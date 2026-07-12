@@ -1,0 +1,10 @@
+{"type":"queue-operation","operation":"dequeue","timestamp":"2026-07-11T21:59:22.123Z"}
+{"type":"user","message":{"role":"user","content":"add a login endpoint"},"uuid":"a1","sessionId":"f26a487a","cwd":"/home/drew/repo/demo","isSidechain":false}
+{"type":"assistant","message":{"id":"msg_01","role":"assistant","content":[{"type":"thinking","thinking":"private chain of thought"},{"type":"text","text":"I'll add the endpoint now."}]},"uuid":"a2","isSidechain":false}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Edit","input":{"file_path":"api/login.go","old_string":"","new_string":"package api"}}]},"uuid":"a3","isSidechain":false}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"ok"}]},"uuid":"a4","isSidechain":false}
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"looks good, run the tests"}]},"uuid":"a5","isSidechain":false}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_02","name":"Bash","input":{"command":"go test ./..."}}]},"uuid":"a6","isSidechain":false}
+{"type":"user","message":{"role":"user","content":"sidechain chatter"},"uuid":"a7","isSidechain":true}
+{"type":"attachment","attachment":{"type":"diagnostics"},"uuid":"a8"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Tests pass."}]},"uuid":"a9","isSidechain":false}

@@ -1,0 +1,39 @@
+[
+  {
+    "role": "user",
+    "text": "add a login endpoint"
+  },
+  {
+    "role": "agent",
+    "text": "I'll add the endpoint now."
+  },
+  {
+    "role": "tool",
+    "tool": {
+      "name": "Edit",
+      "input": {
+        "file_path": "api/login.go",
+        "old_string": "",
+        "new_string": "package api"
+      },
+      "path": "api/login.go"
+    }
+  },
+  {
+    "role": "user",
+    "text": "looks good, run the tests"
+  },
+  {
+    "role": "tool",
+    "tool": {
+      "name": "Bash",
+      "input": {
+        "command": "go test ./..."
+      }
+    }
+  },
+  {
+    "role": "agent",
+    "text": "Tests pass."
+  }
+]
