@@ -7,7 +7,7 @@ same-session tasks created mid-run. Spawned per run by the Router. It does NOT d
 templates (Data Service stores them; validation logic is shared) and does NOT talk to the
 UI directly — progress is announced as `pipeline.*`/`stage.*` events.
 
-**Status: W3.1 done — the stage machine lives.** `internal/engine` executes a
+**Status: W3.1 + W3.2 done — stage machine and isolation.** `internal/engine` executes a
 frozen template over a session's task graph: launch checks (shared
 `pkg/template` validation, agent resolution frozen at start, cycle check per
 §3.6), a continuous dependency-ordered scheduler under a concurrency cap,
@@ -15,8 +15,19 @@ agent stages as provider one-shots, command stages via `sh -c`, `when:`
 guards (grammar in `pkg/template` so the editor rejects exactly what launch
 rejects), and `on_fail` loop-backs that feed failure output back into the
 next agent attempt before blocking at max_loops. Every running task is
-leased; foreign-leased tasks are left untouched. Next: W3.2 worktrees +
-merge/verify, W3.3–W3.4 `mads run`.
+leased; foreign-leased tasks are left untouched.
+
+With `Isolated` on (W3.2), each task gets its own worktree and `mads/<task>`
+branch: pre-merge stages run there, a stage whose command starts `git merge`
+is the merge-back — serialized (one at a time), branch and trailer-carrying
+message supplied by the engine, conflicts aborted loudly into a blocker note
+naming the files — and post-merge stages (verify) run on the merged tree
+under the same lock. Uncommitted agent work is auto-committed with the task
+trailer before merging (never lost, always linked); merged worktrees are
+cleaned up, blocked ones kept for inspection with their path in the note. A
+post-commit hook installed in the workspace repo reports every commit —
+task context read from per-worktree git config — to the Data Service (§5).
+Next: W3.3 dynamic work queue, W3.4 `mads run`.
 
 Conventions the engine defines (until the spec §6 grammar grows richer):
 - An **agent stage fails** when the provider errors or the reply's last line
@@ -63,3 +74,13 @@ never a mock of either contract.
   untouched: TestForeignLeaseSkipsTask.
 - **`when:` guards skip, visibly** — stage.skipped events, not silence:
   TestWhenGuardSkips.
+- **Conflicts block loudly and abort cleanly** — the trunk stays clean, the
+  conflicted files are named in the blocker note, the loser's branch and
+  worktree survive: TestConflictingPairBlocksSecond (a real same-lines
+  conflict needs both branches off a common base — concurrent tasks, not
+  sequential ones).
+- **Verify catches quiet conflicts** — two individually-clean merges whose
+  combination breaks are caught on the merged tree: TestVerifyCatchesQuietConflict.
+- **Commits report themselves** — the post-commit hook posts from a task
+  worktree to the Data Service and the trailer linkage resolves:
+  TestPostCommitHookReportsCommit (needs curl, as does the hook).

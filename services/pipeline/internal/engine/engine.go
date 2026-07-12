@@ -47,6 +47,18 @@ type Config struct {
 	Model string
 	// StageTimeout bounds each stage (default 10m).
 	StageTimeout time.Duration
+
+	// Isolated turns on worktree-per-task (spec §6, §17): stages before the
+	// merge run in the task's own worktree; the merge stage brings the task
+	// branch into Cwd (the primary repo) serialized in dependency order;
+	// stages after it (verify) run on the merged tree. Requires WorktreeRoot.
+	Isolated bool
+	// WorktreeRoot is where task worktrees are created (outside the repo).
+	WorktreeRoot string
+	// DataURL, when set with Isolated, is stamped into each worktree's git
+	// config so the installed post-commit hook can report commits with task
+	// context (spec §5).
+	DataURL string
 }
 
 // Summary is the run's outcome.
@@ -91,6 +103,15 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	}
 
 	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}}
+	if cfg.Isolated {
+		if cfg.WorktreeRoot == "" {
+			return nil, errors.New("isolated runs require WorktreeRoot")
+		}
+		e.wt = &worktrees{
+			primary: cfg.Cwd, root: cfg.WorktreeRoot,
+			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
+		}
+	}
 	return e.run(ctx)
 }
 
@@ -134,6 +155,7 @@ type engine struct {
 	cfg    Config
 	agents map[string]contracts.Agent
 	conds  []*template.Cond
+	wt     *worktrees // nil unless Isolated
 
 	mu    sync.Mutex
 	loops map[string]int // task|stage → loop-backs taken
@@ -252,12 +274,37 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		return task.Status
 	}
 
+	// Where stages run: the primary repo, or (isolated) the task's own
+	// worktree until the merge stage moves work back to the primary.
+	run := taskRun{dir: e.cfg.Cwd}
+	if e.wt != nil {
+		dir, branch, err := e.wt.create(ctx, task)
+		if err != nil {
+			e.block(ctx, &task, "worktree", err.Error())
+			return contracts.StatusBlocked
+		}
+		run.dir, run.worktree, run.branch = dir, dir, branch
+	}
+	mergeHeld := false
+	defer func() {
+		if mergeHeld {
+			e.wt.mergeMu.Unlock()
+		}
+	}()
+	// A blocked task keeps its worktree for inspection; say where it is.
+	blockReason := func(reason string) string {
+		if run.worktree != "" && !run.merged {
+			return fmt.Sprintf("%s\n\nThe task's worktree is kept at %s (branch %s).", reason, run.worktree, run.branch)
+		}
+		return reason
+	}
+
 	stages := e.cfg.Template.Stages
 	var feedback string // most recent failure, fed to the next agent attempt
 	for i := 0; i < len(stages); {
 		st := stages[i]
 		if ctx.Err() != nil {
-			e.block(ctx, &task, st.Name, "run cancelled")
+			e.block(ctx, &task, st.Name, blockReason("run cancelled"))
 			return contracts.StatusBlocked
 		}
 		if !e.conds[i].Eval(task.Labels) {
@@ -269,7 +316,30 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		}
 		e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": st.Name})
 
-		output, err := e.runStage(ctx, st, task, feedback)
+		var output string
+		var err error
+		if e.wt != nil && isMergeStage(st) {
+			// One merge at a time, and the lock is held through the
+			// remaining stages so verify sees exactly this merge.
+			if !mergeHeld {
+				e.wt.mergeMu.Lock()
+				mergeHeld = true
+			}
+			err = e.wt.commitStray(ctx, run.dir, task)
+			if err == nil {
+				err = e.wt.merge(ctx, st.Command, task, run.branch)
+			}
+			if err == nil {
+				run.dir = e.cfg.Cwd // post-merge stages run on the merged tree
+				run.merged = true
+			}
+			output = ""
+			if err != nil {
+				output = err.Error()
+			}
+		} else {
+			output, err = e.runStage(ctx, st, task, feedback, run.dir)
+		}
 		if err == nil {
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": st.Name})
 			i++
@@ -294,30 +364,47 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				continue
 			}
 		}
-		e.block(ctx, &task, st.Name, trim(output, 2000))
+		e.block(ctx, &task, st.Name, blockReason(trim(output, 2000)))
 		return contracts.StatusBlocked
 	}
 
+	if e.wt != nil && run.merged {
+		e.wt.remove(context.WithoutCancel(ctx), run.worktree, run.branch)
+	}
 	if !e.setStatus(ctx, &task, contracts.StatusDone) {
 		return contracts.StatusBlocked
 	}
 	return contracts.StatusDone
 }
 
-// runStage executes one stage; a nil error is a pass. output carries the
-// failure detail for feedback notes.
-func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback string) (output string, err error) {
+// taskRun is one task's execution context.
+type taskRun struct {
+	dir      string // where the current stage runs
+	worktree string // the task's worktree (isolated runs)
+	branch   string
+	merged   bool
+}
+
+// isMergeStage recognizes the template's merge directive; the engine
+// supplies the branch and serialization (spec §6).
+func isMergeStage(st template.Stage) bool {
+	return strings.HasPrefix(strings.TrimSpace(st.Command), "git merge")
+}
+
+// runStage executes one stage in dir; a nil error is a pass. output carries
+// the failure detail for feedback notes.
+func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (output string, err error) {
 	sctx, cancel := context.WithTimeout(ctx, e.cfg.StageTimeout)
 	defer cancel()
 	if st.Command != "" {
-		return e.runCommand(sctx, st.Command)
+		return e.runCommand(sctx, st.Command, dir)
 	}
-	return e.runAgent(sctx, st, task, feedback)
+	return e.runAgent(sctx, st, task, feedback, dir)
 }
 
-func (e *engine) runCommand(ctx context.Context, command string) (string, error) {
+func (e *engine) runCommand(ctx context.Context, command, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
-	cmd.Dir = e.cfg.Cwd
+	cmd.Dir = dir
 	raw, err := cmd.CombinedOutput()
 	out := string(raw)
 	if err != nil {
@@ -326,7 +413,7 @@ func (e *engine) runCommand(ctx context.Context, command string) (string, error)
 	return out, nil
 }
 
-func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback string) (string, error) {
+func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
 	name := st.Agent
 	if name == "auto" {
 		name = "executor"
@@ -340,7 +427,7 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 		Prompt: taskPrompt(st.Name, task, feedback),
 		System: agent.Prompt,
 		Model:  model,
-		Cwd:    e.cfg.Cwd,
+		Cwd:    dir,
 	})
 	if err != nil {
 		return "", fmt.Errorf("agent %s: %w", name, err)
