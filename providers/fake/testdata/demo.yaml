@@ -1,0 +1,16 @@
+name: demo
+models:
+  - id: demo-1
+    name: Demo One
+    default: true
+rules:
+  - match: add auth
+    tools:
+      - name: write_file
+        path: auth/login.go
+        content: |
+          package auth
+    chunks: ["Working on auth. ", "Done."]
+    delay_ms: 1
+  - match: flaky
+    crash: true
