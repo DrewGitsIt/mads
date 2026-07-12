@@ -17,9 +17,21 @@ agents — not services themselves.
   the same data. Probes the suite cannot run for a given provider (e.g.
   interrupt verification on a PTY-only harness) pass with an explicit
   `Note`, never silently.
-- `fake/` — **provider-fake** (W2.2), the deterministic scripted test double
-  every downstream suite runs against.
-- `claudecode/` — the reference adapter (W2.3).
+- `fake/` — **provider-fake**, the deterministic scripted test double every
+  downstream suite runs against: scenario rules (YAML-loadable) for replies,
+  chunked streaming, delay on cue, tool events with real file writes, crash
+  on cue, and rate-limit on cue; a built-in echo/slow/recall dialect backstops
+  unmatched prompts so any scenario'd fake still passes conformance.
+- `claudecode/` — the reference adapter: persistent stream-json sessions,
+  `claude -p` one-shots, `--resume`, PTY via creack/pty, and on-disk
+  transcript normalization (golden-pinned). CI runs the full conformance
+  suite against a scripted stand-in subprocess — no claude binary needed;
+  `MADS_CLAUDE_SMOKE=1` opts into the real-binary smoke.
+- `fastmodel/` — the one-shot job runner every transient job uses (synthesis,
+  summaries, retro steps): prompt in, validated JSON out, bounded feedback
+  retries. Baseline transport is any provider's OneShot; configuring an
+  OpenAI-compatible `BaseURL` flips the transport without caller changes.
+  Rate limits bubble as the typed error, never retried.
 - `kirocli/` — the second adapter that keeps the abstraction honest (W7.1).
 
 ## Test it
