@@ -83,6 +83,10 @@ func Validate(t *Template, knownAgent func(string) bool) *contracts.ValidationEr
 		case s.Agent != "" && s.Agent != "auto" && !knownAgent(s.Agent):
 			v.Add(field+".agent", fmt.Sprintf("unknown agent %q — not in the registry (spec §9)", s.Agent))
 		}
+
+		if _, err := ParseCond(s.When); err != nil {
+			v.Add(field+".when", err.Error())
+		}
 	}
 
 	for i, s := range t.Stages {

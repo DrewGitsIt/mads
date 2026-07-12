@@ -175,7 +175,7 @@ Wizard over empty app (§14.2): provider detection → credential setup → defa
 
 ## 4. Event Vocabulary (starter set implied by the surfaces)
 
-`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed` · `stage.started|completed|failed` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
+`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed` · `stage.started|completed|failed|skipped` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
 
 This list feeds §15's event log contract; expect growth during mockups.
 

@@ -74,6 +74,7 @@ const (
 	StageStarted   EventType = "stage.started"
 	StageCompleted EventType = "stage.completed"
 	StageFailed    EventType = "stage.failed"
+	StageSkipped   EventType = "stage.skipped"
 
 	RetroStarted   EventType = "retro.started"
 	RetroProgress  EventType = "retro.progress"
@@ -112,7 +113,7 @@ var EventTypes = []EventType{
 	FileChanged,
 	CommitCreated, CommitLinked,
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted,
-	StageStarted, StageCompleted, StageFailed,
+	StageStarted, StageCompleted, StageFailed, StageSkipped,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted,
