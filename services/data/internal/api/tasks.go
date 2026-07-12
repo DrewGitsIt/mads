@@ -21,10 +21,15 @@ func actor(r *http.Request) string {
 // writeStoreError maps store errors onto the API contract: ValidationError →
 // 422 with every problem listed (spec §10.3), ErrNotFound → 404, else 500.
 func writeStoreError(w http.ResponseWriter, err error) {
-	var verr *contracts.ValidationError
+	var (
+		verr *contracts.ValidationError
+		lerr *store.LeaseHeldError
+	)
 	switch {
 	case errors.As(err, &verr):
 		writeJSON(w, http.StatusUnprocessableEntity, verr)
+	case errors.As(err, &lerr):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": lerr.Error(), "holder": lerr.Holder})
 	case errors.Is(err, store.ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	default:

@@ -153,6 +153,9 @@ func (s *Tasks) Update(ctx context.Context, t *contracts.Task, actor string) err
 			return err
 		}
 		now := time.Now().UTC()
+		if err := checkAndRenew(tx, t.ID, actor, now); err != nil {
+			return err
+		}
 		t.UpdatedAt = now
 		labels, err := json.Marshal(orEmpty(t.Labels))
 		if err != nil {
@@ -221,6 +224,9 @@ func (s *Tasks) draftTransition(ctx context.Context, id, actor string, event con
 		if err != nil {
 			return err
 		}
+		if err := checkAndRenew(tx, id, actor, time.Now().UTC()); err != nil {
+			return err
+		}
 		if draft == 0 {
 			verr := &contracts.ValidationError{}
 			verr.Add("draft", "task is not a draft")
@@ -275,6 +281,9 @@ func (s *Tasks) subRecord(ctx context.Context, taskID, actor string, event contr
 			return fmt.Errorf("tasks: %s: %w", taskID, ErrNotFound)
 		}
 		if err != nil {
+			return err
+		}
+		if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
 			return err
 		}
 		if err := apply(tx); err != nil {

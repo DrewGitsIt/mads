@@ -4,12 +4,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/drewkidwell/mads/services/data/internal/api"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -44,6 +46,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("data: %v", err)
 	}
+
+	// The meter reader (spec §15): collect expired leases so tasks whose
+	// holder died silently land blocked-with-event instead of stuck.
+	leases := store.NewLeases(store.NewLog(db))
+	go func() {
+		for range time.Tick(2 * time.Second) {
+			if n, err := leases.ExpireStale(context.Background()); err != nil {
+				log.Printf("data: lease sweep: %v", err)
+			} else if n > 0 {
+				log.Printf("data: lease sweep released %d expired lease(s)", n)
+			}
+		}
+	}()
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

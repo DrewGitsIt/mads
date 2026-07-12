@@ -7,10 +7,11 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: W1.3 done** — store + migrations (W1.1), event log + outbox + SSE
-subscriptions (W1.2), and the task store: CRUD, draft confirm/discard, dependency
-edges with launch-time cycle detection, handoffs, typed notes, atomic bulk import.
-Next: W1.4 write leases.
+**Status: W1.4 done** — store + migrations (W1.1), event log + outbox + SSE
+subscriptions (W1.2), task store (W1.3), and write leases: claim/renew/release with
+only-holder-may-write enforcement, renewal on every holder write, supervision
+release-all, and the expiry sweep that blocks abandoned tasks with an event.
+Next: W1.5 template store / W1.6 registries.
 
 ## Run it alone
 
@@ -58,6 +59,17 @@ Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user
 - `GET /tasks/cycles?session_id=` — dependency cycles (legal at rest, block pipeline
   launch, spec §3.6)
 
+Lease routes (spec §15 — holder = `X-Mads-Actor`):
+
+- `POST /tasks/{id}/claim` `{ttl_seconds?}` (default 600) — take or renew the lease;
+  409 with the current holder when live-leased by someone else
+- `POST /tasks/{id}/release` — idempotent; only the holder may release
+- `POST /leases/release-all` `{holder, reason?}` — the Router's supervision call:
+  frees everything a dead child held, blocking its mid-flight tasks with events
+- Enforcement: while a task is live-leased, every task mutation by a non-holder
+  returns 409; each holder write renews the meter. Unleased tasks are writable by
+  anyone. The sweep (2s ticker in main) collects expired leases.
+
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|
 status_changed|confirmed|discarded`, `note.created`); subscribers are woken
@@ -84,4 +96,8 @@ post-commit.
   transaction leaves no rows and no events: TestDependencyValidation,
   TestImportAtomicity.
 
-Coming with W1.4+: lease TTL expiry → blocked-with-event.
+- **Lease expiry blocks, loudly** — an expired lease on a mid-flight task releases,
+  marks the task blocked, and emits task.status_changed with the reason; idle tasks
+  keep their status: TestExpireStaleBlocksMidFlightTasks, TestReleaseAllForCrashedHolder.
+- **Exactly one claimant wins** — racing claims produce one lease and clean
+  LeaseHeldError losses: TestClaimContention (under -race).
