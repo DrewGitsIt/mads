@@ -137,8 +137,10 @@ func (w *worktrees) commitStray(ctx context.Context, dir string, task contracts.
 // message. A conflict aborts cleanly and returns the conflicted files as the
 // error — the loud path (spec §6).
 func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.Task, branch string) error {
-	msg := fmt.Sprintf("Merge %s: %s\n\nTask: %s", branch, task.Title, task.ID)
-	full := fmt.Sprintf("%s %s -m %q", mergeCmd, branch, msg)
+	// Two -m flags make subject + body paragraphs — %q on a multiline
+	// string would bake literal \n into the subject and break the trailer.
+	subject := fmt.Sprintf("Merge %s: %s", branch, task.Title)
+	full := fmt.Sprintf("%s %s -m %q -m %q", mergeCmd, branch, subject, "Task: "+task.ID)
 	cmd := exec.CommandContext(ctx, "sh", "-c", full)
 	cmd.Dir = w.primary
 	out, err := cmd.CombinedOutput()

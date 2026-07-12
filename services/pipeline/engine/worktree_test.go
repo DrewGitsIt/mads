@@ -85,10 +85,14 @@ func TestIndependentTasksMergeCleanly(t *testing.T) {
 	if strings.TrimSpace(status) != "" {
 		t.Errorf("trunk dirty after merges:\n%s", status)
 	}
-	log := gitOut(t, h.cwd, "log", "--format=%s%n%b")
+	// Trailers must be REAL trailers (git-interpreted), not text that merely
+	// looks like one — a %q-quoted multiline -m once baked literal \n into
+	// the merge subject and this assertion is what catches that class of bug.
+	trailers := gitOut(t, h.cwd, "log", "--format=%(trailers:key=Task,valueonly)")
 	for _, task := range seeded {
-		if !strings.Contains(log, "Task: "+task.ID) {
-			t.Errorf("no commit carries trailer for %s:\n%s", task.ID, log)
+		if !strings.Contains(trailers, task.ID) {
+			t.Errorf("no commit carries a git-interpreted Task trailer for %s; trailers:\n%s\nfull log:\n%s",
+				task.ID, trailers, gitOut(t, h.cwd, "log", "--format=%s%n%b"))
 		}
 	}
 	// Worktrees and branches cleaned up.
