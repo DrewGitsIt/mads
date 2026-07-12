@@ -75,6 +75,12 @@ never a mock of either contract.
 - **Cycles block launch, before any event** — TestCyclesBlockLaunch.
 - **Foreign leases are respected** — a task another actor holds is skipped
   untouched: TestForeignLeaseSkipsTask.
+- **Leases survive silent stages** — writes renew the lease meter, but an
+  agent one-shot can be silent for longer than any TTL (the first Wave-4
+  dogfood run lost a task to the reaper this way); a heartbeat renews at a
+  third of the TTL for the life of the task, and a renewal refused as a
+  conflict abandons the task without another write:
+  TestLeaseHeartbeatOutlivesSilentStage, TestLostLeaseAbandonsTask.
 - **`when:` guards skip, visibly** — stage.skipped events, not silence:
   TestWhenGuardSkips.
 - **Conflicts block loudly and abort cleanly** — the trunk stays clean, the

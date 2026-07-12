@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -47,6 +48,10 @@ type Config struct {
 	Model string
 	// StageTimeout bounds each stage (default 10m).
 	StageTimeout time.Duration
+	// LeaseTTL is the task lease meter (default 10m). A heartbeat renews it
+	// at a third of the TTL while the task runs: agent stages can be silent
+	// far longer than any TTL, so writes must never be the only renewal.
+	LeaseTTL time.Duration
 
 	// Isolated turns on worktree-per-task (spec §6, §17): stages before the
 	// merge run in the task's own worktree; the merge stage brings the task
@@ -80,6 +85,9 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	}
 	if cfg.StageTimeout <= 0 {
 		cfg.StageTimeout = 10 * time.Minute
+	}
+	if cfg.LeaseTTL <= 0 {
+		cfg.LeaseTTL = 10 * time.Minute
 	}
 
 	// Launch checks — the same ones the template editor runs (M9).
@@ -302,10 +310,41 @@ func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task
 // status. The task is leased for the duration; every mutation renews the
 // meter.
 func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.TaskStatus {
-	if err := e.cfg.Data.Claim(ctx, task.ID, 10*time.Minute); err != nil {
+	ttl := e.cfg.LeaseTTL
+	if err := e.cfg.Data.Claim(ctx, task.ID, ttl); err != nil {
 		return task.Status // someone else holds it; not ours this run
 	}
-	defer func() { _ = e.cfg.Data.Release(context.WithoutCancel(ctx), task.ID) }()
+	// Writes renew the lease meter, but an agent stage can be silent for
+	// longer than any TTL (dogfooding lost a lease to the reaper inside a
+	// ten-minute one-shot). Heartbeat at a third of the TTL; a renewal
+	// refused as a conflict means the lease is gone and the task is no
+	// longer ours — cancel its work and stop writing.
+	ctx, cancelTask := context.WithCancel(ctx)
+	defer cancelTask()
+	var lost atomic.Bool
+	taskID := task.ID // the goroutine must not touch task: UpdateTask rewrites it
+	go func() {
+		tick := time.NewTicker(ttl / 3)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				err := e.cfg.Data.Claim(ctx, taskID, ttl)
+				if errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
+					lost.Store(true)
+					cancelTask()
+					return
+				}
+			}
+		}
+	}()
+	defer func() {
+		if !lost.Load() {
+			_ = e.cfg.Data.Release(context.WithoutCancel(ctx), task.ID)
+		}
+	}()
 
 	if !e.setStatus(ctx, &task, contracts.StatusInProgress) {
 		return task.Status
@@ -341,6 +380,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	for i := 0; i < len(stages); {
 		st := stages[i]
 		if ctx.Err() != nil {
+			if lost.Load() {
+				return task.Status // lease gone; the task is not ours to write
+			}
 			e.block(ctx, &task, st.Name, blockReason("run cancelled"))
 			return contracts.StatusBlocked
 		}
@@ -377,6 +419,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		} else {
 			output, err = e.runStage(ctx, st, task, feedback, run.dir)
 		}
+		if lost.Load() {
+			return task.Status // lease gone mid-stage; whoever holds it now owns the outcome
+		}
 		if err == nil {
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": st.Name})
 			i++
@@ -405,6 +450,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		return contracts.StatusBlocked
 	}
 
+	if lost.Load() {
+		return task.Status
+	}
 	if e.wt != nil && run.merged {
 		e.wt.remove(context.WithoutCancel(ctx), run.worktree, run.branch)
 	}
