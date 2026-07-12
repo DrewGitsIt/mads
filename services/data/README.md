@@ -7,11 +7,11 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: W1.5 + W1.6 done** — store + migrations (W1.1), event log + outbox + SSE
-subscriptions (W1.2), task store (W1.3), write leases (W1.4), registries (W1.6:
-agents with the six system agents seeded, capabilities, workspaces), and pipeline
-templates (W1.5: YAML source of truth, launch-equivalent validation via
-`pkg/template`, system default seeded). Next: W1.7 session/file/commit records.
+**Status: Wave 1 COMPLETE (W1.1–W1.7)** — SQLite store + migrations, event log +
+transactional outbox + SSE subscriptions, task store, write leases, registries
+(six system agents seeded), pipeline templates (launch-equivalent validation via
+`pkg/template`, system default seeded), and session records with §5 file-change
+attribution and the commit-linkage chain. Next: Wave 2, the provider layer.
 
 ## Run it alone
 
@@ -75,6 +75,17 @@ Registry routes (spec §9, §12, §17) — uniform CRUD on `/agents`, `/capabili
 (name resolution is how pipeline `agent:` references and workspace bindings find
 their targets). System agents are editable but not deletable. Every mutation emits
 its `agent.*`/`capability.*`/`workspace.*` event.
+
+Session routes (spec §1, §5): `POST/GET /sessions` (`?activity=` filter),
+`GET/PUT/DELETE /sessions/{id}` — updates emit the specific event
+(`session.renamed` / `session.activity_changed` / `session.updated`); delete
+hard-cascades tasks, file changes, commits, and leases while the event log keeps
+history (spec §8). `POST/GET /sessions/{id}/files` — attribution computed by the
+§5 rule (`contracts.AttributedChange`: worktree → everything; non-isolated →
+tool-use + commits only, observed changes recorded unattributed).
+`POST/GET /sessions/{id}/commits` — linkage resolved through the chain: trailer →
+session's active task → heuristic candidates → orphan flag; `commit.created`
+always, `commit.linked` when a rung resolves.
 
 Template routes (spec §6, M9): same CRUD shape on `/templates`, plus
 `POST /templates/validate` `{source}`. Both validate and save run

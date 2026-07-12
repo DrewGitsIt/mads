@@ -47,6 +47,7 @@ const (
 	SessionProvisioning    EventType = "session.provisioning"
 	SessionRenamed         EventType = "session.renamed"
 	SessionActivityChanged EventType = "session.activity_changed"
+	SessionUpdated         EventType = "session.updated"
 	SessionDeleted         EventType = "session.deleted"
 
 	TaskCreated       EventType = "task.created"
@@ -105,7 +106,7 @@ const (
 
 // EventTypes is the full registry, for validation and enumeration.
 var EventTypes = []EventType{
-	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionDeleted,
+	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

@@ -44,6 +44,7 @@ func New(db *sql.DB) http.Handler {
 	registryRoutes(mux, "capabilities", store.NewCapabilities(l))
 	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	templateRoutes(mux, l)
+	sessionRoutes(mux, l)
 	return mux
 }
 
