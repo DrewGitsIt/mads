@@ -7,7 +7,11 @@ same-session tasks created mid-run. Spawned per run by the Router. It does NOT d
 templates (Data Service stores them; validation logic is shared) and does NOT talk to the
 UI directly — progress is announced as `pipeline.*`/`stage.*` events.
 
-**Status: W3.1 + W3.2 done — stage machine and isolation.** `internal/engine` executes a
+**Status: Wave 3 complete (W3.1–W3.4).** The engine is exported at
+`services/pipeline/engine` — the bootstrap CLI (`cmd/mads`) drives it
+directly, and the queue is live: the scheduler wakes on the session's
+`task.*` events, mid-run inserts join behind their dependencies, and
+cycle-introducing inserts are rejected loudly (blocked + note + event). `internal/engine` executes a
 frozen template over a session's task graph: launch checks (shared
 `pkg/template` validation, agent resolution frozen at start, cycle check per
 §3.6), a continuous dependency-ordered scheduler under a concurrency cap,
@@ -27,7 +31,6 @@ trailer before merging (never lost, always linked); merged worktrees are
 cleaned up, blocked ones kept for inspection with their path in the note. A
 post-commit hook installed in the workspace repo reports every commit —
 task context read from per-worktree git config — to the Data Service (§5).
-Next: W3.3 dynamic work queue, W3.4 `mads run`.
 
 Conventions the engine defines (until the spec §6 grammar grows richer):
 - An **agent stage fails** when the provider errors or the reply's last line

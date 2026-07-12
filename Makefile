@@ -3,7 +3,11 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: test lint check tidy
+.PHONY: build test lint check tidy
+
+build:
+	go build ./...
+	go build -o $(GOBIN)/mads ./cmd/mads
 
 test:
 	go test -race ./...

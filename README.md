@@ -19,7 +19,8 @@ test loop that never requires a live LLM.
 | `services/router` | Router — always-on coordinator; supervision, SSE fan-out to the UI |
 | `services/session` | Session Service — one process per active session, owns the agent |
 | `services/pipeline` | Pipeline Engine — template execution over task graphs (spec §6) |
-| `providers/` | Provider adapters (claude-code, kiro-cli, provider-fake) — wave 2 |
+| `providers/` | Provider layer: the abstraction + conformance suite, claude-code adapter, provider-fake, fast-model runner |
+| `cmd/mads` | The bootstrap CLI — see **mads builds mads** below |
 | `ui/` | Electron desktop app — wave 6 |
 
 ## Working on mads
@@ -27,7 +28,34 @@ test loop that never requires a live LLM.
 ```sh
 make check   # lint + test with -race; identical to CI
 make test    # tests only
+make build   # compiles everything and puts the mads CLI at bin/mads
 ```
+
+## mads builds mads (the dogfood loop)
+
+From Wave 4 on, work items are executed as mads tasks by the pipeline itself.
+This is **the** way mads builds mads:
+
+```sh
+make -C services/data run          # terminal 1: the Data Service (state + events)
+
+make build                         # terminal 2:
+SES=$(bin/mads new-session -name "Wave 4")
+bin/mads seed -session $SES -file wave4-tasks.yaml   # titles + depends_on graph
+bin/mads run  -session $SES -workspace .             # claude-code agents, worktrees
+```
+
+`mads run` freezes the `default-implementation` template (architect → executor
+→ build → code review → merge → verify), gives every task its own worktree
+and `mads/<task>` branch, runs agent stages as `claude -p` one-shots in that
+worktree, loops review/build failures back to the executor with feedback,
+serializes merges back to the trunk (conflicts block loudly and keep the
+worktree), and tails every `pipeline.*`/`stage.*` event to the terminal.
+Commits report themselves to the Data Service through the installed
+post-commit hook and link to their tasks via the `Task:` trailer (spec §5).
+
+`-provider fake -fake-scenario file.yaml` rehearses a run with scripted
+agents — no tokens spent; that is also how the CLI's own end-to-end test runs.
 
 Every service directory has its own `README.md` (the agent-maintainability contract:
 how to run it alone, how to test it, its API contract, its critical paths) and its own
