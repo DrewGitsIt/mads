@@ -6,6 +6,7 @@
 package dataclient
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -211,6 +212,57 @@ func (c *Client) Append(ctx context.Context, env *contracts.Envelope) error {
 		env.Actor = c.actor
 	}
 	return c.do(ctx, http.MethodPost, "/events", env, env)
+}
+
+// Stream opens a filtered SSE subscription (history from the cursor, then
+// live pushes). Envelopes arrive on the returned channel until ctx ends or
+// the connection drops; the channel then closes. Callers resume by passing
+// the last envelope's Seq as since — reconnection policy is theirs.
+func (c *Client) Stream(ctx context.Context, since int64, sessionID string, types []string) (<-chan contracts.Envelope, error) {
+	q := url.Values{}
+	q.Set("since", fmt.Sprint(since))
+	if sessionID != "" {
+		q.Set("session_id", sessionID)
+	}
+	if len(types) > 0 {
+		q.Set("types", strings.Join(types, ","))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/events?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := (&http.Client{}).Do(req) // no timeout: the stream lives until ctx ends
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("stream: status %d", resp.StatusCode)
+	}
+	ch := make(chan contracts.Envelope, 64)
+	go func() {
+		defer close(ch)
+		defer func() { _ = resp.Body.Close() }()
+		sc := bufio.NewScanner(resp.Body)
+		sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+		for sc.Scan() {
+			line := sc.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			var env contracts.Envelope
+			if json.Unmarshal([]byte(strings.TrimSpace(line[len("data:"):])), &env) != nil {
+				continue
+			}
+			select {
+			case ch <- env:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return ch, nil
 }
 
 // Events fetches one filtered batch after the cursor (capped server-side;

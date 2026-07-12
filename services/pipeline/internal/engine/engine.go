@@ -167,6 +167,17 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		"concurrency": e.cfg.Concurrency,
 	})
 
+	// The live work queue (spec §6): task.* events for this session poke the
+	// scheduler so mid-run inserts are picked up promptly. The stream is an
+	// optimization — completion-driven rescans and the poll fallback keep
+	// the run correct without it.
+	streamCtx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	taskEvents, streamErr := e.cfg.Data.Stream(streamCtx, 0, e.cfg.SessionID, []string{"task.*"})
+	if streamErr != nil {
+		taskEvents = nil
+	}
+
 	summary := &Summary{}
 	type result struct {
 		id     string
@@ -192,6 +203,23 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		for _, t := range tasks {
 			byID[t.ID] = t
 		}
+		// Mid-run inserts can introduce cycles the launch check never saw:
+		// re-check and reject the participants loudly (spec §6, §3.6).
+		if cycles, err := e.cfg.Data.Cycles(ctx, e.cfg.SessionID); err == nil {
+			for _, cycle := range cycles {
+				for _, id := range cycle {
+					t, known := byID[id]
+					if !known || excluded[id] || running[id] || t.Status != contracts.StatusReady {
+						continue
+					}
+					e.block(ctx, &t, "scheduler", fmt.Sprintf(
+						"rejected from the live queue: its dependencies introduce a cycle (%s)",
+						strings.Join(cycle, " → ")))
+					excluded[id] = true
+					summary.Blocked = append(summary.Blocked, id)
+				}
+			}
+		}
 		if ctx.Err() == nil { // when cancelled, stop launching but keep draining
 			for _, t := range e.runnable(tasks, byID) {
 				if running[t.ID] || excluded[t.ID] || len(running) >= e.cfg.Concurrency {
@@ -211,16 +239,25 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 			}
 			break
 		}
-		r := <-results
-		delete(running, r.id)
-		switch r.status {
-		case contracts.StatusDone:
-			summary.Done = append(summary.Done, r.id)
-		case contracts.StatusBlocked:
-			summary.Blocked = append(summary.Blocked, r.id)
-		default:
-			excluded[r.id] = true
-			summary.Skipped = append(summary.Skipped, r.id)
+		// Wake on a completion, a task event (mid-run insert), or the poll
+		// fallback — whichever comes first.
+		select {
+		case r := <-results:
+			delete(running, r.id)
+			switch r.status {
+			case contracts.StatusDone:
+				summary.Done = append(summary.Done, r.id)
+			case contracts.StatusBlocked:
+				summary.Blocked = append(summary.Blocked, r.id)
+			default:
+				excluded[r.id] = true
+				summary.Skipped = append(summary.Skipped, r.id)
+			}
+		case _, ok := <-taskEvents:
+			if !ok {
+				taskEvents = nil // stream dropped; rescans carry on
+			}
+		case <-time.After(2 * time.Second):
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -452,6 +489,7 @@ func taskPrompt(stage string, task contracts.Task, feedback string) string {
 	if feedback != "" {
 		fmt.Fprintf(&b, "\nA previous attempt failed downstream. Address this feedback:\n%s\n", feedback)
 	}
+	b.WriteString("\nWhen you are done, end your reply with a final line reporting the stage outcome: 'STAGE: pass', or 'STAGE: fail — <reason>' if the work under review does not meet the bar. No marker counts as a pass.\n")
 	return b.String()
 }
 

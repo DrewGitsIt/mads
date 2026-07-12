@@ -116,6 +116,11 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 			return nil, err
 		}
 	}
+	// Delay on cue holds for one-shots too — downstream timing tests rely
+	// on scripted turns taking as long as the scenario says.
+	if plan.delay > 0 {
+		time.Sleep(plan.delay * time.Duration(len(plan.chunks)))
+	}
 	text := strings.Join(plan.chunks, "")
 	return &provider.OneShotResult{Text: text, Usage: usage(req.Prompt, text)}, nil
 }
