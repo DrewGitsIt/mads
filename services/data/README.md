@@ -7,11 +7,11 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: W1.6 done** — store + migrations (W1.1), event log + outbox + SSE
-subscriptions (W1.2), task store (W1.3), write leases (W1.4), and the registries:
-agents (six system agents seeded — editable, not deletable), capabilities
-(skill/MCP with type-specific validation, credentials by env-var name only), and
-workspaces (exactly-one-primary repo rule). Next: W1.5 template store.
+**Status: W1.5 + W1.6 done** — store + migrations (W1.1), event log + outbox + SSE
+subscriptions (W1.2), task store (W1.3), write leases (W1.4), registries (W1.6:
+agents with the six system agents seeded, capabilities, workspaces), and pipeline
+templates (W1.5: YAML source of truth, launch-equivalent validation via
+`pkg/template`, system default seeded). Next: W1.7 session/file/commit records.
 
 ## Run it alone
 
@@ -75,6 +75,13 @@ Registry routes (spec §9, §12, §17) — uniform CRUD on `/agents`, `/capabili
 (name resolution is how pipeline `agent:` references and workspace bindings find
 their targets). System agents are editable but not deletable. Every mutation emits
 its `agent.*`/`capability.*`/`workspace.*` event.
+
+Template routes (spec §6, M9): same CRUD shape on `/templates`, plus
+`POST /templates/validate` `{source}`. Both validate and save run
+`pkg/template.Check` — the identical parse + launch checks the Pipeline Engine
+uses (unknown agents, missing/forward loop targets, stage shape), reported all at
+once. `GET /templates/{id}` includes `used_by` (workspaces bound via defaults);
+deletion refuses while bound or for the system default.
 
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|

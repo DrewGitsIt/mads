@@ -97,6 +97,36 @@ func NewCapabilities(log *Log) *Registry[contracts.Capability] {
 	}
 }
 
+// NewTemplates returns the template registry (spec §6). Semantic validation
+// (grammar, agent resolution, loop targets) happens in the API layer via
+// pkg/template, where the agent registry is in reach; the store only
+// guarantees shape.
+func NewTemplates(log *Log) *Registry[contracts.Template] {
+	return &Registry[contracts.Template]{
+		log: log, table: "templates", prefix: "tpl",
+		created: contracts.TemplateCreated, updated: contracts.TemplateUpdated, deleted: contracts.TemplateDeleted,
+		id:     func(t *contracts.Template) *string { return &t.ID },
+		name:   func(t *contracts.Template) string { return t.Name },
+		system: func(t *contracts.Template) bool { return t.System },
+		times: func(t *contracts.Template) (*time.Time, *time.Time) {
+			return &t.CreatedAt, &t.UpdatedAt
+		},
+		validate: func(t *contracts.Template) *contracts.ValidationError {
+			var v contracts.ValidationError
+			if t.Name == "" {
+				v.Add("name", "required")
+			}
+			if t.Source == "" {
+				v.Add("source", "required")
+			}
+			if v.Empty() {
+				return nil
+			}
+			return &v
+		},
+	}
+}
+
 // NewWorkspaces returns the workspace registry (spec §17).
 func NewWorkspaces(log *Log) *Registry[contracts.Workspace] {
 	return &Registry[contracts.Workspace]{
@@ -199,7 +229,7 @@ func (r *Registry[T]) Delete(ctx context.Context, id, actor string) error {
 		}
 		if system != 0 {
 			verr := &contracts.ValidationError{}
-			verr.Add("system", fmt.Sprintf("%q is a system agent — editable, not deletable (spec §12)", name))
+			verr.Add("system", fmt.Sprintf("%q ships with mads — editable, not deletable (spec §12)", name))
 			return verr
 		}
 		if _, err := tx.Exec("DELETE FROM "+r.table+" WHERE id = ?", id); err != nil {

@@ -92,6 +92,10 @@ const (
 	WorkspaceUpdated EventType = "workspace.updated"
 	WorkspaceDeleted EventType = "workspace.deleted"
 
+	TemplateCreated EventType = "template.created"
+	TemplateUpdated EventType = "template.updated"
+	TemplateDeleted EventType = "template.deleted"
+
 	AttachmentAdded EventType = "attachment.added"
 
 	MergeAttempted  EventType = "merge.attempted"
@@ -112,6 +116,7 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
+	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted,
 }

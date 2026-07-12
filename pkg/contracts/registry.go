@@ -99,6 +99,20 @@ type Capability struct {
 	UpdatedAt         time.Time        `json:"updated_at"`
 }
 
+// Template is a stored pipeline template (spec §6, M9). Source is the YAML
+// text — the single artifact behind both editor views (visual and source).
+// The parsed, validated form lives in pkg/template; in-flight runs freeze
+// their own copy at launch, so edits here never disturb them.
+type Template struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Source      string    `json:"source"`
+	System      bool      `json:"system,omitempty"` // ships with mads; editable, not deletable
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
 // WorkspaceRepo is one repository a workspace declares (spec §17). Exactly
 // one repo is primary — it anchors worktree isolation; the rest are tracked
 // only.
