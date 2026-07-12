@@ -7,8 +7,8 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: wave-0 skeleton.** `/health` only. Wave-1 work items W1.1–W1.7
-(docs/MADS-WORK-ITEMS.md) build it out.
+**Status: W1.1 done** — SQLite (WAL, CGO-free via modernc.org/sqlite), versioned
+up/down migrations, `/health` with db ping. Next: W1.2 event log & outbox.
 
 ## Run it alone
 
@@ -17,11 +17,19 @@ make run        # listens on localhost:8081 (-addr to change)
 curl localhost:8081/health
 ```
 
+Data lives in `~/.mads/mads.db` by default; override with `-data-dir` or
+`MADS_DATA_DIR`. Migrations apply automatically at startup.
+
 ## Test it
 
 ```sh
-make test       # -race always; no external dependencies
+make test       # -race always; no external dependencies, temp-dir databases
 ```
+
+`internal/store` covers open pragmas (WAL, foreign keys), migration up/down
+round-trips, atomic failure rollback, and that the production migration set
+always round-trips. `internal/api` covers `/health` including the unreachable-
+database path (503).
 
 ## API contract
 
@@ -31,5 +39,10 @@ the UI) and the other services (writes via lease, event append via outbox).
 
 ## Critical paths
 
-To be populated as W1.2+ land. The first entries will be: outbox atomicity, cursor-resume
-exactness (no gaps, no duplicates), lease TTL expiry → blocked-with-event.
+- **Migrations are atomic** — a failing migration leaves no partial schema and records
+  no version: `internal/store/migrate_test.go` (TestMigrateFailureRollsBackAtomically).
+- **The production migration set always round-trips** — up → down → up must stay clean
+  forever, or the update lifecycle (§14) breaks: TestProductionMigrations.
+
+Coming with W1.2+: outbox atomicity, cursor-resume exactness (no gaps, no duplicates),
+lease TTL expiry → blocked-with-event.
