@@ -40,6 +40,9 @@ func New(db *sql.DB) http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/claim", s.handleClaimLease)
 	mux.HandleFunc("POST /tasks/{id}/release", s.handleReleaseLease)
 	mux.HandleFunc("POST /leases/release-all", s.handleReleaseAllLeases)
+	registryRoutes(mux, "agents", store.NewAgents(l))
+	registryRoutes(mux, "capabilities", store.NewCapabilities(l))
+	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	return mux
 }
 

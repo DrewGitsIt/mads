@@ -79,11 +79,18 @@ const (
 	RetroCompleted EventType = "retro.completed"
 	RetroFailed    EventType = "retro.failed"
 
+	CapabilityCreated       EventType = "capability.created"
+	CapabilityUpdated       EventType = "capability.updated"
+	CapabilityDeleted       EventType = "capability.deleted"
 	CapabilityHealthChanged EventType = "capability.health_changed"
 
 	AgentCreated EventType = "agent.created"
 	AgentUpdated EventType = "agent.updated"
 	AgentDeleted EventType = "agent.deleted"
+
+	WorkspaceCreated EventType = "workspace.created"
+	WorkspaceUpdated EventType = "workspace.updated"
+	WorkspaceDeleted EventType = "workspace.deleted"
 
 	AttachmentAdded EventType = "attachment.added"
 
@@ -102,8 +109,9 @@ var EventTypes = []EventType{
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted,
 	StageStarted, StageCompleted, StageFailed,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
-	CapabilityHealthChanged,
+	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted,
+	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted,
 }

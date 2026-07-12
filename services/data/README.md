@@ -7,11 +7,11 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: W1.4 done** — store + migrations (W1.1), event log + outbox + SSE
-subscriptions (W1.2), task store (W1.3), and write leases: claim/renew/release with
-only-holder-may-write enforcement, renewal on every holder write, supervision
-release-all, and the expiry sweep that blocks abandoned tasks with an event.
-Next: W1.5 template store / W1.6 registries.
+**Status: W1.6 done** — store + migrations (W1.1), event log + outbox + SSE
+subscriptions (W1.2), task store (W1.3), write leases (W1.4), and the registries:
+agents (six system agents seeded — editable, not deletable), capabilities
+(skill/MCP with type-specific validation, credentials by env-var name only), and
+workspaces (exactly-one-primary repo rule). Next: W1.5 template store.
 
 ## Run it alone
 
@@ -69,6 +69,12 @@ Lease routes (spec §15 — holder = `X-Mads-Actor`):
 - Enforcement: while a task is live-leased, every task mutation by a non-holder
   returns 409; each holder write renews the meter. Unleased tasks are writable by
   anyone. The sweep (2s ticker in main) collects expired leases.
+
+Registry routes (spec §9, §12, §17) — uniform CRUD on `/agents`, `/capabilities`,
+`/workspaces`: `POST /<base>`, `GET /<base>`, `GET|PUT|DELETE /<base>/{id-or-name}`
+(name resolution is how pipeline `agent:` references and workspace bindings find
+their targets). System agents are editable but not deletable. Every mutation emits
+its `agent.*`/`capability.*`/`workspace.*` event.
 
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|
