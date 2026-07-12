@@ -13,17 +13,29 @@ import (
 )
 
 type server struct {
-	db  *sql.DB
-	log *store.Log
+	db    *sql.DB
+	log   *store.Log
+	tasks *store.Tasks
 }
 
 // New returns the Data Service handler backed by db.
 func New(db *sql.DB) http.Handler {
-	s := &server{db: db, log: store.NewLog(db)}
+	l := store.NewLog(db)
+	s := &server{db: db, log: l, tasks: store.NewTasks(l)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /events", s.handlePostEvent)
 	mux.HandleFunc("GET /events", s.handleGetEvents)
+	mux.HandleFunc("POST /tasks", s.handleCreateTask)
+	mux.HandleFunc("POST /tasks/import", s.handleImportTasks)
+	mux.HandleFunc("GET /tasks", s.handleListTasks)
+	mux.HandleFunc("GET /tasks/cycles", s.handleTaskCycles)
+	mux.HandleFunc("GET /tasks/{id}", s.handleGetTask)
+	mux.HandleFunc("PUT /tasks/{id}", s.handleUpdateTask)
+	mux.HandleFunc("POST /tasks/{id}/confirm", s.handleConfirmTask)
+	mux.HandleFunc("POST /tasks/{id}/discard", s.handleDiscardTask)
+	mux.HandleFunc("POST /tasks/{id}/handoffs", s.handleAddHandoff)
+	mux.HandleFunc("POST /tasks/{id}/notes", s.handleAddNote)
 	return mux
 }
 

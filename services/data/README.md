@@ -7,9 +7,10 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: W1.2 done** — SQLite store with migrations (W1.1) plus the event log and
-transactional outbox: `POST /events`, `GET /events` with server-side filters and SSE
-subscriptions with cursor resume. Next: W1.3 task store.
+**Status: W1.3 done** — store + migrations (W1.1), event log + outbox + SSE
+subscriptions (W1.2), and the task store: CRUD, draft confirm/discard, dependency
+edges with launch-time cycle detection, handoffs, typed notes, atomic bulk import.
+Next: W1.4 write leases.
 
 ## Run it alone
 
@@ -46,8 +47,21 @@ the UI) and the other services (writes via lease, event append via outbox).
   With `Accept: text/event-stream`: history replay from the cursor, then live pushes;
   each SSE message's `id` is the event seq, so clients resume with `since=<last id>`.
 
+Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user`):
+
+- `POST /tasks`, `GET /tasks?session_id=&status=&draft=`, `GET /tasks/{id}`,
+  `PUT /tasks/{id}` (full replace — every field is mutable)
+- `POST /tasks/{id}/confirm` / `discard` — draft lifecycle; discard is drafts-only
+  (cancel real tasks with status `wont_do`)
+- `POST /tasks/{id}/handoffs`, `POST /tasks/{id}/notes`
+- `POST /tasks/import` — atomic bulk create; intra-batch dependencies allowed
+- `GET /tasks/cycles?session_id=` — dependency cycles (legal at rest, block pipeline
+  launch, spec §3.6)
+
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
-outbox. State change and events commit atomically; subscribers are woken post-commit.
+outbox. State change and events commit atomically (`task.created|updated|
+status_changed|confirmed|discarded`, `note.created`); subscribers are woken
+post-commit.
 
 ## Critical paths
 
@@ -63,4 +77,11 @@ outbox. State change and events commit atomically; subscribers are woken post-co
 - **Subscribers wake only after commit** — TestWaitWakesOnCommit; the SSE loop arms its
   wait before querying so no event can land unseen between the two.
 
-Coming with W1.3+: lease TTL expiry → blocked-with-event.
+- **Single-connection discipline** — the pool holds one connection (`store.Open`), so
+  no query may run while another cursor is still open; `List`/`Get` close before
+  hydrating. Violations deadlock instantly under test, which is the guard.
+- **Failed writes leave nothing** — a create/import that fails validation mid-
+  transaction leaves no rows and no events: TestDependencyValidation,
+  TestImportAtomicity.
+
+Coming with W1.4+: lease TTL expiry → blocked-with-event.
