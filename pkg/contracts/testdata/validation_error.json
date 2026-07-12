@@ -1,0 +1,16 @@
+{
+  "errors": [
+    {
+      "field": "title",
+      "message": "required"
+    },
+    {
+      "field": "stages[2].agent",
+      "message": "unknown agent \"reviewer-9000\""
+    },
+    {
+      "field": "stages[4].on_fail.loop_back",
+      "message": "target stage does not exist"
+    }
+  ]
+}

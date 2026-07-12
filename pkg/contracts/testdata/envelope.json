@@ -1,0 +1,12 @@
+{
+  "seq": 42,
+  "timestamp": "2026-07-12T09:30:00Z",
+  "type": "task.status_changed",
+  "session_id": "ses_01hq3k",
+  "task_id": "tsk_01hq3m",
+  "actor": "pipeline",
+  "payload": {
+    "from": "ready",
+    "to": "in_progress"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "tsk_01hq3m",
+  "session_id": "ses_01hq3k",
+  "status": "blocked",
+  "dependencies": [
+    "tsk_01hq3a"
+  ],
+  "labels": [
+    "backend",
+    "data-service"
+  ],
+  "retry_count": 0,
+  "created_at": "2026-07-12T09:00:00Z",
+  "updated_at": "2026-07-12T09:05:00Z",
+  "title": "Add cursor resume to event subscriptions",
+  "description": "Subscribers reconnect with ?since=\u003cseq\u003e and receive exactly the missed events.",
+  "acceptance_criteria": "1. Reconnect with a cursor replays missed events in order\n2. No duplicates across reconnects\n3. Property test covers interleaved writes",
+  "source": "user",
+  "handoffs": [
+    {
+      "from": "architect",
+      "content": "Cursor is the global seq; keep filters server-side.",
+      "timestamp": "2026-07-12T09:02:00Z"
+    }
+  ],
+  "notes": [
+    {
+      "type": "decision",
+      "content": "SSE over WebSockets — one-directional is all we need.",
+      "source": "synthesizer",
+      "status": "draft",
+      "timestamp": "2026-07-12T09:03:00Z"
+    }
+  ]
+}
