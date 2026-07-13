@@ -1,0 +1,221 @@
+package supervisor_test
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+)
+
+var testChildBin string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "mads-router-supervisor-test")
+	if err != nil {
+		panic(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	testChildBin = filepath.Join(dir, "testchild")
+	build := exec.Command("go", "build", "-o", testChildBin,
+		"github.com/drewkidwell/mads/services/router/internal/testchild")
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("build testchild: " + err.Error() + "\n" + string(out))
+	}
+
+	os.Exit(m.Run())
+}
+
+// eventually polls fn on a tight interval until it reports success or the
+// budget elapses. Local process supervision should be fast; this is not
+// meant to accommodate TTL expiry (the whole point of the test below is to
+// prove supervision beats TTL expiry, not race it).
+func eventually(t *testing.T, budget time.Duration, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !fn() {
+		t.Fatalf("condition not met within %s", budget)
+	}
+}
+
+func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
+	base := datatest.Start(t)
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sessionID := "ses_test"
+	addr, err := sup.SpawnSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if addr == "" {
+		t.Fatal("SpawnSession: no address discovered")
+	}
+
+	admin := dataclient.New(base, "test-setup")
+	task := contracts.Task{
+		SessionID: sessionID,
+		Title:     "seed task",
+		Source:    "test",
+		Status:    contracts.StatusInProgress,
+	}
+	if err := admin.CreateTask(ctx, &task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	// Long enough that if the assertions below only pass because of TTL
+	// expiry rather than supervision, they'd still be failing a few hundred
+	// ms in — this proves supervision, not the backstop.
+	sessionClient := dataclient.New(base, sessionID)
+	if err := sessionClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	pid, ok := sup.SessionPID(sessionID)
+	if !ok {
+		t.Fatalf("SessionPID(%s): not tracked", sessionID)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess(%d): %v", pid, err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatalf("kill child pid %d: %v", pid, err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		got, err := admin.Task(ctx, task.ID)
+		return err == nil && got.Status == contracts.StatusBlocked
+	})
+
+	eventually(t, 5*time.Second, func() bool {
+		events, err := admin.Events(ctx, 0, sessionID, []string{"session.crashed"})
+		return err == nil && len(events) > 0
+	})
+}
+
+func TestTerminateDoesNotEmitCrashEvent(t *testing.T) {
+	base := datatest.Start(t)
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sessionID := "ses_terminate"
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	if err := sup.TerminateSession(ctx, sessionID); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	admin := dataclient.New(base, "test-setup")
+	// Terminate's exit handling has already completed by the time
+	// TerminateSession returns (child.Terminate waits for onExit to
+	// finish) — no polling budget needed to prove absence.
+	events, err := admin.Events(ctx, 0, sessionID, []string{"session.crashed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("session.crashed events after Terminate: %v, want none", events)
+	}
+}
+
+func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
+	base := datatest.Start(t)
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sessionID := "ses_pipeline"
+	runID := "run_test"
+	addr, err := sup.SpawnPipeline(ctx, runID, sessionID)
+	if err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+	if addr == "" {
+		t.Fatal("SpawnPipeline: no address discovered")
+	}
+
+	admin := dataclient.New(base, "test-setup")
+	task := contracts.Task{
+		SessionID: sessionID,
+		Title:     "seed task",
+		Source:    "test",
+		Status:    contracts.StatusInProgress,
+	}
+	if err := admin.CreateTask(ctx, &task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	runClient := dataclient.New(base, runID)
+	if err := runClient.Claim(ctx, task.ID, 30*time.Second); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	pid, ok := sup.PipelinePID(runID)
+	if !ok {
+		t.Fatalf("PipelinePID(%s): not tracked", runID)
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		t.Fatalf("FindProcess(%d): %v", pid, err)
+	}
+	if err := proc.Kill(); err != nil {
+		t.Fatalf("kill child pid %d: %v", pid, err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		got, err := admin.Task(ctx, task.ID)
+		return err == nil && got.Status == contracts.StatusBlocked
+	})
+
+	eventually(t, 5*time.Second, func() bool {
+		events, err := admin.Events(ctx, 0, sessionID, []string{"pipeline.failed"})
+		return err == nil && len(events) > 0
+	})
+}
+
+func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
+	base := datatest.Start(t)
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sessionID := "ses_cancel"
+	runID := "run_cancel"
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+
+	if err := sup.TerminatePipeline(ctx, runID); err != nil {
+		t.Fatalf("TerminatePipeline: %v", err)
+	}
+
+	admin := dataclient.New(base, "test-setup")
+	events, err := admin.Events(ctx, 0, sessionID, []string{"pipeline.failed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("pipeline.failed events after Terminate: %v, want none", events)
+	}
+}

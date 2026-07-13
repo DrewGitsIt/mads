@@ -63,6 +63,21 @@ func TestClientRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Session update + delete.
+	sess.Name = "renamed"
+	if err := c.UpdateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Session(ctx, sess.ID); err != nil || got.Name != "renamed" {
+		t.Fatalf("session after update: %+v, %v", got, err)
+	}
+	if err := c.DeleteSession(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Session(ctx, sess.ID); !errors.Is(err, dataclient.ErrNotFound) {
+		t.Fatalf("want ErrNotFound after delete, got %v", err)
+	}
+
 	// Registry + seeded template.
 	agent, err := c.Agent(ctx, "executor")
 	if err != nil || agent.Prompt == "" {

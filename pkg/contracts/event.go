@@ -49,6 +49,9 @@ const (
 	SessionActivityChanged EventType = "session.activity_changed"
 	SessionUpdated         EventType = "session.updated"
 	SessionDeleted         EventType = "session.deleted"
+	// SessionCrashed fires when the Router's supervision detects a Session
+	// Service child exited unexpectedly. Payload: {"reason": string}.
+	SessionCrashed EventType = "session.crashed"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -70,6 +73,9 @@ const (
 	PipelineResumed   EventType = "pipeline.resumed"
 	PipelineCancelled EventType = "pipeline.cancelled"
 	PipelineCompleted EventType = "pipeline.completed"
+	// PipelineFailed fires when the Router's supervision detects a Pipeline
+	// Engine child exited unexpectedly. Payload: {"run_id": string, "reason": string}.
+	PipelineFailed EventType = "pipeline.failed"
 
 	StageStarted   EventType = "stage.started"
 	StageCompleted EventType = "stage.completed"
@@ -107,12 +113,12 @@ const (
 
 // EventTypes is the full registry, for validation and enumeration.
 var EventTypes = []EventType{
-	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted,
+	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,
 	CommitCreated, CommitLinked,
-	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted,
+	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
 	StageStarted, StageCompleted, StageFailed, StageSkipped,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,

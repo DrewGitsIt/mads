@@ -177,6 +177,14 @@ func (c *Client) CreateSession(ctx context.Context, s *contracts.Session) error 
 	return c.do(ctx, http.MethodPost, "/sessions", s, s)
 }
 
+func (c *Client) UpdateSession(ctx context.Context, s *contracts.Session) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(s.ID), s, s)
+}
+
+func (c *Client) DeleteSession(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
+}
+
 func (c *Client) Session(ctx context.Context, id string) (contracts.Session, error) {
 	var s contracts.Session
 	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(id), nil, &s)
