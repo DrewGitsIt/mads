@@ -34,9 +34,14 @@ type Session struct {
 	ActiveTaskID string `json:"active_task_id,omitempty"`
 	// LinkedLeaderID is the schema hook for linked sessions (spec §1.12,
 	// behind the linked-sessions flag); empty until that feature lands.
-	LinkedLeaderID string    `json:"linked_leader_id,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	LinkedLeaderID string `json:"linked_leader_id,omitempty"`
+	// ProviderRef is the provider-native session handle (provider.Session.Ref) —
+	// set once, right after the provider session starts, and passed back as
+	// StartOptions.Resume to reattach after a bounce. Also the transcript
+	// pointer: TranscriptReader.Transcript(ctx, ref) reads by this same value.
+	ProviderRef string    `json:"provider_ref,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ChangeOrigin is how a file change was noticed (spec §5).

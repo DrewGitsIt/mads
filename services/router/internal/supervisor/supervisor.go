@@ -59,7 +59,8 @@ func New(data *dataclient.Client, sessionArgv, pipelineArgv []string) *Superviso
 // holder identity IS the session ID — matches spec: "when a session or
 // pipeline stage claims a task").
 func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string, error) {
-	p, err := child.Spawn(ctx, sessionID, s.sessionArgv, func(_ *child.Process, expected bool, exitErr error) {
+	argv := append(append([]string{}, s.sessionArgv...), "-session-id", sessionID)
+	p, err := child.Spawn(ctx, sessionID, argv, func(_ *child.Process, expected bool, exitErr error) {
 		s.onSessionExit(sessionID, expected, exitErr)
 	})
 	if err != nil {

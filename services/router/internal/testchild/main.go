@@ -16,6 +16,7 @@ import (
 
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
+	_ = flag.String("session-id", "", "ignored — matches the real session service's argv shape")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *addr)
