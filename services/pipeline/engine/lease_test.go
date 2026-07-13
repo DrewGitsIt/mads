@@ -67,6 +67,37 @@ func TestLeaseHeartbeatOutlivesSilentStage(t *testing.T) {
 	}
 }
 
+// A machine suspend stalls every heartbeat past the TTL at once; on wake the
+// reaper has released the lease and blocked the task. The engine, still
+// alive and mid-stage, must take the lease back AND put the status back —
+// simulated here by doing exactly what the reaper does (release + block) out
+// from under a running stage.
+func TestSuspendWakeRestoresTask(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: napper", Reply: "done", DelayMs: 1500})
+	seeded := h.seed(contracts.Task{Title: "napper"})
+	done := h.runSolo(t, f, 400*time.Millisecond)
+
+	// Mid-stage, play reaper: free the lease and block the task.
+	time.Sleep(600 * time.Millisecond)
+	if err := h.data.Release(context.Background(), seeded[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	swept := h.task(t, seeded[0].ID)
+	swept.Status = contracts.StatusBlocked
+	if err := h.data.UpdateTask(context.Background(), &swept); err != nil {
+		t.Fatal(err)
+	}
+
+	sum := <-done
+	if len(sum.Done) != 1 {
+		t.Fatalf("summary after simulated suspend: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusDone {
+		t.Errorf("task status = %s, want done", got.Status)
+	}
+}
+
 // The other side of the heartbeat: when a renewal is refused because another
 // actor holds the lease, the task is no longer ours — the engine must stop
 // driving it and write nothing more, leaving the outcome to the new holder.

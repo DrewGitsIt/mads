@@ -81,6 +81,10 @@ never a mock of either contract.
   third of the TTL for the life of the task, and a renewal refused as a
   conflict abandons the task without another write:
   TestLeaseHeartbeatOutlivesSilentStage, TestLostLeaseAbandonsTask.
+- **Suspend/wake self-heals** — a machine suspend stalls every heartbeat past
+  the TTL at once; on wake the reaper has blocked the task but nobody else
+  claimed it, so the engine re-takes the lease and puts the status back to
+  in_progress (the second Wave-4 run surfaced this): TestSuspendWakeRestoresTask.
 - **`when:` guards skip, visibly** — stage.skipped events, not silence:
   TestWhenGuardSkips.
 - **Conflicts block loudly and abort cleanly** — the trunk stays clean, the

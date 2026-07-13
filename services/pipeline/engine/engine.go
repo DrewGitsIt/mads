@@ -321,7 +321,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	// longer ours — cancel its work and stop writing.
 	ctx, cancelTask := context.WithCancel(ctx)
 	defer cancelTask()
-	var lost atomic.Bool
+	var lost, terminal atomic.Bool
 	taskID := task.ID // the goroutine must not touch task: UpdateTask rewrites it
 	go func() {
 		tick := time.NewTicker(ttl / 3)
@@ -336,6 +336,19 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 					lost.Store(true)
 					cancelTask()
 					return
+				}
+				if err != nil {
+					continue // transient; the meter has slack for a retry
+				}
+				// A machine suspend stalls every heartbeat past the TTL:
+				// on wake the reaper has blocked the task, and the claim
+				// above silently re-took the freed lease. The engine is
+				// alive and still owns the work — put the status back.
+				// terminal guards the engine's own block/done writes.
+				if cur, err := e.cfg.Data.Task(ctx, taskID); err == nil &&
+					cur.Status == contracts.StatusBlocked && !terminal.Load() {
+					cur.Status = contracts.StatusInProgress
+					_ = e.cfg.Data.UpdateTask(ctx, &cur)
 				}
 			}
 		}
@@ -356,6 +369,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	if e.wt != nil {
 		dir, branch, err := e.wt.create(ctx, task)
 		if err != nil {
+			terminal.Store(true)
 			e.block(ctx, &task, "worktree", err.Error())
 			return contracts.StatusBlocked
 		}
@@ -383,6 +397,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			if lost.Load() {
 				return task.Status // lease gone; the task is not ours to write
 			}
+			terminal.Store(true)
 			e.block(ctx, &task, st.Name, blockReason("run cancelled"))
 			return contracts.StatusBlocked
 		}
@@ -446,6 +461,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				continue
 			}
 		}
+		terminal.Store(true)
 		e.block(ctx, &task, st.Name, blockReason(trim(output, 2000)))
 		return contracts.StatusBlocked
 	}
@@ -456,6 +472,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	if e.wt != nil && run.merged {
 		e.wt.remove(context.WithoutCancel(ctx), run.worktree, run.branch)
 	}
+	terminal.Store(true)
 	if !e.setStatus(ctx, &task, contracts.StatusDone) {
 		return contracts.StatusBlocked
 	}
