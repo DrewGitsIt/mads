@@ -166,6 +166,28 @@ func (s *Supervisor) PipelineSessionID(runID string) (sessionID string, ok bool)
 	return e.sessionID, true
 }
 
+// SessionAddr returns the running session child's address, if any.
+func (s *Supervisor) SessionAddr(sessionID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.sessions[sessionID]
+	if !ok {
+		return "", false
+	}
+	return p.Addr, true
+}
+
+// PipelineAddr returns the running pipeline child's address, if any.
+func (s *Supervisor) PipelineAddr(runID string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.pipelines[runID]
+	if !ok {
+		return "", false
+	}
+	return e.proc.Addr, true
+}
+
 // Shutdown terminates every tracked child. Used on Router SIGINT/SIGTERM so
 // a clean shutdown doesn't orphan "go run" child processes.
 func (s *Supervisor) Shutdown(ctx context.Context) {
