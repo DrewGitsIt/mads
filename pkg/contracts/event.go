@@ -119,9 +119,17 @@ const (
 
 	AttachmentAdded EventType = "attachment.added"
 
-	MergeAttempted  EventType = "merge.attempted"
+	// MergeAttempted fires when a session's isolated worktree branch begins
+	// merging back into a target branch. Payload: {"branch": string,
+	// "target_branch": string}.
+	MergeAttempted EventType = "merge.attempted"
+	// MergeConflicted fires when a merge attempt aborts due to conflicts; the
+	// worktree and branch are kept for manual resolution. Payload: {"branch":
+	// string, "target_branch": string, "files": []string}.
 	MergeConflicted EventType = "merge.conflicted"
-	MergeCompleted  EventType = "merge.completed"
+	// MergeCompleted fires when a merge lands cleanly and the worktree/branch
+	// are cleaned up. Payload: {"branch": string, "target_branch": string}.
+	MergeCompleted EventType = "merge.completed"
 )
 
 // EventTypes is the full registry, for validation and enumeration.
