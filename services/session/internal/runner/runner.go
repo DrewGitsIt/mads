@@ -10,11 +10,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/githook"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/worktree"
 )
@@ -65,6 +68,10 @@ type Runner struct {
 	sess    provider.Session
 	busy    bool // a turn is in flight (Send called, no EventTurnEnd yet)
 	closing bool // Shutdown has started tearing this session down
+
+	// touched tracks paths already reported this run, so recordFileChange
+	// can tell an "added" first sighting from a later "modified" one.
+	touched map[string]bool
 }
 
 // New builds a Runner for sessionID. data's actor must be sessionID (spec
@@ -78,6 +85,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		Cwd:       ".",
 		Died:      make(chan struct{}),
 		hub:       newHub(),
+		touched:   make(map[string]bool),
 	}
 }
 
@@ -108,6 +116,9 @@ func (r *Runner) Start(ctx context.Context) error {
 			cwd = dir
 		}
 	}
+	// Isolated worktrees get the hook via Manager.Create; this covers the
+	// non-isolated case where the session works directly on a real repo.
+	r.installHook(ctx, cwd)
 
 	provSess, err := p.Start(ctx, provider.StartOptions{
 		Mode:   provider.ModeACP,
@@ -148,6 +159,33 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go r.pump(provSess)
 	return nil
+}
+
+// installHook installs the mads post-commit hook (spec §5) in the session's
+// working tree and points it at the Data Service, so interactive commits
+// report with session/task linkage the same way pipeline task commits do.
+// Best-effort and silent on failure (logged, not returned): dir defaults to
+// "." for un-isolated sessions with no explicit -cwd, and installing
+// against "." would mutate whatever repo this process happens to have been
+// started from, so this only acts on an explicit directory that is itself a
+// git repo.
+func (r *Runner) installHook(ctx context.Context, dir string) {
+	if dir == "" || dir == "." {
+		return
+	}
+	if err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run(); err != nil {
+		return
+	}
+	if err := githook.EnsureInstalled(ctx, dir); err != nil {
+		log.Printf("runner: install commit hook: %v", err)
+		return
+	}
+	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
+		SessionID: r.sessionID,
+		DataURL:   r.data.BaseURL(),
+	}); err != nil {
+		log.Printf("runner: configure commit hook: %v", err)
+	}
 }
 
 // manager lazily builds the worktree.Manager the first time isolation is
@@ -280,6 +318,18 @@ func (r *Runner) Subscribe() (ch <-chan provider.Event, unsubscribe func()) {
 	return r.hub.subscribe()
 }
 
+// Files returns every file this session has touched, as recorded with the
+// Data Service (spec §5).
+func (r *Runner) Files(ctx context.Context) ([]contracts.FileChange, error) {
+	return r.data.FileChanges(ctx, r.sessionID)
+}
+
+// Commits returns every commit this session has produced, with task
+// linkage resolved by the Data Service (spec §5).
+func (r *Runner) Commits(ctx context.Context) ([]contracts.Commit, error) {
+	return r.data.Commits(ctx, r.sessionID)
+}
+
 // Shutdown closes the provider session, marks the session record inactive,
 // releases any leases held by this session, and stops accepting new events.
 // Safe to call once; subsequent calls are no-ops.
@@ -335,6 +385,9 @@ func (r *Runner) pump(sess provider.Session) {
 			r.busy = false
 			r.mu.Unlock()
 		}
+		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
+			r.recordFileChange(ev.Tool.Path)
+		}
 		r.hub.broadcast(ev)
 	}
 
@@ -348,6 +401,31 @@ func (r *Runner) pump(sess provider.Session) {
 	log.Printf("runner: provider session for %s ended unexpectedly mid-turn", r.sessionID)
 	r.hub.broadcast(provider.Event{Kind: provider.EventError, Text: "provider process exited unexpectedly"})
 	r.died.Do(func() { close(r.Died) })
+}
+
+// recordFileChange reports one path the agent's tools touched to the Data
+// Service (spec §5). "added" on first sighting this run, "modified" after —
+// best effort, since a dropped observation shouldn't interrupt the turn.
+func (r *Runner) recordFileChange(path string) {
+	r.mu.Lock()
+	change := "modified"
+	if !r.touched[path] {
+		change = "added"
+		r.touched[path] = true
+	}
+	r.mu.Unlock()
+
+	fc := &contracts.FileChange{
+		SessionID: r.sessionID,
+		Path:      path,
+		Change:    change,
+		Origin:    contracts.OriginToolUse,
+		Actor:     r.sessionID,
+		Timestamp: time.Now(),
+	}
+	if err := r.data.RecordFileChange(context.Background(), fc); err != nil {
+		log.Printf("runner: record file change %s: %v", path, err)
+	}
 }
 
 func mustJSON(v any) json.RawMessage {

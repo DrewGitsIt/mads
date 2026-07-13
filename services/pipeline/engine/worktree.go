@@ -10,26 +10,8 @@ import (
 	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/githook"
 )
-
-// hookScript is the post-commit hook installed in the workspace repo
-// (spec §5): it reports every commit — from any of the repo's worktrees —
-// to the Data Service with the task context stored in the worktree's own
-// git config. Reporting must never break a commit, hence the trailing
-// `|| true` and the silent curl.
-const hookScript = `#!/bin/sh
-# installed by mads — reports commits with task context (spec §5)
-session_id=$(git config mads.sessionId 2>/dev/null)
-data_url=$(git config mads.dataUrl 2>/dev/null)
-[ -n "$session_id" ] && [ -n "$data_url" ] || exit 0
-hash=$(git rev-parse HEAD)
-subject=$(git log -1 --format=%s | sed 's/\\/\\\\/g; s/"/\\"/g')
-trailer=$(git log -1 --format=%B | sed -n 's/^Task:[[:space:]]*//p' | head -n1)
-curl -s -X POST -H 'Content-Type: application/json' \
-  -H "X-Mads-Actor: session-$session_id" \
-  -d "{\"hash\":\"$hash\",\"message\":\"$subject\",\"trailer_task_id\":\"$trailer\"}" \
-  "$data_url/sessions/$session_id/commits" >/dev/null 2>&1 || true
-`
 
 // worktrees owns per-task isolation (spec §6, §17): worktree + branch per
 // task, task context in per-worktree config for the hook, serialized merges
@@ -64,26 +46,7 @@ func (w *worktrees) git(ctx context.Context, dir string, args ...string) (string
 // once per run.
 func (w *worktrees) ensureSetup(ctx context.Context) error {
 	w.setup.Do(func() {
-		if _, err := w.git(ctx, w.primary, "config", "extensions.worktreeConfig", "true"); err != nil {
-			w.setupEr = err
-			return
-		}
-		gitDir, err := w.git(ctx, w.primary, "rev-parse", "--git-common-dir")
-		if err != nil {
-			w.setupEr = err
-			return
-		}
-		hooksDir := filepath.Join(w.primary, strings.TrimSpace(gitDir), "hooks")
-		if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-			w.setupEr = err
-			return
-		}
-		hook := filepath.Join(hooksDir, "post-commit")
-		if raw, err := os.ReadFile(hook); err == nil && !strings.Contains(string(raw), "installed by mads") {
-			w.setupEr = fmt.Errorf("a foreign post-commit hook exists at %s — not overwriting", hook)
-			return
-		}
-		w.setupEr = os.WriteFile(hook, []byte(hookScript), 0o755) //nolint:gosec // hooks must be executable
+		w.setupEr = githook.EnsureInstalled(ctx, w.primary)
 	})
 	return w.setupEr
 }
@@ -99,17 +62,12 @@ func (w *worktrees) create(ctx context.Context, task contracts.Task) (dir, branc
 	if _, err := w.git(ctx, w.primary, "worktree", "add", "-b", branch, dir); err != nil {
 		return "", "", err
 	}
-	for key, val := range map[string]string{
-		"mads.taskId":    task.ID,
-		"mads.sessionId": w.sessionID,
-		"mads.dataUrl":   w.dataURL,
-	} {
-		if val == "" {
-			continue
-		}
-		if _, err := w.git(ctx, dir, "config", "--worktree", key, val); err != nil {
-			return "", "", err
-		}
+	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
+		TaskID:    task.ID,
+		SessionID: w.sessionID,
+		DataURL:   w.dataURL,
+	}); err != nil {
+		return "", "", err
 	}
 	return dir, branch, nil
 }

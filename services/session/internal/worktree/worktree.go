@@ -1,10 +1,11 @@
 // Package worktree gives interactive sessions the same git worktree
 // isolation the pipeline engine gives tasks (spec §6, §17): a session gets
 // its own worktree and branch, work happens there instead of on the primary
-// tree, and merge-back is attempted on request. Mirrored from
-// services/pipeline/engine/worktree.go rather than shared, since the two
-// services' release timing shouldn't be coupled together; see that file for
-// the git mechanics this one intentionally repeats.
+// tree, and merge-back is attempted on request. The git mechanics are
+// mirrored from services/pipeline/engine/worktree.go rather than shared,
+// since the two services' release timing shouldn't be coupled together —
+// but the post-commit hook is a wire contract with the Data Service, so it
+// comes from pkg/githook, never a local copy.
 package worktree
 
 import (
@@ -17,26 +18,8 @@ import (
 	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/githook"
 )
-
-// hookScript is the post-commit hook installed in the workspace repo
-// (spec §5): it reports every commit — from any of the repo's worktrees —
-// to the Data Service with the session context stored in the worktree's own
-// git config. Reporting must never break a commit, hence the trailing
-// `|| true` and the silent curl.
-const hookScript = `#!/bin/sh
-# installed by mads — reports commits with session context (spec §5)
-session_id=$(git config mads.sessionId 2>/dev/null)
-data_url=$(git config mads.dataUrl 2>/dev/null)
-[ -n "$session_id" ] && [ -n "$data_url" ] || exit 0
-hash=$(git rev-parse HEAD)
-subject=$(git log -1 --format=%s | sed 's/\\/\\\\/g; s/"/\\"/g')
-trailer=$(git log -1 --format=%B | sed -n 's/^Session:[[:space:]]*//p' | head -n1)
-curl -s -X POST -H 'Content-Type: application/json' \
-  -H "X-Mads-Actor: session-$session_id" \
-  -d "{\"hash\":\"$hash\",\"message\":\"$subject\",\"trailer_task_id\":\"$trailer\"}" \
-  "$data_url/sessions/$session_id/commits" >/dev/null 2>&1 || true
-`
 
 // Manager owns per-session isolation: worktree + branch per session, session
 // context in per-worktree config for the hook, serialized merges back into
@@ -77,30 +60,12 @@ func (m *Manager) Git(ctx context.Context, dir string, args ...string) (string, 
 	return string(out), nil
 }
 
-// ensureSetup enables per-worktree config and installs the post-commit hook,
-// once per manager.
+// ensureSetup enables per-worktree config and installs the post-commit hook
+// (the shared pkg/githook contract — see the package comment), once per
+// manager.
 func (m *Manager) ensureSetup(ctx context.Context) error {
 	m.setup.Do(func() {
-		if _, err := m.Git(ctx, m.Primary, "config", "extensions.worktreeConfig", "true"); err != nil {
-			m.setupEr = err
-			return
-		}
-		gitDir, err := m.Git(ctx, m.Primary, "rev-parse", "--git-common-dir")
-		if err != nil {
-			m.setupEr = err
-			return
-		}
-		hooksDir := filepath.Join(m.Primary, strings.TrimSpace(gitDir), "hooks")
-		if err := os.MkdirAll(hooksDir, 0o755); err != nil {
-			m.setupEr = err
-			return
-		}
-		hook := filepath.Join(hooksDir, "post-commit")
-		if raw, err := os.ReadFile(hook); err == nil && !strings.Contains(string(raw), "installed by mads") {
-			m.setupEr = fmt.Errorf("a foreign post-commit hook exists at %s — not overwriting", hook)
-			return
-		}
-		m.setupEr = os.WriteFile(hook, []byte(hookScript), 0o755) //nolint:gosec // hooks must be executable
+		m.setupEr = githook.EnsureInstalled(ctx, m.Primary)
 	})
 	return m.setupEr
 }
@@ -116,16 +81,11 @@ func (m *Manager) Create(ctx context.Context, id, title string) (dir, branch str
 	if _, err := m.Git(ctx, m.Primary, "worktree", "add", "-b", branch, dir); err != nil {
 		return "", "", err
 	}
-	for key, val := range map[string]string{
-		"mads.sessionId": m.SessionID,
-		"mads.dataUrl":   m.DataURL,
-	} {
-		if val == "" {
-			continue
-		}
-		if _, err := m.Git(ctx, dir, "config", "--worktree", key, val); err != nil {
-			return "", "", err
-		}
+	if err := githook.SetWorktreeConfig(ctx, dir, githook.Config{
+		SessionID: m.SessionID,
+		DataURL:   m.DataURL,
+	}); err != nil {
+		return "", "", err
 	}
 	return dir, branch, nil
 }

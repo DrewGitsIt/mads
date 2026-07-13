@@ -26,6 +26,8 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /stream", s.handleStream)
+	mux.HandleFunc("GET /files", s.handleFiles)
+	mux.HandleFunc("GET /commits", s.handleCommits)
 	return mux
 }
 
@@ -118,6 +120,29 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// handleFiles lists every file this session has touched (spec §5), read
+// straight through from the Data Service — the durable record, not a
+// local cache.
+func (s *server) handleFiles(w http.ResponseWriter, r *http.Request) {
+	files, err := s.runner.Files(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+// handleCommits lists every commit this session has produced, with task
+// linkage resolved by the Data Service (spec §5).
+func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
+	commits, err := s.runner.Commits(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, commits)
 }
 
 // writeRunnerError maps the runner's sentinel errors onto this API's
