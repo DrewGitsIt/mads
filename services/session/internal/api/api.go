@@ -24,6 +24,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
+	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /stream", s.handleStream)
 	mux.HandleFunc("GET /files", s.handleFiles)
 	mux.HandleFunc("GET /commits", s.handleCommits)
@@ -58,6 +59,26 @@ func (s *server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleMerge attempts to merge the session's isolated worktree branch back
+// into target_branch (the primary's current branch if omitted). Both a
+// clean merge and a conflicted merge answer 200 — a conflict is a
+// structured, success-shaped response the UI branches on via
+// result.conflicted, not a failure status (spec §6, §17).
+func (s *server) handleMerge(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TargetBranch string `json:"target_branch"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	result, err := s.runner.Merge(r.Context(), body.TargetBranch)
+	if err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // handleStream is the data plane's live event feed (spec §15): every
@@ -133,6 +154,8 @@ func writeRunnerError(w http.ResponseWriter, err error) {
 	case errors.Is(err, runner.ErrNotReady):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	case errors.Is(err, runner.ErrTurnInFlight):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, runner.ErrNoWorktree):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

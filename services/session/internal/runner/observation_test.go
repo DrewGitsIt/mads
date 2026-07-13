@@ -100,7 +100,6 @@ func TestCommitInSessionWorktreeReportsLinkage(t *testing.T) {
 	}
 	r := New(sess.ID, data, reg)
 	r.Cwd = dir
-	r.DataURL = base
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -135,14 +134,5 @@ func TestCommitInSessionWorktreeReportsLinkage(t *testing.T) {
 	}
 	if got.Message != "do the work" {
 		t.Errorf("message: %q", got.Message)
-	}
-}
-
-func gitRun(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git %v: %v\n%s", args, err, out)
 	}
 }
