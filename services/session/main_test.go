@@ -4,10 +4,16 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/drewkidwell/mads/services/session/internal/api"
+	"github.com/drewkidwell/mads/services/session/internal/runner"
 )
 
 func TestHealth(t *testing.T) {
-	srv := httptest.NewServer(newMux())
+	// /health never touches the runner (spec §4: always 200 regardless of
+	// runner state), so an unstarted Runner is enough for this test.
+	r := runner.New("unused", nil, nil)
+	srv := httptest.NewServer(api.New(r))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
