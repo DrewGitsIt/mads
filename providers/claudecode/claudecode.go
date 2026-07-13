@@ -122,7 +122,16 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 		if rle := rateLimit(stderr.String() + stdout.String()); rle != nil {
 			return nil, rle
 		}
-		return nil, fmt.Errorf("claude -p: %w: %s", err, strings.TrimSpace(stderr.String()))
+		// Failures land in blocker notes; carry whichever stream has the
+		// story (a usage-limit death writes JSON to stdout, stderr empty).
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			detail = strings.TrimSpace(stdout.String())
+		}
+		if len(detail) > 600 {
+			detail = detail[:600] + " …"
+		}
+		return nil, fmt.Errorf("claude -p: %w: %s", err, detail)
 	}
 	return parseOneShot(stdout.Bytes())
 }
