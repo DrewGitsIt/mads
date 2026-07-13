@@ -10,10 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/githook"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -37,6 +40,11 @@ type Runner struct {
 	// resolution is later work — so this is a known gap, not solved here.
 	Cwd string
 
+	// DataURL is the Data Service base URL. It is stamped into the session
+	// worktree's git config (mads.dataUrl) so the post-commit hook
+	// installed by Start knows where to report commits (spec §5).
+	DataURL string
+
 	// Died is closed exactly once if the provider process ends mid-turn
 	// without us having initiated the close (the Router's crash-supervision
 	// signal, spec §15). The caller (main.go) selects on this and exits the
@@ -52,6 +60,10 @@ type Runner struct {
 	sess    provider.Session
 	busy    bool // a turn is in flight (Send called, no EventTurnEnd yet)
 	closing bool // Shutdown has started tearing this session down
+
+	// touched tracks paths already reported this run, so recordFileChange
+	// can tell an "added" first sighting from a later "modified" one.
+	touched map[string]bool
 }
 
 // New builds a Runner for sessionID. data's actor must be sessionID (spec
@@ -65,6 +77,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		Cwd:       ".",
 		Died:      make(chan struct{}),
 		hub:       newHub(),
+		touched:   make(map[string]bool),
 	}
 }
 
@@ -80,6 +93,8 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: provider %q: %w", sess.Provider, err)
 	}
+
+	r.installHook(ctx)
 
 	provSess, err := p.Start(ctx, provider.StartOptions{
 		Mode:   provider.ModeACP,
@@ -120,6 +135,34 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go r.pump(provSess)
 	return nil
+}
+
+// installHook installs the mads post-commit hook (spec §5) in the
+// session's working tree and points it at the Data Service, so interactive
+// commits report with session/task linkage the same way pipeline task
+// commits do. Best-effort and silent on failure (logged, not returned):
+// Cwd defaults to "." (no worktree resolution yet — see README's "Known
+// gaps"), and installing against "." would mutate whatever repo this
+// process happens to have been started from, so this only acts once Cwd
+// has been pointed at an actual session-specific directory that is itself
+// a git repo.
+func (r *Runner) installHook(ctx context.Context) {
+	if r.Cwd == "" || r.Cwd == "." {
+		return
+	}
+	if err := exec.CommandContext(ctx, "git", "-C", r.Cwd, "rev-parse", "--git-dir").Run(); err != nil {
+		return
+	}
+	if err := githook.EnsureInstalled(ctx, r.Cwd); err != nil {
+		log.Printf("runner: install commit hook: %v", err)
+		return
+	}
+	if err := githook.SetWorktreeConfig(ctx, r.Cwd, githook.Config{
+		SessionID: r.sessionID,
+		DataURL:   r.DataURL,
+	}); err != nil {
+		log.Printf("runner: configure commit hook: %v", err)
+	}
 }
 
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
@@ -165,6 +208,18 @@ func (r *Runner) Interrupt(ctx context.Context) error {
 // unsubscribe when done to release the channel.
 func (r *Runner) Subscribe() (ch <-chan provider.Event, unsubscribe func()) {
 	return r.hub.subscribe()
+}
+
+// Files returns every file this session has touched, as recorded with the
+// Data Service (spec §5).
+func (r *Runner) Files(ctx context.Context) ([]contracts.FileChange, error) {
+	return r.data.FileChanges(ctx, r.sessionID)
+}
+
+// Commits returns every commit this session has produced, with task
+// linkage resolved by the Data Service (spec §5).
+func (r *Runner) Commits(ctx context.Context) ([]contracts.Commit, error) {
+	return r.data.Commits(ctx, r.sessionID)
 }
 
 // Shutdown closes the provider session, marks the session record inactive,
@@ -222,6 +277,9 @@ func (r *Runner) pump(sess provider.Session) {
 			r.busy = false
 			r.mu.Unlock()
 		}
+		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
+			r.recordFileChange(ev.Tool.Path)
+		}
 		r.hub.broadcast(ev)
 	}
 
@@ -235,6 +293,31 @@ func (r *Runner) pump(sess provider.Session) {
 	log.Printf("runner: provider session for %s ended unexpectedly mid-turn", r.sessionID)
 	r.hub.broadcast(provider.Event{Kind: provider.EventError, Text: "provider process exited unexpectedly"})
 	r.died.Do(func() { close(r.Died) })
+}
+
+// recordFileChange reports one path the agent's tools touched to the Data
+// Service (spec §5). "added" on first sighting this run, "modified" after —
+// best effort, since a dropped observation shouldn't interrupt the turn.
+func (r *Runner) recordFileChange(path string) {
+	r.mu.Lock()
+	change := "modified"
+	if !r.touched[path] {
+		change = "added"
+		r.touched[path] = true
+	}
+	r.mu.Unlock()
+
+	fc := &contracts.FileChange{
+		SessionID: r.sessionID,
+		Path:      path,
+		Change:    change,
+		Origin:    contracts.OriginToolUse,
+		Actor:     r.sessionID,
+		Timestamp: time.Now(),
+	}
+	if err := r.data.RecordFileChange(context.Background(), fc); err != nil {
+		log.Printf("runner: record file change %s: %v", path, err)
+	}
 }
 
 func mustJSON(v any) json.RawMessage {

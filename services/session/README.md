@@ -4,8 +4,11 @@ One process per active session, hosting that session's provider session (spec §
 or resumes it, relays user turns onto it, streams its events back out, and keeps the Data
 Service's session record (`Activity`, `ProviderRef`) in sync. Spawned and supervised by the
 Router on an ephemeral port. It does NOT persist state directly — every write goes through
-the Data Service — and it does not yet own worktree setup, file-change observation, or
-commit linkage (later work items); it also never talks to other sessions.
+the Data Service. It tracks the files the agent's tools touch and installs the mads
+post-commit hook (spec §5) in its working tree, so interactive commits report to the Data
+Service with task linkage the same way pipeline task commits do — see "File observation &
+commit linkage" below. It does not yet own worktree *setup* (later work item); it also
+never talks to other sessions.
 
 ## Run it alone
 
@@ -41,6 +44,10 @@ One process, one session — no `:id` in any path.
 - `GET /stream` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
   Ephemeral: no replay/cursor, just whatever the connected UI catches live. Durable history
   (transcript, activity) is the Data Service's job, not this stream's.
+- `GET /files` — every file this session has touched, straight through from the Data
+  Service (`[]contracts.FileChange`). See "File observation & commit linkage" below.
+- `GET /commits` — every commit this session has produced, with task linkage resolved by
+  the Data Service (`[]contracts.Commit`). See "File observation & commit linkage" below.
 
 Counterparties (spec §15: exactly two):
 
@@ -49,8 +56,9 @@ Counterparties (spec §15: exactly two):
   emits the crash event itself. This service's own clean-shutdown path releases leases and
   flips `Activity` proactively so the common case doesn't wait on the Router noticing.
 - **Data Service** — session state (`Session`, `UpdateSession`), lifecycle events (`Append`
-  `session.provisioning` / `session.activity_changed`), and lease release (`ReleaseAll`),
-  all through `pkg/dataclient`.
+  `session.provisioning` / `session.activity_changed`), lease release (`ReleaseAll`), file
+  changes and commits (`RecordFileChange`/`FileChanges`, `RecordCommit`/`Commits`), all
+  through `pkg/dataclient`.
 
 ## Critical paths
 
@@ -74,9 +82,24 @@ Counterparties (spec §15: exactly two):
 - **One turn at a time** — `Send` returns `ErrTurnInFlight` (409) while a turn is in
   progress, matching the composer-disabled chat UX; see `internal/api.TestHTTPRoundTrip` and
   the `busy` flag in `internal/runner/runner.go`.
+- **File observation & commit linkage** (spec §5) — `Runner.pump` watches provider
+  `EventToolUse` events for a `Tool.Path` and reports each one to the Data Service
+  (`dataclient.RecordFileChange`), deduping "added" (first sighting this run) from
+  "modified" (`touched` map). `Runner.Start` installs the mads post-commit hook (`pkg/githook`
+  — the same package and reporting contract `services/pipeline/engine` uses for task
+  worktrees) into `Cwd` and stamps `mads.sessionId`/`mads.dataUrl` into its per-worktree git
+  config, so a commit made there reports itself to `POST /sessions/{id}/commits` with the
+  session's `X-Mads-Actor` identity; task linkage (trailer → session context → heuristic →
+  orphan) is resolved server-side, not here. `GET /files` and `GET /commits` read the
+  results straight back from the Data Service — there is no local cache to go stale. See
+  `internal/runner.TestFilesTracksToolUsePaths` and
+  `internal/runner.TestCommitInSessionWorktreeReportsLinkage`.
 
 ## Known gaps
 
 - **Working directory** — `Runner.Cwd` (from `-cwd`) is passed straight to the provider as
   `StartOptions.Cwd`. There's no worktree resolution yet; `contracts.Session` has no
-  workdir field beyond `Workspace`. Isolation-mode worktree setup is later work.
+  workdir field beyond `Workspace`. Isolation-mode worktree setup is later work. Because of
+  this, hook installation only fires once `Cwd` has been pointed at an actual
+  session-specific git repo (i.e. isn't left at its default `"."`) — see
+  `Runner.installHook`.

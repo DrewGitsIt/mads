@@ -191,6 +191,48 @@ func (c *Client) Session(ctx context.Context, id string) (contracts.Session, err
 	return s, err
 }
 
+// --- Session file tracking & commit linkage (spec §5) ---
+
+// RecordFileChange reports one file the session touched. fc.SessionID
+// selects the URL path; the Data Service computes Attributed itself
+// (contracts.AttributedChange) — callers must not duplicate that logic.
+func (c *Client) RecordFileChange(ctx context.Context, fc *contracts.FileChange) error {
+	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(fc.SessionID)+"/files", fc, fc)
+}
+
+// FileChanges lists every file change recorded for sessionID.
+func (c *Client) FileChanges(ctx context.Context, sessionID string) ([]contracts.FileChange, error) {
+	var list []contracts.FileChange
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/files", nil, &list)
+	return list, err
+}
+
+// CommitReport is what the post-commit hook (pkg/githook) sends: the raw
+// commit plus whatever the hook itself could read out of the commit
+// message. Task-linkage resolution (trailer → session context → heuristic →
+// orphan) happens server-side, not here.
+type CommitReport struct {
+	contracts.Commit
+	TrailerTaskID    string   `json:"trailer_task_id,omitempty"`
+	HeuristicTaskIDs []string `json:"heuristic_task_ids,omitempty"`
+}
+
+// RecordCommit reports one commit for linkage resolution. rep.SessionID
+// selects the URL path. Returns the stored contracts.Commit, including the
+// LinkedVia/Orphan fields the Data Service resolved.
+func (c *Client) RecordCommit(ctx context.Context, rep *CommitReport) (contracts.Commit, error) {
+	var out contracts.Commit
+	err := c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(rep.SessionID)+"/commits", rep, &out)
+	return out, err
+}
+
+// Commits lists every commit recorded for sessionID, with linkage.
+func (c *Client) Commits(ctx context.Context, sessionID string) ([]contracts.Commit, error) {
+	var list []contracts.Commit
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/commits", nil, &list)
+	return list, err
+}
+
 // --- Registries (spec §9, §12, §17) ---
 
 func (c *Client) Agent(ctx context.Context, idOrName string) (contracts.Agent, error) {

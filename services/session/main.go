@@ -49,6 +49,7 @@ func main() {
 	data := dataclient.New(*dataURL, *sessionID)
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
+	r.DataURL = *dataURL
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
