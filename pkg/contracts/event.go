@@ -87,6 +87,19 @@ const (
 	RetroCompleted EventType = "retro.completed"
 	RetroFailed    EventType = "retro.failed"
 
+	// JobQueued fires when the Router accepts a transient Fast Model job (spec
+	// §15) for execution. Payload: {"job_id": string, "kind": string}.
+	JobQueued EventType = "job.queued"
+	// JobStarted fires when a queued job begins running. Payload: {"job_id":
+	// string, "kind": string}.
+	JobStarted EventType = "job.started"
+	// JobCompleted fires when a job finishes successfully. Payload: {"job_id":
+	// string, "kind": string}.
+	JobCompleted EventType = "job.completed"
+	// JobFailed fires when a job's body returns an error or panics. Payload:
+	// {"job_id": string, "kind": string, "error": string}.
+	JobFailed EventType = "job.failed"
+
 	CapabilityCreated       EventType = "capability.created"
 	CapabilityUpdated       EventType = "capability.updated"
 	CapabilityDeleted       EventType = "capability.deleted"
@@ -121,6 +134,7 @@ var EventTypes = []EventType{
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
 	StageStarted, StageCompleted, StageFailed, StageSkipped,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
+	JobQueued, JobStarted, JobCompleted, JobFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
