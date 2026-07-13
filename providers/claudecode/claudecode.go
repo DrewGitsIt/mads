@@ -160,12 +160,25 @@ func parseOneShot(raw []byte) (*provider.OneShotResult, error) {
 }
 
 // rateLimit turns claude's rate-limit output into the typed error (§11.9).
+// The phrasing varies ("rate limit", "usage limit", "session limit" — the
+// Wave-4 run hit that last one untyped), so also trust an explicit 429 on a
+// result line's api_error_status.
 func rateLimit(out string) *provider.RateLimitError {
 	low := strings.ToLower(out)
-	if !strings.Contains(low, "rate limit") && !strings.Contains(low, "usage limit") {
+	limited := strings.Contains(low, "rate limit") ||
+		strings.Contains(low, "usage limit") ||
+		strings.Contains(low, "session limit") ||
+		strings.Contains(out, `"api_error_status":429`)
+	if !limited {
 		return nil
 	}
-	return &provider.RateLimitError{Message: strings.TrimSpace(firstLine(out)), RetryAfter: 0}
+	msg := strings.TrimSpace(firstLine(out))
+	// A result line's human story beats raw JSON in a blocker note.
+	var line wireLine
+	if json.Unmarshal([]byte(firstLine(out)), &line) == nil && line.Result != "" {
+		msg = line.Result
+	}
+	return &provider.RateLimitError{Message: msg, RetryAfter: 0}
 }
 
 func firstLine(s string) string {

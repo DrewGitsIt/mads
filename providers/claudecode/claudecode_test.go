@@ -154,6 +154,15 @@ func TestRateLimitSurfaces(t *testing.T) {
 	if rateLimit("some unrelated failure") != nil {
 		t.Error("false positive rate-limit detection")
 	}
+	// The Wave-4 phrasing: "session limit" on a result line with a 429 —
+	// either signal alone must classify, and the message is the human story.
+	sessionLimit := `{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your session limit · resets 3am (America/New_York)"}`
+	rle = nil
+	if got := rateLimit(sessionLimit); got == nil {
+		t.Error("session-limit result line not classified as a rate limit")
+	} else if !strings.Contains(got.Message, "session limit") {
+		t.Errorf("message = %q, want the result text", got.Message)
+	}
 }
 
 func TestRegistersCleanly(t *testing.T) {
