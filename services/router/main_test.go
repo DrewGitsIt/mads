@@ -4,10 +4,15 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 func TestHealth(t *testing.T) {
-	srv := httptest.NewServer(newMux())
+	data := dataclient.New("http://localhost:0", "router")
+	sup := supervisor.New(data, nil, nil)
+	srv := httptest.NewServer(newMux(data, sup))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
