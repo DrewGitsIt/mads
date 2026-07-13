@@ -28,7 +28,15 @@ type Session struct {
 	Provider  string          `json:"provider,omitempty"`
 	Model     string          `json:"model,omitempty"`
 	Isolation string          `json:"isolation,omitempty"`
-	Summary   string          `json:"summary,omitempty"`
+	// WorktreeDir is the absolute path of this session's isolated worktree
+	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
+	// Empty means the session works directly in its configured directory.
+	WorktreeDir string `json:"worktree_dir,omitempty"`
+	// WorktreeBranch is the branch backing WorktreeDir. Non-empty means the
+	// session has isolated work not yet merged back — the UI's signal to flag
+	// the session, active or inactive, as needing merge-back.
+	WorktreeBranch string `json:"worktree_branch,omitempty"`
+	Summary        string `json:"summary,omitempty"`
 	// ActiveTaskID is the session's current task context (spec §1) — the
 	// second rung of the commit-linkage chain.
 	ActiveTaskID string `json:"active_task_id,omitempty"`
@@ -42,6 +50,16 @@ type Session struct {
 	ProviderRef string    `json:"provider_ref,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// MergeResult is the response to a session's merge-back request. A
+// conflicted merge is a normal, structured outcome — not a Go error — so
+// the API can hand it straight to the UI's resolution flow: Branch names
+// the (still-existing) worktree branch, Files names the conflicted paths.
+type MergeResult struct {
+	Conflicted bool     `json:"conflicted"`
+	Branch     string   `json:"branch,omitempty"`
+	Files      []string `json:"files,omitempty"`
 }
 
 // ChangeOrigin is how a file change was noticed (spec §5).

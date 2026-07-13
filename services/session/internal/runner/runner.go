@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/session/internal/worktree"
 )
 
 // ErrNotReady is returned by Send/Interrupt before Start has completed.
@@ -25,6 +27,10 @@ var ErrNotReady = errors.New("runner: session not ready")
 // streaming).
 var ErrTurnInFlight = errors.New("runner: turn already in flight")
 
+// ErrNoWorktree is returned by Merge when the session has no isolated
+// worktree to merge back.
+var ErrNoWorktree = errors.New("runner: session has no isolated worktree to merge")
+
 // Runner owns one provider.Session for the lifetime of this OS process.
 type Runner struct {
 	sessionID string
@@ -32,10 +38,17 @@ type Runner struct {
 	providers *provider.Registry
 
 	// Cwd is the provider session's working directory. Defaults to ".";
-	// callers set it (from -cwd) before calling Start. There is no
-	// working-directory field on contracts.Session yet — worktree path
-	// resolution is later work — so this is a known gap, not solved here.
+	// callers set it (from -cwd) before calling Start. When WorktreeRoot is
+	// set and Cwd is a git repo, Start isolates the session into a worktree
+	// under WorktreeRoot instead of running directly on Cwd (spec §17).
 	Cwd string
+
+	// WorktreeRoot is where session worktrees are created (outside Cwd).
+	// Empty (the default) disables isolation entirely, keeping every
+	// existing caller — which never sets this — on today's behavior.
+	WorktreeRoot string
+
+	wt *worktree.Manager // built lazily the first time isolation is needed
 
 	// Died is closed exactly once if the provider process ends mid-turn
 	// without us having initiated the close (the Router's crash-supervision
@@ -81,10 +94,25 @@ func (r *Runner) Start(ctx context.Context) error {
 		return fmt.Errorf("runner: provider %q: %w", sess.Provider, err)
 	}
 
+	cwd := r.Cwd
+	if r.WorktreeRoot != "" && sess.Isolation != contracts.IsolationCurrentDir {
+		switch {
+		case sess.WorktreeDir != "":
+			cwd = sess.WorktreeDir // resuming (bounce): reuse, don't recreate
+		case worktree.IsGitRepo(ctx, r.Cwd):
+			dir, branch, err := r.manager().Create(ctx, r.sessionID, sess.Name)
+			if err != nil {
+				return fmt.Errorf("runner: create worktree: %w", err)
+			}
+			sess.WorktreeDir, sess.WorktreeBranch = dir, branch
+			cwd = dir
+		}
+	}
+
 	provSess, err := p.Start(ctx, provider.StartOptions{
 		Mode:   provider.ModeACP,
 		Model:  sess.Model,
-		Cwd:    r.Cwd,
+		Cwd:    cwd,
 		Resume: sess.ProviderRef,
 	})
 	if err != nil {
@@ -120,6 +148,91 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go r.pump(provSess)
 	return nil
+}
+
+// manager lazily builds the worktree.Manager the first time isolation is
+// needed, so a Runner that never isolates (WorktreeRoot == "") never touches
+// git at all.
+func (r *Runner) manager() *worktree.Manager {
+	if r.wt == nil {
+		r.wt = &worktree.Manager{
+			Primary:   r.Cwd,
+			Root:      r.WorktreeRoot,
+			DataURL:   r.data.BaseURL(),
+			SessionID: r.sessionID,
+		}
+	}
+	return r.wt
+}
+
+// Merge attempts to merge the session's isolated worktree branch back into
+// targetBranch (the primary's current branch if targetBranch is empty). A
+// clean merge lands the work on the primary and cleans up the worktree and
+// branch; a conflicted merge aborts, keeps the branch, and returns
+// structured conflict data for the UI's resolution flow (spec §6, §17).
+//
+// Known gap, not solved here: the cleanup below removes the worktree
+// directory that the live provider process may still have as its cwd. If
+// the interactive agent is mid-turn when merge-back runs, later
+// relative-path operations in that process could fail. Restarting the
+// provider session pointed at the primary tree post-merge (reusing
+// ProviderRef the way Start already resumes it) would fix this properly,
+// but it's out of scope for W4.5's acceptance criteria.
+func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.MergeResult, error) {
+	sess, err := r.data.Session(ctx, r.sessionID)
+	if err != nil {
+		return contracts.MergeResult{}, fmt.Errorf("runner: load session: %w", err)
+	}
+	if sess.WorktreeBranch == "" {
+		return contracts.MergeResult{}, ErrNoWorktree
+	}
+
+	m := r.manager()
+	if targetBranch != "" {
+		if _, err := m.Git(ctx, r.Cwd, "checkout", targetBranch); err != nil {
+			return contracts.MergeResult{}, fmt.Errorf("runner: checkout %s: %w", targetBranch, err)
+		}
+	}
+	actualTarget, _ := m.Git(ctx, r.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	actualTarget = strings.TrimSpace(actualTarget)
+
+	if err := r.data.Append(ctx, &contracts.Envelope{
+		Type: contracts.MergeAttempted, SessionID: r.sessionID,
+		Payload: mustJSON(map[string]string{"branch": sess.WorktreeBranch, "target_branch": actualTarget}),
+	}); err != nil {
+		log.Printf("runner: append merge.attempted: %v", err)
+	}
+
+	if err := m.CommitStray(ctx, sess.WorktreeDir, r.sessionID, sess.Name); err != nil {
+		return contracts.MergeResult{}, fmt.Errorf("runner: commit stray changes: %w", err)
+	}
+	result, err := m.Merge(ctx, "git merge --no-ff", r.sessionID, sess.Name, sess.WorktreeBranch)
+	if err != nil {
+		return contracts.MergeResult{}, err
+	}
+
+	if result.Conflicted {
+		if err := r.data.Append(ctx, &contracts.Envelope{
+			Type: contracts.MergeConflicted, SessionID: r.sessionID,
+			Payload: mustJSON(map[string]any{"branch": result.Branch, "target_branch": actualTarget, "files": result.Files}),
+		}); err != nil {
+			log.Printf("runner: append merge.conflicted: %v", err)
+		}
+		return result, nil // branch/worktree untouched — session stays flagged unmerged
+	}
+
+	m.Remove(context.WithoutCancel(ctx), sess.WorktreeDir, sess.WorktreeBranch)
+	sess.WorktreeDir, sess.WorktreeBranch = "", ""
+	if err := r.data.UpdateSession(ctx, &sess); err != nil {
+		return contracts.MergeResult{}, fmt.Errorf("runner: clear worktree fields: %w", err)
+	}
+	if err := r.data.Append(ctx, &contracts.Envelope{
+		Type: contracts.MergeCompleted, SessionID: r.sessionID,
+		Payload: mustJSON(map[string]string{"branch": result.Branch, "target_branch": actualTarget}),
+	}); err != nil {
+		log.Printf("runner: append merge.completed: %v", err)
+	}
+	return result, nil
 }
 
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)

@@ -44,6 +44,11 @@ func New(baseURL, actor string) *Client {
 	}
 }
 
+// BaseURL returns the Data Service URL this client was built with.
+func (c *Client) BaseURL() string {
+	return c.base
+}
+
 // do runs one request; out, when non-nil, receives the decoded 2xx body.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader

@@ -32,6 +32,7 @@ func main() {
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
 	cwd := flag.String("cwd", ".", "provider session working directory")
+	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
 	flag.Parse()
 
 	if *sessionID == "" {
@@ -49,6 +50,7 @@ func main() {
 	data := dataclient.New(*dataURL, *sessionID)
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
+	r.WorktreeRoot = *worktreeRoot
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
