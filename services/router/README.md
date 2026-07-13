@@ -8,10 +8,13 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1 and W4.2 complete.** Child process supervision (`internal/child`,
+**Status: W4.1, W4.2, and W4.6 complete.** Child process supervision (`internal/child`,
 `internal/supervisor`), the lifecycle HTTP API, and stream fan-out (`internal/api`) are
 built and tested against real spawned processes, real SSE connections, and a real Data
-Service. Not yet built: whatever W4.6 turns out to be.
+Service. `internal/job` adds the spawn-run-exit pattern for transient Fast Model work
+(see below). Not yet wired: an HTTP endpoint that calls `job.Runner.Spawn` — that lands
+with the first wave-5 feature (summaries, retros, agent generation, selection scoring)
+that needs one.
 
 ## Run it alone
 
@@ -117,3 +120,22 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
   contract — any Session Service / Pipeline Engine process must expose `GET /output` (SSE)
   on its supervised address once it starts emitting live agent output — is relevant to
   W4.3+.
+- **Transient jobs: goroutine-hosted, not a spawned process.** `internal/job` runs Fast
+  Model work (spec §15) as an in-process goroutine, not a `child.Spawn`'d binary — nothing
+  calls into a job over HTTP the way the UI dials a session's `/output`, so there's no
+  readiness contract for `child` to supervise. `Runner.Spawn(ctx, kind, sessionID, fn)`
+  mints a job ID, appends `job.queued` synchronously, then runs `fn` on its own goroutine
+  and returns immediately; callers observe progress via the event log
+  (`job.started`/`job.completed`/`job.failed`), not via `Spawn`'s return. A recovered panic
+  in the job body becomes a `job.failed` event — the goroutine equivalent of a crashed
+  child being contained and reported rather than taking the process down. A job body's
+  only two ways to reach the outside world are `Deps.Data` (`*dataclient.Client`) and
+  `Deps.FastModel` (`*providers/fastmodel.Runner`) — never raw storage, never a live
+  provider API directly. `job.Noop` is the sample job proving the contract end to end: it
+  round-trips both legs (a `Deps.Data.Events` call and a `Deps.FastModel.DoText` call) so
+  the test proves the wiring, not just the runner's own bookkeeping. `GET /events` already
+  proxies every event type transparently (see above), so job lifecycle events are
+  observable over the existing SSE stream with zero Router API changes. There is
+  deliberately no HTTP endpoint yet that calls `job.Runner.Spawn` and no `job.Runner`
+  constructed in `main.go` — the first wave-5 feature that defines a real job kind wires
+  both.
