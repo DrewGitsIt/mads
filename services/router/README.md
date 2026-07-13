@@ -8,10 +8,10 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1 complete.** Child process supervision (`internal/child`,
-`internal/supervisor`) and the lifecycle HTTP API (`internal/api`) are built and tested
-against real spawned processes and a real Data Service. Not yet built: event subscription
-proxying and agent-output streaming to the UI (W4.2), and whatever W4.6 turns out to be.
+**Status: W4.1 and W4.2 complete.** Child process supervision (`internal/child`,
+`internal/supervisor`), the lifecycle HTTP API, and stream fan-out (`internal/api`) are
+built and tested against real spawned processes, real SSE connections, and a real Data
+Service. Not yet built: whatever W4.6 turns out to be.
 
 ## Run it alone
 
@@ -57,6 +57,16 @@ never called peer-to-peer.
 - `POST /pipelines` — body `{"session_id", "template_id"}`, mints a `run_<hex>` ID, spawns
   a Pipeline Engine child; 201 with `{"run_id", "addr"}`.
 - `POST /pipelines/{id}/cancel` — stop the child and append `pipeline.cancelled`; 204.
+- `GET /events` — the UI's single control-plane subscription point (spec §15). SSE only
+  (`Accept: text/event-stream`, no batch/JSON mode — the Data Service already serves that
+  directly for one-shot fetches). Query params `since`/`session_id`/`types` are passed
+  straight through to `dataclient.Stream`; each envelope is re-emitted with the same
+  `id:`/`event:`/`data:` framing the Data Service uses, so a reconnecting client's
+  `since=<last id>` resumes without gaps whether it's talking to the Data Service directly
+  or through Router.
+- `GET /sessions/{id}/output`, `GET /pipelines/{id}/output` — the UI's data-plane
+  subscription point: a byte-transparent reverse proxy to the running child's own
+  `GET /output` SSE endpoint. 404 if the session/pipeline isn't currently running.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
@@ -87,5 +97,23 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
   right after `cmd.Start()` in `internal/child`, not after address discovery, so a child
   that crashes before ever logging "listening on \<addr\>" is still reaped and still fires
   `onExit` — the `exitedCh` branch of `Spawn`'s ready-select.
-  (Subscription reconnect resuming from cursor without gaps is W4.2's critical path, not
-  this one's.)
+- **Control plane: per-subscriber proxy, not a shared multiplexer.** `GET /events` opens
+  one independent upstream `dataclient.Stream` call per UI connection — there is no
+  Router-side fan-out logic and no shared upstream state between subscribers. Filtering is
+  entirely the Data Service's job; Router just passes `since`/`session_id`/`types` through.
+  `TestStreamEventsFanoutFilters` (`internal/api`) proves two concurrent subscribers with
+  different `session_id` filters each see exactly their own events, in order, and nothing
+  else. `TestStreamEventsReconnectWithCursorNoGaps` proves a subscriber that disconnects,
+  misses events appended while it's gone, and reconnects with `since=<lastSeq>` resumes
+  with exactly the missed events — no gap, no duplicate.
+- **Data plane: forwarded, never persisted.** `handleSessionOutput`/`handlePipelineOutput`
+  reverse-proxy straight to the child's `GET /output`; the handler never touches `s.data`
+  or any dataclient call on this path. `TestSessionOutputForwarding` (`internal/api`)
+  spawns a real session child, streams its `/output` through Router, and then asserts the
+  Data Service's event log is byte-for-byte unchanged — proving the forwarded tokens never
+  reached the Data Service. Multi-viewer fan-out on this plane (two tabs watching the same
+  session) is out of scope here: each UI connection gets its own upstream proxy connection
+  to the child, so N viewers means N upstream connections, not one shared one. The child
+  contract — any Session Service / Pipeline Engine process must expose `GET /output` (SSE)
+  on its supervised address once it starts emitting live agent output — is relevant to
+  W4.3+.

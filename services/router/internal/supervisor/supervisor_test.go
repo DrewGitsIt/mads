@@ -219,3 +219,36 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 		t.Fatalf("pipeline.failed events after Terminate: %v, want none", events)
 	}
 }
+
+func TestSessionAndPipelineAddr(t *testing.T) {
+	base := datatest.Start(t)
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, ok := sup.SessionAddr("no-such-session"); ok {
+		t.Fatal("SessionAddr for untracked session: ok = true, want false")
+	}
+	if _, ok := sup.PipelineAddr("no-such-run"); ok {
+		t.Fatal("PipelineAddr for untracked run: ok = true, want false")
+	}
+
+	sessionID := "ses_addr"
+	sessionAddr, err := sup.SpawnSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if got, ok := sup.SessionAddr(sessionID); !ok || got != sessionAddr {
+		t.Fatalf("SessionAddr(%s) = %q, %v; want %q, true", sessionID, got, ok, sessionAddr)
+	}
+
+	runID := "run_addr"
+	pipelineAddr, err := sup.SpawnPipeline(ctx, runID, sessionID)
+	if err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+	if got, ok := sup.PipelineAddr(runID); !ok || got != pipelineAddr {
+		t.Fatalf("PipelineAddr(%s) = %q, %v; want %q, true", runID, got, ok, pipelineAddr)
+	}
+}
