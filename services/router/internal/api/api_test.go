@@ -11,8 +11,11 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -35,13 +38,22 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// testJobs builds a job.Runner over a fake-backed Fast Model — no scripted
+// reply needed for tests that don't exercise agent generation.
+func testJobs(t *testing.T, data *dataclient.Client) *job.Runner {
+	t.Helper()
+	fm := fastmodel.New(fake.New(), fastmodel.Config{})
+	return job.New(data, fm)
+}
+
 // newTestServer wires a real datatest Data Service, a Supervisor that spawns
 // the fast testchild binary, and the Router's own api.Handler in front of it.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
-	srv := httptest.NewServer(api.New(dataclient.New(base, "router"), sup))
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin})
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data)))
 	t.Cleanup(srv.Close)
 	return srv
 }

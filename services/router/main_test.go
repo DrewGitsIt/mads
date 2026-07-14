@@ -6,13 +6,17 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 func TestHealth(t *testing.T) {
 	data := dataclient.New("http://localhost:0", "router")
 	sup := supervisor.New(data, nil, nil)
-	srv := httptest.NewServer(newMux(data, sup))
+	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}))
+	srv := httptest.NewServer(newMux(data, sup, jobs))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")
