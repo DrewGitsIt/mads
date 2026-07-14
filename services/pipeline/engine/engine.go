@@ -52,6 +52,16 @@ type Config struct {
 	// at a third of the TTL while the task runs: agent stages can be silent
 	// far longer than any TTL, so writes must never be the only renewal.
 	LeaseTTL time.Duration
+	// RateLimitBackoff is how long the engine pauses before retrying a stage
+	// attempt that hit a provider rate limit (spec §11.9: inform and wait).
+	// Default 5m — these are rolling windows measured in minutes to hours,
+	// so the default is deliberately coarse. Tests override with sub-second
+	// values.
+	RateLimitBackoff time.Duration
+	// RateLimitMaxRetries caps retries after a rate limit before the task is
+	// blocked with a note naming the limit, in case the provider never
+	// recovers. Default 12 (~1h of pauses at the default backoff).
+	RateLimitMaxRetries int
 
 	// Isolated turns on worktree-per-task (spec §6, §17): stages before the
 	// merge run in the task's own worktree; the merge stage brings the task
@@ -88,6 +98,12 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	}
 	if cfg.LeaseTTL <= 0 {
 		cfg.LeaseTTL = 10 * time.Minute
+	}
+	if cfg.RateLimitBackoff <= 0 {
+		cfg.RateLimitBackoff = 5 * time.Minute
+	}
+	if cfg.RateLimitMaxRetries <= 0 {
+		cfg.RateLimitMaxRetries = 12
 	}
 
 	// Launch checks — the same ones the template editor runs (M9).
@@ -432,7 +448,11 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				output = err.Error()
 			}
 		} else {
-			output, err = e.runStage(ctx, st, task, feedback, run.dir)
+			var blocked bool
+			output, err, blocked = e.runStageRateLimited(ctx, st, &task, feedback, run.dir, &lost, &terminal, blockReason)
+			if blocked {
+				return contracts.StatusBlocked
+			}
 		}
 		if lost.Load() {
 			return task.Status // lease gone mid-stage; whoever holds it now owns the outcome
@@ -477,6 +497,45 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		return contracts.StatusBlocked
 	}
 	return contracts.StatusDone
+}
+
+// runStageRateLimited runs st, pausing and retrying the SAME attempt (same
+// feedback, no loop-back consumed) each time the provider reports a rolling
+// rate limit — the engine waits it out instead of treating it like a stage
+// failure (spec §11.9). blocked reports whether it already parked the task
+// at the retry cap; callers must return StatusBlocked without further
+// handling in that case.
+func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, lost *atomic.Bool, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
+	var attempt int
+	for {
+		output, err = e.runStage(ctx, st, *task, feedback, dir)
+		if lost.Load() {
+			return output, err, false
+		}
+		var rle *provider.RateLimitError
+		if err == nil || !errors.As(err, &rle) {
+			return output, err, false
+		}
+		attempt++
+		if attempt > e.cfg.RateLimitMaxRetries {
+			terminal.Store(true)
+			e.block(ctx, task, st.Name, blockReason(fmt.Sprintf(
+				"rate limited by the provider (%s) after %d attempt(s), giving up",
+				rle.Message, attempt)))
+			return output, err, true
+		}
+		e.event(ctx, contracts.StageRateLimited, task.ID, map[string]any{
+			"stage": st.Name, "attempt": attempt, "message": rle.Message,
+			"backoff": e.cfg.RateLimitBackoff.String(),
+		})
+		select {
+		case <-time.After(e.cfg.RateLimitBackoff):
+		case <-ctx.Done():
+		}
+		e.event(ctx, contracts.StageRateLimitCleared, task.ID, map[string]any{
+			"stage": st.Name, "attempt": attempt,
+		})
+	}
 }
 
 // taskRun is one task's execution context.

@@ -39,9 +39,15 @@ type Rule struct {
 	// the event stream closes with no turn end — the process-died signal
 	// downstream supervision consumes.
 	Crash bool `yaml:"crash,omitempty"`
-	// RateLimit makes the turn fail with *provider.RateLimitError instead
-	// of running (§11.9 inform-and-wait paths).
+	// RateLimit makes every matching turn fail with *provider.RateLimitError
+	// instead of running (§11.9 inform-and-wait paths). Mutually exclusive
+	// with RateLimitTimes and Crash.
 	RateLimit bool `yaml:"rate_limit,omitempty"`
+	// RateLimitTimes makes the first N matching turns fail with
+	// *provider.RateLimitError; the (N+1)th and later turns run normally
+	// (Reply/Chunks/Tools as scripted). Lets a test script "rate-limited
+	// twice, then succeeds". Mutually exclusive with RateLimit and Crash.
+	RateLimitTimes int `yaml:"rate_limit_times,omitempty"`
 }
 
 // ToolStep is one scripted tool invocation.
@@ -59,8 +65,11 @@ type ToolStep struct {
 func (sc Scenario) Validate() error {
 	var probs []string
 	for i, r := range sc.Rules {
-		if r.Crash && r.RateLimit {
-			probs = append(probs, fmt.Sprintf("rule %d: crash and rate_limit are mutually exclusive", i))
+		if r.Crash && (r.RateLimit || r.RateLimitTimes > 0) {
+			probs = append(probs, fmt.Sprintf("rule %d: crash and rate_limit(_times) are mutually exclusive", i))
+		}
+		if r.RateLimit && r.RateLimitTimes > 0 {
+			probs = append(probs, fmt.Sprintf("rule %d: rate_limit and rate_limit_times are mutually exclusive", i))
 		}
 		for j, ts := range r.Tools {
 			if ts.Name == "" {

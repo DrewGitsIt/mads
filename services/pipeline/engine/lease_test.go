@@ -98,6 +98,48 @@ func TestSuspendWakeRestoresTask(t *testing.T) {
 	}
 }
 
+// A rate-limit pause is not a silent stage — it's the engine itself waiting —
+// but the lease must be held across it exactly the same way: the heartbeat
+// keeps renewing through a backoff far longer than the TTL, so a foreign
+// claim mid-pause is refused and the task still finishes.
+func TestRateLimitPauseHoldsLease(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: throttled", Reply: "done", RateLimitTimes: 1})
+	seeded := h.seed(contracts.Task{Title: "throttled"})
+	parsed, verr := template.Check([]byte(soloTemplate), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	const ttl = 150 * time.Millisecond
+	const backoff = 600 * time.Millisecond // several heartbeat ticks (ttl/3) deep
+	done := make(chan *Summary, 1)
+	go func() {
+		sum, err := Run(context.Background(), Config{
+			Data: h.data, Provider: f, SessionID: h.sess.ID,
+			Template: parsed, Cwd: h.cwd, Concurrency: 1,
+			StageTimeout: 30 * time.Second, LeaseTTL: ttl,
+			RateLimitBackoff: backoff,
+		})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- sum
+	}()
+
+	// Mid-pause, well past the TTL: the lease must still be held.
+	time.Sleep(backoff / 2)
+	thief := dataclient.New(h.base, "thief")
+	err := thief.Claim(context.Background(), seeded[0].ID, time.Minute)
+	if !errors.Is(err, dataclient.ErrConflict) {
+		t.Fatalf("foreign claim during a rate-limit pause: err=%v (want conflict — the heartbeat must be renewing)", err)
+	}
+
+	sum := <-done
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+}
+
 // The other side of the heartbeat: when a renewal is refused because another
 // actor holds the lease, the task is no longer ours — the engine must stop
 // driving it and write nothing more, leaving the outcome to the new holder.

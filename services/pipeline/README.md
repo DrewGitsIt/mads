@@ -18,8 +18,11 @@ frozen template over a session's task graph: launch checks (shared
 agent stages as provider one-shots, command stages via `sh -c`, `when:`
 guards (grammar in `pkg/template` so the editor rejects exactly what launch
 rejects), and `on_fail` loop-backs that feed failure output back into the
-next agent attempt before blocking at max_loops. Every running task is
-leased; foreign-leased tasks are left untouched.
+next agent attempt before blocking at max_loops. A provider rate limit is
+not a stage failure: the engine pauses and retries the same attempt (no
+loop_back consumed, no rate-limit text reaching the prompt) until the
+provider recovers or a retry cap is hit, per spec §11.9. Every running task
+is leased; foreign-leased tasks are left untouched.
 
 With `Isolated` on (W3.2), each task gets its own worktree and `mads/<task>`
 branch: pre-merge stages run there, a stage whose command starts `git merge`
@@ -85,6 +88,16 @@ never a mock of either contract.
   the TTL at once; on wake the reaper has blocked the task but nobody else
   claimed it, so the engine re-takes the lease and puts the status back to
   in_progress (the second Wave-4 run surfaced this): TestSuspendWakeRestoresTask.
+- **Rate limits pause instead of failing** — a stage hit with
+  `*provider.RateLimitError` retries the same attempt after
+  `RateLimitBackoff`, emitting `stage.rate_limited`/`stage.rate_limit_cleared`
+  around the pause, with zero loop_back iterations consumed and no
+  rate-limit text ever reaching an agent prompt; a provider that never
+  recovers within `RateLimitMaxRetries` blocks the task with a note naming
+  the rate limit, not a generic stage failure; and the lease heartbeat holds
+  the task through the whole pause (proven with a sub-second TTL):
+  TestRateLimitPausesThenSucceeds, TestRateLimitNeverRecoversBlocks,
+  TestRateLimitPauseHoldsLease.
 - **`when:` guards skip, visibly** — stage.skipped events, not silence:
   TestWhenGuardSkips.
 - **Conflicts block loudly and abort cleanly** — the trunk stays clean, the

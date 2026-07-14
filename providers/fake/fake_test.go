@@ -185,6 +185,42 @@ func TestRateLimitOnCue(t *testing.T) {
 	}
 }
 
+// RateLimitTimes scripts "rate-limited N times, then succeeds": the first N
+// matching turns fail with the typed error, the rest run normally.
+func TestRateLimitTimesThenSucceeds(t *testing.T) {
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "rl", Rules: []fake.Rule{
+		{Match: "retry me", Reply: "all good", RateLimitTimes: 2},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := provider.OneShotRequest{Prompt: "retry me"}
+	for i := 0; i < 2; i++ {
+		_, err := f.OneShot(context.Background(), req)
+		var rle *provider.RateLimitError
+		if !errors.As(err, &rle) {
+			t.Fatalf("attempt %d: want RateLimitError, got %v", i+1, err)
+		}
+	}
+	res, err := f.OneShot(context.Background(), req)
+	if err != nil {
+		t.Fatalf("third attempt: want success, got %v", err)
+	}
+	if res.Text != "all good" {
+		t.Errorf("third attempt: text = %q, want %q", res.Text, "all good")
+	}
+}
+
+// RateLimit and RateLimitTimes together are rejected as ambiguous.
+func TestScenarioValidationRateLimitTimesExclusive(t *testing.T) {
+	_, err := fake.NewWithScenario(fake.Scenario{Name: "bad-rl", Rules: []fake.Rule{
+		{Match: "x", RateLimit: true, RateLimitTimes: 2},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("want mutually-exclusive rejection, got %v", err)
+	}
+}
+
 // Delay on cue keeps the turn observably in flight, and an interrupt during
 // the delay ends it with the partial text.
 func TestDelayAndInterrupt(t *testing.T) {
