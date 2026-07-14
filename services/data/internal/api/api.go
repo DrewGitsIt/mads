@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
@@ -17,12 +18,14 @@ type server struct {
 	log    *store.Log
 	tasks  *store.Tasks
 	leases *store.Leases
+	caps   *store.Registry[contracts.Capability]
 }
 
 // New returns the Data Service handler backed by db.
 func New(db *sql.DB) http.Handler {
 	l := store.NewLog(db)
-	s := &server{db: db, log: l, tasks: store.NewTasks(l), leases: store.NewLeases(l)}
+	caps := store.NewCapabilities(l)
+	s := &server{db: db, log: l, tasks: store.NewTasks(l), leases: store.NewLeases(l), caps: caps}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /events", s.handlePostEvent)
@@ -43,7 +46,8 @@ func New(db *sql.DB) http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/release", s.handleReleaseLease)
 	mux.HandleFunc("POST /leases/release-all", s.handleReleaseAllLeases)
 	registryRoutes(mux, "agents", store.NewAgents(l))
-	registryRoutes(mux, "capabilities", store.NewCapabilities(l))
+	registryRoutes(mux, "capabilities", caps)
+	mux.HandleFunc("POST /capabilities/{id}/health", s.handleSetCapabilityHealth)
 	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	templateRoutes(mux, l)
 	sessionRoutes(mux, l)

@@ -281,6 +281,36 @@ func (c *Client) CreateAgent(ctx context.Context, a *contracts.Agent) error {
 	return c.do(ctx, http.MethodPost, "/agents", a, a)
 }
 
+func (c *Client) Capability(ctx context.Context, idOrName string) (contracts.Capability, error) {
+	var out contracts.Capability
+	err := c.do(ctx, http.MethodGet, "/capabilities/"+url.PathEscape(idOrName), nil, &out)
+	return out, err
+}
+
+// Capabilities lists the full capability registry — the declaration source
+// for the capability runtime's MCP lifecycle and skill injection (spec §12).
+func (c *Client) Capabilities(ctx context.Context) ([]contracts.Capability, error) {
+	var out []contracts.Capability
+	err := c.do(ctx, http.MethodGet, "/capabilities", nil, &out)
+	return out, err
+}
+
+// CreateCapability adds a capability to the registry.
+func (c *Client) CreateCapability(ctx context.Context, capability *contracts.Capability) error {
+	return c.do(ctx, http.MethodPost, "/capabilities", capability, capability)
+}
+
+// SetCapabilityHealth records a health check result (spec §12.6): reason
+// must never carry a credential value, only capability/env-var names and
+// static diagnostic text (spec §13) — this travels as a wire type, so a
+// credential value here would violate the boundary.
+func (c *Client) SetCapabilityHealth(ctx context.Context, idOrName string, healthy bool, reason string) (contracts.Capability, error) {
+	var out contracts.Capability
+	body := map[string]any{"healthy": healthy, "reason": reason}
+	err := c.do(ctx, http.MethodPost, "/capabilities/"+url.PathEscape(idOrName)+"/health", body, &out)
+	return out, err
+}
+
 // --- Templates (spec §6) ---
 
 // Template fetches by id or name; used_by is dropped — callers wanting

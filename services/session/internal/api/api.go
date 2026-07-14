@@ -28,6 +28,8 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /stream", s.handleStream)
 	mux.HandleFunc("GET /files", s.handleFiles)
 	mux.HandleFunc("GET /commits", s.handleCommits)
+	mux.HandleFunc("POST /skills/{name}/inject", s.handleInjectSkill)
+	mux.HandleFunc("GET /capabilities/{name}/diagnose", s.handleDiagnoseCapability)
 	return mux
 }
 
@@ -143,6 +145,32 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, commits)
+}
+
+// handleInjectSkill sends a declared skill's content into the session as a
+// turn (spec §12.4) — the system-directed and /command injection paths both
+// resolve to this one endpoint.
+func (s *server) handleInjectSkill(w http.ResponseWriter, r *http.Request) {
+	if err := s.runner.InjectSkill(r.Context(), r.PathValue("name")); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+// handleDiagnoseCapability runs a live health check (spec §12.7) — not a
+// cached read — self-healing the recorded status as a side effect.
+func (s *server) handleDiagnoseCapability(w http.ResponseWriter, r *http.Request) {
+	healthy, reason, suggestions, err := s.runner.DiagnoseCapability(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"healthy":     healthy,
+		"reason":      reason,
+		"suggestions": suggestions,
+	})
 }
 
 // writeRunnerError maps the runner's sentinel errors onto this API's
