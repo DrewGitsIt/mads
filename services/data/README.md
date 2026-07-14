@@ -7,13 +7,14 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: Wave 1 COMPLETE (W1.1–W1.7)**, plus **W5.7 (metrics query views)** — SQLite
-store + migrations, event log + transactional outbox + SSE subscriptions, task store,
-write leases, registries (six system agents seeded), pipeline templates
-(launch-equivalent validation via `pkg/template`, system default seeded), session
-records with §5 file-change attribution and the commit-linkage chain, and `GET
-/metrics/*` dashboard views computed as pure queries over the event log. W5.7 was the
-only Wave 5 item scoped to this service, so Wave 5 is closed out here too.
+**Status: Wave 1 COMPLETE (W1.1–W1.7)**, plus **W5.7 (metrics query views)** and the
+retro store (W5.5) — SQLite store + migrations, event log + transactional outbox + SSE
+subscriptions, task store, write leases, registries (six system agents seeded), pipeline
+templates (launch-equivalent validation via `pkg/template`, system default seeded),
+session records with §5 file-change attribution and the commit-linkage chain, `GET
+/metrics/*` dashboard views computed as pure queries over the event log, and `/retros`
+CRUD plus per-DPA accept/reject/edit and follow-up-session linkage (spec §7) for the
+Router's retro engine (`services/router`'s `job.GenerateRetro`).
 
 ## Run it alone
 
@@ -130,6 +131,20 @@ the event log plus the task and capability tables; no separate metrics store (§
 production emitter yet (future wiring: `services/session`'s runner and the
 capability runtime's injection paths) — same pattern as `agent.outcome_recorded`.
 
+Retro routes (spec §7, W5.5) — a `Retro`'s DPAs live inside its own JSON blob, not a
+separate SQL table, so per-DPA mutations are read-modify-write inside `store.Log.WithTx`:
+
+- `POST /retros`, `GET /retros`, `GET /retros/{id}` — create/list/get; `Create` emits
+  `retro.completed` in the same transaction as the row write (one write, one event — the
+  Router's job body makes no completion emit of its own).
+- `POST /retros/{id}/dpas/{dpaId}/accept` / `reject` — flips a DPA's status, emits
+  `retro.dpa_accepted` / `retro.dpa_rejected`.
+- `PATCH /retros/{id}/dpas/{dpaId}` — edits any non-empty field, sets status to `edited`,
+  emits `retro.dpa_edited`.
+- `POST /retros/{id}/follow-up` — links a retro to the session created from its accepted
+  DPAs, emits `retro.follow_up_created`. Called by the Router's
+  `handleRetroFollowUpSession` after it creates the session and imports the tasks.
+
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|
 status_changed|confirmed|discarded`, `note.created|confirmed|discarded`);
@@ -179,3 +194,7 @@ subscribers are woken post-commit.
   `capability.invoked` events are visible as removal candidates instead of
   disappearing from the view: `pkg/dataclient/metrics_test.go`
   (TestMetricsCapabilityUsage).
+- **DPA transitions never lose the rest of the retro.** Accept/reject/edit each
+  read-modify-write the whole `Retro` row inside one `WithTx`, so a DPA mutation can never
+  partially apply or clobber sibling DPAs: `internal/store/retros_test.go`
+  (TestDPATransitions, TestDPANotFound).

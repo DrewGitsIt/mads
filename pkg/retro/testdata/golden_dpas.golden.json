@@ -1,0 +1,20 @@
+[
+  {
+    "id": "dpa_1",
+    "problem": "The CI test suite fails intermittently on the router package.",
+    "evidence": "Task 'Flaky test suite' has retry_count 3 and a blocker note about a timing-dependent test.",
+    "root_cause": "A test asserts on goroutine completion without synchronization.",
+    "remediation_layer": "tool_config",
+    "suggested_action": "Add a wait group or channel handshake instead of a sleep in the test.",
+    "status": "accepted"
+  },
+  {
+    "id": "dpa_2",
+    "problem": "The commit fixing the flake was orphaned (no linked task).",
+    "evidence": "Commit abc123 'fix flaky test' has orphan=true.",
+    "root_cause": "The session had no active task set when the fix was committed.",
+    "remediation_layer": "human_process",
+    "suggested_action": "Set the session's active task before committing fixes.",
+    "status": "accepted"
+  }
+]

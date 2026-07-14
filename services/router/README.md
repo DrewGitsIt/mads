@@ -8,7 +8,7 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1, W4.2, W4.6, W5.3, and W5.4 complete.** Child process supervision
+**Status: W4.1, W4.2, W4.6, W5.3, W5.4, and W5.5 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
 (`internal/api`) are built and tested against real spawned processes, real SSE
 connections, and a real Data Service. `internal/job` adds the spawn-run-exit pattern for
@@ -17,6 +17,11 @@ its first caller, spawning `pkg/agentgen` draft generation (task-context or NL-d
 driven) and delivering the result as an `agent.draft_generated` event. `internal/supervisor`
 also spawns a `session_summary` job (W5.4, spec §16) on every session-child exit, deriving
 the session's compressed narrative from task data and writing it to `session.summary`.
+`POST /retros` (W5.5, spec §7) spawns the retro engine — a cancellable job that generates
+DPAs (Durable Preventative Actions) over user-selected sessions via `pkg/retro`, persisted
+by the Data Service; `POST /jobs/{id}/cancel` cancels any running job generically, and
+`POST /retros/{id}/follow-up-session` turns a retro's accepted DPAs into a new session's
+tasks.
 
 ## Run it alone
 
@@ -87,6 +92,23 @@ never called peer-to-peer.
   `{"job_id": ...}` immediately; the draft (plus a near-duplicate warning, if any) is
   delivered asynchronously as an `agent.draft_generated` event, observed via `GET /events`
   like any other job.
+- `POST /retros` — body `{"session_ids", "user_observations"?}`; 400 if `session_ids` is
+  empty. Mints the retro ID before spawning (so it can be handed back immediately and so
+  every `retro.*` event the job emits carries it for correlation), spawns a
+  `job.RetroKind` job, returns 202 with `{"job_id", "retro_id"}`. Progress
+  (`retro.started`/`retro.progress`/`retro.completed`/`retro.failed`/`retro.cancelled`) and
+  the final DPA set are observed via `GET /events` and `dataclient.Retro`, like any other
+  job.
+- `POST /jobs/{id}/cancel` — cancels any running job generically (not retro-specific, so
+  any future cancellable job kind gets it for free); 204, or 404 if the job isn't running
+  (already finished or never existed).
+- `POST /retros/{id}/follow-up-session` — turns a retro's non-rejected DPAs into a new
+  session's tasks (spec §7): one task per DPA, `Source: "retro"` and `DPAID` set for
+  traceability; the new session is tagged `Tags: ["retro"]` with `RetroID` set (this is
+  also how "retro-of-retros" works — it's not a separate mode, just selecting a
+  retro-tagged session as an input to another `POST /retros` call). 400 if every DPA is
+  rejected (nothing to create). Mirrors `POST /sessions`' spawn-then-rollback-on-failure
+  pattern; 201 with `{"session", "addr", "tasks"}`.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
@@ -187,3 +209,17 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
   path end to end against a real `job.Runner`; `job.GenerateSessionSummary`'s own tests
   (`internal/job`) prove the write and, explicitly, that a second run overwrites the first
   rather than appending.
+- **Cancelling a retro mid-generation leaves no partial state.** `job.GenerateRetro`
+  (`internal/job/retro.go`) makes exactly one Data Service write —
+  `deps.Data.CreateRetro` — and only after `pkg/retro.Generator.Generate` (which is
+  read-only) fully succeeds, so a cancel at any earlier point guarantees nothing was
+  persisted. `Runner.Cancel(jobID)` cancels that job's own `context.CancelFunc`;
+  `Runner.run` distinguishes a cancelled job from a genuinely failed one via
+  `errors.Is(err, context.Canceled)` and reports terminal events on a fresh
+  `context.Background()`-derived context (the job's own ctx is already cancelled and
+  can't carry its own cancellation report).
+  `TestRetroJobCancelLeavesNoPartialState` (`internal/job`) gates the Fast Model's HTTP
+  backend on a channel, waits for a `retro.progress{step:"generating"}` event (proving
+  generation reached the model call), cancels, and then inspects the Data Service
+  directly: no `Retro` row exists (`dataclient.ErrNotFound`), and no
+  `retro.completed`/`job.completed` events were ever emitted.

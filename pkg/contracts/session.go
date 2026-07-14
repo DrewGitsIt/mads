@@ -71,6 +71,13 @@ type Session struct {
 	// LinkedLeaderID is the schema hook for linked sessions (spec §1.12,
 	// behind the linked-sessions flag); empty until that feature lands.
 	LinkedLeaderID string `json:"linked_leader_id,omitempty"`
+	// Tags marks a session for cross-cutting classification — currently just
+	// "retro" for a retro-generated follow-up session (spec §7's retro-of-retros:
+	// selecting tagged sessions, not a separate mode).
+	Tags []string `json:"tags,omitempty"`
+	// RetroID is set when this session was created as a retro's follow-up
+	// (spec §7 DPA → task flow) — the traceability link back to the analysis.
+	RetroID string `json:"retro_id,omitempty"`
 	// SynthesisMode controls the synthesis engine (spec §4, §10). Empty is
 	// treated as SynthesisOff by the engine — no DB default needed, since
 	// sessions are a JSON blob column.
