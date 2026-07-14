@@ -74,7 +74,10 @@ Registry routes (spec §9, §12, §17) — uniform CRUD on `/agents`, `/capabili
 `/workspaces`: `POST /<base>`, `GET /<base>`, `GET|PUT|DELETE /<base>/{id-or-name}`
 (name resolution is how pipeline `agent:` references and workspace bindings find
 their targets). System agents are editable but not deletable. Every mutation emits
-its `agent.*`/`capability.*`/`workspace.*` event.
+its `agent.*`/`capability.*`/`workspace.*` event. `GET /agents` backs
+`pkg/agentselect`'s candidate pool (spec §9); its selection decisions and stage
+outcomes are recorded as `agent.selected` / `agent.outcome_recorded` events through
+the general event log, not through this registry CRUD surface.
 
 Session routes (spec §1, §5): `POST/GET /sessions` (`?activity=` filter),
 `GET/PUT/DELETE /sessions/{id}` — updates emit the specific event

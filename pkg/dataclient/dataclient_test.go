@@ -83,6 +83,18 @@ func TestClientRoundTrip(t *testing.T) {
 	if err != nil || agent.Prompt == "" {
 		t.Fatalf("seeded agent: %+v, %v", agent, err)
 	}
+	seeded, err := c.Agents(ctx)
+	if err != nil || len(seeded) < 6 {
+		t.Fatalf("seeded agents list: %d, %v", len(seeded), err)
+	}
+	newAgent := contracts.Agent{Name: "custom-agent", Prompt: "do things"}
+	if err := c.CreateAgent(ctx, &newAgent); err != nil || newAgent.ID == "" {
+		t.Fatalf("create agent: %+v, %v", newAgent, err)
+	}
+	afterCreate, err := c.Agents(ctx)
+	if err != nil || len(afterCreate) != len(seeded)+1 {
+		t.Fatalf("agents after create: %d, %v", len(afterCreate), err)
+	}
 	tpl, err := c.Template(ctx, "default-implementation")
 	if err != nil || tpl.Source == "" {
 		t.Fatalf("seeded template: %+v, %v", tpl, err)

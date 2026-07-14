@@ -108,6 +108,16 @@ const (
 	AgentCreated EventType = "agent.created"
 	AgentUpdated EventType = "agent.updated"
 	AgentDeleted EventType = "agent.deleted"
+	// AgentSelected fires when auto-select (spec §9) picks an agent for a task
+	// stage. Payload is agentselect.Selection (json) — the quadrant classification
+	// and every candidate's score breakdown, so retros (§7) can evaluate ranking
+	// quality after the fact.
+	AgentSelected EventType = "agent.selected"
+	// AgentOutcomeRecorded fires once a task stage's result under a specific
+	// agent is known, feeding future failure-exclusion and track-record ranking
+	// (spec §9). Payload: {"agent": string, "stage": string, "labels": []string,
+	// "outcome": "success"|"failure"}.
+	AgentOutcomeRecorded EventType = "agent.outcome_recorded"
 
 	WorkspaceCreated EventType = "workspace.created"
 	WorkspaceUpdated EventType = "workspace.updated"
@@ -144,7 +154,7 @@ var EventTypes = []EventType{
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	JobQueued, JobStarted, JobCompleted, JobFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
-	AgentCreated, AgentUpdated, AgentDeleted,
+	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	AttachmentAdded,
