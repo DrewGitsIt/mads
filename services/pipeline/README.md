@@ -88,6 +88,19 @@ never a mock of either contract.
   the TTL at once; on wake the reaper has blocked the task but nobody else
   claimed it, so the engine re-takes the lease and puts the status back to
   in_progress (the second Wave-4 run surfaced this): TestSuspendWakeRestoresTask.
+- **Sleep is inhibited while a run is active** — the engine holds a
+  logind `sleep:idle` block inhibitor for the run's duration, plus an
+  `org.freedesktop.ScreenSaver` inhibit on the session bus where one
+  exists (COSMIC's automatic idle-suspend only honors the latter — a
+  logind-only inhibitor was held throughout the Wave-5 run and the
+  machine still suspended at 01:14 that day); both release on every exit
+  path — completion, cancellation, and launch failure. A missing/refused
+  D-Bus service logs a warning and the run proceeds unaffected; this is
+  a polite block, so critical-battery and forced lid-close policies still
+  override it, and the suspend/wake self-heal above stays as the
+  backstop: TestInhibitorHeldForRun, TestInhibitorReleasedOnLaunchFailure,
+  TestInhibitorReleasedOnCancel, TestInhibitorDisabled,
+  TestInhibitorDefaultsGracefully.
 - **Rate limits pause instead of failing** — a stage hit with
   `*provider.RateLimitError` retries the same attempt after
   `RateLimitBackoff`, emitting `stage.rate_limited`/`stage.rate_limit_cleared`
