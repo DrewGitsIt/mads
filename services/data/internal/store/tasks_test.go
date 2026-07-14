@@ -192,6 +192,63 @@ func TestHandoffsAndNotes(t *testing.T) {
 	}
 }
 
+func TestNoteDraftLifecycle(t *testing.T) {
+	s, l := newTaskStore(t)
+	ctx := context.Background()
+	task := mkTask(t, s, contracts.Task{Title: "A"})
+
+	confirm := &contracts.Note{Type: contracts.NoteDecision, Content: "confirm me", Source: "synthesizer", Status: contracts.NoteStatusDraft}
+	if err := s.AddNote(ctx, task.ID, confirm, "synthesizer"); err != nil {
+		t.Fatal(err)
+	}
+	discard := &contracts.Note{Type: contracts.NoteObservation, Content: "discard me", Source: "synthesizer", Status: contracts.NoteStatusDraft}
+	if err := s.AddNote(ctx, task.ID, discard, "synthesizer"); err != nil {
+		t.Fatal(err)
+	}
+	real := &contracts.Note{Type: contracts.NoteContext, Content: "already real", Source: "user"}
+	if err := s.AddNote(ctx, task.ID, real, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ConfirmNote(ctx, task.ID, confirm.ID, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DiscardNote(ctx, task.ID, discard.ID, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notes) != 2 {
+		t.Fatalf("want 2 remaining notes (confirmed + real), got %+v", got.Notes)
+	}
+	for _, n := range got.Notes {
+		if n.ID == discard.ID {
+			t.Errorf("discarded note still present: %+v", n)
+		}
+		if n.ID == confirm.ID && n.Status != contracts.NoteStatusConfirmed {
+			t.Errorf("confirm did not promote status: %+v", n)
+		}
+	}
+
+	// A non-draft note cannot be confirmed or discarded.
+	var verr *contracts.ValidationError
+	if err := s.DiscardNote(ctx, task.ID, real.ID, "user"); !errors.As(err, &verr) {
+		t.Errorf("discarding a non-draft note should be a validation error, got %v", err)
+	}
+
+	if err := s.ConfirmNote(ctx, task.ID, 99999, "user"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("confirming a missing note: want ErrNotFound, got %v", err)
+	}
+
+	types := eventTypes(t, l, Filter{Types: []string{"note.confirmed", "note.discarded"}})
+	if len(types) != 2 {
+		t.Errorf("want note.confirmed + note.discarded events, got %v", types)
+	}
+}
+
 func TestImportAtomicity(t *testing.T) {
 	s, _ := newTaskStore(t)
 	ctx := context.Background()

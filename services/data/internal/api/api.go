@@ -37,6 +37,8 @@ func New(db *sql.DB) http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/discard", s.handleDiscardTask)
 	mux.HandleFunc("POST /tasks/{id}/handoffs", s.handleAddHandoff)
 	mux.HandleFunc("POST /tasks/{id}/notes", s.handleAddNote)
+	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/confirm", s.handleConfirmNote)
+	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/discard", s.handleDiscardNote)
 	mux.HandleFunc("POST /tasks/{id}/claim", s.handleClaimLease)
 	mux.HandleFunc("POST /tasks/{id}/release", s.handleReleaseLease)
 	mux.HandleFunc("POST /leases/release-all", s.handleReleaseAllLeases)

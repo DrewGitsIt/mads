@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Add retry to the flaky uploader",
+    "draft": true,
+    "source": "synthesizer",
+    "notes": [
+      {
+        "type": "decision",
+        "content": "Chose exponential backoff over a fixed delay.",
+        "status": "draft",
+        "source": "synthesizer"
+      }
+    ]
+  }
+]

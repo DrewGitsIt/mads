@@ -31,6 +31,7 @@ func sampleTask() contracts.Task {
 			Timestamp: ts.Add(2 * time.Minute),
 		}},
 		Notes: []contracts.Note{{
+			ID:        7,
 			Type:      contracts.NoteDecision,
 			Content:   "SSE over WebSockets — one-directional is all we need.",
 			Source:    "synthesizer",

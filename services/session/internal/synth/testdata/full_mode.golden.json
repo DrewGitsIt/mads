@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Add retry to the flaky uploader",
+    "draft": true,
+    "source": "synthesizer",
+    "notes": [
+      {
+        "type": "decision",
+        "content": "Chose exponential backoff over a fixed delay.",
+        "status": "draft",
+        "source": "synthesizer"
+      },
+      {
+        "type": "observation",
+        "content": "The uploader test is still a little slow.",
+        "status": "draft",
+        "source": "synthesizer"
+      }
+    ]
+  },
+  {
+    "title": "Consider renaming the helper",
+    "draft": true,
+    "source": "synthesizer"
+  }
+]

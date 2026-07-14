@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -98,6 +99,41 @@ func TestDraftConfirmDiscardOverHTTP(t *testing.T) {
 	// Confirming twice fails: no longer a draft.
 	if resp := doJSON(t, srv, "POST", "/tasks/"+draft.ID+"/confirm", nil, nil); resp.StatusCode != 422 {
 		t.Errorf("double confirm: status %d, want 422", resp.StatusCode)
+	}
+}
+
+func TestNoteConfirmDiscardOverHTTP(t *testing.T) {
+	srv, _ := newTestServer(t)
+	var task contracts.Task
+	doJSON(t, srv, "POST", "/tasks", contracts.Task{Title: "A", SessionID: "ses_api", Source: "user"}, &task)
+
+	var draft contracts.Note
+	doJSON(t, srv, "POST", "/tasks/"+task.ID+"/notes", contracts.Note{
+		Type: contracts.NoteDecision, Content: "maybe this", Source: "synthesizer", Status: contracts.NoteStatusDraft,
+	}, &draft)
+
+	noteID := fmt.Sprintf("%d", draft.ID)
+	if resp := doJSON(t, srv, "POST", "/tasks/"+task.ID+"/notes/"+noteID+"/confirm", nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("confirm: status %d", resp.StatusCode)
+	}
+	// Confirming twice fails: no longer a draft.
+	if resp := doJSON(t, srv, "POST", "/tasks/"+task.ID+"/notes/"+noteID+"/confirm", nil, nil); resp.StatusCode != 422 {
+		t.Errorf("double confirm: status %d, want 422", resp.StatusCode)
+	}
+
+	var toDiscard contracts.Note
+	doJSON(t, srv, "POST", "/tasks/"+task.ID+"/notes", contracts.Note{
+		Type: contracts.NoteObservation, Content: "discard this", Source: "synthesizer", Status: contracts.NoteStatusDraft,
+	}, &toDiscard)
+	discardID := fmt.Sprintf("%d", toDiscard.ID)
+	if resp := doJSON(t, srv, "POST", "/tasks/"+task.ID+"/notes/"+discardID+"/discard", nil, nil); resp.StatusCode != 200 {
+		t.Fatalf("discard: status %d", resp.StatusCode)
+	}
+
+	var events []contracts.Envelope
+	doJSON(t, srv, "GET", "/events?session_id=ses_api&types=note.confirmed,note.discarded", nil, &events)
+	if len(events) != 2 {
+		t.Fatalf("want note.confirmed + note.discarded, got %d", len(events))
 	}
 }
 

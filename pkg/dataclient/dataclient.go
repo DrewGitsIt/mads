@@ -140,8 +140,30 @@ func (c *Client) UpdateTask(ctx context.Context, t *contracts.Task) error {
 	return c.do(ctx, http.MethodPut, "/tasks/"+url.PathEscape(t.ID), t, t)
 }
 
+// ConfirmTask turns a draft task into a real one.
+func (c *Client) ConfirmTask(ctx context.Context, taskID string) error {
+	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/confirm", map[string]any{}, nil)
+}
+
+// DiscardTask deletes a draft task. Non-draft tasks cannot be discarded.
+func (c *Client) DiscardTask(ctx context.Context, taskID string) error {
+	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/discard", map[string]any{}, nil)
+}
+
 func (c *Client) AddNote(ctx context.Context, taskID string, n *contracts.Note) error {
 	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/notes", n, n)
+}
+
+// ConfirmNote promotes a draft note to confirmed.
+func (c *Client) ConfirmNote(ctx context.Context, taskID string, noteID int64) error {
+	return c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/tasks/%s/notes/%d/confirm", url.PathEscape(taskID), noteID), map[string]any{}, nil)
+}
+
+// DiscardNote deletes a draft note. Non-draft notes cannot be discarded.
+func (c *Client) DiscardNote(ctx context.Context, taskID string, noteID int64) error {
+	return c.do(ctx, http.MethodPost,
+		fmt.Sprintf("/tasks/%s/notes/%d/discard", url.PathEscape(taskID), noteID), map[string]any{}, nil)
 }
 
 // Cycles returns the session's dependency cycles — legal at rest, they block
