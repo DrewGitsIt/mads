@@ -118,6 +118,13 @@ const (
 	// (spec §9). Payload: {"agent": string, "stage": string, "labels": []string,
 	// "outcome": "success"|"failure"}.
 	AgentOutcomeRecorded EventType = "agent.outcome_recorded"
+	// AgentDraftGenerated fires when agent generation (spec §9.5) produces a
+	// draft agent definition. Payload: {"draft": contracts.Agent, "similar":
+	// *agentselect.Similar (omitted if nil)}. TaskID/SessionID on the envelope
+	// identify what triggered generation; the draft itself is never persisted
+	// to the agent registry unless the caller later calls Data Service's
+	// POST /agents explicitly.
+	AgentDraftGenerated EventType = "agent.draft_generated"
 
 	WorkspaceCreated EventType = "workspace.created"
 	WorkspaceUpdated EventType = "workspace.updated"
@@ -154,7 +161,7 @@ var EventTypes = []EventType{
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	JobQueued, JobStarted, JobCompleted, JobFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
-	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded,
+	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	AttachmentAdded,

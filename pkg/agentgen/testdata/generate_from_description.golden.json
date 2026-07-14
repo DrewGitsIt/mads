@@ -1,0 +1,33 @@
+{
+  "id": "",
+  "name": "db-migrator",
+  "description": "Specializes in PostgreSQL schema migrations",
+  "prompt": "You are a database migration specialist who knows PostgreSQL deeply.",
+  "quadrant": "technical_partner",
+  "tags": [
+    "database",
+    "postgres",
+    "migrations"
+  ],
+  "created_at": "0001-01-01T00:00:00Z",
+  "updated_at": "0001-01-01T00:00:00Z",
+  "capabilities": {
+    "tools": [
+      "shell",
+      "read",
+      "write"
+    ],
+    "mcp_servers": [
+      "postgres"
+    ]
+  },
+  "permissions": {
+    "allowed_paths": [
+      "migrations/**"
+    ],
+    "denied_commands": [
+      "DROP DATABASE *"
+    ]
+  },
+  "preferences": {}
+}

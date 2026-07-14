@@ -13,17 +13,19 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 type server struct {
 	data *dataclient.Client
 	sup  *supervisor.Supervisor
+	jobs *job.Runner
 }
 
 // New returns the Router's HTTP handler.
-func New(data *dataclient.Client, sup *supervisor.Supervisor) http.Handler {
-	s := &server{data: data, sup: sup}
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) http.Handler {
+	s := &server{data: data, sup: sup, jobs: jobs}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
@@ -34,6 +36,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor) http.Handler {
 	mux.HandleFunc("GET /events", s.handleStreamEvents)
 	mux.HandleFunc("GET /sessions/{id}/output", s.handleSessionOutput)
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
+	mux.HandleFunc("POST /agents/generate", s.handleGenerateAgent)
 	return mux
 }
 

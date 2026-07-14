@@ -8,13 +8,13 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1, W4.2, and W4.6 complete.** Child process supervision (`internal/child`,
-`internal/supervisor`), the lifecycle HTTP API, and stream fan-out (`internal/api`) are
-built and tested against real spawned processes, real SSE connections, and a real Data
-Service. `internal/job` adds the spawn-run-exit pattern for transient Fast Model work
-(see below). Not yet wired: an HTTP endpoint that calls `job.Runner.Spawn` — that lands
-with the first wave-5 feature (summaries, retros, agent generation, selection scoring)
-that needs one.
+**Status: W4.1, W4.2, W4.6, and W5.3 complete.** Child process supervision
+(`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
+(`internal/api`) are built and tested against real spawned processes, real SSE
+connections, and a real Data Service. `internal/job` adds the spawn-run-exit pattern for
+transient Fast Model work (see below); `POST /agents/generate` (W5.3, spec §9.5–9.6) is
+its first caller, spawning `pkg/agentgen` draft generation (task-context or NL-description
+driven) and delivering the result as an `agent.draft_generated` event.
 
 ## Run it alone
 
@@ -70,6 +70,14 @@ never called peer-to-peer.
 - `GET /sessions/{id}/output`, `GET /pipelines/{id}/output` — the UI's data-plane
   subscription point: a byte-transparent reverse proxy to the running child's own
   `GET /output` SSE endpoint. 404 if the session/pipeline isn't currently running.
+- `POST /agents/generate` — body `{"session_id", "task_id", "title", "description",
+  "labels", "required_tools", "required_mcp_servers", "required_skills"}`; `title` set
+  drives task-context generation (the auto-select-found-no-match fallback), `description`
+  alone drives NL-description generation (the Library editor's "describe what you want"
+  path) — 400 if neither is set. Spawns a `job.Runner` job and returns 202 with
+  `{"job_id": ...}` immediately; the draft (plus a near-duplicate warning, if any) is
+  delivered asynchronously as an `agent.draft_generated` event, observed via `GET /events`
+  like any other job.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
@@ -135,7 +143,20 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
   round-trips both legs (a `Deps.Data.Events` call and a `Deps.FastModel.DoText` call) so
   the test proves the wiring, not just the runner's own bookkeeping. `GET /events` already
   proxies every event type transparently (see above), so job lifecycle events are
-  observable over the existing SSE stream with zero Router API changes. There is
-  deliberately no HTTP endpoint yet that calls `job.Runner.Spawn` and no `job.Runner`
-  constructed in `main.go` — the first wave-5 feature that defines a real job kind wires
-  both.
+  observable over the existing SSE stream with zero Router API changes. `main.go`
+  constructs the `job.Runner` over a `providers/fastmodel.Runner`; `-fastmodel-base-url`
+  selects an OpenAI-compatible backend, and an unset (default empty) value falls back to
+  `providers/fake` with a log message, so the binary still starts and answers requests
+  without a real Fast Model endpoint configured.
+- **Agent generation is spawn-then-observe, and drafts are never silently persisted.**
+  `POST /agents/generate` (`internal/api/agents.go`) is the first caller of
+  `job.Runner.Spawn`: it builds a `job.Func` from `pkg/agentgen` (task-context or
+  NL-description generation, per spec §9.5–9.6), spawns it under
+  `job.AgentGenerationKind`, and returns 202 immediately. The job body calls
+  `agentgen.Generator`, which drafts via the Fast Model and then checks the draft against
+  every existing agent with `agentselect.FindSimilar` (Jaccard text/capability overlap
+  plus a quadrant bonus, thresholded) before delivering `{"draft": ..., "similar": ...}`
+  as a single `agent.draft_generated` event — `similar` is populated (not silently
+  dropped) when a near-duplicate exists, so a caller can warn instead of minting a
+  redundant agent. The draft itself is never written to the agent registry; only an
+  explicit later `POST /agents` against the Data Service persists it.

@@ -1,0 +1,32 @@
+{
+  "id": "",
+  "name": "login-test-fixer",
+  "description": "Fixes flaky login tests",
+  "prompt": "You are a QA engineer who stabilizes flaky login tests.",
+  "quadrant": "autonomous_executor",
+  "tags": [
+    "testing",
+    "login"
+  ],
+  "created_at": "0001-01-01T00:00:00Z",
+  "updated_at": "0001-01-01T00:00:00Z",
+  "capabilities": {
+    "tools": [
+      "shell",
+      "read",
+      "write"
+    ],
+    "skills": [
+      "testing"
+    ]
+  },
+  "permissions": {
+    "allowed_paths": [
+      "tests/**"
+    ],
+    "denied_commands": [
+      "rm -rf *"
+    ]
+  },
+  "preferences": {}
+}

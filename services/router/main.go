@@ -18,7 +18,11 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -26,8 +30,8 @@ import (
 // stop cleanly after a SIGINT/SIGTERM before the process exits anyway.
 const shutdownGrace = 10 * time.Second
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor) http.Handler {
-	return api.New(data, sup)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) http.Handler {
+	return api.New(data, sup, jobs)
 }
 
 func main() {
@@ -35,6 +39,9 @@ func main() {
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", "go run ./services/session", "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", "go run ./services/pipeline", "command to spawn a Pipeline Engine child")
+	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint (empty uses providers/fake as a placeholder)")
+	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
+	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	flag.Parse()
 
 	sessionArgv := strings.Fields(*sessionCmd)
@@ -43,11 +50,20 @@ func main() {
 	data := dataclient.New(*dataURL, "router")
 	sup := supervisor.New(data, sessionArgv, pipelineArgv)
 
+	var backend provider.Provider = fake.New()
+	if *fastmodelBaseURL == "" {
+		log.Printf("router: no -fastmodel-base-url set, using providers/fake as a placeholder Fast Model backend")
+	}
+	fm := fastmodel.New(backend, fastmodel.Config{
+		Model: *fastmodelModel, BaseURL: *fastmodelBaseURL, APIKeyEnv: *fastmodelAPIKeyEnv,
+	})
+	jobs := job.New(data, fm)
+
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
