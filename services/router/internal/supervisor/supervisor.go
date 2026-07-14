@@ -19,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/services/router/internal/child"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 )
 
 // terminateGrace is how long Terminate waits after SIGTERM before SIGKILL.
@@ -34,6 +35,7 @@ type Supervisor struct {
 	data         *dataclient.Client // actor = "router"
 	sessionArgv  []string           // e.g. []string{"go", "run", "./services/session"}
 	pipelineArgv []string
+	jobs         *job.Runner // nil in tests that don't exercise summary generation
 
 	mu        sync.Mutex
 	sessions  map[string]*child.Process
@@ -44,12 +46,15 @@ type Supervisor struct {
 // "router" actor. sessionArgv/pipelineArgv are the spawn commands (argv[0]
 // plus args, "-addr localhost:0" is appended automatically by child.Spawn)
 // — configurable so production can point at compiled binaries once spec §14
-// ships, and tests can point at a fast test-double binary.
-func New(data *dataclient.Client, sessionArgv, pipelineArgv []string) *Supervisor {
+// ships, and tests can point at a fast test-double binary. jobs may be nil
+// (no session-summary generation on exit) — production always passes a real
+// one; only test call sites that don't care about summaries pass nil.
+func New(data *dataclient.Client, sessionArgv, pipelineArgv []string, jobs *job.Runner) *Supervisor {
 	return &Supervisor{
 		data:         data,
 		sessionArgv:  sessionArgv,
 		pipelineArgv: pipelineArgv,
+		jobs:         jobs,
 		sessions:     map[string]*child.Process{},
 		pipelines:    map[string]*pipelineEntry{},
 	}
@@ -225,18 +230,29 @@ func (s *Supervisor) onSessionExit(sessionID string, expected bool, exitErr erro
 		log.Printf("supervisor: release leases for session %s: %v", sessionID, err)
 	}
 	s.forgetSession(sessionID)
-	if expected {
-		return // Terminate/Bounce already emits its own event; this is not a failure
+	if !expected {
+		// Terminate/Bounce already emits its own event and the Session
+		// Service child sets Activity = Inactive itself before exiting
+		// (services/session/internal/runner.Shutdown); an unexpected exit
+		// never got that chance, so the Supervisor does both here.
+		if err := s.data.Append(ctx, &contracts.Envelope{
+			Type: contracts.SessionCrashed, SessionID: sessionID,
+			Payload: mustJSON(map[string]any{"reason": reason}),
+		}); err != nil {
+			log.Printf("supervisor: append session.crashed for %s: %v", sessionID, err)
+		}
+		if sess, err := s.data.Session(ctx, sessionID); err == nil {
+			sess.Activity = contracts.SessionInactive
+			_ = s.data.UpdateSession(ctx, &sess)
+		}
 	}
-	if err := s.data.Append(ctx, &contracts.Envelope{
-		Type: contracts.SessionCrashed, SessionID: sessionID,
-		Payload: mustJSON(map[string]any{"reason": reason}),
-	}); err != nil {
-		log.Printf("supervisor: append session.crashed for %s: %v", sessionID, err)
-	}
-	if sess, err := s.data.Session(ctx, sessionID); err == nil {
-		sess.Activity = contracts.SessionInactive
-		_ = s.data.UpdateSession(ctx, &sess)
+	// Every session-child exit, expected or crash, is an active → inactive
+	// transition by construction (spec §16) — the right hook to trigger
+	// summary generation, no separate event subscription needed.
+	if s.jobs != nil {
+		if _, err := s.jobs.Spawn(ctx, job.SessionSummaryKind, sessionID, job.GenerateSessionSummary(sessionID)); err != nil {
+			log.Printf("supervisor: spawn session summary for %s: %v", sessionID, err)
+		}
 	}
 }
 

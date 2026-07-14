@@ -10,7 +10,10 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -53,7 +56,7 @@ func eventually(t *testing.T, budget time.Duration, fn func() bool) {
 
 func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -111,7 +114,7 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 
 func TestTerminateDoesNotEmitCrashEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -140,7 +143,7 @@ func TestTerminateDoesNotEmitCrashEvent(t *testing.T) {
 
 func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -195,7 +198,7 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 
 func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -222,7 +225,7 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 
 func TestSessionAndPipelineAddr(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -251,4 +254,50 @@ func TestSessionAndPipelineAddr(t *testing.T) {
 	if got, ok := sup.PipelineAddr(runID); !ok || got != pipelineAddr {
 		t.Fatalf("PipelineAddr(%s) = %q, %v; want %q, true", runID, got, ok, pipelineAddr)
 	}
+}
+
+// TerminateSession is the graceful active → inactive transition (spec §16):
+// it must reach the same onSessionExit hook that spawns the session-summary
+// job, proving the wiring end to end against a real job.Runner.
+func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "supervisor-summary", Rules: []fake.Rule{{
+		Match: "seed task",
+		Reply: `{"accomplished":"Did the seed task.","decisions":"","remaining":""}`,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
+	jobs := job.New(data, fm)
+
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, jobs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "summary trigger session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := data.CreateTask(ctx, &contracts.Task{
+		SessionID: sess.ID, Title: "seed task", Source: "test", Status: contracts.StatusDone,
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if _, err := sup.SpawnSession(ctx, sess.ID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if err := sup.TerminateSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	want := "## What was accomplished\n\nDid the seed task."
+	eventually(t, 5*time.Second, func() bool {
+		got, err := data.Session(ctx, sess.ID)
+		return err == nil && got.Summary == want
+	})
 }
