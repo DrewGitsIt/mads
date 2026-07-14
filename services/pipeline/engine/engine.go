@@ -19,6 +19,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -63,6 +64,16 @@ type Config struct {
 	// recovers. Default 12 (~1h of pauses at the default backoff).
 	RateLimitMaxRetries int
 
+	// DisableSleepInhibit turns off the OS sleep/idle inhibitor normally
+	// held for the run's duration (logind + ScreenSaver where available —
+	// COSMIC's idle-suspend only honors the latter). Default false
+	// (inhibitor enabled). Acquiring it never fails or delays the run: a
+	// missing/refused D-Bus service just logs a warning (pkg/inhibit).
+	DisableSleepInhibit bool
+	// SleepInhibitor is the inhibitor implementation; nil defaults to the
+	// real D-Bus-backed inhibit.Locker. Tests inject a fake.
+	SleepInhibitor inhibit.Locker
+
 	// Isolated turns on worktree-per-task (spec §6, §17): stages before the
 	// merge run in the task's own worktree; the merge stage brings the task
 	// branch into Cwd (the primary repo) serialized in dependency order;
@@ -105,6 +116,16 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	if cfg.RateLimitMaxRetries <= 0 {
 		cfg.RateLimitMaxRetries = 12
 	}
+
+	lock := inhibit.Handle(inhibit.HandleFunc(func() {}))
+	if !cfg.DisableSleepInhibit {
+		locker := cfg.SleepInhibitor
+		if locker == nil {
+			locker = inhibit.NewLocker()
+		}
+		lock = locker.Acquire(fmt.Sprintf("pipeline run %s", cfg.SessionID))
+	}
+	defer lock.Release()
 
 	// Launch checks — the same ones the template editor runs (M9).
 	if cfg.Template == nil {
@@ -216,12 +237,20 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	// dependents immediately, and the concurrency cap is never idle-wasted
 	// on a batch barrier.
 	for {
-		tasks, err := e.cfg.Data.Tasks(ctx, e.cfg.SessionID, "")
-		if err != nil {
-			if len(running) > 0 {
-				continue // drain in-flight tasks before giving up
+		// Once cancelled, stop polling for new work — a request against an
+		// already-cancelled ctx would just fail and retry in a tight loop,
+		// starving the select below that drains in-flight results — and fall
+		// straight through to draining.
+		var tasks []contracts.Task
+		if ctx.Err() == nil {
+			var err error
+			tasks, err = e.cfg.Data.Tasks(ctx, e.cfg.SessionID, "")
+			if err != nil {
+				if len(running) > 0 {
+					continue // drain in-flight tasks before giving up
+				}
+				return nil, err
 			}
-			return nil, err
 		}
 		byID := map[string]contracts.Task{}
 		for _, t := range tasks {
