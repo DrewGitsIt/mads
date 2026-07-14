@@ -2,6 +2,7 @@ package supervisor_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+	"github.com/drewkidwell/mads/services/router/internal/testleakcheck"
 )
 
 var testChildBin string
@@ -24,7 +26,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
 
 	testChildBin = filepath.Join(dir, "testchild")
 	build := exec.Command("go", "build", "-o", testChildBin,
@@ -33,7 +34,27 @@ func TestMain(m *testing.M) {
 		panic("build testchild: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+
+	if err := testleakcheck.Verify(testChildBin); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// newSupervisor builds a Supervisor wired to the fast testchild binary and
+// registers a t.Cleanup backstop that terminates every child still tracked
+// when the test ends, so a test that returns early (e.g. via t.Fatal)
+// doesn't leak a testchild process.
+func newSupervisor(t *testing.T, data *dataclient.Client, jobs *job.Runner) *supervisor.Supervisor {
+	t.Helper()
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, jobs)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	return sup
 }
 
 // eventually polls fn on a tight interval until it reports success or the
@@ -56,7 +77,7 @@ func eventually(t *testing.T, budget time.Duration, fn func() bool) {
 
 func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -114,7 +135,7 @@ func TestExternalKillReleasesLeasesAndEmitsCrashEvent(t *testing.T) {
 
 func TestTerminateDoesNotEmitCrashEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -143,7 +164,7 @@ func TestTerminateDoesNotEmitCrashEvent(t *testing.T) {
 
 func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -198,7 +219,7 @@ func TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent(t *testing.T) {
 
 func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -225,7 +246,7 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 
 func TestSessionAndPipelineAddr(t *testing.T) {
 	base := datatest.Start(t)
-	sup := supervisor.New(dataclient.New(base, "router"), []string{testChildBin}, []string{testChildBin}, nil)
+	sup := newSupervisor(t, dataclient.New(base, "router"), nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -273,7 +294,7 @@ func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
 	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
 	jobs := job.New(data, fm)
 
-	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, jobs)
+	sup := newSupervisor(t, data, jobs)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

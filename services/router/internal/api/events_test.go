@@ -26,6 +26,7 @@ func newTestServerWithData(t *testing.T) (*httptest.Server, string) {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
 	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data)))
 	t.Cleanup(srv.Close)
 	return srv, base

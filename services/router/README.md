@@ -43,6 +43,13 @@ readiness contract as the real services, built once in `TestMain` — and kill i
 would take. `internal/api` runs the full HTTP surface against a real Data Service via
 `services/data/datatest`. Nothing here is mocked.
 
+Every test-constructed `Supervisor`/`child.Process` registers a `t.Cleanup` that
+calls `Shutdown`/`Terminate` as a backstop, so a test that returns early still
+reaps its spawned `testchild`. `TestMain` in `internal/child`, `internal/supervisor`,
+and `internal/api` then fails the package if any spawned `testchild` process is
+still alive after the run (via `internal/testleakcheck`), turning a silent leak
+into a test failure.
+
 ## API contract
 
 Wire types live in `pkg/contracts`. Counterparties: the UI (HTTP, and eventually SSE) and

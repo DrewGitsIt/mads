@@ -2,12 +2,15 @@ package child
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/drewkidwell/mads/services/router/internal/testleakcheck"
 )
 
 var testChildBin string
@@ -17,7 +20,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
 
 	testChildBin = filepath.Join(dir, "testchild")
 	build := exec.Command("go", "build", "-o", testChildBin,
@@ -26,7 +28,16 @@ func TestMain(m *testing.M) {
 		panic("build testchild: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+
+	if err := testleakcheck.Verify(testChildBin); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
@@ -45,6 +56,7 @@ func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	t.Cleanup(func() { _ = p.Terminate(context.Background(), 2*time.Second) })
 	if p.Addr == "" {
 		t.Fatal("Spawn: no address discovered")
 	}
@@ -90,6 +102,7 @@ func TestExternalKillIsUnexpected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
+	t.Cleanup(func() { _ = p.Terminate(context.Background(), 2*time.Second) })
 
 	proc, err := os.FindProcess(p.Cmd.Process.Pid)
 	if err != nil {

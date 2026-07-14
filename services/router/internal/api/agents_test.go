@@ -27,6 +27,7 @@ func newTestServerWithScenario(t *testing.T, sc fake.Scenario) (*httptest.Server
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
 	f, err := fake.NewWithScenario(sc)
 	if err != nil {
 		t.Fatal(err)
