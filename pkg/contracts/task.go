@@ -61,6 +61,9 @@ type Task struct {
 	// Source is who authored the task: "user", "synthesizer", "pipeline", or
 	// an agent name.
 	Source string `json:"source"`
+	// DPAID traces a retro-generated task back to the DPA it came from (spec §7:
+	// "DPAs are traceable — you can see which retro produced which tasks").
+	DPAID string `json:"dpa_id,omitempty"`
 
 	Handoffs []Handoff `json:"handoffs,omitempty"`
 	Notes    []Note    `json:"notes,omitempty"`

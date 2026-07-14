@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -40,16 +41,20 @@ type Runner struct {
 	data *dataclient.Client
 	fm   *fastmodel.Runner
 	wg   sync.WaitGroup
+
+	mu      sync.Mutex
+	cancels map[string]context.CancelFunc
 }
 
 func New(data *dataclient.Client, fm *fastmodel.Runner) *Runner {
-	return &Runner{data: data, fm: fm}
+	return &Runner{data: data, fm: fm, cancels: make(map[string]context.CancelFunc)}
 }
 
 // Spawn mints a job ID, appends job.queued synchronously, then runs fn on
 // its own goroutine. It returns immediately — callers observe completion
-// via the event log (job.started/job.completed/job.failed), not via
-// Spawn's return. sessionID may be "" for a job with no session scope.
+// via the event log (job.started/job.completed/job.failed/job.cancelled),
+// not via Spawn's return. sessionID may be "" for a job with no session
+// scope.
 func (r *Runner) Spawn(ctx context.Context, kind, sessionID string, fn Func) (string, error) {
 	id := newJobID()
 	if err := r.data.Append(ctx, &contracts.Envelope{
@@ -59,15 +64,43 @@ func (r *Runner) Spawn(ctx context.Context, kind, sessionID string, fn Func) (st
 		return "", fmt.Errorf("job: append job.queued: %w", err)
 	}
 
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), defaultTimeout)
+	runCtx, cancel := context.WithCancel(timeoutCtx)
+	r.mu.Lock()
+	r.cancels[id] = cancel
+	r.mu.Unlock()
+
 	r.wg.Add(1)
-	go r.run(id, kind, sessionID, fn)
+	go func() {
+		defer timeoutCancel()
+		r.run(runCtx, id, kind, sessionID, fn)
+	}()
 	return id, nil
 }
 
-func (r *Runner) run(id, kind, sessionID string, fn Func) {
+// Cancel requests that the running job id stop as soon as its next
+// ctx-aware operation observes cancellation. Idempotent; returns whether id
+// was found running.
+func (r *Runner) Cancel(id string) bool {
+	r.mu.Lock()
+	cancel, ok := r.cancels[id]
+	r.mu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel()
+	return true
+}
+
+func (r *Runner) forget(id string) {
+	r.mu.Lock()
+	delete(r.cancels, id)
+	r.mu.Unlock()
+}
+
+func (r *Runner) run(ctx context.Context, id, kind, sessionID string, fn Func) {
 	defer r.wg.Done()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultTimeout)
-	defer cancel()
+	defer r.forget(id)
 
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type: contracts.JobStarted, SessionID: sessionID,
@@ -76,17 +109,29 @@ func (r *Runner) run(id, kind, sessionID string, fn Func) {
 		log.Printf("job: append job.started for %s: %v", id, err)
 	}
 
-	if err := r.invoke(ctx, fn); err != nil {
-		if aerr := r.data.Append(ctx, &contracts.Envelope{
-			Type: contracts.JobFailed, SessionID: sessionID,
+	err := r.invoke(ctx, fn)
+
+	// The terminal append must not use ctx: if this is a cancellation report,
+	// ctx is already cancelled and the append would fail immediately,
+	// silently swallowing the report.
+	reportCtx, reportCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer reportCancel()
+
+	if err != nil {
+		eventType, logVerb := contracts.JobFailed, "failed"
+		if errors.Is(err, context.Canceled) {
+			eventType, logVerb = contracts.JobCancelled, "cancelled"
+		}
+		if aerr := r.data.Append(reportCtx, &contracts.Envelope{
+			Type: eventType, SessionID: sessionID,
 			Payload: mustJSON(map[string]any{"job_id": id, "kind": kind, "error": err.Error()}),
 		}); aerr != nil {
-			log.Printf("job: append job.failed for %s: %v", id, aerr)
+			log.Printf("job: append job.%s for %s: %v", logVerb, id, aerr)
 		}
 		return
 	}
 
-	if err := r.data.Append(ctx, &contracts.Envelope{
+	if err := r.data.Append(reportCtx, &contracts.Envelope{
 		Type: contracts.JobCompleted, SessionID: sessionID,
 		Payload: mustJSON(map[string]any{"job_id": id, "kind": kind}),
 	}); err != nil {

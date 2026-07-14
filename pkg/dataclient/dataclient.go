@@ -260,6 +260,45 @@ func (c *Client) Commits(ctx context.Context, sessionID string) ([]contracts.Com
 	return list, err
 }
 
+// --- Retros (spec §7) ---
+
+func (c *Client) CreateRetro(ctx context.Context, r *contracts.Retro) error {
+	return c.do(ctx, http.MethodPost, "/retros", r, r)
+}
+
+func (c *Client) Retro(ctx context.Context, id string) (contracts.Retro, error) {
+	var r contracts.Retro
+	err := c.do(ctx, http.MethodGet, "/retros/"+url.PathEscape(id), nil, &r)
+	return r, err
+}
+
+// Retros lists every retro, newest first.
+func (c *Client) Retros(ctx context.Context) ([]contracts.Retro, error) {
+	var out []contracts.Retro
+	err := c.do(ctx, http.MethodGet, "/retros", nil, &out)
+	return out, err
+}
+
+func (c *Client) AcceptDPA(ctx context.Context, retroID, dpaID string) error {
+	return c.do(ctx, http.MethodPost, "/retros/"+url.PathEscape(retroID)+"/dpas/"+url.PathEscape(dpaID)+"/accept", map[string]any{}, nil)
+}
+
+func (c *Client) RejectDPA(ctx context.Context, retroID, dpaID string) error {
+	return c.do(ctx, http.MethodPost, "/retros/"+url.PathEscape(retroID)+"/dpas/"+url.PathEscape(dpaID)+"/reject", map[string]any{}, nil)
+}
+
+func (c *Client) EditDPA(ctx context.Context, retroID, dpaID string, edit contracts.DPAEdit) (contracts.DPA, error) {
+	var out contracts.DPA
+	err := c.do(ctx, http.MethodPatch, "/retros/"+url.PathEscape(retroID)+"/dpas/"+url.PathEscape(dpaID), edit, &out)
+	return out, err
+}
+
+// SetRetroFollowUpSession links a retro to the follow-up session created from
+// its accepted DPAs.
+func (c *Client) SetRetroFollowUpSession(ctx context.Context, retroID, sessionID string) error {
+	return c.do(ctx, http.MethodPost, "/retros/"+url.PathEscape(retroID)+"/follow-up", map[string]any{"session_id": sessionID}, nil)
+}
+
 // --- Registries (spec §9, §12, §17) ---
 
 func (c *Client) Agent(ctx context.Context, idOrName string) (contracts.Agent, error) {

@@ -95,6 +95,23 @@ const (
 	RetroProgress  EventType = "retro.progress"
 	RetroCompleted EventType = "retro.completed"
 	RetroFailed    EventType = "retro.failed"
+	// RetroCancelled fires when a retro job is cancelled mid-run; no state was
+	// mutated (the single Data Service write happens only after generation
+	// fully succeeds). Payload: {"retro_id": string}.
+	RetroCancelled EventType = "retro.cancelled"
+	// RetroDPAAccepted fires when a DPA's status is set to accepted. Payload:
+	// {"retro_id": string, "dpa_id": string}.
+	RetroDPAAccepted EventType = "retro.dpa_accepted"
+	// RetroDPARejected fires when a DPA's status is set to rejected. Payload:
+	// {"retro_id": string, "dpa_id": string}.
+	RetroDPARejected EventType = "retro.dpa_rejected"
+	// RetroDPAEdited fires when a DPA's fields are edited. Payload:
+	// {"retro_id": string, "dpa_id": string} — the diff itself isn't in the
+	// payload; callers re-fetch the DPA.
+	RetroDPAEdited EventType = "retro.dpa_edited"
+	// RetroFollowUpCreated fires when a follow-up session is created from a
+	// retro's accepted DPAs. Payload: {"retro_id": string, "session_id": string}.
+	RetroFollowUpCreated EventType = "retro.follow_up_created"
 
 	// JobQueued fires when the Router accepts a transient Fast Model job (spec
 	// §15) for execution. Payload: {"job_id": string, "kind": string}.
@@ -108,6 +125,9 @@ const (
 	// JobFailed fires when a job's body returns an error or panics. Payload:
 	// {"job_id": string, "kind": string, "error": string}.
 	JobFailed EventType = "job.failed"
+	// JobCancelled fires when a job is cancelled via Runner.Cancel before it
+	// completes. Payload: {"job_id": string, "kind": string, "error": string}.
+	JobCancelled EventType = "job.cancelled"
 
 	CapabilityCreated       EventType = "capability.created"
 	CapabilityUpdated       EventType = "capability.updated"
@@ -184,7 +204,8 @@ var EventTypes = []EventType{
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
 	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
-	JobQueued, JobStarted, JobCompleted, JobFailed,
+	RetroCancelled, RetroDPAAccepted, RetroDPARejected, RetroDPAEdited, RetroFollowUpCreated,
+	JobQueued, JobStarted, JobCompleted, JobFailed, JobCancelled,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,

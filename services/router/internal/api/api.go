@@ -37,6 +37,9 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) 
 	mux.HandleFunc("GET /sessions/{id}/output", s.handleSessionOutput)
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
 	mux.HandleFunc("POST /agents/generate", s.handleGenerateAgent)
+	mux.HandleFunc("POST /retros", s.handleStartRetro)
+	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
+	mux.HandleFunc("POST /retros/{id}/follow-up-session", s.handleRetroFollowUpSession)
 	return mux
 }
 
