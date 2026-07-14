@@ -14,7 +14,7 @@ import (
 
 func TestHealth(t *testing.T) {
 	data := dataclient.New("http://localhost:0", "router")
-	sup := supervisor.New(data, nil, nil)
+	sup := supervisor.New(data, nil, nil, nil)
 	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}))
 	srv := httptest.NewServer(newMux(data, sup, jobs))
 	defer srv.Close()

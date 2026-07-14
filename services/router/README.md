@@ -8,13 +8,15 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1, W4.2, W4.6, and W5.3 complete.** Child process supervision
+**Status: W4.1, W4.2, W4.6, W5.3, and W5.4 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
 (`internal/api`) are built and tested against real spawned processes, real SSE
 connections, and a real Data Service. `internal/job` adds the spawn-run-exit pattern for
 transient Fast Model work (see below); `POST /agents/generate` (W5.3, spec §9.5–9.6) is
 its first caller, spawning `pkg/agentgen` draft generation (task-context or NL-description
-driven) and delivering the result as an `agent.draft_generated` event.
+driven) and delivering the result as an `agent.draft_generated` event. `internal/supervisor`
+also spawns a `session_summary` job (W5.4, spec §16) on every session-child exit, deriving
+the session's compressed narrative from task data and writing it to `session.summary`.
 
 ## Run it alone
 
@@ -160,3 +162,21 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
   dropped) when a near-duplicate exists, so a caller can warn instead of minting a
   redundant agent. The draft itself is never written to the agent registry; only an
   explicit later `POST /agents` against the Data Service persists it.
+- **Session summaries are triggered by a child-exit hook, not an event subscription.**
+  `contracts.Session.Activity` only ever flips to `Inactive` in two places: the Session
+  Service child's own graceful `Shutdown` (before it exits) and `onSessionExit`'s
+  unexpected-exit branch (the child crashed before it could do that itself). Since every
+  session-child exit — expected or crash — leaves `Activity == Inactive` by the time
+  `onSessionExit` runs, that callback is the trigger point (spec §16: "generated on session
+  deactivation"): it unconditionally spawns a `job.SessionSummaryKind` job via
+  `job.GenerateSessionSummary`, whose body (`pkg/sessionsummary`) derives the three-section
+  narrative from the session's task data — titles, statuses, handoffs, and confirmed
+  `decision`-type notes, never transcripts — and overwrites `session.summary` via
+  `dataclient.UpdateSession`. Watching `session.activity_changed` over SSE instead would
+  need a replay/cursor strategy across Router restarts; the exit hook sidesteps that for
+  free. `Supervisor.jobs` may be `nil` (existing tests that don't exercise summaries keep
+  passing `nil`); production (`main.go`) always constructs a real one.
+  `TestTerminateSessionTriggersSessionSummary` (`internal/supervisor`) proves the graceful
+  path end to end against a real `job.Runner`; `job.GenerateSessionSummary`'s own tests
+  (`internal/job`) prove the write and, explicitly, that a second run overwrites the first
+  rather than appending.

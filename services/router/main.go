@@ -48,7 +48,6 @@ func main() {
 	pipelineArgv := strings.Fields(*pipelineCmd)
 
 	data := dataclient.New(*dataURL, "router")
-	sup := supervisor.New(data, sessionArgv, pipelineArgv)
 
 	var backend provider.Provider = fake.New()
 	if *fastmodelBaseURL == "" {
@@ -58,6 +57,7 @@ func main() {
 		Model: *fastmodelModel, BaseURL: *fastmodelBaseURL, APIKeyEnv: *fastmodelAPIKeyEnv,
 	})
 	jobs := job.New(data, fm)
+	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {

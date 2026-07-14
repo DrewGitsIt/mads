@@ -52,7 +52,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
-	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin})
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data)))
 	t.Cleanup(srv.Close)
 	return srv
