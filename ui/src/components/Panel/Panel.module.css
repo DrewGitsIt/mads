@@ -1,0 +1,29 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.header {
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line-soft);
+  font: 650 12.5px var(--sans);
+  color: var(--text);
+}
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.footer {
+  flex: none;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line-soft);
+}

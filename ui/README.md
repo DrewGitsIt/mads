@@ -1,11 +1,69 @@
 # ui/
 
-The Electron + TypeScript desktop app lands here in wave 6 (docs/MADS-WORK-ITEMS.md
-W6.1–W6.11). Until then, the UI's source of truth is:
+The Electron + TypeScript app shell and design system (docs/MADS-WORK-ITEMS.md
+W6.1). This package owns the token system, type rules, and reusable component
+kit every future surface composes from, plus the Electron scaffold that hosts
+them. It does **not** yet own any real surface (Sessions/Retro/Library/etc.),
+Router wiring, or IPC — those land in W6.2+. It also does not do per-platform
+packaging (electron-builder); that's later work, not gated by this package.
 
-- `docs/MADS-UX.md` — information architecture, design-system rules, per-surface data
-  contracts
-- `docs/ux-prototype.html` — the approved clickable prototype (mockups 1–9, with design
-  notes toggled via the "Design notes" control)
+Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
+`docs/ux-prototype.html` (its `:root` custom properties and `COST_SER` array
+are the only place the approved dark-theme palette values live — see
+`src/tokens/tokens.ts` for how they're pinned).
 
-The UI talks only to the Router (HTTP + SSE) — never to other services directly.
+## Run it alone
+
+```sh
+npm ci
+npm run dev     # renderer dev server (Vite), open the printed localhost URL
+npm start       # build + launch the Electron shell (placeholder content only)
+```
+
+The app shell currently renders an icon rail and a teaching empty state — no
+real surfaces are wired up yet.
+
+## Gallery
+
+```sh
+npm run gallery
+```
+
+Opens `gallery.html` via the Vite dev server: every component in the kit,
+rendered in both the dark (primary) and light (peer) theme, grouped by
+component name. This is the review artifact a human signs off on — in
+particular, the light theme is a first-pass derivation (no light-theme values
+exist in `docs/`; see the comment block in `src/tokens/tokens.ts`) pending
+sign-off via this gallery, not an approved value.
+
+## Test it
+
+```sh
+npm run lint    # eslint (typescript-eslint + eslint-plugin-react-hooks)
+npm run test    # vitest: tokens, contrast, every component
+```
+
+`src/tokens/tokens.test.ts` pins every dark-theme hex to `docs/ux-prototype.html`
+as a regression guard, pins the derived light-theme values, and runs a WCAG AA
+contrast check (relative luminance, no dependency) over every documented
+fg/bg pair in both themes. Every component has a `*.test.tsx` alongside it
+(component-level, `@testing-library/react` + happy-dom).
+
+By design, this package has no Playwright/E2E/visual-regression tooling —
+that's a later wave, developed separately once real surfaces exist to test
+against.
+
+## Critical paths
+
+- `src/tokens/tokens.css` is the only place colors are declared as literal
+  hex/rgba values. Components must read `var(--token-name)`, never hardcode a
+  color — `src/tokens/tokens.test.ts` guards the dark-theme values against
+  drift from the approved source, and `src/tokens/tokens.ts` must stay
+  byte-identical to `tokens.css` (same test file).
+- `src/components/Draft/Draft.tsx` (`DraftChip` + `Draft`) is the one
+  provenance treatment every future surface must reuse for synthesis cards,
+  generated agents, and DPA drafts — don't reimplement the border/badge
+  pattern elsewhere.
+- `make build`/`make test` from the repo root run this package's build/lint/
+  test as part of the standard gates (see root `Makefile`'s `ui-deps` target,
+  which runs `npm ci`) — a fresh worktree needs no manual steps beyond that.

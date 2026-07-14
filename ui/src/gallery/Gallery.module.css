@@ -1,0 +1,63 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  background: var(--bg0);
+}
+
+.themeSection {
+  background: var(--bg0);
+  color: var(--text);
+  font: 13px/1.5 var(--sans);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.themeTitle {
+  margin: 0;
+  font-size: 15px;
+  text-transform: capitalize;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.groupTitle {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text2);
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.confined {
+  position: relative;
+  height: 320px;
+  overflow: hidden;
+  transform: translateZ(0);
+  border: 1px dashed var(--line);
+  border-radius: var(--r);
+}
+
+.railDemo {
+  height: 200px;
+  display: flex;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  overflow: hidden;
+}

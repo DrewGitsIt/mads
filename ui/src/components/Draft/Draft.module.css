@@ -1,0 +1,7 @@
+.draft {
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--draft);
+  border-radius: var(--r);
+  background: var(--bg2);
+  padding: var(--space-3) var(--space-4);
+}

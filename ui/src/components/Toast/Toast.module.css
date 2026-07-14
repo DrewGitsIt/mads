@@ -1,0 +1,39 @@
+.toast {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 240px;
+  max-width: 360px;
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+
+.title {
+  font: 650 12.5px var(--sans);
+  color: var(--text);
+}
+
+.description {
+  font: 12px var(--sans);
+  color: var(--text2);
+}
+
+.neutral {
+  border-left-color: var(--line);
+}
+.ok {
+  border-left-color: var(--ok);
+}
+.warn {
+  border-left-color: var(--warn);
+}
+.bad {
+  border-left-color: var(--bad);
+}
+.info {
+  border-left-color: var(--info);
+}
