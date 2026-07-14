@@ -12,9 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/capability"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -28,6 +31,20 @@ import (
 // Router's 5s SIGTERM grace period before it escalates to SIGKILL.
 const shutdownGrace = 4 * time.Second
 
+// defaultMadsHome mirrors services/data/main.go's defaultDataDir — same env
+// var family, same default — since credentials and the MCP registry are
+// local state, not shared with the Data Service's own data dir.
+func defaultMadsHome() string {
+	if dir := os.Getenv("MADS_HOME"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".mads"
+	}
+	return filepath.Join(home, ".mads")
+}
+
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
@@ -35,6 +52,7 @@ func main() {
 	cwd := flag.String("cwd", ".", "provider session working directory")
 	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
+	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
 	flag.Parse()
 
 	if *sessionID == "" {
@@ -59,6 +77,15 @@ func main() {
 	r.Cwd = *cwd
 	r.WorktreeRoot = *worktreeRoot
 	r.FastModel = fastmodel.New(fmProvider, fastmodel.Config{})
+
+	// A credstore failure degrades to "no capabilities wired", not a fatal
+	// error — same best-effort philosophy as every other optional step here.
+	if cs, err := credstore.Open(filepath.Join(*madsHome, "credentials.json")); err != nil {
+		log.Printf("session: open credential store: %v (capability wiring disabled)", err)
+	} else {
+		r.CredStore = cs
+	}
+	r.MCPRegistry = capability.NewRegistry(filepath.Join(*madsHome, "mcp"))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

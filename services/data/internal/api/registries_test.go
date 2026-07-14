@@ -73,3 +73,56 @@ func TestCapabilityAndWorkspaceRoutes(t *testing.T) {
 		t.Errorf("want capability.created on the log, got %+v", events)
 	}
 }
+
+func TestCapabilityHealthRouteOverHTTP(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	var cap contracts.Capability
+	resp := doJSON(t, srv, "POST", "/capabilities", contracts.Capability{
+		Name: "jira", Type: contracts.CapabilityMCP,
+		Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-jira"},
+	}, &cap)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("capability create: status %d", resp.StatusCode)
+	}
+
+	// First report, unhealthy, matches the zero-value default: no event.
+	var reported contracts.Capability
+	resp = doJSON(t, srv, "POST", "/capabilities/"+cap.Name+"/health",
+		map[string]any{"healthy": false, "reason": "missing credential: JIRA_TOKEN"}, &reported)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set health: status %d", resp.StatusCode)
+	}
+	if reported.Health.Healthy || reported.Health.Reason != "missing credential: JIRA_TOKEN" {
+		t.Errorf("health not applied: %+v", reported.Health)
+	}
+
+	// Flip to healthy (resolved by id this time): exactly one transition event.
+	resp = doJSON(t, srv, "POST", "/capabilities/"+cap.ID+"/health",
+		map[string]any{"healthy": true}, &reported)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set health: status %d", resp.StatusCode)
+	}
+	if !reported.Health.Healthy {
+		t.Errorf("health not flipped: %+v", reported.Health)
+	}
+
+	var events []contracts.Envelope
+	doJSON(t, srv, "GET", "/events?types=capability.health_changed", nil, &events)
+	if len(events) != 1 {
+		t.Fatalf("want exactly 1 capability.health_changed event, got %d: %+v", len(events), events)
+	}
+
+	// Same-status repeat: no additional event.
+	doJSON(t, srv, "POST", "/capabilities/"+cap.ID+"/health", map[string]any{"healthy": true}, &reported)
+	doJSON(t, srv, "GET", "/events?types=capability.health_changed", nil, &events)
+	if len(events) != 1 {
+		t.Fatalf("same-status repeat: want still 1 event, got %d", len(events))
+	}
+
+	// Unknown capability: 404.
+	resp = doJSON(t, srv, "POST", "/capabilities/does-not-exist/health", map[string]any{"healthy": true}, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown capability: status %d, want 404", resp.StatusCode)
+	}
+}

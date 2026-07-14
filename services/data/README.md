@@ -82,6 +82,16 @@ its `agent.*`/`capability.*`/`workspace.*` event. `GET /agents` backs
 outcomes are recorded as `agent.selected` / `agent.outcome_recorded` events through
 the general event log, not through this registry CRUD surface.
 
+- `POST /capabilities/{id-or-name}/health` `{healthy, reason?}` — records a capability's
+  last-known health (spec §12.6), called by the Session Service's capability runtime
+  (`services/session/internal/runner`) on every session start and guided-diagnostics check.
+  Emits `capability.health_changed` **only when `healthy` actually flips** from the
+  capability's current stored value — same-status repeats (the common case) update `Reason`/
+  `CheckedAt` silently, so the event log isn't flooded by every session start reporting the
+  same steady state. `reason` is caller-supplied free text; by convention it never carries a
+  credential value (spec §13) — this handler stores and forwards whatever it's given, so that
+  discipline is enforced entirely by the caller, not here.
+
 Session routes (spec §1, §5): `POST/GET /sessions` (`?activity=` filter),
 `GET/PUT/DELETE /sessions/{id}` — updates emit the specific event
 (`session.renamed` / `session.activity_changed` / `session.updated`); delete
@@ -118,6 +128,12 @@ subscribers are woken post-commit.
   TestSSEStreamAndCursorResume (api, across a real disconnect).
 - **Subscribers wake only after commit** — TestWaitWakesOnCommit; the SSE loop arms its
   wait before querying so no event can land unseen between the two.
+- **Capability health is transition-only** — `SetCapabilityHealth` compares against the
+  capability's currently stored `Healthy` flag inside the same transaction as the update,
+  emitting `capability.health_changed` only on a genuine flip. The sharpest case: the very
+  first unhealthy report matches the zero-value default and emits nothing.
+  `internal/store/capability_health_test.go` (TestSetCapabilityHealthTransitionOnly) and
+  `internal/api/registries_test.go` (TestCapabilityHealthRouteOverHTTP) both pin this.
 
 - **Single-connection discipline** — the pool holds one connection (`store.Open`), so
   no query may run while another cursor is still open; `List`/`Get` close before

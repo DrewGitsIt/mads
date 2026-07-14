@@ -21,6 +21,10 @@ curl localhost:<logged port>/health
 Model calls (default `fake`; real model selection is a later settings-service
 concern, spec §10).
 
+`-mads-home` (env `MADS_HOME`, default `~/.mads`) roots the local credential store
+(`credentials.json`) and the system-wide MCP server registry (`mcp/*.pid`) — see
+"Capability runtime" below.
+
 `-session-id` is required and fails fast if empty — the Router always supplies it
 (`services/router/internal/supervisor.SpawnSession`). The session must already exist in the
 Data Service (`POST /sessions`) before this process can start it. `make run` (`go run .`
@@ -58,6 +62,14 @@ One process, one session — no `:id` in any path.
   Service (`[]contracts.FileChange`). See "File observation & commit linkage" below.
 - `GET /commits` — every commit this session has produced, with task linkage resolved by
   the Data Service (`[]contracts.Commit`). See "File observation & commit linkage" below.
+- `POST /skills/{name}/inject` — sends a declared skill capability's content as a turn
+  (spec §12.4); 202 once relayed. The system-directed and `/command` injection paths both
+  resolve to this one endpoint; user-directed injection needs no separate route (asking the
+  agent in free text is a UI/agent concern, not this service's).
+- `GET /capabilities/{name}/diagnose` — runs a live health check for a capability (spec
+  §12.7, "guided diagnostics") and returns `{"healthy": bool, "reason": "...",
+  "suggestions": ["..."]}`. Not a cached read: it self-heals the recorded status as a side
+  effect via the same `capability.health_changed` transition rule as session start.
 
 Counterparties (spec §15: exactly two):
 
@@ -67,8 +79,9 @@ Counterparties (spec §15: exactly two):
   flips `Activity` proactively so the common case doesn't wait on the Router noticing.
 - **Data Service** — session state (`Session`, `UpdateSession`), lifecycle events (`Append`
   `session.provisioning` / `session.activity_changed`), lease release (`ReleaseAll`), file
-  changes and commits (`RecordFileChange`/`FileChanges`, `RecordCommit`/`Commits`), all
-  through `pkg/dataclient`.
+  changes and commits (`RecordFileChange`/`FileChanges`, `RecordCommit`/`Commits`), agent and
+  capability registry reads (`Agent`, `Capability`) and health reporting
+  (`SetCapabilityHealth`), all through `pkg/dataclient`.
 
 ## Critical paths
 
@@ -119,6 +132,40 @@ Counterparties (spec §15: exactly two):
   only those above a confidence threshold. See the golden trigger/mode tests in
   `internal/synth/engine_test.go` and the Runner-level
   `internal/runner.TestSynthesisEndToEnd`.
+
+- **Capability runtime** (spec §12, §13, `internal/runner/capability.go`, `pkg/capability`,
+  `pkg/credstore`) — `Start` calls `setupCapabilities` right after the worktree/hook setup
+  and before the provider session starts, resolving `Session.Agent`'s declared capabilities:
+  - **Skills** — installed into the session's `cwd` (`.claude/skills/<name>` symlink,
+    `capability.InstallSkill`) and health-checked (directory exists). Their resolved
+    credential env vars are the *only* thing `setupCapabilities` returns — this return value
+    becomes `StartOptions.Env`, the agent's own process environment.
+  - **MCP servers** — started system-wide via `MCPRegistry.EnsureStarted` (a local
+    `~/.mads/mcp/<name>.pid` file, `O_CREATE|O_EXCL`-claimed so any Session Service process
+    can be the one that starts it first; stays running across sessions until explicitly
+    stopped — no daemon, no flock, see `pkg/capability`'s package doc for the documented,
+    accepted race). Their resolved credential env vars go *only* to `EnsureStarted`'s own
+    `env` argument (the spawned server's process), never into the returned agent env.
+  - **The security boundary is structural, not filtered**: `setupMCP`'s env variable and
+    `setupSkill`'s returned env are two separate code paths that are never merged — an agent
+    can only ever observe a credential belonging to a capability it declared as a *skill*.
+    A capability declared only as an MCP server, or not declared at all, cannot appear in the
+    agent's environment by construction. See
+    `internal/runner.TestSetupCapabilitiesScopesEnvByDeclaration`, which inspects both the
+    returned agent env and a real spawned MCP child process's actual environment (via
+    `pkg/capability/testdata/envdump`) to prove this in both directions.
+  - **Missing credentials degrade, never crash** — `CredStore.ResolveEnv` splits requested
+    names into resolved pairs and a `missing` list; any capability with a missing credential
+    is reported unhealthy (`"missing credential: <name>"`, never a value) via
+    `dataclient.SetCapabilityHealth` and simply left out of the session, which starts
+    normally regardless. See `internal/runner.TestSetupCapabilitiesMissingCredentialDegradesGracefully`,
+    which also asserts a resolved credential's *value* never appears in any event on the log.
+  - **`capability.health_changed` fires only on a genuine transition** (spec §12.6) — the
+    Data Service only emits when a capability's stored healthy/unhealthy flips, so repeated
+    reports of the same status (the common case, once per session start) don't flood the
+    event log. See `internal/runner.TestSetupCapabilitiesHealthChangedFiresOnTransition`.
+  - Both `CredStore` and `MCPRegistry` are nil-safe: unset (as in every pre-existing test),
+    `setupCapabilities` is a no-op and returns `nil` — existing callers are unaffected.
 
 ## Worktree isolation & merge-back (spec §6, §17)
 

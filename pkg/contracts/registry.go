@@ -85,6 +85,16 @@ type CapabilityConfig struct {
 	URL     string `json:"url,omitempty"`
 }
 
+// CapabilityHealth is a capability's last-known health (spec §12.6):
+// Healthy transitions are what drive capability.health_changed events. Reason
+// holds only capability/env-var names and static diagnostic text — never a
+// credential value (spec §13).
+type CapabilityHealth struct {
+	Healthy   bool      `json:"healthy"`
+	Reason    string    `json:"reason,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
+}
+
 // Capability is a registry capability (spec §12). Credentials are referenced
 // by environment-variable name only — values live in the credential store,
 // never here (spec §13).
@@ -95,6 +105,7 @@ type Capability struct {
 	Type              CapabilityType   `json:"type"`
 	Config            CapabilityConfig `json:"config"`
 	CredentialEnvVars []string         `json:"credential_env_vars,omitempty"`
+	Health            CapabilityHealth `json:"health,omitempty"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 }

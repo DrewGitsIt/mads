@@ -51,7 +51,11 @@ type Session struct {
 	Workspace string          `json:"workspace,omitempty"`
 	Provider  string          `json:"provider,omitempty"`
 	Model     string          `json:"model,omitempty"`
-	Isolation string          `json:"isolation,omitempty"`
+	// Agent binds this session to a registry Agent (spec §9), the source of
+	// its declared capabilities (spec §12) for capability-runtime wiring.
+	// Empty means no agent binding — no capability wiring occurs.
+	Agent     string `json:"agent,omitempty"`
+	Isolation string `json:"isolation,omitempty"`
 	// WorktreeDir is the absolute path of this session's isolated worktree
 	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
 	// Empty means the session works directly in its configured directory.

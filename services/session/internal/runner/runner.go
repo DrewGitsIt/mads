@@ -17,7 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -59,6 +61,16 @@ type Runner struct {
 	// Callers set it (from main.go) before calling Start, same pattern as
 	// Cwd/WorktreeRoot. Nil is fine when the session's SynthesisMode is off.
 	FastModel *fastmodel.Runner
+
+	// CredStore resolves capability credential env vars from the local
+	// restricted-permission credential store (spec §13.1). Callers set it
+	// (from main.go) before calling Start; nil disables all capability
+	// wiring — same nil-safe convention as FastModel.
+	CredStore *credstore.Store
+
+	// MCPRegistry coordinates system-wide MCP server processes (spec §12.5).
+	// Nil disables capability wiring the same way a nil CredStore does.
+	MCPRegistry *capability.Registry
 
 	wt *worktree.Manager // built lazily the first time isolation is needed
 
@@ -131,11 +143,14 @@ func (r *Runner) Start(ctx context.Context) error {
 	// non-isolated case where the session works directly on a real repo.
 	r.installHook(ctx, cwd)
 
+	capEnv := r.setupCapabilities(ctx, sess, cwd)
+
 	provSess, err := p.Start(ctx, provider.StartOptions{
 		Mode:   provider.ModeACP,
 		Model:  sess.Model,
 		Cwd:    cwd,
 		Resume: sess.ProviderRef,
+		Env:    capEnv,
 	})
 	if err != nil {
 		return fmt.Errorf("runner: start provider session: %w", err)
