@@ -2,7 +2,9 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+	"github.com/drewkidwell/mads/services/router/internal/testleakcheck"
 )
 
 var testChildBin string
@@ -26,7 +29,6 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	defer func() { _ = os.RemoveAll(dir) }()
 
 	testChildBin = filepath.Join(dir, "testchild")
 	build := exec.Command("go", "build", "-o", testChildBin,
@@ -35,7 +37,16 @@ func TestMain(m *testing.M) {
 		panic("build testchild: " + err.Error() + "\n" + string(out))
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+
+	if err := testleakcheck.Verify(testChildBin); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // testJobs builds a job.Runner over a fake-backed Fast Model — no scripted
@@ -53,6 +64,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
 	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data)))
 	t.Cleanup(srv.Close)
 	return srv
