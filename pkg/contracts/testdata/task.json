@@ -25,6 +25,7 @@
   ],
   "notes": [
     {
+      "id": 7,
       "type": "decision",
       "content": "SSE over WebSockets — one-directional is all we need.",
       "source": "synthesizer",

@@ -17,6 +17,30 @@ const (
 	IsolationCurrentDir = "current_dir"
 )
 
+// SynthesisMode controls the synthesis engine's trigger sensitivity (spec §4,
+// §10): off does nothing, light surfaces only high-confidence drafts, full
+// surfaces everything the fast model proposes.
+type SynthesisMode string
+
+const (
+	SynthesisOff   SynthesisMode = "off"
+	SynthesisLight SynthesisMode = "light"
+	SynthesisFull  SynthesisMode = "full"
+)
+
+// SynthesisModes is the full registry, for validation and enumeration.
+var SynthesisModes = []SynthesisMode{SynthesisOff, SynthesisLight, SynthesisFull}
+
+// Valid reports whether m is a registered synthesis mode.
+func (m SynthesisMode) Valid() bool {
+	for _, v := range SynthesisModes {
+		if m == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Session is the workspace-of-record for one conversation-with-work (spec §1).
 // Provider and Model bind at first message (spec §11.5); Summary is the
 // compressed narrative regenerated on each deactivation (spec §16).
@@ -43,6 +67,10 @@ type Session struct {
 	// LinkedLeaderID is the schema hook for linked sessions (spec §1.12,
 	// behind the linked-sessions flag); empty until that feature lands.
 	LinkedLeaderID string `json:"linked_leader_id,omitempty"`
+	// SynthesisMode controls the synthesis engine (spec §4, §10). Empty is
+	// treated as SynthesisOff by the engine — no DB default needed, since
+	// sessions are a JSON blob column.
+	SynthesisMode SynthesisMode `json:"synthesis_mode,omitempty"`
 	// ProviderRef is the provider-native session handle (provider.Session.Ref) —
 	// set once, right after the provider session starts, and passed back as
 	// StartOptions.Resume to reattach after a bounce. Also the transcript

@@ -97,6 +97,7 @@ const (
 
 // Note is a typed annotation on a task (spec §4).
 type Note struct {
+	ID        int64      `json:"id,omitempty"`
 	Type      NoteType   `json:"type"`
 	Content   string     `json:"content"`
 	Source    string     `json:"source"`

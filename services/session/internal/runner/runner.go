@@ -1,7 +1,9 @@
 // Package runner drives one interactive provider session for one MADS
 // session (spec §15): it starts or resumes the provider session, serializes
 // user turns onto it, fans out provider events to subscribers, and keeps the
-// Data Service's session record (Activity, ProviderRef) in sync.
+// Data Service's session record (Activity, ProviderRef) in sync. It also
+// hosts the synthesis engine (spec §4, services/session/internal/synth),
+// feeding it every user turn and provider event.
 package runner
 
 import (
@@ -18,7 +20,9 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/session/internal/synth"
 	"github.com/drewkidwell/mads/services/session/internal/worktree"
 )
 
@@ -51,7 +55,14 @@ type Runner struct {
 	// existing caller — which never sets this — on today's behavior.
 	WorktreeRoot string
 
+	// FastModel backs the synthesis engine's structured drafting calls.
+	// Callers set it (from main.go) before calling Start, same pattern as
+	// Cwd/WorktreeRoot. Nil is fine when the session's SynthesisMode is off.
+	FastModel *fastmodel.Runner
+
 	wt *worktree.Manager // built lazily the first time isolation is needed
+
+	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
 
 	// Died is closed exactly once if the provider process ends mid-turn
 	// without us having initiated the close (the Router's crash-supervision
@@ -152,6 +163,8 @@ func (r *Runner) Start(ctx context.Context) error {
 	}); err != nil {
 		log.Printf("runner: append session.activity_changed: %v", err)
 	}
+
+	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, dataclient.New(r.data.BaseURL(), "synthesizer"), r.FastModel)
 
 	r.mu.Lock()
 	r.sess = provSess
@@ -289,6 +302,8 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	sess := r.sess
 	r.mu.Unlock()
 
+	r.synthEngine.OnUserSend(text)
+
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
@@ -388,6 +403,7 @@ func (r *Runner) pump(sess provider.Session) {
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 			r.recordFileChange(ev.Tool.Path)
 		}
+		r.synthEngine.OnEvent(ev)
 		r.hub.broadcast(ev)
 	}
 

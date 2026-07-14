@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -166,6 +167,32 @@ func (s *server) handleAddNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, n)
+}
+
+func (s *server) handleConfirmNote(w http.ResponseWriter, r *http.Request) {
+	noteID, err := strconv.ParseInt(r.PathValue("noteId"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note id"})
+		return
+	}
+	if err := s.tasks.ConfirmNote(r.Context(), r.PathValue("id"), noteID, actor(r)); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "confirmed"})
+}
+
+func (s *server) handleDiscardNote(w http.ResponseWriter, r *http.Request) {
+	noteID, err := strconv.ParseInt(r.PathValue("noteId"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid note id"})
+		return
+	}
+	if err := s.tasks.DiscardNote(r.Context(), r.PathValue("id"), noteID, actor(r)); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "discarded"})
 }
 
 func (s *server) handleTaskCycles(w http.ResponseWriter, r *http.Request) {

@@ -17,6 +17,10 @@ go run . -session-id <id> -data-url http://localhost:8081   # -addr to pin the p
 curl localhost:<logged port>/health
 ```
 
+`-fast-model` names the registered provider backing the synthesis engine's Fast
+Model calls (default `fake`; real model selection is a later settings-service
+concern, spec §10).
+
 `-session-id` is required and fails fast if empty — the Router always supplies it
 (`services/router/internal/supervisor.SpawnSession`). The session must already exist in the
 Data Service (`POST /sessions`) before this process can start it. `make run` (`go run .`
@@ -100,6 +104,21 @@ Counterparties (spec §15: exactly two):
   results straight back from the Data Service — there is no local cache to go stale. See
   `internal/runner.TestFilesTracksToolUsePaths` and
   `internal/runner.TestCommitInSessionWorktreeReportsLinkage`.
+- **Synthesis engine** (spec §4, `internal/synth`) — the note-taker: watches the
+  transcript delta since its last pass and, on trigger, spawns a Fast Model call
+  drafting tasks and notes, written through `pkg/dataclient` under the actor
+  `"synthesizer"` with draft provenance (`Task.Draft`/`Note.Status`). Mode
+  (`off`/`light`/`full`) is `Session.SynthesisMode`, read once in `Runner.Start` —
+  a mode change mid-session has no effect until the session is restarted. Off never
+  constructs an `Engine` at all (nil-safe no-ops throughout `runner.go`), so cost and
+  behavior are structurally guaranteed, not just policy. Triggers are classified
+  structurally, no LLM judgment: a write-tool use or a user confirmation phrase
+  fires immediately in any mode; three-or-more tool uses in one turn fires in Full
+  mode only, subject to a debounce (elapsed time or turn count since the last fire,
+  whichever comes first). Full mode keeps every drafted task/note; Light mode keeps
+  only those above a confidence threshold. See the golden trigger/mode tests in
+  `internal/synth/engine_test.go` and the Runner-level
+  `internal/runner.TestSynthesisEndToEnd`.
 
 ## Worktree isolation & merge-back (spec §6, §17)
 

@@ -55,6 +55,9 @@ Task routes (spec §3–§4; mutations carry `X-Mads-Actor`, defaulting to `user
 - `POST /tasks/{id}/confirm` / `discard` — draft lifecycle; discard is drafts-only
   (cancel real tasks with status `wont_do`)
 - `POST /tasks/{id}/handoffs`, `POST /tasks/{id}/notes`
+- `POST /tasks/{id}/notes/{noteId}/confirm` / `discard` — same draft lifecycle,
+  note-scoped (the synthesis engine's drafted notes, spec §4); discard is
+  drafts-only, same rule as tasks
 - `POST /tasks/import` — atomic bulk create; intra-batch dependencies allowed
 - `GET /tasks/cycles?session_id=` — dependency cycles (legal at rest, block pipeline
   launch, spec §3.6)
@@ -99,8 +102,8 @@ deletion refuses while bound or for the system default.
 
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|
-status_changed|confirmed|discarded`, `note.created`); subscribers are woken
-post-commit.
+status_changed|confirmed|discarded`, `note.created|confirmed|discarded`);
+subscribers are woken post-commit.
 
 ## Critical paths
 

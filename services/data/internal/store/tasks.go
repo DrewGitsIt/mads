@@ -273,6 +273,54 @@ func (s *Tasks) AddNote(ctx context.Context, taskID string, n *contracts.Note, a
 	})
 }
 
+// ConfirmNote promotes a draft note to confirmed (spec §4), emitting
+// note.confirmed.
+func (s *Tasks) ConfirmNote(ctx context.Context, taskID string, noteID int64, actor string) error {
+	return s.noteTransition(ctx, taskID, noteID, actor, contracts.NoteConfirmed, func(tx *Tx) error {
+		_, err := tx.Exec("UPDATE task_notes SET status = ? WHERE task_id = ? AND id = ?",
+			string(contracts.NoteStatusConfirmed), taskID, noteID)
+		return err
+	})
+}
+
+// DiscardNote deletes a draft note (spec §4), emitting note.discarded.
+// Non-draft notes cannot be discarded.
+func (s *Tasks) DiscardNote(ctx context.Context, taskID string, noteID int64, actor string) error {
+	return s.noteTransition(ctx, taskID, noteID, actor, contracts.NoteDiscarded, func(tx *Tx) error {
+		_, err := tx.Exec("DELETE FROM task_notes WHERE task_id = ? AND id = ?", taskID, noteID)
+		return err
+	})
+}
+
+func (s *Tasks) noteTransition(ctx context.Context, taskID string, noteID int64, actor string, event contracts.EventType, apply func(*Tx) error) error {
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		var (
+			sessionID string
+			status    string
+		)
+		err := tx.QueryRow("SELECT t.session_id, n.status FROM task_notes n JOIN tasks t ON t.id = n.task_id WHERE n.task_id = ? AND n.id = ?",
+			taskID, noteID).Scan(&sessionID, &status)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("tasks: note %d on %s: %w", noteID, taskID, ErrNotFound)
+		}
+		if err != nil {
+			return err
+		}
+		if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
+			return err
+		}
+		if status != string(contracts.NoteStatusDraft) {
+			verr := &contracts.ValidationError{}
+			verr.Add("status", "note is not a draft")
+			return verr
+		}
+		if err := apply(tx); err != nil {
+			return err
+		}
+		return tx.Append(&contracts.Envelope{Type: event, SessionID: sessionID, TaskID: taskID, Actor: actor})
+	})
+}
+
 func (s *Tasks) subRecord(ctx context.Context, taskID, actor string, event contracts.EventType, apply func(*Tx) error) error {
 	return s.log.WithTx(ctx, func(tx *Tx) error {
 		var sessionID string
@@ -500,9 +548,13 @@ func insertNote(tx *Tx, taskID string, n *contracts.Note) error {
 	if n.Status == "" {
 		n.Status = contracts.NoteStatusConfirmed
 	}
-	_, err := tx.Exec(
+	res, err := tx.Exec(
 		"INSERT INTO task_notes (task_id, type, content, source, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
 		taskID, string(n.Type), n.Content, n.Source, string(n.Status), n.Timestamp.Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	n.ID, err = res.LastInsertId()
 	return err
 }
 
@@ -573,7 +625,7 @@ func (s *Tasks) hydrate(ctx context.Context, t *contracts.Task) error {
 	}
 
 	ns, err := s.log.db.QueryContext(ctx,
-		"SELECT type, content, source, status, timestamp FROM task_notes WHERE task_id = ? ORDER BY id", t.ID)
+		"SELECT id, type, content, source, status, timestamp FROM task_notes WHERE task_id = ? ORDER BY id", t.ID)
 	if err != nil {
 		return err
 	}
@@ -583,7 +635,7 @@ func (s *Tasks) hydrate(ctx context.Context, t *contracts.Task) error {
 			n  contracts.Note
 			ts string
 		)
-		if err := ns.Scan(&n.Type, &n.Content, &n.Source, &n.Status, &ts); err != nil {
+		if err := ns.Scan(&n.ID, &n.Type, &n.Content, &n.Source, &n.Status, &ts); err != nil {
 			return err
 		}
 		if n.Timestamp, err = time.Parse(time.RFC3339Nano, ts); err != nil {

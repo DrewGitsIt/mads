@@ -33,6 +33,9 @@ func validateSession(s *contracts.Session) *contracts.ValidationError {
 	if s.Isolation != "" && s.Isolation != contracts.IsolationWorktree && s.Isolation != contracts.IsolationCurrentDir {
 		v.Add("isolation", fmt.Sprintf("must be %q or %q", contracts.IsolationWorktree, contracts.IsolationCurrentDir))
 	}
+	if s.SynthesisMode != "" && !s.SynthesisMode.Valid() {
+		v.Add("synthesis_mode", fmt.Sprintf("unknown synthesis mode %q", s.SynthesisMode))
+	}
 	if v.Empty() {
 		return nil
 	}

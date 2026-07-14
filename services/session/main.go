@@ -18,6 +18,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/api"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
@@ -33,6 +34,7 @@ func main() {
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
 	cwd := flag.String("cwd", ".", "provider session working directory")
 	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
+	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	flag.Parse()
 
 	if *sessionID == "" {
@@ -47,10 +49,16 @@ func main() {
 		log.Fatalf("session: register fake provider: %v", err)
 	}
 
+	fmProvider, err := registry.Get(*fastModelProvider)
+	if err != nil {
+		log.Fatalf("session: fast model provider %q: %v", *fastModelProvider, err)
+	}
+
 	data := dataclient.New(*dataURL, *sessionID)
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
 	r.WorktreeRoot = *worktreeRoot
+	r.FastModel = fastmodel.New(fmProvider, fastmodel.Config{})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
