@@ -1,0 +1,47 @@
+.panel {
+  position: relative;
+  display: flex;
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.vertical {
+  flex-direction: column;
+}
+.vertical > .handle {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+}
+
+.horizontal {
+  flex-direction: row;
+}
+.horizontal > .handle {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  cursor: col-resize;
+}
+
+.handle {
+  position: absolute;
+  flex: none;
+  z-index: 1;
+}
+.handle:hover {
+  background: var(--accent-soft);
+}
+
+.content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: var(--space-4);
+}

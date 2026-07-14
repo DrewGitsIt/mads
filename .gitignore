@@ -4,4 +4,5 @@
 *.db-shm
 node_modules/
 dist/
+dist-electron/
 coverage.out

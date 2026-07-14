@@ -1,0 +1,36 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font: 650 9.5px/1 var(--sans);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+
+.neutral {
+  color: var(--text2);
+  background: var(--bg3);
+}
+.ok {
+  color: var(--ok-fg);
+  background: var(--ok-soft);
+}
+.warn {
+  color: var(--warn-fg);
+  background: var(--warn-soft);
+}
+.bad {
+  color: var(--bad-fg);
+  background: var(--bad-soft);
+}
+.info {
+  color: var(--info-fg);
+  background: var(--info-soft);
+}
+.draft {
+  color: var(--draft-fg);
+  background: var(--draft-soft);
+}

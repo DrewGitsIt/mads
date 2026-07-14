@@ -1,0 +1,125 @@
+/*
+ * Design tokens — single source every component reads via var(--token-name).
+ * Dark values are pinned verbatim from docs/ux-prototype.html (approved palette).
+ * Light values are a first-pass derivation (see tokens.ts) pending human sign-off
+ * via the gallery review — see ui/README.md.
+ */
+
+:root,
+[data-theme="dark"] {
+  --bg0: #1a1713;
+  --bg1: #201d18;
+  --bg2: #27231d;
+  --bg3: #2f2a23;
+  --bg4: #3c352c;
+  --line: #3a342a;
+  --line-soft: #2c2720;
+
+  --text: #ede9df;
+  --text2: #b2aa97;
+  --text3: #8e8674;
+
+  --accent: #c08552;
+  --accent-soft: rgba(192, 133, 82, 0.15);
+  --accent-ink: #241305;
+
+  --ok: #7cb389;
+  --ok-soft: rgba(124, 179, 137, 0.14);
+  --ok-fg: var(--ok);
+  --warn: #d3af5e;
+  --warn-soft: rgba(211, 175, 94, 0.13);
+  --warn-fg: var(--warn);
+  --bad: #d2604a;
+  --bad-soft: rgba(210, 96, 74, 0.13);
+  /* lightened brick, same ~10deg hue as --bad: the base hue's text-on-soft
+     contrast against dark grounds falls just short of AA (tokens.test.ts) */
+  --bad-fg: #dd7a66;
+  --info: #96afc7;
+  --info-soft: rgba(150, 175, 199, 0.13);
+  --info-fg: var(--info);
+
+  /* draft provenance reuses --warn (one token, two roles) */
+  --draft: var(--warn);
+  --draft-soft: var(--warn-soft);
+  --draft-fg: var(--warn-fg);
+
+  /* diff colors reuse the semantic hues, no new colors declared */
+  --add: var(--ok);
+  --mod: var(--warn);
+  --del: var(--bad);
+
+  --chart-1: #c1763a;
+  --chart-2: #5e8fc9;
+  --chart-3: #a98836;
+}
+
+[data-theme="light"] {
+  --bg0: #f7f3ec;
+  --bg1: #f1ebe0;
+  --bg2: #e9e1d2;
+  --bg3: #dfd5c2;
+  --bg4: #d2c6ae;
+  --line: #c9bba0;
+  --line-soft: #dcd0bc;
+
+  --text: #241f18;
+  --text2: #574e3e;
+  /* darkened from the initial #83775F derivation, which failed AA against
+     bg0/bg1 (tokens.test.ts) — same warm-sepia hue family, lower lightness */
+  --text3: #6b6048;
+
+  /* accent/semantic/chart hues are theme-invariant — same hex as dark */
+  --accent: #c08552;
+  --accent-soft: rgba(192, 133, 82, 0.15);
+  --accent-ink: #241305;
+
+  --ok: #7cb389;
+  --ok-soft: rgba(124, 179, 137, 0.14);
+  /* darkened sage, same ~134deg hue as --ok: base-hue text-on-soft fails AA
+     against the light neutral scale (tokens.test.ts) */
+  --ok-fg: #2e5a3c;
+  --warn: #d3af5e;
+  --warn-soft: rgba(211, 175, 94, 0.13);
+  /* darkened gold, same ~41deg hue as --warn: see --ok-fg comment */
+  --warn-fg: #7a5a1a;
+  --bad: #d2604a;
+  --bad-soft: rgba(210, 96, 74, 0.13);
+  /* darkened brick, same ~10deg hue as --bad: see --ok-fg comment */
+  --bad-fg: #8a3a2a;
+  --info: #96afc7;
+  --info-soft: rgba(150, 175, 199, 0.13);
+  /* darkened slate blue, same ~210deg hue as --info: see --ok-fg comment */
+  --info-fg: #375069;
+
+  --draft: var(--warn);
+  --draft-soft: var(--warn-soft);
+  --draft-fg: var(--warn-fg);
+
+  --add: var(--ok);
+  --mod: var(--warn);
+  --del: var(--bad);
+
+  --chart-1: #c1763a;
+  --chart-2: #5e8fc9;
+  --chart-3: #a98836;
+}
+
+:root {
+  --mono:
+    ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo,
+    Consolas, monospace;
+  --sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Roboto,
+    "Helvetica Neue", sans-serif;
+
+  --r: 8px;
+  --r-sm: 6px;
+
+  /* 4/8px density scale (MADS-UX §2 rule 2) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+}

@@ -1,0 +1,29 @@
+.shell {
+  display: flex;
+  height: 100vh;
+}
+
+.empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-6);
+}
+
+.emptyInner {
+  max-width: 360px;
+  text-align: center;
+  color: var(--text2);
+}
+
+.emptyTitle {
+  color: var(--text);
+  font-weight: 650;
+  margin-bottom: var(--space-2);
+}
+
+.emptyBody {
+  font-size: 12.5px;
+  line-height: 1.6;
+}

@@ -1,0 +1,55 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg0);
+  color: var(--text);
+  font: 13px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* one custom scrollbar style app-wide (MADS-UX §2 rule 7) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg4);
+  border-radius: 5px;
+  border: 2px solid var(--bg0);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--mono);
+}
