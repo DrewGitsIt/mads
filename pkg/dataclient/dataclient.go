@@ -246,6 +246,19 @@ func (c *Client) Agent(ctx context.Context, idOrName string) (contracts.Agent, e
 	return a, err
 }
 
+// Agents lists the full agent registry — the candidate pool for auto-select
+// (pkg/agentselect, spec §9).
+func (c *Client) Agents(ctx context.Context) ([]contracts.Agent, error) {
+	var out []contracts.Agent
+	err := c.do(ctx, http.MethodGet, "/agents", nil, &out)
+	return out, err
+}
+
+// CreateAgent adds an agent to the registry.
+func (c *Client) CreateAgent(ctx context.Context, a *contracts.Agent) error {
+	return c.do(ctx, http.MethodPost, "/agents", a, a)
+}
+
 // --- Templates (spec §6) ---
 
 // Template fetches by id or name; used_by is dropped — callers wanting
