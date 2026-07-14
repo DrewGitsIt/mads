@@ -14,18 +14,23 @@ import (
 )
 
 type server struct {
-	db     *sql.DB
-	log    *store.Log
-	tasks  *store.Tasks
-	leases *store.Leases
-	caps   *store.Registry[contracts.Capability]
+	db      *sql.DB
+	log     *store.Log
+	tasks   *store.Tasks
+	leases  *store.Leases
+	caps    *store.Registry[contracts.Capability]
+	metrics *store.Metrics
 }
 
 // New returns the Data Service handler backed by db.
 func New(db *sql.DB) http.Handler {
 	l := store.NewLog(db)
 	caps := store.NewCapabilities(l)
-	s := &server{db: db, log: l, tasks: store.NewTasks(l), leases: store.NewLeases(l), caps: caps}
+	tasks := store.NewTasks(l)
+	s := &server{
+		db: db, log: l, tasks: tasks, leases: store.NewLeases(l), caps: caps,
+		metrics: store.NewMetrics(l, tasks, caps),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /events", s.handlePostEvent)
@@ -51,6 +56,11 @@ func New(db *sql.DB) http.Handler {
 	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	templateRoutes(mux, l)
 	sessionRoutes(mux, l)
+	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
+	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
+	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
+	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
+	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
 	return mux
 }
 

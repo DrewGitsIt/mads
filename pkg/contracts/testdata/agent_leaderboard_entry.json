@@ -1,0 +1,8 @@
+{
+  "agent": "executor",
+  "usage_count": 3,
+  "successes": 2,
+  "failures": 1,
+  "success_rate": 0.6666666666666666,
+  "retries": 1
+}

@@ -1,0 +1,9 @@
+{
+  "counts": {
+    "blocked": 1,
+    "done": 2,
+    "ready": 1
+  },
+  "total": 4,
+  "completion_rate": 0.5
+}

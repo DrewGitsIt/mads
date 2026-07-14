@@ -1,0 +1,15 @@
+{
+  "session_id": "ses_01hq3k",
+  "run_seq": 3,
+  "started_at": "2026-07-12T09:00:00Z",
+  "ended_at": "2026-07-12T09:10:00Z",
+  "outcome": "completed",
+  "tasks_done": 2,
+  "tasks_blocked": 0,
+  "tasks_skipped": 0,
+  "cost_usd": 0.42,
+  "agents": [
+    "architect",
+    "executor"
+  ]
+}

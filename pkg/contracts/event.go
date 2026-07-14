@@ -147,6 +147,22 @@ const (
 	// MergeCompleted fires when a merge lands cleanly and the worktree/branch
 	// are cleaned up. Payload: {"branch": string, "target_branch": string}.
 	MergeCompleted EventType = "merge.completed"
+
+	// UsageRecorded fires when a provider turn or pipeline stage one-shot completes with
+	// cost reporting available (spec §11's hookpoint: tokens in, tokens out, model, and the
+	// caller-computed dollar cost — the Data Service does no pricing math itself). SessionID
+	// is always set; TaskID is set for a pipeline stage's usage, empty for an interactive
+	// session turn. Payload: {"model": string, "input_tokens": int, "output_tokens": int,
+	// "cost_usd": float64}. Emission is future wiring (services/session's runner on
+	// EventTurnEnd, services/pipeline's stage runs); W5.7's cost metrics view is the
+	// consumer this type exists for.
+	UsageRecorded EventType = "usage.recorded"
+	// CapabilityInvoked fires when a session injects or calls a declared capability
+	// mid-turn — skill injection or an MCP tool use (spec §12.4). Payload: {"capability":
+	// string, "type": "skill"|"mcp"}. Emission is future wiring (the capability runtime's
+	// injection paths, services/session/internal/runner); W5.7's capability-usage metric
+	// (including never-used capabilities) is the consumer this type exists for.
+	CapabilityInvoked EventType = "capability.invoked"
 )
 
 // EventTypes is the full registry, for validation and enumeration.
@@ -166,6 +182,7 @@ var EventTypes = []EventType{
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted,
+	UsageRecorded, CapabilityInvoked,
 }
 
 var eventTypeSet = func() map[EventType]struct{} {

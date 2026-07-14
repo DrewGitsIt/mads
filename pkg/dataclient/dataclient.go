@@ -400,3 +400,57 @@ func (c *Client) Events(ctx context.Context, since int64, sessionID string, type
 	err := c.do(ctx, http.MethodGet, "/events?"+q.Encode(), nil, &out)
 	return out, err
 }
+
+// --- Metrics (spec §8) ---
+
+// MetricsCost fetches usage.recorded events sliced by day/model, session, and
+// pipeline run. sessionID scopes to one session; empty means every session.
+func (c *Client) MetricsCost(ctx context.Context, sessionID string) (contracts.CostMetrics, error) {
+	q := url.Values{}
+	if sessionID != "" {
+		q.Set("session_id", sessionID)
+	}
+	var out contracts.CostMetrics
+	err := c.do(ctx, http.MethodGet, "/metrics/cost?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// MetricsAgentLeaderboard fetches each agent's usage, success rate, and
+// retries, system-wide.
+func (c *Client) MetricsAgentLeaderboard(ctx context.Context) ([]contracts.AgentLeaderboardEntry, error) {
+	var out []contracts.AgentLeaderboardEntry
+	err := c.do(ctx, http.MethodGet, "/metrics/agents", nil, &out)
+	return out, err
+}
+
+// MetricsTaskOutcomes fetches the confirmed-task status distribution.
+// sessionID scopes to one session; empty means every session.
+func (c *Client) MetricsTaskOutcomes(ctx context.Context, sessionID string) (contracts.TaskOutcomes, error) {
+	q := url.Values{}
+	if sessionID != "" {
+		q.Set("session_id", sessionID)
+	}
+	var out contracts.TaskOutcomes
+	err := c.do(ctx, http.MethodGet, "/metrics/tasks?"+q.Encode(), nil, &out)
+	return out, err
+}
+
+// MetricsCapabilityUsage fetches every registered capability's invocation
+// count, including never-used ones.
+func (c *Client) MetricsCapabilityUsage(ctx context.Context) ([]contracts.CapabilityUsage, error) {
+	var out []contracts.CapabilityUsage
+	err := c.do(ctx, http.MethodGet, "/metrics/capabilities", nil, &out)
+	return out, err
+}
+
+// MetricsPipelineRuns fetches reconstructed pipeline run history. sessionID
+// scopes to one session; empty means every session.
+func (c *Client) MetricsPipelineRuns(ctx context.Context, sessionID string) ([]contracts.PipelineRun, error) {
+	q := url.Values{}
+	if sessionID != "" {
+		q.Set("session_id", sessionID)
+	}
+	var out []contracts.PipelineRun
+	err := c.do(ctx, http.MethodGet, "/metrics/pipelines?"+q.Encode(), nil, &out)
+	return out, err
+}
