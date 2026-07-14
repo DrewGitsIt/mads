@@ -81,6 +81,15 @@ const (
 	StageCompleted EventType = "stage.completed"
 	StageFailed    EventType = "stage.failed"
 	StageSkipped   EventType = "stage.skipped"
+	// StageRateLimited fires when an agent stage hits a provider rate limit
+	// (spec §11.9) and the engine pauses to retry the same attempt instead
+	// of treating it as a stage failure — no on_fail loop-back is consumed
+	// and no rate-limit text reaches the next agent prompt. Payload:
+	// {"stage": string, "attempt": int, "message": string, "backoff": string}.
+	StageRateLimited EventType = "stage.rate_limited"
+	// StageRateLimitCleared fires when a rate-limited stage's pause ends and
+	// the engine is about to retry. Payload: {"stage": string, "attempt": int}.
+	StageRateLimitCleared EventType = "stage.rate_limit_cleared"
 
 	RetroStarted   EventType = "retro.started"
 	RetroProgress  EventType = "retro.progress"
@@ -157,7 +166,7 @@ var EventTypes = []EventType{
 	FileChanged,
 	CommitCreated, CommitLinked,
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
-	StageStarted, StageCompleted, StageFailed, StageSkipped,
+	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	JobQueued, JobStarted, JobCompleted, JobFailed,
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,

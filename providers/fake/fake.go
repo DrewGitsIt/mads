@@ -41,6 +41,11 @@ type Fake struct {
 	mu        sync.Mutex
 	seq       int
 	histories map[string][]provider.Message
+	// rateLimitHits counts matches per rule for RateLimitTimes. Keyed by
+	// rule pointer: Scenario.Rules is never mutated/reallocated after
+	// NewWithScenario constructs the Fake, so &sc.Rules[i] stays valid for
+	// the Fake's lifetime.
+	rateLimitHits map[*Rule]int
 }
 
 // New returns a fake running only the built-in dialect.
@@ -54,7 +59,7 @@ func NewWithScenario(sc Scenario) (*Fake, error) {
 	if err := sc.Validate(); err != nil {
 		return nil, err
 	}
-	return &Fake{scenario: sc, histories: map[string][]provider.Message{}}, nil
+	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}}, nil
 }
 
 func (f *Fake) Name() string { return "fake" }
@@ -154,9 +159,17 @@ type turnPlan struct {
 
 func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 	if r := f.scenario.match(prompt); r != nil {
+		rateLimit := r.RateLimit
+		if r.RateLimitTimes > 0 {
+			f.mu.Lock()
+			f.rateLimitHits[r]++
+			hit := f.rateLimitHits[r]
+			f.mu.Unlock()
+			rateLimit = hit <= r.RateLimitTimes
+		}
 		p := turnPlan{
 			chunks: r.Chunks, delay: time.Duration(r.DelayMs) * time.Millisecond,
-			tools: r.Tools, crash: r.Crash, rateLimit: r.RateLimit,
+			tools: r.Tools, crash: r.Crash, rateLimit: rateLimit,
 		}
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}
