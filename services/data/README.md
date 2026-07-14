@@ -7,11 +7,13 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: Wave 1 COMPLETE (W1.1–W1.7)** — SQLite store + migrations, event log +
-transactional outbox + SSE subscriptions, task store, write leases, registries
-(six system agents seeded), pipeline templates (launch-equivalent validation via
-`pkg/template`, system default seeded), and session records with §5 file-change
-attribution and the commit-linkage chain. Next: Wave 2, the provider layer.
+**Status: Wave 1 COMPLETE (W1.1–W1.7)**, plus **W5.7 (metrics query views)** — SQLite
+store + migrations, event log + transactional outbox + SSE subscriptions, task store,
+write leases, registries (six system agents seeded), pipeline templates
+(launch-equivalent validation via `pkg/template`, system default seeded), session
+records with §5 file-change attribution and the commit-linkage chain, and `GET
+/metrics/*` dashboard views computed as pure queries over the event log. W5.7 was the
+only Wave 5 item scoped to this service, so Wave 5 is closed out here too.
 
 ## Run it alone
 
@@ -110,6 +112,24 @@ uses (unknown agents, missing/forward loop targets, stage shape), reported all a
 once. `GET /templates/{id}` includes `used_by` (workspaces bound via defaults);
 deletion refuses while bound or for the system default.
 
+Metrics routes (spec §8, W5.7) — the dashboard's data, computed as pure queries over
+the event log plus the task and capability tables; no separate metrics store (§15):
+
+- `GET /metrics/cost?session_id=` — usage.recorded events sliced by day×model, by
+  session, and by reconstructed pipeline run
+- `GET /metrics/agents` — agent leaderboard: usage count, successes/failures,
+  success rate, retries, from `agent.selected` / `agent.outcome_recorded` events
+- `GET /metrics/tasks?session_id=` — confirmed-task status distribution and
+  completion rate (draft tasks excluded)
+- `GET /metrics/capabilities` — every registered capability's invocation count,
+  including capabilities with zero `capability.invoked` events
+- `GET /metrics/pipelines?session_id=` — reconstructed pipeline run history (span
+  between `pipeline.started` and its next terminal event)
+
+`usage.recorded` and `capability.invoked` are registered event types with no
+production emitter yet (future wiring: `services/session`'s runner and the
+capability runtime's injection paths) — same pattern as `agent.outcome_recorded`.
+
 Internally, every mutating route runs inside `store.Log.WithTx` — the transactional
 outbox. State change and events commit atomically (`task.created|updated|
 status_changed|confirmed|discarded`, `note.created|confirmed|discarded`);
@@ -147,3 +167,15 @@ subscribers are woken post-commit.
   keep their status: TestExpireStaleBlocksMidFlightTasks, TestReleaseAllForCrashedHolder.
 - **Exactly one claimant wins** — racing claims produce one lease and clean
   LeaseHeldError losses: TestClaimContention (under -race).
+- **Pipeline run reconstruction never drops an unterminated run** — a
+  `pipeline.started` with no closing event yet still comes back from
+  `GET /metrics/pipelines`, with `outcome: "running"` and no `ended_at`, rather than
+  being silently excluded: `internal/store/metrics_test.go`
+  (TestPipelineRunsUnterminatedStaysRunning). Cancelled/failed runs report
+  `tasks_done/blocked/skipped = 0` — that data isn't in those terminal events'
+  payloads; this is a documented limitation, not a bug to route around.
+- **Never-used capabilities are zero-filled, not omitted** — `GET
+  /metrics/capabilities` lists every registered capability, so ones with no
+  `capability.invoked` events are visible as removal candidates instead of
+  disappearing from the view: `pkg/dataclient/metrics_test.go`
+  (TestMetricsCapabilityUsage).

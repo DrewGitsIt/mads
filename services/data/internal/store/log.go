@@ -109,6 +109,9 @@ func (l *Log) Append(ctx context.Context, env *contracts.Envelope) error {
 type Filter struct {
 	// Since returns only events with seq strictly greater — the resume cursor.
 	Since int64
+	// Until, when nonzero, caps the upper bound (inclusive) — pipeline-run
+	// reconstruction buckets events by seq range (spec §8, W5.7).
+	Until int64
 	// SessionID restricts to one session's events.
 	SessionID string
 	// Types is a list of patterns: exact ("task.created") or domain wildcard
@@ -126,6 +129,10 @@ func (l *Log) Query(ctx context.Context, f Filter) ([]contracts.Envelope, error)
 		where = []string{"seq > ?"}
 		args  = []any{f.Since}
 	)
+	if f.Until > 0 {
+		where = append(where, "seq <= ?")
+		args = append(args, f.Until)
+	}
 	if f.SessionID != "" {
 		where = append(where, "session_id = ?")
 		args = append(args, f.SessionID)

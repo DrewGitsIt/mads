@@ -1,0 +1,24 @@
+{
+  "by_day": [
+    {
+      "day": "2026-07-12T00:00:00Z",
+      "model": "claude-sonnet-5",
+      "input_tokens": 1200,
+      "output_tokens": 400,
+      "cost_usd": 0.42
+    }
+  ],
+  "by_session": [
+    {
+      "session_id": "ses_01hq3k",
+      "cost_usd": 0.42
+    }
+  ],
+  "by_pipeline_run": [
+    {
+      "session_id": "ses_01hq3k",
+      "run_seq": 3,
+      "cost_usd": 0.42
+    }
+  ]
+}
