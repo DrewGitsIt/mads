@@ -108,3 +108,104 @@ func TestClientRoundTrip(t *testing.T) {
 		t.Fatalf("want ValidationError, got %v", err)
 	}
 }
+
+// TestClientDraftConfirmDiscard exercises the draft lifecycle wrapper
+// methods (ConfirmTask/DiscardTask/ConfirmNote/DiscardNote) against a real
+// Data Service, checking both the resulting state and the emitted events.
+func TestClientDraftConfirmDiscard(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "synthesizer")
+
+	sess := contracts.Session{Name: "drafts"}
+	if err := c.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+
+	// Task confirm: draft -> confirmed, task.confirmed event, no longer a draft.
+	toConfirm := contracts.Task{
+		Title: "maybe do this", SessionID: sess.ID, Source: "synthesizer", Draft: true,
+	}
+	if err := c.CreateTask(ctx, &toConfirm); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ConfirmTask(ctx, toConfirm.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.Task(ctx, toConfirm.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Draft {
+		t.Errorf("confirmed task still marked draft: %+v", got)
+	}
+
+	// Task discard: draft task is removed entirely.
+	toDiscard := contracts.Task{
+		Title: "discard this", SessionID: sess.ID, Source: "synthesizer", Draft: true,
+	}
+	if err := c.CreateTask(ctx, &toDiscard); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DiscardTask(ctx, toDiscard.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Task(ctx, toDiscard.ID); !errors.Is(err, dataclient.ErrNotFound) {
+		t.Fatalf("want ErrNotFound after discard, got %v", err)
+	}
+
+	// Note confirm/discard against a confirmed parent task.
+	parent := contracts.Task{Title: "parent", SessionID: sess.ID, Source: "user"}
+	if err := c.CreateTask(ctx, &parent); err != nil {
+		t.Fatal(err)
+	}
+	noteToConfirm := contracts.Note{
+		Type: contracts.NoteDecision, Content: "maybe this",
+		Source: "synthesizer", Status: contracts.NoteStatusDraft,
+	}
+	if err := c.AddNote(ctx, parent.ID, &noteToConfirm); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ConfirmNote(ctx, parent.ID, noteToConfirm.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	noteToDiscard := contracts.Note{
+		Type: contracts.NoteObservation, Content: "discard this",
+		Source: "synthesizer", Status: contracts.NoteStatusDraft,
+	}
+	if err := c.AddNote(ctx, parent.ID, &noteToDiscard); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DiscardNote(ctx, parent.ID, noteToDiscard.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second confirm/discard on the same draft fails: no longer a draft.
+	if err := c.ConfirmTask(ctx, toConfirm.ID); err == nil {
+		t.Error("want error confirming an already-confirmed task")
+	}
+	if err := c.ConfirmNote(ctx, parent.ID, noteToConfirm.ID); err == nil {
+		t.Error("want error confirming an already-confirmed note")
+	}
+
+	evs, err := c.Events(ctx, 0, sess.ID, []string{
+		"task.confirmed", "task.discarded", "note.confirmed", "note.discarded",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTypes := map[contracts.EventType]int{
+		contracts.TaskConfirmed: 1, contracts.TaskDiscarded: 1,
+		contracts.NoteConfirmed: 1, contracts.NoteDiscarded: 1,
+	}
+	gotTypes := map[contracts.EventType]int{}
+	for _, e := range evs {
+		gotTypes[e.Type]++
+	}
+	for typ, want := range wantTypes {
+		if gotTypes[typ] != want {
+			t.Errorf("event %s: got %d, want %d (all events: %+v)", typ, gotTypes[typ], want, evs)
+		}
+	}
+}
