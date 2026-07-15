@@ -527,3 +527,33 @@ No Go changes in this work item — `make check` at the repo root should
 pass purely from the UI package's `npm run build`/`npm test`/lint gates.
 Run `make check` from repo root as the final step before considering the
 work item done.
+
+## 14. Executor notes (fix pass)
+
+Module was already built in full per §§1–13 (commit `9d8a9fe`), matching
+this doc's spec — no changes to the implementation itself in this pass.
+
+- **What was broken**: `make build` (`tsc --noEmit -p tsconfig.json`)
+  failed in `ui/src/App.test.tsx`'s `start-pipeline` test. The
+  `fetchMock.mock.calls.find(...)` callback had an explicit inline tuple
+  annotation, `([input]: [URL | string]) => ...`, asserting each call
+  args array has exactly one element. The actual type of
+  `fetchMock.mock.calls` (inferred from `vi.fn().mockImplementation((input:
+  URL | string) => ...)`) is `[URL | string][]` but with `find`'s
+  predicate signature expecting `(value: any[], ...)`, TS rejected the
+  narrower tuple annotation as incompatible (TS2769). `go build`, `vite
+  build`, and the vitest run were all unaffected — only the `tsc --noEmit`
+  gate inside `make build`/`make check`'s `npm run build` step caught it,
+  which is why `npm test` alone had passed in the prior attempt.
+- **Fix**: dropped the inline tuple type annotation; destructure via
+  `c[0]` cast to `URL | string` instead of a typed array-destructure
+  parameter. One line, `ui/src/App.test.tsx`, no behavior change — same
+  assertions, same test still exercises `handleDispatch`'s
+  `start-pipeline` case end-to-end.
+- **Verification performed**: `make build` (tsc + vite + electron tsc,
+  clean) and `make check` (golangci-lint 0 issues, `go test -race ./...`
+  green, `npm run lint` 0 issues, `npm run test` 98 files / 490 tests
+  green, including all three `App.test.tsx` cases and the full
+  `features/command-palette` suite) from repo root.
+- **Reviewer should scrutinize**: nothing new — this is a one-line,
+  test-only type-annotation fix. No other file in the diff changed.
