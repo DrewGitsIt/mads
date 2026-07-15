@@ -1,16 +1,17 @@
 package contracts
 
-// AgentSelectionMode controls how a session picks its agent (spec §9):
-// manual leaves it to the user, auto lets the system match agent to task.
+// AgentSelectionMode controls how a session picks its agent (HANDOFF §2.1 /
+// docs/REBUILD-SPEC.md §10): light does minimal agent-matching, full runs
+// the complete selection pipeline.
 type AgentSelectionMode string
 
 const (
-	AgentSelectionManual AgentSelectionMode = "manual"
-	AgentSelectionAuto   AgentSelectionMode = "auto"
+	AgentSelectionLight AgentSelectionMode = "light"
+	AgentSelectionFull  AgentSelectionMode = "full"
 )
 
 // AgentSelectionModes is the full registry, for validation and enumeration.
-var AgentSelectionModes = []AgentSelectionMode{AgentSelectionManual, AgentSelectionAuto}
+var AgentSelectionModes = []AgentSelectionMode{AgentSelectionLight, AgentSelectionFull}
 
 // Valid reports whether m is a registered agent selection mode.
 func (m AgentSelectionMode) Valid() bool {
@@ -22,18 +23,18 @@ func (m AgentSelectionMode) Valid() bool {
 	return false
 }
 
-// ModelTier is the default cost/capability tier new sessions bind to (spec
-// §11.5) absent a more specific override.
+// ModelTier is the default cost/capability tier new sessions bind to
+// (HANDOFF §2.1 / docs/REBUILD-SPEC.md §10) absent a more specific override.
 type ModelTier string
 
 const (
-	ModelTierFast     ModelTier = "fast"
-	ModelTierStandard ModelTier = "standard"
-	ModelTierPowerful ModelTier = "powerful"
+	ModelTierCheapest ModelTier = "cheapest"
+	ModelTierBalanced ModelTier = "balanced"
+	ModelTierBest     ModelTier = "best"
 )
 
 // ModelTiers is the full registry, for validation and enumeration.
-var ModelTiers = []ModelTier{ModelTierFast, ModelTierStandard, ModelTierPowerful}
+var ModelTiers = []ModelTier{ModelTierCheapest, ModelTierBalanced, ModelTierBest}
 
 // Valid reports whether t is a registered model tier.
 func (t ModelTier) Valid() bool {
@@ -132,10 +133,12 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		SynthesisMode:      SynthesisLight,
-		AgentSelectionMode: AgentSelectionAuto,
-		DefaultModelTier:   ModelTierStandard,
+		AgentSelectionMode: AgentSelectionLight,
+		DefaultModelTier:   ModelTierBalanced,
 
-		DefaultTrust: TrustFull,
+		// TrustLimited, not TrustFull — HANDOFF §2.1: a fresh install
+		// shouldn't default new sessions to unattended full-trust execution.
+		DefaultTrust: TrustLimited,
 
 		DisplayMode: "comfortable",
 		Keybindings: "default",
@@ -161,10 +164,10 @@ func ValidateConfig(c *Config) *ValidationError {
 		v.Add("synthesis_mode", "must be one of: off, light, full")
 	}
 	if !c.AgentSelectionMode.Valid() {
-		v.Add("agent_selection_mode", "must be one of: manual, auto")
+		v.Add("agent_selection_mode", "must be one of: light, full")
 	}
 	if !c.DefaultModelTier.Valid() {
-		v.Add("default_model_tier", "must be one of: fast, standard, powerful")
+		v.Add("default_model_tier", "must be one of: cheapest, balanced, best")
 	}
 	if c.CostAlertCents < 0 {
 		v.Add("cost_alert_cents", "must not be negative")

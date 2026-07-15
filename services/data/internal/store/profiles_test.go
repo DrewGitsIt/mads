@@ -54,7 +54,7 @@ func TestActivateProfileMergesOntoConfig(t *testing.T) {
 	p := contracts.Profile{
 		Name: "cost-conscious",
 		Settings: contracts.ProfileSettings{
-			DefaultModelTier: contracts.ModelTierFast,
+			DefaultModelTier: contracts.ModelTierCheapest,
 			ConcurrencyLimit: 1,
 		},
 	}
@@ -72,7 +72,7 @@ func TestActivateProfileMergesOntoConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if merged.DefaultModelTier != contracts.ModelTierFast || merged.ConcurrencyLimit != 1 {
+	if merged.DefaultModelTier != contracts.ModelTierCheapest || merged.ConcurrencyLimit != 1 {
 		t.Fatalf("activation did not merge overridden fields: %+v", merged)
 	}
 	// Untouched fields survive from the prior config, not zero values.

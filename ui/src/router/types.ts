@@ -301,8 +301,8 @@ export interface Retro {
 // mirrors pkg/contracts/config.go (W6.10 Settings). One global row — see
 // services/data/internal/store/config.go.
 export type SynthesisMode = "off" | "light" | "full";
-export type AgentSelectionMode = "manual" | "auto";
-export type ModelTier = "fast" | "standard" | "powerful";
+export type AgentSelectionMode = "light" | "full";
+export type ModelTier = "cheapest" | "balanced" | "best";
 export type ThemeMode = "dark" | "light" | "system";
 export type PaletteName = "clay" | "space" | "glacier";
 

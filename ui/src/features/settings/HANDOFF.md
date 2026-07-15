@@ -973,3 +973,34 @@ what a reviewer should scrutinize.
 - **Not done, out of scope**: real vault integrations, the real §7.3
   preflight backend (stubbed per §2.5 as instructed), Dashboard rail item
   — all explicitly out of scope per §11.
+
+## 16. Review fix pass — vocabulary and default-trust corrections
+
+Code review (post-§15) caught two divergences from this doc's own §2.1 that
+the first executor pass introduced silently:
+
+1. **`DefaultConfig().DefaultTrust` was `TrustFull`, not `TrustLimited`.**
+   §2.1's `DefaultConfig()` snippet always specified `TrustLimited` — a
+   fresh install defaulting new sessions to unattended full-trust execution
+   is a real security regression, not a stylistic slip. Fixed to
+   `TrustLimited` in `pkg/contracts/config.go`, and in the
+   `0010_config.up.sql` seed row (which had independently hardcoded the
+   same wrong value as a literal JSON string, so both had to change).
+2. **`AgentSelectionMode`/`ModelTier` used invented vocabulary**
+   (`manual`/`auto`, `fast`/`standard`/`powerful`) instead of this doc's
+   §2.1 (`light`/`full`, `cheapest`/`balanced`/`best` — matching
+   `docs/REBUILD-SPEC.md` §10 exactly). Renamed the Go consts
+   (`AgentSelectionLight`/`Full`, `ModelTierCheapest`/`Balanced`/`Best`),
+   `ValidateConfig`'s error strings, the `0010_config.up.sql` seed JSON, and
+   every call site: `services/data/internal/store/profiles_test.go`,
+   `services/data/internal/api/config_test.go`,
+   `ui/src/router/types.ts`'s `AgentSelectionMode`/`ModelTier` unions,
+   `ui/src/features/settings/panels/PipelinePanel.tsx`'s option lists +
+   cost-hint map, and `ui/src/router/fixtures.ts`'s `fixtureConfig`/
+   `fixtureProfile`.
+
+Neither change altered any panel's field layout, validation shape, or test
+count — `go test -race ./...` and `npm run test` (525/525) both stayed
+green throughout, confirming the vocabulary was cosmetic (string values
+only) with no downstream logic keyed on the old spellings. Re-ran full
+`make check` after the fix; still 0 lint issues, all green.

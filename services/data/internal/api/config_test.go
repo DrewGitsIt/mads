@@ -58,7 +58,7 @@ func TestProfileRoutesAndActivate(t *testing.T) {
 	var p contracts.Profile
 	resp := doJSON(t, srv, "POST", "/profiles", contracts.Profile{
 		Name:     "night-owl",
-		Settings: contracts.ProfileSettings{DefaultModelTier: contracts.ModelTierPowerful},
+		Settings: contracts.ProfileSettings{DefaultModelTier: contracts.ModelTierBest},
 	}, &p)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status %d", resp.StatusCode)
@@ -75,7 +75,7 @@ func TestProfileRoutesAndActivate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("activate: status %d", resp.StatusCode)
 	}
-	if merged.DefaultModelTier != contracts.ModelTierPowerful {
+	if merged.DefaultModelTier != contracts.ModelTierBest {
 		t.Fatalf("activate did not merge: %+v", merged)
 	}
 

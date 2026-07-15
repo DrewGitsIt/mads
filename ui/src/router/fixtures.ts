@@ -847,9 +847,9 @@ export class FakeRouterClient implements RouterClient {
 // Settings & first-run (W6.10) fixtures.
 export const fixtureConfig: Config = {
   synthesis_mode: "light",
-  agent_selection_mode: "auto",
-  default_model_tier: "standard",
-  default_trust: "full",
+  agent_selection_mode: "full",
+  default_model_tier: "balanced",
+  default_trust: "limited",
   display_mode: "comfortable",
   keybindings: "default",
   theme: "dark",
@@ -865,7 +865,7 @@ export const fixtureProfile: Profile = {
   id: "prf_focus",
   name: "focus-mode",
   description: "Fewer distractions, cheaper model tier",
-  settings: { default_model_tier: "fast", concurrency_limit: 1 },
+  settings: { default_model_tier: "cheapest", concurrency_limit: 1 },
   created_at: "2026-07-14T00:00:00Z",
   updated_at: "2026-07-14T00:00:00Z",
 };

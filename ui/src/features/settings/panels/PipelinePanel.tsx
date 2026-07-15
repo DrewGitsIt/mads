@@ -11,12 +11,12 @@ const SYNTHESIS_COST_HINTS: Record<SynthesisMode, string> = {
   full: "~$0.05 per session — summary + DPA generation.",
 };
 
-const AGENT_SELECTION_MODES: AgentSelectionMode[] = ["manual", "auto"];
-const MODEL_TIERS: ModelTier[] = ["fast", "standard", "powerful"];
+const AGENT_SELECTION_MODES: AgentSelectionMode[] = ["light", "full"];
+const MODEL_TIERS: ModelTier[] = ["cheapest", "balanced", "best"];
 const MODEL_TIER_COST_HINTS: Record<ModelTier, string> = {
-  fast: "Lowest cost, fastest turnaround.",
-  standard: "Balanced cost and quality — default.",
-  powerful: "Highest cost, best for complex synthesis.",
+  cheapest: "Lowest cost, fastest turnaround.",
+  balanced: "Balanced cost and quality — default.",
+  best: "Highest cost, best for complex synthesis.",
 };
 
 export interface PipelinePanelProps {
