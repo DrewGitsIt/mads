@@ -6,6 +6,7 @@ import { useAttentionBadge } from "./features/command-palette/state/useAttention
 import { useCommandPaletteData } from "./features/command-palette/state/useCommandPaletteData";
 import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
+import { DashboardTab } from "./dashboard/DashboardTab";
 import { FetchPipelineClient } from "./pipeline/client/pipelineClient";
 import styles from "./App.module.css";
 
@@ -13,9 +14,12 @@ const RAIL_ITEMS: IconRailItem[] = [
   { id: "sessions", label: "Sessions", icon: "S" },
   { id: "retro", label: "Retro", icon: "R" },
   { id: "library", label: "Library", icon: "L" },
+  { id: "dashboard", label: "Dashboard", icon: "D" },
 ];
 
 const SURFACES: Partial<Record<string, ComponentType>> = {
+  sessions: SessionsSurface,
+  dashboard: DashboardTab,
   retro: RetroSurface,
 };
 
