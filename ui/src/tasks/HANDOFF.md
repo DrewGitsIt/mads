@@ -658,9 +658,21 @@ minimap + node) → `DetailSheet/` → `DraftCard/` → `BulkImport/` →
 - The real Session Workspace container that will host `TasksTab` +
   `ContextRail` together in production doesn't exist yet (W6.2 territory) —
   see the shared-store deviation above.
-- `make check` passes (Go race tests + lint, UI lint + all 261 vitest
-  tests, including the 4 new acceptance-criteria tests in
-  `TasksTab.test.tsx`, `TaskDetailSheet.test.tsx`,
-  `TaskRow.test.tsx`/`GraphNode.test.tsx` for Queued/needs-human rendering,
-  and `useTaskStore.test.ts`/`TaskGraphView.test.tsx` for the streamed
-  `task.*` graph update).
+- `make check` passes (Go race tests + lint, UI lint + all 263 vitest
+  tests, including the acceptance-criteria tests in `TasksTab.test.tsx`,
+  `TaskDetailSheet.test.tsx`, `TaskRow.test.tsx`/`GraphNode.test.tsx` for
+  Queued/needs-human rendering, and `useTaskStore.test.ts`/
+  `TaskGraphView.test.tsx` for the streamed `task.*` graph update).
+
+**Review fix (post-handoff):** the first pass only had `useTaskStore.test.ts`
+proving the *hook's* state updated on a streamed event — nothing asserted the
+*graph component* itself re-rendered, which is what the acceptance criterion
+("Graph updates from a streamed task.* event in a component test") and this
+section's own test-to-criteria map actually call for. `TaskGraphView` takes
+`tasks`/`tasksById` as props and doesn't own `useTaskStore` (that's
+`TasksTab`'s job, §4), so `TaskGraphView.test.tsx` gained a small
+`GraphHarness` wrapper that composes `useTaskStore` + `TaskGraphView` the same
+way `TasksTab` does, plus two tests: a streamed `task.created` event renders a
+new node (new title text appears in the SVG), and a streamed `task.updated`
+event replaces an existing node's rendered title. Both go through the real
+`GraphNode`/`GraphCanvas` render path, not just store state.
