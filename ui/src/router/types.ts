@@ -344,3 +344,120 @@ export interface FileDiff {
   original: string;
   modified: string;
 }
+
+/**
+ * TS mirrors of pkg/contracts/metrics.go, consumed by the Dashboard tab
+ * (W6.9, MADS-UX §3.6). Generic Data Service contracts, not Dashboard-
+ * private, so they live here alongside the rest of the router types.
+ */
+
+// mirrors pkg/contracts/metrics.go CostPoint. `day` is an ISO timestamp,
+// UTC-truncated to midnight.
+export interface CostPoint {
+  day: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostBySession
+export interface CostBySession {
+  session_id: string;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostByPipelineRun
+export interface CostByPipelineRun {
+  session_id: string;
+  run_seq: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostMetrics — GET /metrics/cost's response
+export interface CostMetrics {
+  by_day: CostPoint[];
+  by_session: CostBySession[];
+  by_pipeline_run: CostByPipelineRun[];
+}
+
+// mirrors pkg/contracts/metrics.go AgentLeaderboardEntry
+export interface AgentLeaderboardEntry {
+  agent: string;
+  usage_count: number;
+  successes: number;
+  failures: number;
+  success_rate: number;
+  retries: number;
+}
+
+// mirrors pkg/contracts/metrics.go TaskOutcomes — GET /metrics/tasks's response
+export interface TaskOutcomes {
+  counts: Partial<Record<TaskStatus, number>>;
+  total: number;
+  completion_rate: number;
+}
+
+// mirrors pkg/contracts/metrics.go CapabilityUsage
+export interface CapabilityUsage {
+  capability: string;
+  type: CapabilityType;
+  invocations: number;
+}
+
+// mirrors pkg/contracts/metrics.go PipelineRun — one reconstructed pipeline
+// run. `outcome` matches the Go comment's closed set.
+export type PipelineRunOutcome = "completed" | "incomplete" | "cancelled" | "failed" | "running";
+
+export interface PipelineRun {
+  session_id: string;
+  run_seq: number;
+  started_at: string;
+  ended_at?: string;
+  outcome: PipelineRunOutcome;
+  tasks_done: number;
+  tasks_blocked: number;
+  tasks_skipped: number;
+  cost_usd: number;
+  agents?: string[];
+}
+
+// mirrors pkg/contracts/retro.go DPAStatus
+export type DPAStatus = "accepted" | "rejected" | "edited";
+
+// mirrors pkg/contracts/retro.go RemediationLayer
+export type RemediationLayer =
+  | "agent_config"
+  | "tool_config"
+  | "prompt_engineering"
+  | "task_decomposition"
+  | "dependency_structure"
+  | "pipeline_template"
+  | "human_process";
+
+// mirrors pkg/contracts/retro.go DPA. ID is unique within its owning Retro
+// only (minted "dpa_1", "dpa_2", ... server-side).
+export interface DPA {
+  id: string;
+  problem: string;
+  evidence: string;
+  root_cause: string;
+  remediation_layer: RemediationLayer;
+  suggested_action: string;
+  status: DPAStatus;
+}
+
+// mirrors pkg/contracts/retro.go Retro. `dpas` is present but can be an
+// empty array (never null — Data Service always writes []DPA, never nil)
+// before generation finishes; the review UI only ever renders this after
+// GET /retros/{id} following retro.completed, so treat it as always
+// populated at the point this UI reads it.
+export interface Retro {
+  id: string;
+  session_ids: string[];
+  user_observations?: string;
+  dpas: DPA[];
+  follow_up_session_id?: string;
+  created_at: string;
+  updated_at: string;
+}

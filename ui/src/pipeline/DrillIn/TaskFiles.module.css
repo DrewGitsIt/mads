@@ -1,0 +1,33 @@
+.files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.count {
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text2);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.path {
+  font: var(--fs-sm) var(--mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  margin: 0;
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}

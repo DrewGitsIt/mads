@@ -1,0 +1,85 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.toggle {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-2);
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+  cursor: pointer;
+}
+
+.bar {
+  display: flex;
+  height: 16px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.segment {
+  height: 100%;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--fs-sm) var(--sans);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text2);
+}
+
+.table th {
+  color: var(--text3);
+  font-weight: 500;
+}
+
+.summary {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}

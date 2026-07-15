@@ -65,6 +65,10 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("POST /retros", s.handleStartRetro)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /retros/{id}/follow-up-session", s.handleRetroFollowUpSession)
+	mux.HandleFunc("GET /retros", s.handleListRetros)
+	mux.HandleFunc("GET /retros/{id}", s.handleGetRetro)
+	mux.HandleFunc("POST /retros/{id}/dpas/{dpaId}/accept", s.handleAcceptDPA)
+	mux.HandleFunc("POST /retros/{id}/dpas/{dpaId}/reject", s.handleRejectDPA)
 	mux.HandleFunc("POST /tasks", s.handleCreateTask)
 	mux.HandleFunc("POST /tasks/import", s.handleImportTasks)
 	mux.HandleFunc("GET /tasks", s.handleListTasks)
@@ -80,8 +84,14 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /sessions", s.handleListSessions)
 	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
 	mux.HandleFunc("GET /agents", s.handleListAgents)
+	mux.HandleFunc("POST /tasks/{id}/retry", s.handleRetryTask)
 	mux.HandleFunc("GET /providers", s.handleListProviders)
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
+	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
+	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
+	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
+	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
+	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
 	return mux
 }
 
