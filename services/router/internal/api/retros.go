@@ -109,3 +109,45 @@ func (s *server) handleRetroFollowUpSession(w http.ResponseWriter, r *http.Reque
 
 	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "addr": addr, "tasks": created})
 }
+
+// handleListRetros lists every retro, newest first — thin proxy over the
+// Data Service (spec §7); needed for the history list.
+func (s *server) handleListRetros(w http.ResponseWriter, r *http.Request) {
+	retros, err := s.data.Retros(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, retros)
+}
+
+// handleGetRetro fetches one retro, DPAs included — thin proxy over the Data
+// Service. The UI needs this after retro.completed, since that event's
+// payload carries only {retro_id, dpa_count}, not the DPAs themselves.
+func (s *server) handleGetRetro(w http.ResponseWriter, r *http.Request) {
+	retro, err := s.data.Retro(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, retro)
+}
+
+// handleAcceptDPA and handleRejectDPA back the DPA card's status-chip
+// toggle — thin proxies over the Data Service, which emits
+// retro.dpa_accepted/retro.dpa_rejected on success.
+func (s *server) handleAcceptDPA(w http.ResponseWriter, r *http.Request) {
+	if err := s.data.AcceptDPA(r.Context(), r.PathValue("id"), r.PathValue("dpaId")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleRejectDPA(w http.ResponseWriter, r *http.Request) {
+	if err := s.data.RejectDPA(r.Context(), r.PathValue("id"), r.PathValue("dpaId")); err != nil {
+		writeError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

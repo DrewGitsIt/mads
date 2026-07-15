@@ -1,5 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
+import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
 import styles from "./App.module.css";
 
@@ -11,6 +12,7 @@ const RAIL_ITEMS: IconRailItem[] = [
 
 const SURFACES: Partial<Record<string, ComponentType>> = {
   sessions: SessionsSurface,
+  retro: RetroSurface,
 };
 
 export function App() {

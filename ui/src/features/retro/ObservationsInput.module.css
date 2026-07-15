@@ -1,0 +1,15 @@
+.input {
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg1);
+  color: var(--text);
+  font: 400 var(--fs-body) var(--sans);
+}
+
+.input:disabled {
+  opacity: 0.6;
+}
