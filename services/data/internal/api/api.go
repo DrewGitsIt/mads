@@ -58,6 +58,8 @@ func New(db *sql.DB) http.Handler {
 	templateRoutes(mux, l)
 	sessionRoutes(mux, l)
 	retroRoutes(mux, l)
+	configRoutes(mux, l)
+	profileRoutes(mux, l)
 	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
 	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)

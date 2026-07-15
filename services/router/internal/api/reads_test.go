@@ -115,9 +115,30 @@ func TestListProviders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	names := decodeJSON[[]string](t, resp)
-	if len(names) != 1 || names[0] != "fake" {
-		t.Fatalf("GET /providers = %v, want [fake]", names)
+	infos := decodeJSON[[]struct {
+		Name   string            `json:"name"`
+		Matrix map[string]string `json:"matrix"`
+	}](t, resp)
+	if len(infos) != 1 || infos[0].Name != "fake" {
+		t.Fatalf("GET /providers = %+v, want one entry named fake", infos)
+	}
+	if len(infos[0].Matrix) == 0 {
+		t.Fatalf("GET /providers: fake entry has no matrix")
+	}
+}
+
+func TestListProviderBehaviors(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/providers/behaviors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	behaviors := decodeJSON[[]struct {
+		Behavior string `json:"behavior"`
+		Level    string `json:"level"`
+	}](t, resp)
+	if len(behaviors) == 0 {
+		t.Fatalf("GET /providers/behaviors returned no rows")
 	}
 }
 

@@ -1,8 +1,10 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { RouterValidationError } from "./client";
 import type {
+  BehaviorInfo,
   CapabilitySummary,
   Commit,
+  Config,
   ControlEvent,
   Envelope,
   FileChange,
@@ -11,6 +13,9 @@ import type {
   MergeResult,
   Note,
   NoteType,
+  PreflightCheck,
+  Profile,
+  ProviderInfo,
   Retro,
   Session,
   Task,
@@ -838,3 +843,88 @@ export class FakeRouterClient implements RouterClient {
     return source;
   }
 }
+
+// Settings & first-run (W6.10) fixtures.
+export const fixtureConfig: Config = {
+  synthesis_mode: "light",
+  agent_selection_mode: "full",
+  default_model_tier: "balanced",
+  default_trust: "limited",
+  display_mode: "comfortable",
+  keybindings: "default",
+  theme: "dark",
+  palette: "clay",
+  concurrency_limit: 3,
+  synthesis_debounce_ms: 2000,
+  log_retention_days: 30,
+  feature_flags: { multi_repo: false, linked_sessions: false, remote_registry: false },
+  onboarding_complete: true,
+};
+
+export const fixtureProfile: Profile = {
+  id: "prf_focus",
+  name: "focus-mode",
+  description: "Fewer distractions, cheaper model tier",
+  settings: { default_model_tier: "cheapest", concurrency_limit: 1 },
+  created_at: "2026-07-14T00:00:00Z",
+  updated_at: "2026-07-14T00:00:00Z",
+};
+
+export const fixtureProfiles: Profile[] = [fixtureProfile];
+
+// Spans native/emulated/unsupported across two providers so ProvidersPanel's
+// table has real styling variance to assert against.
+export const fixtureProviders: ProviderInfo[] = [
+  {
+    name: "claude-code",
+    matrix: {
+      interactive: "native",
+      interrupt: "native",
+      one_shot: "native",
+      resume: "native",
+      transcript: "native",
+      model_discovery: "emulated",
+      cost_reporting: "native",
+      acp: "native",
+      pty: "unsupported",
+      branching: "unsupported",
+      cwd_reroot: "unsupported",
+    },
+  },
+  {
+    name: "fake",
+    matrix: {
+      interactive: "native",
+      interrupt: "native",
+      one_shot: "native",
+      resume: "unsupported",
+      transcript: "emulated",
+      model_discovery: "unsupported",
+      cost_reporting: "emulated",
+      acp: "unsupported",
+      pty: "native",
+      branching: "unsupported",
+      cwd_reroot: "unsupported",
+    },
+  },
+];
+
+export const fixtureProviderBehaviors: BehaviorInfo[] = [
+  { behavior: "interactive", level: "required" },
+  { behavior: "interrupt", level: "required" },
+  { behavior: "one_shot", level: "required" },
+  { behavior: "resume", level: "expected" },
+  { behavior: "transcript", level: "expected" },
+  { behavior: "model_discovery", level: "expected" },
+  { behavior: "cost_reporting", level: "expected" },
+  { behavior: "acp", level: "expected" },
+  { behavior: "pty", level: "expected" },
+  { behavior: "branching", level: "optional" },
+  { behavior: "cwd_reroot", level: "optional" },
+];
+
+export const fixturePreflightChecks: PreflightCheck[] = [
+  { name: "git", healthy: true, detail: "stubbed — real check pending W7.3" },
+  { name: "node-pty", healthy: true, detail: "stubbed — real check pending W7.3" },
+  { name: "provider:claude-code", healthy: true, detail: "stubbed — real check pending W7.3" },
+];

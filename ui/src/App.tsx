@@ -6,6 +6,12 @@ import { useAttentionBadge } from "./features/command-palette/state/useAttention
 import { useCommandPaletteData } from "./features/command-palette/state/useCommandPaletteData";
 import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
+import { SettingsSurface } from "./features/settings/SettingsSurface";
+import { applyTheme } from "./features/settings/theme/applyTheme";
+import { FirstRunWizard } from "./onboarding/FirstRunWizard";
+import { setFlags } from "./featureFlags";
+import { routerGet } from "./router/client";
+import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { FetchPipelineClient } from "./pipeline/client/pipelineClient";
@@ -15,6 +21,7 @@ const RAIL_ITEMS: IconRailItem[] = [
   { id: "sessions", label: "Sessions", icon: "S" },
   { id: "retro", label: "Retro", icon: "R" },
   { id: "library", label: "Library", icon: "L" },
+  { id: "settings", label: "Settings", icon: "⚙" },
   { id: "dashboard", label: "Dashboard", icon: "D" },
 ];
 
@@ -23,6 +30,7 @@ const SURFACES: Partial<Record<string, ComponentType>> = {
   library: LibrarySurface,
   dashboard: DashboardTab,
   retro: RetroSurface,
+  settings: SettingsSurface,
 };
 
 // Stateless — safe as a module-level singleton rather than re-created per render.
@@ -30,6 +38,20 @@ const pipelineClient = new FetchPipelineClient();
 
 export function App() {
   const [activeId, setActiveId] = useState("sessions");
+  const [config, setConfig] = useState<Config | null>(null);
+
+  useEffect(() => {
+    routerGet<Config>("/config").then((c) => {
+      applyTheme(c.theme, c.palette);
+      setFlags({
+        multiRepo: c.feature_flags.multi_repo,
+        linkedSessions: c.feature_flags.linked_sessions,
+        remoteRegistry: c.feature_flags.remote_registry,
+      });
+      setConfig(c);
+    });
+  }, []);
+
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
@@ -48,6 +70,12 @@ export function App() {
   }, []);
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);
+
+  if (!config) return null;
+
+  if (!config.onboarding_complete) {
+    return <FirstRunWizard onComplete={() => setConfig({ ...config, onboarding_complete: true })} />;
+  }
 
   function handleDispatch(command: Command) {
     switch (command.kind) {

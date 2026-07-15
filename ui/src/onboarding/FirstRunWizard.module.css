@@ -1,0 +1,38 @@
+.wizard {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg0);
+}
+
+.card {
+  width: 420px;
+  padding: var(--space-6);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg1);
+}
+
+.step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.title {
+  font: 650 18px var(--sans);
+  color: var(--text);
+  margin: 0;
+}
+
+.body {
+  font: 400 var(--fs-body) var(--sans);
+  color: var(--text2);
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}

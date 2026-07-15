@@ -12,22 +12,33 @@ import (
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/preflight"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 type server struct {
-	data      *dataclient.Client
-	sup       *supervisor.Supervisor
-	jobs      *job.Runner
-	providers *provider.Registry
+	data         *dataclient.Client
+	sup          *supervisor.Supervisor
+	jobs         *job.Runner
+	providers    *provider.Registry
+	creds        *credstore.Store
+	preflight    preflight.Checker
+	vaultSources []vault.Source
 }
 
-// New returns the Router's HTTP handler.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry) http.Handler {
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers}
+// New returns the Router's HTTP handler. creds may be nil (credential
+// endpoints degrade to 503); a nil preflightChecker defaults to
+// preflight.StubChecker{} — W7.3's real implementation does not exist yet.
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker) http.Handler {
+	if preflightChecker == nil {
+		preflightChecker = preflight.StubChecker{}
+	}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
@@ -86,7 +97,22 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /agents", s.handleListAgents)
 	mux.HandleFunc("POST /tasks/{id}/retry", s.handleRetryTask)
 	mux.HandleFunc("GET /providers", s.handleListProviders)
+	mux.HandleFunc("GET /providers/behaviors", s.handleListProviderBehaviors)
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
+	mux.HandleFunc("GET /config", s.handleGetConfig)
+	mux.HandleFunc("PUT /config", s.handleUpdateConfig)
+	mux.HandleFunc("GET /profiles", s.handleListProfiles)
+	mux.HandleFunc("POST /profiles", s.handleCreateProfile)
+	mux.HandleFunc("PUT /profiles/{id}", s.handleUpdateProfile)
+	mux.HandleFunc("DELETE /profiles/{id}", s.handleDeleteProfile)
+	mux.HandleFunc("POST /profiles/{id}/activate", s.handleActivateProfile)
+	mux.HandleFunc("GET /preflight", s.handlePreflight)
+	mux.HandleFunc("GET /credentials", s.handleListCredentials)
+	mux.HandleFunc("POST /credentials", s.handleSetCredential)
+	mux.HandleFunc("DELETE /credentials/{name}", s.handleDeleteCredential)
+	mux.HandleFunc("GET /credentials/env-candidates", s.handleCredentialEnvCandidates)
+	mux.HandleFunc("POST /credentials/import", s.handleImportCredentials)
+	mux.HandleFunc("GET /credentials/vault-sources", s.handleListVaultSources)
 	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
 	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)

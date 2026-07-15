@@ -413,6 +413,50 @@ func (c *Client) CreateWorkspace(ctx context.Context, w *contracts.Workspace) er
 	return c.do(ctx, http.MethodPost, "/workspaces", w, w)
 }
 
+// --- Config & Profiles (MADS-UX §3.7 Settings) ---
+
+// Config fetches the global application configuration.
+func (c *Client) Config(ctx context.Context) (contracts.Config, error) {
+	var out contracts.Config
+	err := c.do(ctx, http.MethodGet, "/config", nil, &out)
+	return out, err
+}
+
+// UpdateConfig replaces the global configuration, validated server-side.
+func (c *Client) UpdateConfig(ctx context.Context, cfg *contracts.Config) error {
+	return c.do(ctx, http.MethodPut, "/config", cfg, cfg)
+}
+
+// Profiles lists every settings profile (MADS-UX §10.5).
+func (c *Client) Profiles(ctx context.Context) ([]contracts.Profile, error) {
+	var out []contracts.Profile
+	err := c.do(ctx, http.MethodGet, "/profiles", nil, &out)
+	return out, err
+}
+
+// CreateProfile adds a profile.
+func (c *Client) CreateProfile(ctx context.Context, p *contracts.Profile) error {
+	return c.do(ctx, http.MethodPost, "/profiles", p, p)
+}
+
+// UpdateProfile replaces a profile's fields.
+func (c *Client) UpdateProfile(ctx context.Context, p *contracts.Profile) error {
+	return c.do(ctx, http.MethodPut, "/profiles/"+url.PathEscape(p.ID), p, p)
+}
+
+// DeleteProfile removes a profile. System profiles refuse.
+func (c *Client) DeleteProfile(ctx context.Context, idOrName string) error {
+	return c.do(ctx, http.MethodDelete, "/profiles/"+url.PathEscape(idOrName), nil, nil)
+}
+
+// ActivateProfile merges a profile's settings onto the global Config,
+// returning the merged result.
+func (c *Client) ActivateProfile(ctx context.Context, idOrName string) (contracts.Config, error) {
+	var out contracts.Config
+	err := c.do(ctx, http.MethodPost, "/profiles/"+url.PathEscape(idOrName)+"/activate", map[string]any{}, &out)
+	return out, err
+}
+
 // UpdateWorkspace saves changes to an existing workspace.
 func (c *Client) UpdateWorkspace(ctx context.Context, w *contracts.Workspace) error {
 	return c.do(ctx, http.MethodPut, "/workspaces/"+url.PathEscape(w.ID), w, w)

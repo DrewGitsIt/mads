@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -21,7 +22,11 @@ func TestHealth(t *testing.T) {
 	if err := providers.Register(fake.New()); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers))
+	creds, err := credstore.Open(t.TempDir() + "/credentials.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")

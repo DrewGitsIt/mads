@@ -33,8 +33,40 @@ func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agents)
 }
 
-func (s *server) handleListProviders(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.providers.Names())
+// providerInfo is one row of the Settings Providers panel's capability
+// matrix table (MADS-UX §11): the provider's declared support per behavior.
+type providerInfo struct {
+	Name   string          `json:"name"`
+	Matrix provider.Matrix `json:"matrix"`
+}
+
+func (s *server) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	names := s.providers.Names()
+	out := make([]providerInfo, 0, len(names))
+	for _, name := range names {
+		p, err := s.providers.Get(name)
+		if err != nil {
+			continue
+		}
+		out = append(out, providerInfo{Name: name, Matrix: p.Matrix()})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// behaviorInfo is one row of the matrix legend: the behavior and the
+// platform's requirement level for it (spec §11).
+type behaviorInfo struct {
+	Behavior provider.Behavior `json:"behavior"`
+	Level    provider.Level    `json:"level"`
+}
+
+func (s *server) handleListProviderBehaviors(w http.ResponseWriter, _ *http.Request) {
+	behaviors := provider.Behaviors()
+	out := make([]behaviorInfo, 0, len(behaviors))
+	for _, b := range behaviors {
+		out = append(out, behaviorInfo{Behavior: b, Level: provider.Requirement(b)})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *server) handleListProviderModels(w http.ResponseWriter, r *http.Request) {
