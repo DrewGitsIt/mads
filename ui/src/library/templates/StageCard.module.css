@@ -1,0 +1,50 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.index {
+  font-weight: 600;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 600;
+}
+
+.field input,
+.field select {
+  font-weight: normal;
+}
+
+.modeToggle {
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--fs-sm);
+}
+
+.modeToggle label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.onFail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.error {
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}

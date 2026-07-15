@@ -165,6 +165,68 @@ tree to point an embedded editor at, since `Manager.Merge` aborts the merge
 on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
 follow-up this needs on the Session Service side.
 
+## Library
+
+```sh
+npm run library
+```
+
+Opens `library.html`: `LibrarySurface` (`src/library/LibrarySurface.tsx`, W6.8;
+MADS-UX §3.5) mounted standalone against a real Router (`VITE_ROUTER_URL`),
+not `FakeRouterClient` — unlike the other demo mounts, Library was built
+exclusively against the `routerGet`/`routerPost`/`routerPut`/`routerDelete` +
+`subscribeToEvents` idiom (`src/router/client.ts`/`events.ts`), so there's no
+fake client to point it at yet. `LibrarySurface` owns a `Chip`-row shelf
+switcher over four shelves — Agents, Capabilities, Workspaces, Pipeline
+templates — each following the same shape: a `use<Shelf>.ts` hook
+(list+CRUD, refetch-on-any-event via `subscribeToEvents`) feeding a
+`<Shelf>Shelf.tsx` card grid, with a `SideSheet`-based `<Item>Editor.tsx` for
+create/edit. Browse Registry (`src/library/registry/RegistryShelfStub.tsx`)
+stays behind `FLAGS.remoteRegistry` and is a stub until its own work item.
+
+Agents (`src/library/agents/`) adds an NL-generate flow
+(`NLGenerateBox`/`useAgentGeneration.ts`) that posts to the W5.3
+generation endpoint and renders the result through `Draft`/`DraftChip`
+(matching the kit's one provenance treatment, see Critical paths below) with
+a `SimilarAgentWarning` when the backend flags a near-duplicate. The editor
+composes a prompt scaffold, enrichment actions (describe/suggest-
+capabilities/refine), a provider-discovery-backed model dropdown
+(`ModelField`), a quadrant tooltip (`QuadrantField`), and an import-from-
+provider mapping preview (`ImportFromProviderDialog`).
+
+Capabilities (`src/library/capabilities/`) shows a live health dot per card
+(`HealthDot`) that owns its own `capability.health_changed` subscription and
+refetches just that one capability — correct even without patch-in-place
+semantics, since a full refetch is always safe. `CredentialEnvVarsField` is
+the credential editor: it's built over a plain `string[]` of env-var names,
+so a credential value structurally cannot enter the React tree or a request
+body — `CredentialEnvVarsField.test.tsx` asserts this with negative regex
+matches against rendered output. `DiagnosePanel` posts to `/capabilities/
+{id}/diagnose` and surfaces the healthy/unhealthy verdict plus suggestions.
+
+Workspaces (`src/library/workspaces/`) edits repos (`RepoList`, with a
+primary-repo radio), defaults (agent/model/isolation/template binding), and
+shows `UsedBySessions` — a client-side reverse lookup over `GET /sessions`
+filtered by `session.workspace`, since the Router has no server-side
+`workspace -> sessions` field.
+
+Pipeline templates (`src/library/templates/`) is a dual-mode visual/YAML
+editor kept in sync by construction: `TemplateEditor` owns exactly one piece
+of state, the YAML `source` string; visual mode (`VisualStageList`/
+`StageCard`) is a pure projection derived via `templateSync.parse`, and
+edits made there flow back through `templateSync.serialize` to replace
+`source` wholesale — there's no second copy of the parsed model to drift out
+of sync. `StageCard` exposes the full `pkg/template` grammar (name,
+agent/command, when, on_fail.{loop_back,max_loops,then}). Validation posts
+to `/templates/validate` (`useTemplateValidation.ts`) and surfaces every
+`RouterValidationError` field error at once, routed onto the owning
+`StageCard` by parsing its `stages[N].field` path — a seeded multi-error
+template reports all of them together, not just the first. The YAML view
+lazy-loads `@monaco-editor/react` the same way `DiffViewer` does (see Files
+tab above); its tests mock the module and use `findByTestId`, not
+`getByTestId`, since `Suspense` resolution is asynchronous even against a
+mocked import.
+
 ## Retro surface
 
 `src/features/retro/RetroSurface.tsx` (W6.7; MADS-UX §3.4), registered as
@@ -260,6 +322,73 @@ final inline step that `PUT`s `onboarding_complete: true` and calls
 `onComplete()`. `App.tsx` also applies the persisted theme/palette and
 feature flags on every mount, so a returning user's choices survive reload.
 
+## Dashboard tab
+
+```sh
+npm run dashboard
+```
+
+Opens `dashboard.html`: the Dashboard tab (`src/dashboard/DashboardTab.tsx`)
+mounted standalone against `FakeMetricsClient` and the golden aggregates
+recorded in `src/dashboard/client/fixtures.ts` (copied verbatim from
+`pkg/dataclient/metrics_test.go`'s expected outputs — see `src/dashboard/
+HANDOFF.md` §5). Dashboard is also registered directly in the app shell
+(`src/App.tsx`'s `RAIL_ITEMS`/`SURFACES`) — unlike the other tabs above, it's
+a top-level `IconRail` destination rather than a per-session sub-tab, so it
+mounts a real `FetchMetricsClient` there instead of the demo's fake one.
+
+`DashboardTab` owns date-preset state (7d/30d/90d/all) and composes 8 leaf
+views fed by two independent hooks: `useDashboardMetrics` (fetch-once-on-mount
+for cost, agent leaderboard, task outcomes, capability usage, and run
+history) and `useLiveActivity` (refetch-on-`session.*`/`pipeline.*`-event for
+the live "active sessions / running pipelines" widget). Per the date preset:
+only the cost-by-model chart (`CostChart/CostByModelChart.tsx`) and the run
+history table (`RunHistory/RunHistoryTable.tsx`) re-slice client-side on the
+selected range — the agent leaderboard, task outcomes, and capability usage
+views have no time axis in their response shape and always render the full
+fetched data.
+
+`CostByModelChart` is a stacked bar (one bar per day, stacked by model) using
+only `var(--chart-1/2/3)` — never a hex literal — with a fixed first-seen hue
+order, a 4th+ model folded into an "Other" bucket, a per-day-column hover
+tooltip, and a table-view toggle as the accessible fallback.
+`TaskOutcomes/TaskOutcomesPanel.tsx` is a status-distribution bar that
+deliberately does *not* use the `--chart-*` tokens — task status is a
+severity encoding, so it reuses `--ok`/`--warn`/`--bad`/`--info` the same way
+`Chip`'s `ChipTone` does, with the same legend + table-toggle treatment.
+
+There's no cross-surface router in this codebase yet, so "drill-back to the
+session's Pipeline tab" is implemented as a callback contract, not a
+navigation: `RunHistoryTable` takes an `onDrillBack?: (params: { sessionId,
+runSeq }) => void` prop and `DashboardTab` forwards its own `onDrillBack` prop
+through unchanged. Actually opening `pipeline.html?session=...` (or a future
+in-app router) is the caller's decision, out of scope for this module — see
+`src/dashboard/HANDOFF.md` §7/§11.
+
+## Command palette & notifications
+
+`src/features/command-palette/` (W6.11; MADS-UX §3.8), mounted directly in
+`App.tsx` (not a `SURFACES` entry — it's a global overlay, toggled by ⌘K/
+Ctrl+K rather than the icon rail). `useCommandPaletteData` composes the
+already-mounted `useSessionsList`/`useOpenTaskCounts` hooks plus a new
+`useAllTasks`, all fetched once on mount/SSE event at the `App.tsx` level;
+`CommandPalette.tsx` itself only ever receives this data as props and
+filters it client-side (`commandSource.ts`), so opening the palette issues
+no new Router request. Dispatching a command (jump to session, start
+pipeline, open task, new session, run retro) is handled in `App.tsx`.
+
+The dock/tray badge count reuses `dotState` (`src/features/sessions/rail/
+railGroups.ts`) — the same "needs attention" derivation the session rail
+uses — rather than a second implementation, via
+`state/attentionCount.ts`/`state/useAttentionBadge.ts`. It's pushed to
+Electron over a `badge:set-count` IPC channel (`electron/preload.ts` /
+`electron/main.ts`, wrapping `app.setBadgeCount`), reachable from the
+renderer via `window.mads.badge`, the same `contextBridge` pattern as
+`window.mads.pty`. The notification model is badge-only at launch; no
+in-app inbox exists yet, but `Command`'s shape in `commandSource.ts` is
+meant to be reusable as a future inbox's item source rather than needing a
+new backend feed.
+
 ## Test it
 
 ```sh
@@ -316,6 +445,13 @@ follow that pattern rather than adding a second fake.
 successful `PUT /config`. Consumers read `FLAGS.<name>` directly in their
 render body (no hook) — `subscribeFlags(cb)` is available for anything that
 needs to re-render on a change. Gate any flagged UI behind `FLAGS.<name>`.
+
+`src/featureFlags.ts` is a temporary hardcoded stub (`export const FLAGS = {
+multiRepo: false, remoteRegistry: false }`) standing in for a real `/config`
+endpoint, which doesn't exist yet. Gate any flagged UI behind `FLAGS.<name>`;
+swap the stub for a real fetch once the backend adds one, rather than
+threading config through each surface individually. Library's Browse
+Registry shelf is gated behind `FLAGS.remoteRegistry` (see Library above).
 
 ## Critical paths
 

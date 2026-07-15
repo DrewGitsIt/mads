@@ -1,0 +1,49 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 600;
+}
+
+.field input {
+  font-weight: normal;
+}
+
+.modeToggle {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.validateRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.valid {
+  color: var(--ok-fg);
+  font-weight: 600;
+}
+
+.errorList {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}
+
+.runNote {
+  color: var(--text2);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
+
+.error {
+  color: var(--bad-fg);
+}

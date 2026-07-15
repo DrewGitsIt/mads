@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import { routerGet } from "../../../../router/client";
-import type { Model, Provider } from "../../../../router/types";
+import { useProviderModels } from "../../../../router/useProviderModels";
+import type { Model } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
 export interface ModelPillProps {
@@ -12,26 +12,7 @@ export interface ModelPillProps {
 
 export function ModelPill({ provider, model, onChange }: ModelPillProps) {
   const [open, setOpen] = useState(false);
-  const [modelsByProvider, setModelsByProvider] = useState<Record<string, Model[]>>({});
-
-  useEffect(() => {
-    let cancelled = false;
-    routerGet<Provider[]>("/providers")
-      .then(async (providers) => {
-        const entries = await Promise.all(
-          providers.map(
-            async (p) => [p, await routerGet<Model[]>(`/providers/${p}/models`)] as const,
-          ),
-        );
-        if (!cancelled) setModelsByProvider(Object.fromEntries(entries));
-      })
-      .catch(() => {
-        if (!cancelled) setModelsByProvider({});
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const modelsByProvider = useProviderModels();
 
   const label = model ? `${model} · ${provider}` : "Select model";
 

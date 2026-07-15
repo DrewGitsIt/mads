@@ -51,16 +51,103 @@ export interface Workspace {
   updated_at: string;
 }
 
+// mirrors pkg/contracts/registry.go Quadrant/Quadrants — a closed 4-value
+// enum (W6.8, MADS-UX §3.5's quadrant tooltip).
+export type Quadrant =
+  | "autonomous_executor"
+  | "technical_partner"
+  | "investigator"
+  | "research_analyst";
+
+export interface AgentCapabilities {
+  tools?: string[];
+  mcp_servers?: string[];
+  skills?: string[];
+}
+
+export interface AgentPermissions {
+  allowed_paths?: string[];
+  denied_commands?: string[];
+}
+
+export interface AgentPreferences {
+  model?: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
   description?: string;
   prompt: string;
-  quadrant?: string;
+  quadrant?: Quadrant;
   tags?: string[];
   system?: boolean;
   created_at: string;
   updated_at: string;
+  capabilities?: AgentCapabilities;
+  permissions?: AgentPermissions;
+  preferences?: AgentPreferences;
+}
+
+// mirrors pkg/agentselect/similarity.go Similar — a near-duplicate warning
+// attached to a freshly generated agent draft.
+export interface Similar {
+  agent: string;
+  score: number;
+}
+
+export type CapabilityType = "skill" | "mcp";
+
+export interface CapabilityConfig {
+  path?: string; // skills
+  command?: string; // mcp, local process
+  url?: string; // mcp, remote
+}
+
+export interface CapabilityHealth {
+  healthy: boolean;
+  reason?: string;
+  checked_at?: string;
+}
+
+// Full Capability — the Library editor's shape. CapabilitySummary (above)
+// stays as-is for the / command palette.
+export interface Capability {
+  id: string;
+  name: string;
+  description?: string;
+  type: CapabilityType;
+  config: CapabilityConfig;
+  credential_env_vars?: string[]; // NAMES ONLY — never a value, see CredentialEnvVarsField
+  health?: CapabilityHealth;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  description?: string;
+  source: string; // the YAML text — single source of truth for both editor views
+  system?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// pkg/template's parsed grammar, frontend-only — this is YAML the Library's
+// Templates shelf parses client-side for the visual editor view (no Go JSON
+// tags to mirror; pkg/template only ever round-trips YAML).
+export interface TemplateStage {
+  name: string;
+  agent?: string; // "auto" or a registry agent name; mutually exclusive with command
+  command?: string;
+  when?: string;
+  on_fail?: { loop_back?: string; max_loops?: number; then?: string };
+}
+
+export interface ParsedTemplate {
+  name: string;
+  stages: TemplateStage[];
 }
 
 export type Provider = string;
@@ -256,6 +343,83 @@ export interface FileDiff {
   language?: string;
   original: string;
   modified: string;
+}
+
+/**
+ * TS mirrors of pkg/contracts/metrics.go, consumed by the Dashboard tab
+ * (W6.9, MADS-UX §3.6). Generic Data Service contracts, not Dashboard-
+ * private, so they live here alongside the rest of the router types.
+ */
+
+// mirrors pkg/contracts/metrics.go CostPoint. `day` is an ISO timestamp,
+// UTC-truncated to midnight.
+export interface CostPoint {
+  day: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostBySession
+export interface CostBySession {
+  session_id: string;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostByPipelineRun
+export interface CostByPipelineRun {
+  session_id: string;
+  run_seq: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostMetrics — GET /metrics/cost's response
+export interface CostMetrics {
+  by_day: CostPoint[];
+  by_session: CostBySession[];
+  by_pipeline_run: CostByPipelineRun[];
+}
+
+// mirrors pkg/contracts/metrics.go AgentLeaderboardEntry
+export interface AgentLeaderboardEntry {
+  agent: string;
+  usage_count: number;
+  successes: number;
+  failures: number;
+  success_rate: number;
+  retries: number;
+}
+
+// mirrors pkg/contracts/metrics.go TaskOutcomes — GET /metrics/tasks's response
+export interface TaskOutcomes {
+  counts: Partial<Record<TaskStatus, number>>;
+  total: number;
+  completion_rate: number;
+}
+
+// mirrors pkg/contracts/metrics.go CapabilityUsage
+export interface CapabilityUsage {
+  capability: string;
+  type: CapabilityType;
+  invocations: number;
+}
+
+// mirrors pkg/contracts/metrics.go PipelineRun — one reconstructed pipeline
+// run. `outcome` matches the Go comment's closed set.
+export type PipelineRunOutcome = "completed" | "incomplete" | "cancelled" | "failed" | "running";
+
+export interface PipelineRun {
+  session_id: string;
+  run_seq: number;
+  started_at: string;
+  ended_at?: string;
+  outcome: PipelineRunOutcome;
+  tasks_done: number;
+  tasks_blocked: number;
+  tasks_skipped: number;
+  cost_usd: number;
+  agents?: string[];
 }
 
 // mirrors pkg/contracts/retro.go DPAStatus

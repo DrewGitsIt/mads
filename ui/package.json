@@ -9,7 +9,9 @@
     "conversation": "vite --open /conversation.html",
     "tasks": "vite --open /tasks.html",
     "files": "vite --open /files.html",
+    "library": "vite --open /library.html",
     "pipeline": "vite --open /pipeline.html",
+    "dashboard": "vite --open /dashboard.html",
     "build": "tsc --noEmit -p tsconfig.json && vite build && tsc -p electron/tsconfig.json",
     "start": "npm run build && electron .",
     "lint": "eslint .",
@@ -24,7 +26,8 @@
     "dompurify": "^3.2.3",
     "marked": "^15.0.6",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "yaml": "^2.9.0"
   },
   "optionalDependencies": {
     "node-pty": "^1.0.0"

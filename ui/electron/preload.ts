@@ -41,4 +41,14 @@ const pty = {
   },
 };
 
-contextBridge.exposeInMainWorld("mads", { pty });
+/**
+ * Renderer-facing badge namespace — mirrors the BadgeBridge interface in
+ * ui/src/features/command-palette/badgeBridge.ts.
+ */
+const badge = {
+  setCount: (count: number): void => {
+    void ipcRenderer.invoke("badge:set-count", count);
+  },
+};
+
+contextBridge.exposeInMainWorld("mads", { pty, badge });

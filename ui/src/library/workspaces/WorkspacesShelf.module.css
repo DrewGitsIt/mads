@@ -1,0 +1,54 @@
+.shelf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.title {
+  margin: 0;
+}
+
+.empty {
+  color: var(--text2);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-3);
+}
+
+.card {
+  padding: 0;
+}
+
+.trigger {
+  all: unset;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  width: 100%;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.name {
+  font-weight: 600;
+}
+
+.description {
+  color: var(--text2);
+  font-size: 0.9em;
+}
+
+.repoCount {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}

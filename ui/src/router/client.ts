@@ -342,10 +342,23 @@ export class FetchRouterClient implements RouterClient {
 export const ROUTER_BASE =
   (import.meta.env.VITE_ROUTER_URL as string | undefined) ?? "http://localhost:8080";
 
+/**
+ * On failure, a {errors:[{field,message}]} body throws the same
+ * RouterValidationError idiom (a) uses (jsonOrThrowValidation above) —
+ * added here (W6.8) so the Template editor's Validate flow gets structured
+ * field/message pairs instead of a flattened string, without a third
+ * parallel error-parsing helper. Additive on the failure path only; the
+ * success path is unchanged from before.
+ */
 async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`router request failed: ${res.status} ${body}`);
+    const body = await res
+      .clone()
+      .json()
+      .catch(() => null) as { errors?: { field: string; message: string }[] } | null;
+    if (body?.errors) throw new RouterValidationError(body.errors);
+    const text = await res.text();
+    throw new Error(`router request failed: ${res.status} ${text}`);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

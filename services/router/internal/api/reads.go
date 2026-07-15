@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -23,18 +22,6 @@ func (s *server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, workspaces)
-}
-
-func (s *server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
-	var ws contracts.Workspace
-	if !decode(w, r, &ws) {
-		return
-	}
-	if err := s.data.CreateWorkspace(r.Context(), &ws); err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, ws)
 }
 
 func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
