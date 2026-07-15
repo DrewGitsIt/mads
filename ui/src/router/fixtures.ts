@@ -9,6 +9,8 @@ import type {
 export const fixtureSessions: Record<string, Session> = {
   "session-active": {
     id: "session-active",
+    created_at: "2026-07-14T00:00:00Z",
+    updated_at: "2026-07-14T00:00:00Z",
     name: "Add retry backoff to the ingest worker",
     activity: "active",
     workspace: "mads",
@@ -19,6 +21,8 @@ export const fixtureSessions: Record<string, Session> = {
   },
   "session-inactive": {
     id: "session-inactive",
+    created_at: "2026-07-14T00:00:00Z",
+    updated_at: "2026-07-14T00:00:00Z",
     name: "Investigate flaky metrics query test",
     activity: "inactive",
     workspace: "mads",

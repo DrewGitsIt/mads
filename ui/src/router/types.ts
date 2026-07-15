@@ -24,8 +24,8 @@ export interface Session {
   retro_id?: string;
   synthesis_mode?: string;
   provider_ref?: string;
-  created_at?: string;
-  updated_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface WorkspaceRepo {
@@ -47,8 +47,8 @@ export interface Workspace {
   repos?: WorkspaceRepo[];
   defaults: WorkspaceDefaults;
   steering_files?: string[];
-  created_at?: string;
-  updated_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Agent {
@@ -59,8 +59,8 @@ export interface Agent {
   quadrant?: string;
   tags?: string[];
   system?: boolean;
-  created_at?: string;
-  updated_at?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export type TaskStatus =
@@ -78,8 +78,8 @@ export interface Task {
   dependencies?: string[];
   labels?: string[];
   retry_count: number;
-  created_at?: string;
-  updated_at?: string;
+  created_at: string;
+  updated_at: string;
   title: string;
   description?: string;
   acceptance_criteria?: string;
