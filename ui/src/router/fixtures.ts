@@ -11,6 +11,7 @@ import type {
   MergeResult,
   Note,
   NoteType,
+  Retro,
   Session,
   Task,
   TaskStatus,
@@ -79,6 +80,18 @@ export const fixtureSessions: Record<string, Session> = {
     workspace: "mads",
     worktree_branch: "mads/tsk_contract-rename",
     worktree_dir: "/home/drew/.mads/worktrees/ses_x/tsk_contract-rename",
+  },
+  // Retro surface (W6.7) — a retro-generated follow-up session, so the
+  // picker's "Retro-generated" kind filter has a fixture to match on.
+  "session-retro-generated": {
+    id: "session-retro-generated",
+    created_at: "2026-07-14T00:00:00Z",
+    updated_at: "2026-07-14T00:00:00Z",
+    name: "Follow-up: retry backoff DPAs",
+    activity: "inactive",
+    workspace: "mads",
+    tags: ["retro"],
+    retro_id: "retro-1",
   },
 };
 
@@ -184,6 +197,52 @@ export const fixtureCapabilities: CapabilitySummary[] = [
     healthy: false,
   },
 ];
+
+// Retro surface (W6.7) fixture — three DPAs deliberately span 3 different
+// remediation_layer values and both accepted/rejected statuses, so a single
+// fixture exercises DPACard's kind-agnostic rendering and gives the
+// chip-toggle test a pre-rejected DPA to flip back to accepted, not just an
+// accepted-to-rejected path.
+export const fixtureRetro: Retro = {
+  id: "retro-1",
+  session_ids: ["session-active", "session-inactive"],
+  user_observations:
+    "Retries kept looping without backoff; flaky test masked a real race.",
+  dpas: [
+    {
+      id: "dpa_1",
+      problem: "Ingest worker retried without backoff, hammering the queue.",
+      evidence: "session-active transcript, tool_use Edit at ingest.go:42",
+      root_cause: "No backoff policy configured on the retry loop.",
+      remediation_layer: "tool_config",
+      suggested_action: "Default all retry loops to exponential backoff with jitter.",
+      status: "accepted",
+    },
+    {
+      id: "dpa_2",
+      problem: "Flaky test masked a real refresh/writer race.",
+      evidence: "session-inactive transcript, pinned-clock repro",
+      root_cause: "No FOR UPDATE fence around the metrics view refresh.",
+      remediation_layer: "prompt_engineering",
+      suggested_action:
+        "Steer investigator agents to add a regression test under -race before closing.",
+      status: "rejected",
+    },
+    {
+      id: "dpa_3",
+      problem: "No workspace convention for retry policies.",
+      evidence: "Both DPAs above stem from ad hoc retry code.",
+      root_cause: "Missing workspace-level steering file for retry/backoff conventions.",
+      remediation_layer: "human_process",
+      suggested_action: "Add a retry-policy steering file and reference it from agent prompts.",
+      status: "accepted",
+    },
+  ],
+  created_at: "2026-07-14T12:00:00Z",
+  updated_at: "2026-07-14T12:05:00Z",
+};
+
+export const fixtureRetroList: Retro[] = [fixtureRetro];
 
 // mirrors pkg/contracts/task.go, covering every case a reviewer needs to see
 // without a real backend (ui/src/tasks/HANDOFF.md §3): a plain ready task, an
