@@ -71,7 +71,7 @@ describe("App", () => {
     fireEvent.click(screen.getByTestId("start-pipeline:session-active"));
 
     await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([input]: [URL | string]) => input.toString().includes("/pipelines"));
+      const call = fetchMock.mock.calls.find((c) => (c[0] as URL | string).toString().includes("/pipelines"));
       expect(call).toBeTruthy();
       expect(call?.[1]?.body).toContain("session-active");
       expect(call?.[1]?.body).toContain("default-implementation");
