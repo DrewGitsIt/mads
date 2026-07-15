@@ -18,6 +18,10 @@ function createWindow(): void {
 
   registerPtyHandlers(ipcMain, win.webContents);
 
+  ipcMain.handle("badge:set-count", (_event, count: number) => {
+    app.setBadgeCount(count);
+  });
+
   if (DEV_SERVER_URL) {
     win.loadURL(DEV_SERVER_URL);
   } else {

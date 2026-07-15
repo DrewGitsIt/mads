@@ -28,6 +28,7 @@ declare global {
   interface Window {
     mads?: {
       pty?: PtyBridge;
+      badge?: { setCount(count: number): void };
     };
   }
 }
