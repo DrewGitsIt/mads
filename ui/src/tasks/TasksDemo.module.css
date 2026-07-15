@@ -1,0 +1,19 @@
+.demo {
+  display: flex;
+  height: 100vh;
+  background: var(--bg0);
+  color: var(--text);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+.rail {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line-soft);
+}

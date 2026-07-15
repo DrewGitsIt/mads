@@ -1,0 +1,16 @@
+.minimap {
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+
+.node {
+  fill: var(--text3);
+}
+
+.viewportRect {
+  fill: var(--accent-soft);
+  stroke: var(--accent);
+  stroke-width: 1px;
+}

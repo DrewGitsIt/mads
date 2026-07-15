@@ -1,0 +1,66 @@
+.sheet {
+}
+
+.titleInput {
+  width: 100%;
+  background: none;
+  border: none;
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+  padding: 0;
+}
+
+.titleInput:focus {
+  outline: none;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-4);
+}
+
+.fieldLabel {
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.field textarea {
+  min-height: 72px;
+  resize: vertical;
+  font: inherit;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+}
+
+.field input,
+.field select {
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  font: inherit;
+}
+
+.preview {
+  font-size: var(--fs-sm);
+  color: var(--text2);
+}
+
+.notes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.error {
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}

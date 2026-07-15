@@ -1,0 +1,22 @@
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+  color: var(--text);
+}
+
+.title {
+  flex: 1;
+}
+
+.warning {
+  font-size: var(--fs-sm);
+  color: var(--warn-fg);
+}
