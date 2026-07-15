@@ -53,6 +53,7 @@ func New(db *sql.DB) http.Handler {
 	registryRoutes(mux, "agents", store.NewAgents(l))
 	registryRoutes(mux, "capabilities", caps)
 	mux.HandleFunc("POST /capabilities/{id}/health", s.handleSetCapabilityHealth)
+	mux.HandleFunc("POST /capabilities/{id}/diagnose", s.handleDiagnoseCapability)
 	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	templateRoutes(mux, l)
 	sessionRoutes(mux, l)

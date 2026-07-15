@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"github.com/drewkidwell/mads/pkg/agentgen"
 	"github.com/drewkidwell/mads/pkg/agentselect"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -53,4 +54,98 @@ func (s *server) handleGenerateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": id})
+}
+
+func (s *server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
+	a, err := s.data.Agent(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *server) handleCreateAgent(w http.ResponseWriter, r *http.Request) {
+	var a contracts.Agent
+	if !decode(w, r, &a) {
+		return
+	}
+	if err := s.data.CreateAgent(r.Context(), &a); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, a)
+}
+
+func (s *server) handleUpdateAgent(w http.ResponseWriter, r *http.Request) {
+	var a contracts.Agent
+	if !decode(w, r, &a) {
+		return
+	}
+	a.ID = r.PathValue("id")
+	if err := s.data.UpdateAgent(r.Context(), &a); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a)
+}
+
+func (s *server) handleDeleteAgent(w http.ResponseWriter, r *http.Request) {
+	if err := s.data.DeleteAgent(r.Context(), r.PathValue("id")); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// handleDescribeAgent, handleSuggestCapabilities and handleRefineAgent are
+// the Library editor's three enrichment actions (spec §9.5). Unlike
+// /agents/generate, these are fast, side-effect-free, single-call Fast
+// Model requests, so they run synchronously rather than through job.Runner
+// — no result event to plumb, the response carries the result directly.
+
+func (s *server) handleDescribeAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	result, err := agentgen.New(s.data, s.jobs.FastModel()).Describe(r.Context(), body.Prompt)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "describe agent: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": result})
+}
+
+func (s *server) handleSuggestCapabilities(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt string `json:"prompt"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	result, err := agentgen.New(s.data, s.jobs.FastModel()).SuggestCapabilities(r.Context(), body.Prompt)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "suggest capabilities: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *server) handleRefineAgent(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Prompt      string `json:"prompt"`
+		Instruction string `json:"instruction"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	result, err := agentgen.New(s.data, s.jobs.FastModel()).Refine(r.Context(), body.Prompt, body.Instruction)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "refine agent: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"result": result})
 }

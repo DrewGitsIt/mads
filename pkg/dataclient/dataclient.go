@@ -332,6 +332,16 @@ func (c *Client) CreateAgent(ctx context.Context, a *contracts.Agent) error {
 	return c.do(ctx, http.MethodPost, "/agents", a, a)
 }
 
+// UpdateAgent saves changes to an existing agent.
+func (c *Client) UpdateAgent(ctx context.Context, a *contracts.Agent) error {
+	return c.do(ctx, http.MethodPut, "/agents/"+url.PathEscape(a.ID), a, a)
+}
+
+// DeleteAgent removes an agent from the registry.
+func (c *Client) DeleteAgent(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/agents/"+url.PathEscape(id), nil, nil)
+}
+
 func (c *Client) Capability(ctx context.Context, idOrName string) (contracts.Capability, error) {
 	var out contracts.Capability
 	err := c.do(ctx, http.MethodGet, "/capabilities/"+url.PathEscape(idOrName), nil, &out)
@@ -351,6 +361,16 @@ func (c *Client) CreateCapability(ctx context.Context, capability *contracts.Cap
 	return c.do(ctx, http.MethodPost, "/capabilities", capability, capability)
 }
 
+// UpdateCapability saves changes to an existing capability.
+func (c *Client) UpdateCapability(ctx context.Context, capability *contracts.Capability) error {
+	return c.do(ctx, http.MethodPut, "/capabilities/"+url.PathEscape(capability.ID), capability, capability)
+}
+
+// DeleteCapability removes a capability from the registry.
+func (c *Client) DeleteCapability(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/capabilities/"+url.PathEscape(id), nil, nil)
+}
+
 // SetCapabilityHealth records a health check result (spec §12.6): reason
 // must never carry a credential value, only capability/env-var names and
 // static diagnostic text (spec §13) — this travels as a wire type, so a
@@ -362,11 +382,45 @@ func (c *Client) SetCapabilityHealth(ctx context.Context, idOrName string, healt
 	return out, err
 }
 
+// DiagnoseCapability runs a one-off health check plus troubleshooting
+// suggestions (spec §12.7) — a heavier, on-demand sibling of
+// SetCapabilityHealth that doesn't persist anything.
+func (c *Client) DiagnoseCapability(ctx context.Context, idOrName string) (contracts.CapabilityHealth, []string, error) {
+	var out struct {
+		Healthy     bool     `json:"healthy"`
+		Reason      string   `json:"reason"`
+		Suggestions []string `json:"suggestions"`
+	}
+	err := c.do(ctx, http.MethodPost, "/capabilities/"+url.PathEscape(idOrName)+"/diagnose", nil, &out)
+	return contracts.CapabilityHealth{Healthy: out.Healthy, Reason: out.Reason}, out.Suggestions, err
+}
+
+func (c *Client) Workspace(ctx context.Context, idOrName string) (contracts.Workspace, error) {
+	var out contracts.Workspace
+	err := c.do(ctx, http.MethodGet, "/workspaces/"+url.PathEscape(idOrName), nil, &out)
+	return out, err
+}
+
 // Workspaces lists the full workspace registry (spec §17).
 func (c *Client) Workspaces(ctx context.Context) ([]contracts.Workspace, error) {
 	var out []contracts.Workspace
 	err := c.do(ctx, http.MethodGet, "/workspaces", nil, &out)
 	return out, err
+}
+
+// CreateWorkspace adds a workspace to the registry.
+func (c *Client) CreateWorkspace(ctx context.Context, w *contracts.Workspace) error {
+	return c.do(ctx, http.MethodPost, "/workspaces", w, w)
+}
+
+// UpdateWorkspace saves changes to an existing workspace.
+func (c *Client) UpdateWorkspace(ctx context.Context, w *contracts.Workspace) error {
+	return c.do(ctx, http.MethodPut, "/workspaces/"+url.PathEscape(w.ID), w, w)
+}
+
+// DeleteWorkspace removes a workspace from the registry.
+func (c *Client) DeleteWorkspace(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/workspaces/"+url.PathEscape(id), nil, nil)
 }
 
 // --- Templates (spec §6) ---
@@ -379,6 +433,47 @@ func (c *Client) Template(ctx context.Context, idOrName string) (contracts.Templ
 	}
 	err := c.do(ctx, http.MethodGet, "/templates/"+url.PathEscape(idOrName), nil, &wrapper)
 	return wrapper.Template, err
+}
+
+// Templates lists the full template registry.
+func (c *Client) Templates(ctx context.Context) ([]contracts.Template, error) {
+	var out []contracts.Template
+	err := c.do(ctx, http.MethodGet, "/templates", nil, &out)
+	return out, err
+}
+
+// TemplateDetail fetches a template plus the workspace names bound to it
+// (M9's "used by mads-core, mads-ui" card copy).
+func (c *Client) TemplateDetail(ctx context.Context, idOrName string) (contracts.Template, []string, error) {
+	var wrapper struct {
+		Template contracts.Template `json:"template"`
+		UsedBy   []string           `json:"used_by"`
+	}
+	err := c.do(ctx, http.MethodGet, "/templates/"+url.PathEscape(idOrName), nil, &wrapper)
+	return wrapper.Template, wrapper.UsedBy, err
+}
+
+// CreateTemplate adds a template to the registry.
+func (c *Client) CreateTemplate(ctx context.Context, t *contracts.Template) error {
+	return c.do(ctx, http.MethodPost, "/templates", t, t)
+}
+
+// UpdateTemplate saves changes to an existing template.
+func (c *Client) UpdateTemplate(ctx context.Context, t *contracts.Template) error {
+	return c.do(ctx, http.MethodPut, "/templates/"+url.PathEscape(t.ID), t, t)
+}
+
+// DeleteTemplate removes a template from the registry.
+func (c *Client) DeleteTemplate(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/templates/"+url.PathEscape(id), nil, nil)
+}
+
+// ValidateTemplate runs the launch-equivalent checks against source without
+// storing anything (M9's editor Validate button). Returns nil when valid;
+// on failure, do()'s generic 422 handling already decodes the body into
+// *contracts.ValidationError.
+func (c *Client) ValidateTemplate(ctx context.Context, source string) error {
+	return c.do(ctx, http.MethodPost, "/templates/validate", map[string]string{"source": source}, nil)
 }
 
 // --- Events (spec §8, §15) ---

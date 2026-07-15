@@ -1,0 +1,49 @@
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.label {
+  font-weight: 600;
+}
+
+.textarea {
+  min-height: 72px;
+  resize: vertical;
+  font-family: var(--sans);
+}
+
+.error {
+  color: var(--bad-fg);
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.draft {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.draftHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.prompt {
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}

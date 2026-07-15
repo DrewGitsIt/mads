@@ -1,6 +1,7 @@
 import { useState, type ComponentType } from "react";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
+import { LibrarySurface } from "./library/LibrarySurface";
 import styles from "./App.module.css";
 
 const RAIL_ITEMS: IconRailItem[] = [
@@ -11,6 +12,7 @@ const RAIL_ITEMS: IconRailItem[] = [
 
 const SURFACES: Partial<Record<string, ComponentType>> = {
   sessions: SessionsSurface,
+  library: LibrarySurface,
 };
 
 export function App() {

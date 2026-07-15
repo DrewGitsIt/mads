@@ -1,0 +1,32 @@
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.nameField {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-weight: 600;
+}
+
+.nameField input {
+  font-weight: normal;
+}
+
+.topError {
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+}
+
+.parseError {
+  color: var(--text2);
+}
+
+.parseErrorDetail {
+  margin-top: var(--space-1);
+  color: var(--bad-fg);
+  font-family: var(--mono);
+  font-size: var(--fs-sm);
+}

@@ -1,0 +1,21 @@
+.select {
+  margin-bottom: var(--space-3);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.disclaimer {
+  color: var(--text2);
+  font-style: italic;
+}

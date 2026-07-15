@@ -1,0 +1,18 @@
+.dot {
+  display: inline-block;
+  width: 0.6em;
+  height: 0.6em;
+  border-radius: 50%;
+}
+
+.healthy {
+  background: var(--ok);
+}
+
+.unhealthy {
+  background: var(--bad);
+}
+
+.unknown {
+  background: var(--text3);
+}

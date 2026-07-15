@@ -12,6 +12,7 @@ export default defineConfig({
         conversation: resolve(__dirname, "conversation.html"),
         tasks: resolve(__dirname, "tasks.html"),
         files: resolve(__dirname, "files.html"),
+        library: resolve(__dirname, "library.html"),
       },
     },
   },
