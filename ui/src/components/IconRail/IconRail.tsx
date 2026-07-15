@@ -35,10 +35,8 @@ export function IconRail({
         <button
           key={item.id}
           type="button"
-          data-active={item.id === activeId}
-          className={[styles.item, item.id === activeId ? styles.active : ""]
-            .filter(Boolean)
-            .join(" ")}
+          aria-selected={item.id === activeId}
+          className={styles.item}
           aria-label={item.label}
           onClick={() => onSelect?.(item.id)}
         >

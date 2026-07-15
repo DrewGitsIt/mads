@@ -53,3 +53,12 @@ pre,
 kbd {
   font-family: var(--mono);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}

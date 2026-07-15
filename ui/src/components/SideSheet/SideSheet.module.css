@@ -16,7 +16,7 @@
   flex: none;
   padding: var(--space-4);
   border-bottom: 1px solid var(--line-soft);
-  font: 650 13px var(--sans);
+  font: 650 var(--fs-ui) var(--sans);
   color: var(--text);
 }
 

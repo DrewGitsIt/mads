@@ -3,4 +3,29 @@
   border: 1px solid var(--line-soft);
   border-radius: var(--r);
   padding: var(--space-4);
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+.hoverable {
+  cursor: pointer;
+}
+.hoverable:hover {
+  border-color: var(--line);
+  background: var(--bg2);
+}
+.hoverable:active {
+  background: var(--bg3);
+}
+
+.card:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
