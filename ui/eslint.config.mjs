@@ -10,6 +10,10 @@ export default tseslint.config(
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
+      // Underscore-prefixed params are the established convention for
+      // interface-mandated but intentionally-unused args (e.g. stub
+      // methods matching a shared client interface).
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
     },
   },
 );

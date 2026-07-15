@@ -11,6 +11,7 @@ export default defineConfig({
         gallery: resolve(__dirname, "gallery.html"),
         conversation: resolve(__dirname, "conversation.html"),
         files: resolve(__dirname, "files.html"),
+        pipeline: resolve(__dirname, "pipeline.html"),
       },
     },
   },

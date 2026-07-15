@@ -71,6 +71,26 @@ export type TaskStatus =
   | "done"
   | "wont_do";
 
+// mirrors pkg/contracts/task.go NoteType/Note. Notes carry the loop-back and
+// blocker feedback text the Pipeline tab renders (ui/src/pipeline/HANDOFF.md
+// §1c) — already populated by the engine, no extra fetch needed.
+export type NoteType =
+  | "blocker"
+  | "decision"
+  | "context"
+  | "risk"
+  | "follow_up"
+  | "observation";
+
+export interface Note {
+  id?: number;
+  type: NoteType;
+  content: string;
+  source: string;
+  status: "draft" | "confirmed";
+  timestamp: string;
+}
+
 export interface Task {
   id: string;
   session_id: string;
@@ -85,6 +105,9 @@ export interface Task {
   acceptance_criteria?: string;
   scope?: string;
   draft?: boolean;
+  // "user", "synthesizer", "pipeline", or an agent name.
+  source?: string;
+  notes?: Note[];
 }
 
 export type Provider = string;

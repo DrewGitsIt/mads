@@ -46,6 +46,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
 	mux.HandleFunc("GET /agents", s.handleListAgents)
 	mux.HandleFunc("GET /tasks", s.handleListTasks)
+	mux.HandleFunc("POST /tasks/{id}/retry", s.handleRetryTask)
 	mux.HandleFunc("GET /providers", s.handleListProviders)
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
 	return mux

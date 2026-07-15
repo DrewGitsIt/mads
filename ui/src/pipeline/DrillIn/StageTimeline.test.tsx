@@ -1,0 +1,53 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { StageTimeline } from "./StageTimeline";
+import { usePipelineRun } from "../state/usePipelineRun";
+import { FakeEventSource } from "../../router/testFakeEventSource";
+import { FakePipelineClient } from "../client/fixtures";
+import { recordedEnvelopes, recordedSessionId, recordedTaskIds, recordedTasks } from "../client/recordedRun";
+
+function playRecordedRun() {
+  const source = FakeEventSource.instances[0];
+  act(() => {
+    for (const env of recordedEnvelopes) {
+      source.emit(env.type, JSON.stringify(env));
+    }
+  });
+}
+
+describe("StageTimeline", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("marks flaky api's repeated code_review attempts as loop-backs and shows the failure feedback", async () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    playRecordedRun();
+    await waitFor(() => expect(result.current.phase).toBe("finished"));
+
+    const flakyApi = result.current.taskRunState[recordedTaskIds.flakyApi];
+    const codeReviewAttempts = flakyApi.attempts.filter((a) => a.stage === "code_review");
+    render(<StageTimeline attempts={codeReviewAttempts} />);
+
+    expect(screen.getAllByText("code_review").length).toBe(3);
+    expect(screen.queryByText("loop-back 1")).toBeNull();
+    expect(screen.getByText("loop-back 2")).toBeTruthy();
+    expect(screen.getByText("loop-back 3")).toBeTruthy();
+    expect(screen.getAllByText("failed").length).toBe(3);
+    expect(screen.getAllByText(/missing error handling/).length).toBe(3);
+  });
+
+  it("shows an empty state before any stage has started", () => {
+    render(<StageTimeline attempts={[]} />);
+    expect(screen.getByText("No stages started yet.")).toBeTruthy();
+  });
+});

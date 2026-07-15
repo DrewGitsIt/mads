@@ -8,6 +8,7 @@
     "gallery": "vite --open /gallery.html",
     "conversation": "vite --open /conversation.html",
     "files": "vite --open /files.html",
+    "pipeline": "vite --open /pipeline.html",
     "build": "tsc --noEmit -p tsconfig.json && vite build && tsc -p electron/tsconfig.json",
     "start": "npm run build && electron .",
     "lint": "eslint .",

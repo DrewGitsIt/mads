@@ -1,0 +1,37 @@
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.entry {
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line-soft);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.stage {
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.reason {
+  margin: var(--space-1) 0 0;
+  font: var(--fs-sm) var(--mono);
+  color: var(--bad-fg);
+  white-space: pre-wrap;
+}
+
+.empty {
+  margin: 0;
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}
