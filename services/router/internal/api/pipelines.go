@@ -37,6 +37,27 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"run_id": runID, "addr": addr})
 }
 
+// handleRetryTask resets a blocked/failed task to ready and bumps its retry
+// count. The live scheduler (engine.go's "live work queue") picks it up on
+// its next scan if a run is still in progress; if the run already finished,
+// retry has no effect until a new run is launched — that's expected
+// pipeline behavior, not something this handler works around.
+func (s *server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	task, err := s.data.Task(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	task.Status = contracts.StatusReady
+	task.RetryCount++
+	if err := s.data.UpdateTask(r.Context(), &task); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, task)
+}
+
 func (s *server) handleCancelPipeline(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("id")
 
