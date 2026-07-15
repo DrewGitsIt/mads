@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -65,9 +66,21 @@ func newTestServer(t *testing.T) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data)))
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t)))
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// testProviders returns a registry with just the fake provider registered,
+// matching the test fixtures' existing philosophy of never touching a real
+// provider backend.
+func testProviders(t *testing.T) *provider.Registry {
+	t.Helper()
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatal(err)
+	}
+	return reg
 }
 
 func postJSON(t *testing.T, url string, body any) *http.Response {

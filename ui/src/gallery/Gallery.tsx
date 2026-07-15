@@ -13,6 +13,7 @@ import { Toast, type ToastTone } from "../components/Toast/Toast";
 import { ResizablePanel } from "../components/ResizablePanel/ResizablePanel";
 import { IconRail, type IconRailItem } from "../components/IconRail/IconRail";
 import { Draft, DraftChip } from "../components/Draft/Draft";
+import { Popover } from "../components/Popover/Popover";
 import { palettes, type PaletteName, type ThemeName } from "../tokens/tokens";
 import styles from "./Gallery.module.css";
 
@@ -57,6 +58,7 @@ function ComboSection({
 }) {
   const [chipPressed, setChipPressed] = useState(false);
   const [dismissedToast, setDismissedToast] = useState(false);
+  const [popoverOpen, setPopoverOpen] = useState(false);
 
   return (
     <section
@@ -172,6 +174,20 @@ function ComboSection({
         <div className={styles.railDemo}>
           <IconRail items={RAIL_ITEMS} activeId="sessions" defaultCollapsed />
         </div>
+      </ComponentGroup>
+
+      <ComponentGroup name="Popover">
+        <Popover
+          open={popoverOpen}
+          onClose={() => setPopoverOpen(false)}
+          anchor={
+            <Button variant="secondary" size="sm" onClick={() => setPopoverOpen((o) => !o)}>
+              Toggle popover
+            </Button>
+          }
+        >
+          Popover content — closes on outside click or Escape.
+        </Popover>
       </ComponentGroup>
 
       <ComponentGroup name="Draft">

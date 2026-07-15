@@ -1,0 +1,26 @@
+.strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  font: 500 var(--fs-chip) var(--sans);
+}
+
+.step {
+  color: var(--text3);
+}
+
+.pending {
+  color: var(--text3);
+}
+
+.active {
+  color: var(--info-fg);
+}
+
+.done {
+  color: var(--ok-fg);
+}

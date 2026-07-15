@@ -17,6 +17,16 @@ const (
 	IsolationCurrentDir = "current_dir"
 )
 
+// SessionTrust is the session's trust level (MADS-UX §3.2 Trust pill): a flat
+// per-session field with no workspace-level default propagation yet.
+type SessionTrust string
+
+const (
+	TrustFull     SessionTrust = "full"
+	TrustLimited  SessionTrust = "limited"
+	TrustReadOnly SessionTrust = "read_only"
+)
+
 // SynthesisMode controls the synthesis engine's trigger sensitivity (spec §4,
 // §10): off does nothing, light surfaces only high-confidence drafts, full
 // surfaces everything the fast model proposes.
@@ -56,6 +66,8 @@ type Session struct {
 	// Empty means no agent binding — no capability wiring occurs.
 	Agent     string `json:"agent,omitempty"`
 	Isolation string `json:"isolation,omitempty"`
+	// Trust is the session's trust level (MADS-UX §3.2 Trust pill).
+	Trust SessionTrust `json:"trust,omitempty"`
 	// WorktreeDir is the absolute path of this session's isolated worktree
 	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
 	// Empty means the session works directly in its configured directory.

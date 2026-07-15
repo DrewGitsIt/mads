@@ -1,0 +1,57 @@
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: 500 var(--fs-chip) var(--sans);
+  cursor: pointer;
+}
+
+.trigger:hover {
+  background: var(--bg3);
+}
+
+.key {
+  color: var(--text3);
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 180px;
+}
+
+.option {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:hover {
+  background: var(--bg3);
+}
+
+.optionSelected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.groupLabel {
+  padding: var(--space-1) var(--space-2) 0;
+  color: var(--text3);
+  font: 600 var(--fs-chip) var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
