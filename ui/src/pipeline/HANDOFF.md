@@ -421,3 +421,77 @@ section to `ui/README.md` mirroring the "Conversation tab" section's shape.
 - Orphan/unmerged-state-per-task display (MADS-UX §3.3 mentions it) — that's
   Files tab (W6.5) territory once merge-back semantics exist; don't
   reconstruct a Files-tab feature here as a placeholder.
+
+## 10. Executor notes
+
+Built per the module layout in §3, in this order: `POST /tasks/{id}/retry`
+(§1) + Go test, `client/recordedRun.ts` (§5, captured from a real
+`TestDefaultTemplateReviewLoopBack` run, temporary dump reverted from the Go
+test after copying), `client/pipelineClient.ts` + `fixtures.ts`,
+`state/usePipelineRun.ts` (§2 fold), `RunHeader/`, `Board/` (`TaskCard` →
+`StageBoard` → `BlockedPanel`), `DrillIn/` (`pipelineOutputBridge.ts` →
+`AgentOutputView` → `StageTimeline` → `TaskFiles` → `TaskDrillIn`), then
+top-level `PipelineTab.tsx` + the `pipeline.html` demo mount +
+`ui/README.md`'s "Pipeline tab" section. All 11 pipeline test files / 40
+tests pass; root `make check` (Go tests + golangci-lint + `npm run lint` +
+`npm run test`, 333/333 across 59 files) passes clean.
+
+**Deviations from this doc, flag for review:**
+
+- **`RunHeader` gained an `onRunStarted?: (runId: string) => void` prop**,
+  not specified in §3/§4. `RunHeader` owns its own `run_id` state
+  internally (needed to enable/disable Cancel), but `PipelineTab` also needs
+  the run id to call `pipelineClient.streamTaskOutput(runId, taskId)` from
+  the drill-in. Rather than duplicating `RunHeader`'s start-tracking logic
+  in `PipelineTab` or lifting `run_id` state up (which would've meant
+  `RunHeader` no longer owns it, a bigger change to an already-built,
+  already-tested component), added this one optional callback fired right
+  after `RunHeader`'s own `setRunId`. Small, backward compatible, but not in
+  the original module contract — scrutinize whether lifting `run_id` state
+  to `PipelineTab` entirely would have been cleaner.
+- **ESLint config change**: `ui/eslint.config.mjs` gained
+  `argsIgnorePattern: "^_"` on `@typescript-eslint/no-unused-vars`. This
+  surfaced because `pipelineClient.ts`'s stub methods for the three
+  unsupported actions (§4 — `pausePipeline`/`resumePipeline`/
+  `reassignTask`) have *all* their params unused, and ESLint's default
+  `"args": "after-used"` mode only ignores unused params before the last
+  *used* one, not params in an all-unused signature, even with an
+  underscore prefix. This is a repo-wide config gap the pipeline module
+  happened to be the first to trip — fixed at the config level (verified
+  zero regressions across the whole `ui/src` tree) rather than dropping
+  parameter names (which would've broken call-site arity checks in
+  `RunHeader.test.tsx` and `pipelineClient.test.ts`). Scrutinize if a
+  narrower, per-file `eslint-disable` would have been preferred over a
+  repo-wide rule change.
+- **No dedicated `pipelineOutputBridge.test.ts`**, despite it being listed
+  as its own file in §3's module layout. Its behavior (mount subscribes
+  once, chunks forward, unmount calls `source.close()`) is fully covered by
+  `AgentOutputView.test.tsx` instead, since the bridge has no independent
+  behavior worth testing in isolation from the component that constructs
+  it. Flagging since §3 lists it as a peer test file to the others.
+- **`TaskFiles.test.tsx` uses a hand-built fixture, not `recordedRun.ts`.**
+  The recorded engine run (§5) has zero `file.changed` events (confirmed by
+  grep) — the fake reviewer scenario never touches files. Since
+  `TaskFiles` is a pure presentational component (count + list) whose
+  contract doesn't depend on fold correctness (already covered by
+  `usePipelineRun.test.ts`), used a small hand-built `touchedFiles` array
+  instead of extending the recorded fixture.
+
+**Not done / residual risk:**
+
+- **No browser/dev-server smoke test of `pipeline.html`.** This
+  environment has no browser-automation tool available. Verified instead
+  via `npx vite build` (clean production build of the `pipeline` entry,
+  output discarded after the check) plus the full component test suite —
+  but the demo has not been visually confirmed to render/interact
+  correctly in an actual browser. Whoever reviews this should run `npm run
+  pipeline` and click through the "Play recorded sequence" flow once.
+- Everything in §9 (Non-goals) remains undone by design, not oversight —
+  Pause/Resume/Reassign are disabled controls, there is no real per-task
+  output stream, and `services/pipeline/main.go` is untouched.
+- `stage.skipped` folding was noted as untested in an earlier session of
+  this same task and remains so — the recorded fixture's `cli` task never
+  starts at all (`Summary.Skipped`, dependency never satisfied), so no
+  `stage.skipped` event exists in the fixture to exercise that fold branch.
+  Low risk (it's a straightforward reducer case mirroring
+  `stage.started`/`stage.completed`), but not exercised end-to-end.
