@@ -6,6 +6,52 @@
   background: var(--bg0);
 }
 
+.switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: var(--space-3);
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+}
+
+.tablist {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.tab {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--text2);
+  text-transform: capitalize;
+  cursor: pointer;
+}
+.tab[aria-selected="true"] {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.dimmed {
+  opacity: 0.35;
+}
+
+.cardInput {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-2);
+}
+
 .themeSection {
   background: var(--bg0);
   color: var(--text);

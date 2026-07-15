@@ -16,10 +16,10 @@ describe("IconRail", () => {
 
   it("marks the active item", () => {
     render(<IconRail items={items} activeId="queue" />);
-    expect(screen.getByLabelText("Queue").getAttribute("data-active")).toBe(
+    expect(screen.getByLabelText("Queue").getAttribute("aria-selected")).toBe(
       "true",
     );
-    expect(screen.getByLabelText("Runs").getAttribute("data-active")).toBe(
+    expect(screen.getByLabelText("Runs").getAttribute("aria-selected")).toBe(
       "false",
     );
   });

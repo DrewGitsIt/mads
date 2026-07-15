@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "../components/Button/Button";
 import { Chip, type ChipTone } from "../components/Chip/Chip";
 import { Card } from "../components/Card/Card";
@@ -13,8 +13,11 @@ import { Toast, type ToastTone } from "../components/Toast/Toast";
 import { ResizablePanel } from "../components/ResizablePanel/ResizablePanel";
 import { IconRail, type IconRailItem } from "../components/IconRail/IconRail";
 import { Draft, DraftChip } from "../components/Draft/Draft";
-import type { ThemeName } from "../tokens/tokens";
+import { palettes, type PaletteName, type ThemeName } from "../tokens/tokens";
 import styles from "./Gallery.module.css";
+
+const PALETTE_NAMES = Object.keys(palettes) as PaletteName[];
+const THEME_NAMES: ThemeName[] = ["dark", "light"];
 
 const CHIP_TONES: ChipTone[] = ["neutral", "ok", "warn", "bad", "info", "draft"];
 const TOAST_TONES: ToastTone[] = ["neutral", "ok", "warn", "bad", "info"];
@@ -43,14 +46,30 @@ function ComponentGroup({
   );
 }
 
-function ThemeSection({ theme }: { theme: ThemeName }) {
+function ComboSection({
+  palette,
+  theme,
+  dimmed,
+}: {
+  palette: PaletteName;
+  theme: ThemeName;
+  dimmed: boolean;
+}) {
+  const [chipPressed, setChipPressed] = useState(false);
+  const [dismissedToast, setDismissedToast] = useState(false);
+
   return (
     <section
+      data-palette={palette}
       data-theme={theme}
-      data-testid={`theme-${theme}`}
-      className={styles.themeSection}
+      data-testid={`combo-${palette}-${theme}`}
+      className={[styles.themeSection, dimmed ? styles.dimmed : ""]
+        .filter(Boolean)
+        .join(" ")}
     >
-      <h2 className={styles.themeTitle}>{theme} theme</h2>
+      <h2 className={styles.themeTitle}>
+        {palette} · {theme}
+      </h2>
 
       <ComponentGroup name="Button">
         <Button variant="primary">Primary</Button>
@@ -70,12 +89,31 @@ function ThemeSection({ theme }: { theme: ThemeName }) {
             {tone}
           </Chip>
         ))}
+        <Chip
+          tone={chipPressed ? "info" : "neutral"}
+          pressed={chipPressed}
+          onClick={() => setChipPressed((p) => !p)}
+        >
+          {chipPressed ? "pressed" : "toggle me"}
+        </Chip>
       </ComponentGroup>
 
       <ComponentGroup name="Card">
         <Card>
           <strong>Card title</strong>
           <p>Cards are a bare surface for grouped content.</p>
+        </Card>
+        <Card hoverable>
+          <strong>Hoverable card</strong>
+          <p>Hover or tab to it to see the state.</p>
+        </Card>
+        <Card selected>
+          <strong>Selected card</strong>
+          <p>Accent border + soft fill.</p>
+        </Card>
+        <Card>
+          <strong>Edit in place</strong>
+          <input className={styles.cardInput} defaultValue="Focus me" />
         </Card>
       </ComponentGroup>
 
@@ -106,7 +144,15 @@ function ThemeSection({ theme }: { theme: ThemeName }) {
       </ComponentGroup>
 
       <ComponentGroup name="Toast">
-        {TOAST_TONES.map((tone) => (
+        {!dismissedToast && (
+          <Toast
+            tone="neutral"
+            title="neutral toast"
+            description="Hover or focus to reveal dismiss."
+            onDismiss={() => setDismissedToast(true)}
+          />
+        )}
+        {TOAST_TONES.filter((tone) => tone !== "neutral").map((tone) => (
           <Toast
             key={tone}
             tone={tone}
@@ -137,10 +183,54 @@ function ThemeSection({ theme }: { theme: ThemeName }) {
 }
 
 export function Gallery() {
+  const [filterPalette, setFilterPalette] = useState<PaletteName | null>(null);
+  const [filterTheme, setFilterTheme] = useState<ThemeName | null>(null);
+
+  const cycleTheme = () => {
+    setFilterTheme((current) =>
+      current === null ? "dark" : current === "dark" ? "light" : null,
+    );
+  };
+
   return (
     <div className={styles.page}>
-      <ThemeSection theme="dark" />
-      <ThemeSection theme="light" />
+      <div className={styles.switcher}>
+        <div role="tablist" aria-label="Palette" className={styles.tablist}>
+          {PALETTE_NAMES.map((palette) => (
+            <button
+              key={palette}
+              type="button"
+              role="tab"
+              aria-selected={filterPalette === palette}
+              className={styles.tab}
+              onClick={() =>
+                setFilterPalette((current) => (current === palette ? null : palette))
+              }
+            >
+              {palette}
+            </button>
+          ))}
+        </div>
+        <button type="button" className={styles.tab} onClick={cycleTheme}>
+          Theme: {filterTheme ?? "all"}
+        </button>
+      </div>
+
+      {PALETTE_NAMES.map((palette) =>
+        THEME_NAMES.map((theme) => {
+          const dimmed =
+            (filterPalette !== null && filterPalette !== palette) ||
+            (filterTheme !== null && filterTheme !== theme);
+          return (
+            <ComboSection
+              key={`${palette}-${theme}`}
+              palette={palette}
+              theme={theme}
+              dimmed={dimmed}
+            />
+          );
+        }),
+      )}
     </div>
   );
 }
