@@ -270,3 +270,8 @@ export const space = {
   5: "24px",
   6: "32px",
 };
+
+/** Prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose). */
+export const measure = {
+  prose: "92ch",
+};
