@@ -4,12 +4,14 @@ The Electron + TypeScript app shell and design system (docs/MADS-WORK-ITEMS.md
 W6.1). This package owns the token system, type rules, and reusable component
 kit every future surface composes from, plus the Electron scaffold that hosts
 them. It now also owns the Conversation tab (W6.3; MADS-UX §3.3) and the
-`RouterClient` HTTP wrapper it's built against — see `src/conversation/` and
-`src/router/`. It does **not** yet own the Session list/Launchpad surface or
-the app shell's tab registry (W6.2), so `ConversationTab` isn't wired into
-`App.tsx` yet; it's reachable standalone via the `conversation` demo mount
-below. It also does not do per-platform packaging (electron-builder); that's
-later work, not gated by this package.
+Files tab & merge-back flow (W6.5; MADS-UX §3.3/§5/§17), plus the
+`RouterClient` HTTP wrapper both are built against — see `src/conversation/`,
+`src/files/`, and `src/router/`. It does **not** yet own the Session list/
+Launchpad surface or the app shell's tab registry (W6.2), so neither
+`ConversationTab` nor `FilesTab` is wired into `App.tsx` yet; they're
+reachable standalone via the `conversation` and `files` demo mounts below.
+It also does not do per-platform packaging (electron-builder); that's later
+work, not gated by this package.
 
 Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
 `docs/palette-mockups.html` (the approved source for all three shipping
@@ -73,6 +75,41 @@ display or native build. Its real-pty contract test is named
 `ptyHost.realtest.ts` (not `*.test.ts`) so it's excluded from `npm run test`;
 run it manually with `npm run test:pty` on a machine with a usable pty — it
 skips cleanly (not a failure) wherever one isn't available.
+
+## Files tab
+
+```sh
+npm run files
+```
+
+Opens `files.html`: the Files tab (`src/files/FilesTab.tsx`) mounted
+standalone against `FakeRouterClient` fixtures (`src/router/fixtures.ts`),
+with a picker to switch between a clean-changes session, a session with an
+unattributed observation row, and a session with a seeded merge conflict.
+This is the review artifact until W6.2's tab registry exists to register
+`FilesTab` into properly.
+
+`FilesTab` composes a change list (`ChangeList`) and commit list
+(`CommitList`) with attribution chips (trailer/session/heuristic/orphan/
+unattributed — `src/files/ChangeList/attribution.ts`), a `DiffViewer`, and
+the `MergeBackFlow`. The diff viewer and the seed-only embedded merge editor
+both lazy-load `@monaco-editor/react` (`React.lazy` + `Suspense`) so Monaco
+never lands in the initial bundle and never has to mount under happy-dom in
+tests — component tests mock `@monaco-editor/react` instead of loading real
+Monaco (see `DiffViewer.test.tsx`/`ConflictResolution.test.tsx`).
+
+The merge-back flow's status (attempting/conflicted/completed) is driven
+entirely by parsed `merge.*` control-plane events from
+`RouterClient.streamControlEvents`, not by the `mergeSession()` promise
+result — `MergeBackFlow.test.tsx` drives this against a fake, in-memory
+control-event source (`FakeControlEventSource.emit(type, envelope)`).
+Conflict resolution has one real, usable action (open the session's
+worktree in an external editor) and one seed-only stub (`MergeEditor`, a
+raw-text Monaco instance over a fixture conflict-marker string) — there is
+currently no backend path that leaves real conflict-marker content in the
+tree to point an embedded editor at, since `Manager.Merge` aborts the merge
+on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
+follow-up this needs on the Session Service side.
 
 ## Test it
 

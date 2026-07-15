@@ -1,0 +1,35 @@
+.flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.branchInput {
+  font: var(--fs-body) var(--sans);
+  color: var(--text);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  width: 200px;
+}
+
+.hint {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.error {
+  color: var(--bad-fg);
+  font: var(--fs-sm) var(--sans);
+}

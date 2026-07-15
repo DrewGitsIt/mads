@@ -1,0 +1,50 @@
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  text-align: left;
+}
+
+.row:hover {
+  background: var(--bg3);
+}
+
+.row[data-selected="true"] {
+  background: var(--accent-soft);
+}
+
+.kindBadge {
+  flex: none;
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: var(--fs-sm) var(--mono);
+  /* AA-contrast paths (MADS-UX §3.3/§13) — full-strength text, not a muted tone */
+  color: var(--text);
+}
+
+.empty {
+  padding: var(--space-3);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}
