@@ -40,6 +40,18 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) 
 	mux.HandleFunc("POST /retros", s.handleStartRetro)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /retros/{id}/follow-up-session", s.handleRetroFollowUpSession)
+	mux.HandleFunc("POST /tasks", s.handleCreateTask)
+	mux.HandleFunc("POST /tasks/import", s.handleImportTasks)
+	mux.HandleFunc("GET /tasks", s.handleListTasks)
+	mux.HandleFunc("GET /tasks/cycles", s.handleTaskCycles)
+	mux.HandleFunc("GET /tasks/{id}", s.handleGetTask)
+	mux.HandleFunc("PUT /tasks/{id}", s.handleUpdateTask)
+	mux.HandleFunc("POST /tasks/{id}/confirm", s.handleConfirmTask)
+	mux.HandleFunc("POST /tasks/{id}/discard", s.handleDiscardTask)
+	mux.HandleFunc("POST /tasks/{id}/notes", s.handleAddNote)
+	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/confirm", s.handleConfirmNote)
+	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/discard", s.handleDiscardNote)
+	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
 	return mux
 }
 

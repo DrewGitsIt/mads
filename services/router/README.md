@@ -110,12 +110,31 @@ never called peer-to-peer.
   rejected (nothing to create). Mirrors `POST /sessions`' spawn-then-rollback-on-failure
   pattern; 201 with `{"session", "addr", "tasks"}`.
 
+- `POST /tasks`, `POST /tasks/import`, `GET /tasks` (`session_id`/`status` query params),
+  `GET /tasks/cycles` (`session_id` query param), `GET /tasks/{id}`, `PUT /tasks/{id}`
+  (full-replace, no partial PATCH), `POST /tasks/{id}/confirm`, `POST /tasks/{id}/discard`,
+  `POST /tasks/{id}/notes`, `POST /tasks/{id}/notes/{noteId}/confirm`, `POST
+  /tasks/{id}/notes/{noteId}/discard` — pure proxies over `pkg/dataclient`'s task/note
+  methods (W6.4, MADS-UX §3.3). No new business logic or persistence lives here.
+- `GET /sessions/{id}/files` — proxies `dataclient.FileChanges` (W6.4, Context Rail's
+  Changes tab). Recording a file change (`POST .../files`) is not proxied — that's
+  `pkg/githook`/the watcher talking to the Data Service directly, never through the
+  Router.
+
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
 Service's own 422-for-validation convention — the Router treats a rejected request the
 same whether the rejection came from its own decoding or a proxied dataclient call).
 
 ## Critical paths
+
+- **Task/note/file-change proxying is a pure pass-through, zero Router-side state** —
+  same framing as the rest of this doc's "holds no business logic" claim. `internal/api/tasks.go`
+  has no logic of its own: every handler decodes the request, calls straight through to
+  `s.data`, and maps the error with the Router's own `writeError` (never the Data
+  Service's `writeStoreError`/422 convention). `tasks_test.go` exercises these against a
+  real `datatest` Data Service, including the full-replace `PUT` gotcha (a partial update
+  would null out unset fields) and the dependency-cycle detector (`GET /tasks/cycles`).
 
 - **Supervision beats the lease TTL backstop, not just a graceful path** —
   `TestExternalKillReleasesLeasesAndEmitsCrashEvent` (`internal/supervisor`) spawns a real

@@ -1,0 +1,56 @@
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 320px;
+  padding: var(--space-3);
+  border-left: 1px solid var(--line-soft);
+  background: var(--bg1);
+  height: 100%;
+  overflow-y: auto;
+}
+
+.collapsed {
+  width: 40px;
+  border-left: 1px solid var(--line-soft);
+  background: var(--bg1);
+  display: flex;
+  justify-content: center;
+  padding-top: var(--space-3);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.tabs {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.tab,
+.tabActive {
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.tab {
+  color: var(--text2);
+}
+
+.tabActive {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
