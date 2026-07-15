@@ -489,7 +489,11 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async listProviderNames(): Promise<Provider[]> {
-    return routerGet(this.baseUrl, "/providers");
+    // GET /providers returns ProviderInfo objects, not bare names — derive.
+    // (Typing the raw response as string[] hid a live [object Object] URL
+    // bug in the model pill; the wire shape is the objects.)
+    const infos = await routerGet<ProviderInfo[]>(this.baseUrl, "/providers");
+    return infos.map((p) => p.name);
   }
 
   async listProviderBehaviors(): Promise<BehaviorInfo[]> {

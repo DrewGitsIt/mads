@@ -11,7 +11,7 @@ describe("useProviderModels", () => {
     const fetchMock = vi.fn().mockImplementation((input: URL) => {
       const url = input.toString();
       if (url.endsWith("/providers")) {
-        return Promise.resolve(new Response(JSON.stringify(["claude-code"]), { status: 200 }));
+        return Promise.resolve(new Response(JSON.stringify([{ name: "claude-code", matrix: {} }]), { status: 200 }));
       }
       return Promise.resolve(
         new Response(
