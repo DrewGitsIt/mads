@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Toast } from "../../components/Toast/Toast";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
@@ -7,11 +7,19 @@ import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionsList } from "./state/useSessionsList";
 import styles from "./SessionsSurface.module.css";
 
+export interface SessionsSurfaceProps {
+  jumpToSessionId?: string;
+}
+
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
-export function SessionsSurface() {
+export function SessionsSurface({ jumpToSessionId }: SessionsSurfaceProps = {}) {
   const { sessions, loading, error, createSession } = useSessionsList();
   const openTaskCounts = useOpenTaskCounts();
   const [selectedId, setSelectedId] = useState<string>();
+
+  useEffect(() => {
+    if (jumpToSessionId) setSelectedId(jumpToSessionId);
+  }, [jumpToSessionId]);
 
   return (
     <div className={styles.surface}>

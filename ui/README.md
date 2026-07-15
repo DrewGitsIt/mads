@@ -16,13 +16,14 @@ per surface so concurrent surface work doesn't collide on a shared file.
 
 The package also owns the Files tab & merge-back flow (W6.5; MADS-UX
 §3.3/§5/§17 — see `src/files/` and the `files` demo mount below, not yet an
-entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3) and
-`src/router/` — the Router HTTP layer, which currently carries two idioms
-that landed concurrently: the `RouterClient` interface + `FetchRouterClient`
-(Conversation) and the thin `routerGet`/`routerPost` helpers (Sessions).
-Unifying them is follow-up work. `ConversationTab` is not yet an entry in
-`SURFACES`; it's reachable standalone via the `conversation` demo mount
-below.
+entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3), the Retro
+surface (W6.7; MADS-UX §3.4 — see `src/features/retro/`, registered as
+`SURFACES.retro`, no demo mount needed) and `src/router/` — the Router HTTP
+layer, which currently carries two idioms that landed concurrently: the
+`RouterClient` interface + `FetchRouterClient` (Conversation) and the thin
+`routerGet`/`routerPost` helpers (Sessions, Retro). Unifying them is
+follow-up work. `ConversationTab` is not yet an entry in `SURFACES`; it's
+reachable standalone via the `conversation` demo mount below.
 
 Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
 `docs/palette-mockups.html` (the approved source for all three shipping
@@ -44,9 +45,9 @@ npm start       # build + launch the Electron shell (placeholder content only)
 ```
 
 The app shell renders an icon rail plus whichever surface `App.tsx`'s
-`SURFACES` map resolves for the active rail item — Sessions today, a teaching
-empty state for any rail item without a registered surface yet (Retro,
-Library).
+`SURFACES` map resolves for the active rail item — Sessions and Retro today,
+a teaching empty state for any rail item without a registered surface yet
+(Library).
 
 ## Gallery
 
@@ -160,6 +161,28 @@ tree to point an embedded editor at, since `Manager.Merge` aborts the merge
 on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
 follow-up this needs on the Session Service side.
 
+## Retro surface
+
+`src/features/retro/RetroSurface.tsx` (W6.7; MADS-UX §3.4), registered as
+`SURFACES.retro` — no demo mount, since its own component tests (stubbed
+`fetch` + `FakeEventSource`) already cover it standalone. It owns three
+phases: picking (session checkboxes with an All/Work/Retro-generated kind
+filter, an observations textarea), generating (a 3-step Starting/Gathering/
+Generating indicator driven by `retro.*` SSE events, cancellable back to
+picking), and reviewing (DPA cards whose status chip doubles as the accept/
+reject toggle, plus a "Create follow-up session (N accepted)" CTA and a
+history list of past retros).
+
+Unlike Conversation/Files, this surface talks to the Router directly through
+the thin `routerGet`/`routerPost` + `subscribeToEvents` idiom, not
+`RouterClient`/`FetchRouterClient`. `retro.*` events aren't session-scoped
+(`Envelope.session_id` is empty) — the surface subscribes globally and
+correlates events by `payload.retro_id` instead. Submodules: `picker/`
+(checkboxes, kind filter, chip-strip recap), `generation/` (the step
+indicator), `dpa/` (DPA cards), `history/` (the past-retros list), `state/`
+(the job-lifecycle and data-fetching hooks). See
+`src/features/retro/HANDOFF.md` for the full design.
+
 ## Pipeline tab
 
 ```sh
@@ -237,6 +260,30 @@ runSeq }) => void` prop and `DashboardTab` forwards its own `onDrillBack` prop
 through unchanged. Actually opening `pipeline.html?session=...` (or a future
 in-app router) is the caller's decision, out of scope for this module — see
 `src/dashboard/HANDOFF.md` §7/§11.
+
+## Command palette & notifications
+
+`src/features/command-palette/` (W6.11; MADS-UX §3.8), mounted directly in
+`App.tsx` (not a `SURFACES` entry — it's a global overlay, toggled by ⌘K/
+Ctrl+K rather than the icon rail). `useCommandPaletteData` composes the
+already-mounted `useSessionsList`/`useOpenTaskCounts` hooks plus a new
+`useAllTasks`, all fetched once on mount/SSE event at the `App.tsx` level;
+`CommandPalette.tsx` itself only ever receives this data as props and
+filters it client-side (`commandSource.ts`), so opening the palette issues
+no new Router request. Dispatching a command (jump to session, start
+pipeline, open task, new session, run retro) is handled in `App.tsx`.
+
+The dock/tray badge count reuses `dotState` (`src/features/sessions/rail/
+railGroups.ts`) — the same "needs attention" derivation the session rail
+uses — rather than a second implementation, via
+`state/attentionCount.ts`/`state/useAttentionBadge.ts`. It's pushed to
+Electron over a `badge:set-count` IPC channel (`electron/preload.ts` /
+`electron/main.ts`, wrapping `app.setBadgeCount`), reachable from the
+renderer via `window.mads.badge`, the same `contextBridge` pattern as
+`window.mads.pty`. The notification model is badge-only at launch; no
+in-app inbox exists yet, but `Command`'s shape in `commandSource.ts` is
+meant to be reusable as a future inbox's item source rather than needing a
+new backend feed.
 
 ## Test it
 

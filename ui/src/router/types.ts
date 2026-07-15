@@ -337,3 +337,43 @@ export interface PipelineRun {
   cost_usd: number;
   agents?: string[];
 }
+
+// mirrors pkg/contracts/retro.go DPAStatus
+export type DPAStatus = "accepted" | "rejected" | "edited";
+
+// mirrors pkg/contracts/retro.go RemediationLayer
+export type RemediationLayer =
+  | "agent_config"
+  | "tool_config"
+  | "prompt_engineering"
+  | "task_decomposition"
+  | "dependency_structure"
+  | "pipeline_template"
+  | "human_process";
+
+// mirrors pkg/contracts/retro.go DPA. ID is unique within its owning Retro
+// only (minted "dpa_1", "dpa_2", ... server-side).
+export interface DPA {
+  id: string;
+  problem: string;
+  evidence: string;
+  root_cause: string;
+  remediation_layer: RemediationLayer;
+  suggested_action: string;
+  status: DPAStatus;
+}
+
+// mirrors pkg/contracts/retro.go Retro. `dpas` is present but can be an
+// empty array (never null — Data Service always writes []DPA, never nil)
+// before generation finishes; the review UI only ever renders this after
+// GET /retros/{id} following retro.completed, so treat it as always
+// populated at the point this UI reads it.
+export interface Retro {
+  id: string;
+  session_ids: string[];
+  user_observations?: string;
+  dpas: DPA[];
+  follow_up_session_id?: string;
+  created_at: string;
+  updated_at: string;
+}

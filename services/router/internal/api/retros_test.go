@@ -10,9 +10,9 @@ import (
 	"github.com/drewkidwell/mads/providers/fake"
 )
 
-// Accept/reject/edit transitions are exercised against datatest directly
-// (the Data Service, not the Router — the Router has no routes of its own
-// for these; only the Data Service's HTTP API and its store are involved).
+// Accept/reject go through the Router's own routes below (see
+// TestAcceptDPA/TestRejectDPA); only Edit has no Router route of its own, so
+// it's exercised against the Data Service client directly here.
 func TestRetroDPAAcceptRejectEdit(t *testing.T) {
 	_, dataBase := newTestServerWithScenario(t, fake.Scenario{})
 	c := dataclient.New(dataBase, "test-verify")
@@ -187,5 +187,129 @@ func TestCancelJobNotFound(t *testing.T) {
 	resp := postJSON(t, srv.URL+"/jobs/job_never_existed/cancel", nil)
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestListRetros(t *testing.T) {
+	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
+	c := dataclient.New(dataBase, "test-verify")
+	ctx := context.Background()
+
+	retro := contracts.Retro{ID: "rto_list_me"}
+	if err := c.CreateRetro(ctx, &retro); err != nil {
+		t.Fatalf("CreateRetro: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/retros")
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := decodeJSON[[]contracts.Retro](t, resp)
+	found := false
+	for _, r := range list {
+		if r.ID == retro.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("GET /retros did not include created retro %s: %v", retro.ID, list)
+	}
+}
+
+func TestGetRetro(t *testing.T) {
+	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
+	c := dataclient.New(dataBase, "test-verify")
+	ctx := context.Background()
+
+	retro := contracts.Retro{
+		ID: "rto_get_me",
+		DPAs: []contracts.DPA{
+			{ID: "dpa_1", Problem: "p1", Evidence: "e1", RootCause: "r1",
+				RemediationLayer: contracts.RemediationToolConfig, SuggestedAction: "a1", Status: contracts.DPAAccepted},
+		},
+	}
+	if err := c.CreateRetro(ctx, &retro); err != nil {
+		t.Fatalf("CreateRetro: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/retros/" + retro.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[contracts.Retro](t, resp)
+	if got.ID != retro.ID || len(got.DPAs) != 1 {
+		t.Fatalf("GET /retros/%s = %+v", retro.ID, got)
+	}
+}
+
+func TestGetRetroNotFound(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, err := http.Get(srv.URL + "/retros/rto_never_existed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestAcceptDPA(t *testing.T) {
+	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
+	c := dataclient.New(dataBase, "test-verify")
+	ctx := context.Background()
+
+	retro := contracts.Retro{
+		ID: "rto_accept_http",
+		DPAs: []contracts.DPA{
+			{ID: "dpa_1", Problem: "p1", Evidence: "e1", RootCause: "r1",
+				RemediationLayer: contracts.RemediationToolConfig, SuggestedAction: "a1"},
+		},
+	}
+	if err := c.CreateRetro(ctx, &retro); err != nil {
+		t.Fatalf("CreateRetro: %v", err)
+	}
+
+	resp := postJSON(t, srv.URL+"/retros/"+retro.ID+"/dpas/dpa_1/accept", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	got, err := c.Retro(ctx, retro.ID)
+	if err != nil {
+		t.Fatalf("Retro: %v", err)
+	}
+	if got.DPAs[0].Status != contracts.DPAAccepted {
+		t.Errorf("dpa_1 status = %q, want accepted", got.DPAs[0].Status)
+	}
+}
+
+func TestRejectDPA(t *testing.T) {
+	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
+	c := dataclient.New(dataBase, "test-verify")
+	ctx := context.Background()
+
+	retro := contracts.Retro{
+		ID: "rto_reject_http",
+		DPAs: []contracts.DPA{
+			{ID: "dpa_1", Problem: "p1", Evidence: "e1", RootCause: "r1",
+				RemediationLayer: contracts.RemediationToolConfig, SuggestedAction: "a1"},
+		},
+	}
+	if err := c.CreateRetro(ctx, &retro); err != nil {
+		t.Fatalf("CreateRetro: %v", err)
+	}
+
+	resp := postJSON(t, srv.URL+"/retros/"+retro.ID+"/dpas/dpa_1/reject", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", resp.StatusCode)
+	}
+
+	got, err := c.Retro(ctx, retro.ID)
+	if err != nil {
+		t.Fatalf("Retro: %v", err)
+	}
+	if got.DPAs[0].Status != contracts.DPARejected {
+		t.Errorf("dpa_1 status = %q, want rejected", got.DPAs[0].Status)
 	}
 }
