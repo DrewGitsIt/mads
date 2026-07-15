@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -30,8 +31,8 @@ import (
 // stop cleanly after a SIGINT/SIGTERM before the process exits anyway.
 const shutdownGrace = 10 * time.Second
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) http.Handler {
-	return api.New(data, sup, jobs)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry) http.Handler {
+	return api.New(data, sup, jobs, providers)
 }
 
 func main() {
@@ -49,6 +50,14 @@ func main() {
 
 	data := dataclient.New(*dataURL, "router")
 
+	providers := provider.NewRegistry()
+	if err := providers.Register(claudecode.New(claudecode.Config{})); err != nil {
+		log.Fatalf("router: register claudecode provider: %v", err)
+	}
+	if err := providers.Register(fake.New()); err != nil {
+		log.Fatalf("router: register fake provider: %v", err)
+	}
+
 	var backend provider.Provider = fake.New()
 	if *fastmodelBaseURL == "" {
 		log.Printf("router: no -fastmodel-base-url set, using providers/fake as a placeholder Fast Model backend")
@@ -63,7 +72,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

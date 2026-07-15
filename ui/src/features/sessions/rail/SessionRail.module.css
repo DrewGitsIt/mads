@@ -1,0 +1,80 @@
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow-y: auto;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupHeader {
+  padding: var(--space-2) var(--space-3);
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.count {
+  color: var(--text3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg2);
+}
+
+.selected {
+  background: var(--bg3);
+}
+
+.dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.dot-on {
+  background: var(--ok);
+}
+
+.dot-attn {
+  background: var(--warn);
+}
+
+.dot-off {
+  background: var(--text3);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openCount {
+  flex: none;
+  color: var(--warn-fg);
+  font: 500 var(--fs-chip) var(--sans);
+}

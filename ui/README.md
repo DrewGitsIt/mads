@@ -3,15 +3,26 @@
 The Electron + TypeScript app shell and design system (docs/MADS-WORK-ITEMS.md
 W6.1). This package owns the token system, type rules, and reusable component
 kit every future surface composes from, plus the Electron scaffold that hosts
-them. It now also owns the Conversation tab (W6.3; MADS-UX §3.3) and the
-Files tab & merge-back flow (W6.5; MADS-UX §3.3/§5/§17), plus the
-`RouterClient` HTTP wrapper both are built against — see `src/conversation/`,
-`src/files/`, and `src/router/`. It does **not** yet own the Session list/
-Launchpad surface or the app shell's tab registry (W6.2), so neither
-`ConversationTab` nor `FilesTab` is wired into `App.tsx` yet; they're
-reachable standalone via the `conversation` and `files` demo mounts below.
-It also does not do per-platform packaging (electron-builder); that's later
-work, not gated by this package.
+them. It does not do per-platform packaging (electron-builder); that's
+later work, not gated by this package.
+
+Sessions (W6.2) is the first registered surface: session list rail + Launchpad
+(hero composer, metadata pills, suggestion chips, provisioning strip). See
+`src/features/sessions/`. Every future surface (Retro, Library, etc.) follows
+the same pattern: one entry in `App.tsx`'s `SURFACES` map
+(`{ id: Component }`), registered against `IconRail`'s existing item ids —
+that map is the single app-shell registration point, kept to a one-line diff
+per surface so concurrent surface work doesn't collide on a shared file.
+
+The package also owns the Files tab & merge-back flow (W6.5; MADS-UX
+§3.3/§5/§17 — see `src/files/` and the `files` demo mount below, not yet an
+entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3) and
+`src/router/` — the Router HTTP layer, which currently carries two idioms
+that landed concurrently: the `RouterClient` interface + `FetchRouterClient`
+(Conversation) and the thin `routerGet`/`routerPost` helpers (Sessions).
+Unifying them is follow-up work. `ConversationTab` is not yet an entry in
+`SURFACES`; it's reachable standalone via the `conversation` demo mount
+below.
 
 Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
 `docs/palette-mockups.html` (the approved source for all three shipping
@@ -32,8 +43,10 @@ npm run dev     # renderer dev server (Vite), open the printed localhost URL
 npm start       # build + launch the Electron shell (placeholder content only)
 ```
 
-The app shell currently renders an icon rail and a teaching empty state — no
-real surfaces are wired up yet.
+The app shell renders an icon rail plus whichever surface `App.tsx`'s
+`SURFACES` map resolves for the active rail item — Sessions today, a teaching
+empty state for any rail item without a registered surface yet (Retro,
+Library).
 
 ## Gallery
 
@@ -136,6 +149,35 @@ By design, this package has no Playwright/E2E/visual-regression tooling —
 that's a later wave, developed separately once real surfaces exist to test
 against.
 
+## Router client (`src/router/`)
+
+All data reaches the UI through the Router's HTTP/SSE API — never the Data
+Service directly. `src/router/client.ts` exports `routerGet<T>(path, params?)`
+and `routerPost<T>(path, body?)`; `src/router/events.ts` exports
+`subscribeToEvents({ sessionId?, types }, onEvent): () => void`, a thin
+wrapper over `EventSource` against `GET /events`. The server always names the
+SSE `event:` field after the envelope's own type (never a generic `message`
+event), so callers must pass the explicit `types` they want to receive.
+`src/router/types.ts` hand-mirrors the `pkg/contracts` wire shapes actually
+consumed by the UI (snake_case fields, matching the JSON on the wire — no
+camelCase translation layer). Like the component kit and `tokens.css`, this
+is a shared seam future surfaces should compose, not reimplement.
+
+For tests, `src/router/testFakeEventSource.ts` exports `FakeEventSource`, a
+scripted stand-in for the browser `EventSource` (`vi.stubGlobal("EventSource",
+FakeEventSource)`, then `FakeEventSource.instances[0].emit(type, jsonData)`
+to play back a recorded SSE frame). `src/features/sessions/` tests that
+exercise provisioning/live-list behavior use this instead of a real Router —
+follow that pattern rather than adding a second fake.
+
+## Feature flags
+
+`src/featureFlags.ts` is a temporary hardcoded stub (`export const FLAGS = {
+multiRepo: false }`) standing in for a real `/config` endpoint, which doesn't
+exist yet. Gate any flagged UI behind `FLAGS.<name>`; swap the stub for a
+real fetch once the backend adds one, rather than threading config through
+each surface individually.
+
 ## Critical paths
 
 - `src/tokens/tokens.css` is the only place colors are declared as literal
@@ -147,6 +189,11 @@ against.
   provenance treatment every future surface must reuse for synthesis cards,
   generated agents, and DPA drafts — don't reimplement the border/badge
   pattern elsewhere.
+- `src/components/Popover/Popover.tsx` is the one controlled popover
+  primitive (open/onClose/anchor) — metadata pills and any future
+  dropdown/menu UI should compose it rather than rolling a new
+  positioning/outside-click implementation. The caller owns its own
+  open/closed `useState`; `Popover` itself holds no state.
 - `make build`/`make test` from the repo root run this package's build/lint/
   test as part of the standard gates (see root `Makefile`'s `ui-deps` target,
   which runs `npm ci`) — a fresh worktree needs no manual steps beyond that.
