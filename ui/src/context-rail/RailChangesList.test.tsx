@@ -32,7 +32,7 @@ describe("RailChangesList", () => {
       undefined,
       undefined,
       fixtureTasks,
-      [unattributed],
+      { "session-active": [unattributed] },
     );
     render(<RailChangesList sessionId="session-active" routerClient={client} />);
 

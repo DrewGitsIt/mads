@@ -218,6 +218,18 @@ func (c *Client) Session(ctx context.Context, id string) (contracts.Session, err
 	return s, err
 }
 
+// Sessions lists sessions, optionally filtered by activity ("active" /
+// "inactive"); empty lists every session.
+func (c *Client) Sessions(ctx context.Context, activity string) ([]contracts.Session, error) {
+	path := "/sessions"
+	if activity != "" {
+		path += "?activity=" + url.QueryEscape(activity)
+	}
+	var out []contracts.Session
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
 // --- Session file tracking & commit linkage (spec §5) ---
 
 // RecordFileChange reports one file the session touched. fc.SessionID
@@ -347,6 +359,13 @@ func (c *Client) SetCapabilityHealth(ctx context.Context, idOrName string, healt
 	var out contracts.Capability
 	body := map[string]any{"healthy": healthy, "reason": reason}
 	err := c.do(ctx, http.MethodPost, "/capabilities/"+url.PathEscape(idOrName)+"/health", body, &out)
+	return out, err
+}
+
+// Workspaces lists the full workspace registry (spec §17).
+func (c *Client) Workspaces(ctx context.Context) ([]contracts.Workspace, error) {
+	var out []contracts.Workspace
+	err := c.do(ctx, http.MethodGet, "/workspaces", nil, &out)
 	return out, err
 }
 

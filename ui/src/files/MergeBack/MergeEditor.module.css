@@ -1,0 +1,21 @@
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.note {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.loading {
+  padding: var(--space-3);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}
+
+.resolvedNote {
+  font: var(--fs-sm) var(--sans);
+  color: var(--ok-fg);
+}

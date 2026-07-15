@@ -7,3 +7,4 @@ export * from "./Toast/Toast";
 export * from "./ResizablePanel/ResizablePanel";
 export * from "./IconRail/IconRail";
 export * from "./Draft/Draft";
+export * from "./Popover/Popover";

@@ -1,0 +1,77 @@
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { DiffViewer } from "./DiffViewer";
+import { fixtureFileDiffs } from "../../router/fixtures";
+
+// Intercepts the dynamic import DiffViewer.tsx uses for React.lazy — Monaco
+// needs Worker/canvas-measurement APIs happy-dom doesn't provide, so real
+// Monaco never mounts in this suite (HANDOFF §5).
+vi.mock("@monaco-editor/react", () => ({
+  DiffEditor: (props: {
+    original: string;
+    modified: string;
+    language?: string;
+    options?: { renderSideBySide?: boolean };
+  }) => (
+    <div
+      data-testid="fake-diff-editor"
+      data-original={props.original}
+      data-modified={props.modified}
+      data-language={props.language}
+      data-side-by-side={String(props.options?.renderSideBySide)}
+    />
+  ),
+}));
+
+const diff = fixtureFileDiffs["services/data/internal/ingest.go"];
+
+describe("DiffViewer", () => {
+  it("shows a prompt when no file is selected", () => {
+    render(<DiffViewer diff={null} onOpenInEditor={vi.fn()} />);
+    expect(screen.getByText(/select a file/i)).toBeTruthy();
+  });
+
+  it("renders a seeded diff's original/modified/language into the editor, side-by-side by default", async () => {
+    render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={vi.fn()} />);
+
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-original")).toBe(diff.original);
+    expect(editor.getAttribute("data-modified")).toBe(diff.modified);
+    expect(editor.getAttribute("data-language")).toBe("go");
+    expect(editor.getAttribute("data-side-by-side")).toBe("true");
+  });
+
+  it("toggling to inline flips renderSideBySide to false", async () => {
+    render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={vi.fn()} />);
+    await screen.findByTestId("fake-diff-editor");
+
+    fireEvent.click(screen.getByText("Inline"));
+
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-side-by-side")).toBe("false");
+  });
+
+  it("shows the error state, but keeps the always-visible Open in editor button enabled", () => {
+    render(
+      <DiffViewer path="a.go" diff={null} error="diff unavailable" onOpenInEditor={vi.fn()} />,
+    );
+    expect(screen.getByText("diff unavailable")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open in editor" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("disables Open in editor when there is no path at all", () => {
+    render(<DiffViewer diff={null} onOpenInEditor={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Open in editor" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+  });
+
+  it("calls onOpenInEditor with the current path", () => {
+    const onOpenInEditor = vi.fn();
+    render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={onOpenInEditor} />);
+    fireEvent.click(screen.getByText("Open in editor"));
+    expect(onOpenInEditor).toHaveBeenCalledWith(diff.path);
+  });
+});

@@ -1,0 +1,63 @@
+.launchpad {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+}
+
+.title {
+  font: 600 var(--fs-body) var(--sans);
+  color: var(--text);
+  margin: 0;
+}
+
+.subtitle {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text3);
+  margin: 0;
+}
+
+.box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-3);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+}
+
+.input {
+  width: 100%;
+  resize: vertical;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: 500 var(--fs-body) var(--sans);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.hint {
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  width: 100%;
+}

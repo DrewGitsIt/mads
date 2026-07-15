@@ -1,3 +1,86 @@
+// Hand-written mirrors of pkg/contracts wire types actually consumed by the
+// UI. Field names stay snake_case to match the JSON the Go services emit —
+// no camelCase translation layer for this first pass.
+
+export type SessionActivity = "active" | "inactive";
+export type SessionTrust = "full" | "limited" | "read_only";
+
+export interface Session {
+  id: string;
+  name: string;
+  activity: SessionActivity;
+  workspace?: string;
+  provider?: string;
+  model?: string;
+  agent?: string;
+  isolation?: string;
+  trust?: SessionTrust;
+  worktree_dir?: string;
+  worktree_branch?: string;
+  summary?: string;
+  active_task_id?: string;
+  linked_leader_id?: string;
+  tags?: string[];
+  retro_id?: string;
+  synthesis_mode?: string;
+  provider_ref?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkspaceRepo {
+  path: string;
+  primary?: boolean;
+}
+
+export interface WorkspaceDefaults {
+  agent?: string;
+  model?: string;
+  isolation?: string;
+  template?: string;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  description?: string;
+  repos?: WorkspaceRepo[];
+  defaults: WorkspaceDefaults;
+  steering_files?: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  description?: string;
+  prompt: string;
+  quadrant?: string;
+  tags?: string[];
+  system?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type Provider = string;
+
+export interface Model {
+  id: string;
+  name: string;
+  default?: boolean;
+}
+
+export interface Envelope {
+  seq: number;
+  timestamp: string;
+  type: string;
+  session_id?: string;
+  task_id?: string;
+  actor: string;
+  payload?: unknown;
+}
+
 /**
  * TS mirrors of Go contracts consumed by the Conversation tab. Keep field
  * names/optionality in lockstep with the Go source so wiring a real Router
@@ -35,20 +118,6 @@ export type StreamEvent =
   | { kind: "error"; text: string };
 
 // mirrors pkg/contracts/session.go Session (fields this tab reads)
-export interface Session {
-  id: string;
-  name: string;
-  activity: "active" | "inactive";
-  workspace?: string;
-  provider?: string;
-  model?: string;
-  agent?: string;
-  worktree_branch?: string;
-  // Already a rendered markdown string (accomplished/decisions/remaining
-  // sections omitted when empty — pkg/sessionsummary renders this
-  // server-side, so SessionSummaryCard does no section-presence logic).
-  summary?: string;
-}
 
 // New contract this task introduces on the frontend only (no Go type yet —
 // flag for whoever implements GET /mentionables to reconcile).
@@ -122,6 +191,12 @@ export interface Note {
 }
 
 // mirrors pkg/contracts/session.go FileChange (Context Rail Changes tab)
+// mirrors pkg/contracts/session.go FileChange. `change` is a plain string on
+// the Go struct (comment-documented as added|modified|deleted); narrowed to
+// a closed union here since the frontend only ever branches on those three.
+export type ChangeKind = "added" | "modified" | "deleted";
+export type ChangeOrigin = "tool_use" | "commit" | "observed";
+
 export interface FileChange {
   id: number;
   session_id: string;
@@ -135,9 +210,33 @@ export interface FileChange {
   timestamp: string;
 }
 
-// mirrors pkg/contracts/event.go Envelope — the wire shape delivered over
-// GET /events (SSE `data:` line is exactly this JSON).
-export interface Envelope {
+// mirrors pkg/contracts/session.go Commit
+export type LinkedVia = "trailer" | "session_context" | "heuristic";
+
+export interface Commit {
+  hash: string;
+  session_id: string;
+  task_id?: string;
+  repo?: string;
+  message: string;
+  author?: string;
+  linked_via?: LinkedVia;
+  orphan?: boolean;
+  timestamp: string;
+}
+
+// mirrors pkg/contracts/session.go MergeResult
+export interface MergeResult {
+  conflicted: boolean;
+  branch?: string;
+  files?: string[];
+}
+
+// mirrors pkg/contracts/event.go Envelope (subset fields the Files tab reads).
+// `type` is intentionally `string`, not a closed union — the vocabulary
+// grows as services land (see event.go's own comment) and this tab only
+// ever branches on the three merge.* values it cares about.
+export interface ControlEvent {
   seq: number;
   timestamp: string;
   type: string;
@@ -145,4 +244,16 @@ export interface Envelope {
   task_id?: string;
   actor: string;
   payload?: unknown;
+}
+
+// Frontend-only — NO Go equivalent exists anywhere (ui/src/files/HANDOFF.md
+// §1: no diff-content endpoint at all). Flag for whoever builds GET
+// .../diff to reconcile field names. `language` is a Monaco language id,
+// guessed client-side from the path extension — fine to get wrong, it only
+// affects syntax highlighting.
+export interface FileDiff {
+  path: string;
+  language?: string;
+  original: string;
+  modified: string;
 }
