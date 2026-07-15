@@ -37,7 +37,7 @@
   border: 0;
   background: transparent;
   color: var(--text3);
-  font: 650 13px var(--sans);
+  font: 650 var(--fs-body) var(--sans);
   border-radius: 4px;
   padding: 2px 7px;
   cursor: pointer;
