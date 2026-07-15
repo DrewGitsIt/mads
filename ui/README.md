@@ -218,6 +218,30 @@ The drill-in's terminal reuses `TerminalView` over a `PtyBridge` adapter
 interface `TerminalView` expects — `write`/`resize` are no-ops, matching the
 one-shot, non-interactive nature of agent stage output.
 
+## Command palette & notifications
+
+`src/features/command-palette/` (W6.11; MADS-UX §3.8), mounted directly in
+`App.tsx` (not a `SURFACES` entry — it's a global overlay, toggled by ⌘K/
+Ctrl+K rather than the icon rail). `useCommandPaletteData` composes the
+already-mounted `useSessionsList`/`useOpenTaskCounts` hooks plus a new
+`useAllTasks`, all fetched once on mount/SSE event at the `App.tsx` level;
+`CommandPalette.tsx` itself only ever receives this data as props and
+filters it client-side (`commandSource.ts`), so opening the palette issues
+no new Router request. Dispatching a command (jump to session, start
+pipeline, open task, new session, run retro) is handled in `App.tsx`.
+
+The dock/tray badge count reuses `dotState` (`src/features/sessions/rail/
+railGroups.ts`) — the same "needs attention" derivation the session rail
+uses — rather than a second implementation, via
+`state/attentionCount.ts`/`state/useAttentionBadge.ts`. It's pushed to
+Electron over a `badge:set-count` IPC channel (`electron/preload.ts` /
+`electron/main.ts`, wrapping `app.setBadgeCount`), reachable from the
+renderer via `window.mads.badge`, the same `contextBridge` pattern as
+`window.mads.pty`. The notification model is badge-only at launch; no
+in-app inbox exists yet, but `Command`'s shape in `commandSource.ts` is
+meant to be reusable as a future inbox's item source rather than needing a
+new backend feed.
+
 ## Test it
 
 ```sh

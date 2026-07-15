@@ -62,4 +62,25 @@ describe("SessionsSurface", () => {
 
     await waitFor(() => expect(screen.getByText("Worktree merge-back UX")).toBeTruthy());
   });
+
+  it("selects the session named by jumpToSessionId once sessions load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify([makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })]),
+            { status: 200 },
+          ),
+        ),
+      ),
+    );
+
+    render(<SessionsSurface jumpToSessionId="s2" />);
+
+    await waitFor(() => {
+      const row = screen.getByText("Bravo").closest("button");
+      expect(row?.className.includes("selected")).toBe(true);
+    });
+  });
 });
