@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { join } from "node:path";
+import { registerPtyHandlers } from "./pty/ptyHost";
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 
@@ -14,6 +15,8 @@ function createWindow(): void {
       nodeIntegration: false,
     },
   });
+
+  registerPtyHandlers(ipcMain, win.webContents);
 
   if (DEV_SERVER_URL) {
     win.loadURL(DEV_SERVER_URL);
