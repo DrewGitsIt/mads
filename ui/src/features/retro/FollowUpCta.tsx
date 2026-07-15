@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
-import { routerPost } from "../../router/client";
+import { router } from "../../router/client";
 import type { Session, Task } from "../../router/types";
 import styles from "./FollowUpCta.module.css";
 
@@ -37,9 +37,7 @@ export function FollowUpCta({
     setCreating(true);
     setError(null);
     try {
-      const result = await routerPost<{ session: Session; addr: string; tasks: Task[] }>(
-        `/retros/${retroId}/follow-up-session`,
-      );
+      const result = await router.createRetroFollowUpSession(retroId);
       onCreated?.({ session: result.session, tasks: result.tasks });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

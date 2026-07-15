@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet, routerPost } from "../../../router/client";
+import { router } from "../../../router/client";
 import type { DPAStatus, Retro } from "../../../router/types";
 
 export interface UseRetroDetail {
@@ -31,7 +31,8 @@ export function useRetroDetail(retroId: string | null): UseRetroDetail {
       return;
     }
     setLoading(true);
-    routerGet<Retro>(`/retros/${retroId}`)
+    router
+      .getRetro(retroId)
       .then((result) => {
         if (mounted.current) setRetro(result);
       })
@@ -61,8 +62,11 @@ export function useRetroDetail(retroId: string | null): UseRetroDetail {
       };
 
       applyStatus(nextStatus);
-      const endpoint = nextStatus === "accepted" ? "accept" : "reject";
-      routerPost(`/retros/${retroId}/dpas/${dpaId}/${endpoint}`).catch(() => {
+      const request =
+        nextStatus === "accepted"
+          ? router.acceptDpa(retroId, dpaId)
+          : router.rejectDpa(retroId, dpaId);
+      request.catch(() => {
         applyStatus(previousStatus);
       });
     },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerDelete, routerGet, routerPost, routerPut } from "../../router/client";
+import { router } from "../../router/client";
 import { subscribeToEvents } from "../../router/events";
 import type { Workspace } from "../../router/types";
 
@@ -23,7 +23,7 @@ export function useWorkspaces(): UseWorkspaces {
 
   const refetch = useCallback(async () => {
     try {
-      const list = await routerGet<Workspace[]>("/workspaces");
+      const list = await router.listWorkspaces();
       if (mounted.current) setWorkspaces(list);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));
@@ -45,15 +45,15 @@ export function useWorkspaces(): UseWorkspaces {
   }, [refetch]);
 
   const createWorkspace = useCallback(async (workspace: Partial<Workspace>) => {
-    return routerPost<Workspace>("/workspaces", workspace);
+    return router.createWorkspace(workspace);
   }, []);
 
   const updateWorkspace = useCallback(async (workspace: Workspace) => {
-    return routerPut<Workspace>(`/workspaces/${workspace.id}`, workspace);
+    return router.updateWorkspace(workspace);
   }, []);
 
   const deleteWorkspace = useCallback(async (id: string) => {
-    await routerDelete(`/workspaces/${id}`);
+    await router.deleteWorkspace(id);
   }, []);
 
   return { workspaces, loading, error, createWorkspace, updateWorkspace, deleteWorkspace };

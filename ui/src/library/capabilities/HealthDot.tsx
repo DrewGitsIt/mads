@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { routerGet } from "../../router/client";
+import { router } from "../../router/client";
 import { subscribeToEvents } from "../../router/events";
-import type { Capability, CapabilityHealth } from "../../router/types";
+import type { CapabilityHealth } from "../../router/types";
 import styles from "./HealthDot.module.css";
 
 export interface HealthDotProps {
@@ -21,7 +21,8 @@ export function HealthDot({ capabilityId, health: initialHealth }: HealthDotProp
   useEffect(() => {
     mounted.current = true;
     const unsubscribe = subscribeToEvents({ types: ["capability.health_changed"] }, () => {
-      routerGet<Capability>(`/capabilities/${capabilityId}`)
+      router
+        .getCapability(capabilityId)
         .then((capability) => {
           if (mounted.current) setHealth(capability.health);
         })

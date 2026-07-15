@@ -10,7 +10,7 @@ import { SettingsSurface } from "./features/settings/SettingsSurface";
 import { applyTheme } from "./features/settings/theme/applyTheme";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
-import { routerGet } from "./router/client";
+import { router } from "./router/client";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
@@ -41,7 +41,7 @@ export function App() {
   const [config, setConfig] = useState<Config | null>(null);
 
   useEffect(() => {
-    routerGet<Config>("/config").then((c) => {
+    router.getConfig().then((c) => {
       applyTheme(c.theme, c.palette);
       setFlags({
         multiRepo: c.feature_flags.multi_repo,

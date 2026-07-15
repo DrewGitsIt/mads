@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet, routerPost } from "../../../router/client";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import type { Session } from "../../../router/types";
 
@@ -33,7 +33,7 @@ export function useSessionsList(): UseSessionsList {
 
   const refetch = useCallback(async () => {
     try {
-      const list = await routerGet<Session[]>("/sessions");
+      const list = await router.listSessions();
       if (mounted.current) setSessions(list);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));
@@ -55,7 +55,7 @@ export function useSessionsList(): UseSessionsList {
   }, [refetch]);
 
   const createSession = useCallback(async (payload: Partial<Session>) => {
-    const result = await routerPost<{ session: Session; addr: string }>("/sessions", payload);
+    const result = await router.createSession(payload);
     return result.session;
   }, []);
 

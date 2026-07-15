@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { routerPost } from "../../router/client";
+import { router } from "../../router/client";
 import type { AgentCapabilities } from "../../router/types";
 
 export interface UseAgentEnrichment {
@@ -11,16 +11,16 @@ export interface UseAgentEnrichment {
 /** Synchronous request/response enrichment actions (spec §9.5) — no job/event plumbing. */
 export function useAgentEnrichment(): UseAgentEnrichment {
   const describe = useCallback(async (prompt: string) => {
-    const result = await routerPost<{ result: string }>("/agents/describe", { prompt });
+    const result = await router.describeAgent(prompt);
     return result.result;
   }, []);
 
   const suggestCapabilities = useCallback(async (prompt: string) => {
-    return routerPost<AgentCapabilities>("/agents/suggest-capabilities", { prompt });
+    return router.suggestAgentCapabilities(prompt);
   }, []);
 
   const refine = useCallback(async (prompt: string, instruction: string) => {
-    const result = await routerPost<{ result: string }>("/agents/refine", { prompt, instruction });
+    const result = await router.refineAgent(prompt, instruction);
     return result.result;
   }, []);
 

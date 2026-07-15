@@ -1,13 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FetchRouterClient } from "./client";
+import { FetchRouterClient, RouterValidationError } from "./client";
+import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
-  const fetchMock = vi.fn().mockResolvedValue({
+  const response = {
     ok,
     status,
     statusText: ok ? "OK" : "Error",
     json: async () => body,
-  });
+    text: async () => JSON.stringify(body),
+    clone() {
+      return response;
+    },
+  };
+  const fetchMock = vi.fn().mockResolvedValue(response);
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -141,132 +147,98 @@ describe("FetchRouterClient", () => {
   });
 });
 
-import {
-  ROUTER_BASE,
-  RouterValidationError,
-  routerDelete,
-  routerGet,
-  routerPost,
-  routerPut,
-} from "./client";
-
-describe("routerGet", () => {
+describe("FetchRouterClient — typed methods built on the private transport helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches the given path against the Router base URL", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  it("listTasks omits the status query param when absent", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    const tasks = await client.listTasks("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/tasks?session_id=s1");
+    expect(tasks).toEqual([]);
+  });
+
+  it("listTasks appends the status query param when given", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.listTasks("s1", "ready");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/tasks?session_id=s1&status=ready",
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await routerGet<{ ok: boolean }>("/sessions");
-
-    expect(result).toEqual({ ok: true });
-    const calledUrl = fetchMock.mock.calls[0][0] as URL;
-    expect(calledUrl.toString()).toBe(`${ROUTER_BASE}/sessions`);
   });
 
-  it("appends query params, skipping undefined values", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("[]", { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await routerGet("/tasks", { session_id: "s1", status: undefined });
-
-    const calledUrl = fetchMock.mock.calls[0][0] as URL;
-    expect(calledUrl.searchParams.get("session_id")).toBe("s1");
-    expect(calledUrl.searchParams.has("status")).toBe(false);
+  it("listSessions throws on a non-ok response", async () => {
+    mockFetchOnce(undefined, false, 500);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.listSessions()).rejects.toThrow(/500/);
   });
 
-  it("throws on a non-ok response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response("boom", { status: 500 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(routerGet("/sessions")).rejects.toThrow(/500/);
-  });
-});
-
-describe("routerPost", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("POSTs a JSON body and decodes the JSON response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "s1" }), { status: 201 }),
+  it("createSession POSTs a JSON body and decodes the response", async () => {
+    const fetchMock = mockFetchOnce({ session: { id: "s1" }, addr: "localhost:1" });
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.createSession({ name: "s1" });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ name: "s1" }),
+      }),
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await routerPost<{ id: string }>("/sessions", { name: "s1" });
-
-    expect(result).toEqual({ id: "s1" });
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(url.toString()).toBe(`${ROUTER_BASE}/sessions`);
-    expect(init.method).toBe("POST");
-    expect(init.body).toBe(JSON.stringify({ name: "s1" }));
+    expect(result.session.id).toBe("s1");
   });
 
-  it("returns undefined for a 204 response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await routerPost("/sessions/s1/terminate");
-
+  it("interrupt returns undefined for a 204 response", async () => {
+    mockFetchOnce(undefined, true, 204);
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.interrupt("s1");
     expect(result).toBeUndefined();
   });
 
-  it("throws RouterValidationError on a {errors:[...]} failure body", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ errors: [{ field: "source", message: "duplicate stage name" }] }),
-        { status: 400 },
-      ),
+  it("validateTemplate throws RouterValidationError on a {errors:[...]} failure body", async () => {
+    const fetchMock = mockFetchOnce(
+      { errors: [{ field: "source", message: "duplicate stage name" }] },
+      false,
+      400,
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(routerPost("/templates/validate", { source: "bad" })).rejects.toThrow(
-      RouterValidationError,
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.validateTemplate("bad")).rejects.toThrow(RouterValidationError);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/templates/validate",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ source: "bad" }),
+      }),
     );
   });
-});
 
-describe("routerPut", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("PUTs a JSON body and decodes the JSON response", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ id: "a1" }), { status: 200 }),
+  it("updateAgent PUTs a JSON body and decodes the response", async () => {
+    const fetchMock = mockFetchOnce({ id: "a1" });
+    const client = new FetchRouterClient("http://router.local");
+    const agent: Agent = {
+      id: "a1",
+      name: "a1",
+      prompt: "do the thing",
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+    };
+    const result = await client.updateAgent(agent);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/agents/a1",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify(agent) }),
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await routerPut<{ id: string }>("/agents/a1", { id: "a1" });
-
     expect(result).toEqual({ id: "a1" });
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(url.toString()).toBe(`${ROUTER_BASE}/agents/a1`);
-    expect(init.method).toBe("PUT");
-  });
-});
-
-describe("routerDelete", () => {
-  afterEach(() => {
-    vi.unstubAllGlobals();
   });
 
-  it("DELETEs and returns undefined for a 200 status:deleted body", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "deleted" }), { status: 200 }),
+  it("deleteAgent DELETEs and decodes a 200 body", async () => {
+    const fetchMock = mockFetchOnce({ status: "deleted" });
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.deleteAgent("a1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/agents/a1",
+      expect.objectContaining({ method: "DELETE" }),
     );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const result = await routerDelete<{ status: string }>("/agents/a1");
-
     expect(result).toEqual({ status: "deleted" });
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(url.toString()).toBe(`${ROUTER_BASE}/agents/a1`);
-    expect(init.method).toBe("DELETE");
   });
 });

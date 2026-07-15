@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ROUTER_BASE, routerGet } from "../../../router/client";
+import { router, RouterValidationError } from "../../../router/client";
 import type { Config } from "../../../router/types";
 import { dirtyRestartFields } from "../restartRequired";
-import { fieldErrorMap, type FieldError } from "../validation/fieldErrors";
+import { fieldErrorMap } from "../validation/fieldErrors";
 
 export interface UseConfig {
   /** Config as fetched at mount — never mutated, the diff base for restart badges. */
@@ -42,7 +42,7 @@ export function useConfig(): UseConfig {
   const mounted = useRef(true);
 
   const fetchConfig = useCallback(async () => {
-    const cfg = await routerGet<Config>("/config");
+    const cfg = await router.getConfig();
     if (!mounted.current) return;
     setInitial(cfg);
     setSaved(cfg);
@@ -66,21 +66,20 @@ export function useConfig(): UseConfig {
     async (overrideDraft?: Config) => {
       const body = overrideDraft ?? draft;
       if (!body) return false;
-      const res = await fetch(new URL("/config", ROUTER_BASE), {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!res.ok) {
-        const errBody = (await res.json().catch(() => null)) as { errors?: FieldError[] } | null;
-        setFieldErrors(errBody?.errors ? fieldErrorMap(errBody.errors) : {});
+      try {
+        const updated = await router.updateConfig(body);
+        setFieldErrors({});
+        setSaved(updated);
+        setDraftState(updated);
+        return true;
+      } catch (err) {
+        if (err instanceof RouterValidationError) {
+          setFieldErrors(fieldErrorMap(err.errors));
+        } else {
+          setFieldErrors({});
+        }
         return false;
       }
-      const updated = (await res.json()) as Config;
-      setFieldErrors({});
-      setSaved(updated);
-      setDraftState(updated);
-      return true;
     },
     [draft],
   );

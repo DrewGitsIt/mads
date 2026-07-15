@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerDelete, routerGet, routerPost, routerPut } from "../../../router/client";
+import { router } from "../../../router/client";
 import type { Config, Profile } from "../../../router/types";
 
 export interface UseProfiles {
@@ -25,7 +25,7 @@ export function useProfiles(): UseProfiles {
   const mounted = useRef(true);
 
   const refetch = useCallback(async () => {
-    const list = await routerGet<Profile[]>("/profiles");
+    const list = await router.listProfiles();
     if (mounted.current) setProfiles(list);
   }, []);
 
@@ -42,7 +42,7 @@ export function useProfiles(): UseProfiles {
 
   const create = useCallback(
     async (profile: Partial<Profile>) => {
-      const created = await routerPost<Profile>("/profiles", profile);
+      const created = await router.createProfile(profile as Profile);
       await refetch();
       return created;
     },
@@ -51,7 +51,7 @@ export function useProfiles(): UseProfiles {
 
   const update = useCallback(
     async (profile: Profile) => {
-      const updated = await routerPut<Profile>(`/profiles/${profile.id}`, profile);
+      const updated = await router.updateProfile(profile);
       await refetch();
       return updated;
     },
@@ -60,14 +60,14 @@ export function useProfiles(): UseProfiles {
 
   const remove = useCallback(
     async (id: string) => {
-      await routerDelete(`/profiles/${id}`);
+      await router.deleteProfile(id);
       await refetch();
     },
     [refetch],
   );
 
   const activate = useCallback(async (id: string) => {
-    return routerPost<Config>(`/profiles/${id}/activate`);
+    return router.activateProfile(id);
   }, []);
 
   return { profiles, loading, create, update, remove, activate };

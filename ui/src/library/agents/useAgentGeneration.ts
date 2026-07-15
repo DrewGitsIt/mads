@@ -1,14 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerPost } from "../../router/client";
+import { router } from "../../router/client";
 import { subscribeToEvents } from "../../router/events";
-import type { Agent, Similar } from "../../router/types";
-
-export interface GenerateAgentBody {
-  description?: string;
-  title?: string;
-  session_id?: string;
-  task_id?: string;
-}
+import type { Agent, GenerateAgentBody, Similar } from "../../router/types";
 
 export interface UseAgentGeneration {
   draft: Agent | null;
@@ -54,7 +47,7 @@ export function useAgentGeneration(): UseAgentGeneration {
     setDraft(null);
     setSimilar(null);
     try {
-      const result = await routerPost<{ job_id: string }>("/agents/generate", body);
+      const result = await router.generateAgent(body);
       jobId.current = result.job_id;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

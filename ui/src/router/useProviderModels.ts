@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { routerGet } from "./client";
-import type { Model, Provider } from "./types";
+import { router } from "./client";
+import type { Model } from "./types";
 
 /**
  * Fetches every registered provider's model list, grouped by provider name.
@@ -14,12 +14,11 @@ export function useProviderModels(): Record<string, Model[]> {
 
   useEffect(() => {
     let cancelled = false;
-    routerGet<Provider[]>("/providers")
+    router
+      .listProviderNames()
       .then(async (providers) => {
         const entries = await Promise.all(
-          providers.map(
-            async (p) => [p, await routerGet<Model[]>(`/providers/${p}/models`)] as const,
-          ),
+          providers.map(async (p) => [p, await router.listModels(p)] as const),
         );
         if (!cancelled) setModelsByProvider(Object.fromEntries(entries));
       })

@@ -1,15 +1,9 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody, PanelHeader } from "../../components/Panel/Panel";
-import { routerPost } from "../../router/client";
-import type { Capability } from "../../router/types";
+import { router } from "../../router/client";
+import type { Capability, DiagnoseResult } from "../../router/types";
 import styles from "./DiagnosePanel.module.css";
-
-interface DiagnoseResult {
-  healthy: boolean;
-  reason?: string;
-  suggestions: string[];
-}
 
 export interface DiagnosePanelProps {
   capability: Capability;
@@ -27,7 +21,7 @@ export function DiagnosePanel({ capability }: DiagnosePanelProps) {
     setPending(true);
     setError(null);
     try {
-      const diagnosis = await routerPost<DiagnoseResult>(`/capabilities/${capability.id}/diagnose`);
+      const diagnosis = await router.diagnoseCapability(capability.id);
       setResult(diagnosis);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

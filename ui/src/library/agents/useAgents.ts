@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerDelete, routerGet, routerPost, routerPut } from "../../router/client";
+import { router } from "../../router/client";
 import { subscribeToEvents } from "../../router/events";
 import type { Agent } from "../../router/types";
 
@@ -23,7 +23,7 @@ export function useAgents(): UseAgents {
 
   const refetch = useCallback(async () => {
     try {
-      const list = await routerGet<Agent[]>("/agents");
+      const list = await router.listAgents();
       if (mounted.current) setAgents(list);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));
@@ -45,15 +45,15 @@ export function useAgents(): UseAgents {
   }, [refetch]);
 
   const createAgent = useCallback(async (agent: Partial<Agent>) => {
-    return routerPost<Agent>("/agents", agent);
+    return router.createAgent(agent);
   }, []);
 
   const updateAgent = useCallback(async (agent: Agent) => {
-    return routerPut<Agent>(`/agents/${agent.id}`, agent);
+    return router.updateAgent(agent);
   }, []);
 
   const deleteAgent = useCallback(async (id: string) => {
-    await routerDelete(`/agents/${id}`);
+    await router.deleteAgent(id);
   }, []);
 
   return { agents, loading, error, createAgent, updateAgent, deleteAgent };
