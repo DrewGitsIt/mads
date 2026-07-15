@@ -1,0 +1,245 @@
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { subscribeToEvents } from "../../router/events";
+import type { Envelope, Task } from "../../router/types";
+import type { PipelineClient } from "../client/pipelineClient";
+
+// Task.status_changed/updated/created and note.created carry no full payload
+// worth folding — refetch the whole list, same idiom as useSessionsList.
+const METADATA_EVENT_TYPES = ["task.created", "task.updated", "task.status_changed", "note.created"];
+
+// pipeline.*/stage.*/file.changed have no persisted read model (HANDOFF.md
+// §2) — folded into local reducer state instead of refetched.
+const FOLD_EVENT_TYPES = [
+  "pipeline.started",
+  "pipeline.completed",
+  "pipeline.cancelled",
+  "pipeline.failed",
+  "stage.started",
+  "stage.completed",
+  "stage.failed",
+  "stage.skipped",
+  "file.changed",
+];
+
+const ALL_EVENT_TYPES = [...METADATA_EVENT_TYPES, ...FOLD_EVENT_TYPES];
+
+export type RunPhase = "idle" | "running" | "finished";
+export type StageAttemptStatus = "started" | "completed" | "failed" | "skipped";
+
+export interface StageAttempt {
+  stage: string;
+  /** 1-based count of stage.started events for this stage on this task. */
+  attempt: number;
+  status: StageAttemptStatus;
+  /** stage.failed's `reason` — the loop-back/blocker feedback text (HANDOFF.md §1c). */
+  reason?: string;
+  startedSeq: number;
+  endedSeq?: number;
+}
+
+export interface TaskRunState {
+  taskId: string;
+  /** Stage of the most recent stage.started for this task this run; the board column. */
+  currentStage?: string;
+  attempts: StageAttempt[];
+  touchedFiles: string[];
+}
+
+interface RunFoldState {
+  phase: RunPhase;
+  outcome?: string;
+  runStartSeq?: number;
+  runStartedAt?: string;
+  runEndedAt?: string;
+  /** Stage names in first-seen order across the current run — the board's column order. */
+  columns: string[];
+  taskRunState: Record<string, TaskRunState>;
+}
+
+const initialRunFoldState: RunFoldState = {
+  phase: "idle",
+  columns: [],
+  taskRunState: {},
+};
+
+function taskRunStateOf(state: RunFoldState, taskId: string): TaskRunState {
+  return state.taskRunState[taskId] ?? { taskId, attempts: [], touchedFiles: [] };
+}
+
+function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
+  if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
+    return state;
+  }
+  const taskId = env.task_id;
+  const payload = env.payload as { stage?: string; reason?: string } | undefined;
+  if (!taskId || !payload?.stage) return state;
+  const stage = payload.stage;
+
+  const existing = taskRunStateOf(state, taskId);
+  let attempts = existing.attempts;
+  let currentStage = existing.currentStage;
+
+  if (env.type === "stage.started" || env.type === "stage.skipped") {
+    const attemptNumber = attempts.filter((a) => a.stage === stage).length + 1;
+    const status: StageAttemptStatus = env.type === "stage.started" ? "started" : "skipped";
+    attempts = [
+      ...attempts,
+      {
+        stage,
+        attempt: attemptNumber,
+        status,
+        startedSeq: env.seq,
+        endedSeq: status === "skipped" ? env.seq : undefined,
+      },
+    ];
+    if (env.type === "stage.started") currentStage = stage;
+  } else {
+    // stage.completed | stage.failed — close out the most recent open attempt for this stage.
+    let openIndex = -1;
+    for (let i = attempts.length - 1; i >= 0; i--) {
+      if (attempts[i].stage === stage && attempts[i].status === "started") {
+        openIndex = i;
+        break;
+      }
+    }
+    if (openIndex !== -1) {
+      const status: StageAttemptStatus = env.type === "stage.completed" ? "completed" : "failed";
+      attempts = attempts.slice();
+      attempts[openIndex] = {
+        ...attempts[openIndex],
+        status,
+        endedSeq: env.seq,
+        reason: env.type === "stage.failed" ? payload.reason : undefined,
+      };
+    }
+  }
+
+  const columns = state.columns.includes(stage) ? state.columns : [...state.columns, stage];
+
+  return {
+    ...state,
+    columns,
+    taskRunState: {
+      ...state.taskRunState,
+      [taskId]: { ...existing, attempts, currentStage },
+    },
+  };
+}
+
+function foldFileChanged(state: RunFoldState, env: Envelope): RunFoldState {
+  if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
+    return state;
+  }
+  const taskId = env.task_id;
+  const payload = env.payload as { path?: string } | undefined;
+  if (!taskId || !payload?.path) return state;
+
+  const existing = taskRunStateOf(state, taskId);
+  if (existing.touchedFiles.includes(payload.path)) return state;
+
+  return {
+    ...state,
+    taskRunState: {
+      ...state.taskRunState,
+      [taskId]: { ...existing, touchedFiles: [...existing.touchedFiles, payload.path] },
+    },
+  };
+}
+
+function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
+  switch (env.type) {
+    case "pipeline.started":
+      // A new run always resets board state — old runs' stage.*/task.* events
+      // for the same task ids are otherwise indistinguishable (HANDOFF.md §2).
+      return {
+        phase: "running",
+        runStartSeq: env.seq,
+        runStartedAt: env.timestamp,
+        columns: [],
+        taskRunState: {},
+      };
+    case "pipeline.completed":
+    case "pipeline.cancelled":
+    case "pipeline.failed": {
+      if (state.runStartSeq === undefined || env.seq < state.runStartSeq) return state;
+      const payload = env.payload as { outcome?: string } | undefined;
+      return {
+        ...state,
+        phase: "finished",
+        outcome: payload?.outcome ?? env.type.slice("pipeline.".length),
+        runEndedAt: env.timestamp,
+      };
+    }
+    case "stage.started":
+    case "stage.completed":
+    case "stage.failed":
+    case "stage.skipped":
+      return foldStageEvent(state, env);
+    case "file.changed":
+      return foldFileChanged(state, env);
+    default:
+      return state;
+  }
+}
+
+export interface UsePipelineRunResult {
+  tasks: Task[];
+  loading: boolean;
+  error: string | null;
+  phase: RunPhase;
+  outcome?: string;
+  runStartedAt?: string;
+  runEndedAt?: string;
+  columns: string[];
+  taskRunState: Record<string, TaskRunState>;
+  refetchTasks: () => Promise<void>;
+}
+
+// Seeds the task list and keeps it live via refetch-on-event
+// (useSessionsList's idiom), while separately folding pipeline/stage/
+// file.changed envelopes into local board state — there's no read endpoint
+// for "current stage per task" to refetch instead (HANDOFF.md §2).
+export function usePipelineRun(sessionId: string, client: PipelineClient): UsePipelineRunResult {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [runState, dispatch] = useReducer(foldReducer, initialRunFoldState);
+  const mounted = useRef(true);
+
+  const refetchTasks = useCallback(async () => {
+    try {
+      const list = await client.listTasks(sessionId);
+      if (mounted.current) setTasks(list);
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [client, sessionId]);
+
+  useEffect(() => {
+    mounted.current = true;
+    void refetchTasks();
+    const unsubscribe = subscribeToEvents({ sessionId, types: ALL_EVENT_TYPES }, (env) => {
+      if (FOLD_EVENT_TYPES.includes(env.type)) dispatch(env);
+      if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
+    });
+    return () => {
+      mounted.current = false;
+      unsubscribe();
+    };
+  }, [refetchTasks, sessionId]);
+
+  return {
+    tasks,
+    loading,
+    error,
+    phase: runState.phase,
+    outcome: runState.outcome,
+    runStartedAt: runState.runStartedAt,
+    runEndedAt: runState.runEndedAt,
+    columns: runState.columns,
+    taskRunState: runState.taskRunState,
+    refetchTasks,
+  };
+}

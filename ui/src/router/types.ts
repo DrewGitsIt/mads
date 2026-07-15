@@ -63,30 +63,6 @@ export interface Agent {
   updated_at: string;
 }
 
-export type TaskStatus =
-  | "ready"
-  | "in_progress"
-  | "blocked"
-  | "needs_review"
-  | "done"
-  | "wont_do";
-
-export interface Task {
-  id: string;
-  session_id: string;
-  status: TaskStatus;
-  dependencies?: string[];
-  labels?: string[];
-  retry_count: number;
-  created_at: string;
-  updated_at: string;
-  title: string;
-  description?: string;
-  acceptance_criteria?: string;
-  scope?: string;
-  draft?: boolean;
-}
-
 export type Provider = string;
 
 export interface Model {
@@ -163,6 +139,58 @@ export interface CapabilitySummary {
   healthy: boolean;
 }
 
+// mirrors pkg/contracts/task.go TaskStatus (W6.4). Dependency-waiting tasks
+// keep status "blocked" in the schema — see ui/src/tasks/HANDOFF.md §2 for
+// the client-side heuristic that renders this calmly ("Queued") vs. red
+// ("needs human").
+export type TaskStatus =
+  | "ready"
+  | "in_progress"
+  | "blocked"
+  | "needs_review"
+  | "done"
+  | "wont_do";
+
+// mirrors pkg/contracts/task.go Task (fields this tab reads/writes).
+// Handoffs are omitted — not read by this tab (HANDOFF.md §1a).
+export interface Task {
+  id: string;
+  session_id: string;
+  status: TaskStatus;
+  dependencies?: string[];
+  labels?: string[];
+  retry_count: number;
+  created_at: string;
+  updated_at: string;
+  title: string;
+  description?: string;
+  acceptance_criteria?: string;
+  scope?: string;
+  draft?: boolean;
+  source: string;
+  dpa_id?: string;
+  notes?: Note[];
+}
+
+// mirrors pkg/contracts/task.go NoteType/NoteStatus/Note
+export type NoteType =
+  | "blocker"
+  | "decision"
+  | "context"
+  | "risk"
+  | "follow_up"
+  | "observation";
+export type NoteStatus = "draft" | "confirmed";
+export interface Note {
+  id?: number;
+  type: NoteType;
+  content: string;
+  source: string;
+  status: NoteStatus;
+  timestamp: string;
+}
+
+// mirrors pkg/contracts/session.go FileChange (Context Rail Changes tab)
 // mirrors pkg/contracts/session.go FileChange. `change` is a plain string on
 // the Go struct (comment-documented as added|modified|deleted); narrowed to
 // a closed union here since the frontend only ever branches on those three.
@@ -175,11 +203,11 @@ export interface FileChange {
   task_id?: string;
   repo?: string;
   path: string;
-  change: ChangeKind;
-  origin: ChangeOrigin;
+  change: "added" | "modified" | "deleted";
+  origin: string;
   attributed: boolean;
   actor?: string;
-  timestamp: string; // ISO
+  timestamp: string;
 }
 
 // mirrors pkg/contracts/session.go Commit
@@ -214,6 +242,7 @@ export interface ControlEvent {
   type: string;
   session_id?: string;
   task_id?: string;
+  actor: string;
   payload?: unknown;
 }
 

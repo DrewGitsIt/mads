@@ -90,6 +90,42 @@ display or native build. Its real-pty contract test is named
 run it manually with `npm run test:pty` on a machine with a usable pty — it
 skips cleanly (not a failure) wherever one isn't available.
 
+## Tasks tab & Context Rail
+
+```sh
+npm run tasks
+```
+
+Opens `tasks.html`: `TasksTab` (`src/tasks/TasksTab.tsx`) and `ContextRail`
+(`src/context-rail/ContextRail.tsx`) mounted side by side against
+`FakeRouterClient` fixtures, standing in for the Session Workspace container
+that will eventually host both. `TasksTab` owns list/graph toggle, the detail
+sheet, draft confirm/discard, and bulk import; `ContextRail` owns the
+Tasks/Changes rail tabs and quick-filter chips. This is the review artifact
+until W6.2's tab registry exists to wire `TasksTab` into `App.tsx` properly.
+
+Both `TasksTab` and `ContextRail` read live task state via `useTaskStore`
+(`src/tasks/useTaskStore.ts`), which subscribes to `task.*`/`note.*` events
+off `GET /events` and always refetches the affected task rather than trusting
+the (sparse) event payload. `TasksTab` owns its own instance per the module
+layout in `src/tasks/HANDOFF.md` §4; `ContextRail` instead takes
+`tasks`/`tasksById` as props, so the demo mount runs a second instance to
+supply the rail. Against `FakeRouterClient` this is free (`streamTaskEvents`
+always returns one shared fake event source), but a real container mounting
+both tabs together should lift a single `useTaskStore` call and pass the
+result into each instead of opening two live subscriptions for one session —
+see `src/tasks/HANDOFF.md`'s executor notes.
+
+Task list/graph rendering follows the Queued display rule (`src/tasks/
+ListView/statusPresentation.ts`): a `"blocked"` task with an unfinished
+dependency renders calm/neutral ("Queued"), while `"blocked"` with no
+unfinished dependency (needs a human) renders red — the schema has no
+separate status for the two, so this is a client-side heuristic. The
+dependency graph (`src/tasks/GraphView/`) lays out with `@dagrejs/dagre`
+deterministically (nodes sorted by id, dimensions from a title-length
+heuristic, never measured from the DOM) and highlights cycles from the
+server-authoritative `GET /tasks/cycles`, not client-side detection.
+
 ## Files tab
 
 ```sh
@@ -146,6 +182,41 @@ correlates events by `payload.retro_id` instead. Submodules: `picker/`
 indicator), `dpa/` (DPA cards), `history/` (the past-retros list), `state/`
 (the job-lifecycle and data-fetching hooks). See
 `src/features/retro/HANDOFF.md` for the full design.
+
+## Pipeline tab
+
+```sh
+npm run pipeline
+```
+
+Opens `pipeline.html`: the Pipeline tab (`src/pipeline/PipelineTab.tsx`)
+mounted standalone against `FakePipelineClient` and a recorded engine-run
+event sequence (`src/pipeline/client/recordedRun.ts`, captured from a real
+engine run against provider-fake — three tasks, including a stage loop-back
+and a terminal block). A global `EventSource` stub feeds the recording to
+`usePipelineRun` in place of a real Router SSE connection; a "Play recorded
+sequence" button replays it on demand. This is the review artifact until
+W6.2's tab registry exists to register `PipelineTab` into properly.
+
+`PipelineTab` composes a `RunHeader` (Start/Pause/Resume/Cancel, elapsed +
+task counts — Pause/Resume/Reassign render disabled, since the engine has no
+API for them yet; no live cost, by design, see MADS-UX §8), a `StageBoard`
+(one column per stage in first-seen order, cards move on `stage.*` events,
+loop-backs show an attempt badge), a `BlockedPanel` (blocked tasks surfaced
+separately from the board with their accumulated feedback/blocker notes),
+and a `TaskDrillIn` split panel (stage timeline with attempts/loop-backs/
+feedback, a live agent output stream, and touched-file count) opened by
+selecting a task. All state is folded from `pipeline.*`/`stage.*`/
+`task.*`/`note.*`/`file.changed` envelopes by `usePipelineRun`
+(`src/pipeline/state/usePipelineRun.ts`); retry/reassign actions go through
+`PipelineClient`, which wraps the Router the same way `RouterClient` does
+for Conversation.
+
+The drill-in's terminal reuses `TerminalView` over a `PtyBridge` adapter
+(`src/pipeline/DrillIn/pipelineOutputBridge.ts`) that turns a read-only
+`PipelineOutputSource` (agent output chunks, no input channel) into the
+interface `TerminalView` expects — `write`/`resize` are no-ops, matching the
+one-shot, non-interactive nature of agent stage output.
 
 ## Test it
 

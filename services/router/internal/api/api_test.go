@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -227,5 +228,39 @@ func TestStartPipelineValidation(t *testing.T) {
 	}](t, resp)
 	if len(verr.Errors) != 2 {
 		t.Fatalf("errors = %+v, want 2 (session_id, template_id)", verr.Errors)
+	}
+}
+
+func TestRetryTask(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess := &contracts.Session{Name: "s1"}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	task := &contracts.Task{SessionID: sess.ID, Title: "t1", Status: contracts.StatusBlocked, Source: "user"}
+	if err := data.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, srv.URL+"/tasks/"+task.ID+"/retry", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200", resp.StatusCode)
+	}
+	retried := decodeJSON[contracts.Task](t, resp)
+	if retried.Status != contracts.StatusReady {
+		t.Fatalf("retried task status = %s, want ready", retried.Status)
+	}
+	if retried.RetryCount != 1 {
+		t.Fatalf("retried task retry_count = %d, want 1", retried.RetryCount)
+	}
+}
+
+func TestRetryTaskNotFound(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := postJSON(t, srv.URL+"/tasks/nonexistent/retry", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
