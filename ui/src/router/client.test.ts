@@ -59,6 +59,86 @@ describe("FetchRouterClient", () => {
       "http://router.local/capabilities",
     );
   });
+
+  it("getFileChanges fetches /sessions/:id/files", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.getFileChanges("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/files",
+    );
+  });
+
+  it("getFileChanges includes the task_id query param when given", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.getFileChanges("s1", "tsk_1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/files?task_id=tsk_1",
+    );
+  });
+
+  it("getCommits fetches /sessions/:id/commits", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.getCommits("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commits",
+    );
+  });
+
+  it("getFileDiff encodes the path query param", async () => {
+    const fetchMock = mockFetchOnce({
+      path: "a.go",
+      original: "old",
+      modified: "new",
+    });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getFileDiff("s1", "internal/a.go");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/changes?path=internal%2Fa.go",
+    );
+  });
+
+  it("openInEditor POSTs the path and throws on a non-ok response", async () => {
+    mockFetchOnce(undefined, false, 500);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.openInEditor("a.go")).rejects.toThrow(/500/);
+  });
+
+  it("mergeSession POSTs to /sessions/:id/merge with the target branch", async () => {
+    const fetchMock = mockFetchOnce({ conflicted: false });
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.mergeSession("s1", "main");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/merge",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ target_branch: "main" }),
+      }),
+    );
+    expect(result.conflicted).toBe(false);
+  });
+
+  it("streamControlEvents opens /events with session_id and types filters", () => {
+    // happy-dom (this suite's test environment) doesn't implement
+    // EventSource, so stub the global the same way mockFetchOnce stubs
+    // fetch — this only asserts the URL construction, not real SSE framing.
+    class StubEventSource {
+      constructor(public url: string) {}
+      close(): void {}
+    }
+    vi.stubGlobal("EventSource", StubEventSource);
+
+    const client = new FetchRouterClient("http://router.local");
+    const source = client.streamControlEvents({
+      sessionId: "s1",
+      types: ["merge.attempted", "merge.completed"],
+    });
+    expect((source as unknown as StubEventSource).url).toBe(
+      "http://router.local/events?session_id=s1&types=merge.attempted%2Cmerge.completed",
+    );
+  });
 });
 
 import { ROUTER_BASE, routerGet, routerPost } from "./client";

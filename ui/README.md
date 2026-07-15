@@ -14,7 +14,9 @@ the same pattern: one entry in `App.tsx`'s `SURFACES` map
 that map is the single app-shell registration point, kept to a one-line diff
 per surface so concurrent surface work doesn't collide on a shared file.
 
-The package also owns the Conversation tab (W6.3; MADS-UX §3.3) and
+The package also owns the Files tab & merge-back flow (W6.5; MADS-UX
+§3.3/§5/§17 — see `src/files/` and the `files` demo mount below, not yet an
+entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3) and
 `src/router/` — the Router HTTP layer, which currently carries two idioms
 that landed concurrently: the `RouterClient` interface + `FetchRouterClient`
 (Conversation) and the thin `routerGet`/`routerPost` helpers (Sessions).
@@ -86,6 +88,41 @@ display or native build. Its real-pty contract test is named
 `ptyHost.realtest.ts` (not `*.test.ts`) so it's excluded from `npm run test`;
 run it manually with `npm run test:pty` on a machine with a usable pty — it
 skips cleanly (not a failure) wherever one isn't available.
+
+## Files tab
+
+```sh
+npm run files
+```
+
+Opens `files.html`: the Files tab (`src/files/FilesTab.tsx`) mounted
+standalone against `FakeRouterClient` fixtures (`src/router/fixtures.ts`),
+with a picker to switch between a clean-changes session, a session with an
+unattributed observation row, and a session with a seeded merge conflict.
+This is the review artifact until W6.2's tab registry exists to register
+`FilesTab` into properly.
+
+`FilesTab` composes a change list (`ChangeList`) and commit list
+(`CommitList`) with attribution chips (trailer/session/heuristic/orphan/
+unattributed — `src/files/ChangeList/attribution.ts`), a `DiffViewer`, and
+the `MergeBackFlow`. The diff viewer and the seed-only embedded merge editor
+both lazy-load `@monaco-editor/react` (`React.lazy` + `Suspense`) so Monaco
+never lands in the initial bundle and never has to mount under happy-dom in
+tests — component tests mock `@monaco-editor/react` instead of loading real
+Monaco (see `DiffViewer.test.tsx`/`ConflictResolution.test.tsx`).
+
+The merge-back flow's status (attempting/conflicted/completed) is driven
+entirely by parsed `merge.*` control-plane events from
+`RouterClient.streamControlEvents`, not by the `mergeSession()` promise
+result — `MergeBackFlow.test.tsx` drives this against a fake, in-memory
+control-event source (`FakeControlEventSource.emit(type, envelope)`).
+Conflict resolution has one real, usable action (open the session's
+worktree in an external editor) and one seed-only stub (`MergeEditor`, a
+raw-text Monaco instance over a fixture conflict-marker string) — there is
+currently no backend path that leaves real conflict-marker content in the
+tree to point an embedded editor at, since `Manager.Merge` aborts the merge
+on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
+follow-up this needs on the Session Service side.
 
 ## Test it
 

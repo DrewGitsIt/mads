@@ -10,6 +10,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         gallery: resolve(__dirname, "gallery.html"),
         conversation: resolve(__dirname, "conversation.html"),
+        files: resolve(__dirname, "files.html"),
       },
     },
   },

@@ -1,6 +1,10 @@
 import type {
   CapabilitySummary,
+  Commit,
+  FileChange,
+  FileDiff,
   Mentionable,
+  MergeResult,
   Session,
   TranscriptMessage,
 } from "./types";
@@ -8,11 +12,16 @@ import type {
 /**
  * Structural subset of EventSource a stream source must satisfy — narrow
  * enough that a fake (no real HTTP/SSE transport) can implement it directly
- * instead of polyfilling the full EventSource DOM interface.
+ * instead of polyfilling the full EventSource DOM interface. `type` is
+ * `string`, not just `"message"`, so the same interface covers both the
+ * data-plane stream (unnamed `"message"` frames, W6.3) and the control-plane
+ * stream (named events like `"merge.completed"`, the Router's
+ * `id:/event:/data:` wire format — see services/router/internal/api/
+ * events.go and ui/src/files/HANDOFF.md §3).
  */
 export interface SessionEventSource {
-  addEventListener(type: "message", listener: (ev: MessageEvent<string>) => void): void;
-  removeEventListener(type: "message", listener: (ev: MessageEvent<string>) => void): void;
+  addEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void;
+  removeEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void;
   close(): void;
 }
 
@@ -34,6 +43,17 @@ export interface RouterClient {
   bounce(sessionId: string): Promise<void>;
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
+
+  // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
+  // for which of these are real Router routes today (only
+  // streamControlEvents is) vs. documented-but-unimplemented contracts this
+  // client is built ahead of.
+  getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
+  getCommits(sessionId: string): Promise<Commit[]>;
+  getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
+  openInEditor(path: string): Promise<void>;
+  mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
+  streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource;
 }
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
@@ -108,6 +128,64 @@ export class FetchRouterClient implements RouterClient {
     const qs = agentId ? `?agent=${encodeURIComponent(agentId)}` : "";
     const res = await fetch(`${this.baseUrl}/capabilities${qs}`);
     return jsonOrThrow<CapabilitySummary[]>(res);
+  }
+
+  // Data Service routes, not yet proxied through the Router (HANDOFF §1) —
+  // built against the MADS-UX §3.3-documented shape, same "land ahead of
+  // proxying" precedent as getMentionables above.
+  async getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]> {
+    const qs = taskId ? `?task_id=${encodeURIComponent(taskId)}` : "";
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/files${qs}`);
+    return jsonOrThrow<FileChange[]>(res);
+  }
+
+  async getCommits(sessionId: string): Promise<Commit[]> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commits`);
+    return jsonOrThrow<Commit[]>(res);
+  }
+
+  // No diff-content endpoint exists anywhere yet (HANDOFF §1) — hits the
+  // MADS-UX-named path so it's a rename, not a redesign, once one lands.
+  async getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff> {
+    const params = new URLSearchParams({ path });
+    if (taskId) params.set("task_id", taskId);
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/changes?${params}`);
+    return jsonOrThrow<FileDiff>(res);
+  }
+
+  // MADS-UX §3.3's open-in-editor action; no `/system/open-editor` route
+  // exists anywhere in the codebase yet (HANDOFF §1).
+  async openInEditor(path: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/system/open-editor`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) {
+      throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  // Only the per-session, unproxied `POST /merge` exists today (HANDOFF
+  // §1); this hits the Router-proxied path MADS-UX §3.3's own "Actions"
+  // line documents.
+  async mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/merge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_branch: targetBranch }),
+    });
+    return jsonOrThrow<MergeResult>(res);
+  }
+
+  // The one real route here today: GET /events?session_id=&types= (HANDOFF
+  // §1/§3), already proxied by the Router straight through to the Data
+  // Service's control-plane event log.
+  streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource {
+    const params = new URLSearchParams();
+    if (filter.sessionId) params.set("session_id", filter.sessionId);
+    if (filter.types?.length) params.set("types", filter.types.join(","));
+    return new EventSource(`${this.baseUrl}/events?${params}`);
   }
 }
 
