@@ -256,6 +256,9 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose) */
+  --measure-prose: 92ch;
+
   /* type scale — +10% pass approved via gallery review */
   --fs-chip: 10.5px;
   --fs-sm: 12.5px;

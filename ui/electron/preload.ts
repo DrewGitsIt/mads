@@ -1,5 +1,44 @@
-import { contextBridge } from "electron";
+import { contextBridge, ipcRenderer } from "electron";
 
-// Empty contextBridge stub — real IPC surface is a later wave once Router
-// contracts exist.
-contextBridge.exposeInMainWorld("mads", {});
+interface PtySpawnOptions {
+  cwd?: string;
+  cols?: number;
+  rows?: number;
+  shell?: string;
+}
+
+/**
+ * Renderer-facing pty namespace — mirrors the PtyBridge interface in
+ * ui/src/conversation/TerminalRenderer/ptyBridge.ts. Wraps ipcRenderer so no
+ * raw ipcRenderer/node-pty ever crosses into the renderer (contextIsolation
+ * stays on in main.ts).
+ */
+const pty = {
+  spawn: (options?: PtySpawnOptions): Promise<string> =>
+    ipcRenderer.invoke("pty:spawn", options),
+  write: (id: string, data: string): void => {
+    void ipcRenderer.invoke("pty:write", { id, data });
+  },
+  resize: (id: string, cols: number, rows: number): void => {
+    void ipcRenderer.invoke("pty:resize", { id, cols, rows });
+  },
+  kill: (id: string): void => {
+    void ipcRenderer.invoke("pty:kill", { id });
+  },
+  onData: (id: string, listener: (data: string) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { id: string; data: string }) => {
+      if (payload.id === id) listener(payload.data);
+    };
+    ipcRenderer.on("pty:data", handler);
+    return () => ipcRenderer.removeListener("pty:data", handler);
+  },
+  onExit: (id: string, listener: (exitCode: number) => void): (() => void) => {
+    const handler = (_event: unknown, payload: { id: string; exitCode: number }) => {
+      if (payload.id === id) listener(payload.exitCode);
+    };
+    ipcRenderer.on("pty:exit", handler);
+    return () => ipcRenderer.removeListener("pty:exit", handler);
+  },
+};
+
+contextBridge.exposeInMainWorld("mads", { pty });
