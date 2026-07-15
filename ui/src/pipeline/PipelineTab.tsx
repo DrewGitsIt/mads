@@ -36,7 +36,12 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
         tasks={tasks}
         onRunStarted={setRunId}
       />
-      <BlockedPanel tasks={tasks} taskRunState={taskRunState} onSelectTask={setSelectedTaskId} />
+      <BlockedPanel
+        tasks={tasks}
+        taskRunState={taskRunState}
+        client={pipelineClient}
+        onSelectTask={setSelectedTaskId}
+      />
       <StageBoard
         columns={columns}
         tasks={tasks}

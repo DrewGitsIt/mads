@@ -62,3 +62,15 @@
   color: var(--bad-fg);
   font-weight: 650;
 }
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  padding: 0 var(--space-3) var(--space-3);
+}
+
+.error {
+  padding: 0 var(--space-3) var(--space-3);
+  font: var(--fs-sm) var(--mono);
+  color: var(--bad-fg);
+}

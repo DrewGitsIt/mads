@@ -477,6 +477,19 @@ tests pass; root `make check` (Go tests + golangci-lint + `npm run lint` +
   `usePipelineRun.test.ts`), used a small hand-built `touchedFiles` array
   instead of extending the recorded fixture.
 
+**Post-review fix**: an earlier pass of this task left `retryTask` built and
+client-tested but never called from any component, and Reassign missing even
+the disabled-control treatment §1 mandates. Fixed: `BlockedPanel` (the natural
+home — retry/reassign are per-task actions and a blocked task is exactly what
+needs them) now takes a `client: PipelineClient` prop and renders a **Retry**
+button per blocked task (calls `client.retryTask(task.id)`; the resulting
+`task.status_changed` event drives the existing refetch-on-event path in
+`usePipelineRun`, no manual refetch needed) and a permanently-disabled
+**Reassign** button with the same `NOT_SUPPORTED` tooltip pattern `RunHeader`
+uses for Pause/Resume. `PipelineTab` passes `pipelineClient` through.
+`BlockedPanel.test.tsx` gained two tests: Retry calls `retryTask` with the
+right task id, Reassign is disabled with the tooltip text.
+
 **Not done / residual risk:**
 
 - **No browser/dev-server smoke test of `pipeline.html`.** This
