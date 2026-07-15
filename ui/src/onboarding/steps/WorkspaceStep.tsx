@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
-import { routerPost } from "../../router/client";
-import type { Workspace } from "../../router/types";
+import { router } from "../../router/client";
 import styles from "./WorkspaceStep.module.css";
 
 export interface WorkspaceStepProps {
@@ -20,7 +19,7 @@ export function WorkspaceStep({ onNext, onBack }: WorkspaceStepProps) {
     setCreating(true);
     setError(null);
     try {
-      await routerPost<Workspace>("/workspaces", {
+      await router.createWorkspace({
         name,
         repos: [{ path, primary: true }],
       });

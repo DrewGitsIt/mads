@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { routerGet } from "../../../router/client";
+import { router } from "../../../router/client";
 import type { BehaviorInfo, ProviderInfo } from "../../../router/types";
 
 export interface UseProviderMatrix {
@@ -17,10 +17,7 @@ export function useProviderMatrix(): UseProviderMatrix {
 
   useEffect(() => {
     mounted.current = true;
-    Promise.all([
-      routerGet<ProviderInfo[]>("/providers"),
-      routerGet<BehaviorInfo[]>("/providers/behaviors"),
-    ]).then(([p, b]) => {
+    Promise.all([router.listProviders(), router.listProviderBehaviors()]).then(([p, b]) => {
       if (!mounted.current) return;
       setProviders(p);
       setBehaviors(b);

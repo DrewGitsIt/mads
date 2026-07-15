@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet } from "../../../router/client";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import type { Task } from "../../../router/types";
 
@@ -11,7 +11,7 @@ export function useAllTasks(): Task[] {
   const mounted = useRef(true);
 
   const refetch = useCallback(async () => {
-    const list = await routerGet<Task[]>("/tasks");
+    const list = await router.listAllTasks();
     if (!mounted.current) return;
     setTasks(list);
   }, []);

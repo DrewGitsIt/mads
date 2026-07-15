@@ -554,3 +554,20 @@ export interface PreflightCheck {
   detail?: string;
   fix_hint?: string;
 }
+
+// Body for POST /agents/generate — moved here from useAgentGeneration.ts so
+// client.ts can reference it.
+export interface GenerateAgentBody {
+  description?: string;
+  title?: string;
+  session_id?: string;
+  task_id?: string;
+}
+
+// Response body for POST /capabilities/:id/diagnose — moved here from
+// DiagnosePanel.tsx so client.ts can reference it.
+export interface DiagnoseResult {
+  healthy: boolean;
+  reason?: string;
+  suggestions: string[];
+}

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import { routerGet } from "../../../../router/client";
+import { router } from "../../../../router/client";
 import type { Workspace } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
@@ -14,7 +14,8 @@ export function WorkspacePill({ value, onChange }: WorkspacePillProps) {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
   useEffect(() => {
-    routerGet<Workspace[]>("/workspaces")
+    router
+      .listWorkspaces()
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]));
   }, []);

@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { routerGet } from "../../../router/client";
-import type { Session, Task } from "../../../router/types";
+import { router } from "../../../router/client";
 
 export interface Suggestion {
   id: string;
@@ -21,8 +20,8 @@ export function useSuggestions(): Suggestion[] {
     let cancelled = false;
     async function load() {
       const [sessions, readyTasks] = await Promise.all([
-        routerGet<Session[]>("/sessions"),
-        routerGet<Task[]>("/tasks", { status: "ready" }),
+        router.listSessions(),
+        router.listAllTasks("ready"),
       ]);
       if (cancelled) return;
 

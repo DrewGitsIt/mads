@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerPost } from "../../../router/client";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { RETRO_GENERATION_EVENT_TYPES } from "../events";
 import type { Envelope } from "../../../router/types";
@@ -65,10 +65,7 @@ export function useRetroGeneration(): UseRetroGeneration {
     async (sessionIds: string[], userObservations: string) => {
       setError(null);
       try {
-        const result = await routerPost<{ job_id: string; retro_id: string }>("/retros", {
-          session_ids: sessionIds,
-          user_observations: userObservations || undefined,
-        });
+        const result = await router.startRetro(sessionIds, userObservations || undefined);
         jobIdRef.current = result.job_id;
         retroIdRef.current = result.retro_id;
         setRetroId(result.retro_id);
@@ -87,7 +84,7 @@ export function useRetroGeneration(): UseRetroGeneration {
 
   const cancel = useCallback(() => {
     if (!jobIdRef.current) return;
-    routerPost(`/jobs/${jobIdRef.current}/cancel`).catch((err: unknown) => {
+    router.cancelJob(jobIdRef.current).catch((err: unknown) => {
       setError(err instanceof Error ? err.message : String(err));
     });
   }, []);

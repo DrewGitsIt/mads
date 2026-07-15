@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { routerGet } from "../../router/client";
+import { router } from "../../router/client";
 import type { Session } from "../../router/types";
 import styles from "./UsedBySessions.module.css";
 
@@ -18,7 +18,8 @@ export function UsedBySessions({ workspaceId }: UsedBySessionsProps) {
 
   useEffect(() => {
     mounted.current = true;
-    routerGet<Session[]>("/sessions")
+    router
+      .listSessions()
       .then((all) => {
         if (mounted.current) setSessions(all.filter((s) => s.workspace === workspaceId));
       })

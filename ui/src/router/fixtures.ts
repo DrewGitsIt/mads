@@ -1,26 +1,40 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { RouterValidationError } from "./client";
 import type {
+  Agent,
+  AgentCapabilities,
+  AgentLeaderboardEntry,
   BehaviorInfo,
+  Capability,
   CapabilitySummary,
+  CapabilityUsage,
   Commit,
   Config,
   ControlEvent,
+  CostMetrics,
+  DiagnoseResult,
   Envelope,
   FileChange,
   FileDiff,
+  GenerateAgentBody,
   Mentionable,
   MergeResult,
+  Model,
   Note,
   NoteType,
+  PipelineRun,
   PreflightCheck,
   Profile,
+  Provider,
   ProviderInfo,
   Retro,
   Session,
   Task,
+  TaskOutcomes,
   TaskStatus,
+  Template,
   TranscriptMessage,
+  Workspace,
 } from "./types";
 
 export const fixtureSessions: Record<string, Session> = {
@@ -841,6 +855,254 @@ export class FakeRouterClient implements RouterClient {
     const source = new FakeControlEventSource();
     this.controlEventSources.push(source);
     return source;
+  }
+
+  // --- Sessions (session-agnostic) ---
+  async listSessions(): Promise<Session[]> {
+    return Object.values(this.sessions);
+  }
+
+  async createSession(): Promise<{ session: Session; addr: string }> {
+    throw new Error("not fixtured: createSession");
+  }
+
+  // --- Config ---
+  async getConfig(): Promise<Config> {
+    return fixtureConfig;
+  }
+
+  async updateConfig(): Promise<Config> {
+    throw new Error("not fixtured: updateConfig");
+  }
+
+  // --- Profiles ---
+  async listProfiles(): Promise<Profile[]> {
+    return fixtureProfiles;
+  }
+
+  async createProfile(): Promise<Profile> {
+    throw new Error("not fixtured: createProfile");
+  }
+
+  async updateProfile(): Promise<Profile> {
+    throw new Error("not fixtured: updateProfile");
+  }
+
+  async deleteProfile(): Promise<void> {
+    throw new Error("not fixtured: deleteProfile");
+  }
+
+  async activateProfile(): Promise<Config> {
+    throw new Error("not fixtured: activateProfile");
+  }
+
+  // --- Credentials ---
+  async listCredentials(): Promise<string[]> {
+    throw new Error("not fixtured: listCredentials");
+  }
+
+  async createCredential(): Promise<{ name: string }> {
+    throw new Error("not fixtured: createCredential");
+  }
+
+  async deleteCredential(): Promise<void> {
+    throw new Error("not fixtured: deleteCredential");
+  }
+
+  async listCredentialEnvCandidates(): Promise<string[]> {
+    throw new Error("not fixtured: listCredentialEnvCandidates");
+  }
+
+  async importCredentials(): Promise<{ imported: string[] }> {
+    throw new Error("not fixtured: importCredentials");
+  }
+
+  // --- Preflight ---
+  async getPreflightChecks(): Promise<PreflightCheck[]> {
+    return fixturePreflightChecks;
+  }
+
+  // --- Providers / behaviors / models ---
+  async listProviders(): Promise<ProviderInfo[]> {
+    return fixtureProviders;
+  }
+
+  async listProviderNames(): Promise<Provider[]> {
+    throw new Error("not fixtured: listProviderNames");
+  }
+
+  async listProviderBehaviors(): Promise<BehaviorInfo[]> {
+    return fixtureProviderBehaviors;
+  }
+
+  async listModels(): Promise<Model[]> {
+    throw new Error("not fixtured: listModels");
+  }
+
+  // --- Metrics ---
+  async metricsCost(): Promise<CostMetrics> {
+    throw new Error("not fixtured: metricsCost");
+  }
+
+  async metricsAgentLeaderboard(): Promise<AgentLeaderboardEntry[]> {
+    throw new Error("not fixtured: metricsAgentLeaderboard");
+  }
+
+  async metricsTaskOutcomes(): Promise<TaskOutcomes> {
+    throw new Error("not fixtured: metricsTaskOutcomes");
+  }
+
+  async metricsCapabilityUsage(): Promise<CapabilityUsage[]> {
+    throw new Error("not fixtured: metricsCapabilityUsage");
+  }
+
+  async metricsPipelineRuns(): Promise<PipelineRun[]> {
+    throw new Error("not fixtured: metricsPipelineRuns");
+  }
+
+  // --- Templates ---
+  async listTemplates(): Promise<Template[]> {
+    throw new Error("not fixtured: listTemplates");
+  }
+
+  async createTemplate(): Promise<Template> {
+    throw new Error("not fixtured: createTemplate");
+  }
+
+  async updateTemplate(): Promise<Template> {
+    throw new Error("not fixtured: updateTemplate");
+  }
+
+  async deleteTemplate(): Promise<void> {
+    throw new Error("not fixtured: deleteTemplate");
+  }
+
+  async validateTemplate(): Promise<{ valid: boolean }> {
+    throw new Error("not fixtured: validateTemplate");
+  }
+
+  // --- Workspaces ---
+  async listWorkspaces(): Promise<Workspace[]> {
+    throw new Error("not fixtured: listWorkspaces");
+  }
+
+  async createWorkspace(): Promise<Workspace> {
+    throw new Error("not fixtured: createWorkspace");
+  }
+
+  async updateWorkspace(): Promise<Workspace> {
+    throw new Error("not fixtured: updateWorkspace");
+  }
+
+  async deleteWorkspace(): Promise<void> {
+    throw new Error("not fixtured: deleteWorkspace");
+  }
+
+  // --- Agents (Library) ---
+  async listAgents(): Promise<Agent[]> {
+    throw new Error("not fixtured: listAgents");
+  }
+
+  async createAgent(): Promise<Agent> {
+    throw new Error("not fixtured: createAgent");
+  }
+
+  async updateAgent(): Promise<Agent> {
+    throw new Error("not fixtured: updateAgent");
+  }
+
+  async deleteAgent(): Promise<void> {
+    throw new Error("not fixtured: deleteAgent");
+  }
+
+  async generateAgent(_body: GenerateAgentBody): Promise<{ job_id: string }> {
+    throw new Error("not fixtured: generateAgent");
+  }
+
+  async describeAgent(): Promise<{ result: string }> {
+    throw new Error("not fixtured: describeAgent");
+  }
+
+  async suggestAgentCapabilities(): Promise<AgentCapabilities> {
+    throw new Error("not fixtured: suggestAgentCapabilities");
+  }
+
+  async refineAgent(): Promise<{ result: string }> {
+    throw new Error("not fixtured: refineAgent");
+  }
+
+  // --- Capabilities (Library) ---
+  async listCapabilities(): Promise<Capability[]> {
+    throw new Error("not fixtured: listCapabilities");
+  }
+
+  async getCapability(): Promise<Capability> {
+    throw new Error("not fixtured: getCapability");
+  }
+
+  async createCapability(): Promise<Capability> {
+    throw new Error("not fixtured: createCapability");
+  }
+
+  async updateCapability(): Promise<Capability> {
+    throw new Error("not fixtured: updateCapability");
+  }
+
+  async deleteCapability(): Promise<void> {
+    throw new Error("not fixtured: deleteCapability");
+  }
+
+  async diagnoseCapability(): Promise<DiagnoseResult> {
+    throw new Error("not fixtured: diagnoseCapability");
+  }
+
+  // --- Tasks (session-agnostic) ---
+  async listAllTasks(status?: TaskStatus): Promise<Task[]> {
+    return [...this.tasks.values()].filter((t) => !status || t.status === status);
+  }
+
+  // --- Retro ---
+  async listRetros(): Promise<Retro[]> {
+    return fixtureRetroList;
+  }
+
+  async getRetro(id: string): Promise<Retro> {
+    if (id !== fixtureRetro.id) throw new Error(`fixture retro not found: ${id}`);
+    return fixtureRetro;
+  }
+
+  async startRetro(): Promise<{ job_id: string; retro_id: string }> {
+    throw new Error("not fixtured: startRetro");
+  }
+
+  async acceptDpa(): Promise<void> {
+    throw new Error("not fixtured: acceptDpa");
+  }
+
+  async rejectDpa(): Promise<void> {
+    throw new Error("not fixtured: rejectDpa");
+  }
+
+  async createRetroFollowUpSession(): Promise<{ session: Session; addr: string; tasks: Task[] }> {
+    throw new Error("not fixtured: createRetroFollowUpSession");
+  }
+
+  // --- Jobs ---
+  async cancelJob(): Promise<void> {
+    throw new Error("not fixtured: cancelJob");
+  }
+
+  // --- Pipeline ---
+  async createPipelineRun(): Promise<{ run_id: string }> {
+    throw new Error("not fixtured: createPipelineRun");
+  }
+
+  async cancelPipelineRun(): Promise<void> {
+    throw new Error("not fixtured: cancelPipelineRun");
+  }
+
+  async retryTask(): Promise<Task> {
+    throw new Error("not fixtured: retryTask");
   }
 }
 

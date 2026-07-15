@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import { routerGet } from "../../../../router/client";
+import { router } from "../../../../router/client";
 import type { Agent } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
@@ -14,7 +14,8 @@ export function AgentPill({ value, onChange }: AgentPillProps) {
   const [agents, setAgents] = useState<Agent[]>([]);
 
   useEffect(() => {
-    routerGet<Agent[]>("/agents")
+    router
+      .listAgents()
       .then(setAgents)
       .catch(() => setAgents([]));
   }, []);

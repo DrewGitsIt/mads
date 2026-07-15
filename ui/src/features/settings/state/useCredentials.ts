@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerDelete, routerGet, routerPost } from "../../../router/client";
+import { router } from "../../../router/client";
 
 export interface UseCredentials {
   names: string[];
@@ -26,7 +26,7 @@ export function useCredentials(): UseCredentials {
   const mounted = useRef(true);
 
   const refetch = useCallback(async () => {
-    const list = await routerGet<string[]>("/credentials");
+    const list = await router.listCredentials();
     if (mounted.current) setNames(list);
   }, []);
 
@@ -42,26 +42,24 @@ export function useCredentials(): UseCredentials {
   }, [refetch]);
 
   const add = useCallback(async (name: string, value: string) => {
-    const result = await routerPost<{ name: string }>("/credentials", { name, value });
+    const result = await router.createCredential(name, value);
     if (mounted.current) {
       setNames((prev) => (prev.includes(result.name) ? prev : [...prev, result.name].sort()));
     }
   }, []);
 
   const remove = useCallback(async (name: string) => {
-    await routerDelete(`/credentials/${encodeURIComponent(name)}`);
+    await router.deleteCredential(name);
     if (mounted.current) setNames((prev) => prev.filter((n) => n !== name));
   }, []);
 
   const loadEnvCandidates = useCallback(async () => {
-    const candidates = await routerGet<string[]>("/credentials/env-candidates");
+    const candidates = await router.listCredentialEnvCandidates();
     if (mounted.current) setEnvCandidates(candidates);
   }, []);
 
   const importFromEnv = useCallback(async (namesToImport: string[]) => {
-    const result = await routerPost<{ imported: string[] }>("/credentials/import", {
-      names: namesToImport,
-    });
+    const result = await router.importCredentials(namesToImport);
     if (mounted.current) {
       setNames((prev) => [...new Set([...prev, ...result.imported])].sort());
       setEnvCandidates((prev) => prev.filter((n) => !result.imported.includes(n)));

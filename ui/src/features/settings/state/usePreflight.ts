@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet } from "../../../router/client";
+import { router } from "../../../router/client";
 import type { PreflightCheck } from "../../../router/types";
 
 export interface UsePreflight {
@@ -16,7 +16,7 @@ export function usePreflight(): UsePreflight {
 
   const rerun = useCallback(() => {
     setLoading(true);
-    routerGet<PreflightCheck[]>("/preflight").then((result) => {
+    router.getPreflightChecks().then((result) => {
       if (mounted.current) {
         setChecks(result);
         setLoading(false);

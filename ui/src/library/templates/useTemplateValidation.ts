@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { routerPost, RouterValidationError } from "../../router/client";
+import { router, RouterValidationError } from "../../router/client";
 
 export interface FieldError {
   field: string;
@@ -26,7 +26,7 @@ export function useTemplateValidation(): UseTemplateValidation {
   const validate = useCallback(async (source: string) => {
     setValidating(true);
     try {
-      await routerPost<{ valid: boolean }>("/templates/validate", { source });
+      await router.validateTemplate(source);
       setErrors([]);
       setValid(true);
       return true;

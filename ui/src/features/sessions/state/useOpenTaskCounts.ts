@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet } from "../../../router/client";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import type { Task } from "../../../router/types";
 
 const OPEN_STATUSES = new Set(["ready", "in_progress", "blocked", "needs_review"]);
 
@@ -13,7 +12,7 @@ export function useOpenTaskCounts(): Record<string, number> {
   const mounted = useRef(true);
 
   const refetch = useCallback(async () => {
-    const tasks = await routerGet<Task[]>("/tasks");
+    const tasks = await router.listAllTasks();
     if (!mounted.current) return;
     const next: Record<string, number> = {};
     for (const task of tasks) {

@@ -21,12 +21,12 @@ surface (W6.7; MADS-UX §3.4 — see `src/features/retro/`, registered as
 `SURFACES.retro`, no demo mount needed), Settings & first-run (W6.10;
 MADS-UX §3.7/§3.9 — see `src/features/settings/` and `src/onboarding/`,
 registered as `SURFACES.settings`, no demo mount needed) and `src/router/`
-— the Router HTTP
-layer, which currently carries two idioms that landed concurrently: the
-`RouterClient` interface + `FetchRouterClient` (Conversation) and the thin
-`routerGet`/`routerPost` helpers (Sessions, Retro). Unifying them is
-follow-up work. `ConversationTab` is not yet an entry in `SURFACES`; it's
-reachable standalone via the `conversation` demo mount below.
+— the Router HTTP layer, exposed as a single idiom: the `RouterClient`
+interface + `FetchRouterClient`/`FakeRouterClient` implementations, used
+everywhere via the shared `router` singleton (or an injected `client` prop
+in tests), plus `subscribeToEvents` for the SSE event stream. `ConversationTab`
+is not yet an entry in `SURFACES`; it's reachable standalone via the
+`conversation` demo mount below.
 
 Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
 `docs/palette-mockups.html` (the approved source for all three shipping
@@ -173,10 +173,10 @@ npm run library
 
 Opens `library.html`: `LibrarySurface` (`src/library/LibrarySurface.tsx`, W6.8;
 MADS-UX §3.5) mounted standalone against a real Router (`VITE_ROUTER_URL`),
-not `FakeRouterClient` — unlike the other demo mounts, Library was built
-exclusively against the `routerGet`/`routerPost`/`routerPut`/`routerDelete` +
-`subscribeToEvents` idiom (`src/router/client.ts`/`events.ts`), so there's no
-fake client to point it at yet. `LibrarySurface` owns a `Chip`-row shelf
+not `FakeRouterClient` — unlike the other demo mounts, `FakeRouterClient`
+doesn't carry fixtures for most Library shelf endpoints yet, so there's no
+fake client to point it at (`RouterClient`/`subscribeToEvents`,
+`src/router/client.ts`/`events.ts`). `LibrarySurface` owns a `Chip`-row shelf
 switcher over four shelves — Agents, Capabilities, Workspaces, Pipeline
 templates — each following the same shape: a `use<Shelf>.ts` hook
 (list+CRUD, refetch-on-any-event via `subscribeToEvents`) feeding a
@@ -239,9 +239,9 @@ picking), and reviewing (DPA cards whose status chip doubles as the accept/
 reject toggle, plus a "Create follow-up session (N accepted)" CTA and a
 history list of past retros).
 
-Unlike Conversation/Files, this surface talks to the Router directly through
-the thin `routerGet`/`routerPost` + `subscribeToEvents` idiom, not
-`RouterClient`/`FetchRouterClient`. `retro.*` events aren't session-scoped
+Like the rest of the app, this surface talks to the Router through the
+shared `router` (`RouterClient`/`FetchRouterClient`) singleton plus
+`subscribeToEvents`. `retro.*` events aren't session-scoped
 (`Envelope.session_id` is empty) — the surface subscribes globally and
 correlates events by `payload.retro_id` instead. Submodules: `picker/`
 (checkboxes, kind filter, chip-strip recap), `generation/` (the step
@@ -417,11 +417,19 @@ against.
 ## Router client (`src/router/`)
 
 All data reaches the UI through the Router's HTTP/SSE API — never the Data
-Service directly. `src/router/client.ts` exports `routerGet<T>(path, params?)`,
-`routerPost<T>(path, body?)`, `routerPut<T>(path, body?)`, and
-`routerDelete<T>(path)`; `src/router/events.ts` exports
+Service directly. `src/router/client.ts` exports the `RouterClient` interface
+— one typed method per endpoint — plus its `FetchRouterClient` (real HTTP)
+and `FakeRouterClient` (fixture-backed, for tests) implementations, and a
+`router: RouterClient` singleton (`new FetchRouterClient(ROUTER_BASE)`) that
+call sites import directly; tests inject a `FakeRouterClient` instead, via
+props or a local override. `routerGet`/`routerPost`/`routerPut`/
+`routerDelete` are private transport helpers used only inside
+`FetchRouterClient`'s method bodies — call sites never call them directly.
+`src/router/events.ts` exports
 `subscribeToEvents({ sessionId?, types }, onEvent): () => void`, a thin
-wrapper over `EventSource` against `GET /events`. The server always names the
+wrapper over `EventSource` against `GET /events`, and remains the one
+sanctioned idiom for live SSE updates alongside the `RouterClient` singleton
+for request/response calls. The server always names the
 SSE `event:` field after the envelope's own type (never a generic `message`
 event), so callers must pass the explicit `types` they want to receive.
 `src/router/types.ts` hand-mirrors the `pkg/contracts` wire shapes actually

@@ -1,4 +1,4 @@
-import { routerGet, routerPost } from "../../router/client";
+import { router, type RouterClient } from "../../router/client";
 import type { Task } from "../../router/types";
 
 /**
@@ -17,8 +17,7 @@ const NOT_SUPPORTED = "not supported by the current pipeline engine";
 /**
  * Router API surface the Pipeline tab depends on — a dedicated interface
  * analogous to `RouterClient` (`ui/src/router/client.ts`) but scoped to
- * pipeline actions, per HANDOFF.md §4. Don't bloat the shared `RouterClient`
- * with these.
+ * pipeline actions, per HANDOFF.md §4.
  */
 export interface PipelineClient {
   listTasks(sessionId: string): Promise<Task[]>;
@@ -36,28 +35,27 @@ export interface PipelineClient {
   streamTaskOutput(runId: string, taskId: string): PipelineOutputSource;
 }
 
-/** fetch-backed PipelineClient. Only exercised directly by pipelineClient.test.ts. */
+/** RouterClient-backed PipelineClient. Only exercised directly by pipelineClient.test.ts. */
 export class FetchPipelineClient implements PipelineClient {
+  constructor(private readonly client: RouterClient = router) {}
+
   async listTasks(sessionId: string): Promise<Task[]> {
-    return routerGet<Task[]>("/tasks", { session_id: sessionId });
+    return this.client.listTasks(sessionId);
   }
 
   async startPipeline(
     sessionId: string,
     templateId: string,
   ): Promise<{ run_id: string }> {
-    return routerPost<{ run_id: string }>("/pipelines", {
-      session_id: sessionId,
-      template_id: templateId,
-    });
+    return this.client.createPipelineRun(sessionId, templateId);
   }
 
   async cancelPipeline(runId: string): Promise<void> {
-    await routerPost(`/pipelines/${runId}/cancel`);
+    await this.client.cancelPipelineRun(runId);
   }
 
   async retryTask(taskId: string): Promise<Task> {
-    return routerPost<Task>(`/tasks/${taskId}/retry`);
+    return this.client.retryTask(taskId);
   }
 
   async pausePipeline(_runId: string): Promise<void> {

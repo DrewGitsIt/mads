@@ -1,4 +1,4 @@
-import { routerGet } from "../../router/client";
+import { router, type RouterClient } from "../../router/client";
 import type {
   AgentLeaderboardEntry,
   CapabilityUsage,
@@ -24,29 +24,31 @@ export interface MetricsClient {
   listSessions(): Promise<Session[]>;
 }
 
-/** fetch-backed MetricsClient. Only exercised directly by metricsClient.test.ts. */
+/** RouterClient-backed MetricsClient. Only exercised directly by metricsClient.test.ts. */
 export class FetchMetricsClient implements MetricsClient {
+  constructor(private readonly client: RouterClient = router) {}
+
   async metricsCost(): Promise<CostMetrics> {
-    return routerGet<CostMetrics>("/metrics/cost");
+    return this.client.metricsCost();
   }
 
   async metricsAgentLeaderboard(): Promise<AgentLeaderboardEntry[]> {
-    return routerGet<AgentLeaderboardEntry[]>("/metrics/agents");
+    return this.client.metricsAgentLeaderboard();
   }
 
   async metricsTaskOutcomes(): Promise<TaskOutcomes> {
-    return routerGet<TaskOutcomes>("/metrics/tasks");
+    return this.client.metricsTaskOutcomes();
   }
 
   async metricsCapabilityUsage(): Promise<CapabilityUsage[]> {
-    return routerGet<CapabilityUsage[]>("/metrics/capabilities");
+    return this.client.metricsCapabilityUsage();
   }
 
   async metricsPipelineRuns(): Promise<PipelineRun[]> {
-    return routerGet<PipelineRun[]>("/metrics/pipelines");
+    return this.client.metricsPipelineRuns();
   }
 
   async listSessions(): Promise<Session[]> {
-    return routerGet<Session[]>("/sessions");
+    return this.client.listSessions();
   }
 }

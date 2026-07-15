@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { routerGet } from "../../../router/client";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { RETRO_LIST_EVENT_TYPES } from "../events";
 import type { Retro } from "../../../router/types";
@@ -19,7 +19,7 @@ export function useRetroHistory(): UseRetroHistory {
 
   const refetch = useCallback(async () => {
     try {
-      const list = await routerGet<Retro[]>("/retros");
+      const list = await router.listRetros();
       if (mounted.current) setRetros(list);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : String(err));
