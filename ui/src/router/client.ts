@@ -5,7 +5,11 @@ import type {
   FileDiff,
   Mentionable,
   MergeResult,
+  Note,
+  NoteType,
   Session,
+  Task,
+  TaskStatus,
   TranscriptMessage,
 } from "./types";
 
@@ -44,6 +48,21 @@ export interface RouterClient {
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
 
+  // --- Tasks (W6.4, MADS-UX §3.3) ---
+  listTasks(sessionId: string, status?: TaskStatus): Promise<Task[]>;
+  getTask(id: string): Promise<Task>;
+  createTask(task: Partial<Task>): Promise<Task>;
+  updateTask(task: Task): Promise<Task>; // full replace — see HANDOFF.md §5
+  confirmTask(id: string): Promise<void>;
+  discardTask(id: string): Promise<void>;
+  importTasks(tasks: Partial<Task>[]): Promise<Task[]>;
+  taskCycles(sessionId: string): Promise<string[][]>;
+  addNote(taskId: string, note: { type: NoteType; content: string }): Promise<Note>;
+  confirmNote(taskId: string, noteId: number): Promise<void>;
+  discardNote(taskId: string, noteId: number): Promise<void>;
+  getSessionChanges(sessionId: string): Promise<FileChange[]>;
+  streamTaskEvents(sessionId: string): SessionEventSource;
+
   // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
   // for which of these are real Router routes today (only
   // streamControlEvents is) vs. documented-but-unimplemented contracts this
@@ -56,8 +75,36 @@ export interface RouterClient {
   streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource;
 }
 
+/**
+ * Thrown by task-mutating FetchRouterClient methods on a 400 response whose
+ * body is a ValidationError ({"errors":[{"field","message"}]}) — lets the
+ * bulk-import/edit UI show every field error at once (design rule 10.3)
+ * instead of a single flat message. Narrowly scoped to the task-mutating
+ * methods added in W6.4; nothing else in this client needed field-level
+ * errors before now.
+ */
+export class RouterValidationError extends Error {
+  constructor(public readonly errors: { field: string; message: string }[]) {
+    super(errors.map((e) => `${e.field}: ${e.message}`).join("; "));
+  }
+}
+
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
+    throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
+
+/** Like jsonOrThrow, but a 400 with a {errors:[...]} body throws RouterValidationError. */
+async function jsonOrThrowValidation<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    if (res.status === 400) {
+      const body = (await res.json().catch(() => null)) as
+        | { errors?: { field: string; message: string }[] }
+        | null;
+      if (body?.errors) throw new RouterValidationError(body.errors);
+    }
     throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
@@ -130,6 +177,104 @@ export class FetchRouterClient implements RouterClient {
     return jsonOrThrow<CapabilitySummary[]>(res);
   }
 
+  async listTasks(sessionId: string, status?: TaskStatus): Promise<Task[]> {
+    const q = new URLSearchParams({ session_id: sessionId });
+    if (status) q.set("status", status);
+    const res = await fetch(`${this.baseUrl}/tasks?${q.toString()}`);
+    return jsonOrThrow<Task[]>(res);
+  }
+
+  async getTask(id: string): Promise<Task> {
+    const res = await fetch(`${this.baseUrl}/tasks/${id}`);
+    return jsonOrThrow<Task>(res);
+  }
+
+  async createTask(task: Partial<Task>): Promise<Task> {
+    const res = await fetch(`${this.baseUrl}/tasks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(task),
+    });
+    return jsonOrThrowValidation<Task>(res);
+  }
+
+  async updateTask(task: Task): Promise<Task> {
+    const res = await fetch(`${this.baseUrl}/tasks/${task.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(task),
+    });
+    return jsonOrThrowValidation<Task>(res);
+  }
+
+  async confirmTask(id: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/tasks/${id}/confirm`, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  async discardTask(id: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/tasks/${id}/discard`, { method: "POST" });
+    if (!res.ok) {
+      throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  async importTasks(tasks: Partial<Task>[]): Promise<Task[]> {
+    const res = await fetch(`${this.baseUrl}/tasks/import`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tasks }),
+    });
+    const body = await jsonOrThrowValidation<{ tasks: Task[] }>(res);
+    return body.tasks;
+  }
+
+  async taskCycles(sessionId: string): Promise<string[][]> {
+    const res = await fetch(
+      `${this.baseUrl}/tasks/cycles?session_id=${encodeURIComponent(sessionId)}`,
+    );
+    const body = await jsonOrThrow<{ cycles: string[][] }>(res);
+    return body.cycles;
+  }
+
+  async addNote(taskId: string, note: { type: NoteType; content: string }): Promise<Note> {
+    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note),
+    });
+    return jsonOrThrowValidation<Note>(res);
+  }
+
+  async confirmNote(taskId: string, noteId: number): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/notes/${noteId}/confirm`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  async discardNote(taskId: string, noteId: number): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/tasks/${taskId}/notes/${noteId}/discard`, {
+      method: "POST",
+    });
+    if (!res.ok) {
+      throw new Error(`Router request failed: ${res.status} ${res.statusText}`);
+    }
+  }
+
+  async getSessionChanges(sessionId: string): Promise<FileChange[]> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/files`);
+    return jsonOrThrow<FileChange[]>(res);
+  }
+
+  streamTaskEvents(sessionId: string): SessionEventSource {
+    const q = new URLSearchParams({ session_id: sessionId, types: "task.*,note.*" });
+    return new EventSource(`${this.baseUrl}/events?${q.toString()}`);
+  }
   // Data Service routes, not yet proxied through the Router (HANDOFF §1) —
   // built against the MADS-UX §3.3-documented shape, same "land ahead of
   // proxying" precedent as getMentionables above.

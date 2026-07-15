@@ -3,7 +3,6 @@ package api
 import (
 	"net/http"
 
-	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -32,15 +31,6 @@ func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, agents)
-}
-
-func (s *server) handleListTasks(w http.ResponseWriter, r *http.Request) {
-	tasks, err := s.data.Tasks(r.Context(), r.URL.Query().Get("session_id"), contracts.TaskStatus(r.URL.Query().Get("status")))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, tasks)
 }
 
 func (s *server) handleListProviders(w http.ResponseWriter, _ *http.Request) {
