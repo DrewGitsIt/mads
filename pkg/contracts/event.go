@@ -163,6 +163,14 @@ const (
 	TemplateUpdated EventType = "template.updated"
 	TemplateDeleted EventType = "template.deleted"
 
+	ProfileCreated EventType = "profile.created"
+	ProfileUpdated EventType = "profile.updated"
+	ProfileDeleted EventType = "profile.deleted"
+
+	// ConfigUpdated fires whenever the global Config row changes, whether via
+	// a direct Settings save or a profile activation merge.
+	ConfigUpdated EventType = "config.updated"
+
 	AttachmentAdded EventType = "attachment.added"
 
 	// MergeAttempted fires when a session's isolated worktree branch begins
@@ -210,6 +218,7 @@ var EventTypes = []EventType{
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
+	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted,
 	UsageRecorded, CapabilityInvoked,

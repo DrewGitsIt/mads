@@ -373,3 +373,17 @@ export async function routerPost<T>(path: string, body?: unknown): Promise<T> {
   });
   return readJSON<T>(res);
 }
+
+export async function routerPut<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(new URL(path, ROUTER_BASE), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return readJSON<T>(res);
+}
+
+export async function routerDelete<T>(path: string): Promise<T> {
+  const res = await fetch(new URL(path, ROUTER_BASE), { method: "DELETE" });
+  return readJSON<T>(res);
+}

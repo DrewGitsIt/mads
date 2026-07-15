@@ -297,3 +297,96 @@ export interface Retro {
   created_at: string;
   updated_at: string;
 }
+
+// mirrors pkg/contracts/config.go (W6.10 Settings). One global row — see
+// services/data/internal/store/config.go.
+export type SynthesisMode = "off" | "light" | "full";
+export type AgentSelectionMode = "manual" | "auto";
+export type ModelTier = "fast" | "standard" | "powerful";
+export type ThemeMode = "dark" | "light" | "system";
+export type PaletteName = "clay" | "space" | "glacier";
+
+export interface FeatureFlags {
+  multi_repo: boolean;
+  linked_sessions: boolean;
+  remote_registry: boolean;
+}
+
+export interface Config {
+  synthesis_mode: SynthesisMode;
+  agent_selection_mode: AgentSelectionMode;
+  default_model_tier: ModelTier;
+  cost_alert_cents?: number;
+
+  default_workspace?: string;
+  default_provider?: string;
+  default_trust: SessionTrust;
+  default_template?: string;
+  fast_model?: string;
+
+  display_mode: string;
+  keybindings: string;
+  theme: ThemeMode;
+  palette: PaletteName;
+  editor_command?: string;
+
+  concurrency_limit: number;
+  synthesis_debounce_ms: number;
+  log_retention_days: number;
+  feature_flags: FeatureFlags;
+
+  onboarding_complete: boolean;
+}
+
+// mirrors pkg/contracts/profile.go ProfileSettings — only the fields a
+// profile can override; zero/absent means "leave the current config alone".
+export interface ProfileSettings {
+  synthesis_mode?: SynthesisMode;
+  agent_selection_mode?: AgentSelectionMode;
+  default_model_tier?: ModelTier;
+  default_workspace?: string;
+  default_provider?: string;
+  default_trust?: SessionTrust;
+  default_template?: string;
+  fast_model?: string;
+  concurrency_limit?: number;
+}
+
+// mirrors pkg/contracts/profile.go Profile
+export interface Profile {
+  id: string;
+  name: string;
+  description?: string;
+  settings: ProfileSettings;
+  system?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// mirrors providers/provider/matrix.go Behavior/Support/Level (§11 capability
+// matrix) — left as plain strings rather than closed unions since the Go
+// side is the single source of truth (provider.Behaviors()) and the UI
+// renders whatever rows the Router hands back, not a hardcoded list.
+export type ProviderBehavior = string;
+export type ProviderSupport = "native" | "emulated" | "unsupported";
+export type BehaviorLevel = "required" | "expected" | "optional";
+
+// mirrors services/router/internal/api/reads.go providerInfo
+export interface ProviderInfo {
+  name: string;
+  matrix: Record<ProviderBehavior, ProviderSupport>;
+}
+
+// mirrors services/router/internal/api/reads.go behaviorInfo
+export interface BehaviorInfo {
+  behavior: ProviderBehavior;
+  level: BehaviorLevel;
+}
+
+// mirrors pkg/preflight/preflight.go Check
+export interface PreflightCheck {
+  name: string;
+  healthy: boolean;
+  detail?: string;
+  fix_hint?: string;
+}

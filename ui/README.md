@@ -18,7 +18,10 @@ The package also owns the Files tab & merge-back flow (W6.5; MADS-UX
 §3.3/§5/§17 — see `src/files/` and the `files` demo mount below, not yet an
 entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3), the Retro
 surface (W6.7; MADS-UX §3.4 — see `src/features/retro/`, registered as
-`SURFACES.retro`, no demo mount needed) and `src/router/` — the Router HTTP
+`SURFACES.retro`, no demo mount needed), Settings & first-run (W6.10;
+MADS-UX §3.7/§3.9 — see `src/features/settings/` and `src/onboarding/`,
+registered as `SURFACES.settings`, no demo mount needed) and `src/router/`
+— the Router HTTP
 layer, which currently carries two idioms that landed concurrently: the
 `RouterClient` interface + `FetchRouterClient` (Conversation) and the thin
 `routerGet`/`routerPost` helpers (Sessions, Retro). Unifying them is
@@ -45,9 +48,10 @@ npm start       # build + launch the Electron shell (placeholder content only)
 ```
 
 The app shell renders an icon rail plus whichever surface `App.tsx`'s
-`SURFACES` map resolves for the active rail item — Sessions and Retro today,
-a teaching empty state for any rail item without a registered surface yet
-(Library).
+`SURFACES` map resolves for the active rail item — Sessions, Retro, and
+Settings today, a teaching empty state for any rail item without a
+registered surface yet (Library). On a never-configured install, `App.tsx`
+gates the whole shell behind `FirstRunWizard` until onboarding completes.
 
 ## Gallery
 
@@ -218,6 +222,44 @@ The drill-in's terminal reuses `TerminalView` over a `PtyBridge` adapter
 interface `TerminalView` expects — `write`/`resize` are no-ops, matching the
 one-shot, non-interactive nature of agent stage output.
 
+## Settings & first-run
+
+`src/features/settings/SettingsSurface.tsx` (W6.10; MADS-UX §3.7/§3.9),
+registered as `SURFACES.settings` — no demo mount needed, since the wizard
+and every panel are exercised by component tests against stubbed `fetch`,
+same as Retro. Owns a single shared `useConfig()` instance and a nav rail
+of eight panels: Appearance (palette/theme, live-apply via `data-theme`/
+`data-palette` on `document.documentElement`, persisted through
+`PUT /config`), General (concurrency limit, log retention, editor command,
+display mode, keybindings, plus a "run preflight" affordance), Profiles
+(create/edit/delete, Activate), Providers (the capability-matrix table),
+Credentials (masked list, add/delete, env-var import, vault-sources empty
+state — see below), Pipeline (synthesis/agent-selection/model-tier settings
+with static cost hints), Advanced (three feature-flag toggles), and
+Updates/About. Restart-required fields (`concurrency_limit`,
+`log_retention_days`, `feature_flags` — a UI-owned classification in
+`restartRequired.ts`, not server metadata) show a badge on the owning
+panel; every panel reads the same `useConfig().fieldErrors` map for
+validate-all's inline, per-field errors.
+
+Credential values never round-trip back to the renderer: `useCredentials`'s
+state is `names: string[]` only, structurally unable to retain a value;
+`CredentialsPanel`'s submit handler clears the value input synchronously,
+before `add()`'s network call is awaited. Env-var import only ever moves
+names over the wire — the values themselves are read server-side, inside
+the Router process, straight from `os.Getenv`.
+
+`src/onboarding/FirstRunWizard.tsx`, gated by `App.tsx`'s mount-time
+`GET /config` fetch (`!config.onboarding_complete` renders the wizard in
+place of the icon-rail shell entirely). Five steps under `onboarding/
+steps/`: Welcome (static), Provider preflight (shares `usePreflight` with
+Settings > General — against the stubbed preflight backend everything
+reports healthy, so Continue is never gated), Credential import (shares
+`useCredentials`, skippable), First workspace (`POST /workspaces`), and a
+final inline step that `PUT`s `onboarding_complete: true` and calls
+`onComplete()`. `App.tsx` also applies the persisted theme/palette and
+feature flags on every mount, so a returning user's choices survive reload.
+
 ## Test it
 
 ```sh
@@ -246,8 +288,9 @@ against.
 ## Router client (`src/router/`)
 
 All data reaches the UI through the Router's HTTP/SSE API — never the Data
-Service directly. `src/router/client.ts` exports `routerGet<T>(path, params?)`
-and `routerPost<T>(path, body?)`; `src/router/events.ts` exports
+Service directly. `src/router/client.ts` exports `routerGet<T>(path, params?)`,
+`routerPost<T>(path, body?)`, `routerPut<T>(path, body?)`, and
+`routerDelete<T>(path)`; `src/router/events.ts` exports
 `subscribeToEvents({ sessionId?, types }, onEvent): () => void`, a thin
 wrapper over `EventSource` against `GET /events`. The server always names the
 SSE `event:` field after the envelope's own type (never a generic `message`
@@ -266,11 +309,13 @@ follow that pattern rather than adding a second fake.
 
 ## Feature flags
 
-`src/featureFlags.ts` is a temporary hardcoded stub (`export const FLAGS = {
-multiRepo: false }`) standing in for a real `/config` endpoint, which doesn't
-exist yet. Gate any flagged UI behind `FLAGS.<name>`; swap the stub for a
-real fetch once the backend adds one, rather than threading config through
-each surface individually.
+`src/featureFlags.ts` exports a live `FLAGS` object (`multiRepo`,
+`linkedSessions`, `remoteRegistry`) backed by `Config.feature_flags`
+(W6.10). `App.tsx` calls `setFlags(...)` once on mount alongside
+`applyTheme`; Settings > Advanced's toggles call it again after each
+successful `PUT /config`. Consumers read `FLAGS.<name>` directly in their
+render body (no hook) — `subscribeFlags(cb)` is available for anything that
+needs to re-render on a change. Gate any flagged UI behind `FLAGS.<name>`.
 
 ## Critical paths
 

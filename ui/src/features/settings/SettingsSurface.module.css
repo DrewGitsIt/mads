@@ -1,0 +1,17 @@
+.surface {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
+.loading {
+  padding: var(--space-5);
+  color: var(--text2);
+}

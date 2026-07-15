@@ -12,11 +12,14 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -31,8 +34,22 @@ import (
 // stop cleanly after a SIGINT/SIGTERM before the process exits anyway.
 const shutdownGrace = 10 * time.Second
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry) http.Handler {
-	return api.New(data, sup, jobs, providers)
+// defaultMadsHome mirrors services/session/main.go's — same env var family,
+// same default (credentials are local state, not shared with the Data
+// Service's own data dir).
+func defaultMadsHome() string {
+	if dir := os.Getenv("MADS_HOME"); dir != "" {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".mads"
+	}
+	return filepath.Join(home, ".mads")
+}
+
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, nil)
 }
 
 func main() {
@@ -43,6 +60,7 @@ func main() {
 	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint (empty uses providers/fake as a placeholder)")
 	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
+	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
 	flag.Parse()
 
 	sessionArgv := strings.Fields(*sessionCmd)
@@ -68,11 +86,19 @@ func main() {
 	jobs := job.New(data, fm)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
 
+	// A credstore failure degrades to credential endpoints returning 503, not
+	// a fatal error — same best-effort philosophy as services/session/main.go.
+	creds, err := credstore.Open(filepath.Join(*madsHome, "credentials.json"))
+	if err != nil {
+		log.Printf("router: open credential store: %v (credential endpoints disabled)", err)
+		creds = nil
+	}
+
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

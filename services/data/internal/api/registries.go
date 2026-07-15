@@ -93,6 +93,8 @@ func registryID(e any) string {
 		return v.ID
 	case *contracts.Workspace:
 		return v.ID
+	case *contracts.Profile:
+		return v.ID
 	}
 	return ""
 }
@@ -105,6 +107,8 @@ func setRegistryID(e any, cur any) {
 	case *contracts.Capability:
 		v.ID = id
 	case *contracts.Workspace:
+		v.ID = id
+	case *contracts.Profile:
 		v.ID = id
 	}
 }
