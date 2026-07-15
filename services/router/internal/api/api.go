@@ -13,19 +13,21 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 type server struct {
-	data *dataclient.Client
-	sup  *supervisor.Supervisor
-	jobs *job.Runner
+	data      *dataclient.Client
+	sup       *supervisor.Supervisor
+	jobs      *job.Runner
+	providers *provider.Registry
 }
 
 // New returns the Router's HTTP handler.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) http.Handler {
-	s := &server{data: data, sup: sup, jobs: jobs}
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry) http.Handler {
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
@@ -40,6 +42,12 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner) 
 	mux.HandleFunc("POST /retros", s.handleStartRetro)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /retros/{id}/follow-up-session", s.handleRetroFollowUpSession)
+	mux.HandleFunc("GET /sessions", s.handleListSessions)
+	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
+	mux.HandleFunc("GET /agents", s.handleListAgents)
+	mux.HandleFunc("GET /tasks", s.handleListTasks)
+	mux.HandleFunc("GET /providers", s.handleListProviders)
+	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
 	return mux
 }
 

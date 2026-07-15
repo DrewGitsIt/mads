@@ -1,0 +1,39 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { routerGet } from "../../../router/client";
+import { subscribeToEvents } from "../../../router/events";
+import type { Task } from "../../../router/types";
+
+const OPEN_STATUSES = new Set(["ready", "in_progress", "blocked", "needs_review"]);
+
+const TASK_EVENT_TYPES = ["task.created", "task.status_changed", "task.updated", "task.discarded"];
+
+/** Fetches every task, then keeps per-session open-task counts live via the task.* SSE domain. */
+export function useOpenTaskCounts(): Record<string, number> {
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const mounted = useRef(true);
+
+  const refetch = useCallback(async () => {
+    const tasks = await routerGet<Task[]>("/tasks");
+    if (!mounted.current) return;
+    const next: Record<string, number> = {};
+    for (const task of tasks) {
+      if (!OPEN_STATUSES.has(task.status)) continue;
+      next[task.session_id] = (next[task.session_id] ?? 0) + 1;
+    }
+    setCounts(next);
+  }, []);
+
+  useEffect(() => {
+    mounted.current = true;
+    void refetch();
+    const unsubscribe = subscribeToEvents({ types: TASK_EVENT_TYPES }, () => {
+      void refetch();
+    });
+    return () => {
+      mounted.current = false;
+      unsubscribe();
+    };
+  }, [refetch]);
+
+  return counts;
+}

@@ -1,0 +1,18 @@
+.surface {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.rail {
+  flex: none;
+  width: 260px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line-soft);
+  padding: var(--space-3);
+}
+
+.main {
+  flex: 1;
+  overflow-y: auto;
+}
