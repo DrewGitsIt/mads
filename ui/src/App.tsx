@@ -1,16 +1,19 @@
 import { useState, type ComponentType } from "react";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
+import { DashboardTab } from "./dashboard/DashboardTab";
 import styles from "./App.module.css";
 
 const RAIL_ITEMS: IconRailItem[] = [
   { id: "sessions", label: "Sessions", icon: "S" },
   { id: "retro", label: "Retro", icon: "R" },
   { id: "library", label: "Library", icon: "L" },
+  { id: "dashboard", label: "Dashboard", icon: "D" },
 ];
 
 const SURFACES: Partial<Record<string, ComponentType>> = {
   sessions: SessionsSurface,
+  dashboard: DashboardTab,
 };
 
 export function App() {

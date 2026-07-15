@@ -195,6 +195,49 @@ The drill-in's terminal reuses `TerminalView` over a `PtyBridge` adapter
 interface `TerminalView` expects — `write`/`resize` are no-ops, matching the
 one-shot, non-interactive nature of agent stage output.
 
+## Dashboard tab
+
+```sh
+npm run dashboard
+```
+
+Opens `dashboard.html`: the Dashboard tab (`src/dashboard/DashboardTab.tsx`)
+mounted standalone against `FakeMetricsClient` and the golden aggregates
+recorded in `src/dashboard/client/fixtures.ts` (copied verbatim from
+`pkg/dataclient/metrics_test.go`'s expected outputs — see `src/dashboard/
+HANDOFF.md` §5). Dashboard is also registered directly in the app shell
+(`src/App.tsx`'s `RAIL_ITEMS`/`SURFACES`) — unlike the other tabs above, it's
+a top-level `IconRail` destination rather than a per-session sub-tab, so it
+mounts a real `FetchMetricsClient` there instead of the demo's fake one.
+
+`DashboardTab` owns date-preset state (7d/30d/90d/all) and composes 8 leaf
+views fed by two independent hooks: `useDashboardMetrics` (fetch-once-on-mount
+for cost, agent leaderboard, task outcomes, capability usage, and run
+history) and `useLiveActivity` (refetch-on-`session.*`/`pipeline.*`-event for
+the live "active sessions / running pipelines" widget). Per the date preset:
+only the cost-by-model chart (`CostChart/CostByModelChart.tsx`) and the run
+history table (`RunHistory/RunHistoryTable.tsx`) re-slice client-side on the
+selected range — the agent leaderboard, task outcomes, and capability usage
+views have no time axis in their response shape and always render the full
+fetched data.
+
+`CostByModelChart` is a stacked bar (one bar per day, stacked by model) using
+only `var(--chart-1/2/3)` — never a hex literal — with a fixed first-seen hue
+order, a 4th+ model folded into an "Other" bucket, a per-day-column hover
+tooltip, and a table-view toggle as the accessible fallback.
+`TaskOutcomes/TaskOutcomesPanel.tsx` is a status-distribution bar that
+deliberately does *not* use the `--chart-*` tokens — task status is a
+severity encoding, so it reuses `--ok`/`--warn`/`--bad`/`--info` the same way
+`Chip`'s `ChipTone` does, with the same legend + table-toggle treatment.
+
+There's no cross-surface router in this codebase yet, so "drill-back to the
+session's Pipeline tab" is implemented as a callback contract, not a
+navigation: `RunHistoryTable` takes an `onDrillBack?: (params: { sessionId,
+runSeq }) => void` prop and `DashboardTab` forwards its own `onDrillBack` prop
+through unchanged. Actually opening `pipeline.html?session=...` (or a future
+in-app router) is the caller's decision, out of scope for this module — see
+`src/dashboard/HANDOFF.md` §7/§11.
+
 ## Test it
 
 ```sh

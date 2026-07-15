@@ -13,6 +13,7 @@ export default defineConfig({
         tasks: resolve(__dirname, "tasks.html"),
         files: resolve(__dirname, "files.html"),
         pipeline: resolve(__dirname, "pipeline.html"),
+        dashboard: resolve(__dirname, "dashboard.html"),
       },
     },
   },

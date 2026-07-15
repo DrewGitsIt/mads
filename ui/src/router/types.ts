@@ -257,3 +257,83 @@ export interface FileDiff {
   original: string;
   modified: string;
 }
+
+/**
+ * TS mirrors of pkg/contracts/metrics.go, consumed by the Dashboard tab
+ * (W6.9, MADS-UX §3.6). Generic Data Service contracts, not Dashboard-
+ * private, so they live here alongside the rest of the router types.
+ */
+
+// mirrors pkg/contracts/metrics.go CostPoint. `day` is an ISO timestamp,
+// UTC-truncated to midnight.
+export interface CostPoint {
+  day: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostBySession
+export interface CostBySession {
+  session_id: string;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostByPipelineRun
+export interface CostByPipelineRun {
+  session_id: string;
+  run_seq: number;
+  cost_usd: number;
+}
+
+// mirrors pkg/contracts/metrics.go CostMetrics — GET /metrics/cost's response
+export interface CostMetrics {
+  by_day: CostPoint[];
+  by_session: CostBySession[];
+  by_pipeline_run: CostByPipelineRun[];
+}
+
+// mirrors pkg/contracts/metrics.go AgentLeaderboardEntry
+export interface AgentLeaderboardEntry {
+  agent: string;
+  usage_count: number;
+  successes: number;
+  failures: number;
+  success_rate: number;
+  retries: number;
+}
+
+// mirrors pkg/contracts/metrics.go TaskOutcomes — GET /metrics/tasks's response
+export interface TaskOutcomes {
+  counts: Partial<Record<TaskStatus, number>>;
+  total: number;
+  completion_rate: number;
+}
+
+// mirrors pkg/contracts/registry.go CapabilityType
+export type CapabilityType = "skill" | "mcp";
+
+// mirrors pkg/contracts/metrics.go CapabilityUsage
+export interface CapabilityUsage {
+  capability: string;
+  type: CapabilityType;
+  invocations: number;
+}
+
+// mirrors pkg/contracts/metrics.go PipelineRun — one reconstructed pipeline
+// run. `outcome` matches the Go comment's closed set.
+export type PipelineRunOutcome = "completed" | "incomplete" | "cancelled" | "failed" | "running";
+
+export interface PipelineRun {
+  session_id: string;
+  run_seq: number;
+  started_at: string;
+  ended_at?: string;
+  outcome: PipelineRunOutcome;
+  tasks_done: number;
+  tasks_blocked: number;
+  tasks_skipped: number;
+  cost_usd: number;
+  agents?: string[];
+}

@@ -1,0 +1,24 @@
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: var(--fs-sm) var(--sans);
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text2);
+}
+
+.table th {
+  color: var(--text3);
+  font-weight: 500;
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}

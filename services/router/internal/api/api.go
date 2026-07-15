@@ -60,6 +60,11 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("POST /tasks/{id}/retry", s.handleRetryTask)
 	mux.HandleFunc("GET /providers", s.handleListProviders)
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
+	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
+	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
+	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
+	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
+	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
 	return mux
 }
 
