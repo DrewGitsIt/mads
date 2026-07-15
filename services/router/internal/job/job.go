@@ -50,6 +50,13 @@ func New(data *dataclient.Client, fm *fastmodel.Runner) *Runner {
 	return &Runner{data: data, fm: fm, cancels: make(map[string]context.CancelFunc)}
 }
 
+// FastModel exposes the Fast Model runner for callers that need a
+// synchronous, non-job Fast Model call (e.g. the agent enrichment
+// endpoints) rather than the spawn-run-exit job pattern.
+func (r *Runner) FastModel() *fastmodel.Runner {
+	return r.fm
+}
+
 // Spawn mints a job ID, appends job.queued synchronously, then runs fn on
 // its own goroutine. It returns immediately — callers observe completion
 // via the event log (job.started/job.completed/job.failed/job.cancelled),

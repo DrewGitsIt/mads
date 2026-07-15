@@ -161,6 +161,68 @@ tree to point an embedded editor at, since `Manager.Merge` aborts the merge
 on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
 follow-up this needs on the Session Service side.
 
+## Library
+
+```sh
+npm run library
+```
+
+Opens `library.html`: `LibrarySurface` (`src/library/LibrarySurface.tsx`, W6.8;
+MADS-UX §3.5) mounted standalone against a real Router (`VITE_ROUTER_URL`),
+not `FakeRouterClient` — unlike the other demo mounts, Library was built
+exclusively against the `routerGet`/`routerPost`/`routerPut`/`routerDelete` +
+`subscribeToEvents` idiom (`src/router/client.ts`/`events.ts`), so there's no
+fake client to point it at yet. `LibrarySurface` owns a `Chip`-row shelf
+switcher over four shelves — Agents, Capabilities, Workspaces, Pipeline
+templates — each following the same shape: a `use<Shelf>.ts` hook
+(list+CRUD, refetch-on-any-event via `subscribeToEvents`) feeding a
+`<Shelf>Shelf.tsx` card grid, with a `SideSheet`-based `<Item>Editor.tsx` for
+create/edit. Browse Registry (`src/library/registry/RegistryShelfStub.tsx`)
+stays behind `FLAGS.remoteRegistry` and is a stub until its own work item.
+
+Agents (`src/library/agents/`) adds an NL-generate flow
+(`NLGenerateBox`/`useAgentGeneration.ts`) that posts to the W5.3
+generation endpoint and renders the result through `Draft`/`DraftChip`
+(matching the kit's one provenance treatment, see Critical paths below) with
+a `SimilarAgentWarning` when the backend flags a near-duplicate. The editor
+composes a prompt scaffold, enrichment actions (describe/suggest-
+capabilities/refine), a provider-discovery-backed model dropdown
+(`ModelField`), a quadrant tooltip (`QuadrantField`), and an import-from-
+provider mapping preview (`ImportFromProviderDialog`).
+
+Capabilities (`src/library/capabilities/`) shows a live health dot per card
+(`HealthDot`) that owns its own `capability.health_changed` subscription and
+refetches just that one capability — correct even without patch-in-place
+semantics, since a full refetch is always safe. `CredentialEnvVarsField` is
+the credential editor: it's built over a plain `string[]` of env-var names,
+so a credential value structurally cannot enter the React tree or a request
+body — `CredentialEnvVarsField.test.tsx` asserts this with negative regex
+matches against rendered output. `DiagnosePanel` posts to `/capabilities/
+{id}/diagnose` and surfaces the healthy/unhealthy verdict plus suggestions.
+
+Workspaces (`src/library/workspaces/`) edits repos (`RepoList`, with a
+primary-repo radio), defaults (agent/model/isolation/template binding), and
+shows `UsedBySessions` — a client-side reverse lookup over `GET /sessions`
+filtered by `session.workspace`, since the Router has no server-side
+`workspace -> sessions` field.
+
+Pipeline templates (`src/library/templates/`) is a dual-mode visual/YAML
+editor kept in sync by construction: `TemplateEditor` owns exactly one piece
+of state, the YAML `source` string; visual mode (`VisualStageList`/
+`StageCard`) is a pure projection derived via `templateSync.parse`, and
+edits made there flow back through `templateSync.serialize` to replace
+`source` wholesale — there's no second copy of the parsed model to drift out
+of sync. `StageCard` exposes the full `pkg/template` grammar (name,
+agent/command, when, on_fail.{loop_back,max_loops,then}). Validation posts
+to `/templates/validate` (`useTemplateValidation.ts`) and surfaces every
+`RouterValidationError` field error at once, routed onto the owning
+`StageCard` by parsing its `stages[N].field` path — a seeded multi-error
+template reports all of them together, not just the first. The YAML view
+lazy-loads `@monaco-editor/react` the same way `DiffViewer` does (see Files
+tab above); its tests mock the module and use `findByTestId`, not
+`getByTestId`, since `Suspense` resolution is asynchronous even against a
+mocked import.
+
 ## Retro surface
 
 `src/features/retro/RetroSurface.tsx` (W6.7; MADS-UX §3.4), registered as
@@ -334,10 +396,11 @@ follow that pattern rather than adding a second fake.
 ## Feature flags
 
 `src/featureFlags.ts` is a temporary hardcoded stub (`export const FLAGS = {
-multiRepo: false }`) standing in for a real `/config` endpoint, which doesn't
-exist yet. Gate any flagged UI behind `FLAGS.<name>`; swap the stub for a
-real fetch once the backend adds one, rather than threading config through
-each surface individually.
+multiRepo: false, remoteRegistry: false }`) standing in for a real `/config`
+endpoint, which doesn't exist yet. Gate any flagged UI behind `FLAGS.<name>`;
+swap the stub for a real fetch once the backend adds one, rather than
+threading config through each surface individually. Library's Browse
+Registry shelf is gated behind `FLAGS.remoteRegistry` (see Library above).
 
 ## Critical paths
 

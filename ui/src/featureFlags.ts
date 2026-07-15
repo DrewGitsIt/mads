@@ -2,4 +2,5 @@
 // to swap once a real feature-flag source exists.
 export const FLAGS = {
   multiRepo: false,
+  remoteRegistry: false,
 };

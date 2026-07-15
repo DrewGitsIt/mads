@@ -141,7 +141,14 @@ describe("FetchRouterClient", () => {
   });
 });
 
-import { ROUTER_BASE, routerGet, routerPost } from "./client";
+import {
+  ROUTER_BASE,
+  RouterValidationError,
+  routerDelete,
+  routerGet,
+  routerPost,
+  routerPut,
+} from "./client";
 
 describe("routerGet", () => {
   afterEach(() => {
@@ -207,5 +214,59 @@ describe("routerPost", () => {
     const result = await routerPost("/sessions/s1/terminate");
 
     expect(result).toBeUndefined();
+  });
+
+  it("throws RouterValidationError on a {errors:[...]} failure body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ errors: [{ field: "source", message: "duplicate stage name" }] }),
+        { status: 400 },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(routerPost("/templates/validate", { source: "bad" })).rejects.toThrow(
+      RouterValidationError,
+    );
+  });
+});
+
+describe("routerPut", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("PUTs a JSON body and decodes the JSON response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ id: "a1" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await routerPut<{ id: string }>("/agents/a1", { id: "a1" });
+
+    expect(result).toEqual({ id: "a1" });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`${ROUTER_BASE}/agents/a1`);
+    expect(init.method).toBe("PUT");
+  });
+});
+
+describe("routerDelete", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("DELETEs and returns undefined for a 200 status:deleted body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "deleted" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await routerDelete<{ status: string }>("/agents/a1");
+
+    expect(result).toEqual({ status: "deleted" });
+    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(url.toString()).toBe(`${ROUTER_BASE}/agents/a1`);
+    expect(init.method).toBe("DELETE");
   });
 });

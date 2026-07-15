@@ -92,6 +92,38 @@ never called peer-to-peer.
   `{"job_id": ...}` immediately; the draft (plus a near-duplicate warning, if any) is
   delivered asynchronously as an `agent.draft_generated` event, observed via `GET /events`
   like any other job.
+- `GET /agents/{id}`, `POST /agents`, `PUT /agents/{id}`, `DELETE /agents/{id}` — pure
+  proxies over `pkg/dataclient`'s agent CRUD (W6.8, MADS-UX §3.5, the Library's Agents
+  shelf). `id` resolves as ID first, then name, mirroring the Data Service's own `lookup`.
+- `POST /agents/describe`, `POST /agents/suggest-capabilities`, `POST /agents/refine` —
+  the Library editor's enrichment actions (W6.8, spec §9.5), bodies `{"prompt"}` /
+  `{"prompt"}` / `{"prompt", "instruction"}`. Unlike `/agents/generate`, these are
+  synchronous request/response — fast, side-effect-free, single Fast Model calls with no
+  job/event plumbing, calling `pkg/agentgen.Generator` (built over `s.jobs.FastModel()`)
+  directly and returning the result in the response body (`{"result": ...}` for
+  describe/refine, the raw `AgentCapabilities` shape for suggest-capabilities).
+- `GET /capabilities`, `GET /capabilities/{id}`, `POST /capabilities`, `PUT
+  /capabilities/{id}`, `DELETE /capabilities/{id}` — pure proxies over
+  `pkg/dataclient`'s capability CRUD (W6.8, the Library's Capabilities shelf). `GET
+  /capabilities` incidentally fixes a pre-existing gap: `RouterClient.getSkillCapabilities`
+  (the Conversation tab) has called this route since an earlier task even though it didn't
+  exist on the Router until now.
+- `POST /capabilities/{id}/diagnose` — one-off health check plus troubleshooting
+  suggestions (spec §12.7), proxying a new Data Service endpoint of the same shape; 200
+  with `{"healthy", "reason", "suggestions"}`. Local-command MCP capabilities always
+  diagnose "not running" here — no session context to ask a live `MCPRegistry`, documented
+  limitation, not a bug.
+- `GET /workspaces/{id}`, `POST /workspaces`, `PUT /workspaces/{id}`, `DELETE
+  /workspaces/{id}` — pure proxies over `pkg/dataclient`'s workspace CRUD (W6.8, the
+  Library's Workspaces shelf); `GET /workspaces` (list) already existed.
+- `GET /templates`, `GET /templates/{id}`, `POST /templates`, `PUT /templates/{id}`,
+  `DELETE /templates/{id}`, `POST /templates/validate` — pure proxies over
+  `pkg/dataclient`'s template CRUD (W6.8, the Library's Templates shelf, M9). `GET
+  /templates/{id}` returns `{"template", "used_by"}` — the workspaces bound to it.
+  `POST /templates/validate` runs the same `pkg/template.Check` the Pipeline Engine uses at
+  launch, so "Validate" in the editor is literally the launch judge; a 400
+  `*contracts.ValidationError` carries every failing check's `{field, message}` together
+  (`stages[0].name`, `stages[1].on_fail.loop_back`, etc.), not just the first.
 - `POST /retros` — body `{"session_ids", "user_observations"?}`; 400 if `session_ids` is
   empty. Mints the retro ID before spawning (so it can be handed back immediately and so
   every `retro.*` event the job emits carries it for correlation), spawns a

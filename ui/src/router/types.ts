@@ -51,16 +51,103 @@ export interface Workspace {
   updated_at: string;
 }
 
+// mirrors pkg/contracts/registry.go Quadrant/Quadrants — a closed 4-value
+// enum (W6.8, MADS-UX §3.5's quadrant tooltip).
+export type Quadrant =
+  | "autonomous_executor"
+  | "technical_partner"
+  | "investigator"
+  | "research_analyst";
+
+export interface AgentCapabilities {
+  tools?: string[];
+  mcp_servers?: string[];
+  skills?: string[];
+}
+
+export interface AgentPermissions {
+  allowed_paths?: string[];
+  denied_commands?: string[];
+}
+
+export interface AgentPreferences {
+  model?: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
   description?: string;
   prompt: string;
-  quadrant?: string;
+  quadrant?: Quadrant;
   tags?: string[];
   system?: boolean;
   created_at: string;
   updated_at: string;
+  capabilities?: AgentCapabilities;
+  permissions?: AgentPermissions;
+  preferences?: AgentPreferences;
+}
+
+// mirrors pkg/agentselect/similarity.go Similar — a near-duplicate warning
+// attached to a freshly generated agent draft.
+export interface Similar {
+  agent: string;
+  score: number;
+}
+
+export type CapabilityType = "skill" | "mcp";
+
+export interface CapabilityConfig {
+  path?: string; // skills
+  command?: string; // mcp, local process
+  url?: string; // mcp, remote
+}
+
+export interface CapabilityHealth {
+  healthy: boolean;
+  reason?: string;
+  checked_at?: string;
+}
+
+// Full Capability — the Library editor's shape. CapabilitySummary (above)
+// stays as-is for the / command palette.
+export interface Capability {
+  id: string;
+  name: string;
+  description?: string;
+  type: CapabilityType;
+  config: CapabilityConfig;
+  credential_env_vars?: string[]; // NAMES ONLY — never a value, see CredentialEnvVarsField
+  health?: CapabilityHealth;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  description?: string;
+  source: string; // the YAML text — single source of truth for both editor views
+  system?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// pkg/template's parsed grammar, frontend-only — this is YAML the Library's
+// Templates shelf parses client-side for the visual editor view (no Go JSON
+// tags to mirror; pkg/template only ever round-trips YAML).
+export interface TemplateStage {
+  name: string;
+  agent?: string; // "auto" or a registry agent name; mutually exclusive with command
+  command?: string;
+  when?: string;
+  on_fail?: { loop_back?: string; max_loops?: number; then?: string };
+}
+
+export interface ParsedTemplate {
+  name: string;
+  stages: TemplateStage[];
 }
 
 export type Provider = string;
@@ -310,9 +397,6 @@ export interface TaskOutcomes {
   total: number;
   completion_rate: number;
 }
-
-// mirrors pkg/contracts/registry.go CapabilityType
-export type CapabilityType = "skill" | "mcp";
 
 // mirrors pkg/contracts/metrics.go CapabilityUsage
 export interface CapabilityUsage {
