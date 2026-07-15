@@ -66,7 +66,14 @@ func (m *Metrics) Cost(ctx context.Context, sessionID string) (contracts.CostMet
 		bySession[env.SessionID] += p.CostUSD
 	}
 
-	out := contracts.CostMetrics{}
+	// Empty slices, not nil: these marshal as [] over the wire — the UI
+	// consumes them directly and a JSON null is not an array (found by
+	// driving the Dashboard against a store with no usage events).
+	out := contracts.CostMetrics{
+		ByDay:         []contracts.CostPoint{},
+		BySession:     []contracts.CostBySession{},
+		ByPipelineRun: []contracts.CostByPipelineRun{},
+	}
 	for _, cp := range byDay {
 		out.ByDay = append(out.ByDay, *cp)
 	}
