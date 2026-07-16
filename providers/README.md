@@ -32,7 +32,15 @@ agents — not services themselves.
   retries. Baseline transport is any provider's OneShot; configuring an
   OpenAI-compatible `BaseURL` flips the transport without caller changes.
   Rate limits bubble as the typed error, never retried.
-- `kirocli/` — the second adapter that keeps the abstraction honest (W7.1).
+- `kirocli/` — the second adapter (W7.1): `kiro-cli acp` JSON-RPC for
+  interactive sessions, `kiro-cli chat --no-interactive` for one-shots,
+  `--resume-id` for reattach, and ACP `session/load` replay for transcript
+  normalization. More capable than claude-code on ModelDiscovery, Interrupt,
+  and Transcript; honestly Unsupported on CostReporting (Kiro's billing is
+  credit-based, not token-based) — the matrix is not a copy of claude-code's.
+  Every claim is sourced from public docs, not a live binary (kiro-cli isn't
+  installed here); CI runs the full conformance suite against a scripted
+  stand-in, `MADS_KIRO_SMOKE=1` opts into the real-binary smoke.
 
 ## Test it
 

@@ -19,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/pipeline/engine"
 )
@@ -29,13 +30,15 @@ func cmdRun(args []string, out io.Writer) error {
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
-	providerName := fs.String("provider", "claude-code", "agent provider: claude-code or fake")
+	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 2, "simultaneous tasks")
 	isolated := fs.Bool("isolated", true, "worktree-per-task isolation (spec §6, §17)")
 	worktreeRoot := fs.String("worktree-root", "", "where task worktrees live (default ~/.mads/worktrees/<session>)")
 	claudeArgs := fs.String("claude-args", "--dangerously-skip-permissions",
 		"extra args for every claude invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
+	kiroArgs := fs.String("kiro-args", "--trust-all-tools",
+		"extra args for every kiro-cli invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
 	fakeScenario := fs.String("fake-scenario", "", "scenario YAML for -provider fake (rehearsal runs)")
 	stageTimeout := fs.Duration("stage-timeout", 30*time.Minute, "per-stage timeout")
 	_ = fs.Parse(args)
@@ -76,6 +79,8 @@ func cmdRun(args []string, out io.Writer) error {
 		}
 	case "claude-code":
 		prov = claudecode.New(claudecode.Config{ExtraArgs: strings.Fields(*claudeArgs)})
+	case "kiro-cli":
+		prov = kirocli.New(kirocli.Config{ExtraArgs: strings.Fields(*kiroArgs)})
 	default:
 		return fmt.Errorf("unknown provider %q", *providerName)
 	}

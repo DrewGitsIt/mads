@@ -24,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -90,6 +91,9 @@ func main() {
 	providers := provider.NewRegistry()
 	if err := providers.Register(claudecode.New(claudecode.Config{})); err != nil {
 		log.Fatalf("router: register claudecode provider: %v", err)
+	}
+	if err := providers.Register(kirocli.New(kirocli.Config{})); err != nil {
+		log.Fatalf("router: register kiro-cli provider: %v", err)
 	}
 	if err := providers.Register(fake.New()); err != nil {
 		log.Fatalf("router: register fake provider: %v", err)

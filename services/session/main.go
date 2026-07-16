@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/api"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
@@ -62,6 +63,9 @@ func main() {
 	registry := provider.NewRegistry()
 	if err := registry.Register(claudecode.New(claudecode.Config{})); err != nil {
 		log.Fatalf("session: register claudecode provider: %v", err)
+	}
+	if err := registry.Register(kirocli.New(kirocli.Config{})); err != nil {
+		log.Fatalf("session: register kiro-cli provider: %v", err)
 	}
 	if err := registry.Register(fake.New()); err != nil {
 		log.Fatalf("session: register fake provider: %v", err)
