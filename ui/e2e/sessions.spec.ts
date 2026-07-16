@@ -24,11 +24,6 @@ test("sessions journey: create, rail update, open, send, back", async ({ page, r
   await expect(page.getByText("Terminal mode requires the Electron shell.")).toBeVisible();
   await page.getByRole("button", { name: "Chat" }).click();
 
-  // Composer.handleSend fires `void routerClient.sendMessage(...)` unawaited
-  // against POST /sessions/{id}/messages, which the Router doesn't implement
-  // yet (HANDOFF.md §0 Finding B) — allowlist that 404 and assert only the
-  // local optimistic echo, not a reply.
-  page.allowStatus("/messages");
   const message = "hello from the sessions journey";
   await page.getByPlaceholder("Message the agent — @ to mention, / for commands").fill(message);
   await page.getByRole("button", { name: "Send" }).click();
@@ -38,11 +33,49 @@ test("sessions journey: create, rail update, open, send, back", async ({ page, r
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 });
 
+/**
+ * DESCOPE DECISION (executor, this task): stays unimplemented, for a
+ * different and deeper reason than it looked at first.
+ *
+ * This task did add the Router's missing POST /sessions/{id}/messages and
+ * /interrupt proxy routes (see stream_forward.go, route_manifest_test.go) —
+ * that part of the original gap is fixed and verified: sending a message no
+ * longer 404s (the "create, rail update, open, send, back" journey above no
+ * longer needs an allowStatus escape hatch for it).
+ *
+ * But the reply never becomes observable through the UI, and the root cause
+ * is upstream of the UI entirely: GET /sessions/{id}/transcript
+ * (transcriptFor, transcript.go) reads via `s.providers.Get(sess.Provider)`
+ * — the *Router process's own* provider.Registry — while the actual turn
+ * runs inside the spawned session child's separate process, against *its
+ * own* separate provider instance. Verified by hand against the real
+ * topology (data+router+session binaries, provider=fake): POST /messages
+ * returns 202 and the child's log shows nothing wrong, but every subsequent
+ * GET /transcript comes back `[]`, and the router log repeats
+ * `api: transcript: read session <id>: unknown session ref "fake-1"` —
+ * transcriptFor's error path degrades that to an empty array by design
+ * (transcript.go's doc comment), which is why it doesn't 5xx or trip the
+ * no-bad-response fixture; it just silently never shows the reply. This
+ * isn't fake-provider-specific plumbing either: providers/claudecode
+ * doesn't implement TranscriptReader at all, so no provider transcript
+ * currently reflects a live interactive session's turns across the
+ * router/session process boundary — a live conversation's transcript is
+ * only ever readable within the process that ran the turn.
+ *
+ * Fixing this for real means making transcriptFor proxy to the running
+ * child (mirroring /output, /messages, /interrupt's addr-lookup pattern)
+ * when the session is live, falling back to the provider registry only for
+ * sessions with no running child — a real behavior change to a
+ * general-purpose read endpoint, not a route-wiring gap. Out of proportion
+ * for this task; flagging as a genuine, previously-undiscovered product bug
+ * that likely also affects real (non-fake) interactive sessions once a
+ * provider does implement TranscriptReader. Needs its own task.
+ */
 test.fixme(
   "sessions journey: agent replies to a composer message",
   async () => {
-    // Blocked on session messaging being proxied through the Router
-    // (HANDOFF.md §0 Finding B) — POST /sessions/{id}/messages doesn't exist
-    // on the Router yet, only on the per-session child process.
+    // Blocked on GET /sessions/{id}/transcript not reflecting a live
+    // session child's conversation state across the router/session process
+    // boundary — see the DESCOPE DECISION comment above.
   },
 );

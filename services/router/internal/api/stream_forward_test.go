@@ -2,7 +2,9 @@ package api_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -96,6 +98,83 @@ func TestSessionOutputNotRunning(t *testing.T) {
 func TestPipelineOutputNotRunning(t *testing.T) {
 	srv, _ := newTestServerWithData(t)
 	resp, err := http.Get(srv.URL + "/pipelines/does-not-exist/output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSessionMessagesForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "messages test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	msgResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/messages", "application/json", bytes.NewBufferString(`{"text":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = msgResp.Body.Close() }()
+	if msgResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("messages status = %d, want 202", msgResp.StatusCode)
+	}
+	body, err := io.ReadAll(msgResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(body); got != `{"text":"hi"}` {
+		t.Errorf("proxied body = %q, want the request body echoed back unmodified", got)
+	}
+}
+
+func TestSessionMessagesNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/messages", "application/json", bytes.NewBufferString(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSessionInterruptForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "interrupt test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	intResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/interrupt", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = intResp.Body.Close() }()
+	if intResp.StatusCode != http.StatusOK {
+		t.Fatalf("interrupt status = %d, want 200", intResp.StatusCode)
+	}
+}
+
+func TestSessionInterruptNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/interrupt", "application/json", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

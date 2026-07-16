@@ -97,6 +97,8 @@ var routeManifest = []struct {
 	{"POST", "/registry/install", "POST /registry/install"},
 	{"POST", "/registry/update", "POST /registry/update"},
 	{"POST", "/registry/publish", "POST /registry/publish"},
+	{"POST", "/sessions/abc/messages", "POST /sessions/{id}/messages"},
+	{"POST", "/sessions/abc/interrupt", "POST /sessions/{id}/interrupt"},
 }
 
 // knownGapRoutes are RouterClient (ui/src/router/client.ts) call sites that
@@ -108,8 +110,6 @@ var knownGapRoutes = []struct {
 	method, path, pattern, reason string
 }{
 	{"GET", "/sessions/abc/stream", "GET /sessions/{id}/stream", "conversation streaming (streamSession), not built"},
-	{"POST", "/sessions/abc/messages", "POST /sessions/{id}/messages", "conversation send (sendMessage), pre-existing gap"},
-	{"POST", "/sessions/abc/interrupt", "POST /sessions/{id}/interrupt", "conversation control (interrupt), not built"},
 	{"GET", "/mentionables", "GET /mentionables", "getMentionables, not built"},
 	{"GET", "/sessions/abc/commits", "GET /sessions/{id}/commits", "Files tab / merge-back (getCommits), not built"},
 	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes", "Files tab / merge-back (getFileDiff), not built"},
