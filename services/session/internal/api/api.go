@@ -28,6 +28,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /stream", s.handleStream)
 	mux.HandleFunc("GET /files", s.handleFiles)
 	mux.HandleFunc("GET /commits", s.handleCommits)
+	mux.HandleFunc("GET /transcript", s.handleTranscript)
 	mux.HandleFunc("POST /skills/{name}/inject", s.handleInjectSkill)
 	mux.HandleFunc("GET /capabilities/{name}/diagnose", s.handleDiagnoseCapability)
 	return mux
@@ -145,6 +146,14 @@ func (s *server) handleCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, commits)
+}
+
+// handleTranscript answers this session's live conversation straight from
+// its bound provider instance (runner.Transcript) — the Router proxies here
+// for any session with a running child, since the Router's own
+// provider.Registry has no visibility into this process's provider session.
+func (s *server) handleTranscript(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.runner.Transcript(r.Context()))
 }
 
 // handleInjectSkill sends a declared skill's content into the session as a

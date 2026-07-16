@@ -61,5 +61,13 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
 	})
+	// Trailing newline matches the real Session Service's writeJSON, which
+	// goes through json.Encoder.Encode (always newline-terminated) — router
+	// tests assert this literal body.
+	mux.HandleFunc("GET /transcript", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, "[]\n")
+	})
 	log.Fatal(http.Serve(ln, mux))
 }

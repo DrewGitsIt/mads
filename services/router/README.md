@@ -181,13 +181,15 @@ never called peer-to-peer.
   `pkg/githook`/the watcher talking to the Data Service directly, never through the
   Router.
 - `GET /sessions/{id}` — the session record (proxies `dataclient.Session`); 404 if unknown.
-- `GET /sessions/{id}/transcript` — the session's durable conversation history, read
-  directly from its bound provider via the persisted `ProviderRef` (`Session.ProviderRef`'s
-  documented "transcript pointer"), **not** proxied through a running child the way
-  `/output` is — this works identically whether the session is active or inactive. Always
-  200 with a JSON array (`[]` for a session with no interactive conversation, e.g. a
-  pipeline-only run, or a provider that doesn't implement transcript reading); 404 only for
-  an unknown session id.
+- `GET /sessions/{id}/transcript` — the session's conversation history. Proxied through the
+  running child, like `/output`, whenever one exists (`s.sup.SessionAddr`): a live turn's
+  history only ever exists in the child's own provider instance, not the Router's own
+  `provider.Registry`, so this is the only way a live session's transcript reflects its
+  actual conversation. Falls back to a direct read from the bound provider via the
+  persisted `ProviderRef` (`Session.ProviderRef`'s documented "transcript pointer") only for
+  sessions with no running child. Always 200 with a JSON array (`[]` for a session with no
+  interactive conversation, e.g. a pipeline-only run, or a provider that doesn't implement
+  transcript reading); 404 only for an unknown session id.
 
 Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 `*contracts.ValidationError` → 400 (this is a deliberate divergence from the Data
