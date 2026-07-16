@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -30,6 +31,7 @@ type server struct {
 	preflight    preflight.Checker
 	vaultRefs    *vault.RefStore
 	vaultSources []vault.Source
+	registry     *registryclient.Client
 	version      string
 }
 
@@ -40,15 +42,16 @@ type server struct {
 // be nil or empty (GET /credentials/vault-sources reports no sources).
 // staticHandler serves the built UI at "/" (see internal/static); nil
 // defaults to http.NotFoundHandler(), matching the prior behavior of
-// having no "/" route at all.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string) http.Handler {
+// having no "/" route at all. registry may be nil (registry endpoints
+// return a clear error).
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string, registry *registryclient.Client) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
 	if staticHandler == nil {
 		staticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version, registry: registry}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -133,6 +136,10 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
 	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
 	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
+	mux.HandleFunc("GET /registry/index", s.handleRegistryIndex)
+	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
+	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
+	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
 	mux.Handle("/", staticHandler)
 	return withCORS(mux)
 }

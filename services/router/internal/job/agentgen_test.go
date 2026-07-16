@@ -10,6 +10,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/agentselect"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -39,7 +40,7 @@ func TestGenerateAgentFromTaskJobDeliversDraftEvent(t *testing.T) {
 			`"capabilities":{"tools":["shell"],"mcp_servers":[],"skills":[]},"permissions":{}}`,
 	}}})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -114,7 +115,7 @@ func TestGenerateAgentFromDescriptionJobDeliversDraftEvent(t *testing.T) {
 			`"capabilities":{"tools":["shell"],"mcp_servers":["postgres"],"skills":[]},"permissions":{}}`,
 	}}})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -155,7 +156,7 @@ func TestGenerateAgentFromTaskFailsWhenGenerationFails(t *testing.T) {
 		Reply: `not json at all`,
 	}}})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 

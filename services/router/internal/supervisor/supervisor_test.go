@@ -11,6 +11,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -292,7 +293,7 @@ func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
-	jobs := job.New(data, fm)
+	jobs := job.New(data, fm, registryclient.New(""))
 
 	sup := newSupervisor(t, data, jobs)
 

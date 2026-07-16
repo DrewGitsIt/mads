@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -46,7 +47,7 @@ func TestNoopSampleJobRunsSpawnWorkExit(t *testing.T) {
 	data := dataclient.New(base, "router")
 	fm := testFastModel(t)
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -117,7 +118,7 @@ func TestFailingJobEmitsJobFailed(t *testing.T) {
 	data := dataclient.New(base, "router")
 	fm := testFastModel(t)
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

@@ -206,8 +206,10 @@ switcher over four shelves — Agents, Capabilities, Workspaces, Pipeline
 templates — each following the same shape: a `use<Shelf>.ts` hook
 (list+CRUD, refetch-on-any-event via `subscribeToEvents`) feeding a
 `<Shelf>Shelf.tsx` card grid, with a `SideSheet`-based `<Item>Editor.tsx` for
-create/edit. Browse Registry (`src/library/registry/RegistryShelfStub.tsx`)
-stays behind `FLAGS.remoteRegistry` and is a stub until its own work item.
+create/edit. Browse Registry (`src/library/registry/RegistryShelf.tsx`, gated
+behind `FLAGS.remoteRegistry`) browses/installs/updates agent, capability,
+and template bundles from a remote registry via `useRegistryIndex.ts`/
+`useRegistryJob.ts`, and publishes local items via `PublishDialog.tsx`.
 
 Agents (`src/library/agents/`) adds an NL-generate flow
 (`NLGenerateBox`/`useAgentGeneration.ts`) that posts to the W5.3
