@@ -27,13 +27,28 @@ is leased; foreign-leased tasks are left untouched.
 With `Isolated` on (W3.2), each task gets its own worktree and `mads/<task>`
 branch: pre-merge stages run there, a stage whose command starts `git merge`
 is the merge-back — serialized (one at a time), branch and trailer-carrying
-message supplied by the engine, conflicts aborted loudly into a blocker note
-naming the files — and post-merge stages (verify) run on the merged tree
-under the same lock. Uncommitted agent work is auto-committed with the task
-trailer before merging (never lost, always linked); merged worktrees are
-cleaned up, blocked ones kept for inspection with their path in the note. A
-post-commit hook installed in the workspace repo reports every commit —
-task context read from per-worktree git config — to the Data Service (§5).
+message supplied by the engine — and post-merge stages (verify) run on the
+merged tree under the same lock. Before that trunk-side merge, the engine
+merges current trunk into the task's own branch, inside its worktree
+(rebase-before-merge, Wave 7): if trunk moved since the branch was cut and
+git auto-resolves cleanly, a `build`-named stage (if the template defines
+one) re-runs as a sanity gate; either way "trunk moved under me" is a
+non-event, not a failure. If that in-worktree merge hits a real textual
+conflict, the engine does **not** abort it — conflict markers and `MERGE_MSG`
+are left exactly as git wrote them, and the merge stage fails with output
+naming the conflicted files plus the titles/descriptions of the trunk-side
+tasks whose merges introduced the conflicting changes (walked via `Task:`
+trailers since the branch's base). With no `loop_back` configured, that's
+still "task blocked, worktree and branch kept for inspection" as before; with
+a template-level `merge_resolve` stage (see `on_loop` below), that failure
+output is exactly the prompt a resolving agent needs. The primary-side abort
+in `worktrees.merge` remains as a rare defensive fallback for conflicts that
+somehow reach the trunk merge itself. Uncommitted agent work is
+auto-committed with the task trailer before merging (never lost, always
+linked); merged worktrees are cleaned up, blocked ones kept for inspection
+with their path in the note. A post-commit hook installed in the workspace
+repo reports every commit — task context read from per-worktree git config —
+to the Data Service (§5).
 
 Conventions the engine defines (until the spec §6 grammar grows richer):
 - An **agent stage fails** when the provider errors or the reply's last line
@@ -41,6 +56,22 @@ Conventions the engine defines (until the spec §6 grammar grows richer):
   `STAGE: pass` / `STAGE: fail — reason`).
 - `agent: auto` resolves to the `executor` system agent (quadrant routing is
   a later work item, §9).
+- A stage literally named **`build`** with a non-empty `command:` is, by
+  convention, the post-rebase sanity gate for isolated runs — symmetric with
+  how a `git merge` command prefix (not a name) identifies the merge stage.
+  Absent, the gate is simply skipped.
+- Immediately before the trunk merge, any file named **`HANDOFF.md`** (any
+  depth) still present on the task branch is removed and committed — the
+  architect→executor handoff convention says the executor deletes it, but
+  that's chronically forgotten; this is the backstop, not the primary path.
+
+`when:` grammar (`pkg/template.Cond`, shared with the Data Service so editor
+validation == launch validation, M9): `contains(labels, "x")` /
+`!contains(labels, "x")`, and `on_loop` / `!on_loop` — true only when the
+stage is entered via an `on_fail.loop_back` jump, never on its normal
+forward-pass visit. This lets a template add a stage (e.g. a `merge_resolve`
+agent) that costs nothing on the happy path and only runs after a failure
+sends work back to it.
 
 ## Run it alone
 
@@ -126,11 +157,22 @@ never a mock of either contract.
   TestRateLimitPauseHoldsLease.
 - **`when:` guards skip, visibly** — stage.skipped events, not silence:
   TestWhenGuardSkips.
-- **Conflicts block loudly and abort cleanly** — the trunk stays clean, the
-  conflicted files are named in the blocker note, the loser's branch and
-  worktree survive: TestConflictingPairBlocksSecond (a real same-lines
+- **A stale-but-conflict-free branch merges without blocking** —
+  rebase-before-merge auto-resolves trunk having moved, and the build-named
+  stage's sanity gate runs as part of it: TestStaleBranchMergesWithoutBlocking.
+- **Conflicts are left for resolution, not aborted** — the trunk stays clean
+  and holds the winner's version, but the loser's worktree keeps real
+  conflict markers (not a `merge --abort`), and the blocker note names both
+  the conflicted files and the trunk-side task whose merge introduced the
+  conflicting change: TestConflictingPairBlocksSecond (a real same-lines
   conflict needs both branches off a common base — concurrent tasks, not
   sequential ones).
+- **`on_loop` validates, skips the happy path, and enters after a loop-back**
+  — a template with a `merge_resolve` stage guarded by `when: on_loop` and
+  wired as the merge stage's `loop_back` target: TestOnLoopValidatesSkipsThenEntersMergeResolve.
+- **HANDOFF.md never reaches trunk** — swept and committed immediately before
+  the trunk merge, real work alongside it lands normally:
+  TestHandoffMdSweptBeforeMerge.
 - **Verify catches quiet conflicts** — two individually-clean merges whose
   combination breaks are caught on the merged tree: TestVerifyCatchesQuietConflict.
 - **Commits report themselves** — the post-commit hook posts from a task

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
 )
 
@@ -21,6 +22,7 @@ type worktrees struct {
 	root      string // where task worktrees live
 	dataURL   string
 	sessionID string
+	data      *dataclient.Client // task lookups for conflict diagnostics
 
 	setup   sync.Once
 	setupEr error
@@ -92,8 +94,10 @@ func (w *worktrees) commitStray(ctx context.Context, dir string, task contracts.
 
 // merge brings the task branch into the primary. mergeCmd comes from the
 // template (e.g. "git merge --no-ff"); the engine supplies the branch and
-// message. A conflict aborts cleanly and returns the conflicted files as the
-// error — the loud path (spec §6).
+// message. By the time this runs, rebaseBeforeMerge has already reconciled
+// the branch with trunk under the same mergeMu lock, so a conflict here is a
+// rare defensive fallback rather than the primary path — it still aborts
+// cleanly and returns the conflicted files as the error (spec §6).
 func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.Task, branch string) error {
 	// Two -m flags make subject + body paragraphs — %q on a multiline
 	// string would bake literal \n into the subject and break the trailer.
@@ -111,6 +115,129 @@ func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.T
 		return fmt.Errorf("merge conflict with the current trunk in:\n%s\n\nthe merge was aborted; the task's work is intact on branch %s — resolve by rebasing that branch or adjusting the conflicting tasks", files, branch)
 	}
 	return fmt.Errorf("merge failed: %v\n%s", err, strings.TrimSpace(string(out)))
+}
+
+// rebaseBeforeMerge merges current trunk (primary HEAD) into the branch,
+// inside the task's own worktree (dir), before the trunk-side merge — so
+// "trunk moved under me" is resolved here instead of surfacing as a conflict
+// against the primary. Called under mergeMu, same as the trunk merge itself.
+func (w *worktrees) rebaseBeforeMerge(ctx context.Context, dir string, task contracts.Task) (rebased bool, err error) {
+	trunkHead, err := w.git(ctx, w.primary, "rev-parse", "HEAD")
+	if err != nil {
+		return false, err
+	}
+	trunkHead = strings.TrimSpace(trunkHead)
+
+	// A previous loop_back attempt may have left a merge in progress here
+	// (a merge_resolve agent stage edited files but the resolution wasn't
+	// finished). Don't re-invoke `git merge` on top of that — either finish
+	// it mechanically (nothing left unmerged) or re-surface the same
+	// conflict.
+	if _, err := w.git(ctx, dir, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err == nil {
+		conflicts, _ := w.git(ctx, dir, "diff", "--name-only", "--diff-filter=U")
+		if strings.TrimSpace(conflicts) != "" {
+			return false, w.conflictErr(ctx, dir, conflicts, trunkHead)
+		}
+		if _, err := w.git(ctx, dir, "commit", "--no-edit"); err != nil {
+			return false, fmt.Errorf("rebase-before-merge: finishing the resolved merge: %v", err)
+		}
+		return true, nil
+	}
+
+	if _, err := w.git(ctx, dir, "merge-base", "--is-ancestor", trunkHead, "HEAD"); err == nil {
+		return false, nil // trunk hasn't moved since this branch last caught up: a non-event
+	}
+
+	subject := fmt.Sprintf("Merge trunk into %s (pipeline rebase-before-merge)", task.ID)
+	if _, err := w.git(ctx, dir, "merge", trunkHead, "-m", subject); err == nil {
+		return true, nil
+	}
+	conflicts, _ := w.git(ctx, dir, "diff", "--name-only", "--diff-filter=U")
+	if strings.TrimSpace(conflicts) == "" {
+		return false, fmt.Errorf("rebase-before-merge: merging trunk into the branch failed")
+	}
+	return false, w.conflictErr(ctx, dir, conflicts, trunkHead)
+}
+
+// conflictErr reports a rebase-before-merge conflict: the conflicted files
+// plus the trunk-side tasks whose merges introduced the conflicting changes.
+// The conflict state (markers, MERGE_MSG) is left in dir for a merge_resolve
+// stage or manual resolution — no `merge --abort` here.
+func (w *worktrees) conflictErr(ctx context.Context, dir, conflicts, trunkHead string) error {
+	base, _ := w.git(ctx, dir, "merge-base", "HEAD", trunkHead)
+	rangeSpec := trunkHead
+	if b := strings.TrimSpace(base); b != "" {
+		rangeSpec = b + ".." + trunkHead
+	}
+	return fmt.Errorf(
+		"rebase-before-merge: trunk has moved and conflicts with this branch's changes in:\n%s\n\n%s\n\nthe worktree merge was left unresolved (conflict markers and MERGE_MSG intact) for a merge_resolve stage or manual resolution",
+		strings.TrimSpace(conflicts), w.conflictingTrunkTasks(ctx, rangeSpec))
+}
+
+// conflictingTrunkTasks names the tasks whose merges landed the trunk
+// commits in rangeSpec, via the Task: trailer worktrees.merge stamps on
+// every merge commit (spec §5). Best-effort: this is diagnostic text for a
+// prompt, not a gate — a lookup failure degrades the message, never the
+// task's actual failure path.
+func (w *worktrees) conflictingTrunkTasks(ctx context.Context, rangeSpec string) string {
+	out, err := w.git(ctx, w.primary, "log", rangeSpec, "--format=%(trailers:key=Task,valueonly)")
+	if err != nil {
+		return "conflicting trunk-side task(s): could not be determined (" + err.Error() + ")"
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, line := range strings.Split(out, "\n") {
+		id := strings.TrimSpace(line)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return "conflicting trunk-side task(s): none identified (no Task trailer on the trunk commits since this branch's base)"
+	}
+	var b strings.Builder
+	b.WriteString("conflicting trunk-side task(s) since this branch's base:\n")
+	for _, id := range ids {
+		t, err := w.data.Task(ctx, id)
+		if err != nil {
+			fmt.Fprintf(&b, "- %s (could not fetch task: %v)\n", id, err)
+			continue
+		}
+		fmt.Fprintf(&b, "- %s: %s\n", id, t.Title)
+		if t.Description != "" {
+			fmt.Fprintf(&b, "  %s\n", strings.ReplaceAll(t.Description, "\n", "\n  "))
+		}
+	}
+	return b.String()
+}
+
+// sweepHandoff removes any file named HANDOFF.md, at any depth, still
+// present on the task branch — the architect→executor convention says the
+// executor deletes it, but that's chronically forgotten; this is the
+// backstop (Drew: "we can blindly delete anything called HANDOFF.md
+// pre-merge").
+func (w *worktrees) sweepHandoff(ctx context.Context, dir string, task contracts.Task) error {
+	out, err := w.git(ctx, dir, "ls-files", "-z")
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for _, p := range strings.Split(out, "\x00") {
+		if p != "" && filepath.Base(p) == "HANDOFF.md" {
+			stale = append(stale, p)
+		}
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	if _, err := w.git(ctx, dir, append([]string{"rm", "--"}, stale...)...); err != nil {
+		return err
+	}
+	msg := fmt.Sprintf("Remove HANDOFF.md before merge (pipeline convention)\n\nTask: %s", task.ID)
+	_, err = w.git(ctx, dir, "commit", "-m", msg)
+	return err
 }
 
 // remove cleans up after a fully-merged task. Blocked tasks keep their
