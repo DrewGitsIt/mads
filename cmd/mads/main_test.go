@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,5 +138,71 @@ rules:
 		if !strings.Contains(string(logRaw), "Task: "+task.ID) {
 			t.Errorf("trunk has no commit for %s", task.ID)
 		}
+	}
+
+	// The run leaves the session deactivated (derived state — active only
+	// while an agent process runs).
+	got, err := client.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Activity != contracts.SessionInactive {
+		t.Errorf("session activity after run: got %q, want %q", got.Activity, contracts.SessionInactive)
+	}
+	events, err := client.Events(ctx, 0, sess.ID, []string{"session.activity_changed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no session.activity_changed events")
+	}
+	last := events[len(events)-1]
+	if last.Actor != "pipeline" {
+		t.Errorf("activity_changed actor: got %q, want %q", last.Actor, "pipeline")
+	}
+	var transition struct{ From, To string }
+	if err := json.Unmarshal(last.Payload, &transition); err != nil {
+		t.Fatal(err)
+	}
+	if transition.To != "inactive" {
+		t.Errorf("activity_changed payload To: got %q, want %q", transition.To, "inactive")
+	}
+
+	// A second run on the same (now inactive) session flips it active again
+	// for its duration, then back to inactive when it ends.
+	var out2 bytes.Buffer
+	err = cmdRun([]string{
+		"-data", base, "-session", sess.ID, "-workspace", ws,
+		"-provider", "fake", "-fake-scenario", scenario, "-worktree-root", t.TempDir(),
+	}, &out2)
+	if err != nil {
+		t.Fatalf("second cmdRun: %v\n%s", err, out2.String())
+	}
+	got, err = client.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Activity != contracts.SessionInactive {
+		t.Errorf("session activity after second run: got %q, want %q", got.Activity, contracts.SessionInactive)
+	}
+	events, err = client.Events(ctx, 0, sess.ID, []string{"session.activity_changed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawActiveAfterFirst bool
+	for _, e := range events {
+		if e.Seq <= last.Seq {
+			continue // from the first run
+		}
+		var tr struct{ From, To string }
+		if err := json.Unmarshal(e.Payload, &tr); err != nil {
+			t.Fatal(err)
+		}
+		if tr.To == "active" {
+			sawActiveAfterFirst = true
+		}
+	}
+	if !sawActiveAfterFirst {
+		t.Errorf("expected an active transition after the first run's events, got %d total events", len(events))
 	}
 }

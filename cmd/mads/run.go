@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -41,7 +43,8 @@ func cmdRun(args []string, out io.Writer) error {
 		return fmt.Errorf("run: -session is required")
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	client := dataclient.New(*data, "pipeline")
 
 	// Frozen template copy + the same validation the editor runs (M9).
@@ -90,6 +93,43 @@ func cmdRun(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+
+	// A session may be inactive between runs (derived state, spec §1) — flip
+	// it active for this run's duration. The deferred deactivation below always
+	// sets it back to inactive when the run ends, regardless of the state it
+	// started in, so there's nothing to restore here.
+	sess, err := client.Session(ctx, *session)
+	if err != nil {
+		return fmt.Errorf("session %s: %w", *session, err)
+	}
+	if sess.Activity != contracts.SessionActive {
+		sess.Activity = contracts.SessionActive
+		if err := client.UpdateSession(ctx, &sess); err != nil {
+			return fmt.Errorf("activate session %s: %w", *session, err)
+		}
+	}
+
+	// Router-driven sessions get Activity flipped back to inactive by
+	// services/router/internal/supervisor.go's onSessionExit when their child
+	// process exits (~line 244). `mads run` sessions have no such child — this
+	// is the equivalent for the CLI-driven run path, so the two stay coherent:
+	// both leave Activity accurate without a session ever going active-forever.
+	defer func() {
+		// Best-effort and detached from ctx: a Ctrl-C that already cancelled ctx
+		// must not prevent this from landing, and a failure here must never
+		// shadow the run's real outcome (the named err return, set above).
+		deactivateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		cur, derr := client.Session(deactivateCtx, *session)
+		if derr != nil {
+			_, _ = fmt.Fprintf(out, "warning: could not deactivate session %s: %v\n", *session, derr)
+			return
+		}
+		cur.Activity = contracts.SessionInactive
+		if derr := client.UpdateSession(deactivateCtx, &cur); derr != nil {
+			_, _ = fmt.Fprintf(out, "warning: could not deactivate session %s: %v\n", *session, derr)
+		}
+	}()
 
 	// Tail the run's events to the terminal until the run returns AND the
 	// completion event has been printed (the stream is asynchronous).

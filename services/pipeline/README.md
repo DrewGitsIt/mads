@@ -64,6 +64,19 @@ reads, `pipeline.*`/`stage.*`/`task.*` events). Engine tests run against a
 REAL Data Service via `services/data/datatest` and against provider-fake —
 never a mock of either contract.
 
+## Out of scope
+
+- **Recency-based fallback for orphaned sessions.** `contracts.SessionActivity`
+  is derived state (spec §1): active while an agent process runs. The two
+  paths that flip it back to inactive on their own — the Router supervisor's
+  `onSessionExit` for Router-driven sessions, and `cmd/mads/run.go`'s deferred
+  cleanup for `mads run` sessions — both run only on paths that get a chance
+  to execute cleanup code (normal exit, SIGINT/SIGTERM). Neither covers a
+  process killed with `SIGKILL` or a host crash mid-run, which would leave a
+  session stuck `active` forever. A recency-based fallback (e.g. treat a
+  session as inactive if its last event is older than some TTL) would close
+  that gap but is unbuilt — left as future work.
+
 ## Critical paths
 
 - **Loop-backs terminate** — a persistently failing gate loops back exactly
