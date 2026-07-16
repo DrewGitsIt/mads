@@ -20,6 +20,14 @@
   width: 176px;
 }
 
+/* a collapse just happened while the pointer/focus was still on the rail —
+   hold the narrow width until the pointer actually leaves once. Higher
+   specificity (4 selectors vs. 3) wins regardless of source order. */
+.rail.collapsed[data-peek-suppressed="true"]:hover,
+.rail.collapsed[data-peek-suppressed="true"]:focus-within {
+  width: 44px;
+}
+
 .item {
   display: flex;
   align-items: center;
