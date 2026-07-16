@@ -65,6 +65,14 @@ type Options struct {
 // New returns the Router's HTTP handler. See Options's doc for the
 // nil-tolerant behavior of individual fields.
 func New(opts Options) http.Handler {
+	return withCORS(NewMux(opts))
+}
+
+// NewMux builds the Router's route table without the CORS wrapper. Exported
+// so tests (route_manifest_test.go) can introspect registered routes via
+// (*http.ServeMux).Handler without going over HTTP — New's CORS wrapper
+// hides the underlying *http.ServeMux from callers.
+func NewMux(opts Options) *http.ServeMux {
 	if opts.Preflight == nil {
 		opts.Preflight = preflight.StubChecker{}
 	}
@@ -163,7 +171,7 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
 	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
 	mux.Handle("/", opts.StaticHandler)
-	return withCORS(mux)
+	return mux
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {

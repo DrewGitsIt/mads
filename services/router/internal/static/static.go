@@ -1,19 +1,27 @@
 // Package static serves the built UI (ui/dist) at the Router's root so the
 // Electron shell and the Router's API share one origin. Kept separate from
 // internal/api because it has nothing to do with the JSON API contract — no
-// dataclient, no JSON, just files.
+// dataclient, just file serving (plus a small JSON 404 for non-navigation
+// requests that reach the fallback, see New).
 package static
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// New serves distDir (typically ui/dist) at "/", falling back to index.html
-// for any request path that isn't a real file under distDir — the built SPA
-// owns client-side routing for everything past that.
+// New serves distDir (typically ui/dist) at "/". A request for a real file
+// under distDir gets that file; a navigation-shaped request (GET/HEAD, no
+// file extension, Accept prefers text/html) for anything else falls back to
+// index.html so the built SPA owns client-side routing. Everything else that
+// reaches the fallback — a wrong method, a non-html Accept (e.g. a bare
+// fetch()), or an extensioned path with no matching file — is a caller
+// probing for a resource, not a browser navigating, and gets a JSON 404
+// instead of silently 200'ing as the SPA shell (see isNavigationRequest).
 //
 // Whether the UI is built is checked on every request, not cached once at
 // construction: scripts/app.sh starts the Router before running `npm
@@ -38,13 +46,40 @@ func New(distDir string) http.Handler {
 		// filepath.Clean strips any ".." that would otherwise escape
 		// distDir before it's joined in — a rooted path (r.URL.Path always
 		// starts with "/") can't climb above root.
-		path := filepath.Join(distDir, filepath.Clean(r.URL.Path))
-		if info, err := os.Stat(path); err != nil || info.IsDir() {
+		fsPath := filepath.Join(distDir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(fsPath); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if isNavigationRequest(r) {
 			http.ServeFile(w, r, index)
 			return
 		}
-		fileServer.ServeHTTP(w, r)
+		writeNotFoundJSON(w, r)
 	})
+}
+
+// isNavigationRequest reports whether r looks like a browser navigating to a
+// client-side SPA route, as opposed to a caller (fetch, curl, a missing/
+// typo'd API route) probing for a resource. Only GET/HEAD requests for an
+// extensionless path whose Accept header explicitly names text/html
+// qualify — a bare fetch() (Accept defaults to "*/*", not "text/html") or a
+// request for a path with an extension never does, so an absent API route
+// 404s as JSON instead of silently 200'ing as the SPA shell.
+func isNavigationRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if filepath.Ext(r.URL.Path) != "" {
+		return false
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
+}
+
+func writeNotFoundJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "not found", "path": r.URL.Path})
 }
 
 const notBuiltPage = `<!doctype html>
