@@ -10,12 +10,20 @@ import (
 //
 //	contains(labels, "x")
 //	!contains(labels, "x")
+//	on_loop
+//	!on_loop
+//
+// on_loop is true only when the stage is entered via an on_fail.loop_back
+// jump — never on the stage's normal forward-pass visit. It lets a template
+// add a stage (e.g. a merge_resolve agent) that costs nothing on the happy
+// path.
 //
 // It lives here — not in the engine — so the template editor rejects exactly
 // the expressions launch would reject (M9), and grows only by extending this
 // one parser.
 type Cond struct {
 	negated bool
+	onLoop  bool // true: this atom is on_loop, not contains(...)
 	arg     string
 }
 
@@ -29,6 +37,10 @@ func ParseCond(s string) (*Cond, error) {
 	if strings.HasPrefix(expr, "!") {
 		c.negated = true
 		expr = strings.TrimSpace(expr[1:])
+	}
+	if expr == "on_loop" {
+		c.onLoop = true
+		return c, nil
 	}
 	rest, ok := strings.CutPrefix(expr, "contains")
 	if !ok {
@@ -56,8 +68,15 @@ func ParseCond(s string) (*Cond, error) {
 	return c, nil
 }
 
-// Eval answers the guard against a task's labels.
-func (c *Cond) Eval(labels []string) bool {
+// Eval answers the guard against a task's labels and whether this stage
+// entry was reached via an on_fail.loop_back jump.
+func (c *Cond) Eval(labels []string, onLoop bool) bool {
+	if c.onLoop {
+		if c.negated {
+			return !onLoop
+		}
+		return onLoop
+	}
 	if c.arg == "" {
 		return true // the always-true guard
 	}

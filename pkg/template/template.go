@@ -2,6 +2,8 @@
 // shared by the Data Service (POST /templates/validate, saves) and the
 // Pipeline Engine (launch) so "Validate" in the editor runs literally the
 // same checks as starting a run — one artifact, one grammar, one judge.
+//
+// A stage's `when:` guard is parsed by ParseCond; see Cond for the grammar.
 package template
 
 import (

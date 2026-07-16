@@ -156,6 +156,7 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		e.wt = &worktrees{
 			primary: cfg.Cwd, root: cfg.WorktreeRoot,
 			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
+			data: cfg.Data,
 		}
 	}
 	return e.run(ctx)
@@ -437,6 +438,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 
 	stages := e.cfg.Template.Stages
 	var feedback string // most recent failure, fed to the next agent attempt
+	var loopedInto bool // true for exactly the stage index just jumped to via loop_back
 	for i := 0; i < len(stages); {
 		st := stages[i]
 		if ctx.Err() != nil {
@@ -447,7 +449,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			e.block(ctx, &task, st.Name, blockReason("run cancelled"))
 			return contracts.StatusBlocked
 		}
-		if !e.conds[i].Eval(task.Labels) {
+		onLoop := loopedInto
+		loopedInto = false
+		if !e.conds[i].Eval(task.Labels, onLoop) {
 			e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
 				"stage": st.Name, "when": st.When,
 			})
@@ -466,6 +470,20 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				mergeHeld = true
 			}
 			err = e.wt.commitStray(ctx, run.dir, task)
+			var rebased bool
+			if err == nil {
+				rebased, err = e.wt.rebaseBeforeMerge(ctx, run.dir, task)
+			}
+			if err == nil && rebased {
+				if buildCmd, ok := buildStageCommand(stages); ok {
+					if _, berr := e.runCommand(ctx, buildCmd, run.dir); berr != nil {
+						err = fmt.Errorf("post-rebase sanity build failed: %w", berr)
+					}
+				}
+			}
+			if err == nil {
+				err = e.wt.sweepHandoff(ctx, run.dir, task)
+			}
 			if err == nil {
 				err = e.wt.merge(ctx, st.Command, task, run.branch)
 			}
@@ -508,6 +526,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 					"stage %s failed (loop-back %d/%d to %s): %s",
 					st.Name, taken, of.MaxLoops, of.LoopBack, trim(output, 2000)))
 				i = stageIndex(stages, of.LoopBack)
+				loopedInto = true
 				continue
 			}
 		}
@@ -580,6 +599,19 @@ type taskRun struct {
 // supplies the branch and serialization (spec §6).
 func isMergeStage(st template.Stage) bool {
 	return strings.HasPrefix(strings.TrimSpace(st.Command), "git merge")
+}
+
+// buildStageCommand finds a stage literally named "build" with a non-empty
+// command, by convention — symmetric with how isMergeStage recognizes the
+// merge stage by its command prefix rather than its name. Used as the
+// post-rebase sanity gate; absent, the gate is simply skipped.
+func buildStageCommand(stages []template.Stage) (string, bool) {
+	for _, st := range stages {
+		if st.Name == "build" && st.Command != "" {
+			return st.Command, true
+		}
+	}
+	return "", false
 }
 
 // runStage executes one stage in dir; a nil error is a pass. output carries

@@ -29,22 +29,41 @@ stages:
     on_fail: { then: block }
 `
 
-func (h *harness) runIsolated(t *testing.T, p *fake.Fake, tpl string, concurrency int) *Summary {
+// isolatedTemplateWithBuild adds a build-named stage before merge, so the
+// post-rebase sanity gate (buildStageCommand) has something to run.
+const isolatedTemplateWithBuild = `name: isolated-build
+stages:
+  - name: executor
+    agent: executor
+  - name: build
+    command: make build
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+    on_fail: { then: block }
+`
+
+// runIsolated returns the summary and the worktree root, so tests can
+// construct a specific task's worktree path (filepath.Join(root, task.ID))
+// to inspect state left behind (e.g. unresolved conflict markers).
+func (h *harness) runIsolated(t *testing.T, p *fake.Fake, tpl string, concurrency int) (*Summary, string) {
 	t.Helper()
 	parsed, verr := template.Check([]byte(tpl), func(string) bool { return true })
 	if verr != nil {
 		t.Fatal(verr)
 	}
+	root := t.TempDir()
 	sum, err := Run(context.Background(), Config{
 		Data: h.data, Provider: p, SessionID: h.sess.ID,
 		Template: parsed, Cwd: h.cwd, Concurrency: concurrency,
 		StageTimeout: 30 * time.Second,
-		Isolated:     true, WorktreeRoot: t.TempDir(), DataURL: h.base,
+		Isolated:     true, WorktreeRoot: root, DataURL: h.base,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sum
+	return sum, root
 }
 
 func mustScenario(t *testing.T, rules ...fake.Rule) *fake.Fake {
@@ -68,7 +87,7 @@ func TestIndependentTasksMergeCleanly(t *testing.T) {
 			Tools: []fake.ToolStep{{Name: "write_file", Path: "beta.txt", Content: "beta\n"}}},
 	)
 	seeded := h.seed(contracts.Task{Title: "alpha"}, contracts.Task{Title: "beta"})
-	sum := h.runIsolated(t, f, isolatedTemplate, 2)
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 2)
 
 	if len(sum.Done) != 2 {
 		t.Fatalf("summary: %+v; tasks: %+v %+v", sum, h.task(t, seeded[0].ID), h.task(t, seeded[1].ID))
@@ -105,8 +124,9 @@ func TestIndependentTasksMergeCleanly(t *testing.T) {
 }
 
 // The done criterion, second half: a same-lines conflict blocks the second
-// task with the conflicted file named in its feedback, the merge is aborted
-// (trunk stays clean), and the loser's worktree is kept for inspection.
+// task with the conflicted file (and the trunk task that caused it) named in
+// its feedback, the conflict state is left unresolved in the worktree (not
+// aborted), and the loser's worktree is kept for inspection.
 func TestConflictingPairBlocksSecond(t *testing.T) {
 	h := newHarness(t)
 	// Both tasks must branch from the SAME base for their same-file writes
@@ -120,7 +140,7 @@ func TestConflictingPairBlocksSecond(t *testing.T) {
 			Tools: []fake.ToolStep{{Name: "write_file", Path: "shared.txt", Content: "second version\n"}}},
 	)
 	h.seed(contracts.Task{Title: "first"}, contracts.Task{Title: "second"})
-	sum := h.runIsolated(t, f, isolatedTemplate, 2)
+	sum, worktreeRoot := h.runIsolated(t, f, isolatedTemplate, 2)
 
 	if len(sum.Done) != 1 || len(sum.Blocked) != 1 {
 		t.Fatalf("summary: %+v", sum)
@@ -138,12 +158,15 @@ func TestConflictingPairBlocksSecond(t *testing.T) {
 	if note == nil {
 		t.Fatal("no blocker note on the conflicting task")
 	}
-	for _, want := range []string{"shared.txt", "conflict", "worktree is kept"} {
+	// "first" is the trunk-side task whose merge landed the conflicting
+	// change — the note must name it, not just the conflicted file.
+	for _, want := range []string{"shared.txt", "conflict", "worktree is kept", "first"} {
 		if !strings.Contains(note.Content, want) {
 			t.Errorf("blocker note missing %q:\n%s", want, note.Content)
 		}
 	}
-	// The aborted merge left the trunk clean, holding the winner's version.
+	// The trunk is clean and holds the winner's version — the conflict never
+	// even reached the primary-side git merge.
 	if status := gitOut(t, h.cwd, "status", "--porcelain"); strings.TrimSpace(status) != "" {
 		t.Errorf("trunk dirty after aborted merge:\n%s", status)
 	}
@@ -151,9 +174,78 @@ func TestConflictingPairBlocksSecond(t *testing.T) {
 	if err != nil || string(raw) != "first version\n" {
 		t.Errorf("trunk shared.txt: %q, %v", raw, err)
 	}
+	// The conflict state was left in the blocked task's own worktree, not
+	// aborted: real conflict markers are still there.
+	conflicted, err := os.ReadFile(filepath.Join(worktreeRoot, blocked.ID, "shared.txt"))
+	if err != nil || !strings.Contains(string(conflicted), "<<<<<<<") {
+		t.Errorf("blocked task's worktree shared.txt lacks conflict markers: %q, %v", conflicted, err)
+	}
 	// The loser's branch survives for manual merge-back.
 	if branches := gitOut(t, h.cwd, "branch", "--list", "mads/*"); !strings.Contains(branches, "mads/"+blocked.ID) {
 		t.Errorf("blocked task's branch is gone:\n%s", branches)
+	}
+}
+
+// A stale-but-conflict-free branch (trunk moved while the task worked,
+// touching a different file) auto-resolves inside the worktree via
+// rebase-before-merge and merges without blocking — "trunk moved under me"
+// is a non-event. The build-named stage's sanity gate runs as part of that.
+func TestStaleBranchMergesWithoutBlocking(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: first", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "first.txt", Content: "first\n"}}},
+		fake.Rule{Match: "Task: second", Reply: "done", DelayMs: 300,
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "second.txt", Content: "second\n"}}},
+	)
+	h.seed(contracts.Task{Title: "first"}, contracts.Task{Title: "second"})
+	sum, _ := h.runIsolated(t, f, isolatedTemplateWithBuild, 2)
+
+	if len(sum.Done) != 2 || len(sum.Blocked) != 0 {
+		t.Fatalf("summary: %+v", sum)
+	}
+	for _, name := range []string{"first.txt", "second.txt"} {
+		if _, err := os.Stat(filepath.Join(h.cwd, name)); err != nil {
+			t.Errorf("%s missing from merged trunk", name)
+		}
+	}
+	if status := gitOut(t, h.cwd, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+		t.Errorf("trunk dirty after merges:\n%s", status)
+	}
+}
+
+// A HANDOFF.md left on a task branch never reaches trunk: the sweep removes
+// it immediately before the trunk merge, and the task's real work still
+// lands.
+func TestHandoffMdSweptBeforeMerge(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: leaves handoff", Reply: "done",
+			Tools: []fake.ToolStep{
+				{Name: "write_file", Path: "HANDOFF.md", Content: "architect notes\n"},
+				{Name: "write_file", Path: "sub/HANDOFF.md", Content: "nested notes\n"},
+				{Name: "write_file", Path: "work.txt", Content: "the actual work\n"},
+			}},
+	)
+	seeded := h.seed(contracts.Task{Title: "leaves handoff"})
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	for _, name := range []string{"HANDOFF.md", "sub/HANDOFF.md"} {
+		if _, err := os.Stat(filepath.Join(h.cwd, name)); !os.IsNotExist(err) {
+			t.Errorf("%s reached trunk (err: %v)", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "work.txt")); err != nil {
+		t.Errorf("real work file missing from merged trunk: %v", err)
+	}
+	// The sweep didn't silently eat the merge: a merge commit for the task
+	// still exists, carrying its Task trailer.
+	trailers := gitOut(t, h.cwd, "log", "--format=%(trailers:key=Task,valueonly)")
+	if !strings.Contains(trailers, seeded[0].ID) {
+		t.Errorf("no merge commit carries the task trailer for %s; trailers:\n%s", seeded[0].ID, trailers)
 	}
 }
 
@@ -177,7 +269,7 @@ func TestVerifyCatchesQuietConflict(t *testing.T) {
 			Tools: []fake.ToolStep{{Name: "write_file", Path: "two.marker", Content: "2"}}},
 	)
 	seeded := h.seed(contracts.Task{Title: "one"}, contracts.Task{Title: "two"})
-	sum := h.runIsolated(t, f, isolatedTemplate, 1)
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 1)
 
 	if len(sum.Done) != 1 || len(sum.Blocked) != 1 {
 		t.Fatalf("summary: %+v; tasks: %+v %+v", sum, h.task(t, seeded[0].ID), h.task(t, seeded[1].ID))

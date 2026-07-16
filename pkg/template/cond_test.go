@@ -9,20 +9,25 @@ func TestParseCondAndEval(t *testing.T) {
 	cases := []struct {
 		expr    string
 		labels  []string
+		onLoop  bool
 		want    bool
 		wantErr string
 	}{
-		{"", nil, true, ""},
-		{`contains(labels, "trivial")`, []string{"trivial"}, true, ""},
-		{`contains(labels, "trivial")`, []string{"big"}, false, ""},
-		{`!contains(labels, "trivial")`, []string{"big"}, true, ""},
-		{`!contains(labels, "trivial")`, []string{"trivial", "big"}, false, ""},
-		{`! contains( task.labels , 'trivial' )`, nil, true, ""},
-		{`equals(labels, "x")`, nil, false, "unknown when-expression"},
-		{`contains(status, "done")`, nil, false, "only the task's labels"},
-		{`contains(labels, trivial)`, nil, false, "quoted string"},
-		{`contains(labels, "")`, nil, false, "must not be empty"},
-		{`contains(labels "x")`, nil, false, "contains takes"},
+		{"", nil, false, true, ""},
+		{`contains(labels, "trivial")`, []string{"trivial"}, false, true, ""},
+		{`contains(labels, "trivial")`, []string{"big"}, false, false, ""},
+		{`!contains(labels, "trivial")`, []string{"big"}, false, true, ""},
+		{`!contains(labels, "trivial")`, []string{"trivial", "big"}, false, false, ""},
+		{`! contains( task.labels , 'trivial' )`, nil, false, true, ""},
+		{`equals(labels, "x")`, nil, false, false, "unknown when-expression"},
+		{`contains(status, "done")`, nil, false, false, "only the task's labels"},
+		{`contains(labels, trivial)`, nil, false, false, "quoted string"},
+		{`contains(labels, "")`, nil, false, false, "must not be empty"},
+		{`contains(labels "x")`, nil, false, false, "contains takes"},
+		{"on_loop", nil, false, false, ""},
+		{"on_loop", nil, true, true, ""},
+		{"!on_loop", nil, false, true, ""},
+		{"!on_loop", nil, true, false, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.expr, func(t *testing.T) {
@@ -36,8 +41,8 @@ func TestParseCondAndEval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := cond.Eval(c.labels); got != c.want {
-				t.Errorf("Eval(%v) = %v, want %v", c.labels, got, c.want)
+			if got := cond.Eval(c.labels, c.onLoop); got != c.want {
+				t.Errorf("Eval(%v, %v) = %v, want %v", c.labels, c.onLoop, got, c.want)
 			}
 		})
 	}
