@@ -14,7 +14,7 @@ describe("ModelField", () => {
         return Promise.resolve(new Response(JSON.stringify(["claude-code"]), { status: 200 }));
       }
       return Promise.resolve(
-        new Response(JSON.stringify([{ id: "opus", name: "Opus" }]), { status: 200 }),
+        new Response(JSON.stringify({ models: [{ id: "opus", name: "Opus" }] }), { status: 200 }),
       );
     });
     vi.stubGlobal("fetch", fetchMock);
