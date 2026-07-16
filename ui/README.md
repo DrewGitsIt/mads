@@ -25,8 +25,13 @@ registered as `SURFACES.settings`, no demo mount needed) and `src/router/`
 interface + `FetchRouterClient`/`FakeRouterClient` implementations, used
 everywhere via the shared `router` singleton (or an injected `client` prop
 in tests), plus `subscribeToEvents` for the SSE event stream. `ConversationTab`
-is not yet an entry in `SURFACES`; it's reachable standalone via the
-`conversation` demo mount below.
+is reached by selecting a session in the Sessions rail (`SessionsSurface`),
+which mounts it in the main pane passing the shared `router` singleton and
+the Electron PTY bridge when present — it's still not its own `SURFACES`
+entry, since `SURFACES` maps `IconRail` items, not in-surface state. The
+`conversation` demo mount below still exists standalone (against
+`FakeRouterClient` fixtures) for reviewing it in isolation without a live
+Router.
 
 Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
 `docs/palette-mockups.html` (the approved source for all three shipping
@@ -80,8 +85,10 @@ Opens `conversation.html`: the Conversation tab (`src/conversation/
 ConversationTab.tsx`) mounted standalone against `FakeRouterClient` fixtures
 (`src/router/fixtures.ts`), with a picker to switch between an active and an
 inactive (summary-card) session, and a toy in-memory pty so terminal mode and
-the Shell dock are reviewable without Electron. This is the review artifact
-until W6.2's tab registry exists to register `ConversationTab` into properly.
+the Shell dock are reviewable without Electron. In the real app,
+`ConversationTab` is mounted by `SessionsSurface` when a session is selected
+in the rail (back/deselect returns to the Launchpad); this demo mount remains
+useful for reviewing it in isolation without a live Router.
 
 Terminal mode and the docked Shell use `@xterm/xterm` over a `PtyBridge`
 (`src/conversation/TerminalRenderer/ptyBridge.ts`). The real pty transport

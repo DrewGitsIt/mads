@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { SessionsSurface } from "./SessionsSurface";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { Session } from "../../router/types";
@@ -13,6 +13,33 @@ function makeSession(overrides: Partial<Session>): Session {
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides,
   };
+}
+
+function json(body: unknown) {
+  return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+}
+
+/** Scopes queries to the rail, since a selected session's name also appears in the ConversationHeader. */
+function rail() {
+  return within(screen.getByLabelText("Session list"));
+}
+
+/** Stubs fetch to serve the session list plus the per-session endpoints ConversationTab calls. */
+function stubSessionsAndConversationFetch(sessions: Session[]) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((input: URL) => {
+      const url = input.toString();
+      if (url.match(/\/sessions\/[^/]+\/transcript/)) return json([]);
+      if (url.match(/\/sessions\/[^/]+$/)) {
+        const id = url.split("/sessions/")[1];
+        const session = sessions.find((s) => s.id === id);
+        return session ? json(session) : Promise.resolve(new Response("not found", { status: 404 }));
+      }
+      if (url.includes("/sessions")) return json(sessions);
+      return json([]);
+    }),
+  );
 }
 
 describe("SessionsSurface", () => {
@@ -63,24 +90,76 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.getByText("Worktree merge-back UX")).toBeTruthy());
   });
 
-  it("selects the session named by jumpToSessionId once sessions load", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation(() =>
-        Promise.resolve(
-          new Response(
-            JSON.stringify([makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })]),
-            { status: 200 },
-          ),
-        ),
-      ),
-    );
+  it("selects the session named by jumpToSessionId once sessions load and shows its conversation", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })];
+    stubSessionsAndConversationFetch(sessions);
 
     render(<SessionsSurface jumpToSessionId="s2" />);
 
     await waitFor(() => {
-      const row = screen.getByText("Bravo").closest("button");
+      const row = rail().getByText("Bravo").closest("button");
       expect(row?.className.includes("selected")).toBe(true);
     });
+
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    expect(screen.getAllByText("Bravo").length).toBeGreaterThan(1);
+  });
+
+  it("mounts the conversation for the selected session", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })];
+    stubSessionsAndConversationFetch(sessions);
+
+    render(<SessionsSurface />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    rail().getByText("Alpha").closest("button")?.click();
+
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    expect(screen.getByText("Chat")).toBeTruthy();
+    expect(screen.getByText("Terminal")).toBeTruthy();
+  });
+
+  it("returns to the Launchpad via the back control", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha" })];
+    stubSessionsAndConversationFetch(sessions);
+
+    render(<SessionsSurface />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    rail().getByText("Alpha").closest("button")?.click();
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+
+    screen.getByLabelText("Back to Launchpad").click();
+
+    await waitFor(() => expect(screen.getByText("What can I help you with?")).toBeTruthy());
+    expect(screen.queryByLabelText("Back to Launchpad")).toBeNull();
+  });
+
+  it("returns to the Launchpad by re-clicking the selected row", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha" })];
+    stubSessionsAndConversationFetch(sessions);
+
+    render(<SessionsSurface />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    rail().getByText("Alpha").closest("button")?.click();
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+
+    rail().getByText("Alpha").closest("button")?.click();
+
+    await waitFor(() => expect(screen.getByText("What can I help you with?")).toBeTruthy());
+  });
+
+  it("selecting an inactive session renders without crashing", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha", activity: "inactive" })];
+    stubSessionsAndConversationFetch(sessions);
+
+    render(<SessionsSurface />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    rail().getByText("Alpha").closest("button")?.click();
+
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    expect(screen.getByText("Chat")).toBeTruthy();
   });
 });
