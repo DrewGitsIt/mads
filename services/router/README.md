@@ -8,7 +8,7 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1, W4.2, W4.6, W5.3, W5.4, and W5.5 complete.** Child process supervision
+**Status: W4.1, W4.2, W4.6, W5.3, W5.4, W5.5, and W7.5 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
 (`internal/api`) are built and tested against real spawned processes, real SSE
 connections, and a real Data Service. `internal/job` adds the spawn-run-exit pattern for
@@ -67,6 +67,18 @@ the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned
 never called peer-to-peer.
 
 - `GET /health` — `{"service":"router","status":"ok"}`
+- `GET /version` — `{"version": "..."}`, the linker-set build version (`-ldflags
+  -X main.version=...`, `"dev"` in local builds). `cmd/mads update apply`'s health check
+  after a binary swap calls the *binary* directly (`mads --version`), not this route — this
+  one is what the Settings panel reads to show "you're on vX.Y.Z" without a network call.
+- `POST /update/check` — the only place a release feed is ever contacted (spec §14.3): no
+  polling, no auto-phone-home, this route only runs when the UI/CLI calls it. Reads
+  `Config.UpdateFeedURL`; empty (the default — no release feed exists yet) short-circuits
+  to `{"current_version", "detail": "no update feed configured"}` without any outbound
+  request. Otherwise fetches and parses the feed via `pkg/update.Check`; a fetch/parse
+  failure never turns into an HTTP error — same "never a hard error, always data"
+  philosophy as `/preflight` — it comes back 200 with a `detail` explaining why. Success:
+  `{"current_version", "latest_version", "update_available", "notes"}` (`pkg/update.CheckResult`).
 - `GET /preflight` — per-check environment health (git, Data Service reachability, disk
   space, registered provider binaries + versions against `pkg/preflight`'s compatibility
   matrix), each with `{name, healthy, detail?, fix_hint?}` (spec §14.8-9); no request body,

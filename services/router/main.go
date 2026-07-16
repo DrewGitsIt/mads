@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -72,7 +73,7 @@ func defaultChildCmd(name, goRunFallback string) string {
 }
 
 func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, staticHandler)
+	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, staticHandler, version)
 }
 
 func main() {
@@ -139,6 +140,18 @@ func main() {
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
+
+	// Best-effort, never fatal if it fails: `mads update apply`'s Stop hook
+	// reads this to find and gracefully drain a locally-running Router
+	// (W7.5). A crash leaves a stale PID file behind, which that Stop hook
+	// already handles correctly (checks the process is actually alive, not
+	// just that the file exists, before signaling).
+	pidPath := filepath.Join(*madsHome, "router.pid")
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		log.Printf("router: write pid file: %v", err)
+	}
+	defer func() { _ = os.Remove(pidPath) }()
+
 	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist))}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

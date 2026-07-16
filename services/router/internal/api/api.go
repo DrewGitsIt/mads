@@ -30,6 +30,7 @@ type server struct {
 	preflight    preflight.Checker
 	vaultRefs    *vault.RefStore
 	vaultSources []vault.Source
+	version      string
 }
 
 // New returns the Router's HTTP handler. creds may be nil (credential
@@ -38,18 +39,20 @@ type server struct {
 // vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
 // be nil or empty (GET /credentials/vault-sources reports no sources).
 // staticHandler serves the built UI at "/" (see internal/static); nil
-// defaults to http.NotFoundHandler(), matching the pre-W7.5 behavior of
+// defaults to http.NotFoundHandler(), matching the prior behavior of
 // having no "/" route at all.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler) http.Handler {
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
 	if staticHandler == nil {
 		staticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)

@@ -1,0 +1,10 @@
+{
+  "version": "9.9.9",
+  "notes": "fixture release notes",
+  "platforms": {
+    "linux_amd64": {
+      "url": "http://example.invalid/mads_linux_amd64.tar.gz",
+      "sha256": "deadbeef"
+    }
+  }
+}
