@@ -1,10 +1,19 @@
 package api_test
 
 import (
+	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/vault"
+	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 // TestCredentialValueNeverCrossesTheWireBack is the security acceptance
@@ -90,6 +99,142 @@ func TestCredentialImportNeverEchoesValues(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("imported credential missing from store: %v", names)
+	}
+}
+
+// TestCredentialEnvCandidatesUsesAllowlistNotHeuristic proves the env-import
+// candidate scan (spec §13.7) is a declared allowlist, not a suffix
+// heuristic: a known credential name is surfaced, an arbitrary process env
+// var is not, even though neither name is stored yet.
+func TestCredentialEnvCandidatesUsesAllowlistNotHeuristic(t *testing.T) {
+	srv := newTestServer(t)
+	t.Setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+	t.Setenv("MY_RANDOM_VAR", "some-value")
+
+	resp, err := http.Get(srv.URL + "/credentials/env-candidates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates := decodeJSON[[]string](t, resp)
+
+	hasAllowlisted, hasRandom := false, false
+	for _, c := range candidates {
+		if c == "ANTHROPIC_API_KEY" {
+			hasAllowlisted = true
+		}
+		if c == "MY_RANDOM_VAR" {
+			hasRandom = true
+		}
+	}
+	if !hasAllowlisted {
+		t.Errorf("candidates missing allowlisted ANTHROPIC_API_KEY: %v", candidates)
+	}
+	if hasRandom {
+		t.Errorf("candidates must not include a non-allowlisted var via heuristic match: %v", candidates)
+	}
+}
+
+// newTestServerWithVaultSources is like newTestServer but wires real
+// vault.Source implementations, for tests exercising GET
+// /credentials/vault-sources against an actually-unhealthy source.
+func newTestServerWithVaultSources(t *testing.T, sources []vault.Source) *httptest.Server {
+	t.Helper()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), sources, "test"))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestVaultSourcesReportsRealUnhealthySourceWithActionableError is the "real
+// backends degrade with actionable errors" acceptance criterion, exercised
+// end to end through the Router's HTTP surface (not just the pkg/vault unit
+// level): a real vault.Source pointed at a nonexistent CLI binary reports
+// unhealthy with install guidance in the response body.
+func TestVaultSourcesReportsRealUnhealthySourceWithActionableError(t *testing.T) {
+	src := vault.NewOnePassword(vault.OnePasswordConfig{Bin: filepath.Join(t.TempDir(), "does-not-exist-op")})
+	srv := newTestServerWithVaultSources(t, []vault.Source{src})
+
+	resp, err := http.Get(srv.URL + "/credentials/vault-sources")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := decodeJSON[[]struct {
+		Name    string `json:"name"`
+		Healthy bool   `json:"healthy"`
+		Error   string `json:"error"`
+	}](t, resp)
+	if len(sources) != 1 {
+		t.Fatalf("vault-sources = %+v, want exactly 1", sources)
+	}
+	if sources[0].Healthy {
+		t.Fatalf("vault-sources[0].Healthy = true, want false (CLI missing)")
+	}
+	if !strings.Contains(sources[0].Error, "https://developer.1password.com") {
+		t.Fatalf("vault-sources[0].Error = %q, want an actionable install URL, not a bare exec error", sources[0].Error)
+	}
+}
+
+// TestVaultRefCRUDRoundTrip covers list/set/delete for vault-backed
+// credential refs. path is a locator, not a secret, so echoing it back is
+// fine — unlike a credential value.
+func TestVaultRefCRUDRoundTrip(t *testing.T) {
+	srv := newTestServer(t)
+
+	setResp := postJSON(t, srv.URL+"/credentials/vault-refs", map[string]string{
+		"name": "MY_VAULT_TOKEN", "source": "1password", "path": "op://Eng/aws/secret",
+	})
+	if setResp.StatusCode != http.StatusCreated {
+		t.Fatalf("set: status %d", setResp.StatusCode)
+	}
+
+	type refInfo struct {
+		Name   string `json:"name"`
+		Source string `json:"source"`
+		Path   string `json:"path"`
+	}
+
+	listResp, err := http.Get(srv.URL + "/credentials/vault-refs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := decodeJSON[[]refInfo](t, listResp)
+	found := false
+	for _, ref := range refs {
+		if ref.Name == "MY_VAULT_TOKEN" {
+			found = true
+			if ref.Source != "1password" || ref.Path != "op://Eng/aws/secret" {
+				t.Errorf("ref = %+v, want source=1password path=op://Eng/aws/secret", ref)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("stored ref missing from list: %v", refs)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, srv.URL+"/credentials/vault-refs/MY_VAULT_TOKEN", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete: status %d", delResp.StatusCode)
+	}
+
+	listResp2, err := http.Get(srv.URL + "/credentials/vault-refs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs2 := decodeJSON[[]refInfo](t, listResp2)
+	for _, ref := range refs2 {
+		if ref.Name == "MY_VAULT_TOKEN" {
+			t.Fatalf("deleted ref still present: %v", refs2)
+		}
 	}
 }
 

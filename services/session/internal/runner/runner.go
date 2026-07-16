@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
@@ -71,6 +72,12 @@ type Runner struct {
 	// MCPRegistry coordinates system-wide MCP server processes (spec §12.5).
 	// Nil disables capability wiring the same way a nil CredStore does.
 	MCPRegistry *capability.Registry
+
+	// VaultResolver resolves capability credential env vars that reference an
+	// external vault (spec §13.8), for names credstore doesn't have. Nil
+	// disables vault resolution entirely — capabilities fall back to
+	// credstore-only behavior exactly as before this field existed.
+	VaultResolver *vault.Resolver
 
 	wt *worktree.Manager // built lazily the first time isolation is needed
 

@@ -28,6 +28,7 @@ type server struct {
 	providers    *provider.Registry
 	creds        *credstore.Store
 	preflight    preflight.Checker
+	vaultRefs    *vault.RefStore
 	vaultSources []vault.Source
 	version      string
 }
@@ -35,11 +36,13 @@ type server struct {
 // New returns the Router's HTTP handler. creds may be nil (credential
 // endpoints degrade to 503); a nil preflightChecker defaults to
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, version string) http.Handler {
+// vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
+// be nil or empty (GET /credentials/vault-sources reports no sources).
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, version string) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, version: version}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -116,6 +119,9 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /credentials/env-candidates", s.handleCredentialEnvCandidates)
 	mux.HandleFunc("POST /credentials/import", s.handleImportCredentials)
 	mux.HandleFunc("GET /credentials/vault-sources", s.handleListVaultSources)
+	mux.HandleFunc("GET /credentials/vault-refs", s.handleListVaultRefs)
+	mux.HandleFunc("POST /credentials/vault-refs", s.handleSetVaultRef)
+	mux.HandleFunc("DELETE /credentials/vault-refs/{name}", s.handleDeleteVaultRef)
 	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
 	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
