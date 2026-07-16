@@ -1,101 +1,101 @@
-# HANDOFF: Session defaults — empty provider must inherit, never crash the child
+# HANDOFF: Router — kill child process groups; default to built binaries
 
 ## What shipped
 
-Implemented pieces 1 and 2 of the architect's plan (this task's HANDOFF is preserved in
-git history at `f084ed8..HEAD~1` — see `git log -p` for the original design doc if you
-need the full rationale; it's reproduced in condensed form below since the file itself
-is being overwritten).
+Implemented the architect's plan as designed (the original design doc that shaped this
+task's HANDOFF is quoted in full in this task's conversation transcript, not separately
+recoverable from git history — this branch has a single implementation commit, no
+separate architect commit).
 
-- **`services/router/internal/api/sessiondefaults.go` (new)**: `resolveSessionDefaults`
-  fills empty `Provider`/`Agent`/`Isolation`/`Trust`/`Model` on a `contracts.Session` from,
-  in order: the session itself, the named workspace's `Defaults` (workspace resolved via
-  `sess.Workspace`, falling back to `cfg.DefaultWorkspace`), then global `Config`. Workspace
-  lookup is best-effort: a stale `DefaultWorkspace` or a `sess.Workspace` that no longer
-  resolves degrades to "no workspace defaults", not a failed create (matches
-  `dataclient.ErrNotFound` specifically; any other error still propagates). Model is
-  resolved last, from the *already-resolved* provider's `ModelDiscoverer.Models` (the
-  `Default: true` entry) — `cfg.DefaultModelTier` is not consulted, documented as a
-  simplification inline and in the README.
-- **`sessions.go`/`retros.go`**: both `handleCreateSession` and
-  `handleRetroFollowUpSession` now call `resolveSessionDefaults`, then
-  `s.providers.Get(sess.Provider)` as a pre-spawn validation gate — an unknown/empty
-  provider returns 400 (`writeErrMsg`, reusing `Registry.Get`'s own `unknown provider %q`
-  message verbatim) **before** `s.data.CreateSession` runs, so a rejected create never
-  gets a DB row or a spawn attempt.
-- **`services/router/README.md`**: documented the new pre-spawn resolution/validation
-  step under `POST /sessions`, and added four "Critical paths" entries: the model-tier
-  simplification, provider-before-model resolution order, why the pre-check is
-  trustworthy (same registry instance the child uses), and the known bounce-path gap
-  (see "Not done" below).
+- **`services/router/internal/child/child.go`**: `Spawn` now sets `cmd.SysProcAttr =
+  &syscall.SysProcAttr{Setpgid: true}` before starting the child, making it its own
+  process group leader; anything it forks without calling `setpgid` itself (a `go run`
+  wrapper's compiled binary, a `sh -c` chain) inherits that pgid. A new `killGroup(pid,
+  sig)` helper signals `-pid` (the whole group) via `syscall.Kill`, tolerating `ESRCH`
+  (group already gone) as success. All four kill/signal call sites — `Terminate`'s
+  SIGTERM, `Terminate`'s post-grace SIGKILL, and `Spawn`'s two early-kill paths
+  (`readyTimeout` and `ctx.Done()`) — now go through `killGroup` instead of
+  `cmd.Process.Kill()`/`cmd.Process.Signal()`. Dropped the now-unused `os` import and the
+  `os.ErrProcessDone` tolerance it supported (superseded by `killGroup`'s `ESRCH` check).
+  `SessionPID`/`PipelinePID` and the tests that kill a child directly via
+  `os.FindProcess(pid).Kill()` are untouched — they deliberately exercise the
+  unsupervised single-process-death path, not `Terminate`.
+- **`services/router/internal/child/child_test.go`**: added
+  `TestTerminateKillsGrandchildProcessGroup` — writes a `sh` wrapper script that
+  backgrounds `testChildBin` as a distinct grandchild pid (writing that pid to a file)
+  and `wait`s, spawns it through `Spawn` (proving readiness discovery works through the
+  wrapper's inherited stderr, not just direct spawns), polls the pidfile for the
+  grandchild pid, confirms it's alive (`syscall.Kill(pid, 0)`), calls `Terminate`, then
+  polls until the grandchild pid returns `ESRCH`. Verified this test actually exercises
+  the fix by temporarily reverting `child.go` and confirming both this test and the
+  existing `testleakcheck.Verify` backstop fail together (grandchild survives) — then
+  restored the fix.
+- **`services/router/main.go`**: added `defaultChildCmd(name, goRunFallback string)
+  string` — resolves `os.Executable()`, checks for an executable sibling file named
+  `name` next to it, and returns that path if present, else `goRunFallback`. Keyed off
+  `os.Executable()` rather than cwd because the router's cwd is ambiguous across
+  invocation styles (`cd services/router && go run .` vs. `go run ./services/router`
+  from repo root give different cwds but the same resolved executable path).
+  `-session-cmd`/`-pipeline-cmd` flag defaults now call `defaultChildCmd("session", "go
+  run ./services/session")` / `defaultChildCmd("pipeline", "go run ./services/pipeline")`
+  instead of hardcoding the `go run` string.
+- **Root `Makefile`**: `build` target now also produces `bin/router`, `bin/session`,
+  `bin/pipeline` alongside the existing `bin/mads`, so a built install's `bin/router`
+  finds its siblings automatically and spawns the compiled binaries directly (no `go
+  run` wrapper, no grandchild-orphaning class of bug at all in that path).
+- **`services/router/README.md`**: replaced the "Flags:" paragraph's description of
+  `-session-cmd`/`-pipeline-cmd` defaults with the sibling-binary-if-present/else-`go
+  run` behavior, and added a "Critical paths" bullet documenting the process-group fix,
+  why it doesn't regress the dev Ctrl-C flow (each spawned child now gets its own pgid
+  separate from the router's, but `main.go`'s existing `signal.NotifyContext` +
+  `sup.Shutdown` → `Terminate` path already reaps children on SIGINT/SIGTERM), and the
+  `defaultChildCmd` sibling-resolution behavior.
 
 ## Tests
 
-`services/router/internal/api/sessions_test.go` (new):
-- `TestCreateSessionResolvesConfigDefaults` — all-empty create, `Config.DefaultProvider`
-  set to `"fake"` first; asserts resolved `provider`/`model`/`isolation`/`trust` on the
-  response *and* independently via `GET /sessions` (proving persistence, not just echo).
-- `TestCreateSessionWorkspaceDefaultsOverrideConfig` — a workspace with
-  `Defaults: {Model: "fake-smart", Isolation: "current_dir"}` overrides Config; a second
-  create with an explicit `model` on top of the same workspace proves session-level
-  still wins over workspace-level.
-- `TestCreateSessionUnknownProviderNoOrphan` — unknown provider → 400 naming it; asserts
-  the session list is unchanged before/after (no orphaned record). The no-orphaned-*child*
-  half of this is covered for free by `TestMain`'s `testleakcheck.Verify`, which already
-  fails the package if any spawned `testchild` survives — nothing new needed there.
+- `TestTerminateKillsGrandchildProcessGroup` (`internal/child`) — the acceptance-criteria
+  test: real process tree via a wrapper script, terminated through `Terminate`, explicit
+  poll-until-gone assertion on the grandchild pid specifically.
+- All pre-existing `internal/child`, `internal/supervisor`, `internal/api` tests pass
+  unchanged, including their `TestMain`s' `testleakcheck.Verify` backstop scans.
+- Manually confirmed `make build` produces `bin/{mads,router,session,pipeline}` and that
+  `./bin/router -help` resolves `-session-cmd`/`-pipeline-cmd` to the absolute sibling
+  binary paths (not the `go run` fallback) — proving `defaultChildCmd` is live, not just
+  unit-tested in isolation.
 
-`config_test.go` gained `setDefaultProvider(t, baseURL, provider)`, a small GET/mutate/PUT
-helper — reused by the two new tests above and by `retros_test.go`'s
-`TestRetroFollowUpSession`/`TestRetroFollowUpSessionExcludesRejectedDPAs`, which now set
-`DefaultProvider: "fake"` before hitting the follow-up-session endpoint (they previously
-relied on `testChildBin` ignoring session data entirely to get a 201 with no provider set
-at all — that stopped working once the pre-check landed).
+## Not done
 
-**Existing-test fallout, fixed**: every `POST /sessions` call in this package that omitted
-`provider` and asserted `201` needed `"provider": "fake"` added, since a fresh `datatest`
-Config has no `DefaultProvider` seeded. Touched: `TestCreateTerminateSession`,
-`TestBounceSession` (`api_test.go`), `TestListSessions` (`reads_test.go`),
-`TestSessionOutputForwarding` (`stream_forward_test.go`). Did **not** touch
-`newTestServer`'s shared Config setup to compensate — `TestConfigRoutesProxied`
-(`config_test.go`) asserts a fresh config equals `contracts.DefaultConfig()` exactly, and
-each test gets its own `datatest` instance, so mutating one test's config via
-`setDefaultProvider` doesn't leak into others.
-
-## Not done — piece 3 (optional, per the architect's own handoff)
-
-The architect's HANDOFF called piece 3 "genuinely optional/best-effort" and explicitly
-said pieces 1+2 alone satisfy every acceptance criterion. I left it out:
-
-- No `provider.ErrUnknownProvider` sentinel export in `providers/provider/registry.go`.
-- No last-stderr-line capture in `internal/child/child.go`.
-- `handleBounceSession` still re-spawns an existing session record without re-running
-  resolution or the provider pre-check, and a spawn failure there is still a flat 502 —
-  documented as a known gap in the README's "Critical paths" rather than fixed.
-
-Reasoning: this task's acceptance criteria (all-empty create resolves; unknown provider
-on *create* is 4xx; `make check` green) don't touch the bounce path, and threading a
-sentinel through `errors.Is`-compatible wrapping across `child.Spawn` →
-`Supervisor.SpawnSession`/`BounceSession` → the two handlers is real, multi-layer plumbing
-for a corner case (a provider that was valid at session-create time going bad before a
-later bounce). If this gap starts mattering in practice, the original HANDOFF (recoverable
-via `git log -p -- services/router/HANDOFF.md` on this branch before this overwrite, or
-ask the architect stage to re-derive it) lays out the exact approach.
+Nothing scoped was skipped. The architect's plan's three pieces (process groups, the
+grandchild test, flag defaults) are all implemented as designed.
 
 ## Verification
 
 - `go build ./...` clean.
-- `go test ./services/router/...` — all green, including the 3 new tests and the 4 fixed
-  ones.
-- `make check` — clean exit (golangci-lint, `go test -race ./...`, `npm run lint`,
-  `npm run test`), no failures, no new warnings.
+- `go test ./services/router/...` — all green.
+- `go test -race -v -run TestTerminateKillsGrandchildProcessGroup ./services/router/internal/child/...` — green.
+- Reverted `child.go` only and reran the new test: it failed with "grandchild pid ...
+  still alive after Terminate", and `testleakcheck` also flagged the leaked
+  `testchild` process — confirms the test is a real regression guard, not a false green.
+  Restored the fix before proceeding.
+- `make check` (lint, `go test -race ./...`, `npm run lint`, `npm run test`) — clean
+  exit, 676 UI tests passed, no new warnings.
+- `make build` — clean exit, `bin/router`/`bin/session`/`bin/pipeline` all present and
+  executable; `./bin/router -help` confirms sibling-binary default resolution.
 
 ## Reviewer should scrutinize
 
-- The `errors.Is(err, dataclient.ErrNotFound)` branch in `resolveSessionDefaults`'s
-  workspace lookup — confirm `dataclient.Client.Workspace` really does wrap 404s in
-  `ErrNotFound` (it does, via the shared `do` helper — `pkg/dataclient/dataclient.go`) and
-  that no other error class gets silently swallowed there.
-- Whether "no `Provider` field on `WorkspaceDefaults`" (so a workspace can't override
-  provider, only Config can) matches the spec's actual intent for §10, or whether that's
-  a gap worth a follow-up task — it was called explicitly out of scope in the original
-  design and I left it that way.
+- `killGroup`'s reliance on `cmd.Process.Pid` equaling the process group id: true
+  whenever `Setpgid: true` and `Pgid` is left zero (the new leader's pgid becomes its own
+  pid) — confirmed no other code path in `child.go` sets `SysProcAttr.Pgid` to anything
+  else.
+- The dev Ctrl-C behavior change called out in the README: before this change, a bare
+  `go run .` for the router and its children shared one process group by terminal
+  accident, so Ctrl-C reached everything; after this change each spawned child gets its
+  own pgid, so Ctrl-C (SIGINT) only reaches the router process directly — the existing
+  `signal.NotifyContext` + `sup.Shutdown(ctx)` path in `main.go` (unchanged by this task)
+  is what now does the reaping instead, and it already covered exactly this case, so
+  behavior should be equivalent in practice. Worth a manual `Ctrl-C` dev-loop check if
+  the reviewer wants to be certain rather than take the code-path argument on faith.
+- `defaultChildCmd`'s `info.Mode()&0111 != 0` executable check — required so a stray
+  non-executable file literally named `session`/`pipeline` next to the router binary
+  isn't silently treated as a spawn target; don't drop it as redundant.
