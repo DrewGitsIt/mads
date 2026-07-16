@@ -22,6 +22,7 @@ test loop that never requires a live LLM.
 | `providers/` | Provider layer: the abstraction + conformance suite, claude-code adapter, provider-fake, fast-model runner |
 | `cmd/mads` | The bootstrap CLI — see **mads builds mads** below |
 | `ui/` | Electron desktop app — wave 6 |
+| `scripts/` | `install.sh` (curl-to-shell installer) + its smoke test, `app.sh` (local dev loop) — see [scripts/README.md](scripts/README.md) |
 
 ## Working on mads
 
