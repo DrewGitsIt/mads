@@ -4,6 +4,12 @@ import { App } from "./App";
 import { fixtureConfig, fixtureSessions } from "./router/fixtures";
 import { FakeEventSource } from "./router/testFakeEventSource";
 
+vi.mock("./library/LibrarySurface", () => ({
+  LibrarySurface: () => {
+    throw new Error("boom");
+  },
+}));
+
 // Sessions/Launchpad mount several unrelated GET routes (sessions, tasks,
 // workspaces, agents, providers) this test doesn't care about — anything
 // not explicitly stubbed falls back to an empty list rather than throwing,
@@ -70,6 +76,40 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("Settings"));
     await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+  });
+
+  it("shows the failure screen when the config fetch rejects, and Retry refetches", async () => {
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
+        if (calls++ === 0) return Promise.reject(new TypeError("Failed to fetch"));
+        return routedFetch({ "GET /config": fixtureConfig })(input, init);
+      }),
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText(/can't reach/i)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
+  });
+
+  it("a surface crash renders the error boundary while the rail stays usable", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubRouterFetch();
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Library"));
+    await waitFor(() => expect(screen.getByText("Something went wrong")).toBeTruthy());
+    expect(screen.getByText("boom")).toBeTruthy();
+
+    expect(screen.getByLabelText("Settings")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Settings"));
+    await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+
+    consoleError.mockRestore();
   });
 });
 

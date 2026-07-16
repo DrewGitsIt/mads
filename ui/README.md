@@ -485,3 +485,11 @@ Registry shelf is gated behind `FLAGS.remoteRegistry` (see Library above).
   `src/**` may import it, even transitively — that's what keeps `npm run
   test` (and `make test`) safe to run on a machine with no display or native
   build toolchain.
+- `src/components/ErrorBoundary/ErrorBoundary.tsx` is the one error-boundary
+  primitive future shell/surface work should reuse rather than rolling
+  another `componentDidCatch` — `App.tsx` wraps only the active surface
+  content in it, keyed by `activeId` so navigating away from a crashed
+  surface remounts a clean instance. `App.tsx`'s mount-time config gate
+  (`GET /config`) also has a real failure state now (`ConfigGateFailure`) —
+  a down Router at mount shows a "can't reach the backend" screen with
+  Retry, not a permanently blank window.

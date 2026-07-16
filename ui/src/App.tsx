@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
+import { ConfigGateFailure } from "./ConfigGateFailure";
 import { CommandPalette } from "./features/command-palette/CommandPalette";
 import { buildCommands, type Command } from "./features/command-palette/commandSource";
 import { useAttentionBadge } from "./features/command-palette/state/useAttentionBadge";
@@ -39,18 +41,27 @@ const pipelineClient = new FetchPipelineClient();
 export function App() {
   const [activeId, setActiveId] = useState("sessions");
   const [config, setConfig] = useState<Config | null>(null);
+  const [configError, setConfigError] = useState(false);
+
+  const loadConfig = useCallback(() => {
+    setConfigError(false);
+    router
+      .getConfig()
+      .then((c) => {
+        applyTheme(c.theme, c.palette);
+        setFlags({
+          multiRepo: c.feature_flags.multi_repo,
+          linkedSessions: c.feature_flags.linked_sessions,
+          remoteRegistry: c.feature_flags.remote_registry,
+        });
+        setConfig(c);
+      })
+      .catch(() => setConfigError(true));
+  }, []);
 
   useEffect(() => {
-    router.getConfig().then((c) => {
-      applyTheme(c.theme, c.palette);
-      setFlags({
-        multiRepo: c.feature_flags.multi_repo,
-        linkedSessions: c.feature_flags.linked_sessions,
-        remoteRegistry: c.feature_flags.remote_registry,
-      });
-      setConfig(c);
-    });
-  }, []);
+    loadConfig();
+  }, [loadConfig]);
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();
@@ -70,6 +81,8 @@ export function App() {
   }, []);
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);
+
+  if (configError) return <ConfigGateFailure onRetry={loadConfig} />;
 
   if (!config) return null;
 
@@ -103,26 +116,28 @@ export function App() {
   return (
     <div className={styles.shell}>
       <IconRail items={RAIL_ITEMS} activeId={activeId} onSelect={setActiveId} />
-      {(() => {
-        if (activeId === "sessions") {
-          return <SessionsSurface jumpToSessionId={jumpToSessionId} />;
-        }
-        const Surface = SURFACES[activeId];
-        return Surface ? (
-          <Surface />
-        ) : (
-          <div className={styles.empty}>
-            <div className={styles.emptyInner}>
-              <div className={styles.emptyTitle}>No surfaces wired up yet</div>
-              <div className={styles.emptyBody}>
-                This is the app shell scaffold — sessions, retro, and library views
-                land in later work items. Run <code>npm run gallery</code> to
-                review the component kit this shell is built from.
+      <ErrorBoundary key={activeId}>
+        {(() => {
+          if (activeId === "sessions") {
+            return <SessionsSurface jumpToSessionId={jumpToSessionId} />;
+          }
+          const Surface = SURFACES[activeId];
+          return Surface ? (
+            <Surface />
+          ) : (
+            <div className={styles.empty}>
+              <div className={styles.emptyInner}>
+                <div className={styles.emptyTitle}>No surfaces wired up yet</div>
+                <div className={styles.emptyBody}>
+                  This is the app shell scaffold — sessions, retro, and library views
+                  land in later work items. Run <code>npm run gallery</code> to
+                  review the component kit this shell is built from.
+                </div>
               </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
+      </ErrorBoundary>
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
