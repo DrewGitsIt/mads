@@ -2,7 +2,11 @@ import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
-  { ignores: ["dist", "dist-electron", "node_modules"] },
+  // e2e/ is the separate Playwright journey layer (ui/README.md's "Test
+  // layers" section) — its fixtures.ts intentionally names a parameter `use`
+  // (Playwright's own fixture API), which react-hooks' rules-of-hooks
+  // otherwise misreads as the React `use()` hook.
+  { ignores: ["dist", "dist-electron", "node_modules", "e2e"] },
   ...tseslint.configs.recommended,
   {
     files: ["**/*.{ts,tsx}"],

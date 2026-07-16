@@ -20,7 +20,10 @@ export function subscribeToEvents(
   params: SubscribeParams,
   onEvent: (envelope: Envelope) => void,
 ): () => void {
-  const url = new URL("/events", ROUTER_BASE);
+  // ROUTER_BASE is "" for same-origin builds (e.g. served by the Router
+  // itself) — the URL constructor requires an absolute base, so fall back
+  // to the page's own origin in that case.
+  const url = new URL("/events", ROUTER_BASE || window.location.origin);
   if (params.since !== undefined) url.searchParams.set("since", String(params.since));
   if (params.sessionId) url.searchParams.set("session_id", params.sessionId);
   if (params.types && params.types.length > 0) {

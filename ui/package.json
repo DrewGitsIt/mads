@@ -16,7 +16,8 @@
     "start": "npm run build && electron .",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:pty": "vitest run --config vitest.electron.config.ts"
+    "test:pty": "vitest run --config vitest.electron.config.ts",
+    "test:e2e": "playwright test --config e2e/playwright.config.ts"
   },
   "dependencies": {
     "@dagrejs/dagre": "^3.0.0",
@@ -33,6 +34,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@testing-library/react": "^16.0.1",
     "@types/dompurify": "^3.0.5",
     "@types/node": "^22.10.2",
