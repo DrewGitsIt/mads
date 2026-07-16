@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 	"testing/fstest"
@@ -118,5 +119,30 @@ func TestProductionMigrations(t *testing.T) {
 	}
 	if err := Migrate(db, Migrations()); err != nil {
 		t.Fatalf("production set does not re-apply after rollback: %v", err)
+	}
+}
+
+func TestMaxVersion(t *testing.T) {
+	got, err := MaxVersion(Migrations())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 11 {
+		t.Fatalf("MaxVersion(production set) = %d, want 11 (update this literal when a migration is added)", got)
+	}
+
+	// fstest.MapFS can't represent an empty directory (it synthesizes
+	// directories from file paths), so use a real empty "migrations" dir on
+	// disk via os.DirFS instead.
+	emptyRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(emptyRoot, "migrations"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	empty, err := MaxVersion(os.DirFS(emptyRoot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty != 0 {
+		t.Fatalf("MaxVersion(empty fixture) = %d, want 0", empty)
 	}
 }

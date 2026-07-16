@@ -1,5 +1,7 @@
 package contracts
 
+import "net/url"
+
 // AgentSelectionMode controls how a session picks its agent (HANDOFF §2.1 /
 // docs/REBUILD-SPEC.md §10): light does minimal agent-matching, full runs
 // the complete selection pipeline.
@@ -126,6 +128,11 @@ type Config struct {
 	// OnboardingComplete gates the first-run wizard (§3.9): false until the
 	// wizard's last step finishes.
 	OnboardingComplete bool `json:"onboarding_complete"`
+
+	// UpdateFeedURL is the release feed checked on user request (§14.3, W7.5).
+	// Empty means the update-check feature is off — no releases exist yet, so
+	// an empty default is the honest starting state.
+	UpdateFeedURL string `json:"update_feed_url,omitempty"`
 }
 
 // DefaultConfig is the config a fresh install starts with, before the
@@ -189,6 +196,12 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.LogRetentionDays < 1 {
 		v.Add("log_retention_days", "must be at least 1")
+	}
+	if c.UpdateFeedURL != "" {
+		u, err := url.Parse(c.UpdateFeedURL)
+		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+			v.Add("update_feed_url", "must be an absolute http(s) URL")
+		}
 	}
 
 	return v

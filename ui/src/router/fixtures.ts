@@ -34,6 +34,8 @@ import type {
   TaskStatus,
   Template,
   TranscriptMessage,
+  UpdateCheckResult,
+  VersionInfo,
   Workspace,
 } from "./types";
 
@@ -922,6 +924,15 @@ export class FakeRouterClient implements RouterClient {
     return fixturePreflightChecks;
   }
 
+  // --- Update (W7.5 §14.3) ---
+  async getVersion(): Promise<VersionInfo> {
+    return fixtureVersionInfo;
+  }
+
+  async checkForUpdate(): Promise<UpdateCheckResult> {
+    return fixtureUpdateCheckResult;
+  }
+
   // --- Providers / behaviors / models ---
   async listProviders(): Promise<ProviderInfo[]> {
     return fixtureProviders;
@@ -1195,3 +1206,10 @@ export const fixturePreflightChecks: PreflightCheck[] = [
     fix_hint: "install Claude Code and ensure `claude` is on PATH",
   },
 ];
+
+export const fixtureVersionInfo: VersionInfo = { version: "0.1.0-dev" };
+
+export const fixtureUpdateCheckResult: UpdateCheckResult = {
+  current_version: "0.1.0-dev",
+  update_available: false,
+};

@@ -91,6 +91,22 @@ func Rollback(db *sql.DB, fsys fs.FS, target int) error {
 	return nil
 }
 
+// MaxVersion returns the highest migration version this binary's embedded
+// migration set knows about — the schema version this binary is "at home"
+// with. Used at boot (services/data/main.go) to detect a binary older than
+// the on-disk schema, distinct from Version(db) which reads what's actually
+// applied.
+func MaxVersion(fsys fs.FS) (int, error) {
+	ms, err := loadMigrations(fsys)
+	if err != nil {
+		return 0, err
+	}
+	if len(ms) == 0 {
+		return 0, nil
+	}
+	return ms[len(ms)-1].version, nil // loadMigrations returns them sorted ascending
+}
+
 // Version returns the highest applied migration version, 0 if none.
 func Version(db *sql.DB) (int, error) {
 	if err := ensureMigrationTable(db); err != nil {

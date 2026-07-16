@@ -30,6 +30,7 @@ type server struct {
 	preflight    preflight.Checker
 	vaultRefs    *vault.RefStore
 	vaultSources []vault.Source
+	version      string
 }
 
 // New returns the Router's HTTP handler. creds may be nil (credential
@@ -37,13 +38,15 @@ type server struct {
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
 // vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
 // be nil or empty (GET /credentials/vault-sources reports no sources).
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, version string) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)

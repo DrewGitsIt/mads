@@ -7,6 +7,7 @@
 //	mads tasks       -session ses_x
 //	mads run         -session ses_x -workspace ~/repo/mads [flags]
 //	mads uninstall   [-keep-data] [-yes]
+//	mads update      check | apply [-feed-url URL] [-router URL] [-yes]
 //	mads --version
 package main
 
@@ -32,6 +33,8 @@ func main() {
 		err = cmdRun(os.Args[2:], os.Stdout)
 	case "uninstall":
 		err = cmdUninstall(os.Args[2:], os.Stdin, os.Stdout)
+	case "update":
+		err = cmdUpdate(os.Args[2:], os.Stdin, os.Stdout)
 	case "-v", "--version", "version":
 		fmt.Println("mads " + version)
 	case "-h", "--help", "help":
@@ -57,6 +60,8 @@ func usage() {
       [-model M] [-concurrency 2] [-isolated=true] [-worktree-root DIR]
       [-claude-args "--dangerously-skip-permissions"] [-stage-timeout 30m]
   mads uninstall   [-keep-data] [-yes]
+  mads update check [-router URL]
+  mads update apply [-feed-url URL] [-router URL] [-yes]
   mads --version
 
 The Data Service must be running (make -C services/data run).
