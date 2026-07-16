@@ -60,7 +60,7 @@ func TestCORSSimpleGet(t *testing.T) {
 func TestCORSSimplePost(t *testing.T) {
 	srv := newTestServer(t)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/sessions", strings.NewReader(`{"name":"cors test"}`))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/sessions", strings.NewReader(`{"name":"cors test","provider":"fake"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
