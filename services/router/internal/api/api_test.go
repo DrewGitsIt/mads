@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/testleakcheck"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -23,7 +24,6 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
-	"github.com/drewkidwell/mads/services/router/internal/testleakcheck"
 )
 
 var testChildBin string

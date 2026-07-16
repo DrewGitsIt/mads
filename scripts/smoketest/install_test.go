@@ -41,6 +41,22 @@ func TestMain(m *testing.M) {
 	root := filepath.Dir(filepath.Dir(filepath.Dir(thisFile))) // scripts/smoketest/ -> repo root
 	installSh = filepath.Join(root, "scripts", "install.sh")
 
+	// A release-gate run (scripts/release-gate.sh) already built a candidate
+	// and wants this suite to test *that* binary, not a fresh self-build.
+	// Plain `go test ./scripts/smoketest/...` (unchanged, still part of
+	// `make check`/CI) leaves this unset and falls back to building its own.
+	if candidateDir := os.Getenv("MADS_RELEASE_CANDIDATE_DIR"); candidateDir != "" {
+		madsBin = filepath.Join(candidateDir, "mads")
+		dataBin = filepath.Join(candidateDir, "data")
+		if _, err := os.Stat(madsBin); err != nil {
+			panic(fmt.Sprintf("MADS_RELEASE_CANDIDATE_DIR=%s: missing mads binary: %v", candidateDir, err))
+		}
+		if _, err := os.Stat(dataBin); err != nil {
+			panic(fmt.Sprintf("MADS_RELEASE_CANDIDATE_DIR=%s: missing data binary: %v", candidateDir, err))
+		}
+		os.Exit(m.Run())
+	}
+
 	dir, err := os.MkdirTemp("", "mads-install-smoke")
 	if err != nil {
 		panic(err)
