@@ -31,4 +31,17 @@ describe("PreflightStep", () => {
     fireEvent.click(screen.getByText("Back"));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
+
+  it("renders a failing check's fix_hint and still allows Continue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    const onNext = vi.fn();
+    render(<PreflightStep onNext={onNext} onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("provider:claude-code")).toBeTruthy());
+    expect(screen.getByText("install Claude Code and ensure `claude` is on PATH")).toBeTruthy();
+    fireEvent.click(screen.getByText("Continue"));
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
 });

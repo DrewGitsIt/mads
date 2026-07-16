@@ -26,7 +26,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")

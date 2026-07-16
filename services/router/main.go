@@ -21,6 +21,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -67,8 +68,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, nil)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf)
 }
 
 func main() {
@@ -113,11 +114,13 @@ func main() {
 		creds = nil
 	}
 
+	pf := preflight.New(preflight.Deps{Data: data, Providers: providers, MadsHome: *madsHome})
+
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

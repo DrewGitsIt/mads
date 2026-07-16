@@ -1186,7 +1186,12 @@ export const fixtureProviderBehaviors: BehaviorInfo[] = [
 ];
 
 export const fixturePreflightChecks: PreflightCheck[] = [
-  { name: "git", healthy: true, detail: "stubbed — real check pending W7.3" },
-  { name: "node-pty", healthy: true, detail: "stubbed — real check pending W7.3" },
-  { name: "provider:claude-code", healthy: true, detail: "stubbed — real check pending W7.3" },
+  { name: "git", healthy: true, detail: "git version 2.43.0" },
+  { name: "data_service", healthy: true },
+  {
+    name: "provider:claude-code",
+    healthy: false,
+    detail: "not found on PATH",
+    fix_hint: "install Claude Code and ensure `claude` is on PATH",
+  },
 ];
