@@ -56,7 +56,12 @@ func writeUIDist(t *testing.T) string {
 func TestStaticServesIndexAtRoot(t *testing.T) {
 	srv := newTestServerWithUIDist(t, writeUIDist(t))
 
-	resp, err := http.Get(srv.URL + "/")
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/html")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +99,15 @@ func TestStaticSPAFallback(t *testing.T) {
 	// route either — it's a client-side route the SPA itself resolves — so
 	// the Router must serve index.html rather than 404. (Not
 	// "/sessions/abc123": that's now a real API route — GET /sessions/{id}.)
-	resp, err := http.Get(srv.URL + "/some/unknown/route")
+	// A browser-shaped Accept header is required to hit the fallback at all
+	// (see TestAPIShapedUnregisteredPathGetsJSON404 for the non-navigation
+	// case).
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/some/unknown/route", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/html")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,5 +143,58 @@ func TestStaticDoesNotShadowAPIRoutes(t *testing.T) {
 	}
 	if body["service"] != "router" {
 		t.Fatalf("GET /health body = %v, want the health JSON, not the UI shell", body)
+	}
+}
+
+func TestAPIShapedUnregisteredPathGetsJSON404(t *testing.T) {
+	// A missing/typo'd API route, called the way the UI's fetch client
+	// actually calls it (Accept: application/json), must not be masked as a
+	// 200 text/html SPA shell — that's the bug this whole change fixes.
+	srv := newTestServerWithUIDist(t, writeUIDist(t))
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/sessions/nope/what", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /sessions/nope/what status = %d, want 404", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["error"] != "not found" || body["path"] != "/sessions/nope/what" {
+		t.Fatalf("GET /sessions/nope/what body = %v, want {error: not found, path: /sessions/nope/what}", body)
+	}
+}
+
+func TestBrowserNavigationToDeepLinkGetsIndex(t *testing.T) {
+	// A real browser navigating to a client-side SPA route (full navigation
+	// Accept header, no file extension) must still get index.html, not a
+	// JSON 404.
+	srv := newTestServerWithUIDist(t, writeUIDist(t))
+
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/deep/link", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /deep/link status = %d, want 200", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if got := string(body); got != "<html><body>mads-ui-shell</body></html>" {
+		t.Fatalf("GET /deep/link body = %q, want the SPA shell (index.html)", got)
 	}
 }

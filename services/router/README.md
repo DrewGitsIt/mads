@@ -232,9 +232,20 @@ the Router picks up a new build without a restart.
   required — `internal/api`'s `TestStaticDoesNotShadowAPIRoutes` pins this. A nil
   `staticHandler` (every pre-existing `internal/api` test call site) defaults to
   `http.NotFoundHandler()`, matching the pre-W7.5 behavior of having no `"/"` route at all.
-- Any request path that isn't a real file under the dist directory falls back to
-  `index.html` — the built SPA owns client-side routing for everything past that
-  (`internal/static`'s `TestUnknownPathFallsBackToIndex`).
+- The fallback only serves `index.html` for a *navigation-shaped* request — GET/HEAD, no
+  file extension, and an `Accept` header that prefers `text/html` — so a real browser
+  navigating to a client-side SPA route (e.g. `/deep/link`) gets the SPA shell
+  (`internal/static`'s `TestUnknownPathFallsBackToIndex`). Everything else that reaches the
+  fallback (a bare `fetch()`, whose default `Accept` is `*/*`; an extensioned path with no
+  matching file; a non-GET/HEAD method) gets a JSON 404
+  (`{"error":"not found","path":...}`) instead of silently 200'ing as HTML — this is what
+  stops a missing/typo'd API route from being masked as an SPA page and poisoning JSON
+  parsing on the caller side (`TestNonHTMLAcceptGetsJSON404`,
+  `TestBareFetchDefaultAcceptGetsJSON404`, `internal/api`'s
+  `TestAPIShapedUnregisteredPathGetsJSON404`). `internal/api/route_manifest_test.go`
+  separately cross-checks every route `ui/src/router/client.ts` calls against the mux's
+  registered patterns, so a missing API route fails a test instead of silently falling back
+  to this handler.
 - Whether the UI is built is checked on every request, not cached once at construction:
   `scripts/app.sh` starts the Router before running `npm --prefix ui start` (which builds
   `ui/dist`), so a handler that only checked once at construction would keep serving a
