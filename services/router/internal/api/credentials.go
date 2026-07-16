@@ -5,17 +5,35 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/drewkidwell/mads/pkg/vault"
 )
 
-// credentialEnvSuffixes flags process env vars that look like secrets worth
-// offering the first-run wizard's "import from environment" step (MADS-UX
-// §3.9) — a name-only heuristic; values never leave the process this way.
-var credentialEnvSuffixes = []string{"API_KEY", "TOKEN", "SECRET", "PASSWORD"}
+// knownCredentialEnvVars/knownCredentialEnvVarPrefixes are the declared
+// allowlist for the env-import candidate scan (spec §13.7) — deliberately
+// not a heuristic suffix match: a dragnet risks surfacing unrelated process
+// env vars that happen to end in TOKEN/SECRET but were never meant for mads
+// (e.g. a CI runner's internal vars). Names never leave the process via this
+// scan — only names, never values, are returned to the caller.
+var knownCredentialEnvVars = []string{
+	"ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+	"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN",
+}
+var knownCredentialEnvVarPrefixes = []string{
+	"AWS_", // AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+	"AZURE_",
+	"GOOGLE_", // GOOGLE_API_KEY, GOOGLE_APPLICATION_CREDENTIALS
+}
 
 func looksLikeCredentialName(name string) bool {
 	upper := strings.ToUpper(name)
-	for _, suffix := range credentialEnvSuffixes {
-		if strings.HasSuffix(upper, suffix) {
+	for _, known := range knownCredentialEnvVars {
+		if upper == known {
+			return true
+		}
+	}
+	for _, prefix := range knownCredentialEnvVarPrefixes {
+		if strings.HasPrefix(upper, prefix) {
 			return true
 		}
 	}
@@ -134,18 +152,87 @@ func (s *server) handleImportCredentials(w http.ResponseWriter, r *http.Request)
 }
 
 // vaultSourceInfo is a linkable external secret manager's status (MADS-UX
-// §3.7 vault link). No vault.Source implementations are registered yet —
-// this always returns an empty list until one lands.
+// §3.7 vault link, spec §13.8). Error carries the actionable
+// install/configure guidance from Source.Healthy when unhealthy — never a
+// secret, just diagnostic text.
 type vaultSourceInfo struct {
 	Name    string `json:"name"`
 	Healthy bool   `json:"healthy"`
+	Error   string `json:"error,omitempty"`
 }
 
 func (s *server) handleListVaultSources(w http.ResponseWriter, r *http.Request) {
 	out := make([]vaultSourceInfo, 0, len(s.vaultSources))
 	for _, src := range s.vaultSources {
-		healthy, _ := src.Healthy(r.Context())
-		out = append(out, vaultSourceInfo{Name: src.Name(), Healthy: healthy})
+		healthy, err := src.Healthy(r.Context())
+		info := vaultSourceInfo{Name: src.Name(), Healthy: healthy}
+		if err != nil {
+			info.Error = err.Error()
+		}
+		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// vaultRefInfo is a vault-backed credential's pointer — source + path, never
+// a value, so unlike a credential this is safe to echo back over the wire
+// (spec §13.8).
+type vaultRefInfo struct {
+	Name   string `json:"name"`
+	Source string `json:"source"`
+	Path   string `json:"path"`
+}
+
+func (s *server) handleListVaultRefs(w http.ResponseWriter, _ *http.Request) {
+	if s.vaultRefs == nil {
+		writeJSON(w, http.StatusOK, []vaultRefInfo{})
+		return
+	}
+	names, err := s.vaultRefs.Names()
+	if err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "vault-refs: ", err)
+		return
+	}
+	sort.Strings(names)
+	out := make([]vaultRefInfo, 0, len(names))
+	for _, name := range names {
+		ref, ok, err := s.vaultRefs.Get(name)
+		if err != nil || !ok {
+			continue
+		}
+		out = append(out, vaultRefInfo{Name: name, Source: ref.Source, Path: ref.Path})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *server) handleSetVaultRef(w http.ResponseWriter, r *http.Request) {
+	if s.vaultRefs == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "vault ref store unavailable"})
+		return
+	}
+	var body vaultRefInfo
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Name == "" || body.Source == "" || body.Path == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name, source, and path are required"})
+		return
+	}
+	if err := s.vaultRefs.Set(body.Name, vault.Ref{Source: body.Source, Path: body.Path}); err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "vault-refs: ", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, body)
+}
+
+func (s *server) handleDeleteVaultRef(w http.ResponseWriter, r *http.Request) {
+	if s.vaultRefs == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "vault ref store unavailable"})
+		return
+	}
+	if err := s.vaultRefs.Delete(r.PathValue("name")); err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "vault-refs: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
