@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ContentColumn } from "../../components/ContentColumn/ContentColumn";
 import { SettingsNav, type SettingsPanelId } from "./nav/SettingsNav";
 import { useConfig } from "./state/useConfig";
 import { AppearancePanel } from "./panels/AppearancePanel";
@@ -28,14 +29,16 @@ export function SettingsSurface() {
     <div className={styles.surface}>
       <SettingsNav activeId={activeId} onSelect={setActiveId} />
       <div className={styles.body}>
-        {activeId === "appearance" && <AppearancePanel config={config} />}
-        {activeId === "general" && <GeneralPanel config={config} />}
-        {activeId === "profiles" && <ProfilesPanel config={config} />}
-        {activeId === "providers" && <ProvidersPanel />}
-        {activeId === "credentials" && <CredentialsPanel />}
-        {activeId === "pipeline" && <PipelinePanel config={config} />}
-        {activeId === "advanced" && <AdvancedPanel config={config} />}
-        {activeId === "updates" && <UpdatesAboutPanel />}
+        <ContentColumn variant="wide">
+          {activeId === "appearance" && <AppearancePanel config={config} />}
+          {activeId === "general" && <GeneralPanel config={config} />}
+          {activeId === "profiles" && <ProfilesPanel config={config} />}
+          {activeId === "providers" && <ProvidersPanel />}
+          {activeId === "credentials" && <CredentialsPanel />}
+          {activeId === "pipeline" && <PipelinePanel config={config} />}
+          {activeId === "advanced" && <AdvancedPanel config={config} />}
+          {activeId === "updates" && <UpdatesAboutPanel />}
+        </ContentColumn>
       </div>
     </div>
   );

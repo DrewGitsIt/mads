@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { ContentColumn } from "../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../components/Toast/Toast";
 import type { Session, Task } from "../../router/types";
 import { ChipStrip } from "./picker/ChipStrip";
@@ -81,60 +82,68 @@ export function RetroSurface() {
   return (
     <div className={styles.surface}>
       {surfacePhase === "picking" && (
-        <div className={styles.section}>
-          <SessionPicker
-            sessions={sessionsForPicker.sessions}
-            selectedIds={selectedSessionIds}
-            onToggle={toggleSession}
-            onClear={() => setSelectedSessionIds([])}
-          />
-          <ObservationsInput value={observations} onChange={setObservations} />
-          <Button variant="primary" onClick={handleGenerate} disabled={selectedSessionIds.length === 0}>
-            Generate retro
-          </Button>
-          {generation.error && (
-            <Toast tone="bad" title="Couldn't generate retro" description={generation.error} />
-          )}
-          <RetroHistoryList retros={history.retros} onSelect={setViewedRetroId} />
-        </div>
+        <ContentColumn variant="narrow">
+          <div className={styles.section}>
+            <SessionPicker
+              sessions={sessionsForPicker.sessions}
+              selectedIds={selectedSessionIds}
+              onToggle={toggleSession}
+              onClear={() => setSelectedSessionIds([])}
+            />
+            <ObservationsInput value={observations} onChange={setObservations} />
+            <Button variant="primary" onClick={handleGenerate} disabled={selectedSessionIds.length === 0}>
+              Generate retro
+            </Button>
+            {generation.error && (
+              <Toast tone="bad" title="Couldn't generate retro" description={generation.error} />
+            )}
+            <RetroHistoryList retros={history.retros} onSelect={setViewedRetroId} />
+          </div>
+        </ContentColumn>
       )}
 
       {surfacePhase === "generating" && (
-        <div className={styles.section}>
-          <ChipStrip sessionIds={selectedSessionIds} sessions={sessionsForPicker.sessions} />
-          <GenerationProgress phase={generation.phase} onCancel={generation.cancel} />
-        </div>
+        <ContentColumn variant="narrow">
+          <div className={styles.section}>
+            <ChipStrip sessionIds={selectedSessionIds} sessions={sessionsForPicker.sessions} />
+            <GenerationProgress phase={generation.phase} onCancel={generation.cancel} />
+          </div>
+        </ContentColumn>
       )}
 
       {surfacePhase === "reviewing" && detail.retro && (
-        <div className={styles.section}>
-          <ChipStrip sessionIds={detail.retro.session_ids} sessions={sessionsForPicker.sessions} />
-          <div className={styles.dpaList}>
-            {detail.retro.dpas.map((dpa) => (
-              <DPACard key={dpa.id} dpa={dpa} onToggle={detail.toggleDpa} />
-            ))}
-          </div>
-          <FollowUpCta
-            retroId={detail.retro.id}
-            acceptedCount={acceptedDpaCount(detail.retro.dpas)}
-            followUpSessionId={detail.retro.follow_up_session_id ?? followUpResult?.sessionId}
-            onCreated={handleFollowUpCreated}
-          />
-          {followUpResult && (
-            <Toast
-              tone="ok"
-              title="Tasks imported"
-              description={`${followUpResult.taskCount} tasks imported`}
+        <ContentColumn variant="narrow">
+          <div className={styles.section}>
+            <ChipStrip sessionIds={detail.retro.session_ids} sessions={sessionsForPicker.sessions} />
+            <div className={styles.dpaList}>
+              {detail.retro.dpas.map((dpa) => (
+                <DPACard key={dpa.id} dpa={dpa} onToggle={detail.toggleDpa} />
+              ))}
+            </div>
+            <FollowUpCta
+              retroId={detail.retro.id}
+              acceptedCount={acceptedDpaCount(detail.retro.dpas)}
+              followUpSessionId={detail.retro.follow_up_session_id ?? followUpResult?.sessionId}
+              onCreated={handleFollowUpCreated}
             />
-          )}
-          <Button variant="ghost" onClick={handleStartNew}>
-            Start new retro
-          </Button>
-        </div>
+            {followUpResult && (
+              <Toast
+                tone="ok"
+                title="Tasks imported"
+                description={`${followUpResult.taskCount} tasks imported`}
+              />
+            )}
+            <Button variant="ghost" onClick={handleStartNew}>
+              Start new retro
+            </Button>
+          </div>
+        </ContentColumn>
       )}
 
       {surfacePhase === "reviewing" && !detail.retro && (
-        <div className={styles.section}>Loading retro…</div>
+        <ContentColumn variant="narrow">
+          <div className={styles.section}>Loading retro…</div>
+        </ContentColumn>
       )}
     </div>
   );

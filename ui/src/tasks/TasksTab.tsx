@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { RouterClient } from "../router/client";
 import { Button } from "../components/Button/Button";
+import { ContentColumn } from "../components/ContentColumn/ContentColumn";
 import { useTaskStore } from "./useTaskStore";
 import { TaskListView } from "./ListView/TaskListView";
 import { TaskGraphView } from "./GraphView/TaskGraphView";
@@ -36,45 +37,47 @@ export function TasksTab({ sessionId, routerClient }: TasksTabProps) {
 
   return (
     <div className={styles.tab}>
-      <div className={styles.toolbar}>
-        <div className={styles.toggle}>
-          <Button
-            variant={viewMode === "list" ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => setViewMode("list")}
-          >
-            List
-          </Button>
-          <Button
-            variant={viewMode === "graph" ? "primary" : "secondary"}
-            size="sm"
-            onClick={() => setViewMode("graph")}
-          >
-            Graph
+      <ContentColumn variant="wide" className={styles.body}>
+        <div className={styles.toolbar}>
+          <div className={styles.toggle}>
+            <Button
+              variant={viewMode === "list" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setViewMode("list")}
+            >
+              List
+            </Button>
+            <Button
+              variant={viewMode === "graph" ? "primary" : "secondary"}
+              size="sm"
+              onClick={() => setViewMode("graph")}
+            >
+              Graph
+            </Button>
+          </div>
+          <Button variant="secondary" size="sm" onClick={() => setOpenSheet("import")}>
+            Bulk import
           </Button>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => setOpenSheet("import")}>
-          Bulk import
-        </Button>
-      </div>
 
-      <div className={styles.content}>
-        {viewMode === "list" ? (
-          <TaskListView
-            tasks={tasks}
-            tasksById={tasksById}
-            onSelectTask={(task) => selectTask(task.id)}
-          />
-        ) : (
-          <TaskGraphView
-            sessionId={sessionId}
-            routerClient={routerClient}
-            tasks={tasks}
-            tasksById={tasksById}
-            onSelectTask={(task) => selectTask(task.id)}
-          />
-        )}
-      </div>
+        <div className={styles.content}>
+          {viewMode === "list" ? (
+            <TaskListView
+              tasks={tasks}
+              tasksById={tasksById}
+              onSelectTask={(task) => selectTask(task.id)}
+            />
+          ) : (
+            <TaskGraphView
+              sessionId={sessionId}
+              routerClient={routerClient}
+              tasks={tasks}
+              tasksById={tasksById}
+              onSelectTask={(task) => selectTask(task.id)}
+            />
+          )}
+        </div>
+      </ContentColumn>
 
       {openSheet === "detail" && selectedTask && (
         <TaskDetailSheet

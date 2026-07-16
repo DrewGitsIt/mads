@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Chip } from "../components/Chip/Chip";
+import { ContentColumn } from "../components/ContentColumn/ContentColumn";
 import { FLAGS } from "../featureFlags";
 import { AgentsShelf } from "./agents/AgentsShelf";
 import { CapabilitiesShelf } from "./capabilities/CapabilitiesShelf";
@@ -39,11 +40,13 @@ export function LibrarySurface() {
         ))}
       </nav>
       <main className={styles.main}>
-        {activeShelf === "agents" && <AgentsShelf />}
-        {activeShelf === "capabilities" && <CapabilitiesShelf />}
-        {activeShelf === "workspaces" && <WorkspacesShelf />}
-        {activeShelf === "templates" && <TemplatesShelf />}
-        {activeShelf === "registry" && <RegistryShelfStub />}
+        <ContentColumn variant="wide">
+          {activeShelf === "agents" && <AgentsShelf />}
+          {activeShelf === "capabilities" && <CapabilitiesShelf />}
+          {activeShelf === "workspaces" && <WorkspacesShelf />}
+          {activeShelf === "templates" && <TemplatesShelf />}
+          {activeShelf === "registry" && <RegistryShelfStub />}
+        </ContentColumn>
       </main>
     </div>
   );

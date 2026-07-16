@@ -14,6 +14,7 @@ import { ResizablePanel } from "../components/ResizablePanel/ResizablePanel";
 import { IconRail, type IconRailItem } from "../components/IconRail/IconRail";
 import { Draft, DraftChip } from "../components/Draft/Draft";
 import { Popover } from "../components/Popover/Popover";
+import { ContentColumn } from "../components/ContentColumn/ContentColumn";
 import { palettes, type PaletteName, type ThemeName } from "../tokens/tokens";
 import styles from "./Gallery.module.css";
 
@@ -193,6 +194,14 @@ function ComboSection({
       <ComponentGroup name="Draft">
         <DraftChip />
         <Draft>Synthesized suggestion pending review.</Draft>
+      </ComponentGroup>
+
+      <ComponentGroup name="ContentColumn">
+        <div className={styles.confined}>
+          <ContentColumn variant="narrow">
+            <div style={{ background: "var(--bg2)", padding: "8px" }}>narrow (44rem)</div>
+          </ContentColumn>
+        </div>
       </ComponentGroup>
     </section>
   );

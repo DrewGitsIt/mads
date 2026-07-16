@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { ContentColumn } from "../components/ContentColumn/ContentColumn";
 import { DatePresets, type DatePreset } from "./DatePresets/DatePresets";
 import { StatTiles } from "./StatTiles/StatTiles";
 import { CostByModelChart } from "./CostChart/CostByModelChart";
@@ -52,43 +53,45 @@ export function DashboardTab({ client = defaultClient, onDrillBack }: DashboardT
 
   return (
     <div className={styles.tab}>
-      <div className={styles.header}>
-        <DatePresets value={preset} onChange={setPreset} />
-        <LiveWidget client={client} />
-      </div>
+      <ContentColumn variant="wide" className={styles.body}>
+        <div className={styles.header}>
+          <DatePresets value={preset} onChange={setPreset} />
+          <LiveWidget client={client} />
+        </div>
 
-      <StatTiles
-        cost={cost.data}
-        agents={agents.data}
-        tasks={tasks.data}
-        capabilities={capabilities.data}
-        runs={runs.data}
-      />
+        <StatTiles
+          cost={cost.data}
+          agents={agents.data}
+          tasks={tasks.data}
+          capabilities={capabilities.data}
+          runs={runs.data}
+        />
 
-      <section className={styles.section}>
-        <h2 className={styles.heading}>Cost by model</h2>
-        <CostByModelChart byDay={filteredByDay} />
-      </section>
+        <section className={styles.section}>
+          <h2 className={styles.heading}>Cost by model</h2>
+          <CostByModelChart byDay={filteredByDay} />
+        </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.heading}>Agent leaderboard</h2>
-        <AgentLeaderboardTable entries={agents.data} />
-      </section>
+        <section className={styles.section}>
+          <h2 className={styles.heading}>Agent leaderboard</h2>
+          <AgentLeaderboardTable entries={agents.data} />
+        </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.heading}>Task outcomes</h2>
-        <TaskOutcomesPanel outcomes={tasks.data} />
-      </section>
+        <section className={styles.section}>
+          <h2 className={styles.heading}>Task outcomes</h2>
+          <TaskOutcomesPanel outcomes={tasks.data} />
+        </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.heading}>Capability usage</h2>
-        <CapabilityUsageTable usage={capabilities.data} />
-      </section>
+        <section className={styles.section}>
+          <h2 className={styles.heading}>Capability usage</h2>
+          <CapabilityUsageTable usage={capabilities.data} />
+        </section>
 
-      <section className={styles.section}>
-        <h2 className={styles.heading}>Run history</h2>
-        <RunHistoryTable runs={filteredRuns} onDrillBack={onDrillBack} />
-      </section>
+        <section className={styles.section}>
+          <h2 className={styles.heading}>Run history</h2>
+          <RunHistoryTable runs={filteredRuns} onDrillBack={onDrillBack} />
+        </section>
+      </ContentColumn>
     </div>
   );
 }

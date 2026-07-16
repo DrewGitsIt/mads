@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
+import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../../components/Toast/Toast";
 import type { Session, Workspace } from "../../../router/types";
 import { WorkspacePill } from "./pills/WorkspacePill";
@@ -62,82 +63,84 @@ export function Launchpad({ createSession }: LaunchpadProps) {
 
   return (
     <div className={styles.launchpad}>
-      <h2 className={styles.title}>What can I help you with?</h2>
-      <p className={styles.subtitle}>Describe your goal — I&rsquo;ll help you get there.</p>
+      <ContentColumn variant="narrow">
+        <h2 className={styles.title}>What can I help you with?</h2>
+        <p className={styles.subtitle}>Describe your goal — I&rsquo;ll help you get there.</p>
 
-      <div className={styles.box}>
-        <textarea
-          className={styles.input}
-          rows={3}
-          aria-label="Describe your goal"
-          placeholder="e.g. The deploy script fails on the new Ubuntu runners — help me figure out why"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <div className={styles.actions}>
-          <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
-          <Button variant="primary" disabled={text.trim() === ""} onClick={() => void submit()}>
-            Start session
-          </Button>
+        <div className={styles.box}>
+          <textarea
+            className={styles.input}
+            rows={3}
+            aria-label="Describe your goal"
+            placeholder="e.g. The deploy script fails on the new Ubuntu runners — help me figure out why"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          <div className={styles.actions}>
+            <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
+            <Button variant="primary" disabled={text.trim() === ""} onClick={() => void submit()}>
+              Start session
+            </Button>
+          </div>
         </div>
-      </div>
 
-      <div className={styles.pills}>
-        <WorkspacePill
-          value={staged.workspace}
-          onChange={(ws) => {
-            setSelectedWorkspace(ws);
-            setStaged((prev) => ({
-              ...prev,
-              workspace: ws.name,
-              agent: prev.agent ?? ws.defaults.agent,
-              model: prev.model ?? ws.defaults.model,
-              isolation: prev.isolation ?? ws.defaults.isolation,
-            }));
-          }}
-        />
-        <AgentPill
-          value={staged.agent}
-          onChange={(agent) => setStaged((prev) => ({ ...prev, agent: agent.name }))}
-        />
-        <ModelPill
-          provider={staged.provider}
-          model={staged.model}
-          onChange={(provider, model) =>
-            setStaged((prev) => ({ ...prev, provider, model: model.id }))
-          }
-        />
-        <TrustPill
-          value={staged.trust}
-          onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
-        />
-        <IsolationPill
-          value={staged.isolation}
-          onChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
-          repos={selectedWorkspace?.repos}
-          selectedRepoPaths={staged.multiRepoPaths}
-          onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
-        />
-      </div>
+        <div className={styles.pills}>
+          <WorkspacePill
+            value={staged.workspace}
+            onChange={(ws) => {
+              setSelectedWorkspace(ws);
+              setStaged((prev) => ({
+                ...prev,
+                workspace: ws.name,
+                agent: prev.agent ?? ws.defaults.agent,
+                model: prev.model ?? ws.defaults.model,
+                isolation: prev.isolation ?? ws.defaults.isolation,
+              }));
+            }}
+          />
+          <AgentPill
+            value={staged.agent}
+            onChange={(agent) => setStaged((prev) => ({ ...prev, agent: agent.name }))}
+          />
+          <ModelPill
+            provider={staged.provider}
+            model={staged.model}
+            onChange={(provider, model) =>
+              setStaged((prev) => ({ ...prev, provider, model: model.id }))
+            }
+          />
+          <TrustPill
+            value={staged.trust}
+            onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
+          />
+          <IsolationPill
+            value={staged.isolation}
+            onChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
+            repos={selectedWorkspace?.repos}
+            selectedRepoPaths={staged.multiRepoPaths}
+            onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
+          />
+        </div>
 
-      <SuggestionChips onPick={(suggestionText) => setText(suggestionText)} />
+        <SuggestionChips onPick={(suggestionText) => setText(suggestionText)} />
 
-      {provisioningSessionId && (
-        <ProvisioningStrip
-          sessionId={provisioningSessionId}
-          onDone={() => setProvisioningSessionId(null)}
-        />
-      )}
+        {provisioningSessionId && (
+          <ProvisioningStrip
+            sessionId={provisioningSessionId}
+            onDone={() => setProvisioningSessionId(null)}
+          />
+        )}
 
-      {error && (
-        <Toast
-          tone="bad"
-          title="Couldn't start session"
-          description={error}
-          onDismiss={() => setError(null)}
-        />
-      )}
+        {error && (
+          <Toast
+            tone="bad"
+            title="Couldn't start session"
+            description={error}
+            onDismiss={() => setError(null)}
+          />
+        )}
+      </ContentColumn>
     </div>
   );
 }
