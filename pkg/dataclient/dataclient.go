@@ -49,6 +49,14 @@ func (c *Client) BaseURL() string {
 	return c.base
 }
 
+// Health probes Data Service reachability (used by pkg/preflight). Returns
+// nil on a 2xx response, an error otherwise — do already treats a non-2xx
+// status as an error via its default branch, which is exactly the
+// "unreachable or unhealthy" signal this needs.
+func (c *Client) Health(ctx context.Context) error {
+	return c.do(ctx, http.MethodGet, "/health", nil, nil)
+}
+
 // do runs one request; out, when non-nil, receives the decoded 2xx body.
 func (c *Client) do(ctx context.Context, method, path string, in, out any) error {
 	var body io.Reader

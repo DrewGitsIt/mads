@@ -1,8 +1,7 @@
-// Package preflight defines the first-run wizard's environment health check
-// (MADS-UX §3.9 Preflight step). W7.3's real implementation (git presence,
-// node-pty availability, provider credential checks) does not exist yet —
-// Checker is the seam it plugs into; StubChecker keeps the wizard usable in
-// the meantime by always reporting healthy.
+// Package preflight defines the first-run wizard's and Settings' environment
+// health check (spec §14.8-14.9). Checker is the seam both the real
+// environment probes (New, in checker.go) and StubChecker plug into;
+// StubChecker remains as a nil-default fallback and test fixture.
 package preflight
 
 import "context"

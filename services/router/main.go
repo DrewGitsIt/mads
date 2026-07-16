@@ -21,6 +21,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
@@ -69,8 +70,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, nil, vaultRefs, vaultSources)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources)
 }
 
 func main() {
@@ -130,11 +131,13 @@ func main() {
 		vault.NewAWSSecretsManager(vault.AWSSecretsManagerConfig{}),
 	}
 
+	pf := preflight.New(preflight.Deps{Data: data, Providers: providers, MadsHome: *madsHome})
+
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, vaultRefs, vaultSources)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

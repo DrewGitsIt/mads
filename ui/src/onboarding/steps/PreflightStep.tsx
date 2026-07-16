@@ -9,8 +9,10 @@ export interface PreflightStepProps {
 
 /**
  * Step 2/5: shares usePreflight with Settings > General (HANDOFF §4/§6).
- * Against the StubChecker everything reports healthy, so "Continue" is
- * always enabled — gating on stub data would be worse than not gating.
+ * "Continue" is never gated on preflight results — this is an informational
+ * health check with fix guidance (spec §14.8-14.9), not a hard gate; a user
+ * with a real environment problem still needs to reach Settings to see the
+ * guidance and fix it, not get stuck in the wizard.
  */
 export function PreflightStep({ onNext, onBack }: PreflightStepProps) {
   const preflight = usePreflight();

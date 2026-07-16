@@ -114,4 +114,14 @@ describe("GeneralPanel", () => {
     render(<GeneralPanel config={makeConfig()} />);
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
   });
+
+  it("renders a failing check's fix_hint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    render(<GeneralPanel config={makeConfig()} />);
+    await waitFor(() => expect(screen.getByText("provider:claude-code")).toBeTruthy());
+    expect(screen.getByText("install Claude Code and ensure `claude` is on PATH")).toBeTruthy();
+  });
 });
