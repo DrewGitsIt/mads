@@ -49,8 +49,18 @@ Tokens vary along two independent dimensions on the root element:
 ```sh
 npm ci
 npm run dev     # renderer dev server (Vite), open the printed localhost URL
-npm start       # build + launch the Electron shell (placeholder content only)
+npm start       # build + launch the Electron shell
 ```
+
+`npm start`'s Electron window loads the Router's own address (`http://localhost:8080` by
+default, `VITE_ROUTER_URL` to override — the same env var the renderer's `RouterClient`
+reads) via `win.loadURL`, same-origin with the API it calls; it needs a running Router
+that's already serving the just-built `ui/dist` (see `services/router/README.md`'s
+"Serving the UI"). From the repo root, `make app` (`scripts/app.sh`) starts the Data
+Service and Router first and only then runs `npm --prefix ui start`, so that ordering
+already holds — running `npm start` here directly assumes a Router is already up.
+`VITE_DEV_SERVER_URL` (set by `npm run dev`'s tooling) still takes priority when present,
+for the Vite dev-server loop.
 
 The app shell renders an icon rail plus whichever surface `App.tsx`'s
 `SURFACES` map resolves for the active rail item — Sessions, Retro, and
