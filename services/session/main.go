@@ -19,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -90,6 +91,20 @@ func main() {
 		r.CredStore = cs
 	}
 	r.MCPRegistry = capability.NewRegistry(filepath.Join(*madsHome, "mcp"))
+
+	// A vault-refs failure degrades to "no vault-backed credentials", not a
+	// fatal error — same best-effort philosophy as credstore above.
+	if refs, err := vault.OpenRefStore(filepath.Join(*madsHome, "vault-refs.json")); err != nil {
+		log.Printf("session: open vault ref store: %v (vault credential resolution disabled)", err)
+	} else {
+		r.VaultResolver = &vault.Resolver{
+			Refs: refs,
+			Sources: map[string]vault.Source{
+				"1password":           vault.NewOnePassword(vault.OnePasswordConfig{}),
+				"aws-secrets-manager": vault.NewAWSSecretsManager(vault.AWSSecretsManagerConfig{}),
+			},
+		}
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()

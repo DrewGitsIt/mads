@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -69,8 +70,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources)
 }
 
 func main() {
@@ -118,13 +119,25 @@ func main() {
 		creds = nil
 	}
 
+	// Same best-effort philosophy as the credstore open above — a vault-refs
+	// failure disables ref CRUD, not the whole Router.
+	vaultRefs, err := vault.OpenRefStore(filepath.Join(*madsHome, "vault-refs.json"))
+	if err != nil {
+		log.Printf("router: open vault ref store: %v (vault ref endpoints disabled)", err)
+		vaultRefs = nil
+	}
+	vaultSources := []vault.Source{
+		vault.NewOnePassword(vault.OnePasswordConfig{}),
+		vault.NewAWSSecretsManager(vault.AWSSecretsManagerConfig{}),
+	}
+
 	pf := preflight.New(preflight.Deps{Data: data, Providers: providers, MadsHome: *madsHome})
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
