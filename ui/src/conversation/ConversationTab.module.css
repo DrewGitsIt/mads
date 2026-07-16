@@ -36,3 +36,38 @@
   color: var(--text3);
   font: var(--fs-body) var(--sans);
 }
+
+.stateWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-6);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}
+
+.errorCard {
+  width: 360px;
+  border-left: 3px solid var(--bad);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.errorTitle {
+  font: 650 15px var(--sans);
+  color: var(--text);
+}
+
+.errorBody {
+  font: 400 var(--fs-body) var(--sans);
+  color: var(--text2);
+}
+
+.emptyTranscript {
+  padding: var(--space-4);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}
