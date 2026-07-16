@@ -127,7 +127,27 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		time.Sleep(plan.delay * time.Duration(len(plan.chunks)))
 	}
 	text := strings.Join(plan.chunks, "")
-	return &provider.OneShotResult{Text: text, Usage: usage(req.Prompt, text)}, nil
+	return &provider.OneShotResult{Text: text, Usage: applyUsageOverride(usage(req.Prompt, text), plan.usage)}, nil
+}
+
+// applyUsageOverride layers a scripted override onto the deterministic
+// default: unset (zero) fields keep their default, CostUSD always takes the
+// scripted value (0 when nil, same as an unscripted turn).
+func applyUsageOverride(u provider.Usage, o *UsageOverride) provider.Usage {
+	if o == nil {
+		return u
+	}
+	if o.Model != "" {
+		u.Model = o.Model
+	}
+	if o.InputTokens != 0 {
+		u.InputTokens = o.InputTokens
+	}
+	if o.OutputTokens != 0 {
+		u.OutputTokens = o.OutputTokens
+	}
+	u.CostUSD = o.CostUSD
+	return u
 }
 
 func (f *Fake) Models(context.Context) ([]provider.Model, error) {
@@ -155,6 +175,7 @@ type turnPlan struct {
 	slow      bool
 	crash     bool
 	rateLimit bool
+	usage     *UsageOverride
 }
 
 func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
@@ -169,7 +190,7 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 		}
 		p := turnPlan{
 			chunks: r.Chunks, delay: time.Duration(r.DelayMs) * time.Millisecond,
-			tools: r.Tools, crash: r.Crash, rateLimit: rateLimit,
+			tools: r.Tools, crash: r.Crash, rateLimit: rateLimit, usage: r.Usage,
 		}
 		if len(p.chunks) == 0 && r.Reply != "" {
 			p.chunks = []string{r.Reply}

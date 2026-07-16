@@ -48,6 +48,20 @@ type Rule struct {
 	// (Reply/Chunks/Tools as scripted). Lets a test script "rate-limited
 	// twice, then succeeds". Mutually exclusive with RateLimit and Crash.
 	RateLimitTimes int `yaml:"rate_limit_times,omitempty"`
+	// Usage pins exact token/cost accounting for one-shots matching this
+	// rule, overriding the deterministic length-based default — metrics
+	// tests need exact numbers to assert against, not computed guesses.
+	Usage *UsageOverride `yaml:"usage,omitempty"`
+}
+
+// UsageOverride pins one or more of a scripted one-shot's usage fields; unset
+// (zero) fields fall back to the deterministic default, except CostUSD,
+// which is always exactly what's scripted (the fake never invents a price).
+type UsageOverride struct {
+	Model        string  `yaml:"model,omitempty"`
+	InputTokens  int     `yaml:"input_tokens,omitempty"`
+	OutputTokens int     `yaml:"output_tokens,omitempty"`
+	CostUSD      float64 `yaml:"cost_usd,omitempty"`
 }
 
 // ToolStep is one scripted tool invocation.
