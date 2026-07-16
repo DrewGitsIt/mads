@@ -148,13 +148,14 @@ func parseOneShot(raw []byte) (*provider.OneShotResult, error) {
 		}
 		return nil, fmt.Errorf("claude -p: %s", l.Result)
 	}
-	res := &provider.OneShotResult{Text: l.Result}
+	// total_cost_usd is a top-level result-line field, independent of whether
+	// the nested usage object is present — surface it unconditionally so a
+	// response with cost but no token breakdown still feeds cost metrics.
+	res := &provider.OneShotResult{Text: l.Result, Usage: provider.Usage{CostUSD: l.TotalCostUSD}}
 	if l.Usage != nil {
-		res.Usage = provider.Usage{
-			InputTokens:  l.Usage.InputTokens,
-			OutputTokens: l.Usage.OutputTokens,
-			Model:        l.model(),
-		}
+		res.Usage.InputTokens = l.Usage.InputTokens
+		res.Usage.OutputTokens = l.Usage.OutputTokens
+		res.Usage.Model = l.model()
 	}
 	return res, nil
 }

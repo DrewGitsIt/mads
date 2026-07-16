@@ -50,6 +50,10 @@ type Usage struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	Model        string `json:"model,omitempty"`
+	// CostUSD is the caller-computed dollar cost, when the provider reports
+	// it (BehaviorCostReporting). Zero when unknown — the platform does no
+	// pricing math of its own (spec §11's hookpoint for usage.recorded).
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // Message is one normalized transcript entry (TranscriptReader). Synthesis

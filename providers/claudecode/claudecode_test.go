@@ -53,6 +53,9 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	if res.Usage.Model != "claude-haiku-4-5-20251001" {
 		t.Errorf("model from modelUsage: %q", res.Usage.Model)
 	}
+	if res.Usage.CostUSD != 0.0212739 {
+		t.Errorf("cost: %v, want total_cost_usd from the fixture", res.Usage.CostUSD)
+	}
 }
 
 // Transcript normalization is golden-pinned: the fixture mirrors the on-disk

@@ -123,3 +123,11 @@ never a mock of either contract.
 - **Commits report themselves** — the post-commit hook posts from a task
   worktree to the Data Service and the trailer linkage resolves:
   TestPostCommitHookReportsCommit (needs curl, as does the hook).
+- **Every agent one-shot reports its cost** — the engine posts a
+  `usage.recorded` event (model, tokens, `cost_usd`) after each agent stage's
+  one-shot, and the Data Service's `GET /metrics/cost` aggregates them
+  correctly by day/model and by session: TestUsageRecordedFeedsCostMetrics
+  (provider-fake's scenarios script exact usage/cost per stage so the
+  aggregates are asserted exactly, not just non-zero). The post is
+  best-effort — a failure never fails the stage that already succeeded, only
+  the cost metric is missing: TestUsageRecordFailureDoesNotBlockStage.

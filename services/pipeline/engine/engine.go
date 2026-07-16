@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -622,6 +623,7 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	if err != nil {
 		return "", fmt.Errorf("agent %s: %w", name, err)
 	}
+	e.recordUsage(ctx, task.ID, res.Usage)
 	if line := lastLine(res.Text); strings.HasPrefix(strings.ToUpper(line), strings.ToUpper(FailMarker)) {
 		return res.Text, fmt.Errorf("agent %s failed the stage: %s", name, line)
 	}
@@ -663,6 +665,28 @@ func (e *engine) note(ctx context.Context, taskID string, kind contracts.NoteTyp
 	_ = e.cfg.Data.AddNote(ctx, taskID, &contracts.Note{
 		Type: kind, Content: content, Source: e.cfg.Actor, Status: contracts.NoteStatusConfirmed,
 	})
+}
+
+// recordUsage posts a usage.recorded event for one agent one-shot (spec §8's
+// cost metrics hookpoint). Best-effort: a post that fails never fails the
+// stage — the one-shot already succeeded, and cost data is a nice-to-have,
+// not a correctness gate.
+func (e *engine) recordUsage(ctx context.Context, taskID string, usage provider.Usage) {
+	raw, err := json.Marshal(map[string]any{
+		"model":         usage.Model,
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
+		"cost_usd":      usage.CostUSD,
+	})
+	if err != nil {
+		raw = []byte(`{}`)
+	}
+	err = e.cfg.Data.Append(context.WithoutCancel(ctx), &contracts.Envelope{
+		Type: contracts.UsageRecorded, SessionID: e.cfg.SessionID, TaskID: taskID, Payload: raw,
+	})
+	if err != nil {
+		log.Printf("engine: post usage.recorded for task %s: %v", taskID, err)
+	}
 }
 
 func (e *engine) event(ctx context.Context, t contracts.EventType, taskID string, payload map[string]any) {
