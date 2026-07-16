@@ -1,14 +1,49 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+
+// Trimmed replacement for Electron's stock File/Edit/View/Window/Help menu,
+// which is out of theme and mostly dead weight for this app. We still need a
+// real Menu template (not Menu.setApplicationMenu(null)) because the edit
+// roles below are what wire up Cmd/Ctrl+C/V/X/A/Z in text inputs, and macOS
+// keeps a menu bar by platform convention.
+const menuTemplate: MenuItemConstructorOptions[] = [
+  ...(process.platform === "darwin"
+    ? [{ role: "appMenu" } as MenuItemConstructorOptions]
+    : []),
+  {
+    label: "File",
+    submenu: [{ role: "quit" }],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "undo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "selectAll" },
+    ],
+  },
+  {
+    label: "View",
+    submenu: [{ role: "reload" }, { role: "toggleDevTools" }],
+  },
+];
+
+Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     backgroundColor: "#1A1713",
+    // The menu bar itself is chrome we don't want visible; Alt still reveals
+    // it as an escape hatch. macOS has no equivalent bar to hide.
+    autoHideMenuBar: process.platform !== "darwin",
     webPreferences: {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
