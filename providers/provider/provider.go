@@ -13,6 +13,13 @@ import (
 // asserts it appears exactly where the matrix says it should.
 var ErrUnsupported = errors.New("behavior unsupported by provider")
 
+// ErrDiscoveryUnavailable marks a ModelDiscoverer failure that's an expected
+// runtime condition — the provider's binary is missing or exec itself
+// failed (the same class of problem pkg/preflight checks for ahead of time)
+// — as opposed to a genuine internal error. Handlers that surface discovery
+// failures to callers degrade to an empty list on this, and only this.
+var ErrDiscoveryUnavailable = errors.New("model discovery unavailable")
+
 // RateLimitError is the typed surfacing of a provider rate limit (spec §11.9:
 // inform and wait — the platform never silently retry-loops).
 type RateLimitError struct {

@@ -11,7 +11,7 @@ describe("ModelPill", () => {
       }
       return Promise.resolve(
         new Response(
-          JSON.stringify([{ id: "claude-opus-4.6", name: "claude-opus-4.6", default: true }]),
+          JSON.stringify({ models: [{ id: "claude-opus-4.6", name: "claude-opus-4.6", default: true }] }),
           { status: 200 },
         ),
       );

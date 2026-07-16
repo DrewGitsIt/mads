@@ -93,7 +93,7 @@ func (p *Provider) Models(ctx context.Context) ([]provider.Model, error) {
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())
 		}
-		return nil, fmt.Errorf("kiro-cli chat --list-models: %w: %s", err, detail)
+		return nil, fmt.Errorf("kiro-cli chat --list-models: %w: %s: %w", err, detail, provider.ErrDiscoveryUnavailable)
 	}
 	var wire []wireModel
 	if err := json.Unmarshal(bytes.TrimSpace(stdout.Bytes()), &wire); err != nil {

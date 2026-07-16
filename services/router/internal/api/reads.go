@@ -1,8 +1,10 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -77,13 +79,21 @@ func (s *server) handleListProviderModels(w http.ResponseWriter, r *http.Request
 	}
 	discoverer, ok := p.(provider.ModelDiscoverer)
 	if !ok {
-		writeJSON(w, http.StatusOK, []provider.Model{})
+		writeJSON(w, http.StatusOK, contracts.ModelsResponse{Models: []contracts.Model{}})
 		return
 	}
 	models, err := discoverer.Models(r.Context())
 	if err != nil {
+		if errors.Is(err, provider.ErrDiscoveryUnavailable) {
+			writeJSON(w, http.StatusOK, contracts.ModelsResponse{Models: []contracts.Model{}, Detail: err.Error()})
+			return
+		}
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, models)
+	out := make([]contracts.Model, len(models))
+	for i, m := range models {
+		out[i] = contracts.Model{ID: m.ID, Name: m.Name, Default: m.Default}
+	}
+	writeJSON(w, http.StatusOK, contracts.ModelsResponse{Models: out})
 }

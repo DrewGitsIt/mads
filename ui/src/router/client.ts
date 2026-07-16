@@ -533,7 +533,11 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async listModels(provider: string): Promise<Model[]> {
-    return routerGet(this.baseUrl, `/providers/${provider}/models`);
+    const res = await routerGet<{ models: Model[]; detail?: string }>(
+      this.baseUrl,
+      `/providers/${provider}/models`,
+    );
+    return res.models;
   }
 
   // --- Metrics (W6.9 Dashboard) ---

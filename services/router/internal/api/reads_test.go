@@ -2,12 +2,19 @@ package api_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 func TestListSessions(t *testing.T) {
@@ -148,9 +155,12 @@ func TestListProviderModels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	models := decodeJSON[[]provider.Model](t, resp)
-	if len(models) == 0 {
+	out := decodeJSON[contracts.ModelsResponse](t, resp)
+	if len(out.Models) == 0 {
 		t.Fatalf("GET /providers/fake/models returned no models")
+	}
+	if out.Detail != "" {
+		t.Fatalf("GET /providers/fake/models: Detail = %q, want empty", out.Detail)
 	}
 
 	resp, err = http.Get(srv.URL + "/providers/nonexistent/models")
@@ -159,5 +169,79 @@ func TestListProviderModels(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("GET /providers/nonexistent/models = %d, want 404", resp.StatusCode)
+	}
+}
+
+// flakyModels wraps fake.Fake so its Models() can be scripted to fail —
+// simulating kiro-cli's binary-missing/exec-failure case without needing a
+// real kiro-cli binary.
+type flakyModels struct {
+	*fake.Fake
+	name string
+	err  error
+}
+
+func (f *flakyModels) Name() string { return f.name }
+
+func (f *flakyModels) Models(context.Context) ([]provider.Model, error) {
+	return nil, f.err
+}
+
+// newTestServerWithProvider mirrors newTestServer but registers p alone,
+// for tests that need a specific scripted provider rather than the fake
+// registered by testProviders.
+func newTestServerWithProvider(t *testing.T, p provider.Provider) *httptest.Server {
+	t.Helper()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	reg := provider.NewRegistry()
+	if err := reg.Register(p); err != nil {
+		t.Fatal(err)
+	}
+	opts := testOptions(t, data, sup)
+	opts.Providers = reg
+	srv := httptest.NewServer(api.New(opts))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestListProviderModelsDiscoveryUnavailable(t *testing.T) {
+	p := &flakyModels{
+		Fake: fake.New(),
+		name: "flaky-kiro",
+		err:  fmt.Errorf("kiro-cli chat --list-models: %w: exec: \"kiro-cli\": not found", provider.ErrDiscoveryUnavailable),
+	}
+	srv := newTestServerWithProvider(t, p)
+	resp, err := http.Get(srv.URL + "/providers/flaky-kiro/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /providers/flaky-kiro/models = %d, want 200", resp.StatusCode)
+	}
+	out := decodeJSON[contracts.ModelsResponse](t, resp)
+	if len(out.Models) != 0 {
+		t.Fatalf("GET /providers/flaky-kiro/models: Models = %v, want empty", out.Models)
+	}
+	if out.Detail == "" {
+		t.Fatalf("GET /providers/flaky-kiro/models: Detail = %q, want non-empty", out.Detail)
+	}
+}
+
+func TestListProviderModelsInternalError(t *testing.T) {
+	p := &flakyModels{
+		Fake: fake.New(),
+		name: "flaky-broken",
+		err:  errors.New("boom"),
+	}
+	srv := newTestServerWithProvider(t, p)
+	resp, err := http.Get(srv.URL + "/providers/flaky-broken/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("GET /providers/flaky-broken/models = %d, want 500", resp.StatusCode)
 	}
 }
