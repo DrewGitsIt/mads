@@ -12,7 +12,7 @@ import (
 
 func TestListSessions(t *testing.T) {
 	srv := newTestServer(t)
-	resp := postJSON(t, srv.URL+"/sessions", &contracts.Session{Name: "s1"})
+	resp := postJSON(t, srv.URL+"/sessions", &contracts.Session{Name: "s1", Provider: "fake"})
 	created := decodeJSON[map[string]any](t, resp)
 	sess := created["session"].(map[string]any)
 	id := sess["id"].(string)

@@ -13,6 +13,14 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sess.ID = ""
+	if err := s.resolveSessionDefaults(r.Context(), &sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, err := s.providers.Get(sess.Provider); err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
+		return
+	}
 	if err := s.data.CreateSession(r.Context(), &sess); err != nil {
 		writeError(w, err)
 		return
