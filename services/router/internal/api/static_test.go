@@ -90,20 +90,21 @@ func TestStaticServesRealAsset(t *testing.T) {
 func TestStaticSPAFallback(t *testing.T) {
 	srv := newTestServerWithUIDist(t, writeUIDist(t))
 
-	// "/sessions/abc123" isn't a file on disk — it's a client-side route
-	// the SPA itself resolves — so the Router must serve index.html rather
-	// than 404.
-	resp, err := http.Get(srv.URL + "/sessions/abc123")
+	// "/some/unknown/route" isn't a file on disk and isn't a registered API
+	// route either — it's a client-side route the SPA itself resolves — so
+	// the Router must serve index.html rather than 404. (Not
+	// "/sessions/abc123": that's now a real API route — GET /sessions/{id}.)
+	resp, err := http.Get(srv.URL + "/some/unknown/route")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /sessions/abc123 status = %d, want 200", resp.StatusCode)
+		t.Fatalf("GET /some/unknown/route status = %d, want 200", resp.StatusCode)
 	}
 	body, _ := io.ReadAll(resp.Body)
 	if got := string(body); got != "<html><body>mads-ui-shell</body></html>" {
-		t.Fatalf("GET /sessions/abc123 body = %q, want the SPA shell (index.html)", got)
+		t.Fatalf("GET /some/unknown/route body = %q, want the SPA shell (index.html)", got)
 	}
 }
 
