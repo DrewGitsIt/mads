@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { Button } from "../components/Button/Button";
+import { Card } from "../components/Card/Card";
 import { Chip } from "../components/Chip/Chip";
 import type { RouterClient } from "../router/client";
 import type { Session, TranscriptMessage } from "../router/types";
@@ -36,23 +38,56 @@ type DisplayMode = "chat" | "terminal";
 export function ConversationTab({ sessionId, routerClient, ptyBridge }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
+  const [loadError, setLoadError] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
   const [mode, setMode] = useState<DisplayMode>("chat");
   const [shellOpen, setShellOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    void routerClient.getSession(sessionId).then((s) => {
-      if (!cancelled) setSession(s);
-    });
-    void routerClient.getTranscript(sessionId).then((m) => {
-      if (!cancelled) setMessages(m);
-    });
+    setLoadError(false);
+    setSession(null);
+    setMessages([]);
+    void routerClient
+      .getSession(sessionId)
+      .then((s) => {
+        if (!cancelled) setSession(s);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      });
+    void routerClient
+      .getTranscript(sessionId)
+      .then((m) => {
+        if (!cancelled) setMessages(m);
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [routerClient, sessionId]);
+  }, [routerClient, sessionId, retryToken]);
 
-  if (!session) return null;
+  if (loadError) {
+    return (
+      <div className={styles.stateWrap}>
+        <Card className={styles.errorCard}>
+          <div className={styles.errorTitle}>Couldn't load this conversation</div>
+          <div className={styles.errorBody}>
+            The session or its transcript failed to load.
+          </div>
+          <Button variant="primary" onClick={() => setRetryToken((t) => t + 1)}>
+            Retry
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <div className={styles.stateWrap}>Loading session…</div>;
+  }
 
   return (
     <div className={styles.tab}>
@@ -82,7 +117,11 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
           {mode === "chat" ? (
             <>
               <SessionSummaryCard session={session} />
-              <ChatRenderer messages={messages} />
+              {messages.length === 0 ? (
+                <div className={styles.emptyTranscript}>No conversation yet</div>
+              ) : (
+                <ChatRenderer messages={messages} />
+              )}
               <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}

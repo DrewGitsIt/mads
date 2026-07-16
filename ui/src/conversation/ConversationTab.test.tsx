@@ -95,4 +95,45 @@ describe("ConversationTab", () => {
       expect(document.querySelector('[data-testid="resize-handle"]')).toBeTruthy(),
     );
   });
+
+  it("shows an error card when getSession rejects, and Retry refetches", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockRejectedValueOnce(new Error("boom"));
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+  });
+
+  it("shows an error card when getTranscript rejects", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockRejectedValueOnce(new Error("boom"));
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeTruthy());
+  });
+
+  it("shows a loading placeholder before the fetches resolve", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    expect(screen.getByText(/loading session/i)).toBeTruthy();
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+  });
+
+  it("shows an empty-state note when the transcript is empty, with the composer still usable", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
+    expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
+  });
 });
