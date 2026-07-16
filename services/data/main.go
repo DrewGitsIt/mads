@@ -42,6 +42,9 @@ func main() {
 	if err := store.Migrate(db, store.Migrations()); err != nil {
 		log.Fatalf("data: %v", err)
 	}
+	if err := checkSchemaCompatible(db, store.Migrations()); err != nil {
+		log.Fatalf("%v", err)
+	}
 	version, err := store.Version(db)
 	if err != nil {
 		log.Fatalf("data: %v", err)

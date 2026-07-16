@@ -21,13 +21,38 @@ func TestValidateConfigReportsEveryProblem(t *testing.T) {
 		ConcurrencyLimit:    0,
 		SynthesisDebounceMS: -1,
 		LogRetentionDays:    0,
+		UpdateFeedURL:       "not-a-url",
 	}
 	verr := ValidateConfig(&c)
 	if verr.Empty() {
 		t.Fatal("expected validation failures")
 	}
-	want := 10
+	want := 11
 	if len(verr.Errors) != want {
 		t.Fatalf("got %d errors, want %d (report every problem at once): %+v", len(verr.Errors), want, verr.Errors)
+	}
+}
+
+func TestValidateConfigUpdateFeedURL(t *testing.T) {
+	base := DefaultConfig()
+
+	base.UpdateFeedURL = ""
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("empty update_feed_url should be valid (feature off): %+v", verr.Errors)
+	}
+
+	base.UpdateFeedURL = "https://example.com/feed.json"
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("absolute https URL should be valid: %+v", verr.Errors)
+	}
+
+	base.UpdateFeedURL = "ftp://example.com/feed.json"
+	if verr := ValidateConfig(&base); verr.Empty() {
+		t.Fatal("non-http(s) scheme should be invalid")
+	}
+
+	base.UpdateFeedURL = "not-a-url"
+	if verr := ValidateConfig(&base); verr.Empty() {
+		t.Fatal("relative/non-absolute URL should be invalid")
 	}
 }

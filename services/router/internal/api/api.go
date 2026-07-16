@@ -29,18 +29,21 @@ type server struct {
 	creds        *credstore.Store
 	preflight    preflight.Checker
 	vaultSources []vault.Source
+	version      string
 }
 
 // New returns the Router's HTTP handler. creds may be nil (credential
 // endpoints degrade to 503); a nil preflightChecker defaults to
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker) http.Handler {
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, version string) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, version: version}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)
