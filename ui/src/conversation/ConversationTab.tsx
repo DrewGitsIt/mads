@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Chip } from "../components/Chip/Chip";
@@ -69,6 +69,29 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
     };
   }, [routerClient, sessionId, retryToken]);
 
+  const messagesRef = useRef<TranscriptMessage[]>(messages);
+  messagesRef.current = messages;
+
+  // GET /transcript has no push notification for turn completion (no domain
+  // event fires per-turn, only on session start/shutdown), so a reply only
+  // becomes visible by re-fetching. Bounded poll, not a general subscription:
+  // gives up quietly after ~3s rather than polling indefinitely.
+  const pollForReply = useCallback(async () => {
+    const baseline = messagesRef.current.length;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      try {
+        const fresh = await routerClient.getTranscript(sessionId);
+        if (fresh.length > baseline) {
+          setMessages(fresh);
+          return;
+        }
+      } catch {
+        // transient — keep polling, last attempt just gives up quietly
+      }
+    }
+  }, [routerClient, sessionId]);
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -126,9 +149,10 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
                 routerClient={routerClient}
                 sessionId={sessionId}
                 agentId={session.agent}
-                onSent={(text) =>
-                  setMessages((m) => [...m, { role: "user", text }])
-                }
+                onSent={(text) => {
+                  setMessages((m) => [...m, { role: "user", text }]);
+                  void pollForReply();
+                }}
               />
             </>
           ) : ptyBridge ? (

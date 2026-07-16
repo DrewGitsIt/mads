@@ -15,6 +15,13 @@ import (
 // (no conversation yet, provider deregistered, provider doesn't implement
 // TranscriptReader, the read itself fails) degrades to an empty transcript,
 // matching this endpoint's "always valid JSON, never a blank pane" contract.
+//
+// This is the fallback path only: handleSessionTranscript proxies to the
+// running session child (which reads its own live provider instance) first,
+// since a live turn's in-memory state only ever exists in the child's
+// process, not the Router's own provider.Registry. This path serves sessions
+// with no running child, where the durable ProviderRef read here is all
+// there is.
 func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []contracts.TranscriptMessage {
 	out := []contracts.TranscriptMessage{}
 	if sess.ProviderRef == "" {
@@ -49,6 +56,10 @@ func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request)
 	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, err)
+		return
+	}
+	if addr, ok := s.sup.SessionAddr(sess.ID); ok {
+		s.proxyTo(w, r, addr, "/transcript")
 		return
 	}
 	writeJSON(w, http.StatusOK, s.transcriptFor(r.Context(), sess))

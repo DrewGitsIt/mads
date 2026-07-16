@@ -62,6 +62,12 @@ One process, one session — no `:id` in any path.
   Service (`[]contracts.FileChange`). See "File observation & commit linkage" below.
 - `GET /commits` — every commit this session has produced, with task linkage resolved by
   the Data Service (`[]contracts.Commit`). See "File observation & commit linkage" below.
+- `GET /transcript` — this session's live conversation (`[]contracts.TranscriptMessage`),
+  read straight from the bound provider instance this process owns (`Runner.Transcript`).
+  The Router proxies here for any session with a running child — its own
+  `provider.Registry` has no visibility into this process's provider session, so this is
+  the only place a live turn's history can be read from. Never errors outward: degrades to
+  `[]` the same way the Router's own durable-transcript fallback does.
 - `POST /skills/{name}/inject` — sends a declared skill capability's content as a turn
   (spec §12.4); 202 once relayed. The system-directed and `/command` injection paths both
   resolve to this one endpoint; user-directed injection needs no separate route (asking the
@@ -85,6 +91,15 @@ Counterparties (spec §15: exactly two):
 
 ## Critical paths
 
+- **Live transcript reads cross the process boundary at the child, not the Router** — a
+  live turn's history only ever exists inside the provider session this process owns; the
+  Router's own `provider.Registry` is a separate instance in a separate process with no
+  visibility into it. `GET /transcript` (`Runner.Transcript`) is what makes a live session's
+  conversation readable at all — the Router proxies to it (mirroring `/output`) whenever
+  `SessionAddr` finds a running child, falling back to its own durable-provider read (keyed
+  by the persisted `ProviderRef`) only once this process has exited. See
+  `internal/runner.TestTranscript` and the Router-level topology test
+  `services/router/internal/api.TestSessionTranscriptProxiesLiveChild`.
 - **Bounce and resume** — the provider session survives this process dying. `Start`
   persists `ProviderRef` (the provider-native resume handle) to the Data Service before
   returning success; a fresh process reads it back and passes it as `StartOptions.Resume`.

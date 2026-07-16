@@ -94,10 +94,11 @@ type Runner struct {
 
 	hub *hub
 
-	mu      sync.Mutex
-	sess    provider.Session
-	busy    bool // a turn is in flight (Send called, no EventTurnEnd yet)
-	closing bool // Shutdown has started tearing this session down
+	mu           sync.Mutex
+	sess         provider.Session
+	providerName string // sess's provider name, set alongside sess so Transcript can look the provider back up
+	busy         bool   // a turn is in flight (Send called, no EventTurnEnd yet)
+	closing      bool   // Shutdown has started tearing this session down
 
 	// touched tracks paths already reported this run, so recordFileChange
 	// can tell an "added" first sighting from a later "modified" one.
@@ -190,6 +191,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	r.mu.Lock()
 	r.sess = provSess
+	r.providerName = sess.Provider
 	r.mu.Unlock()
 
 	go r.pump(provSess)

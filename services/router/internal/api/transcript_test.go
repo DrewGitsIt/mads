@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -151,6 +152,69 @@ func TestSessionTranscriptNoConversation(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("len(msgs) = %d, want 0", len(msgs))
+	}
+}
+
+// newTestServerWithRealSession wires a Router whose session argv spawns the
+// real Session Service binary (not testchild), so a test can exercise the
+// Router->child transcript proxy end to end against a genuine child process.
+func newTestServerWithRealSession(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{sessionBin, "-data-url", base}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
+	return srv, base
+}
+
+// TestSessionTranscriptProxiesLiveChild is the topology test for the
+// Router->child transcript proxy: it spawns a real Session Service child
+// (provider=fake), sends a message through the Router, and confirms the
+// reply becomes visible through GET /sessions/{id}/transcript — the process
+// boundary this whole fix is about (see transcript.go's handleSessionTranscript).
+func TestSessionTranscriptProxiesLiveChild(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "live-proxy", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp)
+
+	mresp := postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+
+	var msgs []contracts.TranscriptMessage
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		tresp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID + "/transcript")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = decodeJSON[[]contracts.TranscriptMessage](t, tresp)
+		if len(msgs) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo hi" {
+		t.Errorf("msgs[0] = %+v, want {role: user, text: echo hi}", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
+		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
+	}
+
+	if tresp := postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil); tresp.StatusCode != http.StatusNoContent {
+		t.Fatalf("terminate status = %d, want 204", tresp.StatusCode)
 	}
 }
 

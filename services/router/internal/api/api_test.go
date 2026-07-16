@@ -28,6 +28,7 @@ import (
 )
 
 var testChildBin string
+var sessionBin string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "mads-router-api-test")
@@ -42,9 +43,25 @@ func TestMain(m *testing.M) {
 		panic("build testchild: " + err.Error() + "\n" + string(out))
 	}
 
+	// The real session binary, needed by TestSessionTranscriptProxiesLiveChild
+	// to exercise the Router->child transcript proxy against a genuine
+	// Session Service process rather than testchild's stub.
+	sessionBin = filepath.Join(dir, "mads-session")
+	build = exec.Command("go", "build", "-o", sessionBin,
+		"github.com/drewkidwell/mads/services/session")
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("build session: " + err.Error() + "\n" + string(out))
+	}
+
 	code := m.Run()
 
 	if err := testleakcheck.Verify(testChildBin); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		if code == 0 {
+			code = 1
+		}
+	}
+	if err := testleakcheck.Verify(sessionBin); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		if code == 0 {
 			code = 1

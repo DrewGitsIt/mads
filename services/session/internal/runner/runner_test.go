@@ -91,6 +91,43 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTranscript(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	msgs := r.Transcript(ctx)
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo hi" {
+		t.Errorf("msgs[0] = %+v, want {role: user, text: echo hi}", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
+		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
+	}
+}
+
 func TestBounceAndResume(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)
