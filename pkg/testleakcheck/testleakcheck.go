@@ -1,7 +1,9 @@
-// Package testleakcheck lets a router test package's TestMain prove, after
-// m.Run() returns, that no testchild process it spawned is still alive —
-// turning a silent leak into a hard test failure instead of a growing pile
-// of orphaned processes.
+// Package testleakcheck lets a test's TestMain prove, after m.Run() returns,
+// that no child process it spawned is still alive — turning a silent leak
+// into a hard test failure instead of a growing pile of orphaned processes.
+// Exported under pkg/ (not services/router/internal/) so both the Router's
+// own test suites and cross-service test-infra (e.g. scripts/e2esmoke) can
+// use it.
 package testleakcheck
 
 import (
@@ -40,7 +42,7 @@ func Verify(binPath string) error {
 		}
 	}
 	if len(leaked) > 0 {
-		return fmt.Errorf("testleakcheck: %d testchild process(es) still running %s after test run: %v",
+		return fmt.Errorf("testleakcheck: %d process(es) still running %s after test run: %v",
 			len(leaked), binPath, leaked)
 	}
 	return nil

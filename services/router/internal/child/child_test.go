@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drewkidwell/mads/services/router/internal/testleakcheck"
+	"github.com/drewkidwell/mads/pkg/testleakcheck"
 )
 
 var testChildBin string

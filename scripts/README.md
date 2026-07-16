@@ -77,3 +77,28 @@ explicit "pending CI" message rather than silently passing — it needs a
 macOS GitHub Actions runner wired into `.github/workflows/ci.yml` before it
 can run for real (tracked for whichever work item stands up the release
 build matrix, spec §14 Notes / W7.7).
+
+## Release gate
+
+`scripts/release-gate.sh` (`make release-gate`) is the pre-release check: it
+cross-builds `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`
+(build-only for every combo except the runner's native platform), health-
+checks the native candidate (`mads --version` must exit 0 — the same
+convention `pkg/update.Apply` uses to decide rollback), then runs this
+directory's install/first-run/uninstall smoke and `cmd/mads`'s update-apply
+smoke against that candidate.
+
+```sh
+make release-gate
+```
+
+`MADS_RELEASE_CANDIDATE_DIR=<dir>` skips the build matrix and tests `<dir>`
+instead — `scripts/smoketest`'s `TestMain` picks up prebuilt `mads`/`data`
+binaries from that directory when it's set, falling back to its normal self-
+build otherwise. This is what lets `scripts/releasegate`'s negative-proof
+test (a deliberately broken `mads` binary that fails the health check) run
+in milliseconds instead of repeating a multi-minute cross-compile.
+
+The build matrix gives this gate darwin **build** coverage — it does not
+close the darwin **execution** gap noted above, which still needs an actual
+macOS runner.

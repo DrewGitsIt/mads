@@ -27,9 +27,15 @@ test loop that never requires a live LLM.
 ## Working on mads
 
 ```sh
-make check   # lint + test with -race; identical to CI
-make test    # tests only
-make build   # compiles everything and puts the mads CLI at bin/mads
+make check         # lint + test with -race; identical to CI
+make test          # tests only
+make build         # compiles everything and puts the mads CLI at bin/mads
+make e2e-smoke     # full topology (data + router + session children) over a
+                   # scripted fake-provider pipeline run; not part of `make
+                   # check` — real OS processes, takes longer than a unit test
+make release-gate  # cross-platform build matrix + install/update smokes
+                   # against the native candidate; not part of `make check`
+                   # — a multi-minute cross-compile
 ```
 
 ## mads builds mads (the dogfood loop)
