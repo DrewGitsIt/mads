@@ -127,6 +127,8 @@ func New(opts Options) http.Handler {
 	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/confirm", s.handleConfirmNote)
 	mux.HandleFunc("POST /tasks/{id}/notes/{noteId}/discard", s.handleDiscardNote)
 	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
+	mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
+	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /sessions", s.handleListSessions)
 	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)
 	mux.HandleFunc("GET /agents", s.handleListAgents)

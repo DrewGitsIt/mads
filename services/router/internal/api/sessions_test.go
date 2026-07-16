@@ -8,6 +8,40 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
+func TestGetSession(t *testing.T) {
+	srv := newTestServer(t)
+	created := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, postJSON(t, srv.URL+"/sessions", map[string]string{"name": "get-me", "provider": "fake"}))
+
+	resp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[contracts.Session](t, resp)
+	if got.ID != created.Session.ID || got.Name != created.Session.Name {
+		t.Errorf("got = %+v, want %+v", got, created.Session)
+	}
+}
+
+func TestGetSessionNotFound(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/sessions/nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp)
+	if body["error"] == "" {
+		t.Errorf("expected non-empty error field, got %+v", body)
+	}
+}
+
 // All-empty create (no provider/model/agent/isolation/trust) must resolve
 // through Config defaults before spawning, and persist the resolved values —
 // not just echo them back (spec §10).

@@ -7,6 +7,15 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
+func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
+	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	var sess contracts.Session
 	if !decode(w, r, &sess) {
