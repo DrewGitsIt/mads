@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"os/exec"
 	"regexp"
 	"sync/atomic"
@@ -26,6 +25,18 @@ var listeningRe = regexp.MustCompile(`listening on (\S+)`)
 // address. Generous for "go run"'s compile step in dev; tests should spawn
 // a prebuilt binary to stay fast.
 const readyTimeout = 15 * time.Second
+
+// killGroup signals an entire process group (the negative-pid form of
+// kill(2)) rather than a single process, so a wrapper like "go run" or "sh
+// -c" and every process it forked without its own setpgid call — which is
+// how both behave — dies together. ESRCH means the group is already gone,
+// tolerated as success.
+func killGroup(pid int, sig syscall.Signal) error {
+	if err := syscall.Kill(-pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
 
 // Process is one supervised child.
 type Process struct {
@@ -51,6 +62,11 @@ func Spawn(ctx context.Context, id string, argv []string, onExit func(p *Process
 	}
 	full := append(append([]string{}, argv...), "-addr", "localhost:0")
 	cmd := exec.Command(full[0], full[1:]...) //nolint:gosec // argv is operator-configured, not user input
+	// Own process group (Pgid left zero, so the child becomes its own group
+	// leader): anything it forks without calling setpgid itself — a "go
+	// run" wrapper's compiled binary, a "sh -c" chain — inherits the same
+	// pgid, so killGroup below reaches the whole tree, not just this pid.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -107,12 +123,12 @@ func Spawn(ctx context.Context, id string, argv []string, onExit func(p *Process
 		return nil, fmt.Errorf("child %s: exited before ready: %w", id, p.exitErr)
 	case <-time.After(readyTimeout):
 		p.expected.Store(true)
-		_ = cmd.Process.Kill()
+		_ = killGroup(cmd.Process.Pid, syscall.SIGKILL)
 		<-exitedCh
 		return nil, fmt.Errorf("child %s: timed out waiting for ready", id)
 	case <-ctx.Done():
 		p.expected.Store(true)
-		_ = cmd.Process.Kill()
+		_ = killGroup(cmd.Process.Pid, syscall.SIGKILL)
 		<-exitedCh
 		return nil, ctx.Err()
 	}
@@ -131,7 +147,7 @@ func (p *Process) Terminate(ctx context.Context, grace time.Duration) error {
 	default:
 	}
 
-	if err := p.Cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := killGroup(p.Cmd.Process.Pid, syscall.SIGTERM); err != nil {
 		return fmt.Errorf("child %s: signal: %w", p.ID, err)
 	}
 
@@ -147,7 +163,7 @@ func (p *Process) Terminate(ctx context.Context, grace time.Duration) error {
 		return nil
 	default:
 	}
-	_ = p.Cmd.Process.Kill()
+	_ = killGroup(p.Cmd.Process.Pid, syscall.SIGKILL)
 	<-p.done
 	return nil
 }

@@ -48,6 +48,25 @@ func defaultMadsHome() string {
 	return filepath.Join(home, ".mads")
 }
 
+// defaultChildCmd returns the path to a same-directory sibling binary named
+// name if one exists next to the currently running router executable — the
+// layout `make build` produces (all service binaries land in the same
+// bin/ directory) — else goRunFallback. Resolved via os.Executable, not
+// cwd, so the result doesn't depend on how the router was invoked ("go run
+// ." from services/router vs. "go run ./services/router" from repo root
+// give different cwds but the same executable resolution here).
+func defaultChildCmd(name, goRunFallback string) string {
+	exe, err := os.Executable()
+	if err != nil {
+		return goRunFallback
+	}
+	sibling := filepath.Join(filepath.Dir(exe), name)
+	if info, err := os.Stat(sibling); err == nil && !info.IsDir() && info.Mode()&0111 != 0 {
+		return sibling
+	}
+	return goRunFallback
+}
+
 func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store) http.Handler {
 	return api.New(data, sup, jobs, providers, creds, nil)
 }
@@ -55,8 +74,8 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 func main() {
 	addr := flag.String("addr", "localhost:8080", "listen address")
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
-	sessionCmd := flag.String("session-cmd", "go run ./services/session", "command to spawn a Session Service child")
-	pipelineCmd := flag.String("pipeline-cmd", "go run ./services/pipeline", "command to spawn a Pipeline Engine child")
+	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
+	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")
 	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint (empty uses providers/fake as a placeholder)")
 	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")

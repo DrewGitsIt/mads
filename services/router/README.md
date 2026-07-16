@@ -31,9 +31,11 @@ curl localhost:8080/health
 ```
 
 Flags: `-data-url` (default `http://localhost:8081`) points at the Data Service;
-`-session-cmd`/`-pipeline-cmd` (default `go run ./services/session` / `go run
-./services/pipeline`) are the commands used to spawn children — override to point at
-compiled binaries once spec §14 packaging ships.
+`-session-cmd`/`-pipeline-cmd` are the commands used to spawn children, defaulting to a
+same-directory sibling binary (`session`/`pipeline`) of the running router executable if
+one exists — the layout `make build` produces — else falling back to `go run
+./services/session` / `go run ./services/pipeline` for the dev loop. See "Critical
+paths" below.
 
 ## Test it
 
@@ -240,6 +242,21 @@ localhost-only CORS policy — no flag/env to toggle it off:
   right after `cmd.Start()` in `internal/child`, not after address discovery, so a child
   that crashes before ever logging "listening on \<addr\>" is still reaped and still fires
   `onExit` — the `exitedCh` branch of `Spawn`'s ready-select.
+- **Terminate kills the whole process group, not just the immediate child.** `Spawn` sets
+  `Setpgid: true`, making every spawned child its own process group leader; anything it
+  forks without calling `setpgid` itself — a `go run` wrapper's compiled binary, a `sh -c`
+  chain — inherits that same pgid. `Terminate` (and `Spawn`'s own early-kill paths on
+  timeout/context-cancel) signal `-pid` (`internal/child`'s `killGroup`), reaching the
+  whole tree. Without this, the default dev `-session-cmd "go run ./services/session"`
+  orphaned the compiled grandchild on every termination — the immediate child (`go run`)
+  died, but its forked binary kept its listener open. `TestTerminateKillsGrandchildProcessGroup`
+  (`internal/child`) proves this against a real wrapper-script-spawned grandchild pid, not
+  just `testleakcheck`'s backstop scan. `-session-cmd`/`-pipeline-cmd` default to a
+  same-directory sibling binary of the running router executable (`defaultChildCmd`,
+  keyed off `os.Executable()` rather than cwd, which is ambiguous across invocation
+  styles) if `make build`'s `bin/` layout is present, else the unchanged `go run` dev
+  default — so a built install execs the compiled binary directly (no wrapper, no
+  grandchild) while the dev loop's behavior is untouched.
 - **Control plane: per-subscriber proxy, not a shared multiplexer.** `GET /events` opens
   one independent upstream `dataclient.Stream` call per UI connection — there is no
   Router-side fan-out logic and no shared upstream state between subscribers. Filtering is
