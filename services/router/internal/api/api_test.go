@@ -16,6 +16,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -77,7 +78,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testRegistry(t)))
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, nil, "test", testRegistry(t)))
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -103,6 +104,17 @@ func testCredStore(t *testing.T) *credstore.Store {
 		t.Fatal(err)
 	}
 	return cs
+}
+
+// testVaultRefs opens a vault ref store under a fresh temp dir — isolated
+// per test, never touching a real ~/.mads.
+func testVaultRefs(t *testing.T) *vault.RefStore {
+	t.Helper()
+	rs, err := vault.OpenRefStore(filepath.Join(t.TempDir(), "vault-refs.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rs
 }
 
 func postJSON(t *testing.T, url string, body any) *http.Response {

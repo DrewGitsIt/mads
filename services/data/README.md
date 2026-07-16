@@ -7,8 +7,8 @@ mutation commits together with its event in one SQLite transaction (transactiona
 It does NOT talk to providers, spawn processes, or hold business logic about pipelines or
 sessions — it stores, validates, and announces.
 
-**Status: Wave 1 COMPLETE (W1.1–W1.7)**, plus **W5.7 (metrics query views)** and the
-retro store (W5.5) — SQLite store + migrations, event log + transactional outbox + SSE
+**Status: Wave 1 COMPLETE (W1.1–W1.7)**, plus **W5.7 (metrics query views)**, the
+retro store (W5.5), and **W7.5's boot-time schema compatibility gate** — SQLite store + migrations, event log + transactional outbox + SSE
 subscriptions, task store, write leases, registries (six system agents seeded), pipeline
 templates (launch-equivalent validation via `pkg/template`, system default seeded),
 session records with §5 file-change attribution and the commit-linkage chain, `GET
@@ -156,6 +156,16 @@ subscribers are woken post-commit.
   no version: `internal/store/migrate_test.go` (TestMigrateFailureRollsBackAtomically).
 - **The production migration set always round-trips** — up → down → up must stay clean
   forever, or the update lifecycle (§14) breaks: TestProductionMigrations.
+- **Refuses to start against a newer schema than it knows** (W7.5, §14.5): on boot, after
+  applying every migration it does know (`store.Migrate`), `checkSchemaCompatible`
+  (`compat.go`) compares the on-disk schema version against `store.MaxVersion` (the highest
+  migration compiled into the binary) and `log.Fatal`s if the disk is ahead — an older
+  binary pointed at a newer data directory (a rolled-back update, or a downgrade) refuses
+  to run instead of silently misreading rows it doesn't understand. This is a version-gate,
+  not an automatic down-migration: `Migrations()`'s down.sql files are destructive (they
+  drop columns/tables), so nothing here runs one on your behalf — the fix is installing a
+  binary that knows the schema, not rolling the data back. `compat_test.go` covers both the
+  compatible and refuses-newer-schema paths.
 - **Outbox atomicity** — a state mutation and its events commit or roll back together:
   `internal/store/log_test.go` (TestOutboxAtomicity).
 - **Cursor resume is exact** — a reader resuming by cursor sees every matching event

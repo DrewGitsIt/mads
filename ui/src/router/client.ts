@@ -33,6 +33,8 @@ import type {
   TaskStatus,
   Template,
   TranscriptMessage,
+  UpdateCheckResult,
+  VersionInfo,
   Workspace,
 } from "./types";
 
@@ -121,6 +123,10 @@ export interface RouterClient {
 
   // --- Preflight ---
   getPreflightChecks(): Promise<PreflightCheck[]>;
+
+  // --- Update (W7.5 §14.3) ---
+  getVersion(): Promise<VersionInfo>;
+  checkForUpdate(): Promise<UpdateCheckResult>;
 
   // --- Providers / behaviors / models ---
   listProviders(): Promise<ProviderInfo[]>;
@@ -498,6 +504,15 @@ export class FetchRouterClient implements RouterClient {
   // --- Preflight ---
   async getPreflightChecks(): Promise<PreflightCheck[]> {
     return routerGet(this.baseUrl, "/preflight");
+  }
+
+  // --- Update (W7.5 §14.3) ---
+  async getVersion(): Promise<VersionInfo> {
+    return routerGet(this.baseUrl, "/version");
+  }
+
+  async checkForUpdate(): Promise<UpdateCheckResult> {
+    return routerPost(this.baseUrl, "/update/check");
   }
 
   // --- Providers / behaviors / models ---

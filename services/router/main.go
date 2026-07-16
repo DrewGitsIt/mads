@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
 	"github.com/drewkidwell/mads/pkg/registryclient"
+	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -30,6 +32,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
+	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -70,8 +73,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, registry *registryclient.Client) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf, registry)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, staticHandler, version, registry)
 }
 
 func main() {
@@ -84,6 +87,7 @@ func main() {
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
 	registryURL := flag.String("registry-url", "", "remote registry base URL (empty: unset — install/update/publish return a clear error)")
+	uiDist := flag.String("ui-dist", "ui/dist", "path to the built UI (ui/dist) served at /; missing or unbuilt serves a placeholder page. Relative to the cwd the router is launched from, not the executable — scripts/app.sh and `make run` both launch from the repo root.")
 	flag.Parse()
 
 	sessionArgv := strings.Fields(*sessionCmd)
@@ -121,13 +125,37 @@ func main() {
 		creds = nil
 	}
 
+	// Same best-effort philosophy as the credstore open above — a vault-refs
+	// failure disables ref CRUD, not the whole Router.
+	vaultRefs, err := vault.OpenRefStore(filepath.Join(*madsHome, "vault-refs.json"))
+	if err != nil {
+		log.Printf("router: open vault ref store: %v (vault ref endpoints disabled)", err)
+		vaultRefs = nil
+	}
+	vaultSources := []vault.Source{
+		vault.NewOnePassword(vault.OnePasswordConfig{}),
+		vault.NewAWSSecretsManager(vault.AWSSecretsManagerConfig{}),
+	}
+
 	pf := preflight.New(preflight.Deps{Data: data, Providers: providers, MadsHome: *madsHome})
 
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, reg)}
+
+	// Best-effort, never fatal if it fails: `mads update apply`'s Stop hook
+	// reads this to find and gracefully drain a locally-running Router
+	// (W7.5). A crash leaves a stale PID file behind, which that Stop hook
+	// already handles correctly (checks the process is actually alive, not
+	// just that the file exists, before signaling).
+	pidPath := filepath.Join(*madsHome, "router.pid")
+	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		log.Printf("router: write pid file: %v", err)
+	}
+	defer func() { _ = os.Remove(pidPath) }()
+
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -43,6 +43,26 @@ explicit confirmation (an interactive `y`, or `--yes`); declining, or passing
 `--keep-data`, leaves it untouched. It always prints the exact paths it's
 about to delete before deleting anything.
 
+## Update
+
+```sh
+mads update check                          # asks the Router to check the release feed
+mads update apply -yes                     # download, verify, swap, restart, health-check
+```
+
+Both subcommands talk to a running Router (`-router http://localhost:8080` by
+default). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
+§14.3): it never fires on its own — no polling, no phone-home — only in
+response to this explicit command, hitting `Config.UpdateFeedURL` (empty by
+default; no release feed exists yet). `apply` fetches the manifest itself,
+confirms the platform artifact and its version unless `-yes`, gracefully
+stops a locally-running Router via its PID file
+(`$MADS_HOME/router.pid`), then calls `pkg/update.Apply`: download to a
+staging dir, verify the sha256 from the feed, swap the binary in place,
+restart, and run a post-swap health check (`mads --version`). A failed
+health check rolls the previous binary back automatically and reports it —
+nothing is left half-swapped.
+
 ## Smoke test
 
 `scripts/smoketest` (`go test ./scripts/smoketest/...`, part of `make check`)

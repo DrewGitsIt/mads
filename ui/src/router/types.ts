@@ -588,3 +588,19 @@ export interface DiagnoseResult {
   reason?: string;
   suggestions: string[];
 }
+
+// mirrors services/router/internal/api/version.go VersionInfo
+export interface VersionInfo {
+  version: string;
+}
+
+// mirrors pkg/update/check.go CheckResult (W7.5) — Detail carries a
+// human-readable reason when the feed couldn't be reached or isn't
+// configured, never an HTTP error (§14.3's "never a hard error" contract).
+export interface UpdateCheckResult {
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  notes?: string;
+  detail?: string;
+}

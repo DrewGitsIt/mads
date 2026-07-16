@@ -57,7 +57,7 @@ func (r *Runner) setupSkill(ctx context.Context, name, cwd string) []string {
 		return nil
 	}
 
-	env, missing := r.CredStore.ResolveEnv(c.CredentialEnvVars)
+	env, missing := r.resolveCredentialEnv(ctx, c.CredentialEnvVars)
 	if len(missing) > 0 {
 		r.reportHealth(ctx, c.Name, false, "missing credential: "+strings.Join(missing, ", "))
 		return nil
@@ -84,7 +84,7 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 		return
 	}
 
-	env, missing := r.CredStore.ResolveEnv(c.CredentialEnvVars)
+	env, missing := r.resolveCredentialEnv(ctx, c.CredentialEnvVars)
 	if len(missing) > 0 {
 		r.reportHealth(ctx, c.Name, false, "missing credential: "+strings.Join(missing, ", "))
 		return
@@ -97,6 +97,33 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 	}
 	healthy, reason := capability.Health(ctx, c, r.MCPRegistry.Running(c.Name))
 	r.reportHealth(ctx, c.Name, healthy, reason)
+}
+
+// resolveCredentialEnv resolves names from the local store first, then —
+// for any still missing — from vault-referenced sources (spec §13.8). A
+// local credstore entry always wins over a vault ref for the same name
+// (explicit local override beats a reference). A vault resolution failure
+// degrades exactly like an absent local credential: logged here, folded
+// into the same "missing" list the caller already reports as an unhealthy
+// capability — no new failure shape, no crash.
+func (r *Runner) resolveCredentialEnv(ctx context.Context, names []string) (env, missing []string) {
+	env, missing = r.CredStore.ResolveEnv(names)
+	if r.VaultResolver == nil || len(missing) == 0 {
+		return env, missing
+	}
+	var stillMissing []string
+	for _, name := range missing {
+		value, ok, err := r.VaultResolver.Resolve(ctx, name)
+		if err != nil {
+			log.Printf("runner: vault resolve %s: %v", name, err)
+		}
+		if !ok {
+			stillMissing = append(stillMissing, name)
+			continue
+		}
+		env = append(env, name+"="+value)
+	}
+	return env, stillMissing
 }
 
 // reportHealth records a capability's health check result with the Data

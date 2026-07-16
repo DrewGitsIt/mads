@@ -323,3 +323,101 @@ func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
 		return err == nil && got.Summary == want
 	})
 }
+
+// TestSessionResumeAfterGracefulStopRestart verifies the update lifecycle's
+// "sessions resume" requirement (spec §14.4, W7.5) using only APIs that
+// already exist: activity and task/worktree state are durable in the Data
+// Service, so a graceful stop (the same TerminateSession call
+// Supervisor.Shutdown makes for every tracked child — the "graceful agent
+// stop" step of an update) followed by a fresh SpawnSession (the "restart
+// services" step) must leave nothing lost or reset.
+func TestSessionResumeAfterGracefulStopRestart(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "update-resume session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	task := contracts.Task{
+		SessionID: sess.ID,
+		Title:     "survive an update",
+		Source:    "test",
+		Status:    contracts.StatusInProgress,
+	}
+	if err := data.CreateTask(ctx, &task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if _, err := sup.SpawnSession(ctx, sess.ID); err != nil {
+		t.Fatalf("SpawnSession (first): %v", err)
+	}
+
+	beforeSession, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session (before): %v", err)
+	}
+	beforeTask, err := data.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Task (before): %v", err)
+	}
+
+	// Step 1: "graceful agent stop" — the exact call Supervisor.Shutdown
+	// makes internally for every tracked child.
+	if err := sup.TerminateSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	afterStop, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session (after stop): %v", err)
+	}
+	// Flipping Activity to Inactive on a graceful exit is the real Session
+	// Service's job (runner.Shutdown), not the Supervisor's: testChildBin
+	// is a bare fake spawn target with no Activity logic of its own, and
+	// onSessionExit only sets Activity itself for an *unexpected* exit
+	// (services/router/internal/supervisor/supervisor.go). That behavior is
+	// already covered by TestShutdownReleasesLeases in
+	// services/session/internal/runner/runner_test.go; this test instead
+	// proves what the Supervisor + Data Service alone guarantee across a
+	// stop/restart cycle: task and worktree state survive untouched.
+
+	afterStopTask, err := data.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Task (after stop): %v", err)
+	}
+	if afterStopTask.Status != beforeTask.Status || afterStopTask.Title != beforeTask.Title {
+		t.Fatalf("task changed across graceful stop: before %+v, after %+v", beforeTask, afterStopTask)
+	}
+	if afterStop.WorktreeDir != beforeSession.WorktreeDir || afterStop.WorktreeBranch != beforeSession.WorktreeBranch {
+		t.Fatalf("session worktree fields changed across graceful stop: before %+v, after %+v", beforeSession, afterStop)
+	}
+
+	// Step 2: "restart services" — spawn a fresh child under the same
+	// session ID, simulating the update's post-swap restart.
+	addr, err := sup.SpawnSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("SpawnSession (restart): %v", err)
+	}
+	if addr == "" {
+		t.Fatal("SpawnSession (restart): no address discovered")
+	}
+	if _, ok := sup.SessionPID(sess.ID); !ok {
+		t.Fatalf("SessionPID(%s): not tracked after restart", sess.ID)
+	}
+	if gotAddr, ok := sup.SessionAddr(sess.ID); !ok || gotAddr != addr {
+		t.Fatalf("SessionAddr(%s) = %q, %v; want %q, true", sess.ID, gotAddr, ok, addr)
+	}
+
+	afterRestartTask, err := data.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("Task (after restart): %v", err)
+	}
+	if afterRestartTask.Status != beforeTask.Status || afterRestartTask.Title != beforeTask.Title {
+		t.Fatalf("task state lost/reset across stop/restart cycle: before %+v, after %+v", beforeTask, afterRestartTask)
+	}
+}

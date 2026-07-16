@@ -8,7 +8,7 @@ agent-output streams to the UI. It does NOT persist anything and holds no busine
 about what sessions or pipelines do — all state access goes through `pkg/dataclient`
 against the Data Service; it never calls a sibling service peer-to-peer.
 
-**Status: W4.1, W4.2, W4.6, W5.3, W5.4, and W5.5 complete.** Child process supervision
+**Status: W4.1, W4.2, W4.6, W5.3, W5.4, W5.5, and W7.5 complete.** Child process supervision
 (`internal/child`, `internal/supervisor`), the lifecycle HTTP API, and stream fan-out
 (`internal/api`) are built and tested against real spawned processes, real SSE
 connections, and a real Data Service. `internal/job` adds the spawn-run-exit pattern for
@@ -34,8 +34,11 @@ Flags: `-data-url` (default `http://localhost:8081`) points at the Data Service;
 `-session-cmd`/`-pipeline-cmd` are the commands used to spawn children, defaulting to a
 same-directory sibling binary (`session`/`pipeline`) of the running router executable if
 one exists — the layout `make build` produces — else falling back to `go run
-./services/session` / `go run ./services/pipeline` for the dev loop. See "Critical
-paths" below.
+./services/session` / `go run ./services/pipeline` for the dev loop. `-ui-dist` points at
+the built UI (see "Serving the UI" below), defaulting to the cwd-relative `ui/dist` —
+unlike `-session-cmd`/`-pipeline-cmd` this is not resolved relative to the router
+executable, so it's only correct when launched from the repo root (`scripts/app.sh` and
+`make run` both do this). See "Critical paths" below.
 
 ## Test it
 
@@ -64,6 +67,18 @@ the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned
 never called peer-to-peer.
 
 - `GET /health` — `{"service":"router","status":"ok"}`
+- `GET /version` — `{"version": "..."}`, the linker-set build version (`-ldflags
+  -X main.version=...`, `"dev"` in local builds). `cmd/mads update apply`'s health check
+  after a binary swap calls the *binary* directly (`mads --version`), not this route — this
+  one is what the Settings panel reads to show "you're on vX.Y.Z" without a network call.
+- `POST /update/check` — the only place a release feed is ever contacted (spec §14.3): no
+  polling, no auto-phone-home, this route only runs when the UI/CLI calls it. Reads
+  `Config.UpdateFeedURL`; empty (the default — no release feed exists yet) short-circuits
+  to `{"current_version", "detail": "no update feed configured"}` without any outbound
+  request. Otherwise fetches and parses the feed via `pkg/update.Check`; a fetch/parse
+  failure never turns into an HTTP error — same "never a hard error, always data"
+  philosophy as `/preflight` — it comes back 200 with a `detail` explaining why. Success:
+  `{"current_version", "latest_version", "update_available", "notes"}` (`pkg/update.CheckResult`).
 - `GET /preflight` — per-check environment health (git, Data Service reachability, disk
   space, registered provider binaries + versions against `pkg/preflight`'s compatibility
   matrix), each with `{name, healthy, detail?, fix_hint?}` (spec §14.8-9); no request body,
@@ -190,6 +205,38 @@ localhost-only CORS policy — no flag/env to toggle it off:
 - `GET /events` (SSE) works cross-origin the same way: the middleware sets
   headers before `next.ServeHTTP` runs, so they're on the wire before
   `handleStreamEvents` starts flushing.
+
+## Serving the UI
+
+The Router serves the built UI (`ui/dist`, or wherever `-ui-dist` points) directly at `/`
+(`internal/static`), so the packaged app is same-origin with its own API — Electron loads
+`http://localhost:8080` via `win.loadURL`, not `file://`, and no longer needs
+`webSecurity: false` (`file://` sends `Origin: null`, which the CORS policy above would
+otherwise refuse). `internal/static` is a separate package from `internal/api` on purpose —
+it's pure file-serving with no JSON/dataclient dependency — and the UI itself is not
+embedded into the Go binary: it rebuilds independently (`npm --prefix ui run build`), and
+the Router picks up a new build without a restart.
+
+- `main.go` constructs `static.New(*uiDist)` and passes the resulting `http.Handler` into
+  `api.New`, which registers it as a catch-all `"/"` pattern on the same `http.ServeMux` as
+  every API route. `net/http`'s enhanced routing always ranks a method+path pattern (e.g.
+  `GET /health`) above a bare `"/"`, so API routes take priority with no explicit ordering
+  required — `internal/api`'s `TestStaticDoesNotShadowAPIRoutes` pins this. A nil
+  `staticHandler` (every pre-existing `internal/api` test call site) defaults to
+  `http.NotFoundHandler()`, matching the pre-W7.5 behavior of having no `"/"` route at all.
+- Any request path that isn't a real file under the dist directory falls back to
+  `index.html` — the built SPA owns client-side routing for everything past that
+  (`internal/static`'s `TestUnknownPathFallsBackToIndex`).
+- Whether the UI is built is checked on every request, not cached once at construction:
+  `scripts/app.sh` starts the Router before running `npm --prefix ui start` (which builds
+  `ui/dist`), so a handler that only checked once at construction would keep serving a
+  stale placeholder forever once the build actually landed
+  (`internal/static`'s `TestPicksUpBuildThatLandsAfterConstruction`).
+- A missing/unbuilt dist directory degrades to a plain "UI not built" page instead of
+  failing Router startup (`TestPlaceholderWhenDistMissing`, `TestPlaceholderWhenDistPathEmpty`).
+- The Vite dev-server loop (`npm run dev`, `localhost:5173`) is unaffected — that's what
+  the CORS policy above is for — and Electron's own dev fallback still points at
+  `VITE_DEV_SERVER_URL` when set (`ui/electron/main.ts`).
 
 ## Critical paths
 

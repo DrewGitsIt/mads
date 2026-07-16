@@ -29,20 +29,33 @@ type server struct {
 	providers    *provider.Registry
 	creds        *credstore.Store
 	preflight    preflight.Checker
+	vaultRefs    *vault.RefStore
 	vaultSources []vault.Source
 	registry     *registryclient.Client
+	version      string
 }
 
 // New returns the Router's HTTP handler. creds may be nil (credential
 // endpoints degrade to 503); a nil preflightChecker defaults to
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, registry *registryclient.Client) http.Handler {
+// vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
+// be nil or empty (GET /credentials/vault-sources reports no sources).
+// staticHandler serves the built UI at "/" (see internal/static); nil
+// defaults to http.NotFoundHandler(), matching the prior behavior of
+// having no "/" route at all. registry may be nil (registry endpoints
+// return a clear error).
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string, registry *registryclient.Client) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, registry: registry}
+	if staticHandler == nil {
+		staticHandler = http.NotFoundHandler()
+	}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version, registry: registry}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /version", s.handleVersion)
+	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)
@@ -115,6 +128,9 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /credentials/env-candidates", s.handleCredentialEnvCandidates)
 	mux.HandleFunc("POST /credentials/import", s.handleImportCredentials)
 	mux.HandleFunc("GET /credentials/vault-sources", s.handleListVaultSources)
+	mux.HandleFunc("GET /credentials/vault-refs", s.handleListVaultRefs)
+	mux.HandleFunc("POST /credentials/vault-refs", s.handleSetVaultRef)
+	mux.HandleFunc("DELETE /credentials/vault-refs/{name}", s.handleDeleteVaultRef)
 	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)
 	mux.HandleFunc("GET /metrics/agents", s.handleMetricsAgentLeaderboard)
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
@@ -124,6 +140,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
 	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
 	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
+	mux.Handle("/", staticHandler)
 	return withCORS(mux)
 }
 
