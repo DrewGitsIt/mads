@@ -35,23 +35,43 @@ type server struct {
 	version      string
 }
 
-// New returns the Router's HTTP handler. creds may be nil (credential
-// endpoints degrade to 503); a nil preflightChecker defaults to
-// preflight.StubChecker{} — W7.3's real implementation does not exist yet.
-// vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
-// be nil or empty (GET /credentials/vault-sources reports no sources).
-// staticHandler serves the built UI at "/" (see internal/static); nil
-// defaults to http.NotFoundHandler(), matching the prior behavior of
-// having no "/" route at all. registry may be nil (registry endpoints
-// return a clear error).
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string, registry *registryclient.Client) http.Handler {
-	if preflightChecker == nil {
-		preflightChecker = preflight.StubChecker{}
+// Options bundles server's dependencies so New takes a single argument —
+// Wave 7 grew New's parameter list to 11 positional args one field at a
+// time, which caused merge conflicts on every wave that added one. Add new
+// dependencies as a field here, not a New parameter.
+//
+// Creds may be nil (credential endpoints degrade to 503); a nil Preflight
+// defaults to preflight.StubChecker{} — W7.3's real implementation does not
+// exist yet. VaultRefs may be nil (vault-ref endpoints degrade to 503);
+// VaultSources may be nil or empty (GET /credentials/vault-sources reports
+// no sources). StaticHandler serves the built UI at "/" (see
+// internal/static); nil defaults to http.NotFoundHandler(), matching the
+// prior behavior of having no "/" route at all. Registry may be nil
+// (registry endpoints return a clear error).
+type Options struct {
+	Data          *dataclient.Client
+	Sup           *supervisor.Supervisor
+	Jobs          *job.Runner
+	Providers     *provider.Registry
+	Creds         *credstore.Store
+	Preflight     preflight.Checker
+	VaultRefs     *vault.RefStore
+	VaultSources  []vault.Source
+	StaticHandler http.Handler
+	Version       string
+	Registry      *registryclient.Client
+}
+
+// New returns the Router's HTTP handler. See Options's doc for the
+// nil-tolerant behavior of individual fields.
+func New(opts Options) http.Handler {
+	if opts.Preflight == nil {
+		opts.Preflight = preflight.StubChecker{}
 	}
-	if staticHandler == nil {
-		staticHandler = http.NotFoundHandler()
+	if opts.StaticHandler == nil {
+		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version, registry: registry}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -140,7 +160,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
 	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
 	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
-	mux.Handle("/", staticHandler)
+	mux.Handle("/", opts.StaticHandler)
 	return withCORS(mux)
 }
 

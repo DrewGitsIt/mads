@@ -27,7 +27,10 @@ func newTestServerWithUIDist(t *testing.T, distPath string) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, static.New(distPath), "test", nil))
+	opts := testOptions(t, data, sup)
+	opts.StaticHandler = static.New(distPath)
+	opts.Registry = nil
+	srv := httptest.NewServer(api.New(opts))
 	t.Cleanup(srv.Close)
 	return srv
 }

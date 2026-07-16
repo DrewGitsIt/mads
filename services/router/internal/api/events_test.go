@@ -27,7 +27,9 @@ func newTestServerWithData(t *testing.T) (*httptest.Server, string) {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, nil, nil, nil, "test", testRegistry(t)))
+	opts := testOptions(t, data, sup)
+	opts.VaultRefs = nil
+	srv := httptest.NewServer(api.New(opts))
 	t.Cleanup(srv.Close)
 	return srv, base
 }

@@ -74,7 +74,19 @@ func defaultChildCmd(name, goRunFallback string) string {
 }
 
 func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, staticHandler, version, registry)
+	return api.New(api.Options{
+		Data:          data,
+		Sup:           sup,
+		Jobs:          jobs,
+		Providers:     providers,
+		Creds:         creds,
+		Preflight:     pf,
+		VaultRefs:     vaultRefs,
+		VaultSources:  vaultSources,
+		StaticHandler: staticHandler,
+		Version:       version,
+		Registry:      registry,
+	})
 }
 
 func main() {
