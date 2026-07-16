@@ -8,6 +8,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -41,6 +42,24 @@ func main() {
 			}
 			flusher.Flush()
 		}
+	})
+	// Echoes the request body back with 202, mirroring the real session
+	// service's POST /messages "accepted" contract closely enough for
+	// router-level proxy tests (TestSessionMessagesForwarding) without
+	// needing the real runner/provider stack.
+	mux.HandleFunc("POST /messages", func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write(body)
+	})
+	mux.HandleFunc("POST /interrupt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }

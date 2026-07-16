@@ -446,9 +446,26 @@ sanitize correctly under happy-dom (see
 `src/conversation/ChatRenderer/markdown.test.tsx` for the specifics); the
 real Electron/Chromium renderer is unaffected.
 
-By design, this package has no Playwright/E2E/visual-regression tooling —
-that's a later wave, developed separately once real surfaces exist to test
-against.
+By design, the component layer above has no Playwright/E2E/visual-regression
+tooling — it stays fast and fixture-backed. Real-stack journey testing lives
+in the separate layer below.
+
+## Test layers
+
+This package has two, deliberately separate test layers:
+
+- **Component tests** (`npm run lint` / `npm run test` / `npm run test:pty`,
+  above) — vitest against `FakeRouterClient`/`FakePipelineClient` fixtures,
+  no real backend, no Playwright. Fast, runs as part of `make check`/CI's
+  `test` job.
+- **`ui/e2e/`** — a Playwright journey suite, one spec per tab/flow, driven
+  against a real, hermetic stack: real `data`/`router`/`session` Go binaries
+  on ephemeral ports, a scratch `MADS_HOME`/data dir, the real built UI
+  served same-origin by the Router, and a fake LLM provider for sessions —
+  no mocks. It exists because the component layer above tests against fakes
+  and can't catch the UI calling an endpoint the Router never implemented.
+  Chromium only. Run via `make ui-smoke` from the repo root (not
+  `npm run test`, and not part of `make check`).
 
 ## Router client (`src/router/`)
 

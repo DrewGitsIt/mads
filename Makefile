@@ -3,7 +3,7 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps app e2e-smoke release-gate
+.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate
 
 build: ui-deps
 	go build ./...
@@ -42,6 +42,20 @@ app:
 # — see scripts/e2esmoke's package doc.
 e2e-smoke:
 	go test -tags e2e_smoke -count=1 -v ./scripts/e2esmoke/...
+
+# Playwright journey suite: real data/router/session binaries on ephemeral
+# ports, real UI build, chromium only. Separate from `make check`/CI's fast
+# test job and from `make e2e-smoke` (Go-only, no browser) — see
+# ui/e2e/HANDOFF.md and ui/README.md's "test layers" section. Browsers are
+# cached at ~/.cache/ms-playwright (Linux default) — key CI's cache on that
+# path plus the pinned Playwright version in ui/package-lock.json.
+# VITE_ROUTER_URL="" bakes a relative (same-origin) router base into ui/dist
+# instead of the localhost:8080 default (client.ts's ROUTER_BASE) — the
+# Router serves this build itself on an ephemeral port, never 8080.
+ui-smoke: ui-deps
+	VITE_ROUTER_URL="" npm --prefix ui run build
+	npx --prefix ui playwright install chromium
+	npm --prefix ui run test:e2e
 
 # Release gate: cross-platform build matrix + install/update smokes against
 # the native candidate. Kept out of `check`/CI's fast `test` job (multi-
