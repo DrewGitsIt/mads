@@ -14,7 +14,7 @@ import (
 func TestSessionOutputForwarding(t *testing.T) {
 	srv, dataBase := newTestServerWithData(t)
 
-	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "output test"})
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "output test", "provider": "fake"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", resp.StatusCode)
 	}

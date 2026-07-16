@@ -65,7 +65,14 @@ never called peer-to-peer.
 - `POST /sessions` — create a session (proxies `dataclient.CreateSession`) and spawn its
   Session Service child; 201 with `{"session": ..., "addr": ...}`. On spawn failure, the
   session record is rolled back (best-effort delete) so a failed create doesn't leave an
-  orphaned record with nothing backing it.
+  orphaned record with nothing backing it. Before either step, an empty
+  provider/model/agent/isolation/trust is resolved (spec §10's inheritance chain: session
+  → named workspace's `Defaults` → global `Config`) and the resolved values are what gets
+  persisted and spawned with — the UI sees what actually ran, not what it left blank. An
+  unknown/still-empty provider after resolution is rejected with 400 naming it, before any
+  session record exists or any child is spawned — never a spawned-then-crashed child
+  surfaced as a bare 502. `POST /retros/{id}/follow-up-session` resolves and validates the
+  same way for the same reason.
 - `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL) and delete the
   session record; 204. The Data Service's own `session.deleted` event covers the "why";
   the Router doesn't emit anything itself here.
@@ -159,6 +166,29 @@ Service's own 422-for-validation convention — the Router treats a rejected req
 same whether the rejection came from its own decoding or a proxied dataclient call).
 
 ## Critical paths
+
+- **Model-tier mapping is a documented simplification, not real tier selection.**
+  `resolveSessionDefaults` (`internal/api/sessiondefaults.go`) derives an empty `Model`
+  from the *resolved* provider's discovered default (`ModelDiscoverer.Models`, the
+  `Default: true` entry) — `Config.DefaultModelTier` (cheapest/balanced/best) is not
+  consulted at all yet. Every tier currently maps to "the default provider's default
+  model." A real tier→model mapping is future work.
+- **Resolve provider before model, always.** Model derivation in
+  `resolveSessionDefaults` depends on the already-resolved provider (to look it up in the
+  registry and ask what it discovers) — resolving in the other order would derive from an
+  unresolved/empty provider.
+- **The provider pre-check is trustworthy because it's the same registry the child uses.**
+  `handleCreateSession`/`handleRetroFollowUpSession` call `s.providers.Get` — the identical
+  `*provider.Registry` instance `services/session`'s own binary populates (mirrored
+  construction, `main.go` in both services) — so a 400 here means the real child would
+  have failed the same lookup, not a guess.
+- **`handleBounceSession` re-spawns an existing record without re-running resolution or
+  the provider pre-check** — deliberately: bounce restarts a session that already has
+  whatever provider/model it was created with, there is nothing new to resolve. If that
+  stored provider has since gone bad (e.g. an operator deregistered it), bounce still
+  surfaces the Session Service's crash as a 502, not a 400 — this is a known, accepted gap
+  (see the task's HANDOFF for the considered, not-implemented sentinel-propagation
+  approach), left for a future change if it proves to matter in practice.
 
 - **Task/note/file-change proxying is a pure pass-through, zero Router-side state** —
   same framing as the rest of this doc's "holds no business logic" claim. `internal/api/tasks.go`

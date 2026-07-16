@@ -81,6 +81,23 @@ func TestPreflightStubbed(t *testing.T) {
 	}
 }
 
+// setDefaultProvider sets Config.DefaultProvider against a running server,
+// so session-create tests that omit "provider" resolve to it instead of
+// hitting the unknown-provider pre-check.
+func setDefaultProvider(t *testing.T, baseURL, provider string) {
+	t.Helper()
+	getResp, err := http.Get(baseURL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := decodeJSON[contracts.Config](t, getResp)
+	cfg.DefaultProvider = provider
+	putResp := putJSON(t, baseURL+"/config", cfg)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("set default provider: status %d", putResp.StatusCode)
+	}
+}
+
 func putJSON(t *testing.T, url string, body any) *http.Response {
 	t.Helper()
 	raw, err := json.Marshal(body)

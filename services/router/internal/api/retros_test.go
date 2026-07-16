@@ -63,6 +63,7 @@ func TestRetroFollowUpSession(t *testing.T) {
 	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
 	c := dataclient.New(dataBase, "test-verify")
 	ctx := context.Background()
+	setDefaultProvider(t, srv.URL, "fake")
 
 	retro := contracts.Retro{
 		ID: "rto_followup",
@@ -119,6 +120,7 @@ func TestRetroFollowUpSessionExcludesRejectedDPAs(t *testing.T) {
 	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{})
 	c := dataclient.New(dataBase, "test-verify")
 	ctx := context.Background()
+	setDefaultProvider(t, srv.URL, "fake")
 
 	retro := contracts.Retro{
 		ID: "rto_excludes_rejected",

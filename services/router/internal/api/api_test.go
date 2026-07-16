@@ -134,7 +134,7 @@ func TestHealth(t *testing.T) {
 func TestCreateTerminateSession(t *testing.T) {
 	srv := newTestServer(t)
 
-	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "test session"})
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "test session", "provider": "fake"})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", resp.StatusCode)
 	}
@@ -178,7 +178,7 @@ func TestCreateSessionValidation(t *testing.T) {
 func TestBounceSession(t *testing.T) {
 	srv := newTestServer(t)
 
-	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "bounce me"})
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "bounce me", "provider": "fake"})
 	created := decodeJSON[struct {
 		Session struct {
 			ID string `json:"id"`
