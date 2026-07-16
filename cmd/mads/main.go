@@ -6,6 +6,8 @@
 //	mads seed        -session ses_x -file tasks.yaml
 //	mads tasks       -session ses_x
 //	mads run         -session ses_x -workspace ~/repo/mads [flags]
+//	mads uninstall   [-keep-data] [-yes]
+//	mads --version
 package main
 
 import (
@@ -28,6 +30,10 @@ func main() {
 		err = cmdTasks(os.Args[2:])
 	case "run":
 		err = cmdRun(os.Args[2:], os.Stdout)
+	case "uninstall":
+		err = cmdUninstall(os.Args[2:], os.Stdin, os.Stdout)
+	case "-v", "--version", "version":
+		fmt.Println("mads " + version)
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -50,6 +56,8 @@ func usage() {
       [-template default-implementation] [-provider claude-code|fake]
       [-model M] [-concurrency 2] [-isolated=true] [-worktree-root DIR]
       [-claude-args "--dangerously-skip-permissions"] [-stage-timeout 30m]
+  mads uninstall   [-keep-data] [-yes]
+  mads --version
 
 The Data Service must be running (make -C services/data run).
 `)
