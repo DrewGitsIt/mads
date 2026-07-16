@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
+import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
+import { ConversationTab } from "../../conversation/ConversationTab";
+import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
+import { router } from "../../router/client";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
@@ -16,6 +20,7 @@ export function SessionsSurface({ jumpToSessionId }: SessionsSurfaceProps = {}) 
   const { sessions, loading, error, createSession } = useSessionsList();
   const openTaskCounts = useOpenTaskCounts();
   const [selectedId, setSelectedId] = useState<string>();
+  const ptyBridge = useElectronPtyBridge();
 
   useEffect(() => {
     if (jumpToSessionId) setSelectedId(jumpToSessionId);
@@ -31,12 +36,33 @@ export function SessionsSurface({ jumpToSessionId }: SessionsSurfaceProps = {}) 
             sessions={sessions}
             openTaskCounts={openTaskCounts}
             selectedId={selectedId}
-            onSelect={setSelectedId}
+            onSelect={(id) => setSelectedId((cur) => (cur === id ? undefined : id))}
           />
         )}
       </aside>
       <main className={styles.main}>
-        <Launchpad createSession={createSession} />
+        {selectedId ? (
+          <div className={styles.conversationPane}>
+            <div className={styles.paneHeader}>
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-label="Back to Launchpad"
+                onClick={() => setSelectedId(undefined)}
+              >
+                ✕
+              </Button>
+            </div>
+            <ConversationTab
+              key={selectedId}
+              sessionId={selectedId}
+              routerClient={router}
+              ptyBridge={ptyBridge}
+            />
+          </div>
+        ) : (
+          <Launchpad createSession={createSession} />
+        )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
       </main>
     </div>
