@@ -34,7 +34,11 @@ func newTestServerWithRegistry(t *testing.T, registryBase string) (*httptest.Ser
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
 	fm := fastmodel.New(fake.New(), fastmodel.Config{})
 	reg := registryclient.New(registryBase)
-	srv := httptest.NewServer(api.New(data, sup, job.New(data, fm, reg), testProviders(t), testCredStore(t), nil, nil, nil, nil, "test", reg))
+	opts := testOptions(t, data, sup)
+	opts.Jobs = job.New(data, fm, reg)
+	opts.VaultRefs = nil
+	opts.Registry = reg
+	srv := httptest.NewServer(api.New(opts))
 	t.Cleanup(srv.Close)
 	return srv, base
 }

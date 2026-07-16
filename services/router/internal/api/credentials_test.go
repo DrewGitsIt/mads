@@ -143,7 +143,10 @@ func newTestServerWithVaultSources(t *testing.T, sources []vault.Source) *httpte
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), sources, nil, "test", nil))
+	opts := testOptions(t, data, sup)
+	opts.VaultSources = sources
+	opts.Registry = nil
+	srv := httptest.NewServer(api.New(opts))
 	t.Cleanup(srv.Close)
 	return srv
 }

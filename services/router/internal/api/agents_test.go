@@ -33,7 +33,10 @@ func newTestServerWithScenario(t *testing.T, sc fake.Scenario) (*httptest.Server
 		t.Fatal(err)
 	}
 	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
-	srv := httptest.NewServer(api.New(data, sup, job.New(data, fm, testRegistry(t)), testProviders(t), testCredStore(t), nil, nil, nil, nil, "test", testRegistry(t)))
+	opts := testOptions(t, data, sup)
+	opts.Jobs = job.New(data, fm, testRegistry(t))
+	opts.VaultRefs = nil
+	srv := httptest.NewServer(api.New(opts))
 	t.Cleanup(srv.Close)
 	return srv, base
 }

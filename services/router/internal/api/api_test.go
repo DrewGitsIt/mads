@@ -70,6 +70,24 @@ func testRegistry(t *testing.T) *registryclient.Client {
 	return registryclient.New("")
 }
 
+// testOptions returns a baseline api.Options over the given data client and
+// supervisor, with inert fakes/stubs for every other dependency. Individual
+// tests override whichever fields their scenario needs — a new Options
+// field only needs a default added here, not an edit in every test file.
+func testOptions(t *testing.T, data *dataclient.Client, sup *supervisor.Supervisor) api.Options {
+	t.Helper()
+	return api.Options{
+		Data:      data,
+		Sup:       sup,
+		Jobs:      testJobs(t, data),
+		Providers: testProviders(t),
+		Creds:     testCredStore(t),
+		VaultRefs: testVaultRefs(t),
+		Version:   "test",
+		Registry:  testRegistry(t),
+	}
+}
+
 // newTestServer wires a real datatest Data Service, a Supervisor that spawns
 // the fast testchild binary, and the Router's own api.Handler in front of it.
 func newTestServer(t *testing.T) *httptest.Server {
@@ -78,7 +96,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, nil, "test", testRegistry(t)))
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
 	t.Cleanup(srv.Close)
 	return srv
 }
