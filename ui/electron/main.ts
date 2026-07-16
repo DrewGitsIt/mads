@@ -3,6 +3,9 @@ import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
+// Same env var the renderer's own RouterClient reads (see ui/src/router/client.ts)
+// so a single override points both processes at a non-default Router.
+const ROUTER_BASE_URL = process.env.VITE_ROUTER_URL ?? "http://localhost:8080";
 
 // Trimmed replacement for Electron's stock File/Edit/View/Window/Help menu,
 // which is out of theme and mostly dead weight for this app. We still need a
@@ -48,11 +51,6 @@ function createWindow(): void {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // file:// pages send Origin: null, which the Router's localhost-only
-      // CORS policy rightly refuses. The window loads only our own bundled
-      // renderer (no remote content), so relaxing webSecurity here is the
-      // documented interim until the Router serves the UI same-origin (W7).
-      webSecurity: false,
     },
   });
 
@@ -62,11 +60,11 @@ function createWindow(): void {
     app.setBadgeCount(count);
   });
 
-  if (DEV_SERVER_URL) {
-    win.loadURL(DEV_SERVER_URL);
-  } else {
-    win.loadFile(join(__dirname, "../dist/index.html"));
-  }
+  // The Router serves the built UI same-origin (scripts/app.sh guarantees
+  // it's already up before Electron launches), so this is always an http(s)
+  // origin — never file://, which would send Origin: null and fail the
+  // Router's localhost-only CORS policy.
+  win.loadURL(DEV_SERVER_URL ?? ROUTER_BASE_URL);
 }
 
 app.whenReady().then(createWindow);

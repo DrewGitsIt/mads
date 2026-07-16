@@ -69,7 +69,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, "test"))
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, nil, "test"))
 	t.Cleanup(srv.Close)
 	return srv
 }

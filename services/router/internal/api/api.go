@@ -38,9 +38,15 @@ type server struct {
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
 // vaultRefs may be nil (vault-ref endpoints degrade to 503); vaultSources may
 // be nil or empty (GET /credentials/vault-sources reports no sources).
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, version string) http.Handler {
+// staticHandler serves the built UI at "/" (see internal/static); nil
+// defaults to http.NotFoundHandler(), matching the prior behavior of
+// having no "/" route at all.
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, version string) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
+	}
+	if staticHandler == nil {
+		staticHandler = http.NotFoundHandler()
 	}
 	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, vaultRefs: vaultRefs, vaultSources: vaultSources, version: version}
 	mux := http.NewServeMux()
@@ -127,6 +133,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
 	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
 	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
+	mux.Handle("/", staticHandler)
 	return withCORS(mux)
 }
 

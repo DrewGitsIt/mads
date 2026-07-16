@@ -34,8 +34,11 @@ Flags: `-data-url` (default `http://localhost:8081`) points at the Data Service;
 `-session-cmd`/`-pipeline-cmd` are the commands used to spawn children, defaulting to a
 same-directory sibling binary (`session`/`pipeline`) of the running router executable if
 one exists — the layout `make build` produces — else falling back to `go run
-./services/session` / `go run ./services/pipeline` for the dev loop. See "Critical
-paths" below.
+./services/session` / `go run ./services/pipeline` for the dev loop. `-ui-dist` points at
+the built UI (see "Serving the UI" below), defaulting to the cwd-relative `ui/dist` —
+unlike `-session-cmd`/`-pipeline-cmd` this is not resolved relative to the router
+executable, so it's only correct when launched from the repo root (`scripts/app.sh` and
+`make run` both do this). See "Critical paths" below.
 
 ## Test it
 
@@ -202,6 +205,38 @@ localhost-only CORS policy — no flag/env to toggle it off:
 - `GET /events` (SSE) works cross-origin the same way: the middleware sets
   headers before `next.ServeHTTP` runs, so they're on the wire before
   `handleStreamEvents` starts flushing.
+
+## Serving the UI
+
+The Router serves the built UI (`ui/dist`, or wherever `-ui-dist` points) directly at `/`
+(`internal/static`), so the packaged app is same-origin with its own API — Electron loads
+`http://localhost:8080` via `win.loadURL`, not `file://`, and no longer needs
+`webSecurity: false` (`file://` sends `Origin: null`, which the CORS policy above would
+otherwise refuse). `internal/static` is a separate package from `internal/api` on purpose —
+it's pure file-serving with no JSON/dataclient dependency — and the UI itself is not
+embedded into the Go binary: it rebuilds independently (`npm --prefix ui run build`), and
+the Router picks up a new build without a restart.
+
+- `main.go` constructs `static.New(*uiDist)` and passes the resulting `http.Handler` into
+  `api.New`, which registers it as a catch-all `"/"` pattern on the same `http.ServeMux` as
+  every API route. `net/http`'s enhanced routing always ranks a method+path pattern (e.g.
+  `GET /health`) above a bare `"/"`, so API routes take priority with no explicit ordering
+  required — `internal/api`'s `TestStaticDoesNotShadowAPIRoutes` pins this. A nil
+  `staticHandler` (every pre-existing `internal/api` test call site) defaults to
+  `http.NotFoundHandler()`, matching the pre-W7.5 behavior of having no `"/"` route at all.
+- Any request path that isn't a real file under the dist directory falls back to
+  `index.html` — the built SPA owns client-side routing for everything past that
+  (`internal/static`'s `TestUnknownPathFallsBackToIndex`).
+- Whether the UI is built is checked on every request, not cached once at construction:
+  `scripts/app.sh` starts the Router before running `npm --prefix ui start` (which builds
+  `ui/dist`), so a handler that only checked once at construction would keep serving a
+  stale placeholder forever once the build actually landed
+  (`internal/static`'s `TestPicksUpBuildThatLandsAfterConstruction`).
+- A missing/unbuilt dist directory degrades to a plain "UI not built" page instead of
+  failing Router startup (`TestPlaceholderWhenDistMissing`, `TestPlaceholderWhenDistPathEmpty`).
+- The Vite dev-server loop (`npm run dev`, `localhost:5173`) is unaffected — that's what
+  the CORS policy above is for — and Electron's own dev fallback still points at
+  `VITE_DEV_SERVER_URL` when set (`ui/electron/main.ts`).
 
 ## Critical paths
 

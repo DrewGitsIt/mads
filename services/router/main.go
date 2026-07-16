@@ -31,6 +31,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
+	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -71,8 +72,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, version)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, staticHandler, version)
 }
 
 func main() {
@@ -84,6 +85,7 @@ func main() {
 	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
+	uiDist := flag.String("ui-dist", "ui/dist", "path to the built UI (ui/dist) served at /; missing or unbuilt serves a placeholder page. Relative to the cwd the router is launched from, not the executable — scripts/app.sh and `make run` both launch from the repo root.")
 	flag.Parse()
 
 	sessionArgv := strings.Fields(*sessionCmd)
@@ -150,7 +152,7 @@ func main() {
 	}
 	defer func() { _ = os.Remove(pidPath) }()
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist))}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

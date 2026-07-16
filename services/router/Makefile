@@ -1,7 +1,7 @@
 .PHONY: run test
 
 run:
-	go run .
+	cd ../.. && go run ./services/router
 
 test:
 	go test -race ./...
