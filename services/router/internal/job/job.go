@@ -18,15 +18,18 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 )
 
-// Deps are the only two ways a job body may reach the outside world: the
-// Data Service (never raw storage) and the Fast Model (never a live
-// provider API directly — always through providers/fastmodel's Runner).
+// Deps are the ways a job body may reach the outside world: the Data
+// Service (never raw storage), the Fast Model (never a live provider API
+// directly — always through providers/fastmodel's Runner), and the remote
+// registry client (spec §12.9).
 type Deps struct {
 	Data      *dataclient.Client
 	FastModel *fastmodel.Runner
+	Registry  *registryclient.Client
 }
 
 // Func is a job body. It receives a background context (independent of
@@ -38,16 +41,17 @@ const defaultTimeout = 2 * time.Minute
 // Runner spawns goroutine-hosted jobs and reports their lifecycle as
 // events on the Data Service (spec §15 spawn-run-exit pattern).
 type Runner struct {
-	data *dataclient.Client
-	fm   *fastmodel.Runner
-	wg   sync.WaitGroup
+	data     *dataclient.Client
+	fm       *fastmodel.Runner
+	registry *registryclient.Client
+	wg       sync.WaitGroup
 
 	mu      sync.Mutex
 	cancels map[string]context.CancelFunc
 }
 
-func New(data *dataclient.Client, fm *fastmodel.Runner) *Runner {
-	return &Runner{data: data, fm: fm, cancels: make(map[string]context.CancelFunc)}
+func New(data *dataclient.Client, fm *fastmodel.Runner, registry *registryclient.Client) *Runner {
+	return &Runner{data: data, fm: fm, registry: registry, cancels: make(map[string]context.CancelFunc)}
 }
 
 // FastModel exposes the Fast Model runner for callers that need a
@@ -154,7 +158,7 @@ func (r *Runner) invoke(ctx context.Context, fn Func) (err error) {
 			err = fmt.Errorf("job: panic: %v", p)
 		}
 	}()
-	return fn(ctx, Deps{Data: r.data, FastModel: r.fm})
+	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry})
 }
 
 // Shutdown waits for in-flight jobs to finish, bounded by ctx.

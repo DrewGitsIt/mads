@@ -37,11 +37,11 @@ describe("LibrarySurface", () => {
     expect(screen.queryByText("Registry")).toBeNull();
   });
 
-  it("shows the Registry nav button and stub shelf when the flag is on", async () => {
+  it("shows the Registry nav button and shelf when the flag is on", async () => {
     FLAGS.remoteRegistry = true;
     render(<LibrarySurface />);
     await waitFor(() => expect(screen.getByText("No agents yet.")).toBeTruthy());
     fireEvent.click(screen.getByText("Registry"));
-    expect(screen.getByText("Remote registry browsing lands in a later work item.")).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText("Search the registry")).toBeTruthy());
   });
 });

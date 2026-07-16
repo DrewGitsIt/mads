@@ -134,6 +134,23 @@ export interface Template {
   updated_at: string;
 }
 
+// mirrors pkg/registryclient's wire contract for the remote registry
+// (spec §12.9, W7.6) — deliberately excludes workspace bundles.
+export type RegistryItemType = "agent" | "capability" | "template";
+
+export interface RegistryEntry {
+  type: RegistryItemType;
+  name: string;
+  description?: string;
+  versions: string[];
+  latest: string;
+}
+
+export interface RegistryPublishItem {
+  type: RegistryItemType;
+  id: string;
+}
+
 // pkg/template's parsed grammar, frontend-only — this is YAML the Library's
 // Templates shelf parses client-side for the visual editor view (no Go JSON
 // tags to mirror; pkg/template only ever round-trips YAML).

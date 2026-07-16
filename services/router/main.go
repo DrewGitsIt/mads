@@ -22,6 +22,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -69,8 +70,8 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker) http.Handler {
-	return api.New(data, sup, jobs, providers, creds, pf)
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, registry *registryclient.Client) http.Handler {
+	return api.New(data, sup, jobs, providers, creds, pf, registry)
 }
 
 func main() {
@@ -82,6 +83,7 @@ func main() {
 	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
+	registryURL := flag.String("registry-url", "", "remote registry base URL (empty: unset — install/update/publish return a clear error)")
 	flag.Parse()
 
 	sessionArgv := strings.Fields(*sessionCmd)
@@ -107,7 +109,8 @@ func main() {
 	fm := fastmodel.New(backend, fastmodel.Config{
 		Model: *fastmodelModel, BaseURL: *fastmodelBaseURL, APIKeyEnv: *fastmodelAPIKeyEnv,
 	})
-	jobs := job.New(data, fm)
+	reg := registryclient.New(*registryURL)
+	jobs := job.New(data, fm, reg)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
 
 	// A credstore failure degrades to credential endpoints returning 503, not
@@ -124,7 +127,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("router: listen %s: %v", *addr, err)
 	}
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, reg)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

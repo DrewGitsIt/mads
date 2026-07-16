@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -29,16 +30,17 @@ type server struct {
 	creds        *credstore.Store
 	preflight    preflight.Checker
 	vaultSources []vault.Source
+	registry     *registryclient.Client
 }
 
 // New returns the Router's HTTP handler. creds may be nil (credential
 // endpoints degrade to 503); a nil preflightChecker defaults to
 // preflight.StubChecker{} — W7.3's real implementation does not exist yet.
-func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker) http.Handler {
+func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, preflightChecker preflight.Checker, registry *registryclient.Client) http.Handler {
 	if preflightChecker == nil {
 		preflightChecker = preflight.StubChecker{}
 	}
-	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker}
+	s := &server{data: data, sup: sup, jobs: jobs, providers: providers, creds: creds, preflight: preflightChecker, registry: registry}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
@@ -118,6 +120,10 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
 	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
 	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
+	mux.HandleFunc("GET /registry/index", s.handleRegistryIndex)
+	mux.HandleFunc("POST /registry/install", s.handleRegistryInstall)
+	mux.HandleFunc("POST /registry/update", s.handleRegistryUpdate)
+	mux.HandleFunc("POST /registry/publish", s.handleRegistryPublish)
 	return withCORS(mux)
 }
 
