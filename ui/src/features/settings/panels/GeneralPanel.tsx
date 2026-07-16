@@ -94,6 +94,30 @@ export function GeneralPanel({ config }: GeneralPanelProps) {
           onChange={(e) => setDraft({ ...draft, keybindings: e.target.value })}
         />
       </div>
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="default-workspace">
+          Default workspace
+        </label>
+        <input
+          id="default-workspace"
+          type="text"
+          className={styles.input}
+          value={draft.default_workspace ?? ""}
+          onChange={(e) => setDraft({ ...draft, default_workspace: e.target.value })}
+        />
+      </div>
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="default-provider">
+          Default provider
+        </label>
+        <input
+          id="default-provider"
+          type="text"
+          className={styles.input}
+          value={draft.default_provider ?? ""}
+          onChange={(e) => setDraft({ ...draft, default_provider: e.target.value })}
+        />
+      </div>
       <div className={styles.actions}>
         <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
           Save

@@ -70,6 +70,42 @@ describe("GeneralPanel", () => {
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ concurrency_limit: 5 }));
   });
 
+  it("renders default_workspace/default_provider empty when unset", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    render(<GeneralPanel config={makeConfig()} />);
+    expect((screen.getByLabelText(/default workspace/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/default provider/i) as HTMLInputElement).value).toBe("");
+  });
+
+  it("edits to default_workspace/default_provider call setDraft with the new value", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    const config = makeConfig();
+    render(<GeneralPanel config={config} />);
+    fireEvent.change(screen.getByLabelText(/default workspace/i), { target: { value: "ws-1" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_workspace: "ws-1" }));
+    fireEvent.change(screen.getByLabelText(/default provider/i), { target: { value: "claude-code" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "claude-code" }));
+  });
+
+  it("clicking Save PUTs the updated default_workspace/default_provider", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    const config = makeConfig({
+      draft: { ...fixtureConfig, default_workspace: "ws-1", default_provider: "claude-code" },
+    });
+    render(<GeneralPanel config={config} />);
+    fireEvent.click(screen.getByText("Save"));
+    await waitFor(() => expect(config.save).toHaveBeenCalled());
+  });
+
   it("renders preflight checks from usePreflight", async () => {
     vi.stubGlobal(
       "fetch",

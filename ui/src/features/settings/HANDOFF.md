@@ -1004,3 +1004,30 @@ count — `go test -race ./...` and `npm run test` (525/525) both stayed
 green throughout, confirming the vocabulary was cosmetic (string values
 only) with no downstream logic keyed on the old spellings. Re-ran full
 `make check` after the fix; still 0 lint issues, all green.
+
+## 17. First-run wizard persists global defaults
+
+A separate pipeline task closed a gap where `FirstRunWizard`'s `finish()`
+already PUT the full `config.draft` (carrying `onboarding_complete: true`
+along for free per this doc's full-replace idiom, §2.1) but nothing upstream
+of it ever staged `default_workspace`/`default_provider` into that draft — so
+the Router-side inheritance in `sessiondefaults.go` only ever saw those keys
+if an operator set them by hand outside the wizard.
+
+Fixed in `WorkspaceStep.tsx` only: it now takes a `config: UseConfig` prop
+(threaded from `FirstRunWizard.tsx`, same instance `finish()` already owns),
+adds a default-provider `<select>` sourced from `router.listProviderNames()`
+(empty option = "no default" = skip), and on successful workspace creation
+calls `config.setDraft({ ...config.draft, default_workspace: created.id,
+...(provider ? { default_provider: provider } : {}) })` before advancing.
+Spreading a conditional key (rather than ever writing `default_provider: ""`)
+is what keeps a pre-existing value untouched when the choice is skipped —
+verified by a test that seeds `GET /config` with `default_provider: "fake"`
+and asserts the final `PUT /config` body still carries `"fake"`, not `""` or
+absent.
+
+`GeneralPanel.tsx` got two new plain-text rows (`default_workspace`,
+`default_provider`) matching the `editor_command` idiom exactly — no
+`<select>`, no `fieldErrors` block, not in `RESTART_REQUIRED_FIELDS` — so the
+wizard's choices are visible/editable afterward without pulling workspace or
+provider-matrix fetches into a settings panel that didn't need them before.

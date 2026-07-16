@@ -324,10 +324,17 @@ place of the icon-rail shell entirely). Five steps under `onboarding/
 steps/`: Welcome (static), Provider preflight (shares `usePreflight` with
 Settings > General — against the stubbed preflight backend everything
 reports healthy, so Continue is never gated), Credential import (shares
-`useCredentials`, skippable), First workspace (`POST /workspaces`), and a
-final inline step that `PUT`s `onboarding_complete: true` and calls
-`onComplete()`. `App.tsx` also applies the persisted theme/palette and
-feature flags on every mount, so a returning user's choices survive reload.
+`useCredentials`, skippable), First workspace (`POST /workspaces`, plus an
+optional default-provider `<select>` sourced from `router.listProviderNames()`
+— leaving it at "No default" skips it), and a final inline step that `PUT`s
+`onboarding_complete: true` and calls `onComplete()`. The created workspace's
+id and the chosen provider (if any) are staged into the wizard's shared
+`useConfig()` draft as soon as the workspace is created, so the final step's
+`PUT /config` persists them as `default_workspace`/`default_provider`
+alongside `onboarding_complete: true` — never clobbering either field if the
+provider choice is left unset. `App.tsx` also applies the persisted
+theme/palette and feature flags on every mount, so a returning user's choices
+survive reload.
 
 ## Dashboard tab
 

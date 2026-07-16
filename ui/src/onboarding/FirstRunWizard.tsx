@@ -41,7 +41,7 @@ export function FirstRunWizard({ onComplete }: FirstRunWizardProps) {
         {step === 0 && <WelcomeStep onNext={next} />}
         {step === 1 && <PreflightStep onNext={next} onBack={back} />}
         {step === 2 && <CredentialImportStep onNext={next} onBack={back} />}
-        {step === 3 && <WorkspaceStep onNext={next} onBack={back} />}
+        {step === 3 && <WorkspaceStep onNext={next} onBack={back} config={config} />}
         {step === 4 && (
           <div className={styles.step}>
             <h2 className={styles.title}>All set</h2>
