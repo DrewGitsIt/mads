@@ -158,6 +158,26 @@ Errors: `dataclient.ErrNotFound` → 404, `dataclient.ErrConflict` → 409,
 Service's own 422-for-validation convention — the Router treats a rejected request the
 same whether the rejection came from its own decoding or a proxied dataclient call).
 
+## CORS
+
+The Router serves the UI's HTTP surface, but the Vite dev server runs on its own
+origin (`localhost:5173`) and calling the Router (`localhost:8080`) cross-origin
+would otherwise be blocked by the browser (Electron isn't affected — it doesn't
+enforce Origin). `internal/api/cors.go` wraps the whole mux with a default-on,
+localhost-only CORS policy — no flag/env to toggle it off:
+
+- Matches `http://` or `https://`, host `localhost` or `127.0.0.1`, any port.
+  Echoes the specific origin back via `Access-Control-Allow-Origin: <origin>` —
+  never a wildcard.
+- Non-localhost origins get zero CORS headers.
+- Allowed methods: `GET, POST, PUT, DELETE` (plus `OPTIONS` for preflight).
+  Allowed headers: `Content-Type`, `X-Mads-Actor`.
+- `OPTIONS` is answered directly by the middleware (204, no body) for every
+  request, matching origin or not — the mux has no route registered for it.
+- `GET /events` (SSE) works cross-origin the same way: the middleware sets
+  headers before `next.ServeHTTP` runs, so they're on the wire before
+  `handleStreamEvents` starts flushing.
+
 ## Critical paths
 
 - **Task/note/file-change proxying is a pure pass-through, zero Router-side state** —

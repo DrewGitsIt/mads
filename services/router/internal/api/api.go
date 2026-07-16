@@ -118,7 +118,7 @@ func New(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, 
 	mux.HandleFunc("GET /metrics/tasks", s.handleMetricsTaskOutcomes)
 	mux.HandleFunc("GET /metrics/capabilities", s.handleMetricsCapabilityUsage)
 	mux.HandleFunc("GET /metrics/pipelines", s.handleMetricsPipelineRuns)
-	return mux
+	return withCORS(mux)
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
