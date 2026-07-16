@@ -1,383 +1,434 @@
-# HANDOFF: Session detail + transcript endpoints
+# HANDOFF: Static fallback must not swallow API paths
 
 ## Problem
 
-`ui/src/router/client.ts`'s `FetchRouterClient.getSession`/`getTranscript`
-call `GET /sessions/{id}` and `GET /sessions/{id}/transcript`. Neither route
-is registered in `services/router/internal/api/api.go`. `ConversationTab`
-(`ui/src/conversation/ConversationTab.tsx:44-55`) awaits `getSession` and
-renders `null` until it resolves — with no route, the fetch 404s (falls
-through to the SPA's `index.html` catch-all, not even a clean JSON error),
-the promise never resolves into a session, and the pane stays permanently
-blank. Both routes were built and tested only against `FakeRouterClient`;
-they never existed on the wire.
+`internal/static.New`'s fallback unconditionally serves `index.html` with
+`200 text/html` for *any* request path that isn't a real file under
+`ui/dist` — including a typo'd or not-yet-built API route. A missing
+`GET /sessions/{id}` (before it landed) 200'd as the SPA shell instead of
+404ing, which poisoned JSON parsing in the UI client and hid the real
+problem behind a misleading status code. `internal/static/static_test.go`'s
+`TestUnknownPathFallsBackToIndex` and `internal/api/static_test.go`'s
+`TestStaticSPAFallback`/`TestStaticServesIndexAtRoot` currently assert
+exactly this unconditional behavior and issue bare `http.Get` calls (no
+`Accept` header) — they will need to change along with the production code.
 
-## Decision: the UI's contract is right, extend `pkg/contracts` to match
+## Decision: gate the fallback on "does this look like a browser navigating"
 
-`ui/src/router/types.ts` already hand-mirrors the exact shape the backend
-already produces elsewhere:
+Serve `index.html` only for **navigation-shaped** requests: `GET`/`HEAD`,
+`Accept` header contains `text/html`, and the path has no file extension.
+Everything else that reaches the fallback (wrong method, no/non-html
+`Accept`, or an extensioned path with no matching file) gets a JSON 404:
+`{"error":"not found","path":"<r.URL.Path>"}`.
 
-- `Session` (`types.ts:8-29`) mirrors `contracts.Session` (`pkg/contracts/
-  session.go:57-104`) field-for-field — nothing to reconcile there, `GET
-  /sessions/{id}` just needs to exist and return `contracts.Session` as JSON,
-  exactly like `GET /sessions` (list) already does.
-- `TranscriptMessage`/`ToolUse` (`types.ts:211-215`, `197-201`) mirror
-  `provider.Message`/`provider.ToolUse` (`providers/provider/event.go:38-65`)
-  — the normalized shape `TranscriptReader.Transcript` already returns, and
-  which `providers/fake`, `providers/claudecode`, `providers/kirocli` all
-  already implement and test against. **`pkg/contracts` has no equivalent
-  type today** — that's the actual gap. Add it there (not just reuse
-  `provider.Message` inline), matching this task's "wire types in
-  pkg/contracts" convention and the existing pattern of `contracts.FileChange`
-  / `contracts.Commit` being Router-owned mirrors of Session-Service-produced
-  data.
-
-No UI change is needed. This is purely additive on the Go side.
+Why `Accept` must explicitly contain `text/html`, not just be present/`*/*`:
+a bare `fetch()` (which is what every `RouterClient` method uses today, and
+was the actual failure mode) sends `Accept: */*` by default, not
+`text/html`. If `*/*` counted as "prefers html", the fix would be a no-op
+for the exact bug it's meant to close. Real browser navigations always send
+an explicit `text/html` token near the front of `Accept`; this is a
+substring check (`strings.Contains`), not full RFC 7231 q-value parsing —
+proportionate to this codebase's existing style, and sufficient for both
+acceptance-criteria cases (`fetch` sets `Accept: application/json`; a
+navigation's `Accept` always contains `text/html`).
 
 ## Design
 
-### 1. `pkg/contracts/transcript.go` (new file)
+### 1. `internal/static/static.go`
+
+Add an `isNavigationRequest` gate and a JSON-404 writer; branch on it where
+the fallback currently always calls `http.ServeFile(w, r, index)`.
 
 ```go
-package contracts
+package static
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+)
 
-// ToolUse mirrors providers/provider/event.go ToolUse — the wire shape of a
-// normalized tool invocation inside a transcript message. Duplicated here
-// (not imported from providers/provider) so pkg/contracts stays free of a
-// dependency on the provider layer, same as every other cross-boundary type
-// in this package.
-type ToolUse struct {
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input,omitempty"`
-	Path  string          `json:"path,omitempty"`
-}
-
-// TranscriptMessage mirrors providers/provider/event.go Message — one
-// normalized transcript entry, as returned by GET /sessions/{id}/transcript.
-type TranscriptMessage struct {
-	Role string   `json:"role"` // "user", "agent", or "tool"
-	Text string   `json:"text,omitempty"`
-	Tool *ToolUse `json:"tool,omitempty"`
-}
-```
-
-Field names/optionality must match `ui/src/router/types.ts` exactly (they
-already do, by construction — the UI was built ahead of this route per its
-own doc comments). No golden fixture needed — `contracts.Session`,
-`FileChange`, `Commit`, `MergeResult` set the precedent that not every type
-in this package has one (only `task.go`, `metrics.go`, `event.go`,
-`apierror.go` do today).
-
-### 2. `GET /sessions/{id}` — `services/router/internal/api/sessions.go`
-
-Pure proxy, same shape as every other single-resource read in this package:
-
-```go
-func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
+func New(distDir string) http.Handler {
+	if distDir == "" {
+		log.Printf("static: no UI dist path configured, serving placeholder page")
+		return http.HandlerFunc(serveNotBuilt)
 	}
-	writeJSON(w, http.StatusOK, sess)
-}
-```
-
-`dataclient.Client.Session` (`pkg/dataclient/dataclient.go:223`) already
-exists and does exactly this lookup — no Data Service or dataclient change
-needed. `writeError` already maps `dataclient.ErrNotFound` to a 404 JSON
-body (`api.go:196-208`), which is the acceptance criterion's "404 JSON for
-unknown ids" for free — don't hand-roll it.
-
-Register in `api.go`'s route table, near the other `/sessions/{id}...`
-lines:
-
-```go
-mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
-```
-
-Registration order doesn't matter — Go 1.22's `net/http` mux always ranks a
-more specific pattern (`/sessions/{id}/output`) above a less specific one
-(`/sessions/{id}`) regardless of registration order (already relied on
-elsewhere; see README's static-handler section and
-`TestStaticDoesNotShadowAPIRoutes`).
-
-### 3. `GET /sessions/{id}/transcript` — new file `services/router/internal/api/transcript.go`
-
-**Core decision, and why it's simpler than it first looks:** the scope note
-says to look at `handleSessionOutput`'s live-child reverse-proxy pattern.
-Do — then don't reuse it here. `/output` proxies because that data (raw
-streaming provider events) exists *only* in the live child process's memory
-and is intentionally never persisted (README: "Data plane: forwarded, never
-persisted"). Transcript is the opposite case: `contracts.Session.ProviderRef`
-(`session.go:97-101`) is explicitly documented as "the transcript pointer:
-`TranscriptReader.Transcript(ctx, ref)` reads by this same value" — i.e. the
-transcript is meant to be read directly off the persisted ref, independent
-of whether a child is currently running. Concretely:
-
-- `claudecode.Provider.Transcript` and `kirocli`'s equivalent both read an
-  on-disk file keyed by `ref` (`providers/claudecode/transcript.go:20-37`) —
-  this works identically whether the session is active or not, and whether
-  it's read from the Router's process or the Session Service's, since it's
-  filesystem state, not process memory.
-- `providers/fake`'s `Transcript` reads an in-memory map keyed by `ref`
-  (`providers/fake/fake.go:160-168`), populated live as `Send`/respond run
-  (`fake.go:222-226, 397-398`) — so it reflects an in-progress conversation
-  too, not just a finished one.
-
-So: **no branching on `sess.Activity`, no supervisor/child lookup, no
-reverse proxy.** The Router already holds a `*provider.Registry` (`s.providers`,
-the same instance used for `handleCreateSession`'s pre-check) — read straight
-from that, in-process:
-
-```go
-// transcriptFor reads sess's durable transcript via its bound provider,
-// keyed by the persisted ProviderRef (contracts/session.go's documented
-// "transcript pointer"). Never errors outward — every failure mode here
-// (no conversation yet, provider deregistered, provider doesn't implement
-// TranscriptReader, the read itself fails) degrades to an empty transcript,
-// matching this endpoint's "always valid JSON, never a blank pane" contract.
-func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []contracts.TranscriptMessage {
-	out := []contracts.TranscriptMessage{}
-	if sess.ProviderRef == "" {
-		return out // pipeline-only session (e.g. "Wave 7"): no interactive conversation ever started
-	}
-	p, err := s.providers.Get(sess.Provider)
-	if err != nil {
-		log.Printf("api: transcript: provider %q: %v", sess.Provider, err)
-		return out
-	}
-	reader, ok := p.(provider.TranscriptReader)
-	if !ok {
-		return out
-	}
-	msgs, err := reader.Transcript(ctx, sess.ProviderRef)
-	if err != nil {
-		log.Printf("api: transcript: read session %s: %v", sess.ID, err)
-		return out
-	}
-	result := make([]contracts.TranscriptMessage, len(msgs))
-	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text}
-		if m.Tool != nil {
-			tm.Tool = &contracts.ToolUse{Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
+	fileServer := http.FileServer(http.Dir(distDir))
+	index := filepath.Join(distDir, "index.html")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if info, err := os.Stat(index); err != nil || info.IsDir() {
+			serveNotBuilt(w, r)
+			return
 		}
-		result[i] = tm
-	}
-	return result
+		fsPath := filepath.Join(distDir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(fsPath); err == nil && !info.IsDir() {
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		if isNavigationRequest(r) {
+			http.ServeFile(w, r, index)
+			return
+		}
+		writeNotFoundJSON(w, r)
+	})
 }
 
-func (s *server) handleSessionTranscript(w http.ResponseWriter, r *http.Request) {
-	sess, err := s.data.Session(r.Context(), r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
+// isNavigationRequest reports whether r looks like a browser navigating to a
+// client-side SPA route, as opposed to a caller (fetch, curl, a missing/
+// typo'd API route) probing for a resource. Only GET/HEAD requests for an
+// extensionless path whose Accept header explicitly names text/html
+// qualify — a bare fetch() (Accept defaults to "*/*", not "text/html") or a
+// request for a path with an extension never does, so an absent API route
+// 404s as JSON instead of silently 200'ing as the SPA shell.
+func isNavigationRequest(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
 	}
-	writeJSON(w, http.StatusOK, s.transcriptFor(r.Context(), sess))
+	if filepath.Ext(r.URL.Path) != "" {
+		return false
+	}
+	return strings.Contains(r.Header.Get("Accept"), "text/html")
 }
+
+func writeNotFoundJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": "not found", "path": r.URL.Path})
+}
+
+const notBuiltPage = `...` // unchanged
+func serveNotBuilt(w http.ResponseWriter, _ *http.Request) { /* unchanged */ }
 ```
 
-`out := []contracts.TranscriptMessage{}` (not a nil slice) so `writeJSON`
-encodes `[]`, never `null` — satisfies "a session with no conversation ...
-returns an empty array, NOT an error" precisely, and is friendlier to the UI
-than `null` would be (`ChatRenderer` maps over `messages` directly).
+Rename the existing local variable `path` (shadowing the stdlib `path`
+package) to `fsPath` as shown — avoids a name collision if a future edit
+needs `path.Ext` instead of `filepath.Ext`; not required for this change but
+cheap to do while touching this line. `serveNotBuilt` (the "UI not built"
+dev placeholder) is **untouched** — it's a bring-up signal page, not part of
+the routing contract this task fixes, and no acceptance criterion mentions
+it.
 
-Register:
+Update the package doc comment (currently "no dataclient, no JSON, just
+files") and `New`'s doc comment (currently "falling back to index.html for
+any request path that isn't a real file") to describe the new conditional
+behavior — both are now slightly inaccurate.
 
-```go
-mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
-```
+### 2. `internal/static/static_test.go` — fix 3 existing tests, add new ones
 
-Needs `"log"` and `"github.com/drewkidwell/mads/providers/provider"` added
-to this new file's imports (`sessions.go`'s existing imports — `context`,
-`net/http`, `contracts` — are insufficient on their own).
+**Existing tests that break** because they call the existing `get(t, srv,
+path)` helper, which issues a bare `http.Get` with no `Accept` header — that
+now means "not navigation-shaped" and gets a JSON 404, not `index.html`:
 
-### The four required cases, mapped to this design
+- `TestServesIndexAtRoot` (`GET /`)
+- `TestUnknownPathFallsBackToIndex` (`GET /some/unknown/route`)
+- `TestPicksUpBuildThatLandsAfterConstruction`'s *second* `get(t, srv, "/")`
+  call (the one asserting the real build is now served) — its first call,
+  before the build lands, hits `serveNotBuilt` unconditionally and is
+  unaffected.
 
-| Case | `sess.ProviderRef` | Result |
+Fix: add a second helper alongside `get` that sets an explicit header, e.g.
+`getWithAccept(t, srv, path, accept string) (int, string)`, and switch these
+three call sites to `getWithAccept(t, srv, path, "text/html")` to simulate a
+real browser navigation. `TestServesRealAssetVerbatim`,
+`TestPlaceholderWhenDistMissing`, `TestPlaceholderWhenDistPathEmpty` are
+unaffected (no Accept-dependent branch reached) — leave them on `get`.
+
+**New tests to add** (package `static_test`):
+
+- `TestNonHTMLAcceptGetsJSON404` — `GET /some/unknown/route`,
+  `Accept: application/json` → 404, `Content-Type: application/json`, body
+  decodes to `{"error":"not found","path":"/some/unknown/route"}`.
+- `TestBareFetchDefaultAcceptGetsJSON404` — same path, `Accept: */*`
+  (real browsers' default `fetch()` header — this is the case that actually
+  masked the original bug; explicitly pin it, don't just rely on "no header
+  at all") → 404 JSON, not `index.html`.
+- `TestExtensionedPathWithHTMLAcceptStillGetsJSON404` — `GET
+  /assets/missing.js` (extension present, no real file), `Accept: text/html`
+  → 404 JSON. Proves the extension check wins even when `Accept` would
+  otherwise qualify — pins "static assets with extensions keep today's
+  behavior (real file or 404)".
+- `TestPostToUnknownPathGetsJSON404` — `POST /some/unknown/route` (any
+  `Accept`) → 404 JSON. Pins the method gate.
+
+### 3. `internal/api/static_test.go` — fix 2 existing tests, add the acceptance-criteria cases
+
+Same bare-`http.Get`-has-no-`Accept`-header problem, at the full-stack
+(`api.New`) level:
+
+- `TestStaticServesIndexAtRoot` and `TestStaticSPAFallback` both need an
+  explicit `Accept: text/html` header (switch from `http.Get` to
+  `http.NewRequest` + `client.Do`, or add a small local helper). `
+  TestStaticServesRealAsset` and `TestStaticDoesNotShadowAPIRoutes` are
+  unaffected.
+
+Add the two literal acceptance-criteria scenarios here (this is the
+integration point — full CORS + API-route-priority + static stack):
+
+- `TestAPIShapedUnregisteredPathGetsJSON404` — `GET /sessions/nope/what`
+  (nested, API-shaped, no such route registered), `Accept: application/json`
+  → 404, body `{"error":"not found","path":"/sessions/nope/what"}`.
+- `TestBrowserNavigationToDeepLinkGetsIndex` — `GET /deep/link`, `Accept:
+  text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8` (a real
+  browser's actual navigation header, not just the bare token) → 200,
+  `index.html` body.
+
+### 4. Route-manifest test — `internal/api/route_manifest_test.go` (new)
+
+**Do not implement this as "every method on the `RouterClient` TS interface
+must resolve to a registered route."** I checked: it doesn't hold today, and
+not because of a bug. `ui/src/router/client.ts`'s `FetchRouterClient` has 8
+methods that call routes which are **not** registered in `api.go`, and the
+file's own comments say so explicitly — they're documented forward-built
+contracts (same pattern as the session-detail gap this task's predecessor
+task closed; see git history of this file and its own "Executor notes"
+section below, which independently flagged one of these same 8 — `POST
+/sessions/{id}/messages` — as an out-of-scope pre-existing gap). Verified by
+grep (`grep -rn "mentionables\|/messages\|/interrupt\|/stream\"\|/commits\|
+/changes\|open-editor\|/merge\"" internal/api/*.go`, excluding `_test.go`):
+zero matches. The 8:
+
+| Method | Path client.ts calls | Why it's excluded |
 |---|---|---|
-| Active, has messages (fake provider) | set, fake's in-memory history populated | `reader.Transcript` returns the recorded messages |
-| Inactive | set (persisted from when it was active) | same path, same result — `Activity` is never consulted |
-| No conversation (pipeline-only, e.g. "Wave 7") | `""` (interactive provider session never started) | empty array, first branch |
-| Unknown session id | n/a | `s.data.Session` returns `dataclient.ErrNotFound` → `writeError` → 404 JSON, before `transcriptFor` ever runs |
+| `streamSession` | `GET /sessions/{id}/stream` | conversation streaming, not built |
+| `sendMessage` | `POST /sessions/{id}/messages` | flagged in this file's prior revision, still open |
+| `interrupt` | `POST /sessions/{id}/interrupt` | conversation control, not built |
+| `getMentionables` | `GET /mentionables` | not built |
+| `getCommits` | `GET /sessions/{id}/commits` | Files-tab/merge-back, not built |
+| `getFileDiff` | `GET /sessions/{id}/changes` | Files-tab/merge-back, not built |
+| `openInEditor` | `POST /system/open-editor` | Files-tab/merge-back, not built |
+| `mergeSession` | `POST /sessions/{id}/merge` | Files-tab/merge-back, not built (only the per-session unproxied `POST /merge` exists) |
 
-## Test plan — `services/router/internal/api/transcript_test.go` (new)
+If the literal instruction were followed (enumerate all, assert all
+registered), this test fails 8 ways immediately and `make check` goes red —
+violating this task's own acceptance criteria. Instead: two tables, per the
+established repo convention (flag real gaps explicitly rather than silently
+expanding scope or silently omitting them):
 
-Follow the existing `newTestServerWithData(t) (*httptest.Server, string)`
-pattern (`api_test.go`/`events_test.go`) for direct Data Service writes, but
-this task needs a *specific, held* `*fake.Fake` instance — not a fresh one
-from `testProviders(t)` — so a test can drive a real conversation through it
-and then assert the Router reads that same history back. Add a small local
-variant in the new test file rather than changing `testOptions`/
-`testProviders` (used by every other test in the package; don't perturb
-their behavior):
+- `routeManifest` — every *other* real fetch call site in
+  `FetchRouterClient` (dedupe multiple methods hitting the same
+  method+pattern, e.g. `getSkillCapabilities`/`listCapabilities` both hit
+  `GET /capabilities`). I enumerated all ~91 methods against the current
+  `api.go` mux table by hand for this design; roughly 78 unique
+  (method, pattern) pairs remain after dedup and excluding the 8 above.
+  Verify against `client.ts` directly when building the table — don't just
+  transcribe this doc uncritically, the two files can drift.
+- `knownGapRoutes` — the 8 above, in a **second test** that asserts they're
+  *still* unregistered and fails loudly (telling the reader to move the row
+  into `routeManifest`) the day one of them lands. This keeps the exclusion
+  list honest instead of letting it silently rot into a stale lie.
+
+**Implementation approach — introspect the mux directly, don't go over
+HTTP.** Sending real HTTP requests for this (e.g. via `httptest.Server` +
+matching the JSON-404 sentinel body) has a sharp edge: `GET /events` is a
+real registered route several client methods hit
+(`streamTaskEvents`/`streamControlEvents`), and its handler
+(`handleStreamEvents`) streams SSE indefinitely — `for env := range ch`
+never returns on its own. A body-based check would hang reading that
+response. Go's `net/http.ServeMux` already exposes exactly the primitive
+this test needs, with no handler execution and no network:
+`(*ServeMux).Handler(r *http.Request) (h http.Handler, pattern string)`
+returns the registered pattern string (e.g. `"GET /sessions/{id}"`) for a
+matching request, or `""` if nothing matches — instant, exact, and it's
+literally what "must be a registered mux route" means.
+
+This requires one small, backward-compatible seam in `api.go`: split `New`
+so the mux-building half is reachable without the CORS wrapper.
 
 ```go
-func newTestServerWithFake(t *testing.T, fp *fake.Fake) (*httptest.Server, string) {
-	t.Helper()
-	base := datatest.Start(t)
-	data := dataclient.New(base, "router")
-	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
-	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	reg := provider.NewRegistry()
-	if err := reg.Register(fp); err != nil {
-		t.Fatal(err)
+// New returns the Router's HTTP handler. See Options's doc for the
+// nil-tolerant behavior of individual fields.
+func New(opts Options) http.Handler {
+	return withCORS(NewMux(opts))
+}
+
+// NewMux builds the Router's route table without the CORS wrapper —
+// exported so tests (e.g. the route-manifest test) can check which
+// patterns are registered via (*http.ServeMux).Handler, without an HTTP
+// round trip or executing any handler body. Application code should use
+// New; this exists for tests.
+func NewMux(opts Options) *http.ServeMux {
+	if opts.Preflight == nil {
+		opts.Preflight = preflight.StubChecker{}
 	}
-	opts := testOptions(t, data, sup)
-	opts.Providers = reg
-	srv := httptest.NewServer(api.New(opts))
-	t.Cleanup(srv.Close)
-	return srv, base
+	if opts.StaticHandler == nil {
+		opts.StaticHandler = http.NotFoundHandler()
+	}
+	s := &server{ /* unchanged field list */ }
+	mux := http.NewServeMux()
+	// ... every existing mux.HandleFunc / mux.Handle call, unchanged ...
+	return mux
 }
 ```
 
-Then, for the active/inactive cases: call `fp.Start(ctx, provider.StartOptions{Mode:
-provider.ModeACP})` directly, `provSess.Send(ctx, "echo hi")`, drain
-`provSess.Events()` until `EventTurnEnd` (so both the user and agent
-messages are recorded — `fake.go`'s `Send` records the user message
-synchronously but the agent reply only in `finish`, at turn end), then
-`data.CreateSession(ctx, &contracts.Session{Name: ..., Provider: "fake",
-ProviderRef: provSess.Ref(), Activity: contracts.SessionActive /* or
-Inactive */})` via a `dataclient.Client` built from the returned data base
-URL — bypassing `POST /sessions` entirely, since that would try to spawn a
-real child through the supervisor (this endpoint doesn't need one).
+Move the entire existing body of `New` (defaulting + all `mux.HandleFunc`
+calls + `mux.Handle("/", ...)` + `return mux`) into `NewMux` verbatim; `New`
+becomes the two-line wrapper above. No behavior change to `New` — same
+registration order, same defaults, same final `withCORS` wrap.
 
-- **`TestSessionTranscriptActiveWithMessages`** — as above with
-  `Activity: SessionActive`. `GET /sessions/{id}/transcript` → 200, body has
-  2 messages: `{role: "user", text: "echo hi"}`, `{role: "agent", text: "you
-  said hi"}` (fake's built-in `echo ` dialect).
-- **`TestSessionTranscriptInactive`** — identical setup, `Activity:
-  SessionInactive`. Same 2 messages — proves `Activity` isn't consulted.
-- **`TestSessionTranscriptNoConversation`** — `data.CreateSession` with no
-  `ProviderRef` set (zero value). `GET .../transcript` → 200, body `[]`
-  (assert via `decodeJSON[[]contracts.TranscriptMessage]` and `len(...) ==
-  0`, and separately assert the raw response body is the literal 2-byte
-  `[]`, not `null`, to pin the "empty array, not null" guarantee).
-- **`TestSessionTranscriptUnknownID`** — `GET /sessions/nonexistent/transcript`
-  → 404, JSON body with an `"error"` field (same shape as
-  `TestRetryTaskNotFound`'s 404 assertion).
+Test file:
 
-Also add to `sessions_test.go`:
+```go
+package api_test
 
-- **`TestGetSession`** — create via `data.CreateSession` directly, `GET
-  /sessions/{id}` → 200, decoded `contracts.Session` matches.
-- **`TestGetSessionNotFound`** — `GET /sessions/nonexistent` → 404 JSON.
+import (
+	"net/http/httptest"
+	"testing"
 
-## `services/router/README.md`
+	"github.com/drewkidwell/mads/services/router/internal/api"
+)
 
-Add two entries to the `## API contract` bullet list, near the existing
-`GET /sessions/{id}/files` line:
+// routeManifest mirrors every real (currently-registered) fetch call site
+// in ui/src/router/client.ts's FetchRouterClient — kept in one place, by
+// hand, so a route the UI client calls without a matching Router route
+// fails here instead of silently 200'ing through the static SPA fallback
+// (services/router/internal/static). See knownGapRoutes below for the
+// client.ts methods deliberately excluded because they call routes that
+// don't exist yet, by design.
+var routeManifest = []struct{ method, path, wantPattern string }{
+	{"GET", "/sessions/x", "GET /sessions/{id}"},
+	{"GET", "/sessions/x/transcript", "GET /sessions/{id}/transcript"},
+	{"POST", "/sessions/x/bounce", "POST /sessions/{id}/bounce"},
+	{"GET", "/sessions/x/files", "GET /sessions/{id}/files"},
+	{"GET", "/sessions", "GET /sessions"},
+	{"POST", "/sessions", "POST /sessions"},
+	{"GET", "/events", "GET /events"},
+	// ... continue for every other unique (method, pattern) pair client.ts
+	// hits, per the table above and a fresh read of client.ts. This is the
+	// bulk of the file; not fully transcribed here.
+}
 
-- `GET /sessions/{id}` — the session record (proxies `dataclient.Session`);
-  404 if unknown.
-- `GET /sessions/{id}/transcript` — the session's durable conversation
-  history, read directly from its bound provider via the persisted
-  `ProviderRef` (`Session.ProviderRef`'s documented "transcript pointer"),
-  **not** proxied through a running child the way `/output` is — this works
-  identically whether the session is active or inactive. Always 200 with a
-  JSON array (`[]` for a session with no interactive conversation, e.g. a
-  pipeline-only run, or a provider that doesn't implement transcript
-  reading); 404 only for an unknown session id.
+// knownGapRoutes: client.ts methods that call routes not registered today,
+// by design (see services/router/HANDOFF.md's route-manifest section for
+// why each is excluded from routeManifest). This test fails the day one of
+// these lands as a real route — move its row into routeManifest instead of
+// deleting it here.
+var knownGapRoutes = []struct{ method, path string }{
+	{"GET", "/sessions/x/stream"},
+	{"POST", "/sessions/x/messages"},
+	{"POST", "/sessions/x/interrupt"},
+	{"GET", "/mentionables"},
+	{"GET", "/sessions/x/commits"},
+	{"GET", "/sessions/x/changes"},
+	{"POST", "/system/open-editor"},
+	{"POST", "/sessions/x/merge"},
+}
+
+func TestRouteManifestMatchesRouterClient(t *testing.T) {
+	mux := api.NewMux(api.Options{})
+	for _, rt := range routeManifest {
+		req := httptest.NewRequest(rt.method, rt.path, nil)
+		if _, pattern := mux.Handler(req); pattern != rt.wantPattern {
+			t.Errorf("%s %s: mux pattern = %q, want %q (ui/src/router/client.ts calls this route)", rt.method, rt.path, pattern, rt.wantPattern)
+		}
+	}
+}
+
+func TestKnownGapRoutesStillUnregistered(t *testing.T) {
+	mux := api.NewMux(api.Options{})
+	for _, rt := range knownGapRoutes {
+		req := httptest.NewRequest(rt.method, rt.path, nil)
+		if _, pattern := mux.Handler(req); pattern != "" {
+			t.Errorf("%s %s: now registered as %q — move this row from knownGapRoutes to routeManifest in this file", rt.method, rt.path, pattern)
+		}
+	}
+}
+```
+
+Note this test needs none of the other `api_test.go` fixture machinery
+(`datatest.Start`, `supervisor.New`, `dataclient`) — `api.NewMux(api.Options{})`
+with every field nil is enough to build the route table, since registration
+never calls a handler. That's a deliberate benefit of the `NewMux` split:
+this test is fast and has zero external dependencies, unlike almost every
+other test in this package.
+
+### 5. `services/router/README.md`
+
+Update the "Serving the UI" section's bullet "Any request path that isn't a
+real file under the dist directory falls back to `index.html`" — it's no
+longer accurate. Replace with something describing the navigation-shaped
+gate and pointing at the new tests (`internal/static`'s
+`TestNonHTMLAcceptGetsJSON404`/`TestBareFetchDefaultAcceptGetsJSON404`,
+`internal/api`'s `TestAPIShapedUnregisteredPathGetsJSON404`), and add a
+one-line mention of the route-manifest test's existence and purpose (a
+reader debugging "why did my new UI call 404" should find it from here).
 
 ## Risks / things the reviewer should scrutinize
 
-- **The `fake` provider's history does not cross process boundaries.**
-  `services/router/main.go` and `services/session/main.go` each construct
-  their own `fake.New()` instance independently — they are not shared. In a
-  real dev/demo run (not this task's tests, which deliberately share one
-  instance), a live conversation running against the `fake` provider inside
-  the Session Service child is invisible to the Router's own `fake`
-  instance, so `GET .../transcript` would incorrectly return `[]` for an
-  active fake-provider session outside of tests. This is a pre-existing gap
-  in how `fake` is wired (not introduced by this task) and is out of scope
-  to fix here — flagging it so it isn't mistaken for a bug in this change.
-  `claude-code`/`kirocli` are unaffected (disk-backed, not process-memory-backed).
-- **`reader.Transcript` errors are swallowed to `[]`, not surfaced.** Chosen
-  deliberately (matches this codebase's "never a hard error, always data"
-  convention already used by `/preflight` and `POST /update/check`) so a
-  transient read failure never reintroduces the blank-pane bug this task
-  fixes. A reviewer who wants failures visible could argue for logging a
-  `session.transcript_read_failed`-style signal instead of a bare
-  `log.Printf`; not done here since nothing else in this package emits
-  events from a GET handler.
+- **The `Accept: text/html` substring check, not full q-value parsing.**
+  Deliberately simple — see Decision section. A request with `Accept:
+  application/json, text/html;q=0.01` would be (mis)treated as
+  navigation-shaped under this design, since it contains the substring
+  regardless of quality. No real caller in this codebase constructs such a
+  header today; flagging as a known simplification, not fixing pre-emptively.
+- **`knownGapRoutes` is hand-maintained and can drift from `client.ts`
+  independently of `routeManifest`.** `TestKnownGapRoutesStillUnregistered`
+  catches the "a gap route landed but nobody moved its row" direction; it
+  does *not* catch "a client.ts method's path string changed" (e.g. a typo
+  fix) unless someone also updates the table. Same limitation `routeManifest`
+  itself has — inherent to a hand-maintained mirror, not something to solve
+  in this task.
+- **`api.NewMux` is a new exported symbol whose only real caller is a
+  test.** Acceptable here (same pattern as exporting a constructor for
+  testability elsewhere in Go), but flag it in review — if unwanted, the
+  alternative is an HTTP-based check with an explicit `context.WithTimeout`
+  + immediate `resp.Body.Close()` without reading to avoid the `GET /events`
+  hang, but that's strictly more code and slower for no behavioral gain.
 
 ## Verification
 
 1. `make check` (root) — lint + `go test -race ./...` + UI lint + UI test.
-2. Real-stack check (`scripts/app.sh` or `make run` + `npm --prefix ui run
-   build`/`start`): create a session with the `fake` provider, send a
-   message, click into it from the session list — the Conversation tab's
-   header must render (not a blank pane), and the sent message plus its
-   reply must appear in the chat pane. Also click into an existing
-   pipeline-only session (no prior interactive messages) and confirm it
-   renders with an empty transcript, not an error state.
+2. Manually confirm the two acceptance-criteria requests against a running
+   Router (`scripts/app.sh` or `make run`): `curl -H 'Accept:
+   application/json' localhost:8080/sessions/nope/what` → JSON 404; a real
+   browser navigation to a deep link (or `curl -H 'Accept: text/html'
+   localhost:8080/deep/link`) → `index.html`.
 
-## Executor notes (implementation, as actually landed)
+## Executor notes
 
-Implemented per the design above with no deviation, plus one unplanned fix
-and one scope boundary discovered during real-stack verification:
+Implemented the design above as written, with no deviations from the
+production-code decisions (navigation gate, JSON 404 shape, `New`/`NewMux`
+split). Touched exactly the five files this doc names plus the new
+`internal/api/route_manifest_test.go`.
 
-- `pkg/contracts/transcript.go`, `handleGetSession`, `transcript.go`
-  (`transcriptFor` + `handleSessionTranscript`), the two route registrations
-  in `api.go`, `transcript_test.go`'s four cases, and `sessions_test.go`'s
-  `TestGetSession`/`TestGetSessionNotFound` all landed exactly as designed
-  above.
-- **Unplanned fix: `static_test.go`'s `TestStaticSPAFallback`.** It used `GET
-  /sessions/abc123` as its example of "an unregistered path the SPA catch-all
-  must serve `index.html` for." That path is no longer unregistered — `GET
-  /sessions/{id}` now correctly 404s it as a real API route (unknown session
-  id), which is the intended behavior, but broke this test's premise. Fixed
-  by switching the example to `/some/unknown/route` (matching the analogous
-  test in `internal/static/static_test.go`) and updating the comment.
-  Confirmed via `ui/src/App.tsx` that the UI has no client-side URL routing
-  for sessions (session selection is local `useState`, no react-router), so
-  `/sessions/abc123` was never a real browser-navigated path — just an
-  arbitrary stand-in the test no longer gets to use. **Reviewer: worth a
-  second look**, since it's the one change outside this doc's original plan.
-- `make check` is green: `go build`/`go vet` clean, `go test -race ./...`
-  passes (all packages), `golangci-lint run ./...` reports 0 issues,
-  `npm --prefix ui run lint` and `npm --prefix ui run test` (707 tests) pass.
+- `internal/static/static.go`: added `isNavigationRequest` and
+  `writeNotFoundJSON`, branched the fallback on the gate. Renamed the
+  loop-local `path` var to `fsPath` since it shadowed the `path/filepath`
+  import once `writeNotFoundJSON` needed `r.URL.Path` in the same closure.
+- `internal/static/static_test.go` and `internal/api/static_test.go`: added
+  a `getWithAccept` helper (bare `get`/`http.Get` calls default to
+  `Accept: */*`, which no longer falls back to `index.html`) and rewrote the
+  two pre-existing fallback tests to send an explicit `text/html` Accept
+  header. Added the four/two new tests this doc specifies.
+- `internal/api/api.go`: split `New` into a thin CORS-wrapped `New` plus an
+  exported `NewMux` that builds the route table, unchanged otherwise.
+- `internal/api/route_manifest_test.go`: built `routeManifest` (78 rows) by
+  hand-walking every `FetchRouterClient` method in `ui/src/router/client.ts`
+  against `api.go`'s route table, deduping methods that share a route (e.g.
+  `listTasks`/`listAllTasks` → `GET /tasks`). `knownGapRoutes` holds the 8
+  documented forward-built gaps.
+- `README.md`: replaced the stale "Serving the UI" bullet per the doc's
+  Design §5.
 
-### Real-stack verification (done, with one adjustment from the plan above)
+**Deviation to scrutinize**: `TestKnownGapRoutesStillUnregistered` checks
+`gotPattern == tc.pattern` rather than `gotPattern == ""` as this doc's
+sketch does. `NewMux` always registers `mux.Handle("/", opts.StaticHandler)`
+as a catch-all, so `(*http.ServeMux).Handler` never returns an empty
+pattern for *any* path, registered or not — it returns `"/"` for anything
+unmatched. The doc's sketch as written would make this test always pass
+regardless of whether a gap route became real, silently defeating its own
+purpose. Checking against the specific expected dedicated pattern instead
+preserves the intended guarantee: the test only fails when a gap route's
+exact pattern becomes registered.
 
-Built and ran real `data`/`router`/`session` binaries (isolated data dir and
-ports, not the shared dev instance) and drove them with `curl` rather than
-through Electron/a browser — no browser automation tool is available in this
-environment. Confirmed, against the compiled binaries:
-
-- `POST /sessions` (provider `fake`) → `GET /sessions/{id}` → 200 with the
-  full `contracts.Session` JSON (matches `ui/src/router/types.ts`'s
-  `Session`).
-- `GET /sessions/{id}/transcript` on that fresh session → 200, body `[]`.
-- `GET /sessions/nonexistent` and `GET /sessions/nonexistent/transcript` →
-  both 404 JSON (`{"error": ...}`).
-
-This directly verifies the acceptance criterion's mechanism: `ConversationTab`
-(`ui/src/conversation/ConversationTab.tsx:44-55`) renders `null` until
-`getSession` resolves; it now resolves (200, real data) instead of hanging
-forever on an unregistered-route fetch failure, so the header renders instead
-of a permanent blank pane.
-
-**Could not verify, and flagging why:** driving a live conversation through
-the real stack (send a message, confirm it and the reply appear via
-`/transcript`) turned out to be blocked by a separate, pre-existing gap, not
-by this task's endpoints — `POST /sessions/{id}/messages` (the route
-`RouterClient.sendMessage` calls) **is not registered in `api.go` at all**.
-Sending a message through the real HTTP API 404s to the SPA fallback today,
-independent of anything in this change. This is out of this task's scope
-(only `GET /sessions/{id}` and `GET /sessions/{id}/transcript` were
-assigned), but the reviewer/next task should know: a real end-to-end
-"type a message, see the reply" click-through is not yet possible against
-this Router build, for reasons unrelated to this task. The unit tests'
-approach of driving `fake.Fake` directly in-process (bypassing HTTP) rather
-than through `POST /sessions/{id}/messages` was the correct call, not a
-shortcut — it's the only way to exercise this today.
-
-Also could not verify the "active with messages" / "inactive" transcript
-cases against the real stack specifically (only via the unit tests) — the
-fake provider's history doesn't cross process boundaries (see Risks above),
-so there's no way to seed history into the Router's own in-process `fake`
-instance from outside it via curl. This is the same documented limitation,
-not a new one.
+`make check` passed clean: `go test -race ./...` (all packages, including
+the new route-manifest tests against all 78 manifest + 8 gap rows),
+`golangci-lint run ./...`, UI lint, and 707 UI tests. Did not additionally
+verify the acceptance criteria against a live `scripts/app.sh` Router
+(no browser available in this environment) — covered instead by
+`TestAPIShapedUnregisteredPathGetsJSON404` and
+`TestBrowserNavigationToDeepLinkGetsIndex` in `internal/api/static_test.go`,
+which exercise the same two requests through the real `api.New` + CORS
+wrapper + a real UI dist fixture end-to-end.

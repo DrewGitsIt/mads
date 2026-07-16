@@ -44,11 +44,33 @@ func get(t *testing.T, srv *httptest.Server, path string) (int, string) {
 	return resp.StatusCode, string(body)
 }
 
+// getWithAccept is like get but sets an explicit Accept header, needed to
+// exercise the navigation-shaped gate: only a request that prefers
+// text/html falls back to index.html.
+func getWithAccept(t *testing.T, srv *httptest.Server, path, accept string) (int, string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", accept)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, string(body)
+}
+
 func TestServesIndexAtRoot(t *testing.T) {
 	srv := httptest.NewServer(static.New(writeUIDist(t)))
 	defer srv.Close()
 
-	status, body := get(t, srv, "/")
+	status, body := getWithAccept(t, srv, "/", "text/html")
 	if status != http.StatusOK {
 		t.Fatalf("GET / status = %d, want 200", status)
 	}
@@ -74,12 +96,81 @@ func TestUnknownPathFallsBackToIndex(t *testing.T) {
 	srv := httptest.NewServer(static.New(writeUIDist(t)))
 	defer srv.Close()
 
-	status, body := get(t, srv, "/some/unknown/route")
+	status, body := getWithAccept(t, srv, "/some/unknown/route", "text/html")
 	if status != http.StatusOK {
 		t.Fatalf("GET /some/unknown/route status = %d, want 200", status)
 	}
 	if body != "<html><body>mads-ui-shell</body></html>" {
 		t.Fatalf("GET /some/unknown/route body = %q, want the SPA shell (index.html)", body)
+	}
+}
+
+func TestNonHTMLAcceptGetsJSON404(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	status, body := getWithAccept(t, srv, "/sessions/nope/what", "application/json")
+	if status != http.StatusNotFound {
+		t.Fatalf("GET /sessions/nope/what status = %d, want 404", status)
+	}
+	want := `{"error":"not found","path":"/sessions/nope/what"}` + "\n"
+	if body != want {
+		t.Fatalf("GET /sessions/nope/what body = %q, want %q", body, want)
+	}
+}
+
+func TestBareFetchDefaultAcceptGetsJSON404(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	status, body := getWithAccept(t, srv, "/some/unknown/route", "*/*")
+	if status != http.StatusNotFound {
+		t.Fatalf("GET /some/unknown/route status = %d, want 404", status)
+	}
+	want := `{"error":"not found","path":"/some/unknown/route"}` + "\n"
+	if body != want {
+		t.Fatalf("GET /some/unknown/route body = %q, want %q", body, want)
+	}
+}
+
+func TestExtensionedPathWithHTMLAcceptStillGetsJSON404(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	status, body := getWithAccept(t, srv, "/assets/missing.js", "text/html")
+	if status != http.StatusNotFound {
+		t.Fatalf("GET /assets/missing.js status = %d, want 404", status)
+	}
+	want := `{"error":"not found","path":"/assets/missing.js"}` + "\n"
+	if body != want {
+		t.Fatalf("GET /assets/missing.js body = %q, want %q", body, want)
+	}
+}
+
+func TestPostToUnknownPathGetsJSON404(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/some/unknown/route", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/html")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST /some/unknown/route status = %d, want 404", resp.StatusCode)
+	}
+	want := `{"error":"not found","path":"/some/unknown/route"}` + "\n"
+	if string(body) != want {
+		t.Fatalf("POST /some/unknown/route body = %q, want %q", body, want)
 	}
 }
 
@@ -126,7 +217,7 @@ func TestPicksUpBuildThatLandsAfterConstruction(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	status, body := get(t, srv, "/")
+	status, body := getWithAccept(t, srv, "/", "text/html")
 	if status != http.StatusOK {
 		t.Fatalf("GET / after build lands status = %d, want 200", status)
 	}
