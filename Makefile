@@ -3,7 +3,7 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps
+.PHONY: build test lint check tidy ui-deps app
 
 build: ui-deps
 	go build ./...
@@ -31,3 +31,7 @@ ui-deps:
 
 $(LINT):
 	GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+
+# Local end-to-end entry point: backend up (if not already) + Electron app.
+app:
+	./scripts/app.sh

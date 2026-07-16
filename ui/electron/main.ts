@@ -13,6 +13,11 @@ function createWindow(): void {
       preload: join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // file:// pages send Origin: null, which the Router's localhost-only
+      // CORS policy rightly refuses. The window loads only our own bundled
+      // renderer (no remote content), so relaxing webSecurity here is the
+      // documented interim until the Router serves the UI same-origin (W7).
+      webSecurity: false,
     },
   });
 

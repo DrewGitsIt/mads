@@ -3,6 +3,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  // Electron loads dist/ via file:// — asset URLs must be relative or the
+  // window renders blank (absolute /assets/ resolves to the filesystem root).
+  base: "./",
   plugins: [react()],
   build: {
     rollupOptions: {
