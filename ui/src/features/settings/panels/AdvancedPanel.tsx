@@ -19,7 +19,7 @@ const TOGGLES: Array<{ key: keyof FeatureFlags; label: string; description: stri
   {
     key: "remote_registry",
     label: "Remote registry",
-    description: "Browse and connect to a remote mads registry (toggle only — no UI yet).",
+    description: "Browse and install agents/capabilities/templates from a remote mads registry.",
   },
 ];
 

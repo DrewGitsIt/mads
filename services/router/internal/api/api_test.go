@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
@@ -58,7 +59,15 @@ func TestMain(m *testing.M) {
 func testJobs(t *testing.T, data *dataclient.Client) *job.Runner {
 	t.Helper()
 	fm := fastmodel.New(fake.New(), fastmodel.Config{})
-	return job.New(data, fm)
+	return job.New(data, fm, testRegistry(t))
+}
+
+// testRegistry returns an unconfigured registry client — most tests don't
+// exercise /registry/* and just need something inert to plug into job.New /
+// api.New's required argument.
+func testRegistry(t *testing.T) *registryclient.Client {
+	t.Helper()
+	return registryclient.New("")
 }
 
 // newTestServer wires a real datatest Data Service, a Supervisor that spawns
@@ -69,7 +78,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	data := dataclient.New(base, "router")
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
-	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, nil, "test"))
+	srv := httptest.NewServer(api.New(data, sup, testJobs(t, data), testProviders(t), testCredStore(t), nil, testVaultRefs(t), nil, nil, "test", testRegistry(t)))
 	t.Cleanup(srv.Close)
 	return srv
 }

@@ -6,7 +6,7 @@ import { AgentsShelf } from "./agents/AgentsShelf";
 import { CapabilitiesShelf } from "./capabilities/CapabilitiesShelf";
 import { WorkspacesShelf } from "./workspaces/WorkspacesShelf";
 import { TemplatesShelf } from "./templates/TemplatesShelf";
-import { RegistryShelfStub } from "./registry/RegistryShelfStub";
+import { RegistryShelf } from "./registry/RegistryShelf";
 import styles from "./LibrarySurface.module.css";
 
 type ShelfId = "agents" | "capabilities" | "workspaces" | "templates" | "registry";
@@ -45,7 +45,7 @@ export function LibrarySurface() {
           {activeShelf === "capabilities" && <CapabilitiesShelf />}
           {activeShelf === "workspaces" && <WorkspacesShelf />}
           {activeShelf === "templates" && <TemplatesShelf />}
-          {activeShelf === "registry" && <RegistryShelfStub />}
+          {activeShelf === "registry" && <RegistryShelf />}
         </ContentColumn>
       </main>
     </div>

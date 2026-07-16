@@ -7,6 +7,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -17,7 +18,8 @@ import (
 func TestHealth(t *testing.T) {
 	data := dataclient.New("http://localhost:0", "router")
 	sup := supervisor.New(data, nil, nil, nil)
-	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}))
+	reg := registryclient.New("")
+	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}), reg)
 	providers := provider.NewRegistry()
 	if err := providers.Register(fake.New()); err != nil {
 		t.Fatal(err)
@@ -26,7 +28,7 @@ func TestHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil))
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg))
 	defer srv.Close()
 
 	resp, err := srv.Client().Get(srv.URL + "/health")

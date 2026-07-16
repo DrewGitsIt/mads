@@ -23,6 +23,9 @@ import type {
   Profile,
   Provider,
   ProviderInfo,
+  RegistryEntry,
+  RegistryItemType,
+  RegistryPublishItem,
   Retro,
   Session,
   Task,
@@ -192,6 +195,20 @@ export interface RouterClient {
   createPipelineRun(sessionId: string, templateId: string): Promise<{ run_id: string }>;
   cancelPipelineRun(runId: string): Promise<void>;
   retryTask(taskId: string): Promise<Task>;
+
+  // --- Registry (Library, flag-gated — W7.6) ---
+  registryIndex(q?: string): Promise<RegistryEntry[]>;
+  installRegistryItem(
+    type: RegistryItemType,
+    name: string,
+    version?: string,
+  ): Promise<{ job_id: string }>;
+  updateRegistryItem(
+    type: RegistryItemType,
+    name: string,
+    version?: string,
+  ): Promise<{ job_id: string }>;
+  publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }>;
 }
 
 /**
@@ -696,6 +713,31 @@ export class FetchRouterClient implements RouterClient {
 
   async retryTask(taskId: string): Promise<Task> {
     return routerPost(this.baseUrl, `/tasks/${taskId}/retry`);
+  }
+
+  // --- Registry (Library, flag-gated — W7.6) ---
+  async registryIndex(q?: string): Promise<RegistryEntry[]> {
+    return routerGet(this.baseUrl, "/registry/index", { q });
+  }
+
+  async installRegistryItem(
+    type: RegistryItemType,
+    name: string,
+    version?: string,
+  ): Promise<{ job_id: string }> {
+    return routerPost(this.baseUrl, "/registry/install", { type, name, version });
+  }
+
+  async updateRegistryItem(
+    type: RegistryItemType,
+    name: string,
+    version?: string,
+  ): Promise<{ job_id: string }> {
+    return routerPost(this.baseUrl, "/registry/update", { type, name, version });
+  }
+
+  async publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }> {
+    return routerPost(this.baseUrl, "/registry/publish", { items });
   }
 }
 

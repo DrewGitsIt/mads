@@ -7,6 +7,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -45,7 +46,7 @@ func TestGenerateSessionSummaryWritesSessionSummary(t *testing.T) {
 		SessionID: sess.ID, Title: "Fix the login bug", Source: "user", Status: contracts.StatusDone,
 	})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -103,7 +104,7 @@ func TestGenerateSessionSummaryOverwritesOnSecondRun(t *testing.T) {
 		SessionID: sess.ID, Title: "Fix the login bug", Source: "user", Status: contracts.StatusDone,
 	})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -147,7 +148,7 @@ func TestGenerateSessionSummaryNoopForDeletedSession(t *testing.T) {
 	data := dataclient.New(base, "router")
 	fm := scriptedFastModel(t, fake.Scenario{Name: "summary-job-deleted"})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 

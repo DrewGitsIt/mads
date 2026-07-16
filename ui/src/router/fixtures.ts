@@ -27,6 +27,7 @@ import type {
   Profile,
   Provider,
   ProviderInfo,
+  RegistryEntry,
   Retro,
   Session,
   Task,
@@ -1114,6 +1115,23 @@ export class FakeRouterClient implements RouterClient {
 
   async retryTask(): Promise<Task> {
     throw new Error("not fixtured: retryTask");
+  }
+
+  // --- Registry (Library, flag-gated — W7.6) ---
+  async registryIndex(): Promise<RegistryEntry[]> {
+    throw new Error("not fixtured: registryIndex");
+  }
+
+  async installRegistryItem(): Promise<{ job_id: string }> {
+    throw new Error("not fixtured: installRegistryItem");
+  }
+
+  async updateRegistryItem(): Promise<{ job_id: string }> {
+    throw new Error("not fixtured: updateRegistryItem");
+  }
+
+  async publishRegistryItems(): Promise<{ job_id: string }> {
+    throw new Error("not fixtured: publishRegistryItems");
   }
 }
 

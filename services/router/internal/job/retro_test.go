@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -40,7 +41,7 @@ func TestRetroJobGoldenDPAs(t *testing.T) {
 		SessionID: sess.ID, Title: "Ship the release", Source: "user", Status: contracts.StatusDone, RetryCount: 2,
 	})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -99,7 +100,7 @@ func TestRetroJobCancelLeavesNoPartialState(t *testing.T) {
 		SessionID: sess.ID, Title: "Some task", Source: "user", Status: contracts.StatusDone,
 	})
 
-	runner := job.New(data, fm)
+	runner := job.New(data, fm, registryclient.New(""))
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
