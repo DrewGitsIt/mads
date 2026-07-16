@@ -121,6 +121,22 @@ func TestClientRoundTrip(t *testing.T) {
 	}
 }
 
+// TestClientHealth checks Health against a real running Data Service and
+// against an unreachable one.
+func TestClientHealth(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "router")
+	if err := c.Health(ctx); err != nil {
+		t.Fatalf("Health against running Data Service: %v", err)
+	}
+
+	unreachable := dataclient.New("http://127.0.0.1:1", "router")
+	if err := unreachable.Health(ctx); err == nil {
+		t.Fatal("Health against unreachable Data Service: want error, got nil")
+	}
+}
+
 // TestClientDraftConfirmDiscard exercises the draft lifecycle wrapper
 // methods (ConfirmTask/DiscardTask/ConfirmNote/DiscardNote) against a real
 // Data Service, checking both the resulting state and the emitted events.

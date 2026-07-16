@@ -64,6 +64,10 @@ the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned
 never called peer-to-peer.
 
 - `GET /health` — `{"service":"router","status":"ok"}`
+- `GET /preflight` — per-check environment health (git, Data Service reachability, disk
+  space, registered provider binaries + versions against `pkg/preflight`'s compatibility
+  matrix), each with `{name, healthy, detail?, fix_hint?}` (spec §14.8-9); no request body,
+  always 200 unless the checker itself errors (never does, today).
 - `POST /sessions` — create a session (proxies `dataclient.CreateSession`) and spawn its
   Session Service child; 201 with `{"session": ..., "addr": ...}`. On spawn failure, the
   session record is rolled back (best-effort delete) so a failed create doesn't leave an

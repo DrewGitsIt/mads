@@ -330,8 +330,10 @@ the Router process, straight from `os.Getenv`.
 `GET /config` fetch (`!config.onboarding_complete` renders the wizard in
 place of the icon-rail shell entirely). Five steps under `onboarding/
 steps/`: Welcome (static), Provider preflight (shares `usePreflight` with
-Settings > General — against the stubbed preflight backend everything
-reports healthy, so Continue is never gated), Credential import (shares
+Settings > General — Continue is never gated on preflight results, since
+this is informational health-check guidance, not a hard gate: a user with a
+real environment problem still needs to reach Settings to see the fix
+guidance, not get stuck in the wizard), Credential import (shares
 `useCredentials`, skippable), First workspace (`POST /workspaces`, plus an
 optional default-provider `<select>` sourced from `router.listProviderNames()`
 — leaving it at "No default" skips it), and a final inline step that `PUT`s
