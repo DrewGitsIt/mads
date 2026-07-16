@@ -150,6 +150,14 @@ unattributed observation row, and a session with a seeded merge conflict.
 This is the review artifact until W6.2's tab registry exists to register
 `FilesTab` into properly.
 
+Every surface's main content renders through the shared `ContentColumn`
+primitive (`src/components/ContentColumn/`) — a centered column with a
+max-width, so content doesn't hug the pane's left edge. `FilesTab` (fixed-
+width list rail + a fluid `DiffViewer`) and `PipelineTab`'s `StageBoard`
+(fixed-width columns that `overflow-x: auto` past the pane by design) are
+the two surfaces that intentionally opt out and stay full-bleed — both need
+the full pane width rather than a centered max-width column.
+
 `FilesTab` composes a change list (`ChangeList`) and commit list
 (`CommitList`) with attribution chips (trailer/session/heuristic/orphan/
 unattributed — `src/files/ChangeList/attribution.ts`), a `DiffViewer`, and

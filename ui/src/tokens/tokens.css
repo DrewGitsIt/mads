@@ -259,6 +259,10 @@
   /* prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose) */
   --measure-prose: 92ch;
 
+  /* surface content column widths (layout: shared centered content column) */
+  --content-wide: 76rem;
+  --content-narrow: 44rem;
+
   /* type scale — +10% pass approved via gallery review */
   --fs-chip: 10.5px;
   --fs-sm: 12.5px;
