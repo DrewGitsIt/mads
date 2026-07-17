@@ -15,10 +15,12 @@ import (
 
 func script() conformance.Script {
 	return conformance.Script{
-		Echo:    func(marker string) string { return "echo " + marker },
-		Slow:    func() string { return "slow" },
-		Recall:  func() string { return "recall" },
-		Timeout: 10 * time.Second, // each probe spawns a real subprocess
+		Echo:           func(marker string) string { return "echo " + marker },
+		Slow:           func() string { return "slow" },
+		Recall:         func() string { return "recall" },
+		AttemptWrite:   func() string { return "attempt-write" },
+		AttemptCommand: func() string { return "attempt-command" },
+		Timeout:        10 * time.Second, // each probe spawns a real subprocess
 	}
 }
 
@@ -68,6 +70,83 @@ func TestRateLimitSurfaces(t *testing.T) {
 	}
 	if rateLimit("some unrelated failure") != nil {
 		t.Error("false positive rate-limit detection")
+	}
+}
+
+// A read_only session's attempted Write and a limited session's attempted
+// Bash both deny at the real session/request_permission handshake — proving
+// the kind-based gate in session.go, not just the wire types.
+func TestTrustDeniesToolKind(t *testing.T) {
+	cases := []struct {
+		trust  provider.Trust
+		prompt string
+	}{
+		{provider.TrustLimited, "attempt-command"},
+		{provider.TrustReadOnly, "attempt-write"},
+		{provider.TrustReadOnly, "attempt-command"},
+	}
+	for _, c := range cases {
+		p := testProvider(t)
+		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: c.trust})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Send(context.Background(), c.prompt); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.After(10 * time.Second)
+		for done := false; !done; {
+			select {
+			case ev, ok := <-sess.Events():
+				if !ok {
+					t.Fatal("stream closed before turn end")
+				}
+				if ev.Kind == provider.EventToolUse {
+					t.Errorf("trust %s: tool use event observed for %q (name=%s)", c.trust, c.prompt, ev.Tool.Name)
+				}
+				if ev.Kind == provider.EventTurnEnd {
+					done = true
+				}
+			case <-deadline:
+				t.Fatalf("trust %s: no turn end for %q", c.trust, c.prompt)
+			}
+		}
+		_ = sess.Close()
+	}
+}
+
+// A limited session's attempted Write (an "edit" kind) is allowed — only
+// command execution is restricted at that level.
+func TestTrustLimitedAllowsEdit(t *testing.T) {
+	p := testProvider(t)
+	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustLimited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "attempt-write"); err != nil {
+		t.Fatal(err)
+	}
+	var sawTool bool
+	deadline := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			if ev.Kind == provider.EventToolUse {
+				sawTool = true
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				done = true
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+	if !sawTool {
+		t.Fatal("limited session denied an edit-kind tool, want it allowed")
 	}
 }
 

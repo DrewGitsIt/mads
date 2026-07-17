@@ -84,13 +84,24 @@ type updateContent struct {
 }
 
 type toolCallUpdate struct {
-	Title string          `json:"title"`
+	Title string `json:"title"`
+	// Kind is ACP's public tool-call taxonomy (agentclientprotocol.com):
+	// read/edit/delete/move/search/execute/think/fetch/other. Trust gating
+	// classifies on this field — see streamSession.toolKindAllowed.
+	Kind  string          `json:"kind,omitempty"`
 	Input json.RawMessage `json:"rawInput,omitempty"`
 }
 
-// permissionResult / permissionOutcome — the adapter's auto-approved reply
-// to "session/request_permission" (a real request the agent can send;
-// out of scope to surface as a platform prompt in this pass — see README).
+// requestPermissionParams — "session/request_permission" request params: the
+// tool call the agent wants to make, offered alongside a list of options the
+// caller could pick. This adapter doesn't inspect Options; it derives its
+// answer entirely from the session's trust level and the tool call's Kind.
+type requestPermissionParams struct {
+	ToolCall toolCallUpdate `json:"toolCall"`
+}
+
+// permissionResult / permissionOutcome — the adapter's reply to
+// "session/request_permission". See streamSession.autoApprove/denyPermission.
 type permissionResult struct {
 	Outcome permissionOutcome `json:"outcome"`
 }

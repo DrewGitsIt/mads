@@ -26,12 +26,41 @@ best-effort research, not fact.
 | PTY | **Native** | `kiro-cli chat`'s interactive terminal REPL. |
 | Branching | **Unsupported** | `/rewind` is real and does create a new conversation branch, but it is an interactive-only TUI turn-picker (arrow-key selection UI), not a scriptable flag or stable API. A GitHub issue on Kiro's ACP crate notes session-fork support is behind an `unstable_session_fork` feature flag and is not currently active (`sessionCapabilities` reports empty). No stable, scriptable surface exists to declare this Native or Emulated honestly. |
 | CwdReroot | **Unsupported** | No documented flag or command changes a live session's working directory mid-session. |
+| TrustLimited | **Emulated** | Enforced on the ACP transport by auto-denying `session/request_permission` requests for command-execution-kind tool calls (see below); on PTY, the corresponding restriction is a human declining kiro-cli's own interactive confirmation prompt, not an automated guarantee. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
+| TrustReadOnly | **Emulated** | Same mechanism, denying both command execution and file mutation kinds. Same ACP-vs-PTY asymmetry as TrustLimited. |
 
 Net shape vs. claude-code: kiro-cli is **more capable** on ModelDiscovery,
 Interrupt, and Transcript (all Native here vs. claude-code's
 Emulated/Native mix), and **less capable** on CostReporting (Unsupported vs.
-claude-code's Native). Branching and CwdReroot are Unsupported for both. This
-asymmetry is the point of W7.1 — the matrix is not a copy of claude-code's.
+claude-code's Native) and on both trust rows (Emulated here vs. claude-code's
+Native `--disallowedTools`). Branching and CwdReroot are Unsupported for
+both. This asymmetry is the point of W7.1 — the matrix is not a copy of
+claude-code's.
+
+## Trust enforcement, transport by transport
+
+- **ACP transport (structured):** `session/request_permission` is a real
+  mid-turn request the agent sends before a tool call runs. `session.go`
+  classifies the accompanying tool call's ACP `kind`
+  (`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`other`,
+  per agentclientprotocol.com) against the session's trust level:
+  - `limited` approves `read`/`edit`/`search`/`think`/`fetch`; denies
+    `execute`/`delete`/`move`/`other`.
+  - `read_only` approves only `read`/`search`/`think`/`fetch`; denies
+    everything else, including `edit`.
+  - `full` (and the zero value) approves everything — unchanged from before
+    this row existed.
+  An unrecognized kind denies under `limited`/`read_only` — this adapter
+  never silently under-enforces on a kind it doesn't recognize.
+- **PTY transport (terminal):** `--trust-all-tools` is passed only for
+  `full` trust (and the zero value). For `limited`/`read_only`, it is
+  omitted entirely, so kiro-cli falls back to its own interactive
+  per-tool confirmation prompt. **This is a materially different
+  enforcement mechanism than the ACP transport's automated kind-based
+  deny: it defers to a human at the terminal, not to this adapter.** A
+  PTY session with nobody watching the terminal is not actually
+  trust-restricted in any enforceable sense — only ACP sessions get an
+  automated guarantee.
 
 ## Real, citable gaps beyond the Matrix
 
@@ -40,13 +69,16 @@ asymmetry is the point of W7.1 — the matrix is not a copy of claude-code's.
   session ID and resume command on session exit") — the same limitation
   claude-code's PTY transport has. `ptySession.Ref()` returns
   `StartOptions.Resume` when resuming, empty otherwise.
-- **Tool permission prompts are auto-approved, not surfaced.** The real ACP
-  protocol includes `session/request_permission` (a request the agent can
-  send mid-turn to ask about a tool call). This adapter always responds
-  `allow` — equivalent to running with `--trust-all-tools` at all times —
-  rather than surfacing a platform-level approval prompt. That is out of
-  scope for this pass, but it is a real, permanent behavior difference from
-  a human using kiro-cli interactively, not just a testing shortcut.
+- **The permission-reject wire shape is an educated guess, not a confirmed
+  spec value.** `denyPermission` replies with
+  `{outcome: {outcome: "selected", optionId: "reject"}}`, by symmetry with
+  the existing `autoApprove`'s `optionId: "allow"`. Neither value has been
+  confirmed against a live kiro-cli binary or a captured real
+  `session/request_permission` exchange — if kiro-cli's actual reject
+  semantics use a different `optionId` (or a `"cancelled"` outcome instead
+  of `"selected"`), this adapter's whole `limited`/`read_only` ACP
+  enforcement silently degrades to always-allow. `MADS_KIRO_SMOKE=1` against
+  a real binary is the only way to confirm or refute this.
 - **Least-certain row: Transcript.** ACP's `loadSession: true` capability is
   generally understood to mean `session/load` replays a session's prior
   turns as `session/update` notifications before its own response resolves —

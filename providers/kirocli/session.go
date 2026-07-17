@@ -35,11 +35,16 @@ func (p *Provider) startACP(ctx context.Context, opts provider.StartOptions) (pr
 		return nil, fmt.Errorf("start %s acp: %w", p.cfg.Bin, err)
 	}
 
+	trust := opts.Trust
+	if trust == "" {
+		trust = provider.TrustFull
+	}
 	s := &streamSession{
 		cmd:     cmd,
 		stdin:   stdin,
 		events:  make(chan provider.Event, 256),
 		pending: make(map[int]chan rpcMessage),
+		trust:   trust,
 	}
 	go s.read(stdout)
 
@@ -93,6 +98,7 @@ type streamSession struct {
 	nextID      int
 	pending     map[int]chan rpcMessage
 	ref         string
+	trust       provider.Trust
 	interrupted bool // an interrupt was requested this turn
 	replaying   bool // session/load is in flight: buffer updates, don't stream them
 	replay      []provider.Message
@@ -144,10 +150,16 @@ func (s *streamSession) handleLine(raw []byte) {
 			ch <- m
 		}
 	case m.Method == "session/request_permission" && m.ID != nil:
-		// Real ACP tool-permission prompt. Out of scope for this pass to
-		// surface as a platform prompt (README) — auto-approve so a
-		// scripted or real turn never blocks on it.
-		s.autoApprove(*m.ID)
+		// Real ACP tool-permission prompt. Gated on the session's trust
+		// level and the tool call's Kind — see toolKindAllowed. Not
+		// surfaced as a platform-level prompt (README caveat).
+		var p requestPermissionParams
+		_ = json.Unmarshal(m.Params, &p)
+		if s.toolKindAllowed(p.ToolCall.Kind) {
+			s.autoApprove(*m.ID)
+		} else {
+			s.denyPermission(*m.ID)
+		}
 	case m.Method == "session/update":
 		s.handleUpdate(m.Params)
 	}
@@ -209,8 +221,43 @@ func (s *streamSession) drainReplay() []provider.Message {
 	return s.replay
 }
 
+// toolKindAllowed classifies a tool call's ACP kind against the session's
+// trust level. Unknown/unrecognized kinds deny under limited and read_only —
+// never silently under-enforce on a kind this adapter doesn't recognize.
+func (s *streamSession) toolKindAllowed(kind string) bool {
+	switch s.trust {
+	case provider.TrustLimited:
+		switch kind {
+		case "read", "edit", "search", "think", "fetch":
+			return true
+		default:
+			return false
+		}
+	case provider.TrustReadOnly:
+		switch kind {
+		case "read", "search", "think", "fetch":
+			return true
+		default:
+			return false
+		}
+	default: // TrustFull, and "" (never set here — startACP normalizes it)
+		return true
+	}
+}
+
 func (s *streamSession) autoApprove(id int) {
 	result, _ := json.Marshal(permissionResult{Outcome: permissionOutcome{Outcome: "selected", OptionID: "allow"}})
+	line, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: &id, Result: result})
+	if err != nil {
+		return
+	}
+	_ = s.write(append(line, '\n'))
+}
+
+// denyPermission is autoApprove's refusal counterpart. OptionID "reject" is
+// a guess by symmetry with "allow" — see README's caveat on this shape.
+func (s *streamSession) denyPermission(id int) {
+	result, _ := json.Marshal(permissionResult{Outcome: permissionOutcome{Outcome: "selected", OptionID: "reject"}})
 	line, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: &id, Result: result})
 	if err != nil {
 		return

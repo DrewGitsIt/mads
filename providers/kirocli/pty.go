@@ -26,6 +26,13 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	if opts.Resume != "" {
 		args = append(args, "--resume-id", opts.Resume)
 	}
+	// --trust-all-tools only for full trust (and the zero value). For
+	// limited/read_only, omit it and rely on kiro-cli's own interactive
+	// per-tool confirmation prompt — a human at the terminal, not the
+	// automated kind-based gate the ACP transport uses. See README.
+	if opts.Trust == provider.TrustFull || opts.Trust == "" {
+		args = append(args, "--trust-all-tools")
+	}
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)

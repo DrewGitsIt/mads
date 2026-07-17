@@ -17,10 +17,12 @@ import (
 // script is the fake's built-in dialect, in conformance terms.
 func script() conformance.Script {
 	return conformance.Script{
-		Echo:    func(marker string) string { return "echo " + marker },
-		Slow:    func() string { return "slow" },
-		Recall:  func() string { return "recall" },
-		Timeout: 2 * time.Second,
+		Echo:           func(marker string) string { return "echo " + marker },
+		Slow:           func() string { return "slow" },
+		Recall:         func() string { return "recall" },
+		AttemptWrite:   func() string { return "attempt-write" },
+		AttemptCommand: func() string { return "attempt-command" },
+		Timeout:        2 * time.Second,
 	}
 }
 
@@ -312,6 +314,116 @@ func TestScenarioValidation(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q missing %q", err, want)
 		}
+	}
+}
+
+// A read_only session refuses a file write: the tool never executes (no
+// file lands on disk) and the turn ends via a refusal, not a crash.
+func TestTrustReadOnlyRefusesWrite(t *testing.T) {
+	cwd := t.TempDir()
+	f := fake.New()
+	sess, err := f.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, Cwd: cwd, Trust: provider.TrustReadOnly,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "attempt-write"); err != nil {
+		t.Fatal(err)
+	}
+	events, ended := collect(t, sess)
+	if !ended {
+		t.Fatal("stream closed without turn end")
+	}
+	for _, ev := range events {
+		if ev.Kind == provider.EventToolUse {
+			t.Fatalf("read_only session executed a tool: %+v", ev.Tool)
+		}
+	}
+	if events[0].Kind != provider.EventError {
+		t.Fatalf("want a refusal error event first, got %v", events[0].Kind)
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "trust-probe.txt")); !os.IsNotExist(err) {
+		t.Fatalf("read_only session wrote a file, stat err = %v", err)
+	}
+}
+
+// A limited session refuses command execution but still allows file writes.
+func TestTrustLimitedRefusesCommandAllowsWrite(t *testing.T) {
+	cwd := t.TempDir()
+	f := fake.New()
+	sess, err := f.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, Cwd: cwd, Trust: provider.TrustLimited,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if err := sess.Send(context.Background(), "attempt-command"); err != nil {
+		t.Fatal(err)
+	}
+	events, ended := collect(t, sess)
+	if !ended {
+		t.Fatal("stream closed without turn end")
+	}
+	for _, ev := range events {
+		if ev.Kind == provider.EventToolUse {
+			t.Fatalf("limited session executed a command tool: %+v", ev.Tool)
+		}
+	}
+
+	if err := sess.Send(context.Background(), "attempt-write"); err != nil {
+		t.Fatal(err)
+	}
+	events, ended = collect(t, sess)
+	if !ended {
+		t.Fatal("stream closed without turn end")
+	}
+	var sawWrite bool
+	for _, ev := range events {
+		if ev.Kind == provider.EventToolUse {
+			sawWrite = true
+		}
+	}
+	if !sawWrite {
+		t.Fatal("limited session refused a file write, want it allowed")
+	}
+	if _, err := os.Stat(filepath.Join(cwd, "trust-probe.txt")); err != nil {
+		t.Fatalf("limited session did not write the file: %v", err)
+	}
+}
+
+// A full-trust session (and the zero-value default) allows everything —
+// today's behavior must not regress.
+func TestTrustFullAllowsEverything(t *testing.T) {
+	for _, trust := range []provider.Trust{provider.TrustFull, ""} {
+		cwd := t.TempDir()
+		f := fake.New()
+		sess, err := f.Start(context.Background(), provider.StartOptions{
+			Mode: provider.ModeACP, Cwd: cwd, Trust: trust,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Send(context.Background(), "attempt-command"); err != nil {
+			t.Fatal(err)
+		}
+		events, ended := collect(t, sess)
+		if !ended {
+			t.Fatal("stream closed without turn end")
+		}
+		var sawTool bool
+		for _, ev := range events {
+			if ev.Kind == provider.EventToolUse {
+				sawTool = true
+			}
+		}
+		if !sawTool {
+			t.Fatalf("trust %q refused a tool, want full access", trust)
+		}
+		_ = sess.Close()
 	}
 }
 

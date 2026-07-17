@@ -4,6 +4,7 @@ import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../../components/Toast/Toast";
 import { router } from "../../../router/client";
 import type { Session, SessionDefaults, Workspace } from "../../../router/types";
+import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
 import { WorkspacePill } from "./pills/WorkspacePill";
 import { AgentPill } from "./pills/AgentPill";
 import { ModelPill } from "./pills/ModelPill";
@@ -35,6 +36,7 @@ export function Launchpad({ createSession }: LaunchpadProps) {
   const [error, setError] = useState<string | null>(null);
   const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
+  const { providers } = useProviderMatrix();
 
   useEffect(() => {
     let cancelled = false;
@@ -128,6 +130,10 @@ export function Launchpad({ createSession }: LaunchpadProps) {
           <TrustPill
             value={staged.trust}
             resolved={resolved?.trust}
+            matrix={
+              providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))
+                ?.matrix
+            }
             onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
           />
           <IsolationPill

@@ -8,8 +8,11 @@ package kirocli
 //
 // The reply dialect (echo/recall/crash/slow) mirrors provider-fake's and
 // claude-code's scripted stand-in exactly, per HANDOFF §6's shared-contract
-// instruction — no extra tool-call special case is added here since it is
-// not part of that contract.
+// instruction. attempt-write/attempt-command are the one addition beyond
+// that shared dialect: they drive a real session/request_permission round
+// trip against the production session.go code under test, the only way to
+// exercise kirocli's kind-based trust gate (as opposed to wire-type-only
+// coverage).
 
 import (
 	"bufio"
@@ -215,6 +218,30 @@ func fkACP() {
 		raw, _ := json.Marshal(sessionUpdate{SessionUpdate: kind, Content: &updateContent{Type: "text", Text: text}})
 		notify("session/update", sessionUpdateParams{SessionID: id, Update: raw})
 	}
+	toolCall := func(title, kind string) {
+		raw, _ := json.Marshal(sessionUpdate{SessionUpdate: "tool_call", ToolCall: &toolCallUpdate{Title: title, Kind: kind}})
+		notify("session/update", sessionUpdateParams{SessionID: id, Update: raw})
+	}
+	permReqID := 0
+	// requestPermission sends a real session/request_permission request and
+	// blocks for the client's response — exercising session.go's production
+	// toolKindAllowed/autoApprove/denyPermission path, not just the wire
+	// types. Safe to block on the next msgs receive: the client's read loop
+	// answers synchronously from within handleLine before reading its next
+	// line, so nothing else can arrive first.
+	requestPermission := func(title, kind string) bool {
+		permReqID--
+		reqID := permReqID
+		raw, _ := json.Marshal(requestPermissionParams{ToolCall: toolCallUpdate{Title: title, Kind: kind}})
+		fkSend(rpcMessage{JSONRPC: "2.0", ID: &reqID, Method: "session/request_permission", Params: raw})
+		resp, ok := <-msgs
+		if !ok {
+			return false
+		}
+		var pr permissionResult
+		_ = json.Unmarshal(resp.Result, &pr)
+		return pr.Outcome.OptionID == "allow"
+	}
 
 	for m := range msgs {
 		switch m.Method {
@@ -255,6 +282,24 @@ func fkACP() {
 			}
 			history = append(history, prompt)
 			fkAppendTranscript(transcript, "user", prompt)
+
+			if prompt == "attempt-write" || prompt == "attempt-command" {
+				title, kind := "Write", "edit"
+				if prompt == "attempt-command" {
+					title, kind = "Bash", "execute"
+				}
+				var reply string
+				if requestPermission(title, kind) {
+					toolCall(title, kind)
+					reply = "used " + title
+				} else {
+					reply = fmt.Sprintf("cannot use %s: permission denied", title)
+				}
+				update("agent_message_chunk", reply)
+				fkAppendTranscript(transcript, "agent", reply)
+				respond(m.ID, promptResult{StopReason: "end_turn"})
+				continue
+			}
 
 			if prompt == "slow" {
 				interrupted := false

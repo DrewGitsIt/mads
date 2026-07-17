@@ -188,6 +188,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		Cwd:    cwd,
 		Resume: sess.ProviderRef,
 		Env:    capEnv,
+		Trust:  provider.Trust(sess.Trust),
 	}
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {

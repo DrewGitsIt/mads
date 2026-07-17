@@ -1,19 +1,27 @@
 import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import type { ResolvedSessionField, SessionTrust } from "../../../../router/types";
-import { TRUST_LEVELS } from "./trustLevels";
+import type {
+  ProviderBehavior,
+  ProviderSupport,
+  ResolvedSessionField,
+  SessionTrust,
+} from "../../../../router/types";
+import { trustLevels } from "./trustLevels";
 import pillStyles from "./pills.module.css";
 
 export interface TrustPillProps {
   value?: SessionTrust;
   resolved?: ResolvedSessionField;
+  /** The selected provider's capability matrix — see trustLevels.ts. */
+  matrix?: Record<ProviderBehavior, ProviderSupport>;
   onChange: (trust: SessionTrust) => void;
 }
 
-export function TrustPill({ value, resolved, onChange }: TrustPillProps) {
+export function TrustPill({ value, resolved, matrix, onChange }: TrustPillProps) {
   const [open, setOpen] = useState(false);
-  const selected = TRUST_LEVELS.find((t) => t.value === value);
-  const resolvedLevel = TRUST_LEVELS.find((t) => t.value === resolved?.value);
+  const levels = trustLevels(matrix);
+  const selected = levels.find((t) => t.value === value);
+  const resolvedLevel = levels.find((t) => t.value === resolved?.value);
 
   const triggerLabel =
     selected?.label ?? (resolvedLevel ? `${resolvedLevel.label} (default)` : "Select trust");
@@ -33,7 +41,7 @@ export function TrustPill({ value, resolved, onChange }: TrustPillProps) {
       }
     >
       <div className={pillStyles.menu}>
-        {TRUST_LEVELS.map((t) => (
+        {levels.map((t) => (
           <button
             key={t.value}
             type="button"

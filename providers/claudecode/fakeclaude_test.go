@@ -27,12 +27,13 @@ func TestMain(m *testing.M) {
 
 // fcArgs is a loose parse of the claude flags the adapter uses.
 type fcArgs struct {
-	print        bool
-	prompt       string
-	outputFormat string
-	inputFormat  string
-	resume       string
-	model        string
+	print           bool
+	prompt          string
+	outputFormat    string
+	inputFormat     string
+	resume          string
+	model           string
+	disallowedTools []string
 }
 
 func parseFCArgs(argv []string) fcArgs {
@@ -53,6 +54,9 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--model":
 			i++
 			a.model = argv[i]
+		case "--disallowedTools":
+			i++
+			a.disallowedTools = strings.Split(argv[i], ",")
 		case "--verbose", "--dangerously-skip-permissions":
 		case "--append-system-prompt":
 			i++
@@ -63,6 +67,16 @@ func parseFCArgs(argv []string) fcArgs {
 		}
 	}
 	return a
+}
+
+// fcToolDenied reports whether name is in the parsed --disallowedTools list.
+func fcToolDenied(name string, disallowed []string) bool {
+	for _, d := range disallowed {
+		if d == name {
+			return true
+		}
+	}
+	return false
 }
 
 func fakeClaudeMain() {
@@ -199,6 +213,33 @@ func fcStream(a fcArgs) {
 				}
 			}
 			result("", interrupted)
+			continue
+		}
+		if prompt == "attempt-write" || prompt == "attempt-command" {
+			name := "Write"
+			if prompt == "attempt-command" {
+				name = "Bash"
+			}
+			if fcToolDenied(name, a.disallowedTools) {
+				reply := fmt.Sprintf("cannot use %s: disallowed by --disallowedTools", name)
+				fcEmit(fcAssistantText(id, reply))
+				fcAppendTranscript(transcript, "assistant", reply, "")
+				result(reply, false)
+				continue
+			}
+			fcEmit(map[string]any{
+				"type": "assistant", "session_id": id,
+				"message": map[string]any{
+					"role": "assistant",
+					"content": []map[string]any{{
+						"type": "tool_use", "name": name, "input": map[string]any{},
+					}},
+				},
+			})
+			reply := "used " + name
+			fcEmit(fcAssistantText(id, reply))
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
 			continue
 		}
 		if strings.HasPrefix(prompt, "edit ") {

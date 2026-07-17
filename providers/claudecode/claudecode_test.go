@@ -18,10 +18,12 @@ import (
 
 func script() conformance.Script {
 	return conformance.Script{
-		Echo:    func(marker string) string { return "echo " + marker },
-		Slow:    func() string { return "slow" },
-		Recall:  func() string { return "recall" },
-		Timeout: 10 * time.Second, // each probe spawns a real subprocess
+		Echo:           func(marker string) string { return "echo " + marker },
+		Slow:           func() string { return "slow" },
+		Recall:         func() string { return "recall" },
+		AttemptWrite:   func() string { return "attempt-write" },
+		AttemptCommand: func() string { return "attempt-command" },
+		Timeout:        10 * time.Second, // each probe spawns a real subprocess
 	}
 }
 
@@ -166,6 +168,48 @@ func TestRateLimitSurfaces(t *testing.T) {
 		t.Error("session-limit result line not classified as a rate limit")
 	} else if !strings.Contains(got.Message, "session limit") {
 		t.Errorf("message = %q, want the result text", got.Message)
+	}
+}
+
+// A read_only session's attempted Write and a limited session's attempted
+// Bash both refuse — the stand-in only emits tool_use when the tool isn't in
+// --disallowedTools, so a lingering EventToolUse means the flag didn't land.
+func TestTrustDisallowsTools(t *testing.T) {
+	cases := []struct {
+		trust  provider.Trust
+		prompt string
+	}{
+		{provider.TrustLimited, "attempt-command"},
+		{provider.TrustReadOnly, "attempt-write"},
+		{provider.TrustReadOnly, "attempt-command"},
+	}
+	for _, c := range cases {
+		p := testProvider(t)
+		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: c.trust})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Send(context.Background(), c.prompt); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.After(10 * time.Second)
+		for done := false; !done; {
+			select {
+			case ev, ok := <-sess.Events():
+				if !ok {
+					t.Fatal("stream closed before turn end")
+				}
+				if ev.Kind == provider.EventToolUse {
+					t.Errorf("trust %s: tool use event observed for %q (name=%s)", c.trust, c.prompt, ev.Tool.Name)
+				}
+				if ev.Kind == provider.EventTurnEnd {
+					done = true
+				}
+			case <-deadline:
+				t.Fatalf("trust %s: no turn end for %q", c.trust, c.prompt)
+			}
+		}
+		_ = sess.Close()
 	}
 }
 

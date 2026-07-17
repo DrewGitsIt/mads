@@ -85,6 +85,25 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorPTY:            provider.Native,
 		provider.BehaviorBranching:      provider.Unsupported,
 		provider.BehaviorCwdReroot:      provider.Unsupported,
+		// --disallowedTools removes tools from the model's palette entirely
+		// (confirmed against `claude --help`) — the same flag on both
+		// transports, see README.
+		provider.BehaviorTrustLimited:  provider.Native,
+		provider.BehaviorTrustReadOnly: provider.Native,
+	}
+}
+
+// disallowedToolsArgs maps a trust level to the --disallowedTools value that
+// removes the corresponding tools from claude's palette. TrustFull (and the
+// zero value) adds nothing — the CLI's own permission flow applies as today.
+func disallowedToolsArgs(trust provider.Trust) []string {
+	switch trust {
+	case provider.TrustLimited:
+		return []string{"--disallowedTools", "Bash"}
+	case provider.TrustReadOnly:
+		return []string{"--disallowedTools", "Bash,Write,Edit,NotebookEdit"}
+	default:
+		return nil
 	}
 }
 
