@@ -135,4 +135,15 @@ func TestCommitInSessionWorktreeReportsLinkage(t *testing.T) {
 	if got.Message != "do the work" {
 		t.Errorf("message: %q", got.Message)
 	}
+	wantRepo, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRepo, err := filepath.EvalSymlinks(got.Repo)
+	if err != nil {
+		t.Fatalf("Repo %q does not resolve: %v", got.Repo, err)
+	}
+	if gotRepo != wantRepo {
+		t.Errorf("Repo = %q (resolved %q), want %q", got.Repo, gotRepo, wantRepo)
+	}
 }

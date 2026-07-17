@@ -10,8 +10,8 @@ export interface ChangeListProps {
   onSelect: (path: string) => void;
 }
 
-const KIND_LABEL: Record<ChangeKind, string> = { added: "A", modified: "M", deleted: "D" };
-const KIND_TONE: Record<ChangeKind, ChipTone> = { added: "ok", modified: "info", deleted: "bad" };
+export const KIND_LABEL: Record<ChangeKind, string> = { added: "A", modified: "M", deleted: "D" };
+export const KIND_TONE: Record<ChangeKind, ChipTone> = { added: "ok", modified: "info", deleted: "bad" };
 
 /** FileChange[] rows: A/M/D badge, path, AttributionChip — MADS-UX §3.3. */
 export function ChangeList({ changes, selectedPath, onSelect }: ChangeListProps) {

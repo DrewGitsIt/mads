@@ -26,9 +26,15 @@ data_url=$(git config mads.dataUrl 2>/dev/null)
 hash=$(git rev-parse HEAD)
 subject=$(git log -1 --format=%s | sed 's/\\/\\\\/g; s/"/\\"/g')
 trailer=$(git log -1 --format=%B | sed -n 's/^Task:[[:space:]]*//p' | head -n1)
+common_dir=$(git rev-parse --git-common-dir)
+case "$common_dir" in
+  /*) : ;;
+  *) common_dir="$PWD/$common_dir" ;;
+esac
+repo=$(dirname "$common_dir" | sed 's/\\/\\\\/g; s/"/\\"/g')
 curl -s -X POST -H 'Content-Type: application/json' \
   -H "X-Mads-Actor: session-$session_id" \
-  -d "{\"hash\":\"$hash\",\"message\":\"$subject\",\"trailer_task_id\":\"$trailer\"}" \
+  -d "{\"hash\":\"$hash\",\"message\":\"$subject\",\"repo\":\"$repo\",\"trailer_task_id\":\"$trailer\"}" \
   "$data_url/sessions/$session_id/commits" >/dev/null 2>&1 || true
 `
 
