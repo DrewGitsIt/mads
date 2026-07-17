@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
@@ -13,6 +13,20 @@ export interface ComposerProps {
   onSent?: (text: string, mentions: string[]) => void;
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
+  /** Seeds the textarea on first mount only — later changes to this prop are ignored. */
+  initialValue?: string;
+  /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
+  autoSendInitial?: boolean;
+  onSendError?: (message: string) => void;
+  /**
+   * Fires synchronously when the auto-send effect runs, before the send
+   * resolves — lets the caller stop treating `initialValue` as pending now
+   * that this Composer instance owns it (in its textarea either way,
+   * success or failure). Must not be tied to the *caller's* mount, since a
+   * gate like ConversationTab's `if (!session) return …` means Composer
+   * mounts asynchronously, well after its parent.
+   */
+  onAutoSendStart?: () => void;
 }
 
 /**
@@ -27,8 +41,12 @@ export function Composer({
   agentId,
   onSent,
   disabled,
+  initialValue,
+  autoSendInitial,
+  onSendError,
+  onAutoSendStart,
 }: ComposerProps) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState(initialValue ?? "");
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [injected, setInjected] = useState<MentionCandidate[]>([]);
@@ -83,20 +101,34 @@ export function Composer({
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      void handleSend();
     }
   }
 
-  function handleSend() {
+  async function handleSend() {
     const text = value.trim();
     if (!text) return;
     const mentions = injected.map((i) => i.id);
-    void routerClient.sendMessage(sessionId, { text, mentions });
-    onSent?.(text, mentions);
-    setValue("");
-    setCursor(0);
-    setInjected([]);
+    try {
+      await routerClient.sendMessage(sessionId, { text, mentions });
+      onSent?.(text, mentions);
+      setValue("");
+      setCursor(0);
+      setInjected([]);
+    } catch (err) {
+      onSendError?.(err instanceof Error ? err.message : String(err));
+    }
   }
+
+  const autoSentRef = useRef(false);
+  useEffect(() => {
+    if (autoSendInitial && initialValue && !autoSentRef.current) {
+      autoSentRef.current = true;
+      onAutoSendStart?.();
+      void handleSend();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- auto-send is a one-time mount effect, guarded by autoSentRef against StrictMode's double-invoke
+  }, []);
 
   return (
     <div className={styles.composer}>
@@ -128,7 +160,7 @@ export function Composer({
           onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={handleKeyDown}
         />
-        <Button variant="primary" onClick={handleSend} disabled={disabled}>
+        <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
           Send
         </Button>
       </div>

@@ -76,4 +76,62 @@ describe("Composer", () => {
     );
     expect(textarea.value).toBe("");
   });
+
+  it("auto-sends initialValue on mount and clears the textarea once it succeeds", async () => {
+    const client = new FakeRouterClient();
+    const sendMessage = vi.spyOn(client, "sendMessage");
+
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        initialValue="fix the deploy script"
+        autoSendInitial
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("fix the deploy script");
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith("session-active", {
+        text: "fix the deploy script",
+        mentions: [],
+      }),
+    );
+    await waitFor(() => expect(textarea.value).toBe(""));
+  });
+
+  it("preserves the initial text and calls onSendError when the auto-send fails", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("network down"));
+    const onSendError = vi.fn();
+
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        initialValue="fix the deploy script"
+        autoSendInitial
+        onSendError={onSendError}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+
+    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("network down"));
+    expect(textarea.value).toBe("fix the deploy script");
+  });
+
+  it("keeps the typed text in the textarea when a manual send fails", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("boom"));
+    const onSendError = vi.fn();
+
+    render(<Composer routerClient={client} sessionId="session-active" onSendError={onSendError} />);
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "hello there" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("boom"));
+    expect(textarea.value).toBe("hello there");
+  });
 });

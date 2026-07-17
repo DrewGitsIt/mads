@@ -54,7 +54,7 @@ describe("Launchpad", () => {
   });
 
   it("disables Start session until the composer has text", () => {
-    render(<Launchpad createSession={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
     const button = screen.getByText("Start session").closest("button");
     expect(button?.disabled).toBe(true);
 
@@ -64,9 +64,11 @@ describe("Launchpad", () => {
     expect(button?.disabled).toBe(false);
   });
 
-  it("creates a session with a derived name on submit, then shows its provisioning strip", async () => {
-    const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s42", name: "Fix the deploy script" }));
-    render(<Launchpad createSession={createSession} />);
+  it("creates a session with a derived name on submit, then reports it via onSessionCreated with the goal text", async () => {
+    const session = makeSession({ id: "s42", name: "Fix the deploy script" });
+    const createSession = vi.fn().mockResolvedValue(session);
+    const onSessionCreated = vi.fn();
+    render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
@@ -79,13 +81,13 @@ describe("Launchpad", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.getByRole("status", { name: "Session provisioning" })).toBeTruthy(),
+      expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
     );
   });
 
   it("submits on Enter without Shift, and inserts a newline on Shift+Enter", () => {
     const createSession = vi.fn().mockResolvedValue(makeSession({}));
-    render(<Launchpad createSession={createSession} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
     const textarea = screen.getByLabelText("Describe your goal");
 
     fireEvent.change(textarea, { target: { value: "Fix the thing" } });
@@ -98,7 +100,7 @@ describe("Launchpad", () => {
 
   it("shows an error toast when session creation fails", async () => {
     const createSession = vi.fn().mockRejectedValue(new Error("boom"));
-    render(<Launchpad createSession={createSession} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
@@ -142,7 +144,7 @@ describe("Launchpad", () => {
       }),
     );
     const createSession = vi.fn();
-    render(<Launchpad createSession={createSession} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
     const chip = await screen.findByText(/Resume: Merge-back UX/);
     fireEvent.click(chip);
@@ -161,7 +163,7 @@ describe("Launchpad", () => {
       trust: { value: "limited", source: "config" },
       workspace: "mads",
     });
-    render(<Launchpad createSession={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText("Inherits from mads defaults")).toBeTruthy());
   });
@@ -177,7 +179,7 @@ describe("Launchpad", () => {
         return Promise.resolve(new Response("[]", { status: 200 }));
       }),
     );
-    render(<Launchpad createSession={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText(/Inherits from/)).toBeNull();
@@ -192,7 +194,7 @@ describe("Launchpad", () => {
       trust: { value: "limited", source: "config" },
       workspace: "mads",
     });
-    render(<Launchpad createSession={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText(/Sonnet 5|claude-sonnet-5/)).toBeTruthy());
     expect(screen.queryByText(/Inherits from/)).toBeNull();

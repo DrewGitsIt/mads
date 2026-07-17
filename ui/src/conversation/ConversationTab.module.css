@@ -72,6 +72,10 @@
   font: var(--fs-body) var(--sans);
 }
 
+.provisioningWrap {
+  margin: 0 var(--space-4) var(--space-2);
+}
+
 .transportBanner {
   display: flex;
   align-items: center;

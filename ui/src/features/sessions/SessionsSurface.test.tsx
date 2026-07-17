@@ -177,6 +177,53 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
   });
 
+  it("creating a session via the Launchpad lands directly in the conversation, goal visible, no rail click", async () => {
+    const created = makeSession({ id: "s99", name: "Fix the deploy script" });
+    let sessions: Session[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.match(/\/sessions$/)) {
+          sessions = [...sessions, created];
+          return json({ session: created, addr: "fake://s99" });
+        }
+        if (method === "POST" && url.includes("/messages")) return json({});
+        if (url.match(/\/sessions\/[^/]+\/transcript/)) return json([]);
+        if (url.match(/\/sessions\/[^/]+$/)) {
+          const id = url.split("/sessions/")[1];
+          const session = sessions.find((s) => s.id === id);
+          return session ? json(session) : Promise.resolve(new Response("not found", { status: 404 }));
+        }
+        if (url.includes("/sessions")) return json(sessions);
+        return json([]);
+      }),
+    );
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(screen.getByText("What can I help you with?")).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), {
+      target: { value: "Fix the deploy script" },
+    });
+    fireEvent.click(screen.getByText("Start session"));
+
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
+
+    // The rail itself only updates via the session.created SSE event (as in the
+    // "shows a new session in the rail" test above) — simulate it to confirm the
+    // conversation stays open with no click needed on the rail entry.
+    const source = FakeEventSource.instances.find((s) => s.url.includes("session.created"));
+    source?.emit(
+      "session.created",
+      JSON.stringify({ seq: 1, type: "session.created", actor: "user", session_id: "s99" }),
+    );
+    await waitFor(() => expect(rail().getByText("Fix the deploy script")).toBeTruthy());
+    expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy();
+  });
+
   it("selecting an inactive session renders without crashing", async () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha", activity: "inactive" })];
     stubSessionsAndConversationFetch(sessions);

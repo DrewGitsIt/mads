@@ -4,6 +4,7 @@ import { Toast } from "../../components/Toast/Toast";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { router } from "../../router/client";
+import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
@@ -26,6 +27,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const [selectedId, setSelectedId] = useState<string>();
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [resumeError, setResumeError] = useState<string>();
+  const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
+  const [pendingFirstMessage, setPendingFirstMessage] =
+    useState<{ sessionId: string; text: string }>();
   const ptyBridge = useElectronPtyBridge();
 
   useEffect(() => {
@@ -34,6 +38,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       setInitialTab(jumpToTab);
     }
   }, [jumpToSessionId, jumpToTab]);
+
+  function handleSessionCreated(session: Session, goalText: string) {
+    setSelectedId(session.id);
+    setInitialTab(undefined);
+    setProvisioningSessionId(session.id);
+    setPendingFirstMessage({ sessionId: session.id, text: goalText });
+  }
 
   return (
     <div className={styles.surface}>
@@ -71,9 +82,17 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             openTaskCount={openTaskCounts[selectedId] ?? 0}
             initialTab={initialTab}
             onClose={() => setSelectedId(undefined)}
+            provisioning={selectedId === provisioningSessionId}
+            onProvisioningDone={() => setProvisioningSessionId(undefined)}
+            pendingFirstMessage={
+              selectedId && selectedId === pendingFirstMessage?.sessionId
+                ? pendingFirstMessage.text
+                : undefined
+            }
+            onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
           />
         ) : (
-          <Launchpad createSession={createSession} />
+          <Launchpad createSession={createSession} onSessionCreated={handleSessionCreated} />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
         {resumeError && (
