@@ -201,6 +201,11 @@ never called peer-to-peer.
   `pkg/githook`/the watcher talking to the Data Service directly, never through the
   Router.
 - `GET /sessions/{id}` — the session record (proxies `dataclient.Session`); 404 if unknown.
+- `POST /links`, `GET/PUT/DELETE /links/{id}`, `GET /sessions/{id}/links` — thin
+  proxies over `pkg/dataclient`'s link methods (`docs/LINKED-SESSIONS-DESIGN.md`).
+  All five routes 404 unless `Config.FeatureFlags.LinkedSessions` is set — checked
+  per-request (`requireLinkedSessions`), not baked into the mux at startup, so
+  toggling the flag takes effect without a restart.
 - `GET /sessions/{id}/transcript` — the session's conversation history. Proxied through the
   running child, like `/output`, whenever one exists (`s.sup.SessionAddr`): a live turn's
   history only ever exists in the child's own provider instance, not the Router's own

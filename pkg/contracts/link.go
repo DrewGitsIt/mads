@@ -1,0 +1,86 @@
+package contracts
+
+import "time"
+
+// Grant is one capability a link conveys from its granting session onto its
+// subject session (docs/LINKED-SESSIONS-DESIGN.md).
+type Grant string
+
+const (
+	// GrantRead: receive digests of the subject's activity; read transcript
+	// + task state.
+	GrantRead Grant = "read"
+	// GrantInject: deliver a message into the subject's conversation (queued,
+	// attributed).
+	GrantInject Grant = "inject"
+	// GrantOrchestrate: agent-held tool to message/direct the subject's agent.
+	GrantOrchestrate Grant = "orchestrate"
+)
+
+// Grants is the full registry, for validation and enumeration.
+var Grants = []Grant{GrantRead, GrantInject, GrantOrchestrate}
+
+// Valid reports whether g is a registered grant.
+func (g Grant) Valid() bool {
+	for _, v := range Grants {
+		if g == v {
+			return true
+		}
+	}
+	return false
+}
+
+// LinkPreset names a grant-set shorthand (docs/LINKED-SESSIONS-DESIGN.md).
+// Storage is always the grant set; presets are creation-time sugar.
+type LinkPreset string
+
+const (
+	// PresetMonitor = {read} — user-selectable.
+	PresetMonitor LinkPreset = "monitor"
+	// PresetHandRaiser = {read,inject} — SYSTEM-CREATABLE ONLY (implicit on
+	// pipeline launch, docs/LINKED-SESSIONS-DESIGN.md decision 6); never
+	// offered via the user-facing link chooser or the user CRUD route.
+	PresetHandRaiser LinkPreset = "hand_raiser"
+	// PresetLeader = {read,inject,orchestrate} — user-selectable.
+	PresetLeader LinkPreset = "leader"
+)
+
+// PresetGrants maps each preset to its grant set.
+var PresetGrants = map[LinkPreset][]Grant{
+	PresetMonitor:    {GrantRead},
+	PresetHandRaiser: {GrantRead, GrantInject},
+	PresetLeader:     {GrantRead, GrantInject, GrantOrchestrate},
+}
+
+// Link is a directed grant set from GrantingSessionID to SubjectSessionID
+// (docs/LINKED-SESSIONS-DESIGN.md). Leader→subject orientation only; no
+// peer/bidirectional links. Session deletion never cascades to links — a
+// link outliving one of its endpoints is a dangling reference by design.
+type Link struct {
+	ID                string    `json:"id"`
+	GrantingSessionID string    `json:"granting_session_id"`
+	SubjectSessionID  string    `json:"subject_session_id"`
+	Grants            []Grant   `json:"grants"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// HasGrant reports whether l carries g.
+func (l Link) HasGrant(g Grant) bool {
+	for _, v := range l.Grants {
+		if v == g {
+			return true
+		}
+	}
+	return false
+}
+
+// LinkRequest is POST /links and PUT /links/{id}'s body: either an explicit
+// grant set, or a preset the server resolves server-side. Never persisted
+// as-is — Link.Grants is the only stored shape.
+type LinkRequest struct {
+	GrantingSessionID string     `json:"granting_session_id"`
+	SubjectSessionID  string     `json:"subject_session_id"`
+	Grants            []Grant    `json:"grants,omitempty"`
+	Preset            LinkPreset `json:"preset,omitempty"`
+}

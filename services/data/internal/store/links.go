@@ -1,0 +1,389 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
+)
+
+// pipelineTerminalEventTypes is queried (most recent first) to determine
+// whether a session's pipeline run is still live — there is no persisted
+// "is this a pipeline session" field, so this reconstructs it from the
+// event log the same way Metrics.pipelineRunsForSession does for M8.
+var pipelineTerminalEventTypes = []string{
+	string(contracts.PipelineStarted),
+	string(contracts.PipelineCompleted),
+	string(contracts.PipelineCancelled),
+	string(contracts.PipelineFailed),
+}
+
+// Links is the linked-sessions store (docs/LINKED-SESSIONS-DESIGN.md): a
+// directed grant set from one session (granting) to another (subject).
+// Deliberately not a Registry[T] — links have no name and need lookups by
+// both endpoint columns plus multi-row business rules (the single-orchestrate
+// -holder constraint), so this follows sessions.go's bespoke-store pattern.
+type Links struct {
+	log      *Log
+	sessions *Sessions
+}
+
+// NewLinks wires the link store to the session store it validates against.
+func NewLinks(log *Log, sessions *Sessions) *Links {
+	return &Links{log: log, sessions: sessions}
+}
+
+func validateGrants(grants []contracts.Grant) *contracts.ValidationError {
+	var v contracts.ValidationError
+	if len(grants) == 0 {
+		v.Add("grants", "must not be empty")
+		return &v
+	}
+	for _, g := range grants {
+		if !g.Valid() {
+			v.Add("grants", fmt.Sprintf("unknown grant %q", g))
+		}
+	}
+	if v.Empty() {
+		return nil
+	}
+	return &v
+}
+
+// Create validates and stores a new link, emitting link.created. Validation
+// order (docs/LINKED-SESSIONS-DESIGN.md, existence first — everything else
+// needs both rows): grant shape, both sessions exist, no self-link, no
+// reverse-direction duplicate (leader→subject only), the same-workspace
+// different-worktree constraint, orchestrate-vs-live-pipeline-subject, and
+// at-most-one-orchestrate-holder-per-subject.
+func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) error {
+	if verr := validateGrants(link.Grants); verr != nil {
+		return verr
+	}
+	return l.log.WithTx(ctx, func(tx *Tx) error {
+		granting, err := l.sessions.getInTx(tx, link.GrantingSessionID)
+		if err != nil {
+			return err
+		}
+		subject, err := l.sessions.getInTx(tx, link.SubjectSessionID)
+		if err != nil {
+			return err
+		}
+
+		var v contracts.ValidationError
+		if link.GrantingSessionID == link.SubjectSessionID {
+			v.Add("subject_session_id", "a session cannot link to itself")
+		}
+
+		reverseExists, err := linkExistsInTx(tx, link.SubjectSessionID, link.GrantingSessionID)
+		if err != nil {
+			return err
+		}
+		if reverseExists {
+			v.Add("direction", "a link already exists in the opposite direction — peer/bidirectional links aren't supported")
+		}
+
+		if worktreeConflict(granting, subject) {
+			v.Add("worktree", "sessions are isolated in different worktrees of the same workspace — linked sessions must not operate in different worktrees of the same repo")
+		}
+
+		if hasGrant(link.Grants, contracts.GrantOrchestrate) {
+			live, err := subjectPipelineLive(tx, link.SubjectSessionID)
+			if err != nil {
+				return err
+			}
+			if live {
+				v.Add("grants", "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
+			}
+			holderExists, err := orchestrateHolderExistsInTx(tx, link.SubjectSessionID, "")
+			if err != nil {
+				return err
+			}
+			if holderExists {
+				v.Add("grants", "the subject already has an orchestrate holder — a subject may have at most one")
+			}
+		}
+
+		if !v.Empty() {
+			return &v
+		}
+
+		if link.ID == "" {
+			link.ID = NewID("lnk")
+		}
+		now := time.Now().UTC()
+		link.CreatedAt, link.UpdatedAt = now, now
+		if err := writeLink(tx, link); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"granting_session_id": link.GrantingSessionID,
+			"subject_session_id":  link.SubjectSessionID,
+			"grants":              link.Grants,
+		})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.LinkCreated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// Update changes an existing link's grant set, emitting link.updated.
+// GrantingSessionID/SubjectSessionID are immutable after creation — callers
+// (the API layer) must load them from the stored row before calling Update.
+// Re-validates grant shape, orchestrate-vs-live-pipeline, and the
+// single-orchestrate-holder rule (excluding this link's own row); does not
+// re-check existence/self-link/direction/worktree since the endpoints can't
+// change.
+func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) error {
+	if verr := validateGrants(link.Grants); verr != nil {
+		return verr
+	}
+	return l.log.WithTx(ctx, func(tx *Tx) error {
+		old, err := getLinkInTx(tx, link.ID)
+		if err != nil {
+			return err
+		}
+		link.GrantingSessionID = old.GrantingSessionID
+		link.SubjectSessionID = old.SubjectSessionID
+
+		var v contracts.ValidationError
+		if hasGrant(link.Grants, contracts.GrantOrchestrate) {
+			live, err := subjectPipelineLive(tx, link.SubjectSessionID)
+			if err != nil {
+				return err
+			}
+			if live {
+				v.Add("grants", "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
+			}
+			holderExists, err := orchestrateHolderExistsInTx(tx, link.SubjectSessionID, link.ID)
+			if err != nil {
+				return err
+			}
+			if holderExists {
+				v.Add("grants", "the subject already has an orchestrate holder — a subject may have at most one")
+			}
+		}
+		if !v.Empty() {
+			return &v
+		}
+
+		link.CreatedAt = old.CreatedAt
+		link.UpdatedAt = time.Now().UTC()
+		if err := writeLink(tx, link); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"granting_session_id": link.GrantingSessionID,
+			"subject_session_id":  link.SubjectSessionID,
+			"grants":              link.Grants,
+		})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.LinkUpdated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// Delete removes a link. No cascade concerns — nothing references a link's
+// id.
+func (l *Links) Delete(ctx context.Context, id, actor string) error {
+	return l.log.WithTx(ctx, func(tx *Tx) error {
+		old, err := getLinkInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM links WHERE id = ?", id); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"granting_session_id": old.GrantingSessionID,
+			"subject_session_id":  old.SubjectSessionID,
+		})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.LinkDeleted, SessionID: old.SubjectSessionID, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// Get returns one link.
+func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
+	return scanLink(l.log.db.QueryRowContext(ctx,
+		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		 FROM links WHERE id = ?`, id))
+}
+
+// ForSession returns links where sessionID is on either side (granting or
+// subject), ordered by creation. No existence check on the session itself —
+// mirrors FileChanges/Commits: an unknown or linkless session just returns
+// an empty result.
+func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
+	rows, err := l.log.db.QueryContext(ctx,
+		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		 FROM links WHERE granting_session_id = ? OR subject_session_id = ? ORDER BY created_at`,
+		sessionID, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var out []contracts.Link
+	for rows.Next() {
+		link, err := scanLinkRow(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		out = append(out, *link)
+	}
+	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+func hasGrant(grants []contracts.Grant, g contracts.Grant) bool {
+	for _, v := range grants {
+		if v == g {
+			return true
+		}
+	}
+	return false
+}
+
+// worktreeConflict reports the same-workspace-different-worktree constraint
+// (docs/LINKED-SESSIONS-DESIGN.md "Unchanged from §1.12": linked sessions
+// must not operate in different worktrees of the same repo). contracts.Session
+// has no persisted "which repo is this" field — WorktreeDir is the isolated
+// worktree path (<root>/<sessionID>, see
+// services/session/internal/worktree/worktree.go), not the origin repo, and
+// the origin repo path is never written back onto the session record.
+// Workspace (the declared workspace name) is the closest available proxy for
+// "same repo": two sessions from the same workspace share that workspace's
+// pinned primary repo (spec §17: "exactly one repo must be primary"). Known
+// gap: two ad-hoc sessions isolated from the same directory without a shared
+// Workspace record aren't caught here — there's no schema field to catch
+// that case today (the currently-off MultiRepo flag's territory, out of
+// scope for this task).
+func worktreeConflict(a, b *contracts.Session) bool {
+	if a.WorktreeDir == "" || b.WorktreeDir == "" {
+		return false
+	}
+	if a.Workspace == "" || a.Workspace != b.Workspace {
+		return false
+	}
+	return a.WorktreeDir != b.WorktreeDir
+}
+
+// subjectPipelineLive reports whether sessionID's most recent pipeline
+// lifecycle event is pipeline.started (i.e. no terminal event followed it) —
+// reconstructed from the event log the same way
+// Metrics.pipelineRunsForSession does for M8.
+func subjectPipelineLive(tx *Tx, sessionID string) (bool, error) {
+	var typ string
+	err := tx.QueryRow(
+		`SELECT type FROM events WHERE session_id = ? AND type IN (?, ?, ?, ?) ORDER BY seq DESC LIMIT 1`,
+		sessionID, pipelineTerminalEventTypes[0], pipelineTerminalEventTypes[1],
+		pipelineTerminalEventTypes[2], pipelineTerminalEventTypes[3],
+	).Scan(&typ)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return typ == string(contracts.PipelineStarted), nil
+}
+
+// orchestrateHolderExistsInTx reports whether subjectID already has a link
+// carrying the orchestrate grant, other than excludeLinkID (used by Update
+// to exclude the link's own row from the count).
+func orchestrateHolderExistsInTx(tx *Tx, subjectID, excludeLinkID string) (bool, error) {
+	rows, err := tx.tx.Query(
+		`SELECT id, grants FROM links WHERE subject_session_id = ?`, subjectID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, grantsJSON string
+		if err := rows.Scan(&id, &grantsJSON); err != nil {
+			return false, err
+		}
+		if id == excludeLinkID {
+			continue
+		}
+		var grants []contracts.Grant
+		if err := json.Unmarshal([]byte(grantsJSON), &grants); err != nil {
+			return false, err
+		}
+		if hasGrant(grants, contracts.GrantOrchestrate) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
+	var n int
+	err := tx.QueryRow(
+		`SELECT COUNT(*) FROM links WHERE granting_session_id = ? AND subject_session_id = ?`,
+		grantingID, subjectID,
+	).Scan(&n)
+	return n > 0, err
+}
+
+func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
+	return scanLink(tx.QueryRow(
+		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		 FROM links WHERE id = ?`, id))
+}
+
+func writeLink(tx *Tx, link *contracts.Link) error {
+	grantsJSON, err := json.Marshal(link.Grants)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(
+		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT (id) DO UPDATE SET
+		   grants = excluded.grants, updated_at = excluded.updated_at`,
+		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON),
+		link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// rowScanner is satisfied by both *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLink(row rowScanner) (*contracts.Link, error) {
+	link, err := scanLinkRow(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("links: not found: %w", ErrNotFound)
+	}
+	return link, err
+}
+
+func scanLinkRow(row rowScanner) (*contracts.Link, error) {
+	var (
+		link       contracts.Link
+		grantsJSON string
+		createdAt  string
+		updatedAt  string
+	)
+	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &createdAt, &updatedAt); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(grantsJSON), &link.Grants); err != nil {
+		return nil, err
+	}
+	var err error
+	if link.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt); err != nil {
+		return nil, err
+	}
+	if link.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt); err != nil {
+		return nil, err
+	}
+	return &link, nil
+}

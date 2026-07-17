@@ -159,6 +159,18 @@ const (
 	WorkspaceUpdated EventType = "workspace.updated"
 	WorkspaceDeleted EventType = "workspace.deleted"
 
+	// LinkCreated fires when a linked-sessions grant set is created
+	// (docs/LINKED-SESSIONS-DESIGN.md). Payload: {"granting_session_id":
+	// string, "subject_session_id": string, "grants": []string}. Envelope
+	// SessionID is the subject session (the one being watched/led).
+	LinkCreated EventType = "link.created"
+	// LinkUpdated fires when a link's grant set changes. Same payload shape
+	// as LinkCreated.
+	LinkUpdated EventType = "link.updated"
+	// LinkDeleted fires when a link is removed. Payload: {"granting_session_id":
+	// string, "subject_session_id": string} — identity only, not the removed grants.
+	LinkDeleted EventType = "link.deleted"
+
 	TemplateCreated EventType = "template.created"
 	TemplateUpdated EventType = "template.updated"
 	TemplateDeleted EventType = "template.deleted"
@@ -217,6 +229,7 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
+	LinkCreated, LinkUpdated, LinkDeleted,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,

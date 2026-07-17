@@ -80,9 +80,6 @@ type Session struct {
 	// ActiveTaskID is the session's current task context (spec §1) — the
 	// second rung of the commit-linkage chain.
 	ActiveTaskID string `json:"active_task_id,omitempty"`
-	// LinkedLeaderID is the schema hook for linked sessions (spec §1.12,
-	// behind the linked-sessions flag); empty until that feature lands.
-	LinkedLeaderID string `json:"linked_leader_id,omitempty"`
 	// Tags marks a session for cross-cutting classification — currently just
 	// "retro" for a retro-generated follow-up session (spec §7's retro-of-retros:
 	// selecting tagged sessions, not a separate mode).

@@ -175,7 +175,7 @@ Wizard over empty app (§14.2): provider detection → credential setup → defa
 
 ## 4. Event Vocabulary (starter set implied by the surfaces)
 
-`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed` · `stage.started|completed|failed|skipped` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
+`session.created|provisioning|renamed|activity_changed|updated|deleted` · `task.created|updated|status_changed|confirmed|discarded` · `note.created|confirmed|discarded` · `file.changed` · `commit.created|linked` · `pipeline.started|paused|resumed|cancelled|completed` · `stage.started|completed|failed|skipped` · `retro.started|progress|completed|failed` · `capability.created|updated|deleted|health_changed` · `agent.created|updated|deleted` · `workspace.created|updated|deleted` · `link.created|updated|deleted` · `attachment.added` · `merge.attempted|conflicted|completed`
 
 This list feeds §15's event log contract; expect growth during mockups.
 
@@ -185,7 +185,7 @@ This list feeds §15's event log contract; expect growth during mockups.
 
 1. **Session header density** — how much metadata is visible vs. tucked into popovers? Mockup will decide.
 2. **Pipeline board orientation** — columns-by-stage vs rows-by-task with stage progress bars. Prototype both cheaply.
-3. **Linked sessions UI** (§1.12) — leader/monitor affordances deferred until core workspace lands; schema hooks exist.
+3. **Linked sessions UI** (§1.12) — leader/monitor affordances deferred until core workspace lands; the `Link` entity (docs/LINKED-SESSIONS-DESIGN.md) and its Data Service CRUD exist behind the `linked-sessions` flag.
 4. **Terminal-mode Context Rail interactions** — rail is identical, but confirm hotkey-only workflows feel right for terminal purists.
 5. **Notification surface** — passive model (§8.5); does needs-attention get a dock badge only, or also an in-app inbox?
 

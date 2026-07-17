@@ -57,6 +57,7 @@ func New(db *sql.DB) http.Handler {
 	registryRoutes(mux, "workspaces", store.NewWorkspaces(l))
 	templateRoutes(mux, l)
 	sessionRoutes(mux, l)
+	linkRoutes(mux, l)
 	retroRoutes(mux, l)
 	configRoutes(mux, l)
 	profileRoutes(mux, l)

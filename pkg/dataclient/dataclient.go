@@ -528,6 +528,46 @@ func (c *Client) ValidateTemplate(ctx context.Context, source string) error {
 	return c.do(ctx, http.MethodPost, "/templates/validate", map[string]string{"source": source}, nil)
 }
 
+// --- Links (docs/LINKED-SESSIONS-DESIGN.md) ---
+
+// CreateLink creates a link from a preset or an explicit grant set — the
+// server resolves req into the stored grant set (and refuses the
+// system-only hand_raiser preset).
+func (c *Client) CreateLink(ctx context.Context, req contracts.LinkRequest) (contracts.Link, error) {
+	var out contracts.Link
+	err := c.do(ctx, http.MethodPost, "/links", req, &out)
+	return out, err
+}
+
+// Link fetches one link by id.
+func (c *Client) Link(ctx context.Context, id string) (contracts.Link, error) {
+	var out contracts.Link
+	err := c.do(ctx, http.MethodGet, "/links/"+url.PathEscape(id), nil, &out)
+	return out, err
+}
+
+// UpdateLink changes an existing link's grant set. GrantingSessionID and
+// SubjectSessionID in req are ignored server-side — they're immutable after
+// creation.
+func (c *Client) UpdateLink(ctx context.Context, id string, req contracts.LinkRequest) (contracts.Link, error) {
+	var out contracts.Link
+	err := c.do(ctx, http.MethodPut, "/links/"+url.PathEscape(id), req, &out)
+	return out, err
+}
+
+// DeleteLink removes a link.
+func (c *Client) DeleteLink(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodDelete, "/links/"+url.PathEscape(id), nil, nil)
+}
+
+// LinksForSession lists links where sessionID is on either side (granting
+// or subject).
+func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
+	var out []contracts.Link
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/links", nil, &out)
+	return out, err
+}
+
 // --- Events (spec §8, §15) ---
 
 // Append posts one standalone event (envelope minus seq/timestamp); the

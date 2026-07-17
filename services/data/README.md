@@ -106,6 +106,24 @@ tool-use + commits only, observed changes recorded unattributed).
 session's active task → heuristic candidates → orphan flag; `commit.created`
 always, `commit.linked` when a rung resolves.
 
+Link routes (`docs/LINKED-SESSIONS-DESIGN.md`, W1.7): `POST/GET/PUT/DELETE
+/links(/{id})`, `GET /sessions/{id}/links`. A `Link` is directed (granting
+session → subject session) and always stores a grant *set* from
+`{read, inject, orchestrate}` — presets (`monitor`, `hand_raiser`, `leader`) are
+just named shorthands resolved to a grant set before storage, so new grant
+combinations never need a schema change. Validation, collected into one
+`ValidationError`: both sessions must exist; no self-links; only one link per
+directed pair; the two sessions can't be different worktrees of the same repo;
+`orchestrate` is refused against a subject that's currently a live pipeline-run
+session, and at most one link on a given subject may carry `orchestrate` (one
+boss at a time). Session deletion never cascades to links — a link outliving a
+deleted endpoint is a dangling reference by design (spec §1.12 unchanged),
+exercised by `TestSessionDeleteDoesNotCascadeToLinks` alongside the cascade
+tests it deliberately doesn't join. The Router gates all five routes behind the
+`linked-sessions` feature flag and refuses to resolve the `hand_raiser` preset
+from the user-facing create route (system-only, for a future implicit-link
+path).
+
 Template routes (spec §6, M9): same CRUD shape on `/templates`, plus
 `POST /templates/validate` `{source}`. Both validate and save run
 `pkg/template.Check` — the identical parse + launch checks the Pipeline Engine

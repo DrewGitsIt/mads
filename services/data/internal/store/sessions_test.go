@@ -109,6 +109,39 @@ func TestSessionDeleteCascades(t *testing.T) {
 	}
 }
 
+// Links are the one exception to this file's cascade rule (session deletion
+// breaks its links, never cascades to them — REBUILD-SPEC §9 /
+// docs/LINKED-SESSIONS-DESIGN.md "Unchanged from §1.12"): a link outliving
+// a deleted endpoint is a dangling reference by design, not something to
+// clean up here.
+func TestSessionDeleteDoesNotCascadeToLinks(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	links := NewLinks(l, s)
+	leader := mkSession(t, s, contracts.Session{Name: "leader"})
+	subject := mkSession(t, s, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Delete(ctx, subject.ID, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("link did not survive subject session deletion: %v", err)
+	}
+	if got.SubjectSessionID != subject.ID {
+		t.Errorf("surviving link's subject_session_id = %q, want %q (dangling reference by design)", got.SubjectSessionID, subject.ID)
+	}
+}
+
 // The §5 attribution rule (decided): isolation mode × origin.
 func TestAttributionTable(t *testing.T) {
 	cases := []struct {
