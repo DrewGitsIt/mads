@@ -1,16 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
+import { SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
 import type { Session } from "../../../router/types";
-
-const SESSION_EVENT_TYPES = [
-  "session.created",
-  "session.renamed",
-  "session.activity_changed",
-  "session.updated",
-  "session.deleted",
-  "session.crashed",
-];
 
 export interface UseSessionsList {
   sessions: Session[];

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
@@ -24,6 +25,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const openTaskCounts = useOpenTaskCounts();
   const [selectedId, setSelectedId] = useState<string>();
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
+  const [resumeError, setResumeError] = useState<string>();
   const ptyBridge = useElectronPtyBridge();
 
   useEffect(() => {
@@ -36,6 +38,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   return (
     <div className={styles.surface}>
       <aside className={styles.rail}>
+        <Button variant="ghost" size="sm" onClick={() => setSelectedId(undefined)}>
+          + New session
+        </Button>
         {!loading && sessions.length === 0 ? (
           <NoSessionsEmptyState />
         ) : (
@@ -46,6 +51,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onSelect={(id) => {
               setSelectedId((cur) => (cur === id ? undefined : id));
               setInitialTab(undefined);
+            }}
+            onResume={(id) => {
+              router.resumeSession(id).catch((err: unknown) => {
+                setResumeError(err instanceof Error ? err.message : String(err));
+              });
             }}
           />
         )}
@@ -66,6 +76,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           <Launchpad createSession={createSession} />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
+        {resumeError && (
+          <Toast tone="bad" title="Couldn't resume session" description={resumeError} />
+        )}
       </main>
     </div>
   );

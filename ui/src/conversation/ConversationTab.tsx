@@ -3,6 +3,8 @@ import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Chip } from "../components/Chip/Chip";
 import type { RouterClient } from "../router/client";
+import { subscribeToEvents } from "../router/events";
+import { SESSION_EVENT_TYPES } from "../router/sessionEventTypes";
 import type { Session, TranscriptMessage } from "../router/types";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
@@ -75,6 +77,14 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
       cancelled = true;
     };
   }, [routerClient, sessionId, retryToken]);
+
+  const refetchSession = useCallback(() => {
+    void routerClient.getSession(sessionId).then(setSession);
+  }, [routerClient, sessionId]);
+
+  useEffect(() => {
+    return subscribeToEvents({ sessionId, types: SESSION_EVENT_TYPES }, refetchSession);
+  }, [refetchSession, sessionId]);
 
   const messagesRef = useRef<TranscriptMessage[]>(messages);
   messagesRef.current = messages;

@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 // ChatRenderer/SessionSummaryCard render markdown through DOMPurify, which
 // doesn't sanitize correctly under happy-dom (see ChatRenderer/markdown.test.tsx).
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient } from "../router/fixtures";
+import { FakeEventSource } from "../router/testFakeEventSource";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 
 // jsdom has no matchMedia; xterm.js needs it to mount. happy-dom has one,
@@ -43,6 +44,15 @@ function makeStubBridge(): PtyBridge {
 }
 
 describe("ConversationTab", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders the chat display mode by default", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);

@@ -187,8 +187,11 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+// TestCreateTerminateSession spawns a real Session Service child (not
+// testchild's stub) because asserting the post-terminate Activity flip
+// exercises the real runner.Shutdown path — testchild has no such logic.
 func TestCreateTerminateSession(t *testing.T) {
-	srv := newTestServer(t)
+	srv, _ := newTestServerWithRealSession(t)
 
 	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "test session", "provider": "fake"})
 	if resp.StatusCode != http.StatusCreated {
@@ -213,10 +216,161 @@ func TestCreateTerminateSession(t *testing.T) {
 		t.Fatalf("terminate status = %d, want 204", resp.StatusCode)
 	}
 
-	// The session record is gone too — DeleteSession ran after Terminate.
+	// The session record survives terminate, left inactive — a second
+	// terminate is an idempotent no-op (Supervisor.TerminateSession's own
+	// doc comment: successful call if no child is tracked), not a 404.
 	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("second terminate status = %d, want 204 (idempotent no-op)", resp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get session after terminate status = %d, want 200 (record survives)", resp.StatusCode)
+	}
+	sess := decodeJSON[struct {
+		Activity string `json:"activity"`
+	}](t, resp)
+	if sess.Activity != "inactive" {
+		t.Fatalf("session activity after terminate = %q, want %q", sess.Activity, "inactive")
+	}
+}
+
+// TestResumeSession spawns via testchild (fast, no real provider) since the
+// fake provider's session refs don't survive a real process boundary — a
+// resumed child would fail to start with "unknown session ref". testchild
+// doesn't flip Activity on terminate the way the real Session Service does
+// (see TestCreateTerminateSession), so this test flips it directly through
+// the Data Service to simulate that already having happened.
+func TestResumeSession(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "router")
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "resume test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("terminate status = %d, want 204", resp.StatusCode)
+	}
+
+	sess, err := data.Session(context.Background(), created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Activity = contracts.SessionInactive
+	if err := data.UpdateSession(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/resume", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, want 200", resp.StatusCode)
+	}
+	resumed := decodeJSON[struct {
+		Addr string `json:"addr"`
+	}](t, resp)
+	if resumed.Addr == "" {
+		t.Fatal("resume session: no addr discovered from spawned child")
+	}
+
+	// Resuming an already-active session is a conflict.
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/resume", nil)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("resume-while-active status = %d, want 409", resp.StatusCode)
+	}
+
+	resp = postJSON(t, srv.URL+"/sessions/unknown-id/resume", nil)
 	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("second terminate status = %d, want 404 (session record already deleted)", resp.StatusCode)
+		t.Fatalf("resume unknown id status = %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestDeleteSession spawns via testchild (see TestResumeSession) and flips
+// Activity directly through the Data Service after terminate to simulate
+// what the real Session Service's Shutdown does (proven separately in
+// TestCreateTerminateSession).
+func TestDeleteSession(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "router")
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "delete test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	// Deleting a still-active session is a conflict.
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/sessions/"+created.Session.ID, nil) //nolint:noctx // test helper, url is local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("delete-while-active status = %d, want 409", resp.StatusCode)
+	}
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("terminate status = %d, want 204", resp.StatusCode)
+	}
+
+	sess, err := data.Session(context.Background(), created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Activity = contracts.SessionInactive
+	if err := data.UpdateSession(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+
+	req, err = http.NewRequest(http.MethodDelete, srv.URL+"/sessions/"+created.Session.ID, nil) //nolint:noctx // test helper, url is local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
+	}
+
+	resp, err = http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get session after delete status = %d, want 404", resp.StatusCode)
+	}
+
+	req, err = http.NewRequest(http.MethodDelete, srv.URL+"/sessions/unknown-id", nil) //nolint:noctx // test helper, url is local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown id status = %d, want 404", resp.StatusCode)
 	}
 }
 

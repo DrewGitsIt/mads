@@ -169,7 +169,7 @@ describe("App command palette (W6.11)", () => {
     fireEvent.click(screen.getByTestId("jump:session-inactive"));
 
     await waitFor(() => {
-      const row = screen.getByText("Investigate flaky metrics query test").closest("button");
+      const row = screen.getByText("Investigate flaky metrics query test").closest('[role="button"]');
       expect(row?.className.includes("selected")).toBe(true);
     });
 

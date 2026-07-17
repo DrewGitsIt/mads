@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionWorkspace } from "./SessionWorkspace";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
@@ -86,7 +86,7 @@ describe("SessionWorkspace", () => {
     renderWorkspace();
     await waitFor(() => expect(screen.getByRole("tab", { name: "Pipeline" })).toBeTruthy());
 
-    const source = FakeEventSource.instances.find((s) => s.url.includes("/events"));
+    const source = FakeEventSource.instances.find((s) => s.url.includes("pipeline.started"));
     expect(screen.getByRole("tab", { name: "Pipeline" }).querySelector('[title="run in progress"]')).toBeNull();
 
     act(() => {
@@ -121,5 +121,83 @@ describe("SessionWorkspace", () => {
 
     fireEvent.click(screen.getByLabelText("Back to Launchpad"));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("kebab shows Close for an active session, not Resume or Delete", async () => {
+    renderWorkspace({ sessionId: "session-active" });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+
+    expect(screen.getByText("Close")).toBeTruthy();
+    expect(screen.queryByText("Resume")).toBeNull();
+    expect(screen.queryByText("Delete")).toBeNull();
+  });
+
+  it("kebab shows Resume and Delete for an inactive session, not Close", async () => {
+    renderWorkspace({ sessionId: "session-inactive" });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+
+    expect(screen.getByText("Resume")).toBeTruthy();
+    expect(screen.getByText("Delete")).toBeTruthy();
+    expect(screen.queryByText("Close")).toBeNull();
+  });
+
+  it("Close calls routerClient.closeSession for this session", async () => {
+    const routerClient = new FakeRouterClient();
+    const spy = vi.spyOn(routerClient, "closeSession");
+    renderWorkspace({ sessionId: "session-active", routerClient });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByText("Close"));
+
+    expect(spy).toHaveBeenCalledWith("session-active");
+  });
+
+  it("Resume calls routerClient.resumeSession for this session", async () => {
+    const routerClient = new FakeRouterClient();
+    const spy = vi.spyOn(routerClient, "resumeSession");
+    renderWorkspace({ sessionId: "session-inactive", routerClient });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByText("Resume"));
+
+    expect(spy).toHaveBeenCalledWith("session-inactive");
+  });
+
+  it("Delete opens a confirm dialog with cascade language and does not delete on cancel", async () => {
+    const routerClient = new FakeRouterClient();
+    const spy = vi.spyOn(routerClient, "deleteSession");
+    renderWorkspace({ sessionId: "session-inactive", routerClient });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByText("Delete"));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("event log survive");
+
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("Delete confirms by calling routerClient.deleteSession and firing onClose", async () => {
+    const routerClient = new FakeRouterClient();
+    const spy = vi.spyOn(routerClient, "deleteSession");
+    const onClose = vi.fn();
+    renderWorkspace({ sessionId: "session-inactive", routerClient, onClose });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByText("Delete"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Delete"));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("session-inactive"));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
   });
 });
