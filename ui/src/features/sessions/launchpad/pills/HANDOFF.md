@@ -45,20 +45,33 @@ today** — every session runs identically regardless of trust level. Wiring
 that up is a `providers/*` + `StartOptions` change, cross-cutting and out of
 scope here.
 
-This is why the option copy uses "may" framing (`"Agent may edit files and
-run any command without asking"`) rather than "will/won't" framing — it
-states each level's **declared meaning** per `contracts.SessionTrust`'s doc
-comment and `DefaultConfig`'s rationale (`pkg/contracts/config.go:146-148`:
-default is `TrustLimited`, not `TrustFull`, so sessions don't default to
-unattended full-trust execution). Asserting active gating ("won't run
-commands") would be false today and would just relocate the "opaque/dishonest
-UI" complaint from the placeholder into the options themselves.
+**Revised after review.** The first pass used "may" framing (`"Agent may
+edit files and run any command without asking"` for full, `"avoiding
+destructive ones"` for limited, `"may not edit files or run commands"` for
+read_only). code-reviewer correctly failed this: "may" softens the verb but
+the sentences still assert a behavioral restriction — that limited avoids
+destructive commands, that read_only can't edit or run commands — and given
+`kirocli.go:125` hardcodes `--trust-all-tools` on **every** call and
+claudecode applies no trust-conditioned flag, that restriction doesn't
+happen for any option. Every session runs at full access regardless of
+selection, so "avoiding destructive ones" / "may not edit files" are false
+claims today, not softened ones.
+
+Current copy states the gap plainly instead of asserting a restriction that
+isn't real:
 
 | value | label | description |
 |---|---|---|
-| `full` | Full access | "Agent may edit files and run any command without asking." |
-| `limited` | Limited | "The safer default — agent may edit files and run everyday commands, avoiding destructive ones." |
-| `read_only` | Read-only | "Agent may look around and suggest changes, but may not edit files or run commands." |
+| `full` | Full access | "Agent edits files and runs any command without asking — how every session behaves today." |
+| `limited` | Limited | "Meant to restrict the agent to everyday changes, but not enforced yet — runs as Full access today." |
+| `read_only` | Read-only | "Meant to block edits and commands entirely, but not enforced yet — runs as Full access today." |
+
+`full`'s description is a factual claim about current behavior (verified:
+`--trust-all-tools` always, no conditional flag in claudecode) — it needed no
+hedge. `limited`/`read_only` state the declared intent (per
+`contracts.SessionTrust`'s doc comment) but say outright that it isn't
+enforced and that the session runs as Full regardless, rather than
+implying the restriction is active.
 
 **Reviewer: this enforcement gap is a real product issue, not something this
 task fixed or should have fixed.** Flagging it as a follow-up work item
@@ -94,11 +107,10 @@ passed, including the 3 rewritten `TrustPill.test.tsx` cases). Also ran
 
 ## Reviewer should scrutinize
 
-- The exact option copy wording (table above) — I kept the architect's
-  proposed strings; if terser/clearer phrasing is preferred, `trustLevels.ts`
-  is the single place to change it.
-- Whether "may" framing reads as honest enough given the enforcement gap, or
-  whether the pill should additionally surface the gap in-product (e.g. a
-  banner) rather than only in this handoff / commit message — I judged that
-  out of scope since the task only asked for accurate option copy, not new
-  UI surfacing the enforcement gap itself.
+- The exact option copy wording (table above) — plain statement of the
+  enforcement gap in the `limited`/`read_only` rows; if a different tone is
+  preferred, `trustLevels.ts` is the single place to change it.
+- Whether the pill should additionally surface the gap elsewhere in-product
+  (e.g. a banner) rather than only in the dropdown copy — judged out of
+  scope since the task only asked for accurate option copy, not new UI
+  surfacing the enforcement gap itself.
