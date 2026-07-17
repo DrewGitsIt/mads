@@ -30,6 +30,18 @@ type Deps struct {
 	Data      *dataclient.Client
 	FastModel *fastmodel.Runner
 	Registry  *registryclient.Client
+	// Resolver resolves another session's live child address, for job bodies
+	// (e.g. digest fan-out) that must reach a session other than the one
+	// they're scoped to. Nil unless SetResolver was called.
+	Resolver SessionResolver
+}
+
+// SessionResolver resolves a running session child's address. Defined here
+// rather than imported from internal/supervisor to avoid an import cycle:
+// supervisor already imports job for the session-summary-on-exit hook.
+// *supervisor.Supervisor satisfies this interface structurally.
+type SessionResolver interface {
+	SessionAddr(sessionID string) (string, bool)
 }
 
 // Func is a job body. It receives a background context (independent of
@@ -46,12 +58,22 @@ type Runner struct {
 	registry *registryclient.Client
 	wg       sync.WaitGroup
 
-	mu      sync.Mutex
-	cancels map[string]context.CancelFunc
+	mu       sync.Mutex
+	cancels  map[string]context.CancelFunc
+	resolver SessionResolver
 }
 
 func New(data *dataclient.Client, fm *fastmodel.Runner, registry *registryclient.Client) *Runner {
 	return &Runner{data: data, fm: fm, registry: registry, cancels: make(map[string]context.CancelFunc)}
+}
+
+// SetResolver installs the session-address resolver used by job bodies that
+// must reach a session other than the one they're scoped to (e.g. digest
+// fan-out). Optional: jobs that never call deps.Resolver work fine without it.
+func (r *Runner) SetResolver(res SessionResolver) {
+	r.mu.Lock()
+	r.resolver = res
+	r.mu.Unlock()
 }
 
 // FastModel exposes the Fast Model runner for callers that need a
@@ -158,7 +180,10 @@ func (r *Runner) invoke(ctx context.Context, fn Func) (err error) {
 			err = fmt.Errorf("job: panic: %v", p)
 		}
 	}()
-	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry})
+	r.mu.Lock()
+	resolver := r.resolver
+	r.mu.Unlock()
+	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry, Resolver: resolver})
 }
 
 // Shutdown waits for in-flight jobs to finish, bounded by ctx.

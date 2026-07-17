@@ -91,6 +91,13 @@ type Runner struct {
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
 
+	// digest accumulates the in-flight turn's activity for the per-turn
+	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
+	// active — unlike synthEngine it isn't mode-gated, since whether anyone
+	// reads the digest is the Router digest watcher's call, not this
+	// session's.
+	digest digestAccumulator
+
 	// Died is closed exactly once if the provider process ends mid-turn
 	// without us having initiated the close (the Router's crash-supervision
 	// signal, spec §15). The caller (main.go) selects on this and exits the
@@ -398,6 +405,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
+	r.digest.recordUser(text)
 
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
@@ -432,6 +440,7 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
+	r.digest.recordUser(text)
 	r.recordInjectionAudit(ctx, attribution, text)
 
 	if err := sess.Send(ctx, text); err != nil {
@@ -469,7 +478,14 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // busy, delivers the next one — all under one continuous lock hold, so a
 // concurrent Send or Inject can't steal the slot ahead of a message that
 // was already queued (FIFO ordering, decision 1).
+//
+// It also drains the digest accumulator and pushes the turn's delta
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4) before clearing busy, so a
+// concurrent Send/Inject for the next turn can never record into this
+// turn's buffer.
 func (r *Runner) onTurnEnd() {
+	r.pushTurnEnded()
+
 	r.mu.Lock()
 	r.busy = false
 	if len(r.pending) == 0 {
@@ -486,12 +502,35 @@ func (r *Runner) onTurnEnd() {
 	}
 
 	r.synthEngine.OnUserSend(next.text)
+	r.digest.recordUser(next.text)
 
 	if err := sess.Send(context.Background(), next.text); err != nil {
 		log.Printf("runner: deliver queued injection: %v", err)
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+	}
+}
+
+// pushTurnEnded renders and resets the digest accumulator, appending a
+// TurnEnded envelope carrying the raw delta if the turn produced any
+// activity. The Router's digest watcher does the actual compression and
+// per-link fan-out (job.GenerateDigest) — this is just the trigger.
+// Best-effort: a failure here logs and is skipped, never surfaced to the
+// caller, so a digest problem can never perturb the watched session's own
+// turn (docs/LINKED-SESSIONS-DESIGN.md decision 4).
+func (r *Runner) pushTurnEnded() {
+	delta := r.digest.renderAndReset()
+	if delta == "" {
+		return
+	}
+	env := contracts.Envelope{
+		Type:      contracts.TurnEnded,
+		SessionID: r.sessionID,
+		Payload:   mustJSON(map[string]string{"delta": delta}),
+	}
+	if err := r.data.Append(context.Background(), &env); err != nil {
+		log.Printf("runner: append session.turn_ended: %v", err)
 	}
 }
 
@@ -707,6 +746,7 @@ func (r *Runner) pump(sess provider.Session) {
 			r.recordFileChange(ev.Tool.Path)
 		}
 		r.synthEngine.OnEvent(ev)
+		r.digest.recordEvent(ev)
 		r.hub.broadcast(ev)
 	}
 
@@ -762,6 +802,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 					r.recordFileChange(ev.Tool.Path)
 				}
 				r.synthEngine.OnEvent(ev)
+				r.digest.recordEvent(ev)
 			}
 		}()
 	}

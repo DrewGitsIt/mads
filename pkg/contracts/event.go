@@ -177,6 +177,15 @@ const (
 	// the message was delivered into); Actor is stamped "link-<id>", not
 	// the granting session's own actor identity.
 	LinkMessageInjected EventType = "link.message_injected"
+	// TurnEnded fires when a session's agent completes a turn with non-empty
+	// activity (docs/LINKED-SESSIONS-DESIGN.md decision 4) — the trigger the
+	// Router's digest watcher subscribes to in order to compress and push a
+	// per-turn digest to every session holding a `read` grant on the subject.
+	// Payload: {"delta": string} — the turn's rendered transcript delta, the
+	// same shape synth's Fast Model prompt body uses. Envelope SessionID is
+	// the session whose turn just ended (the subject, from the monitor's
+	// point of view).
+	TurnEnded EventType = "session.turn_ended"
 
 	TemplateCreated EventType = "template.created"
 	TemplateUpdated EventType = "template.updated"
@@ -236,7 +245,7 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
-	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected,
+	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected, TurnEnded,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
