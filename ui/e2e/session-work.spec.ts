@@ -22,6 +22,11 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
   let sessionName: string;
   let workTask: { id: string; title: string };
   let commitHash: string;
+  // The two pipeline runs' own run_seq (== their pipeline.started event's
+  // seq), oldest first — seeded so the "run picker replays historical runs"
+  // journey below has two genuinely distinct runs to switch between.
+  let firstRunSeq: number;
+  let secondRunSeq: number;
 
   test.beforeAll(async () => {
     const routerURL = process.env.MADS_ROUTER_URL!;
@@ -37,14 +42,15 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
       "e2e graph dependent",
     ]);
     await linkDependency(routerURL, dependentTask.id, depTask.id);
-    runFakePipeline({
+    const runFakePipelineOpts = {
       madsBin: process.env.MADS_BIN!,
       dataURL,
       sessionID: sessionId,
       workspace: workspaceDir,
       worktreeRoot: path.join(workspaceDir, ".worktrees"),
       env: process.env,
-    });
+    };
+    runFakePipeline(runFakePipelineOpts);
     await recordFileChange(dataURL, sessionId, changedFilePath);
     commitHash = await recordRealCommit(dataURL, sessionId, workspaceDir, {
       path: "src/commit-file.ts",
@@ -52,6 +58,18 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
       message: commitMessage,
       taskId: workTask.id,
     });
+
+    // A second, independent run (a fresh task, no dependency on anything
+    // above) — dependentTask stays untouched (still blocked on depTask),
+    // so this doesn't disturb the graph-mode journey below.
+    await importTasks(routerURL, sessionId, ["e2e second pipeline run task"]);
+    runFakePipeline(runFakePipelineOpts);
+
+    const runsRes = await fetch(`${routerURL}/metrics/pipelines?session_id=${sessionId}`);
+    if (!runsRes.ok) throw new Error(`metricsPipelineRuns: status ${runsRes.status}`);
+    const runs = (await runsRes.json()) as { run_seq: number }[];
+    if (runs.length !== 2) throw new Error(`expected 2 seeded pipeline runs, got ${runs.length}`);
+    [firstRunSeq, secondRunSeq] = [...runs].map((r) => r.run_seq).sort((a, b) => a - b);
   });
 
   test("tasks tab shows imported tasks", async ({ page, routerURL }) => {
@@ -93,6 +111,48 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     // path and its RunPicker — both are covered at the unit level.)
     await expect(page.getByText("idle", { exact: true })).not.toBeVisible();
     await expect(page.getByText("completed", { exact: true })).toBeVisible();
+  });
+
+  test("pipeline tab run picker replays historical runs", async ({ page, routerURL }) => {
+    // The test above documents that a fresh SSE connection usually replays
+    // its full backlog before the historical fetch resolves, so the live
+    // fold wins the race and the RunPicker never mounts. Stall the SSE
+    // request indefinitely (never continue/fulfill/abort it) to force the
+    // opposite, deterministically, without depending on backlog size:
+    // usePipelineRun's phase stays "idle" for the whole test, so
+    // usePipelineTab always renders the historical (event-log replay) path.
+    await page.route("**/events*", async (route) => {
+      const accept = route.request().headers()["accept"] ?? "";
+      if (accept.includes("text/event-stream")) return; // hang forever
+      await route.continue();
+    });
+
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Pipeline" }).click();
+
+    const picker = page.getByRole("combobox", { name: "Pipeline run" });
+    await expect(picker).toBeVisible();
+    await expect(picker.locator("option")).toHaveCount(2);
+    // Newest-first default selection.
+    await expect(picker).toHaveValue(String(secondRunSeq));
+
+    const statusLine = page.getByText(/^Run \w+ .* · done \d+ · blocked \d+$/);
+    const initialStatusText = await statusLine.textContent();
+
+    // Selecting the older run must fetch and fold *that* run's own event
+    // window from the real backend — not just flip a client-side label.
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (res) => res.url().includes("/events") && res.url().includes(`since=${firstRunSeq - 1}`),
+      ),
+      picker.selectOption(String(firstRunSeq)),
+    ]);
+    expect(response.ok()).toBeTruthy();
+
+    await expect(picker).toHaveValue(String(firstRunSeq));
+    await expect(statusLine).not.toHaveText(initialStatusText ?? "");
   });
 
   test("graph mode shows the unsequenced tray and a canvas node", async ({ page, routerURL }) => {

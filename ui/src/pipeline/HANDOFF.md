@@ -2,7 +2,7 @@
 
 Implemented per the architect's HANDOFF plan (this file replaces it). All
 work items in the original §6 file list are done; `make check` and
-`make ui-smoke` are both green (869/869 vitest, 13/13 e2e).
+`make ui-smoke` are both green (869/869 vitest, 14/14 e2e).
 
 ## What was built
 
@@ -31,7 +31,7 @@ work items in the original §6 file list are done; `make check` and
   any historical run.
 - `pipelineClient.ts`/`FakePipelineClient`: new `listRuns`/`getRunEvents`.
 
-## Deviation from the architect's plan — read this before re-strengthening the e2e test
+## Deviation from the architect's plan, and how it was resolved
 
 §1 of the architect's plan assumed the live SSE connection (`usePipelineRun`'s
 `subscribeToEvents`, no `since` param) never sees events that happened
@@ -45,39 +45,53 @@ param the cursor is `0`, and the query has no `Limit`, so a fresh
 `EventSource` connection replays the *entire* matching history before
 tailing new events, confirmed by reading `handleStreamEvents` (Router),
 `streamEvents` (Data Service), and `store.Log.Query`/`Filter.Limit` ("0
-means no cap"). I confirmed this empirically too: `make ui-smoke` failed
-on `getByRole('combobox', { name: 'Pipeline run' })` not being found, and
-the Playwright error-context snapshot showed a fully-folded, correctly
-labeled board ("completed 0:00 3 tasks ... 3 done") — i.e. the live path,
-not the historical path, had already rendered the finished run, because
-the SSE replay won the race before the historical fetch could.
+means no cap"). Confirmed empirically too: a fresh `make ui-smoke` run
+against this fixture's small backlog folds the finished run via the live
+path before the historical fetch even resolves, so the RunPicker never
+mounts under normal conditions here.
 
-Per the plan's own §6 note that `usePipelineRun.ts` gets "no behavior
-change," I did not touch the live subscription's `since` semantics. Given
-that, the RunPicker will only actually mount in a real browser when a
-session has enough backlogged events that a fresh SSE connection doesn't
-finish replaying before the historical fetch resolves first — not
-reliably reproducible in this e2e fixture (three tasks, one small fake
-run). Per §5's own permission to "pick whichever locator is more stable,"
-I swapped the RunPicker-visibility assertion for one on the finished
-outcome text ("completed") instead, which is what the live path renders
-here and is what the acceptance criteria's "finished label" language
-actually asks for. The RunPicker itself, and the picker's run-switching
-behavior, are fully covered at the unit level (`usePipelineRunHistory
-.test.ts`'s cross-run contamination test, `PipelineTab.test.tsx`'s
-run-switching case) using `FakeEventSource`, which — unlike the real
-backend — never auto-replays history, so those tests do exercise the
-picker path faithfully.
+A first pass at this task left the e2e test not exercising the
+RunPicker/historical-fetch path at all (it asserted the live-fold outcome
+text instead, with a note asking the reviewer whether that was
+acceptable) — code review correctly failed that: the acceptance criteria
+explicitly requires a journey assertion that the picker switches runs.
+Fixed by forcing the historical path deterministically instead of relying
+on backlog size: `session-work.spec.ts`'s new "pipeline tab run picker
+replays historical runs" test installs a `page.route("**/events*", …)`
+handler that inspects each request's `Accept` header (mirroring
+`events.go`'s own dispatch) and never resolves the ones asking for
+`text/event-stream` — the SSE connection just hangs, so `usePipelineRun`'s
+phase never leaves `"idle"` and `PipelineTab` renders the historical path
+for the whole test, no race. The plain JSON `getEvents` fetches
+(`Accept: */*`, used by `usePipelineRunHistory`) pass through untouched.
 
-**Reviewer should scrutinize**: is this an acceptable interpretation of
-the acceptance criteria, or does "the run picker switches runs" require a
-real-backend journey assertion regardless of the SSE-replay-wins-the-race
-issue? If the latter, the fix is not a docs/test change but a real
-behavior change to `usePipelineRun`'s subscription (e.g. seeding `since`
-from the latest known seq so the live path is a genuine forward-only tail
-and historical runs always go through the batch/fold path) — a bigger,
-more invasive change than this task scoped, and one that would also touch
-the "no behavior change" file explicitly carved out in §6.
+The test seeds a *second* pipeline run (a fresh, dependency-free task, run
+after the original one) so there are two real runs to switch between, then:
+- asserts the `RunPicker` combobox is visible with 2 options, newest
+  selected by default (proves the historical path rendered, not the live
+  one — the live path never shows a picker at all);
+- selects the older run and asserts, via `page.waitForResponse`, that this
+  fires a real `GET /events?...since=<olderRun-1>...` request (not just a
+  client-side label flip) whose response is 2xx;
+- asserts the RunPicker's own status line (built from `GET
+  /metrics/pipelines`, per-run `tasks_done`/`tasks_blocked`/timestamps) is
+  visibly different afterwards.
+
+Note on why the assertion stops at the RunPicker's own metadata rather than
+a StageBoard/BlockedPanel difference: `PipelineTab.tsx` always sources
+`tasks`/blocked-status from the live `usePipelineRun`'s global task list
+(HANDOFF.md's own composition above), never from the selected historical
+run — so a "done" task lands in `StageBoard`'s Done bucket the same way
+regardless of which run's fold is selected. The genuinely fold-driven
+`columns`/`taskRunState` (from `getRunEvents`) only produces a visibly
+different board when a task is *not yet done* at the time of the mount
+(mid-run, not this fixture's fully-completed historical runs) — that
+per-fold behavior (including cross-run contamination) is what
+`usePipelineRunHistory.test.ts` and `PipelineTab.test.tsx`'s unit tests
+already cover directly against `foldReducer`. The e2e addition's job is
+proving the *transport* (real backend fetch, real Accept-based dispatch,
+real picker interaction) works end-to-end, which the network-response and
+RunPicker-metadata assertions above do.
 
 ## Not done / explicitly out of scope (per architect's plan)
 
@@ -96,5 +110,9 @@ the "no behavior change" file explicitly carved out in §6.
 - `pipelineClient.test.ts`: `listRuns`/`getRunEvents`
 - Go: `TestGetEventsBatchReturnsJSON` plus existing SSE/manifest tests
   confirmed unmodified
-- e2e: strengthened `session-work.spec.ts` "pipeline tab shows the
-  completed run" (see deviation note above for the exact assertion chosen)
+- e2e: `session-work.spec.ts` seeds a second pipeline run in `beforeAll`
+  and adds "pipeline tab run picker replays historical runs" (see
+  deviation note above), which stalls the live SSE via Playwright route
+  interception and drives the RunPicker against the real backend. The
+  original "pipeline tab shows the completed run" test is unchanged — it
+  still documents and asserts the live-SSE-wins-the-race case.
