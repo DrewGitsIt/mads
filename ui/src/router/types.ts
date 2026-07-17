@@ -51,6 +51,24 @@ export interface Workspace {
   updated_at: string;
 }
 
+// mirrors pkg/contracts/sessiondefaults.go — which layer produced a
+// resolved session-default value (GET /sessions/defaults, Launchpad preview).
+export type SessionDefaultSource = "workspace" | "config" | "provider_default" | "builtin";
+
+export interface ResolvedSessionField {
+  value?: string;
+  source?: SessionDefaultSource;
+}
+
+export interface SessionDefaults {
+  provider: ResolvedSessionField;
+  model: ResolvedSessionField;
+  agent: ResolvedSessionField;
+  isolation: ResolvedSessionField;
+  trust: ResolvedSessionField;
+  workspace?: string;
+}
+
 // mirrors pkg/contracts/registry.go Quadrant/Quadrants — a closed 4-value
 // enum (W6.8, MADS-UX §3.5's quadrant tooltip).
 export type Quadrant =

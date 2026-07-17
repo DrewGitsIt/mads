@@ -30,6 +30,7 @@ import type {
   RegistryEntry,
   Retro,
   Session,
+  SessionDefaults,
   Task,
   TaskOutcomes,
   TaskStatus,
@@ -674,6 +675,7 @@ export class FakeRouterClient implements RouterClient {
     private readonly mergeResults: Record<string, MergeResult> = {
       "session-files-conflict": fixtureConflictedMerge,
     },
+    private readonly sessionDefaults: SessionDefaults = fixtureSessionDefaults,
   ) {
     this.tasks = new Map(tasks.map((t) => [t.id, structuredClone(t)]));
     this.taskEventSource = new FakeSessionEventSource();
@@ -998,6 +1000,11 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: listWorkspaces");
   }
 
+  // --- Session defaults (Launchpad preview) ---
+  async getSessionDefaults(): Promise<SessionDefaults> {
+    return this.sessionDefaults;
+  }
+
   async createWorkspace(): Promise<Workspace> {
     throw new Error("not fixtured: createWorkspace");
   }
@@ -1150,6 +1157,14 @@ export const fixtureConfig: Config = {
   log_retention_days: 30,
   feature_flags: { multi_repo: false, linked_sessions: false, remote_registry: false },
   onboarding_complete: true,
+};
+
+export const fixtureSessionDefaults: SessionDefaults = {
+  provider: { value: "claudecode", source: "config" },
+  model: { value: "claude-sonnet-5", source: "provider_default" },
+  agent: {},
+  isolation: { value: "worktree", source: "builtin" },
+  trust: { value: "limited", source: "config" },
 };
 
 export const fixtureProfile: Profile = {

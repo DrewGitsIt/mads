@@ -1,8 +1,9 @@
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../../components/Toast/Toast";
-import type { Session, Workspace } from "../../../router/types";
+import { router } from "../../../router/client";
+import type { Session, SessionDefaults, Workspace } from "../../../router/types";
 import { WorkspacePill } from "./pills/WorkspacePill";
 import { AgentPill } from "./pills/AgentPill";
 import { ModelPill } from "./pills/ModelPill";
@@ -33,6 +34,22 @@ export function Launchpad({ createSession }: LaunchpadProps) {
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
+  const [resolved, setResolved] = useState<SessionDefaults | undefined>();
+
+  useEffect(() => {
+    let cancelled = false;
+    router
+      .getSessionDefaults(staged.workspace)
+      .then((r) => {
+        if (!cancelled) setResolved(r);
+      })
+      .catch(() => {
+        if (!cancelled) setResolved(undefined);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [staged.workspace]);
 
   async function submit() {
     const trimmed = text.trim();
@@ -88,40 +105,45 @@ export function Launchpad({ createSession }: LaunchpadProps) {
         <div className={styles.pills}>
           <WorkspacePill
             value={staged.workspace}
+            resolved={resolved?.workspace}
             onChange={(ws) => {
               setSelectedWorkspace(ws);
-              setStaged((prev) => ({
-                ...prev,
-                workspace: ws.name,
-                agent: prev.agent ?? ws.defaults.agent,
-                model: prev.model ?? ws.defaults.model,
-                isolation: prev.isolation ?? ws.defaults.isolation,
-              }));
+              setStaged((prev) => ({ ...prev, workspace: ws.name }));
             }}
           />
           <AgentPill
             value={staged.agent}
+            resolved={resolved?.agent}
             onChange={(agent) => setStaged((prev) => ({ ...prev, agent: agent.name }))}
           />
           <ModelPill
             provider={staged.provider}
             model={staged.model}
+            resolved={resolved?.model}
+            resolvedProvider={resolved?.provider?.value}
             onChange={(provider, model) =>
               setStaged((prev) => ({ ...prev, provider, model: model.id }))
             }
           />
           <TrustPill
             value={staged.trust}
+            resolved={resolved?.trust}
             onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
           />
           <IsolationPill
             value={staged.isolation}
+            resolved={resolved?.isolation}
             onChange={(isolation) => setStaged((prev) => ({ ...prev, isolation }))}
             repos={selectedWorkspace?.repos}
             selectedRepoPaths={staged.multiRepoPaths}
             onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
           />
         </div>
+
+        {resolved?.workspace &&
+          [resolved.agent, resolved.model, resolved.isolation].some(
+            (f) => f.source === "workspace",
+          ) && <p className={styles.inheritLine}>Inherits from {resolved.workspace} defaults</p>}
 
         <SuggestionChips onPick={(suggestionText) => setText(suggestionText)} />
 

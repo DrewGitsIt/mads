@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
 import { router } from "../../../../router/client";
-import type { Agent } from "../../../../router/types";
+import type { Agent, ResolvedSessionField } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
 export interface AgentPillProps {
   value?: string;
+  resolved?: ResolvedSessionField;
   onChange: (agent: Agent) => void;
 }
 
-export function AgentPill({ value, onChange }: AgentPillProps) {
+export function AgentPill({ value, resolved, onChange }: AgentPillProps) {
   const [open, setOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
 
@@ -19,6 +20,8 @@ export function AgentPill({ value, onChange }: AgentPillProps) {
       .then(setAgents)
       .catch(() => setAgents([]));
   }, []);
+
+  const triggerLabel = value ?? (resolved?.value ? `${resolved.value} (default)` : "Select agent");
 
   return (
     <Popover
@@ -30,7 +33,7 @@ export function AgentPill({ value, onChange }: AgentPillProps) {
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>agent</span> {value ?? "Select agent"}
+          <span className={pillStyles.key}>agent</span> {triggerLabel}
         </button>
       }
     >

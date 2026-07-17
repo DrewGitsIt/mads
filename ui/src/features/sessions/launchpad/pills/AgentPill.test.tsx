@@ -31,4 +31,18 @@ describe("AgentPill", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ name: "backend-architect" }));
     vi.unstubAllGlobals();
   });
+
+  it("shows the resolved default agent when unset", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(<AgentPill resolved={{ value: "backend-architect", source: "workspace" }} onChange={vi.fn()} />);
+    expect(screen.getByText(/backend-architect \(default\)/)).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the plain placeholder when nothing resolves", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(<AgentPill onChange={vi.fn()} />);
+    expect(screen.getByText("Select agent")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
 });

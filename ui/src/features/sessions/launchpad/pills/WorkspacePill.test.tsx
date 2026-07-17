@@ -31,4 +31,18 @@ describe("WorkspacePill", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ name: "mads-core" }));
     vi.unstubAllGlobals();
   });
+
+  it("shows the resolved default workspace when unset", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(<WorkspacePill resolved="mads" onChange={vi.fn()} />);
+    expect(screen.getByText(/mads \(default\)/)).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the plain placeholder when nothing resolves", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(<WorkspacePill onChange={vi.fn()} />);
+    expect(screen.getByText("Select workspace")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
 });

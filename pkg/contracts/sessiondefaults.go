@@ -1,0 +1,38 @@
+package contracts
+
+// SessionDefaultSource says which layer produced a resolved session
+// default value (spec §10 precedence). Used only by the Launchpad preview
+// endpoint (GET /sessions/defaults) — resolveSessionDefaults itself
+// doesn't expose provenance to its two create-session callers.
+type SessionDefaultSource string
+
+const (
+	SessionDefaultSourceWorkspace       SessionDefaultSource = "workspace"
+	SessionDefaultSourceConfig          SessionDefaultSource = "config"
+	SessionDefaultSourceProviderDefault SessionDefaultSource = "provider_default"
+	SessionDefaultSourceBuiltin         SessionDefaultSource = "builtin"
+)
+
+// ResolvedSessionField is one resolved session-default value plus where it
+// came from. Empty Value with empty Source means nothing resolved it —
+// e.g. Agent with no workspace default and no global fallback exists.
+type ResolvedSessionField struct {
+	Value  string               `json:"value,omitempty"`
+	Source SessionDefaultSource `json:"source,omitempty"`
+}
+
+// SessionDefaults is what GET /sessions/defaults returns: the same
+// resolution resolveSessionDefaults performs at session-creation time,
+// computed without creating anything, so the Launchpad can show what
+// Start would actually use.
+type SessionDefaults struct {
+	Provider  ResolvedSessionField `json:"provider"`
+	Model     ResolvedSessionField `json:"model"`
+	Agent     ResolvedSessionField `json:"agent"`
+	Isolation ResolvedSessionField `json:"isolation"`
+	Trust     ResolvedSessionField `json:"trust"`
+	// Workspace is the workspace whose Defaults were consulted (explicit
+	// ?workspace= query param, or Config.DefaultWorkspace) — empty if none
+	// resolved (bad/missing key, or no workspace involved at all).
+	Workspace string `json:"workspace,omitempty"`
+}

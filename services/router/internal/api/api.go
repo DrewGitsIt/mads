@@ -85,6 +85,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
+	mux.HandleFunc("GET /sessions/defaults", s.handleSessionDefaults)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)
 	mux.HandleFunc("POST /sessions/{id}/messages", s.handleSessionMessages)

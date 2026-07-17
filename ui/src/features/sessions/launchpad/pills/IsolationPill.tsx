@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
 import { FLAGS } from "../../../../featureFlags";
-import type { WorkspaceRepo } from "../../../../router/types";
+import type { ResolvedSessionField, WorkspaceRepo } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
 const ISOLATION_OPTIONS: { value: string; label: string }[] = [
@@ -11,6 +11,7 @@ const ISOLATION_OPTIONS: { value: string; label: string }[] = [
 
 export interface IsolationPillProps {
   value?: string;
+  resolved?: ResolvedSessionField;
   onChange: (isolation: string) => void;
   repos?: WorkspaceRepo[];
   selectedRepoPaths?: string[];
@@ -19,6 +20,7 @@ export interface IsolationPillProps {
 
 export function IsolationPill({
   value,
+  resolved,
   onChange,
   repos,
   selectedRepoPaths,
@@ -26,7 +28,11 @@ export function IsolationPill({
 }: IsolationPillProps) {
   const [open, setOpen] = useState(false);
   const selected = ISOLATION_OPTIONS.find((o) => o.value === value);
+  const resolvedOption = ISOLATION_OPTIONS.find((o) => o.value === resolved?.value);
   const showChecklist = FLAGS.multiRepo && value === "worktree" && repos && repos.length > 1;
+
+  const triggerLabel =
+    selected?.label ?? (resolvedOption ? `${resolvedOption.label} (default)` : "Select isolation");
 
   return (
     <Popover
@@ -38,7 +44,7 @@ export function IsolationPill({
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>isolation</span> {selected?.label ?? "Select isolation"}
+          <span className={pillStyles.key}>isolation</span> {triggerLabel}
         </button>
       }
     >
