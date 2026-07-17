@@ -7,9 +7,25 @@ export interface SubscribeParams {
   types?: string[];
 }
 
+interface PooledConnection {
+  source: EventSource;
+  listeners: Set<(envelope: Envelope) => void>;
+}
+
+// Callers with byte-identical params (same types + sessionId + since) share
+// one EventSource keyed by the resulting URL, refcounted by listener count —
+// several independent hooks (the rail's task counts, the command palette's
+// task list, a session workspace's pipeline-running dot) legitimately
+// subscribe to the exact same filter set at the same time, and each opening
+// its own connection burns through the browser's ~6-per-origin HTTP/1.1
+// socket cap, starving ordinary fetches (e.g. GET /tasks hangs forever
+// queued behind a fistful of identical, otherwise-redundant SSE streams).
+const pool = new Map<string, PooledConnection>();
+
 /**
  * Subscribes to the Router's /events SSE stream. Returns an unsubscribe
- * function that closes the underlying EventSource.
+ * function that detaches this listener, closing the underlying EventSource
+ * once no listener needs it anymore.
  *
  * The Router always names each frame's `event:` field after the envelope's
  * type (e.g. "session.created"), never a bare "message" — so callers must
@@ -29,18 +45,29 @@ export function subscribeToEvents(
   if (params.types && params.types.length > 0) {
     url.searchParams.set("types", params.types.join(","));
   }
+  const key = url.toString();
 
-  const source = new EventSource(url);
-
-  const handleMessage = (e: MessageEvent<string>) => {
-    onEvent(JSON.parse(e.data) as Envelope);
-  };
-
-  for (const type of params.types ?? []) {
-    source.addEventListener(type, handleMessage as EventListener);
+  let pooled = pool.get(key);
+  if (!pooled) {
+    const source = new EventSource(url);
+    const listeners = new Set<(envelope: Envelope) => void>();
+    const handleMessage = (e: MessageEvent<string>) => {
+      const envelope = JSON.parse(e.data) as Envelope;
+      for (const listener of listeners) listener(envelope);
+    };
+    for (const type of params.types ?? []) {
+      source.addEventListener(type, handleMessage as EventListener);
+    }
+    pooled = { source, listeners };
+    pool.set(key, pooled);
   }
+  pooled.listeners.add(onEvent);
 
   return () => {
-    source.close();
+    pooled!.listeners.delete(onEvent);
+    if (pooled!.listeners.size === 0) {
+      pooled!.source.close();
+      pool.delete(key);
+    }
   };
 }

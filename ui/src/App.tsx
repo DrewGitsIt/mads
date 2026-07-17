@@ -16,7 +16,8 @@ import { router } from "./router/client";
 import type { Config } from "./router/types";
 import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
-import { FetchPipelineClient } from "./pipeline/client/pipelineClient";
+import { pipelineClient } from "./pipeline/client/pipelineClient";
+import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import styles from "./App.module.css";
 
 const RAIL_ITEMS: IconRailItem[] = [
@@ -27,16 +28,15 @@ const RAIL_ITEMS: IconRailItem[] = [
   { id: "dashboard", label: "Dashboard", icon: "D" },
 ];
 
+// "sessions" is special-cased in the render switch below (needs
+// jumpToSessionId/jumpToTab/pipelineClient props SURFACES' ComponentType
+// signature can't carry), so it's deliberately absent here.
 const SURFACES: Partial<Record<string, ComponentType>> = {
-  sessions: SessionsSurface,
   library: LibrarySurface,
   dashboard: DashboardTab,
   retro: RetroSurface,
   settings: SettingsSurface,
 };
-
-// Stateless — safe as a module-level singleton rather than re-created per render.
-const pipelineClient = new FetchPipelineClient();
 
 export function App() {
   const [activeId, setActiveId] = useState("sessions");
@@ -65,6 +65,7 @@ export function App() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();
+  const [jumpToTab, setJumpToTab] = useState<WorkspaceTabId>();
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
 
   useAttentionBadge(sessions, openTaskCounts);
@@ -96,9 +97,15 @@ export function App() {
       case "open-task":
         setActiveId("sessions");
         setJumpToSessionId(command.sessionId);
+        setJumpToTab(undefined);
         break;
       case "start-pipeline":
-        if (command.sessionId) void pipelineClient.startPipeline(command.sessionId, "default-implementation");
+        if (command.sessionId) {
+          void pipelineClient.startPipeline(command.sessionId, "default-implementation");
+          setActiveId("sessions");
+          setJumpToSessionId(command.sessionId);
+          setJumpToTab("pipeline");
+        }
         break;
       case "new-session":
         // Real create flow already lives in SessionsSurface; this just navigates there.
@@ -119,7 +126,13 @@ export function App() {
       <ErrorBoundary key={activeId}>
         {(() => {
           if (activeId === "sessions") {
-            return <SessionsSurface jumpToSessionId={jumpToSessionId} />;
+            return (
+              <SessionsSurface
+                jumpToSessionId={jumpToSessionId}
+                jumpToTab={jumpToTab}
+                pipelineClient={pipelineClient}
+              />
+            );
           }
           const Surface = SURFACES[activeId];
           return Surface ? (

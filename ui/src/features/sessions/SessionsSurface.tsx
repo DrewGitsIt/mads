@@ -1,30 +1,37 @@
 import { useEffect, useState } from "react";
-import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
-import { ConversationTab } from "../../conversation/ConversationTab";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
+import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { router } from "../../router/client";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionsList } from "./state/useSessionsList";
+import { SessionWorkspace } from "./workspace/SessionWorkspace";
+import type { WorkspaceTabId } from "./workspace/tabRegistry";
 import styles from "./SessionsSurface.module.css";
 
 export interface SessionsSurfaceProps {
   jumpToSessionId?: string;
+  jumpToTab?: WorkspaceTabId;
+  pipelineClient: PipelineClient;
 }
 
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
-export function SessionsSurface({ jumpToSessionId }: SessionsSurfaceProps = {}) {
+export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: SessionsSurfaceProps) {
   const { sessions, loading, error, createSession } = useSessionsList();
   const openTaskCounts = useOpenTaskCounts();
   const [selectedId, setSelectedId] = useState<string>();
+  const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const ptyBridge = useElectronPtyBridge();
 
   useEffect(() => {
-    if (jumpToSessionId) setSelectedId(jumpToSessionId);
-  }, [jumpToSessionId]);
+    if (jumpToSessionId) {
+      setSelectedId(jumpToSessionId);
+      setInitialTab(jumpToTab);
+    }
+  }, [jumpToSessionId, jumpToTab]);
 
   return (
     <div className={styles.surface}>
@@ -36,30 +43,25 @@ export function SessionsSurface({ jumpToSessionId }: SessionsSurfaceProps = {}) 
             sessions={sessions}
             openTaskCounts={openTaskCounts}
             selectedId={selectedId}
-            onSelect={(id) => setSelectedId((cur) => (cur === id ? undefined : id))}
+            onSelect={(id) => {
+              setSelectedId((cur) => (cur === id ? undefined : id));
+              setInitialTab(undefined);
+            }}
           />
         )}
       </aside>
       <main className={styles.main}>
         {selectedId ? (
-          <div className={styles.conversationPane}>
-            <div className={styles.paneHeader}>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="Back to Launchpad"
-                onClick={() => setSelectedId(undefined)}
-              >
-                ✕
-              </Button>
-            </div>
-            <ConversationTab
-              key={selectedId}
-              sessionId={selectedId}
-              routerClient={router}
-              ptyBridge={ptyBridge}
-            />
-          </div>
+          <SessionWorkspace
+            key={selectedId}
+            sessionId={selectedId}
+            routerClient={router}
+            pipelineClient={pipelineClient}
+            ptyBridge={ptyBridge}
+            openTaskCount={openTaskCounts[selectedId] ?? 0}
+            initialTab={initialTab}
+            onClose={() => setSelectedId(undefined)}
+          />
         ) : (
           <Launchpad createSession={createSession} />
         )}

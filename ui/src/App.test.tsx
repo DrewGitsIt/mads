@@ -172,6 +172,13 @@ describe("App command palette (W6.11)", () => {
       const row = screen.getByText("Investigate flaky metrics query test").closest("button");
       expect(row?.className.includes("selected")).toBe(true);
     });
+
+    // Plain jumps always land on Conversation, not wherever a prior jump left off.
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
   });
 
   it("dispatching a start-pipeline command posts to the pipelines endpoint", async () => {
@@ -188,5 +195,12 @@ describe("App command palette (W6.11)", () => {
       expect(call?.[1]?.body).toContain("session-active");
       expect(call?.[1]?.body).toContain("default-implementation");
     });
+
+    // "start a pipeline" lands on that session's Pipeline tab, not Conversation.
+    await waitFor(() =>
+      expect(screen.getByRole("tab", { name: "Pipeline" }).getAttribute("aria-selected")).toBe(
+        "true",
+      ),
+    );
   });
 });
