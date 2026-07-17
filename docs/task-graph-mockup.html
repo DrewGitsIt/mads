@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Task Graph interactive mockup</title>
+<style>
+/* Tokens: clay (shipped default), from docs/palette-mockups.html. */
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.16); --ok-fg:#2e5a3c;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.15); --warn-fg:#7a5a1a;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.15); --bad-fg:#8a3a2a;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.15); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg0); color:var(--text); font:15px/1.5 system-ui,-apple-system,sans-serif; padding:26px 20px 60px; }
+.frame { max-width:1180px; margin:0 auto; }
+h1 { font-size:21px; margin:0 0 2px; }
+.note { color:var(--text2); font-size:13.5px; max-width:80ch; margin:2px 0 14px; }
+.toolbar { position:fixed; top:14px; right:16px; z-index:50; }
+.toolbar button { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 13px; cursor:pointer; font-size:13px; }
+
+.surface { background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px; box-shadow:var(--shadow); overflow:hidden; }
+.bar { display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--line-soft); font-size:13px; color:var(--text2); }
+.bar .spacer { flex:1; }
+.btn { background:var(--bg2); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:6px 13px; font-size:12.5px; cursor:pointer; }
+.btn:hover { background:var(--bg3); }
+
+/* tray */
+.tray { border-bottom:1px solid var(--line-soft); padding:10px 14px 12px; }
+.tray-head { display:flex; align-items:baseline; gap:10px; font-size:11.5px; letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:8px; }
+.tray-head .cap { text-transform:none; letter-spacing:0; }
+.tray-body { display:flex; flex-wrap:wrap; gap:8px; min-height:38px; border-radius:9px; transition:background .12s ease, outline .12s ease; padding:3px; }
+.tray-body.droptarget { background:var(--accent-soft); outline:1.5px dashed var(--accent); }
+.chip {
+  display:flex; align-items:center; gap:8px; background:var(--bg2); border:1px solid var(--line-soft);
+  border-radius:9px; padding:6px 11px; font-size:12.5px; cursor:grab; user-select:none; max-width:260px;
+}
+.chip:hover { border-color:var(--line); background:var(--bg3); }
+.chip .t { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+/* canvas */
+.canvas { position:relative; height:470px; overflow:hidden; background:
+  radial-gradient(circle, var(--line-soft) 1px, transparent 1px); background-size:26px 26px; }
+svg.wires { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+svg.wires path.wire { fill:none; stroke:var(--text3); stroke-width:1.5; pointer-events:stroke; cursor:pointer; }
+svg.wires path.hit { fill:none; stroke:transparent; stroke-width:14; pointer-events:stroke; cursor:pointer; }
+svg.wires path.wire.sel { stroke:var(--accent); stroke-width:2.5; }
+svg.wires path.wire.dim { opacity:.15; }
+svg.wires path.temp { stroke:var(--accent); stroke-dasharray:5 4; stroke-width:1.5; fill:none; }
+.node {
+  position:absolute; width:216px; background:var(--bg2); border:1.5px solid var(--line-soft);
+  border-radius:11px; padding:9px 12px 8px; cursor:grab; user-select:none; touch-action:none;
+}
+.node:hover { border-color:var(--line); }
+.node.sel { border-color:var(--accent); }
+.node.dim { opacity:.22; }
+.node.cyc { border-color:var(--warn); box-shadow:0 0 0 3px var(--warn-soft); }
+.node .t { font-size:12.8px; font-weight:600; line-height:1.35; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; min-height:34px; }
+.node .meta { display:flex; align-items:center; gap:6px; margin-top:6px; }
+.pill { font-size:10px; border-radius:999px; padding:1px 8px; letter-spacing:.03em; }
+.pill.done { background:var(--ok-soft); color:var(--ok-fg); }
+.pill.prog { background:var(--info-soft); color:var(--info-fg); }
+.pill.ready { background:var(--bg3); color:var(--text2); }
+.unseq { margin-left:auto; font-size:9.5px; color:var(--warn-fg); background:var(--warn-soft); border-radius:5px; padding:1px 6px; }
+.handle {
+  position:absolute; left:50%; bottom:-7px; transform:translateX(-50%);
+  width:13px; height:13px; border-radius:50%; background:var(--bg3); border:1.5px solid var(--line);
+  cursor:crosshair;
+}
+.handle:hover { background:var(--accent); border-color:var(--accent); }
+.node.status-done { border-left:3px solid var(--ok); }
+.node.status-prog { border-left:3px solid var(--info); }
+.node.status-ready { border-left:3px solid var(--line); }
+
+/* banners & toast */
+.banner { display:none; align-items:center; gap:10px; margin:0; padding:8px 14px; font-size:12.5px;
+  background:var(--warn-soft); color:var(--warn-fg); border-bottom:1px solid var(--line-soft); }
+.banner.show { display:flex; }
+.confirmbar { display:none; align-items:center; gap:10px; padding:8px 14px; font-size:12.5px;
+  background:var(--bad-soft); color:var(--bad-fg); border-bottom:1px solid var(--line-soft); }
+.confirmbar.show { display:flex; }
+.confirmbar .btn { border-color:var(--bad); color:var(--bad-fg); }
+.toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--bg3);
+  border:1px solid var(--line); border-radius:10px; padding:9px 16px; font-size:13px; display:none;
+  align-items:center; gap:12px; box-shadow:var(--shadow); z-index:60; }
+.toast.show { display:flex; }
+.toast button { background:none; border:0; color:var(--accent); font-weight:600; cursor:pointer; font-size:13px; }
+.hint { color:var(--text3); font-size:12px; margin-top:10px; }
+kbd { background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:0 5px; font-size:11px; }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">theme</button></div>
+<div class="frame">
+  <h1>Task Graph — interactive mockup</h1>
+  <p class="note">Everything works: drag chips out of the tray onto the canvas · drag nodes around · drag a node onto the tray
+  to unsequence it (confirms, undoable) · drag from a node's <b>bottom handle</b> to another node to create a dependency ·
+  click an edge and press <kbd>Backspace</kbd> to remove it · click a node to highlight its ancestors/descendants
+  (<kbd>Esc</kbd> clears) · make a cycle and watch the warning.</p>
+
+  <div class="surface">
+    <div class="bar">
+      <span>Tasks · <b style="color:var(--text)">Maintenance</b> · Graph</span>
+      <span class="spacer"></span>
+      <button class="btn" id="autolayout">Auto-layout</button>
+    </div>
+    <div class="banner" id="cycbanner">⚠ cycle — the pipeline will refuse to launch the ringed tasks. Remove an edge to clear it.</div>
+    <div class="confirmbar" id="confirmbar">
+      <span id="confirmtext"></span>
+      <button class="btn" id="confirmyes">Remove edges</button>
+      <button class="btn" id="confirmno" style="border-color:var(--line); color:var(--text2)">Cancel</button>
+    </div>
+    <div class="tray">
+      <div class="tray-head">Unsequenced <span class="cap">· runs when a slot opens · in this order</span></div>
+      <div class="tray-body" id="tray"></div>
+    </div>
+    <div class="canvas" id="canvas">
+      <svg class="wires" id="wires"></svg>
+    </div>
+  </div>
+  <p class="hint">Membership rule: tray = zero dependency edges and no manual position. A node dragged out but not yet
+  connected wears the <span style="color:var(--warn-fg)">unsequenced</span> marker — it still runs in slot order until you wire it.</p>
+</div>
+<div class="toast" id="toast"><span id="toastmsg"></span><button id="undobtn">Undo</button></div>
+
+<script>
+"use strict";
+const NODE_W = 216, NODE_H = 74;
+
+// sample tasks (creation order) — statuses echo the real Maintenance session
+const tasks = [
+  { id:"t1",  title:"Trust enforcement: session trust must map to real provider restrictions", st:"prog" },
+  { id:"t2",  title:"Linked sessions L1: link records with grant sets", st:"ready" },
+  { id:"t3",  title:"Linked sessions L2a: queued, attributed inject path", st:"ready" },
+  { id:"t4",  title:"Linked sessions L2b: per-turn digest delivery to monitors", st:"ready" },
+  { id:"t5",  title:"Linked sessions L2c: leader capability (cross-session tool)", st:"ready" },
+  { id:"t6",  title:"Linked sessions L3: implicit hand-raiser over own pipeline runs", st:"ready" },
+  { id:"t7",  title:"Task graph 1: unsequenced tray, component packing, xyflow canvas", st:"ready" },
+  { id:"t8",  title:"Task graph 2: dependency editing on the canvas", st:"ready" },
+  { id:"t9",  title:"Model pills: show full model identity with version", st:"done" },
+  { id:"t10", title:"Session lifecycle: new/close/resume/delete affordances", st:"done" },
+  { id:"t11", title:"Chat/Terminal transport handoff on a shared session ref", st:"done" },
+];
+const stLabel = { done:"done", prog:"in progress", ready:"ready" };
+
+let edges = new Set(["t2>t3","t2>t4","t3>t5","t3>t6","t4>t6","t1>t3","t7>t8"]);
+let positions = {};           // id -> {x,y} manual/laid-out positions
+let selEdge = null, selNode = null;
+let undoStack = [];
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("canvas"), tray = $("tray"), wires = $("wires");
+
+const hasEdges = (id) => [...edges].some(e => e.split(">").includes(id));
+const inTray  = (id) => !hasEdges(id) && !positions[id];
+const parents  = (id) => [...edges].filter(e => e.endsWith(">"+id)).map(e => e.split(">")[0]);
+const children = (id) => [...edges].filter(e => e.startsWith(id+">")).map(e => e.split(">")[1]);
+
+function snapshot(msg) {
+  undoStack.push({ edges:new Set(edges), positions:JSON.parse(JSON.stringify(positions)), msg });
+  if (undoStack.length > 20) undoStack.shift();
+}
+function undo() {
+  const s = undoStack.pop(); if (!s) return;
+  edges = s.edges; positions = s.positions; hideToast(); render();
+}
+let toastTimer;
+function toast(msg) {
+  $("toastmsg").textContent = msg; $("toast").classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 6000);
+}
+function hideToast(){ $("toast").classList.remove("show"); }
+$("undobtn").addEventListener("click", undo);
+
+/* ---- cycle detection: nodes on any cycle ---- */
+function cycleNodes() {
+  const bad = new Set();
+  for (const t of tasks) {
+    const seen = new Set();
+    const stack = children(t.id).slice();
+    while (stack.length) {
+      const n = stack.pop();
+      if (n === t.id) { bad.add(t.id); break; }
+      if (seen.has(n)) continue;
+      seen.add(n); stack.push(...children(n));
+    }
+  }
+  return bad;
+}
+
+/* ---- ancestor/descendant sets for highlight ---- */
+function related(id) {
+  const out = new Set([id]);
+  let stack = [...parents(id)];
+  while (stack.length) { const n = stack.pop(); if (!out.has(n)) { out.add(n); stack.push(...parents(n)); } }
+  stack = [...children(id)];
+  while (stack.length) { const n = stack.pop(); if (!out.has(n)) { out.add(n); stack.push(...children(n)); } }
+  return out;
+}
+
+/* ---- layout: longest-path ranks per connected component, packed L->R ---- */
+function autoLayout() {
+  const onCanvas = tasks.filter(t => hasEdges(t.id)).map(t => t.id);
+  // union-find components
+  const comp = {}; onCanvas.forEach(id => comp[id] = id);
+  const find = (a) => comp[a] === a ? a : (comp[a] = find(comp[a]));
+  for (const e of edges) { const [a,b] = e.split(">"); if (comp[a]!==undefined && comp[b]!==undefined) comp[find(a)] = find(b); }
+  const groups = {};
+  onCanvas.forEach(id => { const r = find(id); (groups[r] = groups[r] || []).push(id); });
+
+  let offsetX = 30;
+  for (const ids of Object.values(groups)) {
+    // ranks: longest path from any root within the component
+    const rank = {}; const memo = {};
+    const depth = (id) => memo[id] !== undefined ? memo[id]
+      : (memo[id] = Math.max(0, ...parents(id).filter(p=>ids.includes(p)).map(p => depth(p)+1)));
+    ids.forEach(id => rank[id] = depth(id));
+    const byRank = {};
+    ids.forEach(id => (byRank[rank[id]] = byRank[rank[id]] || []).push(id));
+    let compW = 0;
+    for (const [r, row] of Object.entries(byRank)) {
+      row.sort();
+      row.forEach((id, i) => { positions[id] = { x: offsetX + i*(NODE_W+36), y: 24 + r*(NODE_H+46) }; });
+      compW = Math.max(compW, row.length*(NODE_W+36));
+    }
+    offsetX += compW + 40;
+  }
+}
+
+/* ---- render ---- */
+function render() {
+  // tray (creation order)
+  tray.innerHTML = "";
+  tasks.filter(t => inTray(t.id)).forEach(t => {
+    const c = document.createElement("div");
+    c.className = "chip"; c.dataset.id = t.id;
+    c.innerHTML = `<span class="pill ${t.st}">${stLabel[t.st]}</span><span class="t">${t.title}</span>`;
+    tray.appendChild(c);
+  });
+  // nodes
+  canvas.querySelectorAll(".node").forEach(n => n.remove());
+  const cyc = cycleNodes();
+  const rel = selNode ? related(selNode) : null;
+  tasks.filter(t => !inTray(t.id)).forEach(t => {
+    if (!positions[t.id]) positions[t.id] = { x: 40, y: 40 };
+    const n = document.createElement("div");
+    n.className = `node status-${t.st}` +
+      (cyc.has(t.id) ? " cyc" : "") +
+      (selNode === t.id ? " sel" : "") +
+      (rel && !rel.has(t.id) ? " dim" : "");
+    n.dataset.id = t.id;
+    n.style.left = positions[t.id].x + "px"; n.style.top = positions[t.id].y + "px";
+    n.innerHTML = `<div class="t" title="${t.title.replace(/"/g,"&quot;")}">${t.title}</div>
+      <div class="meta"><span class="pill ${t.st}">${stLabel[t.st]}</span>${hasEdges(t.id) ? "" : '<span class="unseq">unsequenced</span>'}</div>
+      <div class="handle" title="drag to create a dependency"></div>`;
+    canvas.appendChild(n);
+  });
+  drawWires();
+  $("cycbanner").classList.toggle("show", cyc.size > 0);
+}
+
+function port(id, side) {
+  const p = positions[id] || {x:0,y:0};
+  const el = canvas.querySelector(`.node[data-id="${id}"]`);
+  const h = el ? el.offsetHeight : NODE_H;
+  return side === "out" ? { x:p.x + NODE_W/2, y:p.y + h } : { x:p.x + NODE_W/2, y:p.y };
+}
+function wirePath(a, b) {
+  const dy = Math.max(28, (b.y - a.y) / 2);
+  return `M ${a.x} ${a.y} C ${a.x} ${a.y+dy}, ${b.x} ${b.y-dy}, ${b.x} ${b.y}`;
+}
+function drawWires(tempD) {
+  const rel = selNode ? related(selNode) : null;
+  let svg = "";
+  for (const e of edges) {
+    const [a,b] = e.split(">");
+    if (inTray(a) || inTray(b)) continue;
+    const d = wirePath(port(a,"out"), port(b,"in"));
+    const cls = "wire" + (selEdge===e ? " sel" : "") + (rel && !(rel.has(a)&&rel.has(b)) ? " dim" : "");
+    svg += `<path class="${cls}" d="${d}"></path><path class="hit" data-e="${e}" d="${d}"></path>`;
+  }
+  if (tempD) svg += `<path class="temp" d="${tempD}"></path>`;
+  wires.innerHTML = svg;
+}
+
+/* ---- interactions ---- */
+let drag = null; // {mode:'node'|'tray'|'wire', id, dx, dy, moved}
+const canvasPoint = (ev) => {
+  const r = canvas.getBoundingClientRect();
+  return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+};
+
+document.addEventListener("pointerdown", (ev) => {
+  const handle = ev.target.closest(".handle");
+  const node = ev.target.closest(".node");
+  const chip = ev.target.closest(".chip");
+  const hit = ev.target.closest("path.hit");
+  if (handle && node) {
+    drag = { mode:"wire", id:node.dataset.id, moved:true };
+    ev.preventDefault(); return;
+  }
+  if (node) {
+    const p = positions[node.dataset.id];
+    const c = canvasPoint(ev);
+    drag = { mode:"node", id:node.dataset.id, dx:c.x-p.x, dy:c.y-p.y, moved:false };
+    ev.preventDefault(); return;
+  }
+  if (chip) {
+    drag = { mode:"tray", id:chip.dataset.id, moved:false };
+    ev.preventDefault(); return;
+  }
+  if (hit) {
+    selEdge = hit.dataset.e; selNode = null; render(); return;
+  }
+  // background click clears selection/highlight
+  selEdge = null; selNode = null; render();
+});
+
+document.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  const c = canvasPoint(ev);
+  if (drag.mode === "node") {
+    drag.moved = true;
+    positions[drag.id] = { x: Math.round(c.x - drag.dx), y: Math.round(c.y - drag.dy) };
+    const el = canvas.querySelector(`.node[data-id="${drag.id}"]`);
+    if (el) { el.style.left = positions[drag.id].x+"px"; el.style.top = positions[drag.id].y+"px"; }
+    drawWires();
+    tray.classList.toggle("droptarget", ev.clientY < canvas.getBoundingClientRect().top);
+  } else if (drag.mode === "wire") {
+    drawWires(wirePath(port(drag.id,"out"), c));
+  } else if (drag.mode === "tray") {
+    drag.moved = true;
+    const overCanvas = ev.clientY > canvas.getBoundingClientRect().top;
+    canvas.style.outline = overCanvas ? "2px dashed var(--accent)" : "";
+    canvas.style.outlineOffset = "-2px";
+  }
+});
+
+document.addEventListener("pointerup", (ev) => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  tray.classList.remove("droptarget");
+  canvas.style.outline = "";
+  const c = canvasPoint(ev);
+
+  if (d.mode === "wire") {
+    const target = document.elementsFromPoint(ev.clientX, ev.clientY).map(el => el.closest && el.closest(".node")).find(Boolean);
+    if (target && target.dataset.id !== d.id) {
+      const key = d.id + ">" + target.dataset.id;
+      if (!edges.has(key)) {
+        snapshot(); edges.add(key);
+        const cyc = cycleNodes();
+        toast(cyc.size ? "Dependency added — this creates a cycle" : "Dependency added");
+      }
+    }
+    render(); return;
+  }
+
+  if (d.mode === "node") {
+    if (ev.clientY < canvas.getBoundingClientRect().top) {
+      // dropped on tray: strip all edges + clear position (confirm when edges exist)
+      const id = d.id;
+      const touching = [...edges].filter(e => e.split(">").includes(id));
+      const doit = () => {
+        snapshot(); touching.forEach(e => edges.delete(e)); delete positions[id];
+        selNode = null; render(); toast("Unsequenced — " + touching.length + " edge" + (touching.length===1?"":"s") + " removed");
+      };
+      if (touching.length) {
+        $("confirmtext").textContent = `Unsequence “${tasks.find(t=>t.id===id).title.slice(0,50)}…”? This removes ${touching.length} dependency edge${touching.length===1?"":"s"} and changes other tasks' ordering.`;
+        $("confirmbar").classList.add("show");
+        $("confirmyes").onclick = () => { $("confirmbar").classList.remove("show"); doit(); };
+        $("confirmno").onclick = () => { $("confirmbar").classList.remove("show"); render(); };
+      } else { snapshot(); delete positions[id]; render(); toast("Returned to tray"); }
+      return;
+    }
+    if (!d.moved) { selNode = (selNode === d.id) ? null : d.id; selEdge = null; }
+    render(); return;
+  }
+
+  if (d.mode === "tray") {
+    if (ev.clientY > canvas.getBoundingClientRect().top) {
+      snapshot();
+      positions[d.id] = { x: Math.round(c.x - NODE_W/2), y: Math.round(c.y - 20) };
+      render(); toast("Staged for sequencing — wire an edge to commit an order");
+    }
+    return;
+  }
+});
+
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") { selNode = null; selEdge = null; render(); }
+  if ((ev.key === "Backspace" || ev.key === "Delete") && selEdge) {
+    snapshot(); edges.delete(selEdge); selEdge = null; render(); toast("Dependency removed");
+  }
+});
+
+$("autolayout").addEventListener("click", () => {
+  snapshot();
+  // clear manual positions for edge-less nodes (they return to tray), relayout the rest
+  tasks.forEach(t => { if (!hasEdges(t.id)) delete positions[t.id]; });
+  autoLayout(); render(); toast("Auto-layout applied");
+});
+
+autoLayout();
+render();
+</script>
+</body>
+</html>
