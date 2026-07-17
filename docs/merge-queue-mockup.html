@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Merge Queue mockup</title>
+<style>
+/* Tokens: clay (shipped default), copied from docs/palette-mockups.html.
+   The real surface consumes ui tokens; this file only mocks layout & flow. */
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.16); --ok-fg:#2e5a3c;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.15); --warn-fg:#7a5a1a;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.15); --bad-fg:#8a3a2a;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.15); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--bg0); color:var(--text);
+  font:15px/1.55 system-ui, -apple-system, sans-serif;
+  padding:28px 20px 80px;
+}
+.frame { max-width:1180px; margin:0 auto; }
+.note { color:var(--text2); max-width:68ch; margin:4px 0 18px; }
+.note code { background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; font-size:.88em; }
+h1 { font-size:22px; margin:0; letter-spacing:.2px; }
+h2 { font-size:13px; text-transform:uppercase; letter-spacing:.09em; color:var(--text3); margin:34px 0 10px; }
+.toolbar { position:fixed; top:16px; right:16px; }
+.toolbar button {
+  background:var(--bg2); color:var(--text); border:1px solid var(--line);
+  border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px;
+}
+.toolbar button:hover { background:var(--bg3); }
+
+/* ---- surface chrome ---- */
+.surface {
+  display:grid; grid-template-columns: 340px 1fr; gap:0;
+  background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px;
+  overflow:hidden; box-shadow:var(--shadow); min-height:560px;
+}
+
+/* ---- queue rail ---- */
+.queue { border-right:1px solid var(--line-soft); background:var(--bg1); padding:14px 10px; }
+.queue-head { display:flex; align-items:baseline; justify-content:space-between; padding:2px 8px 10px; }
+.queue-head .t { font-weight:600; font-size:14px; }
+.queue-head .n { color:var(--text3); font-size:12px; }
+.qcard {
+  border:1px solid var(--line-soft); border-radius:10px; background:var(--bg2);
+  padding:10px 12px; margin:8px 0; cursor:pointer;
+  transition: background .12s ease, border-color .12s ease, transform .06s ease;
+}
+.qcard:hover { background:var(--bg3); border-color:var(--line); }
+.qcard:active { transform:scale(.995); }
+.qcard[aria-selected="true"] { border-color:var(--accent); background:var(--accent-soft); }
+.qcard .title { font-weight:600; font-size:14px; margin-bottom:2px; }
+.qcard .vs { color:var(--text3); font-size:12.5px; }
+.qcard .vs b { color:var(--text2); font-weight:600; }
+.qmeta { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.pill {
+  font-size:11.5px; border-radius:999px; padding:2px 9px; border:1px solid transparent;
+}
+.pill.wait { background:var(--warn-soft); color:var(--warn-fg); }
+.pill.agent { background:var(--info-soft); color:var(--info-fg); }
+.pill.you  { background:var(--bad-soft); color:var(--bad-fg); }
+.pill.files{ background:var(--bg3); color:var(--text2); border-color:var(--line-soft); }
+.pill.age  { background:transparent; color:var(--text3); border-color:var(--line-soft); }
+
+/* ---- detail pane ---- */
+.detail { padding:18px 22px 22px; background:var(--bg1); min-width:0; }
+.actions { flex-wrap:wrap; }
+.d-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; border-bottom:1px solid var(--line-soft); padding-bottom:14px; }
+.d-head h3 { margin:0 0 3px; font-size:17px; }
+.d-head .sub { color:var(--text2); font-size:13.5px; }
+.d-head .sub b { color:var(--text); }
+.gate { text-align:right; font-size:12.5px; color:var(--text3); white-space:nowrap; }
+.gate .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+.dot.ok { background:var(--ok); } .dot.bad { background:var(--bad); } .dot.wait { background:var(--warn); }
+
+.filelist { display:flex; gap:8px; margin:14px 0 4px; flex-wrap:wrap; }
+.filechip {
+  font-size:12.5px; font-family:ui-monospace,monospace; background:var(--bg2);
+  border:1px solid var(--line-soft); border-radius:7px; padding:4px 10px; cursor:pointer;
+}
+.filechip[aria-selected="true"] { border-color:var(--accent); background:var(--accent-soft); }
+.filechip:hover { border-color:var(--line); }
+
+/* intent-labeled conflict view — the mads value-add: each side wears its TASK */
+.conflict { border:1px solid var(--line-soft); border-radius:10px; overflow:hidden; margin-top:10px; background:var(--bg2); }
+.c-head { display:grid; grid-template-columns:1fr 1fr; border-bottom:1px solid var(--line-soft); }
+.c-head .side { padding:8px 14px; font-size:12.5px; }
+.c-head .side b { display:block; font-size:13px; color:var(--text); }
+.c-head .side span { color:var(--text3); }
+.c-head .side.mine { border-right:1px solid var(--line-soft); background:var(--info-soft); }
+.c-head .side.trunk { background:var(--warn-soft); }
+pre.code {
+  margin:0; padding:12px 14px; font:12.5px/1.6 ui-monospace,monospace; overflow-x:auto;
+  color:var(--text2);
+}
+pre.code .mine  { color:var(--info-fg); }
+pre.code .trunk { color:var(--warn-fg); }
+pre.code .marker{ color:var(--text3); }
+pre.code .union { background:var(--ok-soft); color:var(--ok-fg); display:block; }
+.c-strategy { display:flex; align-items:center; gap:8px; padding:9px 14px; border-top:1px solid var(--line-soft); font-size:12.5px; color:var(--text3); }
+.seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+.seg button {
+  background:var(--bg2); color:var(--text2); border:0; padding:5px 12px; font-size:12.5px; cursor:pointer;
+  border-right:1px solid var(--line-soft);
+}
+.seg button:last-child { border-right:0; }
+.seg button:hover { background:var(--bg3); color:var(--text); }
+.seg button[aria-pressed="true"] { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+
+/* guidance + actions */
+.guide { margin-top:16px; }
+.guide textarea {
+  width:100%; background:var(--bg2); color:var(--text); border:1px solid var(--line-soft);
+  border-radius:10px; padding:10px 12px; font:inherit; font-size:13.5px; resize:vertical; min-height:52px;
+}
+.guide textarea:focus { outline:2px solid var(--accent); outline-offset:1px; border-color:transparent; }
+.guide textarea::placeholder { color:var(--text3); }
+.actions { display:flex; gap:10px; margin-top:12px; align-items:center; }
+.btn { border-radius:9px; padding:8px 16px; font-size:13.5px; cursor:pointer; border:1px solid transparent; transition:background .12s ease; }
+.btn.primary { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+.btn.primary:hover { background:var(--accent-hover); }
+.btn.ghost { background:transparent; color:var(--text2); border-color:var(--line); }
+.btn.ghost:hover { background:var(--bg2); color:var(--text); }
+.btn.danger { background:transparent; color:var(--bad-fg); border-color:var(--line); }
+.btn.danger:hover { background:var(--bad-soft); }
+.actions .spacer { flex:1; }
+.hint { color:var(--text3); font-size:12px; margin-top:8px; }
+
+/* resolving state strip */
+.strip {
+  display:flex; align-items:center; gap:10px; margin-top:16px; padding:10px 14px;
+  border:1px solid var(--line-soft); border-radius:10px; background:var(--bg2); font-size:13px; color:var(--text2);
+}
+.spin { width:12px; height:12px; border:2px solid var(--line); border-top-color:var(--accent); border-radius:50%; animation:r 1s linear infinite; }
+@keyframes r { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation:none; } }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">theme</button></div>
+<div class="frame">
+  <h1>Merge Queue</h1>
+  <p class="note">Proposed surface for pipeline merge conflicts that survive the automated ladder
+  (engine rebase-before-merge → template's <code>merge_resolve</code> agent). Entry point: a badge on the
+  Pipeline board ("2 need you") and a ⌘K command. The core idea: mads knows the <em>intent on both sides</em>
+  of a conflict — each hunk wears its task, not just its diff.</p>
+
+  <h2>Surface — queue + intent-labeled conflict</h2>
+  <div class="surface">
+    <aside class="queue">
+      <div class="queue-head"><span class="t">Needs reconciliation</span><span class="n">3 conflicts</span></div>
+
+      <div class="qcard" aria-selected="true">
+        <div class="title">W7.4 Credentials: vault sources</div>
+        <div class="vs">vs <b>W7.3 Preflight</b> · merged 22 min ago</div>
+        <div class="qmeta">
+          <span class="pill you">needs you</span>
+          <span class="pill files">2 files</span>
+          <span class="pill age">31 min</span>
+        </div>
+      </div>
+
+      <div class="qcard">
+        <div class="title">W7.6 Remote registry client</div>
+        <div class="vs">vs <b>W7.5 Update lifecycle</b></div>
+        <div class="qmeta">
+          <span class="pill agent">agent resolving · try 1/2</span>
+          <span class="pill files">6 files</span>
+          <span class="pill age">4 min</span>
+        </div>
+      </div>
+
+      <div class="qcard">
+        <div class="title">Layout: centered content column</div>
+        <div class="vs">vs <b>Session click opens Conversation</b></div>
+        <div class="qmeta">
+          <span class="pill wait">queued behind agent</span>
+          <span class="pill files">1 file</span>
+          <span class="pill age">1 min</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="detail">
+      <div class="d-head">
+        <div>
+          <h3>W7.4 Credentials: vault sources</h3>
+          <div class="sub">branch <b>mads/tsk_190477…</b> conflicts with trunk changes from
+          <b>W7.3 Preflight &amp; provider compatibility</b></div>
+        </div>
+        <div class="gate">
+          <div><span class="dot ok"></span>worktree gate green pre-merge</div>
+          <div><span class="dot bad"></span>agent resolve failed · 2/2 tries</div>
+        </div>
+      </div>
+
+      <div class="filelist">
+        <span class="filechip" aria-selected="true">services/router/main.go</span>
+        <span class="filechip">services/router/main_test.go</span>
+      </div>
+
+      <div class="conflict">
+        <div class="c-head">
+          <div class="side mine"><b>This task — W7.4 Credentials</b><span>adds vault refs + sources to the Router wiring</span></div>
+          <div class="side trunk"><b>Trunk — W7.3 Preflight</b><span>adds a preflight checker to the same constructor</span></div>
+        </div>
+<pre class="code"><span class="marker">&lt;&lt;&lt;&lt;&lt;&lt;&lt; mads/tsk_190477… (W7.4 Credentials)</span>
+<span class="mine">func newMux(…, creds *credstore.Store, vaultRefs *vault.RefStore, vaultSources []vault.Source) http.Handler {</span>
+<span class="marker">=======</span>
+<span class="trunk">func newMux(…, creds *credstore.Store, pf preflight.Checker) http.Handler {</span>
+<span class="marker">&gt;&gt;&gt;&gt;&gt;&gt;&gt; main (W7.3 Preflight)</span>
+<span class="union">  proposed union: func newMux(…, creds, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source)</span></pre>
+        <div class="c-strategy">
+          per-file strategy:
+          <span class="seg">
+            <button aria-pressed="true">Union (agent)</button>
+            <button aria-pressed="false">Take this task</button>
+            <button aria-pressed="false">Take trunk</button>
+          </span>
+          <span style="color:var(--text3)">applies on retry</span>
+        </div>
+      </div>
+
+      <div class="guide">
+        <textarea placeholder="Guidance for the next agent attempt — e.g. “keep both params; preflight goes before the vault args; fix the test call sites too”"></textarea>
+        <div class="actions">
+          <button class="btn primary">Retry with agent</button>
+          <button class="btn ghost">Open worktree in a session</button>
+          <span class="spacer"></span>
+          <button class="btn danger">Take trunk, drop branch…</button>
+        </div>
+        <div class="hint">Retry runs the resolve agent in the task's worktree with your guidance + both task descriptions,
+        then the full gate. Destructive choices confirm and keep a backup branch. Resolution lands as a normal
+        serialized merge — post-merge verify still runs.</div>
+      </div>
+
+      <div class="strip"><span class="spin"></span> After “Retry with agent”: this strip shows live stage progress
+      (resolve → build → test → merge) with the same event stream the Pipeline board uses.</div>
+    </main>
+  </div>
+
+  <h2>Flow notes</h2>
+  <p class="note">
+  1 · Conflicts enter the queue only after the free layers fail (git auto-merge, then <code>merge_resolve</code>).
+  2 · "Agent resolving" cards are watchable but need no action; "needs you" cards block that task only — the run continues elsewhere.
+  3 · "Open worktree in a session" spawns a normal interactive session cwd'd in the task worktree — full tooling, no special mode.
+  4 · Everything here is also a task-note trail: each retry/choice posts to the task's notes for the retro.
+  </p>
+</div>
+</body>
+</html>
