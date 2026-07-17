@@ -18,6 +18,7 @@ import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
+import { requestShellToggle } from "./conversation/shellToggleSignal";
 import styles from "./App.module.css";
 
 const RAIL_ITEMS: IconRailItem[] = [
@@ -75,6 +76,9 @@ export function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+      } else if (e.ctrlKey && e.key === "`") {
+        e.preventDefault();
+        requestShellToggle();
       }
     };
     document.addEventListener("keydown", handler);
@@ -115,8 +119,10 @@ export function App() {
         setActiveId("retro");
         break;
       case "toggle-shell":
+        requestShellToggle();
+        break;
       case "open-settings":
-        break; // no-op: no shell-toggle or settings surface exists yet
+        break; // no-op: no settings surface exists yet
     }
   }
 

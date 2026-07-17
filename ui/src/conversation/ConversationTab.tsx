@@ -11,6 +11,7 @@ import { TerminalView } from "./TerminalRenderer/TerminalView";
 import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
 import { ShellDock } from "./ShellDock/ShellDock";
+import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import styles from "./ConversationTab.module.css";
 
 export interface ConversationTabProps {
@@ -42,6 +43,12 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
   const [retryToken, setRetryToken] = useState(0);
   const [mode, setMode] = useState<DisplayMode>("chat");
   const [shellOpen, setShellOpen] = useState(false);
+
+  useEffect(() => {
+    const handler = () => setShellOpen((x) => !x);
+    window.addEventListener(SHELL_TOGGLE_EVENT, handler);
+    return () => window.removeEventListener(SHELL_TOGGLE_EVENT, handler);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
