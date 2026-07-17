@@ -38,6 +38,23 @@ export async function importTasks(
   return data.tasks;
 }
 
+/** Full GET→merge→PUT round-trip: no separate deps endpoint, dependencies live on Task.dependencies (PUT /tasks/{id} full-replace). */
+export async function linkDependency(
+  routerURL: string,
+  taskId: string,
+  dependsOnId: string,
+): Promise<void> {
+  const getRes = await fetch(`${routerURL}/tasks/${taskId}`);
+  if (!getRes.ok) throw new Error(`getTask: status ${getRes.status}`);
+  const task = await getRes.json();
+  const putRes = await fetch(`${routerURL}/tasks/${taskId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...task, dependencies: [...(task.dependencies ?? []), dependsOnId] }),
+  });
+  if (!putRes.ok) throw new Error(`linkDependency: status ${putRes.status}`);
+}
+
 /**
  * Records a file change directly against the Data Service. Nothing in the
  * pipeline/provider stack calls RecordFileChange yet (file-change tracking

@@ -30,6 +30,11 @@
   color: var(--text2);
 }
 
+.action {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
 .x {
   position: absolute;
   top: 6px;

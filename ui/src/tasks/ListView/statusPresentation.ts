@@ -6,7 +6,7 @@ import type { Task, TaskStatus } from "../../router/types";
  * `contracts.Task` has no field distinguishing "blocked because a dependency
  * isn't done yet" (calm, expected) from "blocked and needs a human" (alarm).
  * Both share schema status "blocked" — this heuristic reconstructs the
- * distinction client-side. Implemented once here; TaskRow, GraphNode, and the
+ * distinction client-side. Implemented once here; TaskRow, TaskNode, and the
  * Context Rail's compact row all call it — don't reimplement the rule
  * anywhere else.
  */

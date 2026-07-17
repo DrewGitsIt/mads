@@ -21,10 +21,10 @@ describe("TasksTab", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Graph" }));
-    await waitFor(() => expect(screen.getByTestId("graph-canvas-svg")).toBeTruthy());
+    await waitFor(() => expect(screen.getByTestId("rf__wrapper")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: "List" }));
-    expect(screen.queryByTestId("graph-canvas-svg")).toBeNull();
+    expect(screen.queryByTestId("rf__wrapper")).toBeNull();
   });
 
   it("opens the detail sheet on selecting a task, editable and closable", async () => {
