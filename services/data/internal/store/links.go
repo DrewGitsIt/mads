@@ -231,7 +231,7 @@ func (l *Links) Delete(ctx context.Context, id, actor string) error {
 // Get returns one link.
 func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 	return scanLink(l.log.db.QueryRowContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -241,7 +241,7 @@ func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 // an empty result.
 func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
 	rows, err := l.log.db.QueryContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? OR subject_session_id = ? ORDER BY created_at`,
 		sessionID, sessionID)
 	if err != nil {
@@ -257,6 +257,102 @@ func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.L
 		out = append(out, *link)
 	}
 	return out, errors.Join(rows.Err(), rows.Close())
+}
+
+// CreateImplicitHandRaiser creates (or returns the existing) system-granted
+// self-referential hand-raiser link for sessionID
+// (docs/LINKED-SESSIONS-DESIGN.md decision 6): {read,inject} from sessionID
+// onto itself. Deliberately skips Create's self-link/reverse-direction/
+// worktree checks — those exist to protect distinct-session links; a
+// same-session record is what this method is *for*. Idempotent: a second
+// call for a session that already has one returns the existing row
+// untouched (no duplicate link.created).
+func (l *Links) CreateImplicitHandRaiser(ctx context.Context, sessionID, actor string) (*contracts.Link, error) {
+	var out *contracts.Link
+	err := l.log.WithTx(ctx, func(tx *Tx) error {
+		if _, err := l.sessions.getInTx(tx, sessionID); err != nil {
+			return err
+		}
+		existing, err := implicitHandRaiserInTx(tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			out = existing
+			return nil
+		}
+		link := &contracts.Link{
+			ID:                NewID("lnk"),
+			GrantingSessionID: sessionID,
+			SubjectSessionID:  sessionID,
+			Grants:            contracts.PresetGrants[contracts.PresetHandRaiser],
+			Cadence:           contracts.CadencePerTurn,
+			Implicit:          true,
+		}
+		now := time.Now().UTC()
+		link.CreatedAt, link.UpdatedAt = now, now
+		if err := writeLink(tx, link); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"granting_session_id": link.GrantingSessionID,
+			"subject_session_id":  link.SubjectSessionID,
+			"grants":              link.Grants,
+		})
+		if err := tx.Append(&contracts.Envelope{
+			Type: contracts.LinkCreated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
+		}); err != nil {
+			return err
+		}
+		out = link
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RemoveImplicitHandRaiser deletes sessionID's implicit hand-raiser link, if
+// any (decision 6: auto-removed when the run completes). No-op, successful
+// if none exists.
+func (l *Links) RemoveImplicitHandRaiser(ctx context.Context, sessionID, actor string) error {
+	return l.log.WithTx(ctx, func(tx *Tx) error {
+		existing, err := implicitHandRaiserInTx(tx, sessionID)
+		if err != nil {
+			return err
+		}
+		if existing == nil {
+			return nil
+		}
+		if _, err := tx.Exec("DELETE FROM links WHERE id = ?", existing.ID); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{
+			"granting_session_id": existing.GrantingSessionID,
+			"subject_session_id":  existing.SubjectSessionID,
+		})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.LinkDeleted, SessionID: existing.SubjectSessionID, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// implicitHandRaiserInTx looks up sessionID's implicit hand-raiser link, if
+// any — backs both CreateImplicitHandRaiser's idempotency check and
+// RemoveImplicitHandRaiser's lookup.
+func implicitHandRaiserInTx(tx *Tx, sessionID string) (*contracts.Link, error) {
+	link, err := scanLinkRow(tx.QueryRow(
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
+		 FROM links WHERE granting_session_id = ? AND subject_session_id = ? AND implicit = 1`,
+		sessionID, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return link, nil
 }
 
 func hasGrant(grants []contracts.Grant, g contracts.Grant) bool {
@@ -352,7 +448,7 @@ func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
 	return scanLink(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -362,12 +458,12 @@ func writeLink(tx *Tx, link *contracts.Link) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
 		   grants = excluded.grants, cadence = excluded.cadence, updated_at = excluded.updated_at`,
 		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON), string(link.Cadence),
-		link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
+		boolToInt(link.Implicit), link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -390,13 +486,15 @@ func scanLinkRow(row rowScanner) (*contracts.Link, error) {
 		link       contracts.Link
 		grantsJSON string
 		cadence    string
+		implicit   int
 		createdAt  string
 		updatedAt  string
 	)
-	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &implicit, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	link.Cadence = contracts.LinkCadence(cadence)
+	link.Implicit = implicit != 0
 	if err := json.Unmarshal([]byte(grantsJSON), &link.Grants); err != nil {
 		return nil, err
 	}

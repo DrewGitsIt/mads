@@ -407,6 +407,99 @@ func TestLinkUpdateRefusesSecondOrchestrateHolder(t *testing.T) {
 	}
 }
 
+func TestCreateImplicitHandRaiser(t *testing.T) {
+	links, sessions, l := newLinkStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, sessions, contracts.Session{Name: "solo"})
+
+	link, err := links.CreateImplicitHandRaiser(ctx, sess.ID, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.GrantingSessionID != sess.ID || link.SubjectSessionID != sess.ID {
+		t.Fatalf("self-referential link: granting=%s subject=%s, want both %s", link.GrantingSessionID, link.SubjectSessionID, sess.ID)
+	}
+	if !link.Implicit {
+		t.Error("Implicit = false, want true")
+	}
+	want := contracts.PresetGrants[contracts.PresetHandRaiser]
+	if len(link.Grants) != len(want) {
+		t.Errorf("grants = %v, want %v", link.Grants, want)
+	}
+
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Implicit {
+		t.Error("stored Implicit = false, want true")
+	}
+
+	types := eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"link.*"}})
+	if len(types) != 1 || types[0] != contracts.LinkCreated {
+		t.Errorf("events = %v, want [link.created]", types)
+	}
+}
+
+func TestCreateImplicitHandRaiserIdempotent(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, sessions, contracts.Session{Name: "solo"})
+
+	first, err := links.CreateImplicitHandRaiser(ctx, sess.ID, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := links.CreateImplicitHandRaiser(ctx, sess.ID, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Errorf("second call created a new link %s, want the same one %s", second.ID, first.ID)
+	}
+
+	got, err := links.ForSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Errorf("ForSession = %d links, want 1 (no duplicate)", len(got))
+	}
+}
+
+func TestRemoveImplicitHandRaiser(t *testing.T) {
+	links, sessions, l := newLinkStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, sessions, contracts.Session{Name: "solo"})
+
+	link, err := links.CreateImplicitHandRaiser(ctx, sess.ID, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := links.RemoveImplicitHandRaiser(ctx, sess.ID, "system"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := links.Get(ctx, link.ID); !errors.Is(err, ErrNotFound) {
+		t.Error("implicit hand-raiser survived removal")
+	}
+
+	types := eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"link.*"}})
+	want := []contracts.EventType{contracts.LinkCreated, contracts.LinkDeleted}
+	if len(types) != len(want) {
+		t.Fatalf("events %v, want %v", types, want)
+	}
+}
+
+func TestRemoveImplicitHandRaiserNoOpWhenAbsent(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, sessions, contracts.Session{Name: "solo"})
+
+	if err := links.RemoveImplicitHandRaiser(ctx, sess.ID, "system"); err != nil {
+		t.Fatalf("removing absent implicit hand-raiser should be a no-op, got: %v", err)
+	}
+}
+
 func TestLinkSubjectCanHaveManyMonitors(t *testing.T) {
 	links, sessions, _ := newLinkStore(t)
 	ctx := context.Background()

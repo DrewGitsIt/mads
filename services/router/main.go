@@ -180,6 +180,9 @@ func main() {
 	watcher := digestwatch.NewWatcher(data, jobs)
 	go watcher.Run(ctx)
 
+	runWatcher := digestwatch.NewRunWatcher(data, jobs)
+	go runWatcher.Run(ctx)
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 
