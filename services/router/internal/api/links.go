@@ -78,3 +78,44 @@ func (s *server) handleListSessionLinks(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, list)
 }
+
+// handleLinkInject delivers a message from the link's granting session into
+// its subject's conversation (docs/LINKED-SESSIONS-DESIGN.md decisions
+// 1-2): the Router resolves the Attribution here — link id and the granting
+// session's Name, snapshotted at delivery time — and forwards it to the
+// subject's running child, which queues it behind any in-flight turn.
+func (s *server) handleLinkInject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Text string `json:"text"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	link, err := s.data.Link(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if !link.HasGrant(contracts.GrantInject) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "link does not carry the inject grant"})
+		return
+	}
+	// Links don't cascade: if the granting session has since been deleted,
+	// fall back to its raw ID rather than failing the injection.
+	sourceName := link.GrantingSessionID
+	if granting, err := s.data.Session(r.Context(), link.GrantingSessionID); err == nil {
+		sourceName = granting.Name
+	}
+	addr, ok := s.sup.SessionAddr(link.SubjectSessionID)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "subject session not running"})
+		return
+	}
+	s.postJSONToChild(w, r, addr, "/inject", contracts.InjectRequest{
+		Text: body.Text,
+		Attribution: contracts.Attribution{
+			LinkID:     link.ID,
+			SourceName: sourceName,
+		},
+	})
+}

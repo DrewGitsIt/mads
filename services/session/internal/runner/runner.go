@@ -116,6 +116,23 @@ type Runner struct {
 	busy         bool   // a turn is in flight (Send called, no EventTurnEnd yet)
 	closing      bool   // Shutdown has started tearing this session down
 
+	// pending holds injected messages that arrived while busy (decision 1,
+	// docs/LINKED-SESSIONS-DESIGN.md): inject never interrupts an in-flight
+	// turn, it queues behind it. onTurnEnd pops and delivers the head of
+	// this slice, FIFO, once the current turn ends.
+	pending []pendingInjection
+
+	// sentTurns counts every turn sent so far (Send and Inject alike),
+	// 1-indexed — the ordinal Transcript correlates against turnAttributions
+	// to attach the right Attribution to the right user-role message.
+	sentTurns int
+
+	// turnAttributions records, by sentTurns ordinal, the Attribution of
+	// turns that were injected (absent for ordinary user turns). In-memory
+	// only: lost on session bounce/restart, since the provider's own
+	// transcript has no metadata channel to persist into.
+	turnAttributions map[int]contracts.Attribution
+
 	// lastRef is the provider-native ref of the most recently started
 	// session, kept even while sess == nil mid-switch — SwitchTransport
 	// resumes it, and Transcript falls back to it so the live transcript
@@ -134,18 +151,26 @@ type Runner struct {
 	touched map[string]bool
 }
 
+// pendingInjection is one queued Inject call, waiting for the in-flight
+// turn to end.
+type pendingInjection struct {
+	text        string
+	attribution contracts.Attribution
+}
+
 // New builds a Runner for sessionID. data's actor must be sessionID (spec
 // §15's per-service actor convention) so events and lease claims attribute
 // correctly.
 func New(sessionID string, data *dataclient.Client, providers *provider.Registry) *Runner {
 	return &Runner{
-		sessionID: sessionID,
-		data:      data,
-		providers: providers,
-		Cwd:       ".",
-		Died:      make(chan struct{}),
-		hub:       newHub(),
-		touched:   make(map[string]bool),
+		sessionID:        sessionID,
+		data:             data,
+		providers:        providers,
+		Cwd:              ".",
+		Died:             make(chan struct{}),
+		hub:              newHub(),
+		touched:          make(map[string]bool),
+		turnAttributions: make(map[int]contracts.Attribution),
 	}
 }
 
@@ -344,6 +369,18 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 	return result, nil
 }
 
+// deliverLocked marks a turn as in-flight and records its ordinal — and,
+// for an injected turn, the Attribution Transcript will later attach to the
+// resulting user-role message. Must be called with r.mu held; the caller
+// sends on r.sess itself, after unlocking.
+func (r *Runner) deliverLocked(attribution *contracts.Attribution) {
+	r.busy = true
+	r.sentTurns++
+	if attribution != nil {
+		r.turnAttributions[r.sentTurns] = *attribution
+	}
+}
+
 // Send relays one user turn. Returns ErrTurnInFlight (surfaced as HTTP 409)
 // if a turn is already in flight.
 func (r *Runner) Send(ctx context.Context, text string) error {
@@ -356,7 +393,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		r.mu.Unlock()
 		return ErrTurnInFlight
 	}
-	r.busy = true
+	r.deliverLocked(nil)
 	sess := r.sess
 	r.mu.Unlock()
 
@@ -369,6 +406,93 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		return err
 	}
 	return nil
+}
+
+// Inject delivers a message from a linked session into this session's
+// conversation (docs/LINKED-SESSIONS-DESIGN.md decisions 1-2). It never
+// interrupts an in-flight turn: if the runner is busy, the message queues
+// and onTurnEnd delivers it once the current turn ends, FIFO with any other
+// queued injections. Trust capping (decision 3) needs no extra plumbing
+// here — sess.Send is the same call Send makes, so an injected turn is
+// bound by the subject session's own trust level exactly as a user turn is.
+func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.Attribution) error {
+	r.mu.Lock()
+	if r.sess == nil {
+		r.mu.Unlock()
+		return ErrNotReady
+	}
+	if r.busy {
+		r.pending = append(r.pending, pendingInjection{text: text, attribution: attribution})
+		r.mu.Unlock()
+		r.recordInjectionAudit(ctx, attribution, text)
+		return nil
+	}
+	r.deliverLocked(&attribution)
+	sess := r.sess
+	r.mu.Unlock()
+
+	r.synthEngine.OnUserSend(text)
+	r.recordInjectionAudit(ctx, attribution, text)
+
+	if err := sess.Send(ctx, text); err != nil {
+		r.mu.Lock()
+		r.busy = false
+		r.mu.Unlock()
+		return err
+	}
+	return nil
+}
+
+// recordInjectionAudit appends a LinkMessageInjected event scoped to the
+// link's own actor identity, not r.data — r.data is bound to this session's
+// own actor (spec §15's per-service convention), and an injected message
+// must attribute to the link, not the subject. Best-effort: a failure here
+// must not block delivery, since the message has already been queued or
+// sent by the time this runs.
+func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts.Attribution, text string) {
+	client := dataclient.New(r.data.BaseURL(), "link-"+attribution.LinkID)
+	env := contracts.Envelope{
+		Type:      contracts.LinkMessageInjected,
+		SessionID: r.sessionID,
+		Payload: mustJSON(map[string]string{
+			"link_id":     attribution.LinkID,
+			"source_name": attribution.SourceName,
+			"text":        text,
+		}),
+	}
+	if err := client.Append(ctx, &env); err != nil {
+		log.Printf("runner: append link.message_injected: %v", err)
+	}
+}
+
+// onTurnEnd clears the in-flight flag and, if any injections queued while
+// busy, delivers the next one — all under one continuous lock hold, so a
+// concurrent Send or Inject can't steal the slot ahead of a message that
+// was already queued (FIFO ordering, decision 1).
+func (r *Runner) onTurnEnd() {
+	r.mu.Lock()
+	r.busy = false
+	if len(r.pending) == 0 {
+		r.mu.Unlock()
+		return
+	}
+	next := r.pending[0]
+	r.pending = r.pending[1:]
+	r.deliverLocked(&next.attribution)
+	sess := r.sess
+	r.mu.Unlock()
+	if sess == nil {
+		return
+	}
+
+	r.synthEngine.OnUserSend(next.text)
+
+	if err := sess.Send(context.Background(), next.text); err != nil {
+		log.Printf("runner: deliver queued injection: %v", err)
+		r.mu.Lock()
+		r.busy = false
+		r.mu.Unlock()
+	}
 }
 
 // Interrupt stops the in-flight response, if any. The session remains
@@ -577,9 +701,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 func (r *Runner) pump(sess provider.Session) {
 	for ev := range sess.Events() {
 		if ev.Kind == provider.EventTurnEnd {
-			r.mu.Lock()
-			r.busy = false
-			r.mu.Unlock()
+			r.onTurnEnd()
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 			r.recordFileChange(ev.Tool.Path)
@@ -634,9 +756,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			defer wg.Done()
 			for ev := range events {
 				if ev.Kind == provider.EventTurnEnd {
-					r.mu.Lock()
-					r.busy = false
-					r.mu.Unlock()
+					r.onTurnEnd()
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 					r.recordFileChange(ev.Tool.Path)

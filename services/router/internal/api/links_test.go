@@ -1,10 +1,13 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 func mkSessionRouter(t *testing.T, baseURL, name string) contracts.Session {
@@ -140,5 +143,119 @@ func TestLinkRoutesProxiedWhenFlagOn(t *testing.T) {
 	}
 	if delResp.StatusCode != http.StatusOK {
 		t.Fatalf("delete: status %d", delResp.StatusCode)
+	}
+}
+
+// TestLinkInjectRefusedWithoutGrant proves a link that doesn't carry the
+// inject grant (a Monitor preset, {read} only) can't be used to inject.
+func TestLinkInjectRefusedWithoutGrant(t *testing.T) {
+	srv := newTestServer(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+
+	resp := postJSON(t, srv.URL+"/links/"+link.ID+"/inject", map[string]string{"text": "hello"})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("inject without grant: status %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestLinkInject404WhenSubjectNotRunning proves inject 404s when the
+// subject session has no running child — even though the link itself and
+// its grant are valid.
+func TestLinkInject404WhenSubjectNotRunning(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+
+	// Created directly against the Data Service, bypassing the Router's
+	// POST /sessions (which spawns a child) — this session exists but has
+	// no running process.
+	bootstrap := dataclient.New(base, "test-bootstrap")
+	subject := contracts.Session{Name: "subject", Provider: "fake"}
+	if err := bootstrap.CreateSession(context.Background(), &subject); err != nil {
+		t.Fatalf("create subject session: %v", err)
+	}
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+
+	resp := postJSON(t, srv.URL+"/links/"+link.ID+"/inject", map[string]string{"text": "hello"})
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("inject with subject not running: status %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestLinkInjectDeliversWithAttribution is the end-to-end happy path: a
+// Leader-preset link injects a message into a real running subject child,
+// and the delivered message lands in the subject's transcript stamped with
+// the link's id and the granting session's name (docs/LINKED-SESSIONS-DESIGN.md
+// decisions 1-2).
+func TestLinkInjectDeliversWithAttribution(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader-1")
+	subject := mkSessionRouter(t, srv.URL, "subject-1")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+
+	injectResp := postJSON(t, srv.URL+"/links/"+link.ID+"/inject", map[string]string{"text": "hello"})
+	if injectResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("inject: status %d, want 202", injectResp.StatusCode)
+	}
+
+	var msgs []contracts.TranscriptMessage
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		tresp, err := http.Get(srv.URL + "/sessions/" + subject.ID + "/transcript")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = decodeJSON[[]contracts.TranscriptMessage](t, tresp)
+		if len(msgs) >= 1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("timed out waiting for injected message in subject transcript")
+	}
+	got := msgs[0]
+	if got.Role != "user" || got.Text != "hello" {
+		t.Fatalf("msgs[0] = %+v, want {role: user, text: hello}", got)
+	}
+	if got.Attribution == nil {
+		t.Fatalf("msgs[0] = %+v, attribution = nil, want set", got)
+	}
+	if got.Attribution.LinkID != link.ID || got.Attribution.SourceName != "leader-1" {
+		t.Fatalf("attribution = %+v, want {link_id: %q, source_name: leader-1}", got.Attribution, link.ID)
 	}
 }

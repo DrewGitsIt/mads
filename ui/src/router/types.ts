@@ -224,11 +224,20 @@ export interface Usage {
   model?: string;
 }
 
+// mirrors pkg/contracts/transcript.go Attribution — identifies the linked
+// session a message was injected from (docs/LINKED-SESSIONS-DESIGN.md
+// decision 2).
+export interface Attribution {
+  link_id: string;
+  source_name: string;
+}
+
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
   role: "user" | "agent" | "tool";
   text?: string;
   tool?: ToolUse;
+  attribution?: Attribution;
 }
 
 // mirrors providers/provider/event.go Event (normalized data-plane stream)

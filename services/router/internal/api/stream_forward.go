@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -100,4 +103,31 @@ func (s *server) proxyTo(w http.ResponseWriter, r *http.Request, addr, childPath
 	r2.URL.Path = childPath
 	r2.URL.RawPath = ""
 	proxy.ServeHTTP(w, r2)
+}
+
+// postJSONToChild sends body as a fresh JSON POST to addr+path, rather than
+// byte-transparently proxying r — some routes (e.g. link inject) need the
+// Router to transform the request server-side (resolving Attribution)
+// before it reaches the child, which proxyTo's pass-through can't do.
+func (s *server) postJSONToChild(w http.ResponseWriter, r *http.Request, addr, path string, body any) {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://"+addr+path, bytes.NewReader(raw))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }

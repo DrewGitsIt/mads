@@ -444,3 +444,204 @@ func TestShutdownReleasesLeases(t *testing.T) {
 		t.Fatalf("claim after release should succeed, got: %v", err)
 	}
 }
+
+// TestInjectQueuesBehindInFlightTurn proves decision 1
+// (docs/LINKED-SESSIONS-DESIGN.md): an Inject that arrives mid-turn never
+// interrupts it, it queues — and is delivered only once the in-flight turn
+// ends, in order.
+func TestInjectQueuesBehindInFlightTurn(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	attribution := contracts.Attribution{LinkID: "lnk_x", SourceName: "leader"}
+	if err := r.Inject(ctx, "echo queued", attribution); err != nil {
+		t.Fatalf("inject mid-turn: %v", err)
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+
+	// Drain the interrupted "slow" turn's own turn_end.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before first turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				if !ev.Interrupted {
+					t.Fatalf("first turn_end: interrupted = %v, want true", ev.Interrupted)
+				}
+				goto firstDrained
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for interrupted turn_end")
+		}
+	}
+firstDrained:
+
+	// The queued injection's own turn should now run automatically.
+	got := drainText(t, ch)
+	if got != "you said queued" {
+		t.Fatalf("queued injection reply = %q, want %q", got, "you said queued")
+	}
+}
+
+// TestInjectAttributionReachesTranscript proves decision 2
+// (docs/LINKED-SESSIONS-DESIGN.md): an injected message's Attribution
+// survives into the Transcript, and ordinary user turns carry none.
+func TestInjectAttributionReachesTranscript(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	attribution := contracts.Attribution{LinkID: "lnk_x", SourceName: "leader"}
+	if err := r.Inject(ctx, "echo queued", attribution); err != nil {
+		t.Fatalf("inject mid-turn: %v", err)
+	}
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+
+	// Drain until the queued injection's turn_end lands.
+	var turnEnds int
+	deadline := time.After(5 * time.Second)
+	for turnEnds < 2 {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before second turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				turnEnds++
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for queued injection's turn_end")
+		}
+	}
+
+	msgs := r.Transcript(ctx)
+	var found bool
+	for _, m := range msgs {
+		if m.Role != "user" {
+			continue
+		}
+		if m.Text == "echo queued" {
+			found = true
+			if m.Attribution == nil {
+				t.Fatalf("injected message %+v: attribution = nil, want set", m)
+			}
+			if m.Attribution.LinkID != attribution.LinkID || m.Attribution.SourceName != attribution.SourceName {
+				t.Fatalf("attribution = %+v, want %+v", m.Attribution, attribution)
+			}
+			continue
+		}
+		if m.Attribution != nil {
+			t.Fatalf("ordinary user message %+v: attribution = %+v, want nil", m, m.Attribution)
+		}
+	}
+	if !found {
+		t.Fatalf("transcript %+v: no message with text %q", msgs, "echo queued")
+	}
+}
+
+// TestInjectRespectsTrustCapping proves decision 3
+// (docs/LINKED-SESSIONS-DESIGN.md): what a subject agent may do in response
+// to an injected message is bounded by the subject session's own trust
+// level, exactly as for a user turn — a read_only session refuses an
+// attempted file write asked for via injection.
+func TestInjectRespectsTrustCapping(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	bootstrap := dataclient.New(base, "test-bootstrap")
+	sess := contracts.Session{Name: "test", Provider: "fake", Trust: contracts.TrustReadOnly}
+	if err := bootstrap.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	attribution := contracts.Attribution{LinkID: "lnk_x", SourceName: "leader"}
+	if err := r.Inject(ctx, "attempt-write", attribution); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+
+	var sawError bool
+	deadline := time.After(5 * time.Second)
+loop:
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before turn_end")
+			}
+			switch ev.Kind {
+			case provider.EventError:
+				sawError = true
+			case provider.EventToolUse:
+				t.Fatalf("tool use event observed under read_only trust for an injected turn: %+v", ev)
+			case provider.EventTurnEnd:
+				break loop
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turn_end")
+		}
+	}
+	if !sawError {
+		t.Fatal("want a refusal (EventError) for a read_only session's attempted write via injection, got none")
+	}
+}

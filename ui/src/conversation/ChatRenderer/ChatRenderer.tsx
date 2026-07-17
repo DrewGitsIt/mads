@@ -1,3 +1,4 @@
+import { Chip } from "../../components/Chip/Chip";
 import type { TranscriptMessage } from "../../router/types";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./ToolCard";
@@ -18,6 +19,19 @@ export function ChatRenderer({ messages }: ChatRendererProps) {
       {messages.map((message, i) => {
         if (message.tool) {
           return <ToolCard key={i} tool={message.tool} />;
+        }
+        // Injected messages carry role "user" at the transport level, but
+        // must never render as the subject user's own turn (decision 2,
+        // docs/LINKED-SESSIONS-DESIGN.md) — attribution wins over role.
+        if (message.attribution) {
+          return (
+            <div key={i} className={styles.injected}>
+              <Chip tone="info">
+                ⇄ from Leader · {message.attribution.source_name}
+              </Chip>
+              <Markdown className={styles.prose} text={message.text ?? ""} />
+            </div>
+          );
         }
         return (
           <div key={i} className={styles[message.role] ?? styles.agent}>

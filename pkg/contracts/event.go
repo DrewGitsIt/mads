@@ -170,6 +170,13 @@ const (
 	// LinkDeleted fires when a link is removed. Payload: {"granting_session_id":
 	// string, "subject_session_id": string} — identity only, not the removed grants.
 	LinkDeleted EventType = "link.deleted"
+	// LinkMessageInjected fires when a granting session's message is
+	// delivered into its subject's conversation (docs/LINKED-SESSIONS-DESIGN.md
+	// decision 1/2). Payload: {"link_id": string, "source_name": string,
+	// "text": string}. Envelope SessionID is the subject session (the one
+	// the message was delivered into); Actor is stamped "link-<id>", not
+	// the granting session's own actor identity.
+	LinkMessageInjected EventType = "link.message_injected"
 
 	TemplateCreated EventType = "template.created"
 	TemplateUpdated EventType = "template.updated"
@@ -229,7 +236,7 @@ var EventTypes = []EventType{
 	CapabilityCreated, CapabilityUpdated, CapabilityDeleted, CapabilityHealthChanged,
 	AgentCreated, AgentUpdated, AgentDeleted, AgentSelected, AgentOutcomeRecorded, AgentDraftGenerated,
 	WorkspaceCreated, WorkspaceUpdated, WorkspaceDeleted,
-	LinkCreated, LinkUpdated, LinkDeleted,
+	LinkCreated, LinkUpdated, LinkDeleted, LinkMessageInjected,
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,

@@ -28,6 +28,10 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		ref = r.sess.Ref()
 	}
 	providerName := r.providerName
+	attrs := make(map[int]contracts.Attribution, len(r.turnAttributions))
+	for k, v := range r.turnAttributions {
+		attrs[k] = v
+	}
 	r.mu.Unlock()
 	if ref == "" {
 		return out // Start hasn't finished yet
@@ -47,10 +51,17 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		return out
 	}
 	result := make([]contracts.TranscriptMessage, len(msgs))
+	var userIdx int
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text}
 		if m.Tool != nil {
 			tm.Tool = &contracts.ToolUse{Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
+		}
+		if m.Role == "user" {
+			userIdx++
+			if a, ok := attrs[userIdx]; ok {
+				tm.Attribution = &a
+			}
 		}
 		result[i] = tm
 	}
