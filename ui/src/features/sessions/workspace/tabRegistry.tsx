@@ -1,0 +1,48 @@
+import type { ComponentType } from "react";
+import { ConversationTab } from "../../../conversation/ConversationTab";
+import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
+import { FilesTab } from "../../../files/FilesTab";
+import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
+import { PipelineTab } from "../../../pipeline/PipelineTab";
+import type { RouterClient } from "../../../router/client";
+import { TasksTab } from "../../../tasks/TasksTab";
+
+export type WorkspaceTabId = "conversation" | "tasks" | "files" | "pipeline";
+
+export interface WorkspaceTabContext {
+  sessionId: string;
+  routerClient: RouterClient;
+  pipelineClient: PipelineClient;
+  ptyBridge?: PtyBridge;
+}
+
+export interface WorkspaceTabDef {
+  id: WorkspaceTabId;
+  label: string;
+  component: ComponentType<WorkspaceTabContext>;
+}
+
+function ConversationTabView({ sessionId, routerClient, ptyBridge }: WorkspaceTabContext) {
+  return <ConversationTab sessionId={sessionId} routerClient={routerClient} ptyBridge={ptyBridge} />;
+}
+
+function TasksTabView({ sessionId, routerClient }: WorkspaceTabContext) {
+  return <TasksTab sessionId={sessionId} routerClient={routerClient} />;
+}
+
+function FilesTabView({ sessionId, routerClient }: WorkspaceTabContext) {
+  // taskId intentionally omitted — this is the session-level mount, no
+  // single task in scope; FilesTab already handles taskId being undefined.
+  return <FilesTab sessionId={sessionId} routerClient={routerClient} />;
+}
+
+function PipelineTabView({ sessionId, pipelineClient }: WorkspaceTabContext) {
+  return <PipelineTab sessionId={sessionId} pipelineClient={pipelineClient} />;
+}
+
+export const WORKSPACE_TABS: WorkspaceTabDef[] = [
+  { id: "conversation", label: "Conversation", component: ConversationTabView },
+  { id: "tasks", label: "Tasks", component: TasksTabView },
+  { id: "files", label: "Files", component: FilesTabView },
+  { id: "pipeline", label: "Pipeline", component: PipelineTabView },
+];

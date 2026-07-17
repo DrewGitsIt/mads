@@ -38,6 +38,26 @@ export async function importTasks(
   return data.tasks;
 }
 
+/**
+ * Records a file change directly against the Data Service. Nothing in the
+ * pipeline/provider stack calls RecordFileChange yet (file-change tracking
+ * has no producer), and the Router only exposes GET /sessions/{id}/files —
+ * so seeding a change for a fake-pipeline session means POSTing straight to
+ * the Data Service, same as importTasks seeds tasks via the Router.
+ */
+export async function recordFileChange(
+  dataURL: string,
+  sessionID: string,
+  path: string,
+): Promise<void> {
+  const res = await fetch(`${dataURL}/sessions/${sessionID}/files`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Mads-Actor": "e2e" },
+    body: JSON.stringify({ session_id: sessionID, path, change: "added", origin: "tool_use" }),
+  });
+  if (!res.ok) throw new Error(`recordFileChange: status ${res.status}`);
+}
+
 export interface WorkspaceRepo {
   path: string;
   primary?: boolean;
