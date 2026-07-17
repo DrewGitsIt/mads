@@ -39,6 +39,17 @@
   cursor: pointer;
 }
 
+.optionLabel {
+  display: block;
+  font: 500 var(--fs-sm) var(--sans);
+}
+
+.optionDescription {
+  display: block;
+  font-size: var(--fs-chip);
+  color: var(--text3);
+}
+
 .option:hover {
   background: var(--bg3);
 }

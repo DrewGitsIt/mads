@@ -1,13 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
+import { router } from "../../../../router/client";
 import type { SessionTrust } from "../../../../router/types";
+import { TRUST_LEVELS } from "./trustLevels";
 import pillStyles from "./pills.module.css";
-
-const TRUST_LEVELS: { value: SessionTrust; label: string }[] = [
-  { value: "full", label: "Full access" },
-  { value: "limited", label: "Limited" },
-  { value: "read_only", label: "Read-only" },
-];
 
 export interface TrustPillProps {
   value?: SessionTrust;
@@ -18,7 +14,18 @@ export interface TrustPillProps {
 // pill has no precedence to pre-fill from, unlike Workspace/Agent/Model.
 export function TrustPill({ value, onChange }: TrustPillProps) {
   const [open, setOpen] = useState(false);
+  const [defaultTrust, setDefaultTrust] = useState<SessionTrust>("limited");
   const selected = TRUST_LEVELS.find((t) => t.value === value);
+  const defaultLevel = TRUST_LEVELS.find((t) => t.value === defaultTrust);
+
+  useEffect(() => {
+    router
+      .getConfig()
+      .then((config) => setDefaultTrust(config.default_trust))
+      .catch(() => setDefaultTrust("limited"));
+  }, []);
+
+  const triggerLabel = selected?.label ?? `${defaultLevel?.label ?? "Limited"} (default)`;
 
   return (
     <Popover
@@ -30,7 +37,7 @@ export function TrustPill({ value, onChange }: TrustPillProps) {
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>trust</span> {selected?.label ?? "Prompt each time"}
+          <span className={pillStyles.key}>trust</span> {triggerLabel}
         </button>
       }
     >
@@ -47,7 +54,8 @@ export function TrustPill({ value, onChange }: TrustPillProps) {
               setOpen(false);
             }}
           >
-            {t.label}
+            <span className={pillStyles.optionLabel}>{t.label}</span>
+            <span className={pillStyles.optionDescription}>{t.description}</span>
           </button>
         ))}
       </div>
