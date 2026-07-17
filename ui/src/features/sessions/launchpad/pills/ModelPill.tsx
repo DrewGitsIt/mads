@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
 import { useProviderModels } from "../../../../router/useProviderModels";
+import { modelDisplayName } from "../../../../router/modelDisplay";
 import type { Model } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
 
@@ -14,7 +15,8 @@ export function ModelPill({ provider, model, onChange }: ModelPillProps) {
   const [open, setOpen] = useState(false);
   const modelsByProvider = useProviderModels();
 
-  const label = model ? `${model} · ${provider}` : "Select model";
+  const models = modelsByProvider[provider ?? ""] ?? [];
+  const label = model ? `${modelDisplayName(model, models) ?? model} · ${provider}` : "Select model";
 
   return (
     <Popover

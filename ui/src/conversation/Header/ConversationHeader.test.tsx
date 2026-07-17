@@ -1,9 +1,54 @@
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationHeader } from "./ConversationHeader";
 import { fixtureSessions } from "../../router/fixtures";
 
+function stubProviderModels(models: { id: string; name: string; default?: boolean }[]) {
+  const fetchMock = vi.fn().mockImplementation((input: URL) => {
+    const url = input.toString();
+    if (url.endsWith("/providers")) {
+      return Promise.resolve(new Response(JSON.stringify([{ name: "claudecode", matrix: {} }]), { status: 200 }));
+    }
+    return Promise.resolve(new Response(JSON.stringify({ models }), { status: 200 }));
+  });
+  vi.stubGlobal("fetch", fetchMock);
+}
+
 describe("ConversationHeader", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the resolved model display name when discovery finds a match", async () => {
+    stubProviderModels([{ id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true }]);
+
+    render(
+      <ConversationHeader
+        session={fixtureSessions["session-active"]}
+        shellOpen={false}
+        onToggleShell={() => {}}
+        onRestartAgent={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Claude Sonnet 5")).toBeTruthy());
+  });
+
+  it("falls back to the raw model ID when discovery has no match", async () => {
+    stubProviderModels([{ id: "claude-opus-4-8", name: "Claude Opus 4.8" }]);
+
+    render(
+      <ConversationHeader
+        session={fixtureSessions["session-active"]}
+        shellOpen={false}
+        onToggleShell={() => {}}
+        onRestartAgent={() => {}}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("claude-sonnet-5")).toBeTruthy());
+  });
+
   it("renders name, status chip, and workspace/branch line", () => {
     render(
       <ConversationHeader

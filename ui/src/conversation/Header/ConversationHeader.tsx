@@ -3,6 +3,8 @@ import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import type { Session } from "../../router/types";
+import { useProviderModels } from "../../router/useProviderModels";
+import { modelDisplayName } from "../../router/modelDisplay";
 import { ContextMeter } from "./ContextMeter";
 import styles from "./ConversationHeader.module.css";
 
@@ -40,6 +42,7 @@ export function ConversationHeader({
   const [name, setName] = useState(session.name);
   const [openPill, setOpenPill] = useState<PillField | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const modelsByProvider = useProviderModels();
 
   function commitName() {
     setEditingName(false);
@@ -96,7 +99,7 @@ export function ConversationHeader({
 
         {session.agent && (
           <PillPopover
-            label={session.agent}
+            value={session.agent}
             open={openPill === "agent"}
             onOpen={() => setOpenPill("agent")}
             onCommit={(v) => commitPill("agent", v)}
@@ -105,7 +108,8 @@ export function ConversationHeader({
         )}
         {session.model && (
           <PillPopover
-            label={session.model}
+            value={session.model}
+            label={modelDisplayName(session.model, modelsByProvider[session.provider ?? ""] ?? [])}
             open={openPill === "model"}
             onOpen={() => setOpenPill("model")}
             onCommit={(v) => commitPill("model", v)}
@@ -167,7 +171,8 @@ export function ConversationHeader({
 }
 
 interface PillPopoverProps {
-  label: string;
+  value: string;
+  label?: string;
   open: boolean;
   onOpen: () => void;
   onCommit: (value: string) => void;
@@ -176,21 +181,25 @@ interface PillPopoverProps {
 
 /**
  * Plain editable popover per HANDOFF.md §4 non-goals — the provider-grouped
- * model picker is W6.2 Launchpad's job, not rebuilt here.
+ * model picker is W6.2 Launchpad's job, not rebuilt here. `value` is the raw
+ * wire value (seeds editing and is what gets committed); `label` is an
+ * optional display override for the closed chip only — editing always
+ * starts from `value`, never from a resolved display string, so committing
+ * without changes can't corrupt the field with a display name.
  */
-function PillPopover({ label, open, onOpen, onCommit, onClose }: PillPopoverProps) {
-  const [value, setValue] = useState(label);
+function PillPopover({ value: rawValue, label, open, onOpen, onCommit, onClose }: PillPopoverProps) {
+  const [value, setValue] = useState(rawValue);
 
   return (
     <div className={styles.pillWrap}>
       <Chip
         tone="info"
         onClick={() => {
-          setValue(label);
+          setValue(rawValue);
           onOpen();
         }}
       >
-        {label}
+        {label ?? rawValue}
       </Chip>
       {open && (
         <Panel className={styles.pillMenu}>
