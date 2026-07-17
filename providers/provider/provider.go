@@ -43,6 +43,19 @@ const (
 	ModePTY Mode = "pty"
 )
 
+// Trust is the session's trust level (MADS-UX §3.2 Trust pill), mirrored
+// here rather than imported from pkg/contracts — this package defines its
+// own types throughout and has zero import references of pkg/contracts.
+// Values match contracts.SessionTrust string-for-string by construction;
+// callers cast directly (provider.Trust(sess.Trust)), no lookup table.
+type Trust string
+
+const (
+	TrustFull     Trust = "full"
+	TrustLimited  Trust = "limited"
+	TrustReadOnly Trust = "read_only"
+)
+
 // StartOptions configures an interactive session. Resume carries the
 // provider-native ref of a previous session (Session.Ref); empty starts
 // fresh. Resuming is the same spawn path as starting — that is how every
@@ -54,6 +67,10 @@ type StartOptions struct {
 	SystemPrompt string   // the agent definition's prompt (registry, spec §9)
 	Resume       string   // provider session ref to reattach to
 	Env          []string // extra environment, KEY=value
+	// Trust gates which tools the session may use (spec §11, linked-sessions
+	// design decision 3). Zero value "" behaves exactly like TrustFull in
+	// every provider — existing call sites that don't set it never regress.
+	Trust Trust
 }
 
 // OneShotRequest is a single non-interactive invocation — the Fast Model

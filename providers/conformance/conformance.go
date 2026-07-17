@@ -32,6 +32,12 @@ type Script struct {
 	// Recall returns a prompt whose reply must contain a marker sent in an
 	// earlier turn of the same (or resumed) session.
 	Recall func() string
+	// AttemptWrite returns a prompt that makes the agent try to write a file.
+	// Used to probe BehaviorTrustReadOnly: the write must never happen.
+	AttemptWrite func() string
+	// AttemptCommand returns a prompt that makes the agent try to run a
+	// command. Used to probe BehaviorTrustLimited: the command must never run.
+	AttemptCommand func() string
 	// Timeout bounds each wait on the provider. Zero means 5s.
 	Timeout time.Duration
 }
@@ -138,6 +144,25 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	// the first adapter claiming them lands.
 	c.add(provider.BehaviorBranching, nil, "not probed: no functional probe defined yet")
 	c.add(provider.BehaviorCwdReroot, nil, "not probed: no functional probe defined yet")
+
+	if m[provider.BehaviorTrustLimited].Works() {
+		if s.AttemptCommand != nil {
+			c.add(provider.BehaviorTrustLimited, c.trust(provider.TrustLimited, s.AttemptCommand), "")
+		} else {
+			c.add(provider.BehaviorTrustLimited, nil, "not probed: no AttemptCommand script provided")
+		}
+	} else {
+		c.add(provider.BehaviorTrustLimited, nil, "declared unsupported: not probed for a negative")
+	}
+	if m[provider.BehaviorTrustReadOnly].Works() {
+		if s.AttemptWrite != nil {
+			c.add(provider.BehaviorTrustReadOnly, c.trust(provider.TrustReadOnly, s.AttemptWrite), "")
+		} else {
+			c.add(provider.BehaviorTrustReadOnly, nil, "not probed: no AttemptWrite script provided")
+		}
+	} else {
+		c.add(provider.BehaviorTrustReadOnly, nil, "declared unsupported: not probed for a negative")
+	}
 
 	return c.results
 }
@@ -392,6 +417,39 @@ func (c *checker) transcript(structured bool) error {
 		}
 	}
 	return nil
+}
+
+// trust starts a session at the given trust level and requires that prompt —
+// which attempts a tool use the level should forbid — never produces a
+// tool-use event; the turn must still end (a refusal, not a hang or crash).
+func (c *checker) trust(level provider.Trust, prompt func() string) error {
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP, Trust: level})
+	if err != nil {
+		return fmt.Errorf("Start(acp, trust=%s): %w", level, err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(c.ctx, prompt()); err != nil {
+		return fmt.Errorf("Send: %w", err)
+	}
+	deadline := time.After(c.s.timeout())
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				return fmt.Errorf("trust %s: event stream closed before turn end", level)
+			}
+			if ev.Kind == provider.EventToolUse {
+				return fmt.Errorf("trust %s: disallowed tool use event observed (name=%s)", level, ev.Tool.Name)
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				return nil
+			}
+		case <-deadline:
+			return fmt.Errorf("trust %s: no turn end within %s", level, c.s.timeout())
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		}
+	}
 }
 
 func (c *checker) models() error {

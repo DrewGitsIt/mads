@@ -344,6 +344,65 @@ drained:
 	}
 }
 
+// TestTrustReachesProviderLaunch is the session-child-level proof that
+// sess.Trust actually reaches the provider's StartOptions: a read_only
+// session's attempted file write must refuse (EventError), exercising the
+// full wiring path (sess.Trust -> cast -> StartOptions.Trust -> fake's
+// toolAllowed) rather than unit-testing the cast in isolation.
+func TestTrustReachesProviderLaunch(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	bootstrap := dataclient.New(base, "test-bootstrap")
+	sess := contracts.Session{Name: "test", Provider: "fake", Trust: contracts.TrustReadOnly}
+	if err := bootstrap.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "attempt-write"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	var sawError bool
+	deadline := time.After(5 * time.Second)
+loop:
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before turn_end")
+			}
+			switch ev.Kind {
+			case provider.EventError:
+				sawError = true
+			case provider.EventToolUse:
+				t.Fatalf("tool use event observed under read_only trust: %+v", ev)
+			case provider.EventTurnEnd:
+				break loop
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turn_end")
+		}
+	}
+	if !sawError {
+		t.Fatal("want a refusal (EventError) for a read_only session's attempted write, got none")
+	}
+}
+
 func TestShutdownReleasesLeases(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)

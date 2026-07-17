@@ -83,8 +83,10 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorPTY:            provider.Native,
 		// Honest until the platform defines their interfaces; the fake
 		// grows them alongside the first probe.
-		provider.BehaviorBranching: provider.Unsupported,
-		provider.BehaviorCwdReroot: provider.Unsupported,
+		provider.BehaviorBranching:     provider.Unsupported,
+		provider.BehaviorCwdReroot:     provider.Unsupported,
+		provider.BehaviorTrustLimited:  provider.Native,
+		provider.BehaviorTrustReadOnly: provider.Native,
 	}
 }
 
@@ -114,8 +116,12 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	f.liveRefs[ref] = true
 	f.mu.Unlock()
 
+	trust := opts.Trust
+	if trust == "" {
+		trust = provider.TrustFull
+	}
 	s := &fakeSession{
-		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd,
+		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -231,6 +237,16 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 		return turnPlan{crash: true}
 	case prompt == "ratelimit":
 		return turnPlan{rateLimit: true}
+	case prompt == "attempt-write":
+		return turnPlan{
+			tools:  []ToolStep{{Name: "write_file", Path: "trust-probe.txt", Content: "should not exist under read_only"}},
+			chunks: []string{"wrote it"},
+		}
+	case prompt == "attempt-command":
+		return turnPlan{
+			tools:  []ToolStep{{Name: "run_command", Command: true}},
+			chunks: []string{"ran it"},
+		}
 	default:
 		return turnPlan{chunks: []string{"ok"}}
 	}
@@ -297,6 +313,7 @@ type fakeSession struct {
 	ref       string
 	mode      provider.Mode
 	cwd       string
+	trust     provider.Trust
 	events    chan provider.Event
 	interrupt chan struct{}
 	ptyR      *io.PipeReader
@@ -304,6 +321,23 @@ type fakeSession struct {
 
 	mu     sync.Mutex
 	closed bool
+}
+
+// toolAllowed reports whether ts is permitted at the session's trust level,
+// and the refusal reason to emit when it is not. TrustFull (and the zero
+// value, normalized to TrustFull in Start) always allows every tool.
+func (s *fakeSession) toolAllowed(ts ToolStep) (bool, string) {
+	switch s.trust {
+	case provider.TrustLimited:
+		if ts.Command {
+			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
+		}
+	case provider.TrustReadOnly:
+		if ts.Command || (ts.Path != "" && ts.Content != "") {
+			return false, fmt.Sprintf("trust %s refuses tool %q", s.trust, ts.Name)
+		}
+	}
+	return true, ""
 }
 
 func (s *fakeSession) Ref() string                   { return s.ref }
@@ -361,6 +395,11 @@ func (s *fakeSession) respond(prompt string, plan turnPlan) {
 		return
 	}
 	for _, ts := range plan.tools {
+		if allowed, reason := s.toolAllowed(ts); !allowed {
+			s.emit(provider.Event{Kind: provider.EventError, Text: reason})
+			s.emit(provider.Event{Kind: provider.EventTurnEnd})
+			return
+		}
 		if err := executeTool(ts, s.cwd); err != nil {
 			s.emit(provider.Event{Kind: provider.EventError, Text: err.Error()})
 			s.emit(provider.Event{Kind: provider.EventTurnEnd})

@@ -73,6 +73,10 @@ type ToolStep struct {
 	Path    string `yaml:"path,omitempty"`
 	Content string `yaml:"content,omitempty"`
 	Input   string `yaml:"input,omitempty"` // raw JSON for the event; defaults to {}
+	// Command marks the tool as a command-execution call rather than a file
+	// write — the trust matrix's BehaviorTrustLimited gates on this, distinct
+	// from a Path+Content file write.
+	Command bool `yaml:"command,omitempty"`
 }
 
 // Validate reports every problem at once (§10.3 ethos).

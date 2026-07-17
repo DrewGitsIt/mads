@@ -28,6 +28,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	if opts.Resume != "" {
 		args = append(args, "--resume", opts.Resume)
 	}
+	args = append(args, disallowedToolsArgs(opts.Trust)...)
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)

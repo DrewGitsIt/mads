@@ -28,6 +28,7 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	if opts.Resume != "" {
 		args = append(args, "--resume", opts.Resume)
 	}
+	args = append(args, disallowedToolsArgs(opts.Trust)...)
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)

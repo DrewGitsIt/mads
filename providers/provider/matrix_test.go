@@ -79,7 +79,7 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 11 {
-		t.Errorf("Behaviors() = %d entries, want 11", n)
+	if n := len(Behaviors()); n != 13 {
+		t.Errorf("Behaviors() = %d entries, want 13", n)
 	}
 }

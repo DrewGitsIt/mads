@@ -48,6 +48,14 @@ const (
 	// BehaviorCwdReroot — move a live session to a different working
 	// directory. Optional.
 	BehaviorCwdReroot Behavior = "cwd_reroot"
+	// BehaviorTrustLimited — a "limited" trust session denies command
+	// execution (mapping documented per-provider). Expected: every provider
+	// must take an honest stance, even if that stance is Unsupported.
+	BehaviorTrustLimited Behavior = "trust_limited"
+	// BehaviorTrustReadOnly — a "read_only" trust session denies both file
+	// writes and command execution. Expected, same honesty requirement as
+	// BehaviorTrustLimited.
+	BehaviorTrustReadOnly Behavior = "trust_read_only"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -95,6 +103,8 @@ var requirements = map[Behavior]Level{
 	BehaviorPTY:            LevelExpected,
 	BehaviorBranching:      LevelOptional,
 	BehaviorCwdReroot:      LevelOptional,
+	BehaviorTrustLimited:   LevelExpected,
+	BehaviorTrustReadOnly:  LevelExpected,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""

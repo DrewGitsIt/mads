@@ -76,6 +76,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorPTY:            provider.Native,
 		provider.BehaviorBranching:      provider.Unsupported,
 		provider.BehaviorCwdReroot:      provider.Unsupported,
+		// Emulated: enforcement rides the ACP session/request_permission
+		// handshake (kind-based auto-deny) on the structured transport, and a
+		// human's own interactive confirmation on PTY — neither is a harness
+		// guarantee the way claude-code's --disallowedTools is. See README.
+		provider.BehaviorTrustLimited:  provider.Emulated,
+		provider.BehaviorTrustReadOnly: provider.Emulated,
 	}
 }
 
@@ -122,7 +128,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 // output — stdout is captured as plain text and Usage stays zero-valued,
 // consistent with CostReporting=Unsupported.
 func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
-	args := []string{"chat", "--no-interactive", "--trust-all-tools", req.Prompt}
+	args := []string{"chat", "--no-interactive", req.Prompt}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
 	}
