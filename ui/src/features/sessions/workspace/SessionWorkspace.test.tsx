@@ -123,26 +123,38 @@ describe("SessionWorkspace", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("kebab shows Close for an active session, not Resume or Delete", async () => {
+  it("kebab always shows all three actions; while active, Resume and Delete are disabled with reasons", async () => {
     renderWorkspace({ sessionId: "session-active" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
 
-    expect(screen.getByText("Close")).toBeTruthy();
-    expect(screen.queryByText("Resume")).toBeNull();
-    expect(screen.queryByText("Delete")).toBeNull();
+    expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    const resume = screen.getByRole("button", { name: /Resume/ }) as HTMLButtonElement;
+    expect(resume.disabled).toBe(true);
+    expect(resume.textContent).toContain("Session is already active");
+    const del = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
+    expect(del.disabled).toBe(true);
+    expect(del.textContent).toContain("Close the session first");
   });
 
-  it("kebab shows Resume and Delete for an inactive session, not Close", async () => {
+  it("kebab always shows all three actions; while inactive, Resume and Delete are enabled and Close is disabled with a reason", async () => {
     renderWorkspace({ sessionId: "session-inactive" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
 
-    expect(screen.getByText("Resume")).toBeTruthy();
-    expect(screen.getByText("Delete")).toBeTruthy();
-    expect(screen.queryByText("Close")).toBeNull();
+    expect((screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect((screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    const close = screen.getByRole("button", { name: /Close/ }) as HTMLButtonElement;
+    expect(close.disabled).toBe(true);
+    expect(close.textContent).toContain("Session is already inactive");
   });
 
   it("Close calls routerClient.closeSession for this session", async () => {

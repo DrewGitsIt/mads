@@ -1,0 +1,39 @@
+.menuList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menuItem {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  font: var(--fs-body) var(--sans);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--bg3);
+}
+
+.menuItem:disabled {
+  color: var(--text3);
+  cursor: default;
+}
+
+.menuItem:disabled:hover {
+  background: none;
+}
+
+.reason {
+  display: block;
+  font: 400 var(--fs-chip) var(--sans);
+  color: var(--text3);
+}

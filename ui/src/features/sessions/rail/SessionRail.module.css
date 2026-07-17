@@ -101,3 +101,38 @@
   color: var(--text);
   background: var(--bg3);
 }
+
+.rowMenuWrap {
+  position: relative;
+}
+
+.rowMenuTrigger {
+  flex: none;
+  opacity: 0;
+  background: transparent;
+  border: none;
+  color: var(--text2);
+  padding: 2px 6px;
+  cursor: pointer;
+  font: 500 var(--fs-sm) var(--sans);
+  transition: opacity 0.15s;
+}
+
+.row:hover .rowMenuTrigger,
+.row:focus-within .rowMenuTrigger {
+  opacity: 1;
+}
+
+.rowMenuTrigger:hover {
+  color: var(--text);
+}
+
+.rowMenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-1);
+  z-index: 10;
+  box-shadow: var(--shadow);
+  width: 180px;
+}
