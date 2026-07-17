@@ -147,6 +147,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("PUT /links/{id}", s.requireLinkedSessions(s.handleUpdateLink))
 	mux.HandleFunc("DELETE /links/{id}", s.requireLinkedSessions(s.handleDeleteLink))
 	mux.HandleFunc("GET /sessions/{id}/links", s.requireLinkedSessions(s.handleListSessionLinks))
+	mux.HandleFunc("POST /links/{id}/inject", s.requireLinkedSessions(s.handleLinkInject))
 	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
 	mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)

@@ -16,7 +16,27 @@ type ToolUse struct {
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
 type TranscriptMessage struct {
-	Role string   `json:"role"` // "user", "agent", or "tool"
-	Text string   `json:"text,omitempty"`
-	Tool *ToolUse `json:"tool,omitempty"`
+	Role        string       `json:"role"` // "user", "agent", or "tool"
+	Text        string       `json:"text,omitempty"`
+	Tool        *ToolUse     `json:"tool,omitempty"`
+	Attribution *Attribution `json:"attribution,omitempty"`
+}
+
+// Attribution identifies the linked session a message was injected from
+// (docs/LINKED-SESSIONS-DESIGN.md decision 2): every injected message is
+// stamped with its source, end-to-end, so it can never be rendered or
+// reasoned about as the subject user's own turn. SourceName is the granting
+// session's Name, snapshotted at delivery time — links don't cascade, so a
+// later rename or deletion of the granting session must not change history.
+type Attribution struct {
+	LinkID     string `json:"link_id"`
+	SourceName string `json:"source_name"`
+}
+
+// InjectRequest is the body of POST /inject (session-service) and
+// POST /links/{id}/inject (Router): the text to deliver plus the
+// attribution the Router has already resolved server-side.
+type InjectRequest struct {
+	Text        string      `json:"text"`
+	Attribution Attribution `json:"attribution"`
 }

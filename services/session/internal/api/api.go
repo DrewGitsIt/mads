@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
 )
@@ -25,6 +26,7 @@ func New(r *runner.Runner) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
+	mux.HandleFunc("POST /inject", s.handleInject)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /output", s.handleStream)
@@ -55,6 +57,23 @@ func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.runner.Send(r.Context(), body.Text); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+// handleInject delivers a linked session's message into this session's
+// conversation (docs/LINKED-SESSIONS-DESIGN.md decisions 1-2). The Router
+// has already resolved the Attribution server-side before forwarding here —
+// this handler trusts it as given, same as it trusts the Router's other
+// proxied writes.
+func (s *server) handleInject(w http.ResponseWriter, r *http.Request) {
+	var body contracts.InjectRequest
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.runner.Inject(r.Context(), body.Text, body.Attribution); err != nil {
 		writeRunnerError(w, err)
 		return
 	}
