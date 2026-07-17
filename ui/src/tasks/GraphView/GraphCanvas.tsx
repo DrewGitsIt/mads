@@ -31,6 +31,11 @@ import styles from "./GraphCanvas.module.css";
 
 const NODE_TYPES = { taskNode: TaskNode };
 
+// Stable identity for the "no cycles" default — a `= new Set()` parameter
+// default would otherwise construct a fresh Set every render, which sits in
+// a useEffect dependency array below and would re-fire (and re-render) forever.
+const EMPTY_CYCLE_IDS: Set<string> = new Set();
+
 export type TaskEdgeData = { inCycle: boolean; onDelete?: () => void };
 export type TaskEdgeType = Edge<TaskEdgeData, "depEdge">;
 
@@ -155,7 +160,7 @@ function GraphCanvasInner({
   edges,
   tasksById,
   unsequencedIds,
-  cycleNodeIds = new Set(),
+  cycleNodeIds = EMPTY_CYCLE_IDS,
   onSelectTask,
   onNodeDragStop,
   onDropOnCanvas,

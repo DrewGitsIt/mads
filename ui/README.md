@@ -184,6 +184,19 @@ survive reload; an "Auto-layout" button clears overrides, re-packs, and
 re-fits the view. Cycles are highlighted from the server-authoritative
 `GET /tasks/cycles`, not client-side detection.
 
+Dragging from a node's bottom (source) handle to another node's top (target)
+handle creates a dependency (also via `PUT /tasks/{id}`, appending to the
+target's `dependencies`); selecting an edge and pressing Backspace, or
+clicking the X affordance on a selected edge, removes one — both show an
+undo toast, and a rejected write (e.g. a cross-session dependency, refused
+server-side) surfaces as an error toast instead. Cycles are legal at rest
+but blocked at launch, so a manufactured cycle only warns — a dashed ring on
+every participant node plus a banner — and clears the moment it's broken,
+it never blocks the edit. Clicking a node enters highlight mode, dimming
+every node/edge outside its ancestor+descendant set (Escape or a background
+click clears it); tray nodes can't participate since they have no edges by
+definition.
+
 ## Files tab
 
 ```sh

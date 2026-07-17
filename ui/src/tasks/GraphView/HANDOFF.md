@@ -387,3 +387,41 @@ existing props.
 - Don't build a toast queue. One `GraphToast | null` is enough; a second
   action while one is showing just replaces it (same as today's single
   `undoState`).
+
+## 9. Executor notes (this pass)
+
+A prior executor run was killed mid-task; its work survived on
+`backup/tsk_e31500cee2eb36b5` and, identically, as this branch's own
+`3bf4016` WIP commit (confirmed via `git diff`, zero output — same tree).
+That WIP already implemented everything above almost exactly as specced:
+`edgeOps.ts`'s two new plan builders, `highlight.ts`, the `GraphCanvas.tsx`
+wiring (custom `DepEdge`, `onConnect`/`onEdgesDelete`, highlight state +
+Escape/pane-click clearing, `deletable: false`), `TaskGraphView.tsx`'s
+`GraphToast` union and handlers, and the full test suite from §7 including
+the tray/marker-transition tests (present but uncommitted in the working
+tree; now committed).
+
+**One real bug found and fixed**: `GraphCanvasInner`'s `cycleNodeIds`
+prop had a `= new Set()` default-parameter value. Default parameters are
+evaluated fresh on every function call, so any render where the caller
+omits `cycleNodeIds` (e.g. `GraphCanvas.test.tsx`, which never passes it)
+got a new `Set` identity every render. That Set sits in the `useEffect`
+dependency array that calls `setNodes`, so the effect fired every render,
+which triggered another render, forever — an infinite loop invisible from
+`TaskGraphView`'s own tests (which always pass a real `cycleNodeIds`, or
+mock `GraphCanvas` out entirely) but fatal for anything mounting the real
+`GraphCanvas` without that prop. This is what actually caused the reported
+`make build && make test` OOM: `GraphCanvas.test.tsx`'s tests spun one
+worker at 100% CPU and climbing RSS until the whole `vitest run` process
+hit Node's heap ceiling. Fixed with a module-level `EMPTY_CYCLE_IDS`
+constant used as the default instead, so the reference is stable across
+renders. Reviewer: worth double-checking no other optional prop in this
+file (or `TaskGraphView.tsx`) has the same `= <object literal>` default
+pattern feeding a dependency array — this class of bug is easy to
+reintroduce.
+
+Also added a short README.md paragraph for the create/remove/cycle/
+highlight behavior (task 1's paragraph only covered tray/positions/cycles-
+display, not editing).
+
+`make check` and `make ui-smoke` are both green after the fix.

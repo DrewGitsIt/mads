@@ -215,3 +215,80 @@ describe("TaskGraphView — cycle warning", () => {
     expect(screen.queryByText(/cycle — the pipeline will refuse to launch these/)).toBeNull();
   });
 });
+
+describe("TaskGraphView — tray/marker transitions on edge edits", () => {
+  it("connecting an edge onto an unsequenced-marker node clears its marker on both ends", async () => {
+    const a = task({ id: "tsk_a", title: "a", session_id: "ses_marker1", created_at: "2026-01-01T00:00:00Z" });
+    const b = task({ id: "tsk_b", title: "b", session_id: "ses_marker1", created_at: "2026-01-01T00:01:00Z" });
+    const client = new FakeRouterClient(undefined, undefined, undefined, undefined, [a, b]);
+    const updateSpy = vi.spyOn(client, "updateTask");
+
+    render(<Harness routerClient={client} sessionId="ses_marker1" />);
+    await waitFor(() => expect(capturedProps).not.toBeNull());
+
+    // Give both isolated tasks a manual position so they're canvas nodes
+    // (0-edge + manual position -> floating canvas node with marker) —
+    // matches how a user would have dragged them out of the tray already.
+    act(() => {
+      capturedProps!.onDropOnCanvas!("tsk_a", { x: 0, y: 0 });
+    });
+    act(() => {
+      capturedProps!.onDropOnCanvas!("tsk_b", { x: 100, y: 100 });
+    });
+    await waitFor(() => expect(capturedProps!.unsequencedIds.has("tsk_a")).toBe(true));
+    expect(capturedProps!.unsequencedIds.has("tsk_b")).toBe(true);
+
+    await act(async () => {
+      capturedProps!.onConnect!("tsk_a", "tsk_b");
+    });
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ id: "tsk_b", dependencies: ["tsk_a"] }));
+
+    act(() => {
+      client.taskEventSource.dispatch({ type: "task.updated", task_id: "tsk_b", session_id: "ses_marker1" });
+    });
+
+    await waitFor(() => expect(capturedProps!.unsequencedIds.has("tsk_b")).toBe(false));
+    expect(capturedProps!.unsequencedIds.has("tsk_a")).toBe(false);
+  });
+
+  it("removing a manually-positioned node's last edge reinstates its marker instead of returning it to the tray", async () => {
+    const a = task({ id: "tsk_a", title: "a", session_id: "ses_marker2", created_at: "2026-01-01T00:00:00Z" });
+    const b = task({
+      id: "tsk_b",
+      title: "b",
+      session_id: "ses_marker2",
+      dependencies: ["tsk_a"],
+      created_at: "2026-01-01T00:01:00Z",
+    });
+    const client = new FakeRouterClient(undefined, undefined, undefined, undefined, [a, b]);
+    const updateSpy = vi.spyOn(client, "updateTask");
+
+    render(<Harness routerClient={client} sessionId="ses_marker2" />);
+    await waitFor(() => expect(capturedProps).not.toBeNull());
+    await waitFor(() => expect(capturedProps!.canvasNodes.some((n) => n.id === "tsk_b")).toBe(true));
+
+    // b already sits on the canvas because it has an edge; give it a manual
+    // position too, as if the user had also dragged it, so removing the
+    // edge below exercises the "manual position keeps it out of the tray"
+    // branch of the membership rule rather than the no-position branch.
+    act(() => {
+      capturedProps!.onDropOnCanvas!("tsk_b", { x: 50, y: 60 });
+    });
+
+    await act(async () => {
+      capturedProps!.onDeleteEdges!([{ from: "tsk_a", to: "tsk_b" }]);
+    });
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1));
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ id: "tsk_b", dependencies: [] }));
+
+    act(() => {
+      client.taskEventSource.dispatch({ type: "task.updated", task_id: "tsk_b", session_id: "ses_marker2" });
+    });
+
+    await waitFor(() => expect(capturedProps!.unsequencedIds.has("tsk_b")).toBe(true));
+    expect(capturedProps!.canvasNodes.some((n) => n.id === "tsk_b")).toBe(true);
+    // Still on the canvas, not back in the tray shelf.
+    expect(screen.queryByText("b")).toBeNull();
+  });
+});
