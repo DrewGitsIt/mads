@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { SessionActionsMenu } from "../actions/SessionActionsMenu";
+import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { dotState, groupSessions } from "./railGroups";
 import type { Session } from "../../../router/types";
 import styles from "./SessionRail.module.css";
@@ -8,6 +11,8 @@ export interface SessionRailProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
+  onClose?: (id: string) => void;
+  onDelete?: (id: string) => void;
   className?: string;
 }
 
@@ -17,9 +22,12 @@ export function SessionRail({
   selectedId,
   onSelect,
   onResume,
+  onClose,
+  onDelete,
   className,
 }: SessionRailProps) {
   const { active, recent } = groupSessions(sessions);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
 
   return (
     <div className={[styles.rail, className].filter(Boolean).join(" ")} aria-label="Session list">
@@ -36,6 +44,8 @@ export function SessionRail({
               selected={session.id === selectedId}
               onSelect={onSelect}
               onResume={onResume}
+              onClose={onClose}
+              onDeleteRequest={() => setConfirmDeleteId(session.id)}
             />
           ))}
         </div>
@@ -51,10 +61,20 @@ export function SessionRail({
               selected={session.id === selectedId}
               onSelect={onSelect}
               onResume={onResume}
+              onClose={onClose}
+              onDeleteRequest={() => setConfirmDeleteId(session.id)}
             />
           ))}
         </div>
       )}
+      <SessionDeleteConfirmDialog
+        open={confirmDeleteId !== undefined}
+        onConfirm={() => {
+          onDelete?.(confirmDeleteId!);
+          setConfirmDeleteId(undefined);
+        }}
+        onCancel={() => setConfirmDeleteId(undefined)}
+      />
     </div>
   );
 }
@@ -65,14 +85,19 @@ function SessionRow({
   selected,
   onSelect,
   onResume,
+  onClose,
+  onDeleteRequest,
 }: {
   session: Session;
   openTaskCount: number;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
+  onClose?: (id: string) => void;
+  onDeleteRequest: (id: string) => void;
 }) {
   const dot = dotState(session, openTaskCount);
+  const [menuOpen, setMenuOpen] = useState(false);
   return (
     <div
       role="button"
@@ -102,6 +127,34 @@ function SessionRow({
           Resume
         </button>
       )}
+      <div className={styles.rowMenuWrap} onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          className={styles.rowMenuTrigger}
+          aria-label={`${session.name || "Session"} actions`}
+          onClick={() => setMenuOpen((x) => !x)}
+        >
+          ⋯
+        </button>
+        {menuOpen && (
+          <SessionActionsMenu
+            className={styles.rowMenu}
+            activity={session.activity}
+            onClose={() => {
+              setMenuOpen(false);
+              onClose?.(session.id);
+            }}
+            onResume={() => {
+              setMenuOpen(false);
+              onResume?.(session.id);
+            }}
+            onDeleteRequest={() => {
+              setMenuOpen(false);
+              onDeleteRequest(session.id);
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

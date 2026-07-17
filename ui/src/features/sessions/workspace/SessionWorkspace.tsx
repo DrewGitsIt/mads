@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Chip } from "../../../components/Chip/Chip";
-import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
-import { Panel, PanelBody } from "../../../components/Panel/Panel";
 import { Toast } from "../../../components/Toast/Toast";
 import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
@@ -10,6 +8,8 @@ import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
 import type { Session } from "../../../router/types";
+import { SessionActionsMenu } from "../actions/SessionActionsMenu";
+import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { usePipelineRunning } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
@@ -145,41 +145,17 @@ export function SessionWorkspace({
           >
             ⋮
           </Button>
-          {menuOpen && (
-            <Panel className={styles.menu}>
-              <PanelBody>
-                <ul className={styles.menuList}>
-                  {session?.activity === "active" && (
-                    <li>
-                      <button type="button" className={styles.menuItem} onClick={closeSession}>
-                        Close
-                      </button>
-                    </li>
-                  )}
-                  {session?.activity === "inactive" && (
-                    <li>
-                      <button type="button" className={styles.menuItem} onClick={resumeSession}>
-                        Resume
-                      </button>
-                    </li>
-                  )}
-                  {session?.activity === "inactive" && (
-                    <li>
-                      <button
-                        type="button"
-                        className={styles.menuItem}
-                        onClick={() => {
-                          setMenuOpen(false);
-                          setConfirmingDelete(true);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </li>
-                  )}
-                </ul>
-              </PanelBody>
-            </Panel>
+          {menuOpen && session && (
+            <SessionActionsMenu
+              className={styles.menu}
+              activity={session.activity}
+              onClose={closeSession}
+              onResume={resumeSession}
+              onDeleteRequest={() => {
+                setMenuOpen(false);
+                setConfirmingDelete(true);
+              }}
+            />
           )}
         </div>
       </div>
@@ -188,11 +164,8 @@ export function SessionWorkspace({
         <Toast tone="bad" title="Session action failed" description={actionError} />
       )}
 
-      <ConfirmDialog
+      <SessionDeleteConfirmDialog
         open={confirmingDelete}
-        title="Delete this session?"
-        description="Deleting permanently removes this session, its tasks, file-change history, and commit records. Provider transcripts and the event log survive. This can't be undone."
-        confirmLabel="Delete"
         onConfirm={() => void confirmDelete()}
         onCancel={() => setConfirmingDelete(false)}
       />

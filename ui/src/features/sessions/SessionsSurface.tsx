@@ -26,7 +26,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const openTaskCounts = useOpenTaskCounts();
   const [selectedId, setSelectedId] = useState<string>();
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
-  const [resumeError, setResumeError] = useState<string>();
+  const [actionError, setActionError] = useState<string>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
     useState<{ sessionId: string; text: string }>();
@@ -65,7 +65,17 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             }}
             onResume={(id) => {
               router.resumeSession(id).catch((err: unknown) => {
-                setResumeError(err instanceof Error ? err.message : String(err));
+                setActionError(err instanceof Error ? err.message : String(err));
+              });
+            }}
+            onClose={(id) => {
+              router.closeSession(id).catch((err: unknown) => {
+                setActionError(err instanceof Error ? err.message : String(err));
+              });
+            }}
+            onDelete={(id) => {
+              router.deleteSession(id).catch((err: unknown) => {
+                setActionError(err instanceof Error ? err.message : String(err));
               });
             }}
           />
@@ -95,8 +105,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           <Launchpad createSession={createSession} onSessionCreated={handleSessionCreated} />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
-        {resumeError && (
-          <Toast tone="bad" title="Couldn't resume session" description={resumeError} />
+        {actionError && (
+          <Toast tone="bad" title="Session action failed" description={actionError} />
         )}
       </main>
     </div>

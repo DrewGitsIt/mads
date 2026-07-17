@@ -20,7 +20,11 @@ test("sessions journey: hero goal opens the conversation and gets a reply", asyn
   await expect(page.getByText(`you said hero journey ${token}`)).toBeVisible();
 
   const rail = page.locator('[aria-label="Session list"]');
-  await expect(rail.getByRole("button", { name: goal })).toBeVisible();
+  // getByText resolves to the smallest matching element (the name span) —
+  // the row is itself a role="button" whose computed accessible name also
+  // folds in its nested "⋯ actions" trigger, so a role query here would be
+  // ambiguous (see the third test's identical note).
+  await expect(rail.getByText(goal, { exact: true })).toBeVisible();
 
   // Terminal round trip still works; history (the goal message) survives it.
   await page.getByRole("button", { name: "Terminal" }).click();
@@ -89,12 +93,34 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   // ("Resume <session name>") overrides its accessible name — so
   // getByRole("button", { name: "Resume", exact: true }) stays unambiguous.
   await page.getByLabel("Workspace actions").click();
+
+  // All three lifecycle actions are always visible in the kebab — while the
+  // session is still active, Resume and Delete render disabled with an
+  // inline reason instead of being hidden (discovery beats minimalism).
+  // Scoped to the open menu's own list: other sessions elsewhere on the page
+  // (created by e2e tests running in parallel against the same backend) also
+  // render "Resume ..." rail affordances, which an unscoped substring/regex
+  // query would also match.
+  const kebabList = page.getByRole("list");
+  await expect(page.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+  const deleteWhileActive = kebabList.getByRole("button", { name: /Delete/ });
+  await expect(deleteWhileActive).toBeDisabled();
+  await expect(deleteWhileActive).toContainText("Close the session first");
+  const resumeWhileActive = kebabList.getByRole("button", { name: /Resume/ });
+  await expect(resumeWhileActive).toBeDisabled();
+  await expect(resumeWhileActive).toContainText("Session is already active");
+
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
   await expect(resumeAffordance).toBeVisible();
   await page.getByLabel("Workspace actions").click();
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Close", exact: true })).toHaveCount(0);
+  // Close is now disabled-with-reason rather than absent — same discovery-
+  // over-minimalism rule applies once activity flips.
+  const closeWhileInactive = kebabList.getByRole("button", { name: /Close/ });
+  await expect(closeWhileInactive).toBeVisible();
+  await expect(closeWhileInactive).toBeDisabled();
+  await expect(closeWhileInactive).toContainText("Session is already inactive");
 
   // Resume is reachable here (menu item present, wired to
   // routerClient.resumeSession — covered by SessionWorkspace.test.tsx and
@@ -116,10 +142,18 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await expect(dialog).toHaveCount(0);
   await expect(sessionRow).toBeVisible();
 
-  await page.getByLabel("Workspace actions").click();
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete", exact: true }).click();
-
+  // Delete-from-rail: back at the Launchpad (workspace not open), the same
+  // shared confirm dialog is reachable from the rail row's "⋯" menu.
+  await page.getByRole("button", { name: "Back to Launchpad" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
+
+  await rail.getByLabel(`${goal} actions`).click();
+  await page.getByRole("button", { name: "Delete", exact: true }).click();
+
+  const railDialog = page.getByRole("alertdialog");
+  await expect(railDialog).toBeVisible();
+  await expect(railDialog).toContainText("event log survive");
+  await railDialog.getByRole("button", { name: "Delete", exact: true }).click();
+
   await expect(sessionRow).toHaveCount(0);
 });
