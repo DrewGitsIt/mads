@@ -90,7 +90,29 @@ Links are directed edges; nothing is 1:1 by design:
    Router's Supervisor grants on both edges (pipeline start with a live
    child; child activation with a run in flight) and revokes the moment the
    run's process exits (normal completion, cancellation, or crash alike) —
-   the link never outlives the run it was granted over.
+   the link never outlives the run it was granted over. The grant call
+   itself is detached from the spawn that triggers it (a background
+   goroutine making its own HTTP round trips), so a run that exits quickly
+   can have its (synchronous) revoke run *before* the grant's Create lands —
+   `grantImplicitHandRaiser` re-checks the run's liveness immediately after
+   its own write completes and self-revokes if the run is already gone,
+   closing that window regardless of which call actually lands last.
+
+   **Scope note (L3, 2026-07-17).** The 2026-07-16 amendment above (agent may
+   "act on the RUN as a system: task notes, blocker flags") is implemented
+   only on its *read* half in this pass — the hand-raiser receives run
+   digests (task status changes, blocker notes folded in), matching the
+   acceptance criteria. Wiring an agent-invoked task-note/blocker-flag tool
+   is descoped, not overlooked: `contracts.Task` has no `RunID` (tasks are
+   scoped only by `SessionID`, shared between a run and its interactive
+   session), so there's no schema-level way to distinguish "the run's tasks"
+   from the session's own; and the interactive agent has no task-listing
+   tool at all today (the only existing note-creation path is the
+   background fastmodel synthesizer in
+   `services/session/internal/synth/engine.go`, not an agent-invoked call).
+   A bare post-a-note tool without a way to discover which task ID it
+   applies to would be unusable. Real fast-follow, gated on giving tasks a
+   `RunID` (or equivalent scoping) and a task-listing capability first.
 
 ## Unchanged from §1.12
 

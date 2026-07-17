@@ -1,6 +1,53 @@
 # Executor handoff: Linked sessions L3 — implicit hand-raiser over own pipeline runs
 
-## What was built
+## Stage-fail fixes (this pass)
+
+A downstream code-reviewer failed the previous attempt on two points; both are
+addressed here:
+
+1. **Grant/revoke race.** `grantImplicitHandRaiser` fires as a detached
+   goroutine making its own HTTP round trips (`Config` then
+   `CreateHandRaiser`), independent of the spawn that triggered it. If the run
+   it was granted over exits quickly, `onPipelineExit`'s revoke (which runs
+   synchronously relative to `forgetPipeline`, then fires its own revoke
+   asynchronously) could have its no-op DELETE land *before* the grant's
+   Create — nothing would then ever clean up the resulting link, violating
+   "the link never outlives the run." Fixed in
+   `services/router/internal/supervisor/supervisor.go`:
+   `grantImplicitHandRaiser` now re-checks `hasPipelineForSessionLocked`
+   immediately after its own `CreateHandRaiser` call succeeds, and calls
+   `revokeImplicitHandRaiser` synchronously (same goroutine, not another
+   detached one) if the run is already gone. `forgetPipeline` runs
+   synchronously and deterministically ahead of any exit-triggered revoke
+   goroutine, so this recheck reflects the true final liveness state
+   regardless of scheduling or network timing — whichever of the two calls
+   actually lands last, the outcome self-corrects to "no link."
+
+   Added `services/router/internal/supervisor/race_test.go` (package
+   `supervisor`, white-box — `grantImplicitHandRaiser` is unexported and the
+   race doesn't depend on real subprocess timing): one test simulates "the run
+   already exited" by calling `grantImplicitHandRaiser` with no matching entry
+   in `s.pipelines` and asserts no link is left behind; a second confirms the
+   recheck does *not* fire (and tear down a legitimate link) while the
+   pipeline is still tracked. This exercises the exact ordering the reviewer
+   flagged as untested, without needing to win a real timing race against a
+   subprocess.
+
+2. **Task-note action.** The 2026-07-16 amendment's "hand-raiser may act on
+   the run as a system (task notes, blocker flags)" is implemented only on
+   its read half (run digests) — the task-note/blocker-flag write action is
+   explicitly descoped, not silently dropped. Documented in
+   `docs/LINKED-SESSIONS-DESIGN.md` (new "Scope note (L3, 2026-07-17)" under
+   decision 6) with the concrete reasons: `contracts.Task` has no `RunID`
+   (tasks are scoped only by `SessionID`, shared between a run and its
+   interactive session — no way to distinguish "the run's tasks" from the
+   session's own), and the interactive agent has no task-listing tool at all
+   today (the only existing note path is the background fastmodel
+   synthesizer, not an agent-invoked tool call). A bare post-note tool
+   without a way to discover which task ID to act on would be unusable;
+   real fast-follow, gated on task scoping + a listing tool.
+
+## What was built (prior pass, unchanged by this one)
 
 Implements docs/LINKED-SESSIONS-DESIGN.md decision 6 (+ 2026-07-16 amendment) per the
 architect's HANDOFF.md spec, which this replaces.
@@ -67,6 +114,8 @@ filters to `to ∈ {done, blocked}`, spawns `job.GenerateRunDigest`. Wired into
   `done` transition; ignores non-terminal transitions.
 - `services/router/internal/supervisor/supervisor_test.go`: Edge A, Edge B, no grant
   without a live child, and revoke on `TerminatePipeline`.
+- `services/router/internal/supervisor/race_test.go` (new, this pass): the grant/revoke
+  race fix, described above.
 
 `make check` (lint + full Go test suite + UI vitest suite) is green.
 
@@ -81,6 +130,8 @@ filters to `to ∈ {done, blocked}`, spawns `job.GenerateRunDigest`. Wired into
   `CreateImplicitHandRaiser` idempotency guard in the store makes this safe (a second
   concurrent grant call returns the existing link), but there's no test exercising the
   race directly.
+- The task-note/blocker-flag write action is descoped — see "Stage-fail fixes" above
+  and the design doc's new scope note.
 
 ## What a reviewer should scrutinize
 

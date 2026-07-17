@@ -327,6 +327,21 @@ func (s *Supervisor) grantImplicitHandRaiser(ctx context.Context, sessionID stri
 	}
 	if _, err := s.data.CreateHandRaiser(ctx, sessionID); err != nil {
 		log.Printf("supervisor: grant implicit hand-raiser for %s: %v", sessionID, err)
+		return
+	}
+	// Race guard: this call runs detached from the spawn that triggered it,
+	// so the run it was granted over may already have exited — and been
+	// forgotten by onPipelineExit, whose own revoke runs at most once, right
+	// after forgetting — before the Create above landed. If that revoke's
+	// no-op DELETE ran against a link that didn't exist yet, nothing would
+	// ever clean this one up: it would outlive every run, permanently.
+	// Re-checking liveness here, after our own write completes, self-corrects
+	// regardless of which of the two calls actually lands last.
+	s.mu.Lock()
+	stillLive := s.hasPipelineForSessionLocked(sessionID)
+	s.mu.Unlock()
+	if !stillLive {
+		s.revokeImplicitHandRaiser(ctx, sessionID)
 	}
 }
 
