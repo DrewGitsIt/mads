@@ -94,11 +94,21 @@ never called peer-to-peer.
   session record exists or any child is spawned — never a spawned-then-crashed child
   surfaced as a bare 502. `POST /retros/{id}/follow-up-session` resolves and validates the
   same way for the same reason.
-- `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL) and delete the
-  session record; 204. The Data Service's own `session.deleted` event covers the "why";
-  the Router doesn't emit anything itself here.
+- `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL); 204. The
+  session record survives, left inactive, with a summary generated shortly after (session
+  summaries are triggered by the child-exit hook — see "Critical paths" below). This is
+  what the UI calls "Close" ("I'm done for now").
+- `POST /sessions/{id}/resume` — spawn a fresh child bound to an existing, inactive session
+  record; 200 with `{"addr": ...}`. Provider continuity (`--resume`-style) comes from the
+  record's `ProviderRef`, handled entirely inside the Session Service child on startup, not
+  by this handler. 409 if the session is already active or still has a tracked child.
 - `POST /sessions/{id}/bounce` — terminate and respawn under the same session ID/lease
   holder; 200 with the new `{"addr": ...}`.
+- `DELETE /sessions/{id}` — hard-delete an inactive session record and its orchestration
+  artifacts (tasks and their deps/handoffs/notes, file-change history, commit records —
+  see `store.Sessions.Delete`'s doc comment for the exact cascade; provider transcripts and
+  the event log are not session-scoped and survive). 204. 409 if the session is still active
+  or has a tracked child — close it first.
 - `POST /pipelines` — body `{"session_id", "template_id"}`, mints a `run_<hex>` ID, spawns
   a Pipeline Engine child; 201 with `{"run_id", "addr"}`.
 - `POST /pipelines/{id}/cancel` — stop the child and append `pipeline.cancelled`; 204.

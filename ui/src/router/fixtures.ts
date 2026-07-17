@@ -653,6 +653,7 @@ export function createFakeControlEventSource(): {
  * fetch — see ui/src/conversation/HANDOFF.md §3.
  */
 export class FakeRouterClient implements RouterClient {
+  private sessions: Map<string, Session>;
   private tasks: Map<string, Task>;
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
@@ -664,7 +665,7 @@ export class FakeRouterClient implements RouterClient {
   readonly openedPaths: string[] = [];
 
   constructor(
-    private readonly sessions = fixtureSessions,
+    sessions: Record<string, Session> = fixtureSessions,
     private readonly transcripts = fixtureTranscripts,
     private readonly mentionables = fixtureMentionables,
     private readonly capabilities = fixtureCapabilities,
@@ -677,12 +678,15 @@ export class FakeRouterClient implements RouterClient {
     },
     private readonly sessionDefaults: SessionDefaults = fixtureSessionDefaults,
   ) {
+    this.sessions = new Map(
+      Object.entries(sessions).map(([id, s]) => [id, structuredClone(s)]),
+    );
     this.tasks = new Map(tasks.map((t) => [t.id, structuredClone(t)]));
     this.taskEventSource = new FakeSessionEventSource();
   }
 
   async getSession(id: string): Promise<Session> {
-    const session = this.sessions[id];
+    const session = this.sessions.get(id);
     if (!session) throw new Error(`fixture session not found: ${id}`);
     return session;
   }
@@ -700,6 +704,24 @@ export class FakeRouterClient implements RouterClient {
   async interrupt(): Promise<void> {}
 
   async bounce(): Promise<void> {}
+
+  async closeSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`fixture session not found: ${sessionId}`);
+    session.activity = "inactive";
+  }
+
+  async resumeSession(sessionId: string): Promise<{ addr: string }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`fixture session not found: ${sessionId}`);
+    session.activity = "active";
+    return { addr: "localhost:0" };
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    if (!this.sessions.has(id)) throw new Error(`fixture session not found: ${id}`);
+    this.sessions.delete(id);
+  }
 
   async getMentionables(query: string): Promise<Mentionable[]> {
     const q = query.toLowerCase();
@@ -864,7 +886,7 @@ export class FakeRouterClient implements RouterClient {
 
   // --- Sessions (session-agnostic) ---
   async listSessions(): Promise<Session[]> {
-    return Object.values(this.sessions);
+    return Array.from(this.sessions.values());
   }
 
   async createSession(): Promise<{ session: Session; addr: string }> {

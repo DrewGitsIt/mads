@@ -196,6 +196,39 @@ describe("FetchRouterClient — typed methods built on the private transport hel
     expect(result).toBeUndefined();
   });
 
+  it("closeSession POSTs to /sessions/:id/terminate", async () => {
+    const fetchMock = mockFetchOnce(undefined, true, 204);
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.closeSession("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/terminate",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("resumeSession POSTs to /sessions/:id/resume and decodes the addr", async () => {
+    const fetchMock = mockFetchOnce({ addr: "localhost:2" });
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.resumeSession("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/resume",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.addr).toBe("localhost:2");
+  });
+
+  it("deleteSession DELETEs /sessions/:id", async () => {
+    const fetchMock = mockFetchOnce(undefined, true, 204);
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.deleteSession("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(result).toBeUndefined();
+  });
+
   it("validateTemplate throws RouterValidationError on a {errors:[...]} failure body", async () => {
     const fetchMock = mockFetchOnce(
       { errors: [{ field: "source", message: "duplicate stage name" }] },

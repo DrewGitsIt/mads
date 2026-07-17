@@ -43,7 +43,7 @@ describe("SessionRail", () => {
         openTaskCounts={{ r1: 2 }}
       />,
     );
-    const row = screen.getByText("needs work").closest("button")!;
+    const row = screen.getByText("needs work").closest('[role="button"]')!;
     expect(row.querySelector('[class*="dot-attn"]')).toBeTruthy();
     expect(screen.getByText("2 open")).toBeTruthy();
   });
@@ -59,5 +59,46 @@ describe("SessionRail", () => {
     );
     fireEvent.click(screen.getByText("pick me"));
     expect(onSelect).toHaveBeenCalledWith("a1");
+  });
+
+  it("shows a resume affordance only for non-active sessions when onResume is passed", () => {
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a1", name: "live one", activity: "active" }),
+          makeSession({ id: "r1", name: "resume me", activity: "inactive" }),
+        ]}
+        openTaskCounts={{}}
+        onResume={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Resume live one" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Resume resume me" })).toBeTruthy();
+  });
+
+  it("omits the resume affordance entirely when onResume is not passed", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Resume resume me" })).toBeNull();
+  });
+
+  it("clicking resume calls onResume with the id and not onSelect", () => {
+    const onSelect = vi.fn();
+    const onResume = vi.fn();
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
+        openTaskCounts={{}}
+        onSelect={onSelect}
+        onResume={onResume}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Resume resume me" }));
+    expect(onResume).toHaveBeenCalledWith("r1");
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,117 @@
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { ConfirmDialog } from "./ConfirmDialog";
+
+describe("ConfirmDialog", () => {
+  it("renders nothing when closed", () => {
+    render(
+      <ConfirmDialog
+        open={false}
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("renders title, description, and labels when open", () => {
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.getByText("Delete session")).toBeTruthy();
+    expect(screen.getByText("This can't be undone.")).toBeTruthy();
+    expect(screen.getByText("Delete")).toBeTruthy();
+    expect(screen.getByText("Cancel")).toBeTruthy();
+  });
+
+  it("calls onConfirm when the confirm button is clicked", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={onConfirm}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Delete"));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onCancel when the cancel button is clicked", () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.click(screen.getByText("Cancel"));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onCancel when the backdrop is clicked", () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole("alertdialog").parentElement as Element);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onCancel when the dialog itself is clicked", () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.mouseDown(screen.getByRole("alertdialog"));
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("calls onCancel on Escape", () => {
+    const onCancel = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Delete session"
+        description="This can't be undone."
+        confirmLabel="Delete"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});

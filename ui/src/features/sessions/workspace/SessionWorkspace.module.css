@@ -101,6 +101,45 @@
   flex: 1;
 }
 
+.kebabWrap {
+  position: relative;
+}
+
+.menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: var(--space-1);
+  z-index: 10;
+  box-shadow: var(--shadow);
+  width: 180px;
+}
+
+.menuList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menuItem {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  font: var(--fs-body) var(--sans);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--bg3);
+}
+
 .pane {
   display: none;
 }

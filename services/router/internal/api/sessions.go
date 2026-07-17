@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -51,6 +52,47 @@ func (s *server) handleTerminateSession(w http.ResponseWriter, r *http.Request) 
 	id := r.PathValue("id")
 	if err := s.sup.TerminateSession(r.Context(), id); err != nil {
 		writeErrMsg(w, http.StatusBadGateway, "terminate session: ", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if sess.Activity == contracts.SessionActive {
+		writeErrMsg(w, http.StatusConflict, "resume session: ", errors.New("session is already active"))
+		return
+	}
+	if _, tracked := s.sup.SessionAddr(id); tracked {
+		writeErrMsg(w, http.StatusConflict, "resume session: ", errors.New("session already has a running child"))
+		return
+	}
+	addr, err := s.sup.SpawnSession(r.Context(), id)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "resume session: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"addr": addr})
+}
+
+func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if sess.Activity == contracts.SessionActive {
+		writeErrMsg(w, http.StatusConflict, "delete session: ", errors.New("session is active; close it before deleting"))
+		return
+	}
+	if _, tracked := s.sup.SessionAddr(id); tracked {
+		writeErrMsg(w, http.StatusConflict, "delete session: ", errors.New("session has a running child; close it before deleting"))
 		return
 	}
 	if err := s.data.DeleteSession(r.Context(), id); err != nil {

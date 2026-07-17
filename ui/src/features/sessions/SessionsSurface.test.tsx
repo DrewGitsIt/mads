@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionsSurface } from "./SessionsSurface";
 import { FakePipelineClient } from "../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
@@ -98,7 +98,7 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface jumpToSessionId="s2" pipelineClient={new FakePipelineClient()} />);
 
     await waitFor(() => {
-      const row = rail().getByText("Bravo").closest("button");
+      const row = rail().getByText("Bravo").closest('[role="button"]');
       expect(row?.className.includes("selected")).toBe(true);
     });
 
@@ -113,7 +113,7 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    rail().getByText("Alpha").closest("button")?.click();
+    fireEvent.click(rail().getByText("Alpha"));
 
     await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
     expect(screen.getByText("Chat")).toBeTruthy();
@@ -127,7 +127,7 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    rail().getByText("Alpha").closest("button")?.click();
+    fireEvent.click(rail().getByText("Alpha"));
     await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
 
     screen.getByLabelText("Back to Launchpad").click();
@@ -143,12 +143,38 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    rail().getByText("Alpha").closest("button")?.click();
+    fireEvent.click(rail().getByText("Alpha"));
     await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
 
-    rail().getByText("Alpha").closest("button")?.click();
+    fireEvent.click(rail().getByText("Alpha"));
 
     await waitFor(() => expect(screen.getByText("What can I help you with?")).toBeTruthy());
+  });
+
+  it("shows the teaching empty state after deleting the last session", async () => {
+    let sessions: Session[] = [makeSession({})];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.includes("/sessions")) {
+          return Promise.resolve(new Response(JSON.stringify(sessions), { status: 200 }));
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(rail().getByText("Worktree merge-back UX")).toBeTruthy());
+
+    sessions = [];
+    const source = FakeEventSource.instances.find((s) => s.url.includes("/events"));
+    source?.emit(
+      "session.deleted",
+      JSON.stringify({ seq: 2, type: "session.deleted", actor: "user", session_id: "s1" }),
+    );
+
+    await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
   });
 
   it("selecting an inactive session renders without crashing", async () => {
@@ -158,7 +184,7 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    rail().getByText("Alpha").closest("button")?.click();
+    fireEvent.click(rail().getByText("Alpha"));
 
     await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
     expect(screen.getByText("Chat")).toBeTruthy();

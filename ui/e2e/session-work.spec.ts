@@ -41,7 +41,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
   test("tasks tab shows imported tasks", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
-    await rail.getByRole("button", { name: sessionName }).click();
+    await rail.getByText(sessionName, { exact: true }).click();
 
     await page.getByRole("tab", { name: "Tasks" }).click();
     await expect(page.getByText("e2e session-work task")).toBeVisible();
@@ -56,7 +56,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
 
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
-    await rail.getByRole("button", { name: sessionName }).click();
+    await rail.getByText(sessionName, { exact: true }).click();
 
     await page.getByRole("tab", { name: "Files" }).click();
     await expect(page.getByText(changedFilePath)).toBeVisible();
@@ -65,7 +65,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
   test("pipeline tab shows the completed run", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
-    await rail.getByRole("button", { name: sessionName }).click();
+    await rail.getByText(sessionName, { exact: true }).click();
 
     await page.getByRole("tab", { name: "Pipeline" }).click();
     const doneColumn = page.getByText("Done", { exact: true }).locator("../..");

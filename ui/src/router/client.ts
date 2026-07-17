@@ -71,6 +71,9 @@ export interface RouterClient {
   ): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   bounce(sessionId: string): Promise<void>;
+  closeSession(sessionId: string): Promise<void>;
+  resumeSession(sessionId: string): Promise<{ addr: string }>;
+  deleteSession(id: string): Promise<void>;
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
 
@@ -329,6 +332,18 @@ export class FetchRouterClient implements RouterClient {
 
   async bounce(sessionId: string): Promise<void> {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/bounce`);
+  }
+
+  async closeSession(sessionId: string): Promise<void> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/terminate`);
+  }
+
+  async resumeSession(sessionId: string): Promise<{ addr: string }> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/resume`);
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    return routerDelete(this.baseUrl, `/sessions/${id}`);
   }
 
   async getMentionables(query: string): Promise<Mentionable[]> {

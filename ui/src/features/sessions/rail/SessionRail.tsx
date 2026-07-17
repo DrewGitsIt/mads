@@ -7,6 +7,7 @@ export interface SessionRailProps {
   openTaskCounts: Record<string, number>;
   selectedId?: string;
   onSelect?: (id: string) => void;
+  onResume?: (id: string) => void;
   className?: string;
 }
 
@@ -15,6 +16,7 @@ export function SessionRail({
   openTaskCounts,
   selectedId,
   onSelect,
+  onResume,
   className,
 }: SessionRailProps) {
   const { active, recent } = groupSessions(sessions);
@@ -33,6 +35,7 @@ export function SessionRail({
               openTaskCount={openTaskCounts[session.id] ?? 0}
               selected={session.id === selectedId}
               onSelect={onSelect}
+              onResume={onResume}
             />
           ))}
         </div>
@@ -47,6 +50,7 @@ export function SessionRail({
               openTaskCount={openTaskCounts[session.id] ?? 0}
               selected={session.id === selectedId}
               onSelect={onSelect}
+              onResume={onResume}
             />
           ))}
         </div>
@@ -60,22 +64,44 @@ function SessionRow({
   openTaskCount,
   selected,
   onSelect,
+  onResume,
 }: {
   session: Session;
   openTaskCount: number;
   selected: boolean;
   onSelect?: (id: string) => void;
+  onResume?: (id: string) => void;
 }) {
   const dot = dotState(session, openTaskCount);
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={[styles.row, selected ? styles.selected : ""].filter(Boolean).join(" ")}
       onClick={() => onSelect?.(session.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect?.(session.id);
+        }
+      }}
     >
       <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
       <span className={styles.name}>{session.name || "Untitled session"}</span>
       {openTaskCount > 0 && <span className={styles.openCount}>{openTaskCount} open</span>}
-    </button>
+      {session.activity !== "active" && onResume && (
+        <button
+          type="button"
+          className={styles.resumeAffordance}
+          aria-label={`Resume ${session.name || "session"}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onResume(session.id);
+          }}
+        >
+          Resume
+        </button>
+      )}
+    </div>
   );
 }
