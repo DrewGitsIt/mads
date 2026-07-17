@@ -55,9 +55,29 @@ One process, one session — no `:id` in any path.
   `contracts.MergeResult`: `{"conflicted": bool, "branch": "...", "files": ["..."]}`.
   A conflict is a structured, success-shaped response for the UI's resolution flow — not a
   failure status; the UI branches on `conflicted`, not the HTTP status.
-- `GET /stream` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
+- `GET /output` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
   Ephemeral: no replay/cursor, just whatever the connected UI catches live. Durable history
-  (transcript, activity) is the Data Service's job, not this stream's.
+  (transcript, activity) is the Data Service's job, not this stream's. Renamed from
+  `/stream`: this channel now carries both chat events and terminal pty output (see
+  `/transport` below), so the name shouldn't imply chat-only.
+- `POST /transport` — switches this session between its `chat` and `terminal` transports.
+  Body `{"mode": "chat" | "terminal"}`. Chat and Terminal are two transports over one
+  provider conversation, not simultaneous mirrors: the old transport's provider process is
+  fully terminated and reaped before the new one starts with `--resume <ref>` — enforced
+  deterministically by `providers/fake`'s double-attach guard in tests, not by timing.
+  Responses:
+  - `200 {"mode": "...", "ref": "..."}` on success.
+  - `409 {"error": "...", "code": "busy"}` if a turn is in flight (mid-turn switches are
+    refused, matching `/messages`' single-turn-at-a-time rule).
+  - `502 {"error": "...", "code": "resume_failed", "retryable": true}` if resuming the
+    provider on the new transport fails after the old transport has already closed — the
+    session is left with no active transport until a retry succeeds.
+  - `503` if `Start` hasn't completed yet.
+- `POST /input` — raw body bytes, written directly to the terminal transport
+  (`Runner.TerminalWrite`). 400 if the session isn't currently in `terminal` mode
+  (`ErrNotPTYMode`); 503 if not ready.
+- `POST /resize` — `{"cols": int, "rows": int}`, resizes the terminal transport
+  (`Runner.TerminalResize`). Same error mapping as `/input`.
 - `GET /files` — every file this session has touched, straight through from the Data
   Service (`[]contracts.FileChange`). See "File observation & commit linkage" below.
 - `GET /commits` — every commit this session has produced, with task linkage resolved by

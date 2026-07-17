@@ -101,16 +101,35 @@ the Shell dock are reviewable without Electron. In the real app,
 selected in the rail (back/deselect returns to the Launchpad); this demo
 mount remains useful for reviewing it in isolation without a live Router.
 
-Terminal mode and the docked Shell use `@xterm/xterm` over a `PtyBridge`
-(`src/conversation/TerminalRenderer/ptyBridge.ts`). The real pty transport
-(`node-pty`) is a native addon isolated to the Electron main process
-(`electron/pty/ptyHost.ts`, dynamically imported in a try/catch, exposed to
-the renderer only via `window.mads.pty` in `electron/preload.ts`) —
-`src/**` never imports it, even transitively, so `npm run test` needs no
-display or native build. Its real-pty contract test is named
-`ptyHost.realtest.ts` (not `*.test.ts`) so it's excluded from `npm run test`;
-run it manually with `npm run test:pty` on a machine with a usable pty — it
-skips cleanly (not a failure) wherever one isn't available.
+The Conversation tab's Chat/Terminal toggle is backend-driven: clicking
+Terminal calls `RouterClient.switchTransport`, which hands the session's one
+provider conversation over to its terminal transport (single-writer
+handoff — Chat and Terminal are two transports over one ref, not
+simultaneous mirrors). Terminal output then flows over
+`SessionTerminalBridge` (`src/conversation/TerminalRenderer/
+sessionTerminalBridge.ts`), riding the same `SessionEventSource`
+(`RouterClient.streamSession`) the tab already holds open, into an
+`@xterm/xterm` view. This is independent of Electron: it works the same in
+`npm run conversation` and in the packaged app, and turns taken in terminal
+mode reappear in the chat transcript afterwards since it's the same
+underlying conversation.
+
+The Electron `ptyBridge` (`src/conversation/TerminalRenderer/ptyBridge.ts`)
+is unrelated — it's a local pty for the docked Shell only, not the agent's
+own terminal transport. The real pty transport (`node-pty`) is a native
+addon isolated to the Electron main process (`electron/pty/ptyHost.ts`,
+dynamically imported in a try/catch, exposed to the renderer only via
+`window.mads.pty` in `electron/preload.ts`) — `src/**` never imports it, even
+transitively, so `npm run test` needs no display or native build. Its
+real-pty contract test is named `ptyHost.realtest.ts` (not `*.test.ts`) so
+it's excluded from `npm run test`; run it manually with `npm run test:pty` on
+a machine with a usable pty — it skips cleanly (not a failure) wherever one
+isn't available.
+
+**Manual smoke test** (not automatable — requires a real `claude` provider
+session): start a session in chat, send a message, switch to Terminal, run a
+shell command directly in the pty, switch back to chat, and confirm the
+terminal-run turn appears in the chat transcript in order.
 
 ## Tasks tab & Context Rail
 

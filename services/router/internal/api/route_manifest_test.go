@@ -99,6 +99,10 @@ var routeManifest = []struct {
 	{"POST", "/registry/publish", "POST /registry/publish"},
 	{"POST", "/sessions/abc/messages", "POST /sessions/{id}/messages"},
 	{"POST", "/sessions/abc/interrupt", "POST /sessions/{id}/interrupt"},
+	{"GET", "/sessions/abc/output", "GET /sessions/{id}/output"},
+	{"POST", "/sessions/abc/transport", "POST /sessions/{id}/transport"},
+	{"POST", "/sessions/abc/input", "POST /sessions/{id}/input"},
+	{"POST", "/sessions/abc/resize", "POST /sessions/{id}/resize"},
 	{"POST", "/sessions/abc/terminate", "POST /sessions/{id}/terminate"},
 	{"POST", "/sessions/abc/resume", "POST /sessions/{id}/resume"},
 	{"DELETE", "/sessions/abc", "DELETE /sessions/{id}"},
@@ -112,7 +116,6 @@ var routeManifest = []struct {
 var knownGapRoutes = []struct {
 	method, path, pattern, reason string
 }{
-	{"GET", "/sessions/abc/stream", "GET /sessions/{id}/stream", "conversation streaming (streamSession), not built"},
 	{"GET", "/mentionables", "GET /mentionables", "getMentionables, not built"},
 	{"GET", "/sessions/abc/commits", "GET /sessions/{id}/commits", "Files tab / merge-back (getCommits), not built"},
 	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes", "Files tab / merge-back (getFileDiff), not built"},

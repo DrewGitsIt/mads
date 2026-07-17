@@ -6,6 +6,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
+import { TransportSwitchError } from "../router/client";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 
 // jsdom has no matchMedia; xterm.js needs it to mount. happy-dom has one,
@@ -63,7 +64,11 @@ describe("ConversationTab", () => {
     expect(screen.getByText(/Add retry backoff to the ingest worker, please/)).toBeTruthy();
   });
 
-  it("switches to terminal display mode and mounts TerminalView against the pty bridge", async () => {
+  // Terminal display mode now drives the session's own transport
+  // (SessionTerminalBridge, backed by switchTransport/streamSession), not the
+  // Electron ptyBridge prop — that prop is ShellDock-only now (see
+  // ShellDock.test.tsx for its own spawn coverage).
+  it("switches to terminal display mode using the session's own transport, not the Electron pty bridge", async () => {
     const client = new FakeRouterClient();
     const bridge = makeStubBridge();
     render(
@@ -75,8 +80,81 @@ describe("ConversationTab", () => {
     );
     fireEvent.click(screen.getByText("Terminal"));
 
-    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
-    expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+    expect(bridge.spawn).not.toHaveBeenCalled();
+  });
+
+  it("shows a switching indicator and disables the composer while the transport switch is pending", async () => {
+    const client = new FakeRouterClient();
+    let resolveSwitch!: (v: { mode: string; ref: string }) => void;
+    vi.spyOn(client, "switchTransport").mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSwitch = resolve;
+      }),
+    );
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByText("Terminal"));
+
+    await waitFor(() => expect(screen.getByText(/Switching to terminal…/)).toBeTruthy());
+    // History stays visible and read-only — never a blank pane mid-switch.
+    expect(screen.getByText("Add retry backoff to the ingest worker, please.")).toBeTruthy();
+    const sendButton = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(true);
+
+    resolveSwitch({ mode: "terminal", ref: "test-ref" });
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+  });
+
+  it("shows a busy failure with an interrupt-and-switch escape hatch", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "switchTransport")
+      .mockRejectedValueOnce(new TransportSwitchError("busy", "busy", true))
+      .mockResolvedValueOnce({ mode: "terminal", ref: "test-ref" });
+    const interruptSpy = vi.spyOn(client, "interrupt");
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByText("Terminal"));
+
+    await waitFor(() =>
+      expect(screen.getByText("Can't switch — a turn is in flight.")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Interrupt and switch" }));
+
+    await waitFor(() => expect(interruptSpy).toHaveBeenCalledWith("session-active"));
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+  });
+
+  it("shows a resume-failed failure with a retry that succeeds", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "switchTransport")
+      .mockRejectedValueOnce(new TransportSwitchError("resume failed", "resume_failed", true))
+      .mockResolvedValueOnce({ mode: "terminal", ref: "test-ref" });
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByText("Terminal"));
+
+    await waitFor(() => expect(screen.getByText("Couldn't switch transport.")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
   });
 
   it("shows the summary card for an inactive session with a summary", async () => {

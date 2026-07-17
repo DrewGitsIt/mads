@@ -264,6 +264,41 @@ func TestResumeUnknownRef(t *testing.T) {
 	}
 }
 
+// TestDoubleAttachRejected is the regression guard for the hard-sequencing
+// requirement a transport switch depends on: a real harness (e.g.
+// claude-code) refuses a second attachment to a still-live session, so the
+// old process must be fully dead before the new one starts. The fake must
+// enforce the same rule, or a Runner bug that starts the new transport
+// before the old one closes would go undetected here.
+func TestDoubleAttachRejected(t *testing.T) {
+	ctx := context.Background()
+	f := fake.New()
+
+	first, err := f.Start(ctx, provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	ref := first.Ref()
+
+	if _, err := f.Start(ctx, provider.StartOptions{Mode: provider.ModePTY, Resume: ref}); err == nil {
+		t.Fatal("resume of a still-live ref succeeded, want rejection")
+	} else if !strings.Contains(err.Error(), "already attached") {
+		t.Fatalf("resume of a still-live ref: %v, want an already-attached error", err)
+	}
+
+	if err := first.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	second, err := f.Start(ctx, provider.StartOptions{Mode: provider.ModePTY, Resume: ref})
+	if err != nil {
+		t.Fatalf("resume after close: %v", err)
+	}
+	if second.Ref() != ref {
+		t.Fatalf("resumed ref = %q, want %q", second.Ref(), ref)
+	}
+}
+
 // Scenario validation reports every problem at once (§10.3 ethos).
 func TestScenarioValidation(t *testing.T) {
 	_, err := fake.NewWithScenario(fake.Scenario{Name: "bad", Rules: []fake.Rule{
