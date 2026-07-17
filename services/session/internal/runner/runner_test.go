@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -643,5 +644,101 @@ loop:
 	}
 	if !sawError {
 		t.Fatal("want a refusal (EventError) for a read_only session's attempted write via injection, got none")
+	}
+}
+
+func TestTurnEndPushesDigestForActiveTurn(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	envs, err := data.Events(ctx, 0, sess.ID, []string{string(contracts.TurnEnded)})
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if len(envs) != 1 {
+		t.Fatalf("len(turn_ended envelopes) = %d, want 1: %+v", len(envs), envs)
+	}
+	var payload struct {
+		Delta string `json:"delta"`
+	}
+	if err := json.Unmarshal(envs[0].Payload, &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if !strings.Contains(payload.Delta, "you said hi") {
+		t.Errorf("delta = %q, want it to contain the turn's reply", payload.Delta)
+	}
+}
+
+func TestTurnEndDigestDoesNotLeakAcrossTurns(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	if err := r.Send(ctx, "echo bye"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	envs, err := data.Events(ctx, 0, sess.ID, []string{string(contracts.TurnEnded)})
+	if err != nil {
+		t.Fatalf("events: %v", err)
+	}
+	if len(envs) != 2 {
+		t.Fatalf("len(turn_ended envelopes) = %d, want 2: %+v", len(envs), envs)
+	}
+	var first, second struct {
+		Delta string `json:"delta"`
+	}
+	if err := json.Unmarshal(envs[0].Payload, &first); err != nil {
+		t.Fatalf("unmarshal payload 0: %v", err)
+	}
+	if err := json.Unmarshal(envs[1].Payload, &second); err != nil {
+		t.Fatalf("unmarshal payload 1: %v", err)
+	}
+	if strings.Contains(second.Delta, "hi") {
+		t.Errorf("second turn's delta = %q, leaked content from the first turn", second.Delta)
+	}
+	if !strings.Contains(first.Delta, "you said hi") || !strings.Contains(second.Delta, "you said bye") {
+		t.Fatalf("deltas = %q, %q, want each scoped to its own turn", first.Delta, second.Delta)
 	}
 }

@@ -54,6 +54,20 @@ func validateGrants(grants []contracts.Grant) *contracts.ValidationError {
 	return &v
 }
 
+// validateCadence defaults an unset cadence to per_turn (the spec default)
+// and rejects anything unrecognized.
+func validateCadence(link *contracts.Link) *contracts.ValidationError {
+	if link.Cadence == "" {
+		link.Cadence = contracts.CadencePerTurn
+	}
+	if !link.Cadence.Valid() {
+		var v contracts.ValidationError
+		v.Add("cadence", fmt.Sprintf("unknown cadence %q", link.Cadence))
+		return &v
+	}
+	return nil
+}
+
 // Create validates and stores a new link, emitting link.created. Validation
 // order (docs/LINKED-SESSIONS-DESIGN.md, existence first — everything else
 // needs both rows): grant shape, both sessions exist, no self-link, no
@@ -62,6 +76,9 @@ func validateGrants(grants []contracts.Grant) *contracts.ValidationError {
 // at-most-one-orchestrate-holder-per-subject.
 func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) error {
 	if verr := validateGrants(link.Grants); verr != nil {
+		return verr
+	}
+	if verr := validateCadence(link); verr != nil {
 		return verr
 	}
 	return l.log.WithTx(ctx, func(tx *Tx) error {
@@ -142,6 +159,9 @@ func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) 
 	if verr := validateGrants(link.Grants); verr != nil {
 		return verr
 	}
+	if verr := validateCadence(link); verr != nil {
+		return verr
+	}
 	return l.log.WithTx(ctx, func(tx *Tx) error {
 		old, err := getLinkInTx(tx, link.ID)
 		if err != nil {
@@ -211,7 +231,7 @@ func (l *Links) Delete(ctx context.Context, id, actor string) error {
 // Get returns one link.
 func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 	return scanLink(l.log.db.QueryRowContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -221,7 +241,7 @@ func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 // an empty result.
 func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
 	rows, err := l.log.db.QueryContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? OR subject_session_id = ? ORDER BY created_at`,
 		sessionID, sessionID)
 	if err != nil {
@@ -332,7 +352,7 @@ func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
 	return scanLink(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -342,11 +362,11 @@ func writeLink(tx *Tx, link *contracts.Link) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
-		   grants = excluded.grants, updated_at = excluded.updated_at`,
-		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON),
+		   grants = excluded.grants, cadence = excluded.cadence, updated_at = excluded.updated_at`,
+		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON), string(link.Cadence),
 		link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	return err
@@ -369,12 +389,14 @@ func scanLinkRow(row rowScanner) (*contracts.Link, error) {
 	var (
 		link       contracts.Link
 		grantsJSON string
+		cadence    string
 		createdAt  string
 		updatedAt  string
 	)
-	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
+	link.Cadence = contracts.LinkCadence(cadence)
 	if err := json.Unmarshal([]byte(grantsJSON), &link.Grants); err != nil {
 		return nil, err
 	}

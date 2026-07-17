@@ -31,6 +31,7 @@ import (
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
@@ -128,6 +129,7 @@ func main() {
 	reg := registryclient.New(*registryURL)
 	jobs := job.New(data, fm, reg)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)
+	jobs.SetResolver(sup)
 
 	// A credstore failure degrades to credential endpoints returning 503, not
 	// a fatal error — same best-effort philosophy as services/session/main.go.
@@ -171,6 +173,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	watcher := digestwatch.NewWatcher(data, jobs)
+	go watcher.Run(ctx)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()

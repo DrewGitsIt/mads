@@ -52,17 +52,44 @@ var PresetGrants = map[LinkPreset][]Grant{
 	PresetLeader:     {GrantRead, GrantInject, GrantOrchestrate},
 }
 
+// LinkCadence controls how often a `read` grant's digest push fires
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4).
+type LinkCadence string
+
+const (
+	// CadencePerTurn pushes a compressed digest to the monitor on every
+	// completed turn of the subject's agent. Default.
+	CadencePerTurn LinkCadence = "per_turn"
+	// CadenceManualOnly pushes nothing; the monitor's user pulls via the
+	// subject's existing transcript/summary reads instead.
+	CadenceManualOnly LinkCadence = "manual_only"
+)
+
+// LinkCadences is the full registry, for validation and enumeration.
+var LinkCadences = []LinkCadence{CadencePerTurn, CadenceManualOnly}
+
+// Valid reports whether c is a registered cadence.
+func (c LinkCadence) Valid() bool {
+	for _, v := range LinkCadences {
+		if c == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Link is a directed grant set from GrantingSessionID to SubjectSessionID
 // (docs/LINKED-SESSIONS-DESIGN.md). Leader→subject orientation only; no
 // peer/bidirectional links. Session deletion never cascades to links — a
 // link outliving one of its endpoints is a dangling reference by design.
 type Link struct {
-	ID                string    `json:"id"`
-	GrantingSessionID string    `json:"granting_session_id"`
-	SubjectSessionID  string    `json:"subject_session_id"`
-	Grants            []Grant   `json:"grants"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string      `json:"id"`
+	GrantingSessionID string      `json:"granting_session_id"`
+	SubjectSessionID  string      `json:"subject_session_id"`
+	Grants            []Grant     `json:"grants"`
+	Cadence           LinkCadence `json:"cadence"`
+	CreatedAt         time.Time   `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
 }
 
 // HasGrant reports whether l carries g.
@@ -79,8 +106,9 @@ func (l Link) HasGrant(g Grant) bool {
 // grant set, or a preset the server resolves server-side. Never persisted
 // as-is — Link.Grants is the only stored shape.
 type LinkRequest struct {
-	GrantingSessionID string     `json:"granting_session_id"`
-	SubjectSessionID  string     `json:"subject_session_id"`
-	Grants            []Grant    `json:"grants,omitempty"`
-	Preset            LinkPreset `json:"preset,omitempty"`
+	GrantingSessionID string      `json:"granting_session_id"`
+	SubjectSessionID  string      `json:"subject_session_id"`
+	Grants            []Grant     `json:"grants,omitempty"`
+	Preset            LinkPreset  `json:"preset,omitempty"`
+	Cadence           LinkCadence `json:"cadence,omitempty"`
 }

@@ -25,6 +25,7 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 			GrantingSessionID: req.GrantingSessionID,
 			SubjectSessionID:  req.SubjectSessionID,
 			Grants:            grants,
+			Cadence:           req.Cadence,
 		}
 		if err := links.Create(r.Context(), &link, actor(r)); err != nil {
 			writeStoreError(w, err)
@@ -62,6 +63,7 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 			GrantingSessionID: cur.GrantingSessionID,
 			SubjectSessionID:  cur.SubjectSessionID,
 			Grants:            grants,
+			Cadence:           req.Cadence,
 		}
 		if err := links.Update(r.Context(), &link, actor(r)); err != nil {
 			writeStoreError(w, err)

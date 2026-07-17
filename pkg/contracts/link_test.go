@@ -16,6 +16,7 @@ func sampleLink() contracts.Link {
 		GrantingSessionID: "ses_01hq3k",
 		SubjectSessionID:  "ses_01hq3m",
 		Grants:            []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+		Cadence:           contracts.CadencePerTurn,
 		CreatedAt:         ts,
 		UpdatedAt:         ts.Add(5 * time.Minute),
 	}

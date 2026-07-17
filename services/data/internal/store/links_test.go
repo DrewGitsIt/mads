@@ -88,6 +88,70 @@ func TestLinkRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLinkCreateDefaultsCadenceToPerTurn(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.Cadence != contracts.CadencePerTurn {
+		t.Errorf("cadence = %q, want per_turn", link.Cadence)
+	}
+
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cadence != contracts.CadencePerTurn {
+		t.Errorf("stored cadence = %q, want per_turn", got.Cadence)
+	}
+}
+
+func TestLinkCreateRoundTripsManualOnlyCadence(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceManualOnly,
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Cadence != contracts.CadenceManualOnly {
+		t.Errorf("stored cadence = %q, want manual_only", got.Cadence)
+	}
+}
+
+func TestLinkCreateRefusesInvalidCadence(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	var verr *contracts.ValidationError
+	err := links.Create(ctx, &contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: "bogus",
+	}, "user")
+	if !errors.As(err, &verr) {
+		t.Fatalf("invalid cadence: err = %v, want *ValidationError", err)
+	}
+}
+
 func TestLinkForSessionEmptyForUnknownSession(t *testing.T) {
 	links, _, _ := newLinkStore(t)
 	got, err := links.ForSession(context.Background(), "ses_nope")
