@@ -39,7 +39,7 @@ func (w *worktrees) git(ctx context.Context, dir string, args ...string) (string
 		"GIT_COMMITTER_NAME=mads-pipeline", "GIT_COMMITTER_EMAIL=pipeline@mads.local")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return string(out), fmt.Errorf("git %s: %v\n%s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return string(out), fmt.Errorf("git %s: %v\nstderr: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
 }
@@ -102,19 +102,21 @@ func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.T
 	// Two -m flags make subject + body paragraphs — %q on a multiline
 	// string would bake literal \n into the subject and break the trailer.
 	subject := fmt.Sprintf("Merge %s: %s", branch, task.Title)
-	full := fmt.Sprintf("%s %s -m %q -m %q", mergeCmd, branch, subject, "Task: "+task.ID)
-	cmd := exec.CommandContext(ctx, "sh", "-c", full)
-	cmd.Dir = w.primary
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		return nil
+	// mergeCmd is the template's own words (e.g. "git merge --no-ff"), never
+	// task data — safe to split on whitespace. branch/subject/task.ID are
+	// task-derived and must stay separate argv elements, never
+	// shell-composed (a backtick or $() in a task title must never reach a
+	// shell).
+	args := append(strings.Fields(mergeCmd)[1:], branch, "-m", subject, "-m", "Task: "+task.ID)
+	if _, err := w.git(ctx, w.primary, args...); err != nil {
+		conflicts, _ := w.git(ctx, w.primary, "diff", "--name-only", "--diff-filter=U")
+		_, _ = w.git(ctx, w.primary, "merge", "--abort")
+		if files := strings.TrimSpace(conflicts); files != "" {
+			return fmt.Errorf("merge conflict with the current trunk in:\n%s\n\nthe merge was aborted; the task's work is intact on branch %s — resolve by rebasing that branch or adjusting the conflicting tasks", files, branch)
+		}
+		return fmt.Errorf("merge failed: %w", err)
 	}
-	conflicts, _ := w.git(ctx, w.primary, "diff", "--name-only", "--diff-filter=U")
-	_, _ = w.git(ctx, w.primary, "merge", "--abort")
-	if files := strings.TrimSpace(conflicts); files != "" {
-		return fmt.Errorf("merge conflict with the current trunk in:\n%s\n\nthe merge was aborted; the task's work is intact on branch %s — resolve by rebasing that branch or adjusting the conflicting tasks", files, branch)
-	}
-	return fmt.Errorf("merge failed: %v\n%s", err, strings.TrimSpace(string(out)))
+	return nil
 }
 
 // rebaseBeforeMerge merges current trunk (primary HEAD) into the branch,

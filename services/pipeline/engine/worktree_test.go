@@ -286,6 +286,49 @@ func TestVerifyCatchesQuietConflict(t *testing.T) {
 	}
 }
 
+// A task title carrying shell metacharacters must never break the merge:
+// worktrees.merge composes the merge commit message from task data as
+// direct argv, not through a shell (tsk_96de312d665dbdd0).
+func TestHostileTaskTitleMergesCleanly(t *testing.T) {
+	titles := []struct {
+		name  string
+		title string
+	}{
+		{"backtick", "Shell dock keyboard shortcut (Ctrl+`)"},
+		{"command_substitution", "Rename $(whoami) helper"},
+		{"mixed_quotes", `He said "hello" and it's fine`},
+		{"embedded_newline", "Multi\nline title"},
+		{"leading_dash", "-rf delete everything"},
+	}
+	for _, tc := range titles {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			f := mustScenario(t,
+				fake.Rule{Match: tc.title, Reply: "done",
+					Tools: []fake.ToolStep{
+						{Name: "write_file", Path: "HANDOFF.md", Content: "architect notes\n"},
+						{Name: "write_file", Path: "work.txt", Content: "the actual work\n"},
+					}},
+			)
+			seeded := h.seed(contracts.Task{Title: tc.title})
+			sum, _ := h.runIsolated(t, f, isolatedTemplate, 1)
+
+			if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+				t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+			}
+			if _, err := os.Stat(filepath.Join(h.cwd, "work.txt")); err != nil {
+				t.Errorf("real work file missing from merged trunk: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(h.cwd, "HANDOFF.md")); !os.IsNotExist(err) {
+				t.Errorf("HANDOFF.md reached trunk (err: %v)", err)
+			}
+			if status := gitOut(t, h.cwd, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+				t.Errorf("trunk dirty after merge:\n%s", status)
+			}
+		})
+	}
+}
+
 // The installed post-commit hook reports commits from a task worktree to the
 // Data Service with the task trailer, and the linkage chain resolves it
 // (spec §5). curl talks to the real datatest server.
