@@ -145,6 +145,37 @@ describe("FetchRouterClient", () => {
       "http://router.local/events?session_id=s1&types=merge.attempted%2Cmerge.completed",
     );
   });
+
+  it("getEvents GETs /events with session_id, since, and types query params, no Accept header", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.getEvents({ sessionId: "s1", since: 6, types: ["pipeline.started", "stage.started"] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/events?session_id=s1&since=6&types=pipeline.started%2Cstage.started",
+    );
+    expect(fetchMock.mock.calls[0][1]).toBeUndefined();
+  });
+
+  it("getEvents omits since and types when absent", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.getEvents({ sessionId: "s1" });
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/events?session_id=s1");
+  });
+
+  it("metricsPipelineRuns omits session_id when absent", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.metricsPipelineRuns();
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/metrics/pipelines");
+  });
+
+  it("metricsPipelineRuns includes session_id when given", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchRouterClient("http://router.local");
+    await client.metricsPipelineRuns("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/metrics/pipelines?session_id=s1");
+  });
 });
 
 describe("FetchRouterClient — typed methods built on the private transport helpers", () => {

@@ -77,6 +77,25 @@ describe("FetchPipelineClient", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("listRuns GETs /metrics/pipelines with the session_id query param", async () => {
+    const fetchMock = mockFetchOnce([{ session_id: "ses_1", run_seq: 7, outcome: "completed" }]);
+    const client = new FetchPipelineClient();
+    const runs = await client.listRuns("ses_1");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe(
+      "http://localhost:8080/metrics/pipelines?session_id=ses_1",
+    );
+    expect(runs).toEqual([{ session_id: "ses_1", run_seq: 7, outcome: "completed" }]);
+  });
+
+  it("getRunEvents GETs /events with session_id, since, and the fold event types", async () => {
+    const fetchMock = mockFetchOnce([]);
+    const client = new FetchPipelineClient();
+    await client.getRunEvents("ses_1", 6);
+    expect(fetchMock.mock.calls[0][0].toString()).toBe(
+      "http://localhost:8080/events?session_id=ses_1&since=6&types=pipeline.started%2Cpipeline.completed%2Cpipeline.cancelled%2Cpipeline.failed%2Cstage.started%2Cstage.completed%2Cstage.failed%2Cstage.skipped%2Cfile.changed",
+    );
+  });
+
   it("streamTaskOutput returns an inert source that never emits", () => {
     const client = new FetchPipelineClient();
     const source = client.streamTaskOutput("run_1", "t1");

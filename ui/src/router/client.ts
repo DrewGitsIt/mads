@@ -10,6 +10,7 @@ import type {
   Config,
   CostMetrics,
   DiagnoseResult,
+  Envelope,
   FileChange,
   FileDiff,
   GenerateAgentBody,
@@ -112,6 +113,12 @@ export interface RouterClient {
   mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
   streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource;
 
+  // Batch (non-streaming) read of the same GET /events route
+  // streamControlEvents subscribes to — a plain fetch (no explicit Accept
+  // header) takes the Router's JSON branch instead of the SSE branch
+  // (Pipeline tab HANDOFF.md §2/§3). Used to replay historical pipeline runs.
+  getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]>;
+
   // --- Sessions (session-agnostic) ---
   listSessions(): Promise<Session[]>;
   createSession(payload: Partial<Session>): Promise<{ session: Session; addr: string }>;
@@ -152,7 +159,7 @@ export interface RouterClient {
   metricsAgentLeaderboard(): Promise<AgentLeaderboardEntry[]>;
   metricsTaskOutcomes(): Promise<TaskOutcomes>;
   metricsCapabilityUsage(): Promise<CapabilityUsage[]>;
-  metricsPipelineRuns(): Promise<PipelineRun[]>;
+  metricsPipelineRuns(sessionId?: string): Promise<PipelineRun[]>;
 
   // --- Templates (Library) ---
   listTemplates(): Promise<Template[]>;
@@ -527,6 +534,14 @@ export class FetchRouterClient implements RouterClient {
     return new EventSource(`${this.baseUrl}/events?${params}`);
   }
 
+  async getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]> {
+    return routerGet(this.baseUrl, "/events", {
+      session_id: filter.sessionId,
+      since: filter.since !== undefined ? String(filter.since) : undefined,
+      types: filter.types?.length ? filter.types.join(",") : undefined,
+    });
+  }
+
   // --- Sessions (session-agnostic) ---
   async listSessions(): Promise<Session[]> {
     return routerGet(this.baseUrl, "/sessions");
@@ -645,8 +660,8 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, "/metrics/capabilities");
   }
 
-  async metricsPipelineRuns(): Promise<PipelineRun[]> {
-    return routerGet(this.baseUrl, "/metrics/pipelines");
+  async metricsPipelineRuns(sessionId?: string): Promise<PipelineRun[]> {
+    return routerGet(this.baseUrl, "/metrics/pipelines", { session_id: sessionId });
   }
 
   // --- Templates (Library) ---

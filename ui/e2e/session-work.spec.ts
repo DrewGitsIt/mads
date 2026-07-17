@@ -83,6 +83,16 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await page.getByRole("tab", { name: "Pipeline" }).click();
     const doneColumn = page.getByText("Done", { exact: true }).locator("../..");
     await expect(doneColumn.getByText("e2e session-work task")).toBeVisible();
+
+    // The run finished before this page load. The Data Service's SSE stream
+    // replays a session's full history on connect (since=0 by default), so
+    // usePipelineRun's live fold catches this run on its own — the header
+    // must show its finished outcome, never "idle" (the bug this task fixes).
+    // (A session with more history than a fresh SSE connection replays before
+    // this assertion's timeout would instead fall back to the historical fetch
+    // path and its RunPicker — both are covered at the unit level.)
+    await expect(page.getByText("idle", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("completed", { exact: true })).toBeVisible();
   });
 
   test("graph mode shows the unsequenced tray and a canvas node", async ({ page, routerURL }) => {

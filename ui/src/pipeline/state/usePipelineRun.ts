@@ -8,8 +8,11 @@ import type { PipelineClient } from "../client/pipelineClient";
 const METADATA_EVENT_TYPES = ["task.created", "task.updated", "task.status_changed", "note.created"];
 
 // pipeline.*/stage.*/file.changed have no persisted read model (HANDOFF.md
-// §2) — folded into local reducer state instead of refetched.
-const FOLD_EVENT_TYPES = [
+// §2) — folded into local reducer state instead of refetched. Exported so
+// usePipelineRunHistory (HANDOFF.md §4b) can feed the same fold a batch of
+// historical envelopes instead of a live SSE stream — the fold itself is
+// transport-agnostic.
+export const FOLD_EVENT_TYPES = [
   "pipeline.started",
   "pipeline.completed",
   "pipeline.cancelled",
@@ -45,7 +48,7 @@ export interface TaskRunState {
   touchedFiles: string[];
 }
 
-interface RunFoldState {
+export interface RunFoldState {
   phase: RunPhase;
   outcome?: string;
   runStartSeq?: number;
@@ -56,7 +59,7 @@ interface RunFoldState {
   taskRunState: Record<string, TaskRunState>;
 }
 
-const initialRunFoldState: RunFoldState = {
+export const initialRunFoldState: RunFoldState = {
   phase: "idle",
   columns: [],
   taskRunState: {},
@@ -146,7 +149,7 @@ function foldFileChanged(state: RunFoldState, env: Envelope): RunFoldState {
   };
 }
 
-function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
+export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
   switch (env.type) {
     case "pipeline.started":
       // A new run always resets board state — old runs' stage.*/task.* events
