@@ -18,3 +18,13 @@
 .arrowCycle path {
   fill: var(--bad);
 }
+
+/* xyflow's own stylesheet hardcodes the edge line color — override with kit tokens. */
+.wrapper :global(.react-flow__edge-path) {
+  stroke: var(--line);
+  stroke-width: 1.5px;
+}
+
+.edgeCycle :global(.react-flow__edge-path) {
+  stroke: var(--bad);
+}

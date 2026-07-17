@@ -220,4 +220,30 @@ describe("TaskGraphView", () => {
       tsk_pos_a: { x: 40, y: 60 },
     });
   });
+
+  it("re-fits the view after Auto-layout is clicked", async () => {
+    localStorage.clear();
+    // tsk_fit_b starts far from its packed slot, so clearing manual
+    // positions on Auto-layout shrinks the extent a lot — a real signal
+    // that the viewport actually re-fit, not just re-rendered.
+    const a = task({ id: "tsk_fit_a", title: "a", created_at: "2026-01-01T00:00:00Z" });
+    const b = task({ id: "tsk_fit_b", title: "b", dependencies: ["tsk_fit_a"], created_at: "2026-01-01T00:01:00Z" });
+    const byId = { [a.id]: a, [b.id]: b };
+    localStorage.setItem(
+      "mads.taskGraph.positions.session-fit",
+      JSON.stringify({ tsk_fit_b: { x: 4000, y: 4000 } }),
+    );
+    const client = new FakeRouterClient();
+    const { container } = render(
+      <TaskGraphView sessionId="session-fit" routerClient={client} tasks={[a, b]} tasksById={byId} />,
+    );
+    const viewport = () => container.querySelector(".react-flow__viewport") as HTMLElement;
+    const before = viewport().style.transform;
+
+    fireEvent.click(screen.getByRole("button", { name: "Auto-layout" }));
+
+    await waitFor(() => {
+      expect(viewport().style.transform).not.toBe(before);
+    });
+  });
 });

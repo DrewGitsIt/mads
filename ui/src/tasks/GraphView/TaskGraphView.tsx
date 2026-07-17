@@ -56,6 +56,7 @@ export function TaskGraphView({
   const trayRef = useRef<HTMLDivElement>(null);
   const [pendingDragOut, setPendingDragOut] = useState<PendingDragOut | null>(null);
   const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [autoLayoutSignal, setAutoLayoutSignal] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -157,6 +158,7 @@ export function TaskGraphView({
   function handleAutoLayout() {
     setPositions({});
     previousSlotsRef.current = new Map();
+    setAutoLayoutSignal((n) => n + 1);
   }
 
   return (
@@ -172,6 +174,8 @@ export function TaskGraphView({
           onNodeDragStop={handleNodeDragStop}
           onDropOnCanvas={handleDropOnCanvas}
           onAutoLayout={handleAutoLayout}
+          extent={result.extent}
+          autoLayoutSignal={autoLayoutSignal}
         />
       </div>
       <ConfirmDialog

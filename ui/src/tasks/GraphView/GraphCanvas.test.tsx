@@ -89,6 +89,14 @@ describe("GraphCanvas", () => {
     expect(g?.classList.contains("animated")).toBe(false);
   });
 
+  it("gives a cycle edge a token-styled line class distinct from an ordinary edge", () => {
+    const { container } = renderCanvas();
+    const ordinary = container.querySelector('.react-flow__edge[data-id="tsk_a->tsk_b"]');
+    const cycle = container.querySelector('.react-flow__edge[data-id="tsk_d->tsk_c"]');
+    expect(Array.from(ordinary?.classList ?? []).some((c) => c.includes("edgeCycle"))).toBe(false);
+    expect(Array.from(cycle?.classList ?? []).some((c) => c.includes("edgeCycle"))).toBe(true);
+  });
+
   it("gives each node a target and a source handle with visually-distinct classes", () => {
     const { container } = renderCanvas();
     const node = container.querySelector('[data-id="tsk_b"]');

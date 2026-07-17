@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -42,6 +42,10 @@ export interface GraphCanvasProps {
   /** Fires when a tray card is natively dropped onto the canvas pane. */
   onDropOnCanvas?: (taskId: string, flowPosition: { x: number; y: number }) => void;
   onAutoLayout?: () => void;
+  /** Bounding box of `canvasNodes`, in flow coordinates — used to fit-to-view after auto-layout. */
+  extent?: { minX: number; minY: number; maxX: number; maxY: number };
+  /** Bumped by the caller each time auto-layout runs; a change (not the value itself) triggers the re-fit. */
+  autoLayoutSignal?: number;
 }
 
 function toXYNodes(
@@ -80,6 +84,8 @@ function toXYEdges(
     target: e.to,
     markerEnd: markerFor(e, selectedEdgeIds),
     animated: tasksById[e.from]?.status === "in_progress",
+    // Token-driven line color (markers alone aren't enough — see GraphCanvas.module.css).
+    className: e.inCycle ? styles.edgeCycle : undefined,
     data: { inCycle: e.inCycle },
   }));
 }
@@ -97,12 +103,32 @@ function GraphCanvasInner({
   onNodeDragStop,
   onDropOnCanvas,
   onAutoLayout,
+  extent,
+  autoLayoutSignal,
 }: GraphCanvasProps) {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [nodes, setNodes] = useState<TaskNodeType[]>(() =>
     toXYNodes(canvasNodes, tasksById, unsequencedIds),
   );
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, fitBounds } = useReactFlow();
+
+  // fitView's `fitView` boolean prop only fires on mount. Re-fit after
+  // auto-layout by watching for a signal bump (not node/extent identity,
+  // which also change on every ordinary drag) and fitting to the fresh
+  // extent directly via fitBounds — this sidesteps waiting on xyflow's own
+  // async sync of the controlled `nodes` prop into its internal store.
+  const previousAutoLayoutSignal = useRef(autoLayoutSignal);
+  useEffect(() => {
+    if (autoLayoutSignal === undefined || autoLayoutSignal === previousAutoLayoutSignal.current) return;
+    previousAutoLayoutSignal.current = autoLayoutSignal;
+    if (!extent) return;
+    fitBounds({
+      x: extent.minX,
+      y: extent.minY,
+      width: Math.max(extent.maxX - extent.minX, 1),
+      height: Math.max(extent.maxY - extent.minY, 1),
+    });
+  }, [autoLayoutSignal, extent, fitBounds]);
 
   // Re-sync from the parent's authoritative layout whenever it changes — the
   // parent is the source of truth for node membership/position (§7); local
