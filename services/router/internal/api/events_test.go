@@ -133,6 +133,39 @@ func assertNoMoreFrames(t *testing.T, ch <-chan sseFrame) {
 	}
 }
 
+// TestGetEventsBatchReturnsJSON confirms a plain GET (no SSE Accept header)
+// takes the batch JSON branch, mirroring
+// services/data/internal/api/events_test.go's TestGetEventsFiltersServerSide.
+func TestGetEventsBatchReturnsJSON(t *testing.T) {
+	srv, dataBase := newTestServerWithData(t)
+	writer := dataclient.New(dataBase, "test-writer")
+
+	mustAppend(t, writer, "ses-a", contracts.SessionCreated)
+	mustAppend(t, writer, "ses-b", contracts.SessionCreated)
+	mustAppend(t, writer, "ses-a", contracts.SessionUpdated)
+
+	resp, err := srv.Client().Get(srv.URL + "/events?session_id=ses-a&types=session.created,session.updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var events []contracts.Envelope
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2: %+v", len(events), events)
+	}
+	for _, env := range events {
+		if env.SessionID != "ses-a" {
+			t.Errorf("event %+v: session_id filter leaked another session", env)
+		}
+	}
+}
+
 func TestStreamEventsFanoutFilters(t *testing.T) {
 	srv, dataBase := newTestServerWithData(t)
 	writer := dataclient.New(dataBase, "test-writer")

@@ -6,7 +6,37 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
 )
+
+// handleEvents dispatches GET /events to the streaming (SSE) path or the
+// batch (JSON) path based on Accept, mirroring the Data Service's own
+// dispatch (services/data/internal/api/events.go handleGetEvents) — an
+// EventSource always sends "Accept: text/event-stream"; a plain fetch()
+// doesn't, so the two transports can share one route (Pipeline tab
+// HANDOFF.md §2).
+func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		s.handleStreamEvents(w, r)
+		return
+	}
+	since, _ := strconv.ParseInt(r.URL.Query().Get("since"), 10, 64)
+	sessionID := r.URL.Query().Get("session_id")
+	var types []string
+	if raw := r.URL.Query().Get("types"); raw != "" {
+		types = strings.Split(raw, ",")
+	}
+	events, err := s.data.Events(r.Context(), since, sessionID, types)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if events == nil {
+		events = []contracts.Envelope{}
+	}
+	writeJSON(w, http.StatusOK, events)
+}
 
 // handleStreamEvents is the UI's single control-plane subscription point
 // (spec §15): each request opens its own upstream dataclient.Stream call

@@ -967,6 +967,10 @@ export class FakeRouterClient implements RouterClient {
     return source;
   }
 
+  async getEvents(): Promise<Envelope[]> {
+    throw new Error("not fixtured: getEvents");
+  }
+
   // --- Sessions (session-agnostic) ---
   async listSessions(): Promise<Session[]> {
     return Array.from(this.sessions.values());
@@ -1075,7 +1079,7 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: metricsCapabilityUsage");
   }
 
-  async metricsPipelineRuns(): Promise<PipelineRun[]> {
+  async metricsPipelineRuns(_sessionId?: string): Promise<PipelineRun[]> {
     throw new Error("not fixtured: metricsPipelineRuns");
   }
 

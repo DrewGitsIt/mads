@@ -1,5 +1,6 @@
 import { router, type RouterClient } from "../../router/client";
-import type { Task } from "../../router/types";
+import type { Envelope, PipelineRun, Task } from "../../router/types";
+import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 
 /**
  * A single task's read-only agent-output stream. Returned by
@@ -33,6 +34,9 @@ export interface PipelineClient {
   resumePipeline(runId: string): Promise<void>;
   reassignTask(taskId: string, agent: string): Promise<void>;
   streamTaskOutput(runId: string, taskId: string): PipelineOutputSource;
+  // Historical run replay (HANDOFF.md §4) — the Pipeline tab's run picker.
+  listRuns(sessionId: string): Promise<PipelineRun[]>;
+  getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
 }
 
 /** RouterClient-backed PipelineClient. Only exercised directly by pipelineClient.test.ts. */
@@ -82,6 +86,14 @@ export class FetchPipelineClient implements PipelineClient {
       onChunk: () => () => {},
       close: () => {},
     };
+  }
+
+  async listRuns(sessionId: string): Promise<PipelineRun[]> {
+    return this.client.metricsPipelineRuns(sessionId);
+  }
+
+  async getRunEvents(sessionId: string, since: number): Promise<Envelope[]> {
+    return this.client.getEvents({ sessionId, since, types: FOLD_EVENT_TYPES });
   }
 }
 

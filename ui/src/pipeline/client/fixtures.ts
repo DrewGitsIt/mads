@@ -1,5 +1,5 @@
 import type { PipelineClient, PipelineOutputSource } from "./pipelineClient";
-import type { Task } from "../../router/types";
+import type { Envelope, PipelineRun, Task } from "../../router/types";
 import { recordedSessionId, recordedTasks } from "./recordedRun";
 
 export const fixtureSessionId = recordedSessionId;
@@ -61,6 +61,12 @@ export class FakePipelineOutputSource implements PipelineOutputSource {
  * way the real client never would.
  */
 export class FakePipelineClient implements PipelineClient {
+  // Seedable by tests that exercise usePipelineRunHistory/RunPicker — empty
+  // by default so every pre-existing test (none of which touch runs
+  // history) keeps seeing no runs, same as today.
+  runs: PipelineRun[] = [];
+  runEvents: Envelope[] = [];
+
   constructor(private tasks: Task[] = recordedTasks.map((t) => ({ ...t }))) {}
 
   async listTasks(sessionId: string): Promise<Task[]> {
@@ -95,5 +101,13 @@ export class FakePipelineClient implements PipelineClient {
 
   streamTaskOutput(_runId: string, _taskId: string): PipelineOutputSource {
     return new FakePipelineOutputSource();
+  }
+
+  async listRuns(_sessionId: string): Promise<PipelineRun[]> {
+    return this.runs;
+  }
+
+  async getRunEvents(_sessionId: string, since: number): Promise<Envelope[]> {
+    return this.runEvents.filter((env) => env.seq > since);
   }
 }
