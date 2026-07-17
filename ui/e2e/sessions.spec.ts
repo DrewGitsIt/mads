@@ -20,9 +20,18 @@ test("sessions journey: create, rail update, open, send, back", async ({ page, r
   await expect(page.getByText("No conversation yet")).toBeVisible();
   await expect(page.getByPlaceholder("Message the agent — @ to mention, / for commands")).toBeVisible();
 
+  // Terminal is now a real backend transport switch (POST /transport)
+  // against the session's own provider conversation, not the Electron pty
+  // bridge — assert the switch completes (real network round trip against
+  // the fake provider) without asserting on xterm.js's own canvas/DOM
+  // content, which isn't this journey's concern.
   await page.getByRole("button", { name: "Terminal" }).click();
-  await expect(page.getByText("Terminal mode requires the Electron shell.")).toBeVisible();
+  await expect(page.locator('[data-testid="terminal-view"]')).toBeVisible();
   await page.getByRole("button", { name: "Chat" }).click();
+
+  // History survives the round trip through terminal mode — never a blank
+  // pane on the way back.
+  await expect(page.getByText("No conversation yet")).toBeVisible();
 
   const message = "hello from the sessions journey";
   await page.getByPlaceholder("Message the agent — @ to mention, / for commands").fill(message);

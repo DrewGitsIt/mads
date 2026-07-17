@@ -122,6 +122,16 @@ never called peer-to-peer.
 - `GET /sessions/{id}/output`, `GET /pipelines/{id}/output` — the UI's data-plane
   subscription point: a byte-transparent reverse proxy to the running child's own
   `GET /output` SSE endpoint. 404 if the session/pipeline isn't currently running.
+- `POST /sessions/{id}/transport`, `POST /sessions/{id}/input`, `POST /sessions/{id}/resize`
+  — chat/terminal transport handoff for a session's single provider conversation (Chat and
+  Terminal are two transports over one ref, not simultaneous mirrors). Pure reverse proxies
+  to the running child's own `POST /transport`, `POST /input`, `POST /resize`, same pattern
+  as `/messages`/`/interrupt`: 404 if the session isn't running, otherwise the child's
+  response passes through untouched, including its 409 (switch refused mid-turn) and 502
+  (resume failed after the old transport closed) — the Router does no status-code
+  special-casing on this path. `/transport` body is `{"mode": "chat"|"terminal"}`; `/input`
+  body is the raw bytes to write to the terminal, not JSON-wrapped; `/resize` body is
+  `{"cols", "rows"}`.
 - `POST /agents/generate` — body `{"session_id", "task_id", "title", "description",
   "labels", "required_tools", "required_mcp_servers", "required_skills"}`; `title` set
   drives task-context generation (the auto-select-found-no-match fallback), `description`

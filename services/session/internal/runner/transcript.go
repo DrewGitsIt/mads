@@ -14,13 +14,22 @@ import (
 // session's transcript readable at all: the Router proxies here rather than
 // reading through its own, separate provider.Registry. Never errors outward,
 // matching transcriptFor's "always valid JSON, never a blank pane" contract.
+//
+// Falls back to lastRef when sess is nil (mid-SwitchTransport, which nils
+// sess for the switch's full duration) so the transcript keeps serving
+// history through a switch instead of going blank — providerName never
+// changes across a switch, and TranscriptReader only needs the ref string,
+// not a live session object.
 func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	out := []contracts.TranscriptMessage{}
 	r.mu.Lock()
-	sess := r.sess
+	ref := r.lastRef
+	if r.sess != nil {
+		ref = r.sess.Ref()
+	}
 	providerName := r.providerName
 	r.mu.Unlock()
-	if sess == nil {
+	if ref == "" {
 		return out // Start hasn't finished yet
 	}
 	p, err := r.providers.Get(providerName)
@@ -32,7 +41,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	if !ok {
 		return out
 	}
-	msgs, err := reader.Transcript(ctx, sess.Ref())
+	msgs, err := reader.Transcript(ctx, ref)
 	if err != nil {
 		log.Printf("runner: transcript: read %s: %v", r.sessionID, err)
 		return out

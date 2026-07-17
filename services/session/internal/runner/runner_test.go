@@ -178,6 +178,172 @@ func TestBounceAndResume(t *testing.T) {
 	}
 }
 
+// waitForTranscriptLen polls Transcript until it has at least n messages.
+// Needed for turns taken while the terminal transport is active: pumpPTY
+// deliberately doesn't rebroadcast turn_end to the hub (providers/fake
+// mirrors every chunk onto both Events and Terminal; rebroadcasting would
+// double the text a hub subscriber sees), so drainText's hub-subscription
+// wait doesn't apply there — Transcript, read straight from the provider's
+// history, is the transport-agnostic way to observe a turn's completion.
+func waitForTranscriptLen(t *testing.T, ctx context.Context, r *Runner, n int) []contracts.TranscriptMessage {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		msgs := r.Transcript(ctx)
+		if len(msgs) >= n {
+			return msgs
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for transcript length %d, got %d: %+v", n, len(msgs), msgs)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestSwitchTransportPreservesRef is the acceptance test for the core
+// design: chat, terminal, and a subsequent chat turn all land on the same
+// provider ref and appear in the shared transcript in order.
+func TestSwitchTransportPreservesRef(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	// Each phase subscribes fresh: pumpPTY's terminal-byte relay broadcasts
+	// to the hub too (so a live terminal view can render it), and those
+	// chunks would otherwise sit unread in an earlier subscription's buffer
+	// and corrupt a later drainText's accumulated text.
+	ch1, unsub1 := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if got := drainText(t, ch1); got != "you said hi" {
+		t.Fatalf("reply = %q, want %q", got, "you said hi")
+	}
+	unsub1()
+
+	ref1, err := r.SwitchTransport(ctx, provider.ModePTY)
+	if err != nil {
+		t.Fatalf("switch to terminal: %v", err)
+	}
+
+	// The fake's Send doesn't gate on mode — this is fake-specific
+	// looseness, not something a real PTY transport would allow (real
+	// terminal input goes through TerminalWrite, never Send). Completion is
+	// observed via Transcript, not the hub: pumpPTY doesn't rebroadcast
+	// turn_end (see waitForTranscriptLen's doc).
+	if err := r.Send(ctx, "echo again"); err != nil {
+		t.Fatalf("send in terminal mode: %v", err)
+	}
+	waitForTranscriptLen(t, ctx, r, 4)
+
+	ref2, err := r.SwitchTransport(ctx, provider.ModeACP)
+	if err != nil {
+		t.Fatalf("switch to chat: %v", err)
+	}
+	if ref2 != ref1 {
+		t.Fatalf("ref changed across switches: terminal=%q chat=%q, want equal", ref1, ref2)
+	}
+
+	ch2, unsub2 := r.Subscribe()
+	defer unsub2()
+	if err := r.Send(ctx, "echo once more"); err != nil {
+		t.Fatalf("send after switching back: %v", err)
+	}
+	if got := drainText(t, ch2); got != "you said once more" {
+		t.Fatalf("reply = %q, want %q", got, "you said once more")
+	}
+
+	msgs := r.Transcript(ctx)
+	var texts []string
+	for _, m := range msgs {
+		texts = append(texts, m.Role+":"+m.Text)
+	}
+	want := []string{
+		"user:echo hi", "agent:you said hi",
+		"user:echo again", "agent:you said again",
+		"user:echo once more", "agent:you said once more",
+	}
+	if len(texts) != len(want) {
+		t.Fatalf("transcript = %v, want %v", texts, want)
+	}
+	for i := range want {
+		if texts[i] != want[i] {
+			t.Fatalf("transcript[%d] = %q, want %q (full: %v)", i, texts[i], want[i], texts)
+		}
+	}
+}
+
+// TestSwitchTransportRefusesMidTurn enforces single-writer discipline: a
+// switch mid-turn is refused, and interrupting first is the documented
+// escape hatch.
+func TestSwitchTransportRefusesMidTurn(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if err := r.Send(ctx, "echo hi"); err != ErrTurnInFlight {
+		t.Fatalf("second send mid-turn: err = %v, want ErrTurnInFlight", err)
+	}
+
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != ErrSwitchBusy {
+		t.Fatalf("switch mid-turn: err = %v, want ErrSwitchBusy", err)
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	// Drain until the interrupted turn_end so busy clears.
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				goto drained
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for turn_end after interrupt")
+		}
+	}
+drained:
+
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != nil {
+		t.Fatalf("switch after interrupt: %v", err)
+	}
+}
+
 func TestShutdownReleasesLeases(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)

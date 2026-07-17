@@ -55,6 +55,40 @@ func (s *server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) 
 	s.proxyTo(w, r, addr, "/interrupt")
 }
 
+// handleSessionTransport, handleSessionInput, and handleSessionResize
+// forward the chat/terminal transport-switch control plane to the running
+// session child's own POST /transport, POST /input, and POST /resize
+// (services/session/internal/api/api.go). Pure reverse-proxies, same as
+// /messages and /interrupt above — no status-code special-casing, so the
+// child's 409 (mid-turn switch refused) and 502 (resume failed) responses
+// pass through untouched.
+func (s *server) handleSessionTransport(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/transport")
+}
+
+func (s *server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/input")
+}
+
+func (s *server) handleSessionResize(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/resize")
+}
+
 // proxyTo reverse-proxies r to addr, rewriting the path to childPath —
 // shared by the streaming /output forwarders above and the JSON /messages
 // and /interrupt forwarders (httputil.ReverseProxy handles both request

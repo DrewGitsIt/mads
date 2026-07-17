@@ -46,6 +46,12 @@ type Fake struct {
 	// NewWithScenario constructs the Fake, so &sc.Rules[i] stays valid for
 	// the Fake's lifetime.
 	rateLimitHits map[*Rule]int
+	// liveRefs tracks which refs are currently attached to an un-closed
+	// fakeSession, so Start can reject a second attachment to the same ref
+	// the way a real harness (e.g. claude-code) refuses double-attaching to
+	// a live session — the guarantee SwitchTransport's hard-sequencing
+	// (old process fully dead before the new one starts) depends on.
+	liveRefs map[string]bool
 }
 
 // New returns a fake running only the built-in dialect.
@@ -59,7 +65,7 @@ func NewWithScenario(sc Scenario) (*Fake, error) {
 	if err := sc.Validate(); err != nil {
 		return nil, err
 	}
-	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}}, nil
+	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}, liveRefs: map[string]bool{}}, nil
 }
 
 func (f *Fake) Name() string { return "fake" }
@@ -91,10 +97,21 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	if ref == "" {
 		f.seq++
 		ref = fmt.Sprintf("fake-%d", f.seq)
+		// Register the ref as known immediately, even with no messages
+		// sent yet — a session resumed (e.g. by a transport switch) right
+		// after Start, before any turn, must find its ref valid.
+		if _, exists := f.histories[ref]; !exists {
+			f.histories[ref] = []provider.Message{}
+		}
 	} else if _, known := f.histories[ref]; !known {
 		f.mu.Unlock()
 		return nil, fmt.Errorf("resume: unknown session ref %q", ref)
 	}
+	if f.liveRefs[ref] {
+		f.mu.Unlock()
+		return nil, fmt.Errorf("start: session ref %q already attached", ref)
+	}
+	f.liveRefs[ref] = true
 	f.mu.Unlock()
 
 	s := &fakeSession{
@@ -231,6 +248,15 @@ func (f *Fake) history(ref string) []provider.Message {
 	return append([]provider.Message{}, f.histories[ref]...)
 }
 
+// release marks ref no longer attached to a live session, allowing a later
+// Start to resume it. A different mutex than fakeSession.die() already
+// holds (s.mu) — no nesting/deadlock risk.
+func (f *Fake) release(ref string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.liveRefs, ref)
+}
+
 // executeTool really performs a scripted file edit so downstream
 // file-tracking tests observe genuine changes.
 func executeTool(ts ToolStep, cwd string) error {
@@ -309,6 +335,7 @@ func (s *fakeSession) die() {
 		if s.ptyW != nil {
 			_ = s.ptyW.Close()
 		}
+		s.f.release(s.ref)
 	}
 }
 

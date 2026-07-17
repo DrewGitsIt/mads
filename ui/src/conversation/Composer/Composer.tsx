@@ -11,6 +11,8 @@ export interface ComposerProps {
   sessionId: string;
   agentId?: string;
   onSent?: (text: string, mentions: string[]) => void;
+  /** Disables the textarea and Send button — set during a transport switch. */
+  disabled?: boolean;
 }
 
 /**
@@ -19,7 +21,13 @@ export interface ComposerProps {
  * splices a plain-text reference token into the value and stages it in
  * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
  */
-export function Composer({ routerClient, sessionId, agentId, onSent }: ComposerProps) {
+export function Composer({
+  routerClient,
+  sessionId,
+  agentId,
+  onSent,
+  disabled,
+}: ComposerProps) {
   const [value, setValue] = useState("");
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -111,6 +119,7 @@ export function Composer({ routerClient, sessionId, agentId, onSent }: ComposerP
             .join(" ")}
           placeholder="Message the agent — @ to mention, / for commands"
           value={value}
+          disabled={disabled}
           onChange={(e) => {
             setValue(e.target.value);
             setCursor(e.target.selectionStart ?? e.target.value.length);
@@ -119,7 +128,7 @@ export function Composer({ routerClient, sessionId, agentId, onSent }: ComposerP
           onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
           onKeyDown={handleKeyDown}
         />
-        <Button variant="primary" onClick={handleSend}>
+        <Button variant="primary" onClick={handleSend} disabled={disabled}>
           Send
         </Button>
       </div>

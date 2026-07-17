@@ -71,6 +71,15 @@ export interface RouterClient {
   ): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   bounce(sessionId: string): Promise<void>;
+
+  // --- Chat/Terminal transport handoff (single provider conversation,
+  // two transports, never both at once — see ui/src/conversation/HANDOFF.md) ---
+  switchTransport(
+    sessionId: string,
+    mode: "chat" | "terminal",
+  ): Promise<{ mode: string; ref: string }>;
+  terminalWrite(sessionId: string, data: string): Promise<void>;
+  terminalResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   resumeSession(sessionId: string): Promise<{ addr: string }>;
   deleteSession(id: string): Promise<void>;
@@ -232,6 +241,23 @@ export class RouterValidationError extends Error {
   }
 }
 
+/**
+ * Thrown by `switchTransport` on a non-2xx from `POST /transport`, whose
+ * body is `{error, code, retryable}` (services/session's `writeSwitchError`).
+ * `code` is what lets `ConversationTab` distinguish "mid-turn, offer
+ * interrupt-then-retry" (`busy`) from "old transport is dead, resume
+ * failed" (`resume_failed`) without string-matching the message.
+ */
+export class TransportSwitchError extends Error {
+  constructor(
+    message: string,
+    readonly code: "busy" | "resume_failed" | "not_ready",
+    readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
 // components. The Router's address is exposed via VITE_ROUTER_URL; the
 // default matches the Router's own `-addr` flag default (localhost:8080).
@@ -315,8 +341,13 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/transcript`, { page });
   }
 
+  // The child's live data-plane event feed (services/session's
+  // GET /output, proxied byte-transparently by the Router) — this is also
+  // the channel PTY-mode terminal output flows through post-switch, since
+  // the runner's pumpPTY relays terminal reads onto the same hub as
+  // EventText.
   streamSession(sessionId: string): SessionEventSource {
-    return new EventSource(`${this.baseUrl}/sessions/${sessionId}/stream`);
+    return new EventSource(`${this.baseUrl}/sessions/${sessionId}/output`);
   }
 
   async sendMessage(
@@ -332,6 +363,44 @@ export class FetchRouterClient implements RouterClient {
 
   async bounce(sessionId: string): Promise<void> {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/bounce`);
+  }
+
+  async switchTransport(
+    sessionId: string,
+    mode: "chat" | "terminal",
+  ): Promise<{ mode: string; ref: string }> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/transport`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as {
+        error?: string;
+        code?: "busy" | "resume_failed" | "not_ready";
+        retryable?: boolean;
+      } | null;
+      throw new TransportSwitchError(
+        body?.error ?? `router request failed: ${res.status}`,
+        body?.code ?? "resume_failed",
+        body?.retryable ?? false,
+      );
+    }
+    return (await res.json()) as { mode: string; ref: string };
+  }
+
+  // Raw bytes, not JSON-wrapped — the child's POST /input reads the
+  // request body directly and writes it to the pty.
+  async terminalWrite(sessionId: string, data: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/input`, {
+      method: "POST",
+      body: data,
+    });
+    await readJSON(res);
+  }
+
+  async terminalResize(sessionId: string, cols: number, rows: number): Promise<void> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/resize`, { cols, rows });
   }
 
   async closeSession(sessionId: string): Promise<void> {

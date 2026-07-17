@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -57,6 +58,52 @@ func main() {
 		_, _ = w.Write(body)
 	})
 	mux.HandleFunc("POST /interrupt", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
+	})
+	// The "mode" value doubles as a way for router tests to force the
+	// child's documented switch-failure responses (409 busy, 502 resume
+	// failed) through the proxy without a real runner/provider stack.
+	mux.HandleFunc("POST /transport", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Mode {
+		case "busy":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = fmt.Fprint(w, `{"error":"cannot switch transport mid-turn","code":"busy","retryable":true}`)
+		case "resume_failed":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = fmt.Fprint(w, `{"error":"resume failed","code":"resume_failed","retryable":true}`)
+		default:
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"mode":%q,"ref":"test-ref"}`, req.Mode)
+		}
+	})
+	mux.HandleFunc("POST /input", func(w http.ResponseWriter, r *http.Request) {
+		if _, err := io.ReadAll(r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
+	})
+	mux.HandleFunc("POST /resize", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Cols int `json:"cols"`
+			Rows int `json:"rows"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"status":"ok"}`)

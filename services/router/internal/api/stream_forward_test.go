@@ -183,3 +183,141 @@ func TestSessionInterruptNotRunning(t *testing.T) {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
 }
+
+func TestSessionTransportForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "transport test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	tResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/transport", "application/json", bytes.NewBufferString(`{"mode":"terminal"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tResp.Body.Close() }()
+	if tResp.StatusCode != http.StatusOK {
+		t.Fatalf("transport status = %d, want 200", tResp.StatusCode)
+	}
+	got := decodeJSON[struct {
+		Mode string `json:"mode"`
+		Ref  string `json:"ref"`
+	}](t, tResp)
+	if got.Mode != "terminal" || got.Ref == "" {
+		t.Errorf("proxied transport response = %+v, want mode echoed back with a non-empty ref", got)
+	}
+}
+
+// The child's documented switch-failure responses (409 busy, 502 resume
+// failed) must pass through the Router untouched — it does no status-code
+// special-casing on this route.
+func TestSessionTransportForwardingPassesThroughFailure(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "transport busy test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	tResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/transport", "application/json", bytes.NewBufferString(`{"mode":"busy"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tResp.Body.Close() }()
+	if tResp.StatusCode != http.StatusConflict {
+		t.Fatalf("transport status = %d, want 409", tResp.StatusCode)
+	}
+}
+
+func TestSessionTransportNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/transport", "application/json", bytes.NewBufferString(`{"mode":"terminal"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSessionInputForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "input test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	iResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/input", "application/octet-stream", bytes.NewBufferString("ls\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = iResp.Body.Close() }()
+	if iResp.StatusCode != http.StatusOK {
+		t.Fatalf("input status = %d, want 200", iResp.StatusCode)
+	}
+}
+
+func TestSessionInputNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/input", "application/octet-stream", bytes.NewBufferString("ls\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestSessionResizeForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "resize test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	rResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/resize", "application/json", bytes.NewBufferString(`{"cols":80,"rows":24}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rResp.Body.Close() }()
+	if rResp.StatusCode != http.StatusOK {
+		t.Fatalf("resize status = %d, want 200", rResp.StatusCode)
+	}
+}
+
+func TestSessionResizeNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/resize", "application/json", bytes.NewBufferString(`{"cols":80,"rows":24}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+}

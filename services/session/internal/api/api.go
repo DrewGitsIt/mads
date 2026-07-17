@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 
+	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
 )
 
@@ -25,7 +27,10 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /merge", s.handleMerge)
-	mux.HandleFunc("GET /stream", s.handleStream)
+	mux.HandleFunc("GET /output", s.handleStream)
+	mux.HandleFunc("POST /transport", s.handleTransport)
+	mux.HandleFunc("POST /input", s.handleTerminalInput)
+	mux.HandleFunc("POST /resize", s.handleTerminalResize)
 	mux.HandleFunc("GET /files", s.handleFiles)
 	mux.HandleFunc("GET /commits", s.handleCommits)
 	mux.HandleFunc("GET /transcript", s.handleTranscript)
@@ -125,6 +130,71 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleTransport switches the session's single transport between chat
+// (ACP) and terminal (PTY) mode on the same provider ref (spec: one
+// conversation, two transports, single-writer handoff). Simultaneous
+// mirroring is out of scope — this always tears down the old transport's
+// provider process before starting the new one.
+func (s *server) handleTransport(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	var mode provider.Mode
+	switch body.Mode {
+	case "chat":
+		mode = provider.ModeACP
+	case "terminal":
+		mode = provider.ModePTY
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown mode: " + body.Mode})
+		return
+	}
+	ref, err := s.runner.SwitchTransport(r.Context(), mode)
+	if err != nil {
+		writeSwitchError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": body.Mode, "ref": ref})
+}
+
+// handleTerminalInput writes raw terminal input to the session's current
+// transport. The body is the raw bytes to write, unwrapped — same
+// pass-through contract the Router's proxy already uses for every other
+// route, and it avoids forcing arbitrary terminal byte sequences through a
+// JSON string.
+func (s *server) handleTerminalInput(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "read body: " + err.Error()})
+		return
+	}
+	if err := s.runner.TerminalWrite(data); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleTerminalResize propagates a terminal resize to the session's
+// current transport.
+func (s *server) handleTerminalResize(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Cols int `json:"cols"`
+		Rows int `json:"rows"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if err := s.runner.TerminalResize(body.Cols, body.Rows); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // handleFiles lists every file this session has touched (spec §5), read
 // straight through from the Data Service — the durable record, not a
 // local cache.
@@ -194,8 +264,32 @@ func writeRunnerError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, runner.ErrNoWorktree):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, runner.ErrSwitchBusy):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case errors.Is(err, runner.ErrNotPTYMode):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+}
+
+// writeSwitchError maps SwitchTransport's outcomes onto POST /transport's
+// error contract, which — unlike writeRunnerError's plain {"error":...} —
+// carries a machine-readable code and a retryable hint so the UI can offer
+// the right recovery action (interrupt-then-switch for busy, retry/reopen
+// for a failed resume) without string-matching the message.
+func writeSwitchError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, runner.ErrNotReady):
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error(), "code": "not_ready", "retryable": true})
+	case errors.Is(err, runner.ErrSwitchBusy):
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "busy", "retryable": true})
+	default:
+		// SwitchTransport wraps the provider's Start error for anything
+		// past the busy/not-ready gates — the old process is already dead
+		// at this point, so the caller's only paths forward are retrying
+		// the switch or reopening the mode it just left.
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error(), "code": "resume_failed", "retryable": true})
 	}
 }
 

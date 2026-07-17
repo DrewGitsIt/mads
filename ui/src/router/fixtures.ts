@@ -705,6 +705,20 @@ export class FakeRouterClient implements RouterClient {
 
   async bounce(): Promise<void> {}
 
+  // Fixture-backed no-ops, same convention as sendMessage/interrupt/bounce
+  // above — tests override via vi.spyOn when they need to exercise the
+  // switching flow (ui/src/conversation/HANDOFF.md).
+  async switchTransport(
+    _sessionId: string,
+    mode: "chat" | "terminal",
+  ): Promise<{ mode: string; ref: string }> {
+    return { mode, ref: "fake-ref" };
+  }
+
+  async terminalWrite(): Promise<void> {}
+
+  async terminalResize(): Promise<void> {}
+
   async closeSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) throw new Error(`fixture session not found: ${sessionId}`);
