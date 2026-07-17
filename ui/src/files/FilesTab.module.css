@@ -20,3 +20,9 @@
   display: flex;
   gap: var(--space-1);
 }
+
+.emptyBoth {
+  padding: var(--space-3);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}

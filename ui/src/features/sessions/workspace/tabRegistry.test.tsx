@@ -64,8 +64,7 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    await waitFor(() => expect(screen.getByText("Changed files")).toBeTruthy());
-    expect(screen.getByText("Commits")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Working changes")).toBeTruthy());
   });
 
   it("PipelineTabView renders the real PipelineTab", async () => {

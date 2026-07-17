@@ -343,6 +343,13 @@ export interface FileChange {
 // mirrors pkg/contracts/session.go Commit
 export type LinkedVia = "trailer" | "session_context" | "heuristic";
 
+// mirrors services/router/internal/api/commits.go commitFile — Router-
+// derived via `git show --name-status`, not stored by the Data Service.
+export interface CommitFile {
+  path: string;
+  change: "added" | "modified" | "deleted";
+}
+
 export interface Commit {
   hash: string;
   session_id: string;
@@ -353,6 +360,7 @@ export interface Commit {
   linked_via?: LinkedVia;
   orphan?: boolean;
   timestamp: string;
+  files?: CommitFile[]; // Router-derived, best-effort, absent when unresolvable
 }
 
 // mirrors pkg/contracts/session.go MergeResult

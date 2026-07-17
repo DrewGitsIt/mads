@@ -56,4 +56,37 @@ describe("FilesTab", () => {
     expect(screen.getByText(/router: candidate fix/)).toBeTruthy();
     expect(screen.queryByText(/chore: bump go.sum/)).toBeNull();
   });
+
+  it("shows a single honest empty state when there are no commits and no working changes", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-empty" routerClient={client} />);
+
+    expect(
+      await screen.findByText(/no commits recorded and no working changes observed/i),
+    ).toBeTruthy();
+    expect(screen.queryByText("Committed")).toBeNull();
+    expect(screen.queryByText("Working changes")).toBeNull();
+  });
+
+  it("renders only the Committed section when only commits are non-empty", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-commits-only" routerClient={client} />);
+
+    expect(await screen.findByText("Committed")).toBeTruthy();
+    expect(screen.queryByText("Working changes")).toBeNull();
+  });
+
+  it("renders commits newest-first", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-observed" routerClient={client} />);
+
+    const messages = await screen.findAllByText(
+      /router: filter control events|router: candidate fix|chore: bump go\.sum/,
+    );
+    expect(messages.map((el) => el.textContent)).toEqual([
+      "chore: bump go.sum",
+      "router: candidate fix for overlapping file touches",
+      "router: filter control events by session_id",
+    ]);
+  });
 });

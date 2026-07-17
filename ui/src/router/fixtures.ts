@@ -104,6 +104,26 @@ export const fixtureSessions: Record<string, Session> = {
     worktree_branch: "mads/tsk_contract-rename",
     worktree_dir: "/home/drew/.mads/worktrees/ses_x/tsk_contract-rename",
   },
+  // Double-empty-state fixture: no file changes, no commits (ui/src/files/
+  // HANDOFF.md §7).
+  "session-files-empty": {
+    id: "session-files-empty",
+    created_at: "2026-07-14T00:00:00Z",
+    updated_at: "2026-07-14T00:00:00Z",
+    name: "Nothing recorded yet",
+    activity: "inactive",
+    workspace: "mads",
+  },
+  // Pipeline-only fixture: commits recorded, no observed working changes —
+  // the case this task's root cause was about (ui/src/files/HANDOFF.md §7/§10).
+  "session-files-commits-only": {
+    id: "session-files-commits-only",
+    created_at: "2026-07-14T00:00:00Z",
+    updated_at: "2026-07-14T00:00:00Z",
+    name: "Pipeline-only maintenance run",
+    activity: "inactive",
+    workspace: "mads",
+  },
   // Retro surface (W6.7) — a retro-generated follow-up session, so the
   // picker's "Retro-generated" kind filter has a fixture to match on.
   "session-retro-generated": {
@@ -392,6 +412,39 @@ export const fixtureTasks: Task[] = [
     title: "Cycle B",
     source: "user",
   },
+  // Files tab commit-chip fixtures (ui/src/files/HANDOFF.md §6) — matches
+  // fixtureCommits' task_ids below, so the Files tab's task-title lookup
+  // has something real to resolve.
+  {
+    id: "tsk_retry-backoff",
+    session_id: "session-files-clean",
+    status: "done",
+    retry_count: 0,
+    created_at: "2026-07-14T09:00:00Z",
+    updated_at: "2026-07-14T10:06:00Z",
+    title: "Ingest worker resilience",
+    source: "user",
+  },
+  {
+    id: "tsk_flaky-metrics",
+    session_id: "session-files-observed",
+    status: "in_progress",
+    retry_count: 0,
+    created_at: "2026-07-14T10:30:00Z",
+    updated_at: "2026-07-14T11:08:00Z",
+    title: "Investigate flaky metrics filtering",
+    source: "user",
+  },
+  {
+    id: "tsk_contract-rename",
+    session_id: "session-files-conflict",
+    status: "needs_review",
+    retry_count: 0,
+    created_at: "2026-07-14T11:45:00Z",
+    updated_at: "2026-07-14T12:01:00Z",
+    title: "Rename Session.Trust contract field",
+    source: "user",
+  },
 ];
 
 // Tasks tab / Context Rail change rows (W6.4) — folded into the record below.
@@ -530,6 +583,11 @@ export const fixtureCommits: Record<string, Commit[]> = {
       author: "autonomous-executor",
       linked_via: "trailer",
       timestamp: "2026-07-14T10:06:00Z",
+      files: [
+        { path: "services/data/internal/backoff.go", change: "added" },
+        { path: "services/data/internal/backoff_test.go", change: "added" },
+        { path: "docs/RETRY-BACKOFF.md", change: "modified" },
+      ],
     },
   ],
   "session-files-observed": [
@@ -569,6 +627,17 @@ export const fixtureCommits: Record<string, Commit[]> = {
       author: "autonomous-executor",
       linked_via: "trailer",
       timestamp: "2026-07-14T12:01:00Z",
+    },
+  ],
+  "session-files-commits-only": [
+    {
+      hash: "d1e2f3a",
+      session_id: "session-files-commits-only",
+      task_id: "tsk_contract-rename",
+      message: "chore: pipeline-only maintenance commit",
+      author: "autonomous-executor",
+      linked_via: "session_context",
+      timestamp: "2026-07-14T13:00:00Z",
     },
   ],
 };

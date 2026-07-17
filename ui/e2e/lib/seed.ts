@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 export interface SeedSession {
   id: string;
@@ -73,6 +74,42 @@ export async function recordFileChange(
     body: JSON.stringify({ session_id: sessionID, path, change: "added", origin: "tool_use" }),
   });
   if (!res.ok) throw new Error(`recordFileChange: status ${res.status}`);
+}
+
+/**
+ * Makes a real commit in repoDir (the same repo setupWorkspace initialized)
+ * and reports it to the Data Service with repo=repoDir, so the Router's
+ * git-enrichment (services/router/internal/api/commits.go) can resolve a
+ * real file list for it — same "seed the producer gap directly" pattern as
+ * recordFileChange (nothing in the pipeline/provider stack makes a real
+ * pipeline-stage commit against the fake provider today).
+ */
+export async function recordRealCommit(
+  dataURL: string,
+  sessionID: string,
+  repoDir: string,
+  opts: { path: string; content: string; message: string; taskId: string },
+): Promise<string> {
+  const filePath = path.join(repoDir, opts.path);
+  mkdirSync(path.dirname(filePath), { recursive: true });
+  writeFileSync(filePath, opts.content);
+  const run = (args: string[]) => execFileSync("git", args, { cwd: repoDir, stdio: "pipe" });
+  run(["add", "-A"]);
+  run(["-c", "user.email=e2e@smoke.test", "-c", "user.name=e2esmoke", "commit", "-q", "-m", opts.message]);
+  const hash = run(["rev-parse", "HEAD"]).toString().trim();
+  const res = await fetch(`${dataURL}/sessions/${sessionID}/commits`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Mads-Actor": "e2e" },
+    body: JSON.stringify({
+      session_id: sessionID,
+      hash,
+      message: opts.message,
+      repo: repoDir,
+      trailer_task_id: opts.taskId,
+    }),
+  });
+  if (!res.ok) throw new Error(`recordRealCommit: status ${res.status}`);
+  return hash;
 }
 
 export interface WorkspaceRepo {

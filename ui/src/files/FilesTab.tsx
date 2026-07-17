@@ -28,6 +28,7 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
   const [scope, setScope] = useState<Scope>("session");
   const [changes, setChanges] = useState<FileChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
+  const [taskTitles, setTaskTitles] = useState<Map<string, string>>(new Map());
   const [selectedPath, setSelectedPath] = useState<string | undefined>();
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
@@ -47,12 +48,23 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
 
   useEffect(() => {
     let cancelled = false;
+    void routerClient.listTasks(sessionId).then((tasks) => {
+      if (!cancelled) setTaskTitles(new Map(tasks.map((t) => [t.id, t.title])));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [routerClient, sessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
     void routerClient.getFileChanges(sessionId, scopedTaskId).then((fc) => {
       if (!cancelled) setChanges(fc);
     });
     void routerClient.getCommits(sessionId).then((cs) => {
       if (!cancelled) {
-        setCommits(scopedTaskId ? cs.filter((c) => c.task_id === scopedTaskId) : cs);
+        const scoped = scopedTaskId ? cs.filter((c) => c.task_id === scopedTaskId) : cs;
+        setCommits(scoped.slice().reverse());
       }
     });
     return () => {
@@ -102,19 +114,34 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
           </div>
         )}
 
-        <Panel>
-          <PanelHeader>Changed files</PanelHeader>
-          <PanelBody>
-            <ChangeList changes={changes} selectedPath={selectedPath} onSelect={setSelectedPath} />
-          </PanelBody>
-        </Panel>
-
-        <Panel>
-          <PanelHeader>Commits</PanelHeader>
-          <PanelBody>
-            <CommitList commits={commits} />
-          </PanelBody>
-        </Panel>
+        {commits.length === 0 && changes.length === 0 ? (
+          <Panel>
+            <PanelBody>
+              <div className={styles.emptyBoth}>
+                No commits recorded and no working changes observed for this session yet.
+              </div>
+            </PanelBody>
+          </Panel>
+        ) : (
+          <>
+            {commits.length > 0 && (
+              <Panel>
+                <PanelHeader>Committed</PanelHeader>
+                <PanelBody>
+                  <CommitList commits={commits} taskTitles={taskTitles} />
+                </PanelBody>
+              </Panel>
+            )}
+            {changes.length > 0 && (
+              <Panel>
+                <PanelHeader>Working changes</PanelHeader>
+                <PanelBody>
+                  <ChangeList changes={changes} selectedPath={selectedPath} onSelect={setSelectedPath} />
+                </PanelBody>
+              </Panel>
+            )}
+          </>
+        )}
 
         <MergeBackFlow
           sessionId={sessionId}

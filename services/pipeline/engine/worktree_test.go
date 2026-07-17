@@ -370,6 +370,20 @@ func TestPostCommitHookReportsCommit(t *testing.T) {
 	if got.Message != "do the work" {
 		t.Errorf("message: %q", got.Message)
 	}
+	// The commit was made in the task worktree (dir), distinct from the
+	// primary (w.primary/h.cwd) — Repo must resolve back to the primary,
+	// proving --git-common-dir reaches through the linked worktree.
+	wantRepo, err := filepath.EvalSymlinks(w.primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotRepo, err := filepath.EvalSymlinks(got.Repo)
+	if err != nil {
+		t.Fatalf("Repo %q does not resolve: %v", got.Repo, err)
+	}
+	if gotRepo != wantRepo {
+		t.Errorf("Repo = %q (resolved %q), want %q", got.Repo, gotRepo, wantRepo)
+	}
 }
 
 // hGet is a bare GET against the Data Service for endpoints the engine's
