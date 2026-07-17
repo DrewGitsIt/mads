@@ -14,9 +14,31 @@ set** — the schema stores grants, the UI names presets:
 | `inject` | deliver a message into the subject's conversation (queued, attributed) |
 | `orchestrate` | agent-held tool to message/direct the subject's agent |
 
-Presets: **Monitor** = `{read}` · **Hand-raiser** = `{read, inject}` ·
-**Leader** = `{read, inject, orchestrate}`. Users pick presets; contracts see
-grants, so new combinations need no schema change.
+**User-selectable presets are exactly two**: **Monitor** = `{read}` and
+**Leader** = `{read, inject, orchestrate}`. **Hand-raiser** = `{read, inject}`
+exists only as a SYSTEM-GRANTED state (see decision 6) — it is never offered in
+the link chooser. Contracts see grants, so new combinations need no schema
+change.
+
+The meaning of `inject` depends on the subject:
+
+- subject is an interactive session → deliver a message into its conversation
+  (in practice Leader-only, since hand-raiser is never user-granted);
+- subject is a pipeline run → system-facing actions on the run (e.g. posting a
+  task note, flagging a blocker) — a hand-raiser interacts with **systems,
+  never directly with other agents** (Drew, 2026-07-16). Agent-to-agent
+  messaging is exclusively `orchestrate` territory.
+
+## Multiplicity
+
+Links are directed edges; nothing is 1:1 by design:
+
+- A subject may have **any number of monitors** (`read` fans out; L2b digests
+  deliver to every reading link).
+- A leader may hold links over **any number of subjects** (the L2c tool lists
+  them all).
+- A subject may have **at most one `orchestrate` holder** — two bosses invite
+  conflicting direction; validated at L1. Revisit if a real use case appears.
 
 ## Decisions
 
@@ -48,8 +70,9 @@ grants, so new combinations need no schema change.
    for a session whose interactive agent is live — or the session becomes
    interactive while the pipeline runs — that agent acquires hand-raiser
    grants `{read, inject}` over the run immediately (or on its next turn
-   boundary): it receives run digests and may surface findings to its user or
-   inject guidance, exactly the shepherding pattern proven manually.
+   boundary): it receives run digests, may surface findings to its user, and
+   may act on the RUN as a system (task notes, blocker flags) — never message
+   other agents. Exactly the shepherding pattern proven manually.
 
 ## Unchanged from §1.12
 

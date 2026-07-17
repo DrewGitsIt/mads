@@ -104,41 +104,44 @@ h2 { font-size:13px; text-transform:uppercase; letter-spacing:.09em; color:var(-
   <p class="note">L4 mockup for <code>docs/LINKED-SESSIONS-DESIGN.md</code>. Flag-gated (<code>linked-sessions</code>).
   Presets in the chooser are clickable.</p>
 
-  <h2>1 · Creating a link — multi-select in the rail, then choose a preset</h2>
+  <h2>1 · Creating links — multi-select in the rail, pick a mode, pick who holds it</h2>
   <div class="row">
     <div class="panel rail">
-      <div class="h"><span>Active · 3</span><span>2 selected</span></div>
+      <div class="h"><span>Active · 4</span><span>3 selected</span></div>
       <div class="srow checked"><span class="cb">✓</span><span class="dot on"></span>investigator</div>
       <div class="srow checked"><span class="cb">✓</span><span class="dot on"></span>payments refactor</div>
+      <div class="srow checked"><span class="cb">✓</span><span class="dot on"></span>gateway hardening</div>
       <div class="srow"><span class="cb"></span><span class="dot on"></span>Maintenance</div>
       <div class="linkbar">
-        <button class="btn primary">Link 2 sessions…</button>
+        <button class="btn primary">Link 3 sessions…</button>
         <button class="btn ghost">Clear</button>
       </div>
     </div>
     <div class="panel chooser">
       <div class="title">Link sessions</div>
-      <div class="sub">Choose what <b>investigator</b> may do with <b>payments refactor</b>.</div>
-      <div class="dir"><b>investigator</b> ⟶ <b>payments refactor</b><button class="swap">⇄ swap direction</button></div>
+      <div class="sub">Pick a mode, then pick which session holds it — every other selected session becomes its subject.</div>
       <div class="presets" id="presets">
         <div class="preset" aria-selected="false">
           <div class="pt">Monitor</div>
-          <div class="pd">Follows along: receives a digest after each of the other agent's turns. Never speaks into it.</div>
+          <div class="pd">Follows along: receives a digest after each watched agent's turn. Never speaks into them.</div>
           <div class="grants"><span class="grant">read</span></div>
-        </div>
-        <div class="preset" aria-selected="false">
-          <div class="pt">Hand-raiser</div>
-          <div class="pd">Follows along and may raise a point into the other conversation — attributed, queued after the current turn.</div>
-          <div class="grants"><span class="grant">read</span><span class="grant">inject</span></div>
         </div>
         <div class="preset" aria-selected="true">
           <div class="pt">Leader</div>
-          <div class="pd">Gets a tool to message and direct the other agent. Its reach is capped by that session's own trust level.</div>
+          <div class="pd">Gets a tool to message and direct the other agents. Its reach is capped by each session's own trust level.</div>
           <div class="grants"><span class="grant">read</span><span class="grant">inject</span><span class="grant">orchestrate</span></div>
         </div>
       </div>
-      <div class="constraint">Links never cross different worktrees of the same repo. Pipeline runs can be monitored, not led.</div>
-      <div class="actions"><button class="btn ghost">Cancel</button><button class="btn primary">Create link</button></div>
+      <div class="dir" style="margin-top:12px; flex-direction:column; align-items:stretch; gap:6px;">
+        <div style="font-size:12px; color:var(--text3); letter-spacing:.05em; text-transform:uppercase;">Who leads?</div>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="radio" name="holder" checked><b>investigator</b> <span style="color:var(--text3)">⟶ payments refactor, gateway hardening</span></label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="radio" name="holder"><b>payments refactor</b> <span style="color:var(--text3)">⟶ investigator, gateway hardening</span></label>
+        <label style="display:flex; gap:8px; align-items:center;"><input type="radio" name="holder"><b>gateway hardening</b> <span style="color:var(--text3)">⟶ investigator, payments refactor</span></label>
+      </div>
+      <div class="constraint">One leader per subject — a session already led by someone else is refused. Links never cross
+      different worktrees of the same repo. Pipeline runs can be monitored, not led. (Hand-raiser isn't offered here:
+      it's granted automatically to a session's own agent while its pipeline runs, and it talks to systems, not agents.)</div>
+      <div class="actions"><button class="btn ghost">Cancel</button><button class="btn primary">Create 2 links</button></div>
     </div>
   </div>
 
@@ -146,8 +149,9 @@ h2 { font-size:13px; text-transform:uppercase; letter-spacing:.09em; color:var(-
   <div class="row">
     <div class="panel rail">
       <div class="h"><span>Active · 3</span></div>
-      <div class="srow leader"><span class="dot on"></span>investigator<span class="linkbadge lead">LEADER</span></div>
+      <div class="srow leader"><span class="dot on"></span>investigator<span class="linkbadge lead">LEADER · 2</span></div>
       <div class="srow follower"><span class="dot on"></span>payments refactor<span class="linkbadge">LINKED</span></div>
+      <div class="srow follower"><span class="dot on"></span>gateway hardening<span class="linkbadge">LINKED</span></div>
       <div class="srow"><span class="dot on"></span>Maintenance</div>
     </div>
     <div class="panel convo">
