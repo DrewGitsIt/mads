@@ -12,7 +12,6 @@ import { TrustPill } from "./pills/TrustPill";
 import { IsolationPill } from "./pills/IsolationPill";
 import type { StagedConfig } from "./pills/stagedConfig";
 import { SuggestionChips } from "./SuggestionChips";
-import { ProvisioningStrip } from "./ProvisioningStrip";
 import styles from "./Launchpad.module.css";
 
 const MAX_NAME_LENGTH = 60;
@@ -27,14 +26,14 @@ export function deriveSessionName(text: string): string {
 
 export interface LaunchpadProps {
   createSession: (payload: Partial<Session>) => Promise<Session>;
+  onSessionCreated: (session: Session, goalText: string) => void;
 }
 
-export function Launchpad({ createSession }: LaunchpadProps) {
+export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedConfig>({});
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
   const [error, setError] = useState<string | null>(null);
-  const [provisioningSessionId, setProvisioningSessionId] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
   const { providers } = useProviderMatrix();
 
@@ -66,8 +65,8 @@ export function Launchpad({ createSession }: LaunchpadProps) {
         trust: staged.trust,
         isolation: staged.isolation,
       });
-      setProvisioningSessionId(session.id);
       setText("");
+      onSessionCreated(session, trimmed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -152,13 +151,6 @@ export function Launchpad({ createSession }: LaunchpadProps) {
           ) && <p className={styles.inheritLine}>Inherits from {resolved.workspace} defaults</p>}
 
         <SuggestionChips onPick={(suggestionText) => setText(suggestionText)} />
-
-        {provisioningSessionId && (
-          <ProvisioningStrip
-            sessionId={provisioningSessionId}
-            onDone={() => setProvisioningSessionId(null)}
-          />
-        )}
 
         {error && (
           <Toast

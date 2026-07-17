@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Chip } from "../components/Chip/Chip";
+import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
@@ -14,6 +15,7 @@ import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
 import { TerminalView } from "./TerminalRenderer/TerminalView";
 import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
+import { ProvisioningStrip } from "./ProvisioningStrip";
 import { ShellDock } from "./ShellDock/ShellDock";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import styles from "./ConversationTab.module.css";
@@ -29,6 +31,12 @@ export interface ConversationTabProps {
    * they never actually share a pty.
    */
   ptyBridge?: PtyBridge;
+  /** Shows the ProvisioningStrip until the session goes active — set for a session just created from the Launchpad. */
+  provisioning?: boolean;
+  onProvisioningDone?: () => void;
+  /** A goal/message to auto-send through the Composer once, on mount — set for a session just created from the Launchpad. */
+  pendingFirstMessage?: string;
+  onPendingFirstMessageHandled?: () => void;
 }
 
 type DisplayMode = "chat" | "terminal";
@@ -53,7 +61,15 @@ type TransportState =
  * demo-mount rationale (no Session Workspace shell exists yet to register
  * this into).
  */
-export function ConversationTab({ sessionId, routerClient, ptyBridge }: ConversationTabProps) {
+export function ConversationTab({
+  sessionId,
+  routerClient,
+  ptyBridge,
+  provisioning,
+  onProvisioningDone,
+  pendingFirstMessage,
+  onPendingFirstMessageHandled,
+}: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [loadError, setLoadError] = useState(false);
@@ -61,6 +77,7 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
   const [transport, setTransport] = useState<TransportState>({ status: "idle", mode: "chat" });
   const [shellOpen, setShellOpen] = useState(false);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
+  const [sendError, setSendError] = useState<string>();
 
   useEffect(() => {
     const handler = () => setShellOpen((x) => !x);
@@ -245,6 +262,11 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
 
           {showHistory ? (
             <>
+              {provisioning && (
+                <div className={styles.provisioningWrap}>
+                  <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
+                </div>
+              )}
               <SessionSummaryCard session={session} />
               {messages.length === 0 ? (
                 <div className={styles.emptyTranscript}>No conversation yet</div>
@@ -298,6 +320,10 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
                 sessionId={sessionId}
                 agentId={session.agent}
                 disabled={transport.status !== "idle"}
+                initialValue={pendingFirstMessage}
+                autoSendInitial={Boolean(pendingFirstMessage)}
+                onSendError={setSendError}
+                onAutoSendStart={onPendingFirstMessageHandled}
                 onSent={(text) => {
                   setMessages((m) => [...m, { role: "user", text }]);
                   void pollForReply();
@@ -320,6 +346,15 @@ export function ConversationTab({ sessionId, routerClient, ptyBridge }: Conversa
             </div>
           ))}
       </div>
+
+      {sendError && (
+        <Toast
+          tone="bad"
+          title="Couldn't send your message"
+          description={sendError}
+          onDismiss={() => setSendError(undefined)}
+        />
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { subscribeToEvents } from "../../../router/events";
+import { subscribeToEvents } from "../router/events";
 import { reduceSteps, type StepId } from "./provisioningSteps";
 import styles from "./ProvisioningStrip.module.css";
 

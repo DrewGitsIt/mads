@@ -23,6 +23,11 @@ export interface SessionWorkspaceProps {
   openTaskCount: number;
   initialTab?: WorkspaceTabId;
   onClose: () => void;
+  /** Set for a session just created from the Launchpad — forwarded into the Conversation tab's context only. */
+  provisioning?: boolean;
+  onProvisioningDone?: () => void;
+  pendingFirstMessage?: string;
+  onPendingFirstMessageHandled?: () => void;
 }
 
 /**
@@ -39,6 +44,10 @@ export function SessionWorkspace({
   openTaskCount,
   initialTab,
   onClose,
+  provisioning,
+  onProvisioningDone,
+  pendingFirstMessage,
+  onPendingFirstMessageHandled,
 }: SessionWorkspaceProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialTab ?? "conversation");
@@ -201,6 +210,10 @@ export function SessionWorkspace({
             routerClient={routerClient}
             pipelineClient={pipelineClient}
             ptyBridge={ptyBridge}
+            provisioning={provisioning}
+            onProvisioningDone={onProvisioningDone}
+            pendingFirstMessage={pendingFirstMessage}
+            onPendingFirstMessageHandled={onPendingFirstMessageHandled}
           />
         </div>
       ))}

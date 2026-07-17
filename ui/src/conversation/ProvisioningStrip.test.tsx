@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { ProvisioningStrip } from "./ProvisioningStrip";
-import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { FakeEventSource } from "../router/testFakeEventSource";
 
 describe("ProvisioningStrip", () => {
   beforeEach(() => {

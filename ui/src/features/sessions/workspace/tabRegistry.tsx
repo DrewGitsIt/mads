@@ -14,6 +14,11 @@ export interface WorkspaceTabContext {
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
   ptyBridge?: PtyBridge;
+  /** Set for a session just created from the Launchpad — only ConversationTabView consumes these. */
+  provisioning?: boolean;
+  onProvisioningDone?: () => void;
+  pendingFirstMessage?: string;
+  onPendingFirstMessageHandled?: () => void;
 }
 
 export interface WorkspaceTabDef {
@@ -22,8 +27,26 @@ export interface WorkspaceTabDef {
   component: ComponentType<WorkspaceTabContext>;
 }
 
-function ConversationTabView({ sessionId, routerClient, ptyBridge }: WorkspaceTabContext) {
-  return <ConversationTab sessionId={sessionId} routerClient={routerClient} ptyBridge={ptyBridge} />;
+function ConversationTabView({
+  sessionId,
+  routerClient,
+  ptyBridge,
+  provisioning,
+  onProvisioningDone,
+  pendingFirstMessage,
+  onPendingFirstMessageHandled,
+}: WorkspaceTabContext) {
+  return (
+    <ConversationTab
+      sessionId={sessionId}
+      routerClient={routerClient}
+      ptyBridge={ptyBridge}
+      provisioning={provisioning}
+      onProvisioningDone={onProvisioningDone}
+      pendingFirstMessage={pendingFirstMessage}
+      onPendingFirstMessageHandled={onPendingFirstMessageHandled}
+    />
+  );
 }
 
 function TasksTabView({ sessionId, routerClient }: WorkspaceTabContext) {

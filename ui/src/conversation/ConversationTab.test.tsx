@@ -224,4 +224,88 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
     expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
   });
+
+  it("shows the provisioning strip when provisioning, and clears it via onProvisioningDone once the session goes active", async () => {
+    const client = new FakeRouterClient();
+    const onProvisioningDone = vi.fn();
+    render(
+      <ConversationTab
+        sessionId="session-active"
+        routerClient={client}
+        provisioning
+        onProvisioningDone={onProvisioningDone}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Session provisioning" })).toBeTruthy(),
+    );
+
+    const source = FakeEventSource.instances.find((s) => s.url.includes("session.provisioning"));
+    source?.emit(
+      "session.activity_changed",
+      JSON.stringify({
+        seq: 1,
+        type: "session.activity_changed",
+        actor: "system",
+        session_id: "session-active",
+      }),
+    );
+
+    await waitFor(() => expect(onProvisioningDone).toHaveBeenCalledOnce());
+  });
+
+  it("auto-sends pendingFirstMessage through the composer and shows it as the first message", async () => {
+    const client = new FakeRouterClient();
+    const sendMessage = vi.spyOn(client, "sendMessage");
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(
+      <ConversationTab
+        sessionId="session-active"
+        routerClient={client}
+        pendingFirstMessage="fix the deploy script"
+      />,
+    );
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith("session-active", {
+        text: "fix the deploy script",
+        mentions: [],
+      }),
+    );
+    await waitFor(() => expect(screen.getByText("fix the deploy script")).toBeTruthy());
+  });
+
+  it("opens with the composer pre-filled and a toast when the auto-sent first message fails", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("network down"));
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(
+      <ConversationTab
+        sessionId="session-active"
+        routerClient={client}
+        pendingFirstMessage="fix the deploy script"
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("Couldn't send your message")).toBeTruthy());
+    expect(screen.getByText("network down")).toBeTruthy();
+    const textarea = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("fix the deploy script");
+  });
+
+  it("calls onPendingFirstMessageHandled once on mount when pendingFirstMessage is set", async () => {
+    const client = new FakeRouterClient();
+    const onPendingFirstMessageHandled = vi.fn();
+    render(
+      <ConversationTab
+        sessionId="session-active"
+        routerClient={client}
+        pendingFirstMessage="fix the deploy script"
+        onPendingFirstMessageHandled={onPendingFirstMessageHandled}
+      />,
+    );
+
+    await waitFor(() => expect(onPendingFirstMessageHandled).toHaveBeenCalledOnce());
+  });
 });
