@@ -1,0 +1,12 @@
+{
+  "id": "lnk_01hq3z",
+  "granting_session_id": "ses_01hq3k",
+  "subject_session_id": "ses_01hq3m",
+  "grants": [
+    "read",
+    "inject",
+    "orchestrate"
+  ],
+  "created_at": "2026-07-16T09:00:00Z",
+  "updated_at": "2026-07-16T09:05:00Z"
+}

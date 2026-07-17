@@ -19,7 +19,6 @@ export interface Session {
   worktree_branch?: string;
   summary?: string;
   active_task_id?: string;
-  linked_leader_id?: string;
   tags?: string[];
   retro_id?: string;
   synthesis_mode?: string;
