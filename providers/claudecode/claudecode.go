@@ -90,6 +90,9 @@ func (p *Provider) Matrix() provider.Matrix {
 		// transports, see README.
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
+		// --mcp-config + --strict-mcp-config threads a real MCP server into
+		// the launch on both transports — see mcp.go and README.
+		provider.BehaviorMCPServers: provider.Native,
 	}
 }
 

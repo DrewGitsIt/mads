@@ -73,8 +73,10 @@ type StartOptions struct {
 	Trust Trust
 	// MCPServers lists MCP servers the agent's own process should be able to
 	// call as tools (docs/LINKED-SESSIONS-DESIGN.md, the orchestrate
-	// capability). claudecode and kirocli do not yet consume this field —
-	// wiring it into their actual launch args is a fast-follow.
+	// capability). claudecode threads this into a real `--mcp-config` launch
+	// (both transports); kirocli declares BehaviorMCPServers unsupported
+	// (providers/kirocli/README.md) — the descriptor is simply never
+	// materialized for its sessions.
 	MCPServers []MCPServerRef
 }
 

@@ -22,6 +22,7 @@ history.
 | CwdReroot | **Unsupported** | No flag or API moves a live session to a different working directory. |
 | TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available. |
 | TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool. |
+| MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 
 ## Trust enforcement, transport by transport
 
@@ -41,6 +42,48 @@ description in this environment, not from a scripted-vs-live divergence test
 rather than merely unlisted. If a future `MADS_CLAUDE_SMOKE=1` run surfaces
 daylight between "flag passed" and "tool actually unavailable," downgrade
 both trust rows to `Emulated` and cite the finding here.
+
+## MCP servers
+
+`StartOptions.MCPServers` (the L2c leader capability's orchestrate server,
+`docs/LINKED-SESSIONS-DESIGN.md` item 5) threads into claude's own
+documented `--mcp-config <file>` flag — a real temp JSON file
+(`mcp.go`'s `writeMCPConfig`), not an inline string, and not a `.mcp.json`
+dropped into the session's cwd. `claude mcp list`/`get` show project-scoped
+`.mcp.json` servers sitting "⏸ Pending approval" until a human confirms
+them interactively; a headless `stream-json` session has nobody to do
+that, so a `.mcp.json` server would hang forever. `--mcp-config`-supplied
+servers are the CLI's own mechanism for exactly this headless case and
+skip that gate. `--strict-mcp-config` is passed alongside it whenever
+`opts.MCPServers` is non-empty, so an ambient project `.mcp.json` can never
+silently attach and hang the session on approval.
+
+`claude` spawns the MCP server subprocess itself, from the session's own
+cwd (a worktree) — not this adapter process's cwd. `writeMCPConfig`
+resolves each server's command to an absolute path via `exec.LookPath`
+before writing the config, so it survives being spawned from a different
+directory; a `LookPath` failure falls back to the raw token rather than
+erroring, since one capability's misconfiguration must never block the
+whole session launch. Both transports (`startStream`/`startPTY`) build the
+same args before `p.cfg.ExtraArgs` and remove the temp config file on
+`Close()` and on process-start failure.
+
+`fakeclaude_test.go`'s `"mcp-echo"` dialect reads back the `--mcp-config`
+file's exact contents and the `--strict-mcp-config` flag, proving the
+adapter's launch args/config carry a server descriptor unmodified
+(`TestStartStreamMCPServersMatchesOrchestrateShape`,
+`TestStartPTYMCPServersMatchesOrchestrateShape`). `TestRealClaudeMCPSmoke`
+is the opt-in real-binary counterpart:
+
+```sh
+MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run MCPSmoke
+```
+
+Note: declaring an MCP server in an agent's own capabilities
+(`agent.Capabilities.MCPServers` / `setupMCP` in `capability.go`) is a
+separate, still-unwired path — those servers run as health-checked
+subprocesses only, never connected to a provider's own launch by any
+existing mechanism. This section covers `StartOptions.MCPServers` only.
 
 ## Pipeline vs. interactive registries
 

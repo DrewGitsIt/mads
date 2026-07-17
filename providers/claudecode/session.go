@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -29,6 +30,11 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		args = append(args, "--resume", opts.Resume)
 	}
 	args = append(args, disallowedToolsArgs(opts.Trust)...)
+	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
+	if err != nil {
+		return nil, fmt.Errorf("mcp config: %w", err)
+	}
+	args = append(args, mcpArgVals...)
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)
@@ -43,14 +49,18 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("start %s: %w", p.cfg.Bin, err)
 	}
 
 	s := &streamSession{
-		cmd:    cmd,
-		stdin:  stdin,
-		events: make(chan provider.Event, 256),
-		ref:    opts.Resume,
+		cmd:           cmd,
+		stdin:         stdin,
+		events:        make(chan provider.Event, 256),
+		ref:           opts.Resume,
+		mcpConfigPath: mcpConfigPath,
 	}
 	go s.read(stdout)
 	return s, nil
@@ -58,8 +68,9 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 
 // streamSession owns one claude process on the structured transport.
 type streamSession struct {
-	cmd    *exec.Cmd
-	events chan provider.Event
+	cmd           *exec.Cmd
+	events        chan provider.Event
+	mcpConfigPath string
 
 	mu          sync.Mutex
 	stdin       io.WriteCloser
@@ -180,5 +191,8 @@ func (s *streamSession) Close() error {
 	_ = s.stdin.Close()
 	s.mu.Unlock()
 	closeWait(s.cmd, 3*time.Second)
+	if s.mcpConfigPath != "" {
+		_ = os.Remove(s.mcpConfigPath)
+	}
 	return nil
 }

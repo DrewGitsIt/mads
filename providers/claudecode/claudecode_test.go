@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -213,6 +214,152 @@ func TestTrustDisallowsTools(t *testing.T) {
 	}
 }
 
+// orchestrateMCPRef is the exact descriptor shape
+// services/session/internal/runner/capability.go's setupOrchestrate
+// produces for the L2c leader capability (docs/LINKED-SESSIONS-DESIGN.md
+// item 5) — proving this specific shape survives translation into a real
+// claude launch, not an arbitrary one. The grant-gating logic that produces
+// it is proven separately, against providers/fake, in
+// services/session/internal/runner/orchestrate_test.go.
+func orchestrateMCPRef() provider.MCPServerRef {
+	return provider.MCPServerRef{
+		Name:    "orchestrate-sess-123",
+		Command: "mads internal orchestrate-mcp",
+		Env:     []string{"MADS_ROUTER_URL=http://localhost:9999", "MADS_SESSION_ID=sess-123"},
+	}
+}
+
+// StartOptions.MCPServers threads into a real --mcp-config file and
+// --strict-mcp-config flag on the structured transport. The stand-in's
+// "mcp-echo" dialect reads back the file claude itself would have loaded and
+// echoes it, so this proves the exact bytes the adapter wrote reached the
+// launched process, not just that some flag was passed.
+func TestStartStreamMCPServersMatchesOrchestrateShape(t *testing.T) {
+	p := testProvider(t)
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode:       provider.ModeACP,
+		MCPServers: []provider.MCPServerRef{orchestrateMCPRef()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "mcp-echo"); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	deadline := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			if ev.Kind == provider.EventText {
+				text += ev.Text
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				done = true
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+	assertOrchestrateMCPEcho(t, text)
+}
+
+// The terminal transport wires the identical --mcp-config/--strict-mcp-config
+// args and file — the task's "BOTH transports" requirement.
+func TestStartPTYMCPServersMatchesOrchestrateShape(t *testing.T) {
+	p := testProvider(t)
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode:       provider.ModePTY,
+		MCPServers: []provider.MCPServerRef{orchestrateMCPRef()},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	pty, ok := sess.(provider.PTYSession)
+	if !ok {
+		t.Fatal("session doesn't implement PTYSession")
+	}
+	if err := sess.Send(context.Background(), "mcp-echo"); err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan string, 1)
+	go func() {
+		var acc strings.Builder
+		buf := make([]byte, 8192)
+		for {
+			n, err := pty.Terminal().Read(buf)
+			acc.Write(buf[:n])
+			if strings.Contains(acc.String(), "mcp_config_err=") || err != nil {
+				out <- acc.String()
+				return
+			}
+		}
+	}()
+	select {
+	case text := <-out:
+		assertOrchestrateMCPEcho(t, text)
+	case <-time.After(10 * time.Second):
+		t.Fatal("mcp-echo marker not seen in terminal output")
+	}
+}
+
+// assertOrchestrateMCPEcho checks the "mcp_config_err=%v strict=%v
+// mcp_config=%s" line the fakeclaude "mcp-echo" dialect produces
+// (fakeclaude_test.go) against orchestrateMCPRef's exact shape. Command is
+// checked against whatever exec.LookPath("mads") resolves to right now
+// rather than a hardcoded value — writeMCPConfig does the same lookup, and
+// whether a "mads" binary happens to be on this machine's PATH shouldn't
+// change what "correct" means.
+func assertOrchestrateMCPEcho(t *testing.T, text string) {
+	t.Helper()
+	if !strings.Contains(text, "mcp_config_err=<nil>") {
+		t.Fatalf("mcp config file was not readable: %q", text)
+	}
+	if !strings.Contains(text, "strict=true") {
+		t.Fatalf("--strict-mcp-config not observed: %q", text)
+	}
+	i := strings.Index(text, "mcp_config=")
+	if i < 0 {
+		t.Fatalf("no mcp_config payload: %q", text)
+	}
+	// Decode (not Unmarshal): the PTY transport's echo is followed by more
+	// terminal output (a trailing "\r\n> " prompt), which Unmarshal rejects
+	// as trailing garbage but Decode simply stops after the JSON value.
+	var cfg mcpConfigFile
+	dec := json.NewDecoder(strings.NewReader(text[i+len("mcp_config="):]))
+	if err := dec.Decode(&cfg); err != nil {
+		t.Fatalf("mcp_config payload isn't the written file: %v (%q)", err, text)
+	}
+	entry, ok := cfg.MCPServers["orchestrate-sess-123"]
+	if !ok {
+		t.Fatalf("orchestrate-sess-123 server missing from config: %+v", cfg)
+	}
+	wantCmd := "mads"
+	if resolved, err := exec.LookPath("mads"); err == nil {
+		wantCmd = resolved
+	}
+	if entry.Command != wantCmd {
+		t.Errorf("command: %q, want %q", entry.Command, wantCmd)
+	}
+	if len(entry.Args) != 2 || entry.Args[0] != "internal" || entry.Args[1] != "orchestrate-mcp" {
+		t.Errorf("args: %v", entry.Args)
+	}
+	want := map[string]string{"MADS_ROUTER_URL": "http://localhost:9999", "MADS_SESSION_ID": "sess-123"}
+	if len(entry.Env) != len(want) {
+		t.Errorf("env: %v, want %v", entry.Env, want)
+	}
+	for k, v := range want {
+		if entry.Env[k] != v {
+			t.Errorf("env[%s] = %q, want %q", k, entry.Env[k], v)
+		}
+	}
+}
+
 func TestRegistersCleanly(t *testing.T) {
 	if err := provider.NewRegistry().Register(New(Config{})); err != nil {
 		t.Fatal(err)
@@ -249,5 +396,65 @@ func TestRealClaudeSmoke(t *testing.T) {
 	}
 	if !strings.Contains(res.Text, "mk-smoke") || res.Usage.OutputTokens == 0 {
 		t.Fatalf("smoke result: %+v", res)
+	}
+}
+
+// TestRealClaudeMCPSmoke proves a real claude launch actually sees the L2c
+// orchestrate server's tools via --mcp-config, by asking it to list them.
+// pkg/orchestratemcp.New only constructs a client lazily — MADS_ROUTER_URL
+// is dereferenced on a tool *call*, not on tool *listing* — so a real
+// Router isn't needed for this smoke to prove the wiring. Opt-in: it spends
+// real tokens. MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run MCPSmoke
+func TestRealClaudeMCPSmoke(t *testing.T) {
+	if os.Getenv("MADS_CLAUDE_SMOKE") != "1" {
+		t.Skip("set MADS_CLAUDE_SMOKE=1 (spends tokens) to run against the real claude binary")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("no claude binary on PATH")
+	}
+	binDir := t.TempDir()
+	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "mads"), "github.com/drewkidwell/mads/cmd/mads")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build mads: %v\n%s", err, out)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := New(Config{ExtraArgs: []string{"--dangerously-skip-permissions"}})
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP,
+		Cwd:  t.TempDir(),
+		MCPServers: []provider.MCPServerRef{{
+			Name:    "orchestrate-smoke",
+			Command: "mads internal orchestrate-mcp",
+			Env:     []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "What MCP tools do you have available? List their exact names."); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	deadline := time.After(60 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			if ev.Kind == provider.EventText {
+				text += ev.Text
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				done = true
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+	if !strings.Contains(text, "list_links") {
+		t.Fatalf("claude did not report the orchestrate server's list_links tool: %q", text)
 	}
 }

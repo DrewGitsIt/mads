@@ -34,6 +34,8 @@ type fcArgs struct {
 	resume          string
 	model           string
 	disallowedTools []string
+	mcpConfigPath   string
+	strictMCPConfig bool
 }
 
 func parseFCArgs(argv []string) fcArgs {
@@ -57,6 +59,11 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--disallowedTools":
 			i++
 			a.disallowedTools = strings.Split(argv[i], ",")
+		case "--mcp-config":
+			i++
+			a.mcpConfigPath = argv[i]
+		case "--strict-mcp-config":
+			a.strictMCPConfig = true
 		case "--verbose", "--dangerously-skip-permissions":
 		case "--append-system-prompt":
 			i++
@@ -67,6 +74,15 @@ func parseFCArgs(argv []string) fcArgs {
 		}
 	}
 	return a
+}
+
+// fcMCPEcho reads back the --mcp-config file's contents and the
+// --strict-mcp-config flag, so tests can assert the exact config the
+// adapter wrote/passed reached the launched process — the same proof for
+// both transports since fcStream and fcTerminal both call this.
+func fcMCPEcho(a fcArgs) string {
+	raw, err := os.ReadFile(a.mcpConfigPath)
+	return fmt.Sprintf("mcp_config_err=%v strict=%v mcp_config=%s", err, a.strictMCPConfig, string(raw))
 }
 
 // fcToolDenied reports whether name is in the parsed --disallowedTools list.
@@ -87,7 +103,7 @@ func fakeClaudeMain() {
 	case a.print && a.inputFormat == "stream-json":
 		fcStream(a)
 	default:
-		fcTerminal()
+		fcTerminal(a)
 	}
 }
 
@@ -200,6 +216,13 @@ func fcStream(a fcArgs) {
 		history = append(history, prompt)
 		fcAppendTranscript(transcript, "user", prompt, "")
 
+		if prompt == "mcp-echo" {
+			reply := fcMCPEcho(a)
+			fcEmit(fcAssistantText(id, reply))
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+			continue
+		}
 		if prompt == "slow" {
 			interrupted := false
 			for i := 0; i < 400 && !interrupted; i++ {
@@ -268,11 +291,16 @@ func fcStream(a fcArgs) {
 }
 
 // fcTerminal mimics the interactive UI for PTY probes: prompt, echo, prompt.
-func fcTerminal() {
+func fcTerminal(a fcArgs) {
 	fmt.Print("> ")
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
-		reply, crash := fcReply(strings.TrimSpace(sc.Text()), nil)
+		text := strings.TrimSpace(sc.Text())
+		if text == "mcp-echo" {
+			fmt.Printf("%s\r\n> ", fcMCPEcho(a))
+			continue
+		}
+		reply, crash := fcReply(text, nil)
 		if crash {
 			os.Exit(1)
 		}

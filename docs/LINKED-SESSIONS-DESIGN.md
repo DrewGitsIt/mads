@@ -157,11 +157,14 @@ Links are directed edges; nothing is 1:1 by design:
    `send_message`, materialized only when a session holds an `orchestrate`
    grant and the `linked-sessions` flag is on (`Runner.setupOrchestrate`),
    via a new `StartOptions.MCPServers` descriptor on `provider.Provider`.
-   **Not shipped** (fast-follow): wiring `StartOptions.MCPServers` into any
-   real provider's actual launch args/config (`claudecode`/`kirocli` writing
-   `.mcp.json`/`--mcp-config`) — today only `providers/fake` records and
-   exposes what it received, so the capability is real and tested end-to-end
-   over the fake provider but not yet reachable by a live agent process.
+   `providers/claudecode` now threads `StartOptions.MCPServers` into a real
+   `--mcp-config`/`--strict-mcp-config` launch on both transports
+   (`providers/claudecode/mcp.go`), so a live claude-code agent holding an
+   `orchestrate` grant can reach `list_links`/`get_summary`/`send_message`.
+   `providers/kirocli` declares `BehaviorMCPServers` unsupported
+   (`providers/kirocli/README.md`) pending a confirmed live mechanism — the
+   capability simply doesn't materialize for kiro-cli sessions, and the
+   session child degrades gracefully rather than erroring.
 6. **L3 Implicit hand-raiser**: pipeline start/session-activation hooks
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +
