@@ -134,6 +134,8 @@ export function ConversationHeader({
                     <button
                       type="button"
                       className={styles.menuItem}
+                      title="Toggle Shell (Ctrl+`)"
+                      aria-keyshortcuts="Control+`"
                       onClick={() => {
                         setMenuOpen(false);
                         onToggleShell();

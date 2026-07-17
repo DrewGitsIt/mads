@@ -26,7 +26,7 @@ export interface Command {
 const STATIC_COMMANDS: Command[] = [
   { id: "action:new-session", kind: "new-session", label: "New session" },
   { id: "action:run-retro", kind: "run-retro", label: "Run retro" },
-  { id: "action:toggle-shell", kind: "toggle-shell", label: "Toggle shell" },
+  { id: "action:toggle-shell", kind: "toggle-shell", label: "Toggle shell", detail: "Ctrl+`" },
   { id: "action:open-settings", kind: "open-settings", label: "Open settings" },
 ];
 

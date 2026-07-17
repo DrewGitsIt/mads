@@ -9,7 +9,7 @@ export interface ShellDockProps {
 }
 
 /**
- * Docked, resizable general-purpose shell (⌘\`) — a separate worktree
+ * Docked, resizable general-purpose shell (Ctrl+\`) — a separate worktree
  * process, nothing to do with the agent's own PTY session. Callers must
  * supply a `bridge` distinct from the one bound to the Conversation tab's
  * terminal display mode; TerminalView spawns its own pty id per mount, so
