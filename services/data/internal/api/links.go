@@ -91,6 +91,28 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	})
+
+	// Both hand-raiser routes are meant to be called by the Router's
+	// Supervisor only (docs/LINKED-SESSIONS-DESIGN.md decision 6) — there's
+	// no user-facing UI action that should ever hit these. The actor is
+	// hardcoded to "system" rather than read from X-Mads-Actor: this route
+	// only ever means one thing regardless of who calls it.
+	mux.HandleFunc("POST /sessions/{id}/hand-raiser", func(w http.ResponseWriter, r *http.Request) {
+		link, err := links.CreateImplicitHandRaiser(r.Context(), r.PathValue("id"), "system")
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, link)
+	})
+
+	mux.HandleFunc("DELETE /sessions/{id}/hand-raiser", func(w http.ResponseWriter, r *http.Request) {
+		if err := links.RemoveImplicitHandRaiser(r.Context(), r.PathValue("id"), "system"); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	})
 }
 
 // resolveGrants turns a LinkRequest into the grant set the store persists —

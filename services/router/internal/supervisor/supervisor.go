@@ -73,7 +73,14 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 	}
 	s.mu.Lock()
 	s.sessions[sessionID] = p
+	hasPipeline := s.hasPipelineForSessionLocked(sessionID)
 	s.mu.Unlock()
+	if hasPipeline {
+		// Edge B (docs/LINKED-SESSIONS-DESIGN.md decision 6): the session's
+		// interactive child is activating while a pipeline run is already in
+		// flight for it — grant the implicit hand-raiser now.
+		go s.grantImplicitHandRaiser(context.Background(), sessionID)
+	}
 	return p.Addr, nil
 }
 
@@ -93,7 +100,14 @@ func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID string)
 	}
 	s.mu.Lock()
 	s.pipelines[runID] = &pipelineEntry{proc: p, sessionID: sessionID}
+	_, hasChild := s.sessions[sessionID]
 	s.mu.Unlock()
+	if hasChild {
+		// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): a pipeline run
+		// is starting for a session whose interactive child is already
+		// live — grant the implicit hand-raiser now.
+		go s.grantImplicitHandRaiser(context.Background(), sessionID)
+	}
 	return p.Addr, nil
 }
 
@@ -263,6 +277,17 @@ func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exit
 		log.Printf("supervisor: release leases for run %s: %v", runID, err)
 	}
 	s.forgetPipeline(runID)
+	// docs/LINKED-SESSIONS-DESIGN.md decision 6: the implicit hand-raiser
+	// link never outlives the run it was granted over. This must run for
+	// every exit path (normal completion, cancel, crash alike) — including
+	// the common "expected" case just below — so it goes before the
+	// expected-exit early return, not after.
+	s.mu.Lock()
+	stillLive := s.hasPipelineForSessionLocked(sessionID)
+	s.mu.Unlock()
+	if !stillLive {
+		go s.revokeImplicitHandRaiser(context.Background(), sessionID)
+	}
 	if expected {
 		return // Cancel already emits PipelineCancelled
 	}
@@ -271,6 +296,46 @@ func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exit
 		Payload: mustJSON(map[string]any{"run_id": runID, "reason": reason}),
 	}); err != nil {
 		log.Printf("supervisor: append pipeline.failed for %s: %v", runID, err)
+	}
+}
+
+// hasPipelineForSessionLocked reports whether any tracked pipeline run is
+// scoped to sessionID. Callers must hold s.mu. Linear scan: s.pipelines is
+// tiny, no need for a secondary index.
+func (s *Supervisor) hasPipelineForSessionLocked(sessionID string) bool {
+	for _, e := range s.pipelines {
+		if e.sessionID == sessionID {
+			return true
+		}
+	}
+	return false
+}
+
+// grantImplicitHandRaiser grants sessionID's own live agent hand-raiser
+// grants {read,inject} over its own pipeline run
+// (docs/LINKED-SESSIONS-DESIGN.md decision 6). Best-effort: never blocks or
+// fails the spawn path that triggered it. Gated on the linked-sessions flag
+// — the whole feature is flag-gated.
+func (s *Supervisor) grantImplicitHandRaiser(ctx context.Context, sessionID string) {
+	cfg, err := s.data.Config(ctx)
+	if err != nil {
+		log.Printf("supervisor: implicit hand-raiser: load config for %s: %v", sessionID, err)
+		return
+	}
+	if !cfg.FeatureFlags.LinkedSessions {
+		return
+	}
+	if _, err := s.data.CreateHandRaiser(ctx, sessionID); err != nil {
+		log.Printf("supervisor: grant implicit hand-raiser for %s: %v", sessionID, err)
+	}
+}
+
+// revokeImplicitHandRaiser removes sessionID's implicit hand-raiser link, if
+// any. Runs unconditionally (not flag-gated): cheap, safe no-op if nothing
+// exists, and must clean up even if the flag was toggled off mid-run.
+func (s *Supervisor) revokeImplicitHandRaiser(ctx context.Context, sessionID string) {
+	if err := s.data.RemoveHandRaiser(ctx, sessionID); err != nil {
+		log.Printf("supervisor: revoke implicit hand-raiser for %s: %v", sessionID, err)
 	}
 }
 

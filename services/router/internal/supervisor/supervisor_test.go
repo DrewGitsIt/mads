@@ -245,6 +245,145 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 	}
 }
 
+func enableLinkedSessions(t *testing.T, data *dataclient.Client) {
+	t.Helper()
+	cfg, err := data.Config(context.Background())
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.FeatureFlags.LinkedSessions = true
+	if err := data.UpdateConfig(context.Background(), &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+}
+
+// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): a pipeline run starting
+// for a session whose interactive child is already live grants the implicit
+// hand-raiser immediately.
+func TestSpawnPipelineGrantsImplicitHandRaiserWhenSessionLive(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "edge a session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_a", sessionID); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 1 && links[0].Implicit
+	})
+}
+
+// Edge B: the session's interactive child starting while a pipeline run is
+// already in flight for it also grants the implicit hand-raiser.
+func TestSpawnSessionGrantsImplicitHandRaiserWhenPipelineLive(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "edge b session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	if _, err := sup.SpawnPipeline(ctx, "run_edge_b", sessionID); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 1 && links[0].Implicit
+	})
+}
+
+// A pipeline run starting for a session with no live interactive child must
+// not grant anything — there's no one to raise a hand to.
+func TestSpawnPipelineNoImplicitHandRaiserWithoutLiveChild(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sessionID := "ses_no_child"
+	if _, err := sup.SpawnPipeline(ctx, "run_no_child", sessionID); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+
+	// Give any (incorrect) implicit grant a beat to land before asserting its
+	// absence.
+	time.Sleep(200 * time.Millisecond)
+	links, err := data.LinksForSession(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("LinksForSession: %v", err)
+	}
+	if len(links) != 0 {
+		t.Fatalf("links for session with no live child: %v, want none", links)
+	}
+}
+
+// When the pipeline run that granted the implicit hand-raiser completes and
+// the session's interactive child is still live, the implicit link is
+// removed — it should not outlive the run that created it.
+func TestPipelineExitRevokesImplicitHandRaiser(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "teardown session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	runID := "run_teardown"
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 1
+	})
+
+	if err := sup.TerminatePipeline(ctx, runID); err != nil {
+		t.Fatalf("TerminatePipeline: %v", err)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 0
+	})
+}
+
 func TestSessionAndPipelineAddr(t *testing.T) {
 	base := datatest.Start(t)
 	sup := newSupervisor(t, dataclient.New(base, "router"), nil)

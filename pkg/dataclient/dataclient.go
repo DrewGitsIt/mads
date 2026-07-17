@@ -568,6 +568,21 @@ func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contr
 	return out, err
 }
 
+// CreateHandRaiser creates (or returns the existing) implicit self-referential
+// hand-raiser link for sessionID (docs/LINKED-SESSIONS-DESIGN.md decision 6).
+// System-only: meant to be called by the Router's Supervisor.
+func (c *Client) CreateHandRaiser(ctx context.Context, sessionID string) (contracts.Link, error) {
+	var out contracts.Link
+	err := c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(sessionID)+"/hand-raiser", nil, &out)
+	return out, err
+}
+
+// RemoveHandRaiser deletes sessionID's implicit hand-raiser link, if any.
+// No-op, successful if none exists.
+func (c *Client) RemoveHandRaiser(ctx context.Context, sessionID string) error {
+	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(sessionID)+"/hand-raiser", nil, nil)
+}
+
 // --- Events (spec §8, §15) ---
 
 // Append posts one standalone event (envelope minus seq/timestamp); the

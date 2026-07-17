@@ -102,3 +102,33 @@ func TestLinkExplicitGrantsRoundTrip(t *testing.T) {
 		t.Fatalf("delete: status %d", resp.StatusCode)
 	}
 }
+
+func TestHandRaiserRouteRoundTrip(t *testing.T) {
+	srv, _ := newTestServer(t)
+	sess := mkSessionAPI(t, srv, "solo")
+
+	var link contracts.Link
+	resp := doJSON(t, srv, "POST", "/sessions/"+sess.ID+"/hand-raiser", nil, &link)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create hand-raiser: status %d", resp.StatusCode)
+	}
+	if link.GrantingSessionID != sess.ID || link.SubjectSessionID != sess.ID || !link.Implicit {
+		t.Fatalf("hand-raiser link = %+v, want self-referential and implicit", link)
+	}
+
+	var list []contracts.Link
+	resp = doJSON(t, srv, "GET", "/sessions/"+sess.ID+"/links", nil, &list)
+	if resp.StatusCode != http.StatusOK || len(list) != 1 {
+		t.Fatalf("list: status %d, got %+v", resp.StatusCode, list)
+	}
+
+	resp = doJSON(t, srv, "DELETE", "/sessions/"+sess.ID+"/hand-raiser", nil, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("delete hand-raiser: status %d", resp.StatusCode)
+	}
+
+	resp = doJSON(t, srv, "GET", "/sessions/"+sess.ID+"/links", nil, &list)
+	if resp.StatusCode != http.StatusOK || len(list) != 0 {
+		t.Fatalf("list after delete: status %d, got %+v", resp.StatusCode, list)
+	}
+}

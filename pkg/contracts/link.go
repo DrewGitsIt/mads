@@ -88,8 +88,14 @@ type Link struct {
 	SubjectSessionID  string      `json:"subject_session_id"`
 	Grants            []Grant     `json:"grants"`
 	Cadence           LinkCadence `json:"cadence"`
-	CreatedAt         time.Time   `json:"created_at"`
-	UpdatedAt         time.Time   `json:"updated_at"`
+	// Implicit marks a link the system created without user action
+	// (docs/LINKED-SESSIONS-DESIGN.md decision 6) — currently only the
+	// self-referential hand-raiser grant on a session's own pipeline run.
+	// Auto-removed when the condition that created it ends; never
+	// user-editable.
+	Implicit  bool      `json:"implicit,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // HasGrant reports whether l carries g.

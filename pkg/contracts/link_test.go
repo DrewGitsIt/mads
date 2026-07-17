@@ -30,6 +30,22 @@ func TestLinkProducerMatchesGolden(t *testing.T) {
 	golden.Assert(t, "link.json", append(got, '\n'))
 }
 
+func TestLinkImplicitRoundTrips(t *testing.T) {
+	link := sampleLink()
+	link.Implicit = true
+	raw, err := json.Marshal(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got contracts.Link
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.Implicit {
+		t.Errorf("Implicit did not round-trip: got %+v", got)
+	}
+}
+
 func TestLinkConsumerParsesGolden(t *testing.T) {
 	var got contracts.Link
 	if err := json.Unmarshal(golden.Read(t, "link.json"), &got); err != nil {
