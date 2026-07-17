@@ -145,6 +145,8 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	c.add(provider.BehaviorBranching, nil, "not probed: no functional probe defined yet")
 	c.add(provider.BehaviorCwdReroot, nil, "not probed: no functional probe defined yet")
 
+	c.add(provider.BehaviorMCPServers, c.mcpServers(), "")
+
 	if m[provider.BehaviorTrustLimited].Works() {
 		if s.AttemptCommand != nil {
 			c.add(provider.BehaviorTrustLimited, c.trust(provider.TrustLimited, s.AttemptCommand), "")
@@ -450,6 +452,29 @@ func (c *checker) trust(level provider.Trust, prompt func() string) error {
 			return c.ctx.Err()
 		}
 	}
+}
+
+// mcpServers proves the field can never fail a session launch, regardless
+// of declared support — a provider with no real wiring mechanism must
+// silently drop the descriptor, never error (docs/LINKED-SESSIONS-DESIGN.md
+// item 5; kirocli is the concrete case this protects). Verifying a
+// "working" declaration actually threads the descriptor into real launch
+// args/config is adapter-specific (argv/config shape differs per CLI) and
+// lives in each adapter's own scripted-stand-in test, not here.
+func (c *checker) mcpServers() error {
+	mode := provider.ModeACP
+	if !c.m[provider.BehaviorACP].Works() {
+		mode = provider.ModePTY
+	}
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{
+		Mode:       mode,
+		MCPServers: []provider.MCPServerRef{{Name: "conformance-probe", Command: "true", Env: []string{"FOO=bar"}}},
+	})
+	if err != nil {
+		return fmt.Errorf("Start with MCPServers set: %w", err)
+	}
+	_ = sess.Close()
+	return nil
 }
 
 func (c *checker) models() error {

@@ -91,6 +91,8 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorCwdReroot:     provider.Unsupported,
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
+		// The fake already fully records/exposes it via MCPServers(ref).
+		provider.BehaviorMCPServers: provider.Native,
 	}
 }
 

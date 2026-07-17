@@ -29,6 +29,11 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 		args = append(args, "--resume", opts.Resume)
 	}
 	args = append(args, disallowedToolsArgs(opts.Trust)...)
+	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
+	if err != nil {
+		return nil, fmt.Errorf("mcp config: %w", err)
+	}
+	args = append(args, mcpArgVals...)
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)
@@ -36,18 +41,22 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	cmd.Env = p.env(opts.Env)
 	master, err := pty.Start(cmd)
 	if err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
 		return nil, fmt.Errorf("start %s on a pty: %w", p.cfg.Bin, err)
 	}
 	// The ref is only known when resuming: claude does not announce session
 	// ids on the terminal transport. Structured sessions learn theirs from
 	// the init line.
-	return &ptySession{cmd: cmd, master: master, ref: opts.Resume}, nil
+	return &ptySession{cmd: cmd, master: master, ref: opts.Resume, mcpConfigPath: mcpConfigPath}, nil
 }
 
 type ptySession struct {
-	cmd    *exec.Cmd
-	master *os.File
-	ref    string
+	cmd           *exec.Cmd
+	master        *os.File
+	ref           string
+	mcpConfigPath string
 
 	mu     sync.Mutex
 	closed bool
@@ -84,5 +93,8 @@ func (s *ptySession) Close() error {
 	s.mu.Unlock()
 	_ = s.master.Close()
 	closeWait(s.cmd, 3*time.Second)
+	if s.mcpConfigPath != "" {
+		_ = os.Remove(s.mcpConfigPath)
+	}
 	return nil
 }

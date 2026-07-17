@@ -28,14 +28,17 @@ best-effort research, not fact.
 | CwdReroot | **Unsupported** | No documented flag or command changes a live session's working directory mid-session. |
 | TrustLimited | **Emulated** | Enforced on the ACP transport by auto-denying `session/request_permission` requests for command-execution-kind tool calls (see below); on PTY, the corresponding restriction is a human declining kiro-cli's own interactive confirmation prompt, not an automated guarantee. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
 | TrustReadOnly | **Emulated** | Same mechanism, denying both command execution and file mutation kinds. Same ACP-vs-PTY asymmetry as TrustLimited. |
+| MCPServers | **Unsupported** | No documented flag or config mechanism threads an MCP server into kiro-cli's own launch was found in its public docs/GitHub issues (same citation bar as the rest of this table — kiro-cli is not installed in this environment). A session simply starts without the descriptor materialized; the L2c leader capability (`docs/LINKED-SESSIONS-DESIGN.md` item 5) never reaches a kiro-cli-backed agent. Revisit with `MADS_KIRO_SMOKE=1` against a real binary. |
 
 Net shape vs. claude-code: kiro-cli is **more capable** on ModelDiscovery,
 Interrupt, and Transcript (all Native here vs. claude-code's
 Emulated/Native mix), and **less capable** on CostReporting (Unsupported vs.
 claude-code's Native) and on both trust rows (Emulated here vs. claude-code's
 Native `--disallowedTools`). Branching and CwdReroot are Unsupported for
-both. This asymmetry is the point of W7.1 — the matrix is not a copy of
-claude-code's.
+both. MCPServers is also Unsupported here, unlike claude-code's Native
+`--mcp-config` wiring — the L2c orchestrate capability simply doesn't
+materialize for kiro-cli sessions. This asymmetry is the point of W7.1 —
+the matrix is not a copy of claude-code's.
 
 ## Trust enforcement, transport by transport
 

@@ -48,6 +48,15 @@ const (
 	// BehaviorCwdReroot — move a live session to a different working
 	// directory. Optional.
 	BehaviorCwdReroot Behavior = "cwd_reroot"
+	// BehaviorMCPServers — thread StartOptions.MCPServers into the provider's
+	// real launch, so the agent process can actually call the declared
+	// servers as tools (the L2c orchestrate capability,
+	// docs/LINKED-SESSIONS-DESIGN.md item 5, is the first and only producer
+	// today). Optional: a provider with no wiring mechanism simply never
+	// materializes the declared server for its sessions — no error, no
+	// partial/degraded state, the capability just silently doesn't reach the
+	// agent.
+	BehaviorMCPServers Behavior = "mcp_servers"
 	// BehaviorTrustLimited — a "limited" trust session denies command
 	// execution (mapping documented per-provider). Expected: every provider
 	// must take an honest stance, even if that stance is Unsupported.
@@ -103,6 +112,7 @@ var requirements = map[Behavior]Level{
 	BehaviorPTY:            LevelExpected,
 	BehaviorBranching:      LevelOptional,
 	BehaviorCwdReroot:      LevelOptional,
+	BehaviorMCPServers:     LevelOptional,
 	BehaviorTrustLimited:   LevelExpected,
 	BehaviorTrustReadOnly:  LevelExpected,
 }

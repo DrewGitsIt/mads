@@ -82,6 +82,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		// guarantee the way claude-code's --disallowedTools is. See README.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
+		// No documented flag or config mechanism threads an MCP server into
+		// kiro-cli's own launch — see README.md. Sessions simply start
+		// without the descriptor materialized.
+		provider.BehaviorMCPServers: provider.Unsupported,
 	}
 }
 
