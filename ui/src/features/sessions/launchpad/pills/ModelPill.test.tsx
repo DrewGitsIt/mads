@@ -73,4 +73,40 @@ describe("ModelPill", () => {
     await waitFor(() => expect(screen.getByText(/claude-retired-1/)).toBeTruthy());
     vi.unstubAllGlobals();
   });
+
+  it("shows the resolved default model and provider on the closed pill when unset", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: URL) => {
+      const url = input.toString();
+      if (url.endsWith("/providers")) {
+        return Promise.resolve(new Response(JSON.stringify([{ name: "claude-code", matrix: {} }]), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true }] }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <ModelPill
+        resolved={{ value: "claude-sonnet-5", source: "provider_default" }}
+        resolvedProvider="claude-code"
+        onChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/Claude Sonnet 5 · claude-code \(default\)/)).toBeTruthy(),
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("shows the plain placeholder when nothing resolves", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(<ModelPill onChange={vi.fn()} />);
+    expect(screen.getByText("Select model")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
 });

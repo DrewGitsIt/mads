@@ -1,31 +1,22 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import { router } from "../../../../router/client";
-import type { SessionTrust } from "../../../../router/types";
+import type { ResolvedSessionField, SessionTrust } from "../../../../router/types";
 import { TRUST_LEVELS } from "./trustLevels";
 import pillStyles from "./pills.module.css";
 
 export interface TrustPillProps {
   value?: SessionTrust;
+  resolved?: ResolvedSessionField;
   onChange: (trust: SessionTrust) => void;
 }
 
-// No workspace-level trust default exists yet (see Session.Trust) — this
-// pill has no precedence to pre-fill from, unlike Workspace/Agent/Model.
-export function TrustPill({ value, onChange }: TrustPillProps) {
+export function TrustPill({ value, resolved, onChange }: TrustPillProps) {
   const [open, setOpen] = useState(false);
-  const [defaultTrust, setDefaultTrust] = useState<SessionTrust>("limited");
   const selected = TRUST_LEVELS.find((t) => t.value === value);
-  const defaultLevel = TRUST_LEVELS.find((t) => t.value === defaultTrust);
+  const resolvedLevel = TRUST_LEVELS.find((t) => t.value === resolved?.value);
 
-  useEffect(() => {
-    router
-      .getConfig()
-      .then((config) => setDefaultTrust(config.default_trust))
-      .catch(() => setDefaultTrust("limited"));
-  }, []);
-
-  const triggerLabel = selected?.label ?? `${defaultLevel?.label ?? "Limited"} (default)`;
+  const triggerLabel =
+    selected?.label ?? (resolvedLevel ? `${resolvedLevel.label} (default)` : "Select trust");
 
   return (
     <Popover

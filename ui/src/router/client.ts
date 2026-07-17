@@ -28,6 +28,7 @@ import type {
   RegistryPublishItem,
   Retro,
   Session,
+  SessionDefaults,
   Task,
   TaskOutcomes,
   TaskStatus,
@@ -153,6 +154,9 @@ export interface RouterClient {
   createWorkspace(w: Partial<Workspace>): Promise<Workspace>;
   updateWorkspace(w: Workspace): Promise<Workspace>;
   deleteWorkspace(id: string): Promise<void>;
+
+  // --- Session defaults (Launchpad preview) ---
+  getSessionDefaults(workspace?: string): Promise<SessionDefaults>;
 
   // --- Agents (Library) ---
   listAgents(): Promise<Agent[]>;
@@ -597,6 +601,11 @@ export class FetchRouterClient implements RouterClient {
 
   async deleteWorkspace(id: string): Promise<void> {
     return routerDelete(this.baseUrl, `/workspaces/${id}`);
+  }
+
+  // --- Session defaults (Launchpad preview) ---
+  async getSessionDefaults(workspace?: string): Promise<SessionDefaults> {
+    return routerGet(this.baseUrl, "/sessions/defaults", { workspace });
   }
 
   // --- Agents (Library) ---

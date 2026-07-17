@@ -3,11 +3,25 @@ package api
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/provider"
 )
+
+// sessionDefaultSources records, per field, which layer actually produced a
+// resolved value (only set on the branch that changes the field from empty
+// to non-empty — see resolveSessionDefaultsSourced). Used only by the
+// Launchpad preview endpoint.
+type sessionDefaultSources struct {
+	Provider  contracts.SessionDefaultSource
+	Model     contracts.SessionDefaultSource
+	Agent     contracts.SessionDefaultSource
+	Isolation contracts.SessionDefaultSource
+	Trust     contracts.SessionDefaultSource
+	Workspace string // resolved workspace *name* whose Defaults were consulted; "" if none
+}
 
 // resolveSessionDefaults fills provider/model/agent/isolation/trust on sess
 // from, in order: the session itself (already set), the named workspace's
@@ -17,9 +31,19 @@ import (
 // defaults available", not a failed create (Workspace is optional on Session
 // today; this must not become a new hard dependency).
 func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Session) error {
+	_, err := s.resolveSessionDefaultsSourced(ctx, sess)
+	return err
+}
+
+// resolveSessionDefaultsSourced is resolveSessionDefaults plus provenance
+// for each field it resolves. Same body, same order, same mutations, same
+// error returns — only used by GET /sessions/defaults today.
+func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contracts.Session) (sessionDefaultSources, error) {
+	var src sessionDefaultSources
+
 	cfg, err := s.data.Config(ctx)
 	if err != nil {
-		return err
+		return src, err
 	}
 
 	var wsDefaults contracts.WorkspaceDefaults
@@ -31,31 +55,46 @@ func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Ses
 		switch {
 		case err == nil:
 			wsDefaults = ws.Defaults
+			src.Workspace = ws.Name
 		case errors.Is(err, dataclient.ErrNotFound):
 			// Stale DefaultWorkspace or a Workspace field that no longer
 			// resolves — degrade to "no workspace defaults", not a failure.
 		default:
-			return err
+			return src, err
 		}
 	}
 
 	if sess.Provider == "" {
 		sess.Provider = cfg.DefaultProvider
+		if sess.Provider != "" {
+			src.Provider = contracts.SessionDefaultSourceConfig
+		}
 	}
 	if sess.Agent == "" {
 		sess.Agent = wsDefaults.Agent
+		if sess.Agent != "" {
+			src.Agent = contracts.SessionDefaultSourceWorkspace
+		}
 	}
 	if sess.Isolation == "" {
 		sess.Isolation = wsDefaults.Isolation
+		if sess.Isolation != "" {
+			src.Isolation = contracts.SessionDefaultSourceWorkspace
+		}
 	}
 	if sess.Isolation == "" {
 		sess.Isolation = contracts.IsolationWorktree
+		src.Isolation = contracts.SessionDefaultSourceBuiltin
 	}
 	if sess.Trust == "" {
 		sess.Trust = cfg.DefaultTrust
+		if sess.Trust != "" {
+			src.Trust = contracts.SessionDefaultSourceConfig
+		}
 	}
 	if sess.Trust == "" {
 		sess.Trust = contracts.TrustLimited
+		src.Trust = contracts.SessionDefaultSourceBuiltin
 	}
 
 	// Model: session -> workspace -> the resolved provider's discovered
@@ -65,6 +104,9 @@ func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Ses
 	// tier->model mapping is future work.
 	if sess.Model == "" {
 		sess.Model = wsDefaults.Model
+		if sess.Model != "" {
+			src.Model = contracts.SessionDefaultSourceWorkspace
+		}
 	}
 	if sess.Model == "" && sess.Provider != "" {
 		if p, err := s.providers.Get(sess.Provider); err == nil {
@@ -73,6 +115,7 @@ func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Ses
 					for _, m := range models {
 						if m.Default {
 							sess.Model = m.ID
+							src.Model = contracts.SessionDefaultSourceProviderDefault
 							break
 						}
 					}
@@ -81,5 +124,22 @@ func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Ses
 		}
 	}
 
-	return nil
+	return src, nil
+}
+
+func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
+	sess := contracts.Session{Workspace: r.URL.Query().Get("workspace")}
+	src, err := s.resolveSessionDefaultsSourced(r.Context(), &sess)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contracts.SessionDefaults{
+		Provider:  contracts.ResolvedSessionField{Value: sess.Provider, Source: src.Provider},
+		Model:     contracts.ResolvedSessionField{Value: sess.Model, Source: src.Model},
+		Agent:     contracts.ResolvedSessionField{Value: sess.Agent, Source: src.Agent},
+		Isolation: contracts.ResolvedSessionField{Value: sess.Isolation, Source: src.Isolation},
+		Trust:     contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
+		Workspace: src.Workspace,
+	})
 }

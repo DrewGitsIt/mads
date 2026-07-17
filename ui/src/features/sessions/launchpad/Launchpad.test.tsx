@@ -2,7 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, deriveSessionName } from "./Launchpad";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
-import type { Session } from "../../../router/types";
+import type { Session, SessionDefaults } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -19,6 +19,19 @@ function stubEmptyFetch() {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation(() => Promise.resolve(new Response("[]", { status: 200 }))),
+  );
+}
+
+function stubFetchWithSessionDefaults(defaults: SessionDefaults) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation((input: URL) => {
+      const url = input.toString();
+      if (url.includes("/sessions/defaults")) {
+        return Promise.resolve(new Response(JSON.stringify(defaults), { status: 200 }));
+      }
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    }),
   );
 }
 
@@ -137,5 +150,51 @@ describe("Launchpad", () => {
     const textarea = screen.getByLabelText("Describe your goal") as HTMLTextAreaElement;
     expect(textarea.value).toBe("Resume: Merge-back UX — 1 open task");
     expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it("shows the 'Inherits from <workspace> defaults' line when a workspace default resolved a field", async () => {
+    stubFetchWithSessionDefaults({
+      provider: { value: "claudecode", source: "config" },
+      model: {},
+      agent: { value: "backend-architect", source: "workspace" },
+      isolation: {},
+      trust: { value: "limited", source: "config" },
+      workspace: "mads",
+    });
+    render(<Launchpad createSession={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText("Inherits from mads defaults")).toBeTruthy());
+  });
+
+  it("does not show the inherit line when the defaults fetch fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.includes("/sessions/defaults")) {
+          return Promise.reject(new Error("network error"));
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    render(<Launchpad createSession={vi.fn()} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/Inherits from/)).toBeNull();
+  });
+
+  it("does not show the inherit line when a workspace resolved but none of its Defaults contributed", async () => {
+    stubFetchWithSessionDefaults({
+      provider: { value: "claudecode", source: "config" },
+      model: { value: "claude-sonnet-5", source: "provider_default" },
+      agent: {},
+      isolation: { value: "worktree", source: "builtin" },
+      trust: { value: "limited", source: "config" },
+      workspace: "mads",
+    });
+    render(<Launchpad createSession={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText(/Sonnet 5|claude-sonnet-5/)).toBeTruthy());
+    expect(screen.queryByText(/Inherits from/)).toBeNull();
   });
 });

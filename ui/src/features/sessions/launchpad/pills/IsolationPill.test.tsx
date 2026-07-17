@@ -21,4 +21,16 @@ describe("IsolationPill", () => {
     fireEvent.click(screen.getByText("New worktree"));
     expect(screen.queryByText("mads-ui")).toBeNull();
   });
+
+  it("shows the resolved default isolation mode when unset", () => {
+    render(
+      <IsolationPill resolved={{ value: "worktree", source: "builtin" }} onChange={vi.fn()} />,
+    );
+    expect(screen.getByText(/New worktree \(default\)/)).toBeTruthy();
+  });
+
+  it("shows the plain placeholder when nothing resolves", () => {
+    render(<IsolationPill onChange={vi.fn()} />);
+    expect(screen.getByText("Select isolation")).toBeTruthy();
+  });
 });

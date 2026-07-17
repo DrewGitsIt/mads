@@ -6,10 +6,12 @@ import pillStyles from "./pills.module.css";
 
 export interface WorkspacePillProps {
   value?: string;
+  /** Resolved default workspace name (Config.DefaultWorkspace), shown when nothing is staged yet. */
+  resolved?: string;
   onChange: (workspace: Workspace) => void;
 }
 
-export function WorkspacePill({ value, onChange }: WorkspacePillProps) {
+export function WorkspacePill({ value, resolved, onChange }: WorkspacePillProps) {
   const [open, setOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
@@ -19,6 +21,8 @@ export function WorkspacePill({ value, onChange }: WorkspacePillProps) {
       .then(setWorkspaces)
       .catch(() => setWorkspaces([]));
   }, []);
+
+  const triggerLabel = value ?? (resolved ? `${resolved} (default)` : "Select workspace");
 
   return (
     <Popover
@@ -30,7 +34,7 @@ export function WorkspacePill({ value, onChange }: WorkspacePillProps) {
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>ws</span> {value ?? "Select workspace"}
+          <span className={pillStyles.key}>ws</span> {triggerLabel}
         </button>
       }
     >
