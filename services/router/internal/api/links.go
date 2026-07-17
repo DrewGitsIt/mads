@@ -100,22 +100,13 @@ func (s *server) handleLinkInject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "link does not carry the inject grant"})
 		return
 	}
-	// Links don't cascade: if the granting session has since been deleted,
-	// fall back to its raw ID rather than failing the injection.
-	sourceName := link.GrantingSessionID
-	if granting, err := s.data.Session(r.Context(), link.GrantingSessionID); err == nil {
-		sourceName = granting.Name
-	}
 	addr, ok := s.sup.SessionAddr(link.SubjectSessionID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "subject session not running"})
 		return
 	}
 	s.postJSONToChild(w, r, addr, "/inject", contracts.InjectRequest{
-		Text: body.Text,
-		Attribution: contracts.Attribution{
-			LinkID:     link.ID,
-			SourceName: sourceName,
-		},
+		Text:        body.Text,
+		Attribution: s.resolveLinkAttribution(r.Context(), link),
 	})
 }

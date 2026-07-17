@@ -103,7 +103,10 @@ func main() {
 	uiDist := flag.String("ui-dist", "ui/dist", "path to the built UI (ui/dist) served at /; missing or unbuilt serves a placeholder page. Relative to the cwd the router is launched from, not the executable — scripts/app.sh and `make run` both launch from the repo root.")
 	flag.Parse()
 
-	sessionArgv := strings.Fields(*sessionCmd)
+	// sessionArgv/pipelineArgv are built before net.Listen resolves ln.Addr()
+	// (below), so -router-url must be sourced from *addr, the configured
+	// flag value, not the post-bind address.
+	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr)
 	pipelineArgv := strings.Fields(*pipelineCmd)
 
 	data := dataclient.New(*dataURL, "router")

@@ -87,6 +87,14 @@ type Runner struct {
 	// credstore-only behavior exactly as before this field existed.
 	VaultResolver *vault.Resolver
 
+	// RouterURL is the Router's own base URL, passed as MADS_ROUTER_URL to
+	// the orchestrate capability's MCP server process (docs/
+	// LINKED-SESSIONS-DESIGN.md, setupOrchestrate) — the one thing the
+	// Runner needs to reach the Router directly rather than through r.data
+	// (the Data Service client). Callers set it (from -router-url) before
+	// calling Start, same pattern as Cwd/WorktreeRoot.
+	RouterURL string
+
 	wt *worktree.Manager // built lazily the first time isolation is needed
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
@@ -213,6 +221,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.installHook(ctx, cwd)
 
 	capEnv := r.setupCapabilities(ctx, sess, cwd)
+	orchestrateMCP := r.setupOrchestrate(ctx, sess)
 
 	opts := provider.StartOptions{
 		Mode:   provider.ModeACP,
@@ -221,6 +230,9 @@ func (r *Runner) Start(ctx context.Context) error {
 		Resume: sess.ProviderRef,
 		Env:    capEnv,
 		Trust:  provider.Trust(sess.Trust),
+	}
+	if orchestrateMCP != nil {
+		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}
 	}
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {

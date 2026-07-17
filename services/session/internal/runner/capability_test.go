@@ -43,6 +43,12 @@ func (f *fakeVaultSource) Resolve(_ context.Context, ref string) (string, error)
 
 var envdumpBin string
 
+// madsBinDir holds a real `mads` binary — setupOrchestrate hardcodes
+// "mads internal orchestrate-mcp" as its Command (docs/LINKED-SESSIONS-DESIGN.md),
+// so exercising it end to end (rather than just its gating logic) needs the
+// real binary resolvable via PATH, the same way it would be once installed.
+var madsBinDir string
+
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "mads-capability-test")
 	if err != nil {
@@ -55,6 +61,13 @@ func TestMain(m *testing.M) {
 		"github.com/drewkidwell/mads/pkg/capability/testdata/envdump")
 	if out, err := build.CombinedOutput(); err != nil {
 		panic("build envdump: " + err.Error() + "\n" + string(out))
+	}
+
+	madsBinDir = dir
+	build = exec.Command("go", "build", "-o", filepath.Join(madsBinDir, "mads"),
+		"github.com/drewkidwell/mads/cmd/mads")
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("build mads: " + err.Error() + "\n" + string(out))
 	}
 
 	os.Exit(m.Run())
