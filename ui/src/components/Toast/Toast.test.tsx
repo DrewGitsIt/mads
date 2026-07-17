@@ -34,4 +34,16 @@ describe("Toast", () => {
     render(<Toast title="Run finished" />);
     expect(screen.queryByLabelText("Dismiss")).toBeNull();
   });
+
+  it("renders an action button and calls its onClick when clicked", () => {
+    const onClick = vi.fn();
+    render(<Toast title="Dependency removed" action={{ label: "Undo", onClick }} />);
+    fireEvent.click(screen.getByText("Undo"));
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the action button when action is not provided", () => {
+    render(<Toast title="Run finished" />);
+    expect(screen.queryByText("Undo")).toBeNull();
+  });
 });

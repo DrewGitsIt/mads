@@ -1,12 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TaskGraphView } from "./TaskGraphView";
 import { useTaskStore } from "../useTaskStore";
 import { FakeRouterClient } from "../../router/fixtures";
 import { fixtureTasks } from "../../router/fixtures";
+import { installXyflowMeasurements } from "./xyflowTestEnv";
 import type { RouterClient } from "../../router/client";
+import type { Task } from "../../router/types";
 
 const tasksById = Object.fromEntries(fixtureTasks.map((t) => [t.id, t]));
+
+let uninstall: () => void;
+beforeAll(() => {
+  uninstall = installXyflowMeasurements();
+});
+afterAll(() => {
+  uninstall();
+});
 
 /**
  * TaskGraphView takes tasks/tasksById as plain props (§4/§6) — it does not
@@ -30,6 +40,25 @@ function GraphHarness({
       tasksById={tasksById}
     />
   );
+}
+
+function edgeMarker(container: HTMLElement, edgeId: string): string | null {
+  const g = container.querySelector(`.react-flow__edge[data-id="${edgeId}"]`);
+  return g?.querySelector(".react-flow__edge-path")?.getAttribute("marker-end") ?? null;
+}
+
+function task(overrides: Partial<Task>): Task {
+  return {
+    id: "tsk_1",
+    session_id: "ses_1",
+    status: "ready",
+    retry_count: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    title: "a task",
+    source: "user",
+    ...overrides,
+  };
 }
 
 describe("TaskGraphView", () => {
@@ -61,14 +90,17 @@ describe("TaskGraphView", () => {
       />,
     );
     await waitFor(() => {
-      expect(container.querySelector('[class*="edgeCycle"]')).not.toBeNull();
+      const marker =
+        edgeMarker(container, "tsk_cycle_a->tsk_cycle_b") ??
+        edgeMarker(container, "tsk_cycle_b->tsk_cycle_a");
+      expect(marker).toBe("url('#mads-arrow-cycle')");
     });
   });
 
-  it("invokes onSelectTask when a node is clicked", () => {
+  it("invokes onSelectTask when a canvas node is clicked", () => {
     const onSelectTask = vi.fn();
     const client = new FakeRouterClient();
-    render(
+    const { container } = render(
       <TaskGraphView
         sessionId="session-active"
         routerClient={client}
@@ -77,11 +109,10 @@ describe("TaskGraphView", () => {
         onSelectTask={onSelectTask}
       />,
     );
-    const readyTitle = screen.getByText("Add retry backoff to the ingest worker");
-    fireEvent.click(readyTitle.closest('[role="button"]')!);
-    expect(onSelectTask).toHaveBeenCalledWith(
-      fixtureTasks.find((t) => t.id === "tsk_ready"),
-    );
+    // tsk_cycle_a has an edge (depends on tsk_cycle_b) so it's a canvas node, not tray.
+    const node = container.querySelector('.react-flow__node[data-id="tsk_cycle_a"]');
+    fireEvent.click(node!);
+    expect(onSelectTask).toHaveBeenCalledWith(tasksById.tsk_cycle_a);
   });
 
   it("renders a new node when a streamed task.created event arrives, via the owning useTaskStore", async () => {
@@ -127,5 +158,66 @@ describe("TaskGraphView", () => {
       expect(screen.getByText("Renamed via streamed event")).toBeTruthy(),
     );
     expect(screen.queryByText("Add retry backoff to the ingest worker")).toBeNull();
+  });
+
+  it("renders a sparse session as a tray plus small packed components — no mega-row", () => {
+    // 20 tasks, only 3 edges (touching 4 distinct tasks) — the rest are tray-eligible.
+    const tasks: Task[] = [];
+    for (let i = 0; i < 20; i++) {
+      tasks.push(task({ id: `tsk_${i}`, title: `Task ${i}`, created_at: `2026-01-01T00:${String(i).padStart(2, "0")}:00Z` }));
+    }
+    tasks[1].dependencies = [tasks[0].id];
+    tasks[3].dependencies = [tasks[2].id];
+    tasks[5].dependencies = [tasks[4].id];
+    const byId = Object.fromEntries(tasks.map((t) => [t.id, t]));
+    const client = new FakeRouterClient();
+    const { container } = render(
+      <TaskGraphView sessionId="session-sparse" routerClient={client} tasks={tasks} tasksById={byId} />,
+    );
+    expect(container.querySelectorAll('[draggable="true"]').length).toBe(14);
+    expect(container.querySelectorAll(".react-flow__node").length).toBe(6);
+  });
+
+  it("renders a long task title without overflowing its card", () => {
+    const longTitle = "A".repeat(300);
+    const a = task({ id: "tsk_long_a", title: longTitle, created_at: "2026-01-01T00:00:00Z" });
+    const b = task({ id: "tsk_long_b", title: "dependent", dependencies: ["tsk_long_a"], created_at: "2026-01-01T00:01:00Z" });
+    const byId = { [a.id]: a, [b.id]: b };
+    const client = new FakeRouterClient();
+    const { container } = render(
+      <TaskGraphView sessionId="session-long" routerClient={client} tasks={[a, b]} tasksById={byId} />,
+    );
+    const title = container.querySelector('.react-flow__node[data-id="tsk_long_a"] [title]');
+    expect(title?.getAttribute("title")).toBe(longTitle);
+    expect(title?.className).toMatch(/title/);
+  });
+
+  it("persists a manual position to localStorage under the session key and reloads it on remount", () => {
+    localStorage.clear();
+    const a = task({ id: "tsk_pos_a", title: "positioned", created_at: "2026-01-01T00:00:00Z" });
+    const byId = { [a.id]: a };
+    const client = new FakeRouterClient();
+
+    // No edges, so tsk_pos_a starts in the tray; seed a manual position directly
+    // via loadPositions/localStorage the same way TaskGraphView reads it, then
+    // confirm remounting the component surfaces that position (canvas, not tray).
+    localStorage.setItem(
+      "mads.taskGraph.positions.session-persist",
+      JSON.stringify({ tsk_pos_a: { x: 40, y: 60 } }),
+    );
+
+    const { container, unmount } = render(
+      <TaskGraphView sessionId="session-persist" routerClient={client} tasks={[a]} tasksById={byId} />,
+    );
+    expect(container.querySelector('.react-flow__node[data-id="tsk_pos_a"]')).not.toBeNull();
+    unmount();
+
+    const { container: remounted } = render(
+      <TaskGraphView sessionId="session-persist" routerClient={client} tasks={[a]} tasksById={byId} />,
+    );
+    expect(remounted.querySelector('.react-flow__node[data-id="tsk_pos_a"]')).not.toBeNull();
+    expect(JSON.parse(localStorage.getItem("mads.taskGraph.positions.session-persist")!)).toEqual({
+      tsk_pos_a: { x: 40, y: 60 },
+    });
   });
 });

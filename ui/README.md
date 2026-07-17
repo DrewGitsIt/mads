@@ -163,11 +163,22 @@ Task list/graph rendering follows the Queued display rule (`src/tasks/
 ListView/statusPresentation.ts`): a `"blocked"` task with an unfinished
 dependency renders calm/neutral ("Queued"), while `"blocked"` with no
 unfinished dependency (needs a human) renders red — the schema has no
-separate status for the two, so this is a client-side heuristic. The
-dependency graph (`src/tasks/GraphView/`) lays out with `@dagrejs/dagre`
-deterministically (nodes sorted by id, dimensions from a title-length
-heuristic, never measured from the DOM) and highlights cycles from the
-server-authoritative `GET /tasks/cycles`, not client-side detection.
+separate status for the two, so this is a client-side heuristic.
+
+The dependency graph (`src/tasks/GraphView/`) renders on an `@xyflow/react`
+canvas. Tasks with zero dependency edges and no manually-set position sit in
+the "Unsequenced tray" instead of the canvas — this keeps a dependency-sparse
+session from rendering as one wide mega-row. Everything else is split into
+its connected components, each packed independently with `@dagrejs/dagre`
+(nodes sorted by id, dimensions from a title-length heuristic, never
+measured from the DOM) and tiled onto the canvas, so unrelated small chains
+don't get stretched across a shared row. Dragging a tray task onto the
+canvas or a canvas task into the tray updates its dependency edges (via the
+same full-replace `PUT /tasks/{id}` the detail sheet uses) after a confirm
+dialog, with an undo toast immediately after. Manual node positions persist
+to `localStorage` per session (`mads.taskGraph.positions.<sessionId>`) and
+survive reload. Cycles are highlighted from the server-authoritative
+`GET /tasks/cycles`, not client-side detection.
 
 ## Files tab
 

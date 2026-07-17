@@ -7,27 +7,14 @@
   border-radius: var(--r);
 }
 
-.canvas {
-  width: 100%;
-  height: 100%;
-  cursor: grab;
+.arrowDefault path {
+  fill: var(--line);
 }
 
-.edge {
-  stroke: var(--line);
-  stroke-width: 1.5px;
+.arrowSelected path {
+  fill: var(--accent);
 }
 
-.edgeCycle {
-  stroke: var(--bad);
-  stroke-width: 2px;
-  stroke-dasharray: 5 3;
-}
-
-.controls {
-  position: absolute;
-  right: var(--space-3);
-  bottom: var(--space-3);
-  display: flex;
-  gap: var(--space-2);
+.arrowCycle path {
+  fill: var(--bad);
 }
