@@ -34,7 +34,8 @@ describe("usePipelineRun", () => {
   });
 
   it("seeds the task list on mount", async () => {
-    const { result } = renderHook(() => usePipelineRun(recordedSessionId, newClient()));
+    const client = newClient();
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.tasks.map((t) => t.id)).toEqual(recordedTasks.map((t) => t.id));
@@ -42,7 +43,8 @@ describe("usePipelineRun", () => {
   });
 
   it("moves a task's card through stages and derives column order from the recorded run", async () => {
-    const { result } = renderHook(() => usePipelineRun(recordedSessionId, newClient()));
+    const client = newClient();
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     playRecordedRun();
@@ -72,7 +74,8 @@ describe("usePipelineRun", () => {
   });
 
   it("renders a loop-back as repeated attempts on the same stage, each carrying the failure feedback", async () => {
-    const { result } = renderHook(() => usePipelineRun(recordedSessionId, newClient()));
+    const client = newClient();
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     playRecordedRun();
@@ -91,7 +94,8 @@ describe("usePipelineRun", () => {
   });
 
   it("a blocked task's final currentStage reflects where it blocked", async () => {
-    const { result } = renderHook(() => usePipelineRun(recordedSessionId, newClient()));
+    const client = newClient();
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     playRecordedRun();
@@ -110,7 +114,8 @@ describe("usePipelineRun", () => {
   });
 
   it("a task with no folded stage.started stays out of taskRunState (still queued)", async () => {
-    const { result } = renderHook(() => usePipelineRun(recordedSessionId, newClient()));
+    const client = newClient();
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     playRecordedRun();

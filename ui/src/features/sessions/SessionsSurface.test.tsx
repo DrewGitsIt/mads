@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { SessionsSurface } from "./SessionsSurface";
+import { FakePipelineClient } from "../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { Session } from "../../router/types";
 
@@ -58,7 +59,7 @@ describe("SessionsSurface", () => {
       vi.fn().mockImplementation(() => Promise.resolve(new Response("[]", { status: 200 }))),
     );
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
 
     await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
     expect(screen.getByText("What can I help you with?")).toBeTruthy();
@@ -77,7 +78,7 @@ describe("SessionsSurface", () => {
       }),
     );
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
 
     sessions = [makeSession({})];
@@ -94,7 +95,7 @@ describe("SessionsSurface", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })];
     stubSessionsAndConversationFetch(sessions);
 
-    render(<SessionsSurface jumpToSessionId="s2" />);
+    render(<SessionsSurface jumpToSessionId="s2" pipelineClient={new FakePipelineClient()} />);
 
     await waitFor(() => {
       const row = rail().getByText("Bravo").closest("button");
@@ -109,7 +110,7 @@ describe("SessionsSurface", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha" }), makeSession({ id: "s2", name: "Bravo" })];
     stubSessionsAndConversationFetch(sessions);
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     rail().getByText("Alpha").closest("button")?.click();
@@ -123,7 +124,7 @@ describe("SessionsSurface", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha" })];
     stubSessionsAndConversationFetch(sessions);
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     rail().getByText("Alpha").closest("button")?.click();
@@ -139,7 +140,7 @@ describe("SessionsSurface", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha" })];
     stubSessionsAndConversationFetch(sessions);
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     rail().getByText("Alpha").closest("button")?.click();
@@ -154,7 +155,7 @@ describe("SessionsSurface", () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha", activity: "inactive" })];
     stubSessionsAndConversationFetch(sessions);
 
-    render(<SessionsSurface />);
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     rail().getByText("Alpha").closest("button")?.click();

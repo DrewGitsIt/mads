@@ -96,9 +96,10 @@ ConversationTab.tsx`) mounted standalone against `FakeRouterClient` fixtures
 (`src/router/fixtures.ts`), with a picker to switch between an active and an
 inactive (summary-card) session, and a toy in-memory pty so terminal mode and
 the Shell dock are reviewable without Electron. In the real app,
-`ConversationTab` is mounted by `SessionsSurface` when a session is selected
-in the rail (back/deselect returns to the Launchpad); this demo mount remains
-useful for reviewing it in isolation without a live Router.
+`ConversationTab` is mounted by `SessionWorkspace`'s Conversation tab
+(`src/features/sessions/workspace/tabRegistry.tsx`) when a session is
+selected in the rail (back/deselect returns to the Launchpad); this demo
+mount remains useful for reviewing it in isolation without a live Router.
 
 Terminal mode and the docked Shell use `@xterm/xterm` over a `PtyBridge`
 (`src/conversation/TerminalRenderer/ptyBridge.ts`). The real pty transport
@@ -119,11 +120,13 @@ npm run tasks
 
 Opens `tasks.html`: `TasksTab` (`src/tasks/TasksTab.tsx`) and `ContextRail`
 (`src/context-rail/ContextRail.tsx`) mounted side by side against
-`FakeRouterClient` fixtures, standing in for the Session Workspace container
-that will eventually host both. `TasksTab` owns list/graph toggle, the detail
+`FakeRouterClient` fixtures. `TasksTab` owns list/graph toggle, the detail
 sheet, draft confirm/discard, and bulk import; `ContextRail` owns the
-Tasks/Changes rail tabs and quick-filter chips. This is the review artifact
-until W6.2's tab registry exists to wire `TasksTab` into `App.tsx` properly.
+Tasks/Changes rail tabs and quick-filter chips. `TasksTab` is the real Tasks
+tab inside `SessionWorkspace` (`src/features/sessions/workspace/
+tabRegistry.tsx`), wired to the session's live `RouterClient`; `ContextRail`
+stays unmounted there (explicitly deferred, not part of the tab registry),
+so this demo mount remains the only place to review it.
 
 Both `TasksTab` and `ContextRail` read live task state via `useTaskStore`
 (`src/tasks/useTaskStore.ts`), which subscribes to `task.*`/`note.*` events
@@ -157,8 +160,11 @@ Opens `files.html`: the Files tab (`src/files/FilesTab.tsx`) mounted
 standalone against `FakeRouterClient` fixtures (`src/router/fixtures.ts`),
 with a picker to switch between a clean-changes session, a session with an
 unattributed observation row, and a session with a seeded merge conflict.
-This is the review artifact until W6.2's tab registry exists to register
-`FilesTab` into properly.
+`FilesTab` is the real Files tab inside `SessionWorkspace`
+(`src/features/sessions/workspace/tabRegistry.tsx`), wired to the session's
+live `RouterClient`; this demo mount remains useful for reviewing it against
+fixture sessions (clean changes, an unattributed observation, a seeded
+merge conflict) without a live Router.
 
 Every surface's main content renders through the shared `ContentColumn`
 primitive (`src/components/ContentColumn/`) — a centered column with a
@@ -288,8 +294,11 @@ event sequence (`src/pipeline/client/recordedRun.ts`, captured from a real
 engine run against provider-fake — three tasks, including a stage loop-back
 and a terminal block). A global `EventSource` stub feeds the recording to
 `usePipelineRun` in place of a real Router SSE connection; a "Play recorded
-sequence" button replays it on demand. This is the review artifact until
-W6.2's tab registry exists to register `PipelineTab` into properly.
+sequence" button replays it on demand. `PipelineTab` is the real Pipeline
+tab inside `SessionWorkspace` (`src/features/sessions/workspace/
+tabRegistry.tsx`), wired to the session's live `PipelineClient`; this demo
+mount remains useful for replaying a recorded engine run without a live
+Router/pipeline service.
 
 `PipelineTab` composes a `RunHeader` (Start/Pause/Resume/Cancel, elapsed +
 task counts — Pause/Resume/Reassign render disabled, since the engine has no
@@ -546,3 +555,14 @@ Registry shelf is gated behind `FLAGS.remoteRegistry` (see Library above).
   (`GET /config`) also has a real failure state now (`ConfigGateFailure`) —
   a down Router at mount shows a "can't reach the backend" screen with
   Retry, not a permanently blank window.
+- `SessionWorkspace`'s tab registry (`src/features/sessions/workspace/
+  tabRegistry.tsx`) mounts a tab on first visit and then keeps it mounted
+  (CSS display-toggled, never unmounted) for the rest of the session pane's
+  lifetime — so composer drafts, the Tasks graph selection, and scroll
+  position all survive flipping tabs. Tab liveness indicators reuse existing
+  state rather than opening a second subscription: the Tasks badge reads the
+  same `useOpenTaskCounts()` the rail already calls (don't add a second
+  call), and the Pipeline run-dot is its own small `subscribeToEvents`
+  subscription (`usePipelineRunning.ts`) independent of `usePipelineRun` —
+  it needs to reflect "a run is in flight" the instant the tab mounts, even
+  before `PipelineTab`/`usePipelineRun` has been visited once.

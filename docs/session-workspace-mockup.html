@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Session Workspace mockup</title>
+<style>
+/* Tokens: clay (shipped default), from docs/palette-mockups.html. Layout/flow mock only. */
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.16); --ok-fg:#2e5a3c;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.15); --warn-fg:#7a5a1a;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.15); --bad-fg:#8a3a2a;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.15); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg0); color:var(--text); font:15px/1.55 system-ui,-apple-system,sans-serif; padding:28px 20px 80px; }
+.frame { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; margin:0; }
+.note { color:var(--text2); max-width:70ch; margin:4px 0 18px; }
+.note code { background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; font-size:.88em; }
+.toolbar { position:fixed; top:16px; right:16px; }
+.toolbar button { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; }
+.toolbar button:hover { background:var(--bg3); }
+
+/* ---- app chrome (abridged: icon rail + session list omitted after the first) ---- */
+.window { display:grid; grid-template-columns:200px 1fr; background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; box-shadow:var(--shadow); min-height:600px; margin-top:14px; }
+.slist { border-right:1px solid var(--line-soft); padding:14px 10px; font-size:13.5px; }
+.slist .h { font-size:11px; letter-spacing:.09em; color:var(--text3); text-transform:uppercase; padding:2px 8px 8px; }
+.srow { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; color:var(--text2); cursor:pointer; }
+.srow:hover { background:var(--bg2); }
+.srow.sel { background:var(--accent-soft); color:var(--text); font-weight:600; }
+.dot { width:7px; height:7px; border-radius:50%; background:var(--text3); flex:none; }
+.dot.on { background:var(--ok); }
+
+/* ---- the workspace ---- */
+.ws { display:flex; flex-direction:column; min-width:0; }
+.wsbar { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line-soft); background:var(--bg1); }
+.x { background:none; border:0; color:var(--text3); font-size:15px; cursor:pointer; padding:4px 8px; border-radius:6px; }
+.x:hover { background:var(--bg2); color:var(--text); }
+.wsname { font-weight:650; font-size:15px; display:flex; align-items:center; gap:8px; }
+.chip { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; border-radius:5px; padding:2px 7px; background:var(--bg3); color:var(--text2); }
+.chip.live { background:var(--ok-soft); color:var(--ok-fg); }
+
+.tabs { display:flex; gap:2px; margin-left:18px; }
+.tab { position:relative; background:none; border:0; color:var(--text2); font:inherit; font-size:13.5px; padding:7px 14px 9px; cursor:pointer; border-radius:8px 8px 0 0; }
+.tab:hover { background:var(--bg2); color:var(--text); }
+.tab[aria-selected="true"] { color:var(--text); font-weight:600; }
+.tab[aria-selected="true"]::after { content:""; position:absolute; left:10px; right:10px; bottom:-1px; height:2px; background:var(--accent); border-radius:2px; }
+.tab .badge { display:inline-block; min-width:17px; text-align:center; font-size:11px; background:var(--accent-soft); color:var(--accent); border-radius:999px; padding:1px 5px; margin-left:6px; }
+.tab .rundot { display:inline-block; width:7px; height:7px; border-radius:50%; background:var(--ok); margin-left:7px; animation:pulse 1.6s ease infinite; }
+@keyframes pulse { 50% { opacity:.35; } }
+@media (prefers-reduced-motion:reduce){ .tab .rundot{animation:none;} }
+.wsbar .spacer { flex:1; }
+.kebab { color:var(--text3); background:none; border:0; font-size:17px; cursor:pointer; padding:2px 8px; border-radius:6px; }
+.kebab:hover { background:var(--bg2); }
+
+.pane { display:none; padding:0; min-height:480px; }
+.pane.active { display:block; }
+
+/* conversation */
+.convo { display:flex; flex-direction:column; height:520px; }
+.msgs { flex:1; padding:20px 22px; overflow:auto; display:flex; flex-direction:column; gap:12px; }
+.msg { max-width:62ch; border-radius:12px; padding:9px 14px; font-size:14px; }
+.msg.user { align-self:flex-end; background:var(--accent-soft); }
+.msg.agent { align-self:flex-start; background:var(--bg2); border:1px solid var(--line-soft); }
+.msg .who { font-size:11px; color:var(--text3); margin-bottom:2px; }
+.toolrow { align-self:flex-start; font-size:12.5px; color:var(--text3); border:1px dashed var(--line); border-radius:8px; padding:6px 12px; }
+.composer { display:flex; gap:10px; border-top:1px solid var(--line-soft); padding:12px 16px; }
+.composer input { flex:1; background:var(--bg2); border:1px solid var(--line-soft); border-radius:9px; color:var(--text); padding:9px 12px; font:inherit; font-size:13.5px; }
+.composer input::placeholder { color:var(--text3); }
+.send { background:var(--accent); color:var(--accent-ink); border:0; border-radius:9px; padding:8px 18px; font-weight:600; cursor:pointer; }
+.send:hover { background:var(--accent-hover); }
+
+/* tasks */
+.tasklist { padding:16px 20px; }
+.trow { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--line-soft); border-radius:9px; margin-bottom:8px; background:var(--bg2); font-size:13.5px; }
+.trow:hover { background:var(--bg3); }
+.pill { font-size:11px; border-radius:999px; padding:2px 9px; }
+.pill.done { background:var(--ok-soft); color:var(--ok-fg); }
+.pill.prog { background:var(--info-soft); color:var(--info-fg); }
+.pill.ready { background:var(--bg3); color:var(--text2); }
+.pill.blocked { background:var(--bad-soft); color:var(--bad-fg); }
+.trow .t { flex:1; }
+.trow .dep { color:var(--text3); font-size:12px; }
+.graphnote { margin:10px 12px 0; color:var(--text3); font-size:12.5px; }
+
+/* files */
+.filelist { padding:16px 20px; }
+.frow { display:flex; align-items:center; gap:12px; padding:9px 12px; border-bottom:1px solid var(--line-soft); font-size:13px; }
+.frow .path { flex:1; font-family:ui-monospace,monospace; }
+.plus { color:var(--ok-fg); } .minus { color:var(--bad-fg); }
+.attribution { font-size:11.5px; color:var(--text3); }
+.mergeback { margin:16px 12px 0; display:flex; align-items:center; gap:12px; border:1px solid var(--line-soft); background:var(--warn-soft); border-radius:10px; padding:12px 16px; font-size:13.5px; }
+.mergeback button { background:var(--accent); border:0; color:var(--accent-ink); border-radius:8px; padding:7px 14px; font-weight:600; cursor:pointer; }
+
+/* pipeline board */
+.board { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:16px 20px; }
+.col .colh { font-size:11.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--text3); padding:2px 4px 8px; }
+.card { background:var(--bg2); border:1px solid var(--line-soft); border-radius:9px; padding:9px 11px; font-size:12.5px; margin-bottom:8px; }
+.card .st { color:var(--text3); font-size:11.5px; margin-top:3px; }
+.card.active { border-color:var(--accent); }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">theme</button></div>
+<div class="frame">
+  <h1>Session Workspace</h1>
+  <p class="note">What sits behind clicking a session, once the tab registry lands. The tabs are <b>clickable in this mockup</b>.
+  Everything below the bar already exists as built components (<code>TasksTab</code>, <code>FilesTab</code>, <code>PipelineTab</code>, <code>ConversationTab</code>) —
+  the new construction is only the thin bar + tab registry. Conversation keeps its own header (shell / restart controls) inside the tab.</p>
+
+  <div class="window">
+    <aside class="slist">
+      <div class="h">Active · 2</div>
+      <div class="srow"><span class="dot on"></span>Maintenance</div>
+      <div class="srow sel"><span class="dot on"></span>payments refactor</div>
+      <div class="h" style="margin-top:14px">Recent</div>
+      <div class="srow"><span class="dot"></span>Wave 7</div>
+      <div class="srow"><span class="dot"></span>Wave 6.5</div>
+    </aside>
+
+    <div class="ws">
+      <div class="wsbar">
+        <button class="x" title="Back to Launchpad">✕</button>
+        <span class="wsname">payments refactor <span class="chip live">active</span></span>
+        <nav class="tabs" id="tabs">
+          <button class="tab" aria-selected="true" data-pane="conversation">Conversation</button>
+          <button class="tab" aria-selected="false" data-pane="tasks">Tasks<span class="badge">3</span></button>
+          <button class="tab" aria-selected="false" data-pane="files">Files<span class="badge">7</span></button>
+          <button class="tab" aria-selected="false" data-pane="pipeline">Pipeline<span class="rundot" title="run in progress"></span></button>
+        </nav>
+        <span class="spacer"></span>
+        <button class="kebab" title="Session actions">⋯</button>
+      </div>
+
+      <section class="pane active" id="conversation">
+        <div class="convo">
+          <div class="msgs">
+            <div class="msg user"><div class="who">you</div>Refactor the payments retry logic — the backoff is hammering the gateway when it's down.</div>
+            <div class="msg agent"><div class="who">agent · claude-code / sonnet</div>Looking at <b>payments/retry.go</b> — the loop retries immediately on connection errors instead of honoring the backoff. I'll add jittered exponential backoff and a circuit-breaker threshold, then extend the gateway tests.</div>
+            <div class="toolrow">⚒ edited payments/retry.go · +48 −12 &nbsp;·&nbsp; ran go test ./payments/... ✓</div>
+            <div class="msg agent"><div class="who">agent</div>Done — backoff now caps at 30s with ±20% jitter, breaker opens after 5 consecutive failures. Two tasks queued for the pieces you flagged as follow-ups.</div>
+          </div>
+          <div class="composer">
+            <input placeholder="Message the agent — @ to mention, / for commands">
+            <button class="send">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" id="tasks">
+        <div class="tasklist">
+          <div class="trow"><span class="pill prog">in progress</span><span class="t">Add circuit-breaker metrics to the dashboard</span><span class="dep">executor · 4m</span></div>
+          <div class="trow"><span class="pill ready">ready</span><span class="t">Gateway timeout budget config</span><span class="dep">depends on metrics task</span></div>
+          <div class="trow"><span class="pill blocked">blocked</span><span class="t">Retire legacy retry path</span><span class="dep">merge conflict · in Merge Queue</span></div>
+          <div class="trow"><span class="pill done">done</span><span class="t">Jittered exponential backoff</span><span class="dep">merged 22m ago</span></div>
+          <div class="graphnote">list ↔ dependency-graph toggle lives here (both views already built in TasksTab)</div>
+        </div>
+      </section>
+
+      <section class="pane" id="files">
+        <div class="filelist">
+          <div class="frow"><span class="path">payments/retry.go</span><span class="plus">+48</span><span class="minus">−12</span><span class="attribution">agent · tool-use</span></div>
+          <div class="frow"><span class="path">payments/retry_test.go</span><span class="plus">+96</span><span class="minus">−4</span><span class="attribution">agent · tool-use</span></div>
+          <div class="frow"><span class="path">payments/breaker.go</span><span class="plus">+121</span><span class="minus">−0</span><span class="attribution">agent · tool-use</span></div>
+          <div class="frow"><span class="path">docs/runbook.md</span><span class="plus">+9</span><span class="minus">−2</span><span class="attribution">you · observed</span></div>
+          <div class="mergeback">
+            <span>This session's worktree has <b>4 files</b> not merged back to <b>main</b>.</span>
+            <button>Merge back…</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="pane" id="pipeline">
+        <div class="board">
+          <div class="col"><div class="colh">Architect</div>
+            <div class="card">Gateway timeout budget config<div class="st">waiting on dependency</div></div>
+          </div>
+          <div class="col"><div class="colh">Executor</div>
+            <div class="card active">Circuit-breaker metrics<div class="st">turn 31 · 4m elapsed</div></div>
+          </div>
+          <div class="col"><div class="colh">Review / Merge</div>
+            <div class="card">Retire legacy retry path<div class="st">⚠ conflict → Merge Queue</div></div>
+          </div>
+          <div class="col"><div class="colh">Done</div>
+            <div class="card">Jittered exponential backoff<div class="st">verified · merged</div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:18px">
+  Notes: tab state defaults to Conversation per session (A, agreed). ContextRail deferred (B) — the Tasks badge and Pipeline
+  run-dot carry the "something is happening" signal instead. ⌘K "start a pipeline" lands on the Pipeline tab of that session.
+  The blocked card links into the Merge Queue surface (see <code>merge-queue-mockup.html</code>).
+  </p>
+</div>
+<script>
+document.getElementById("tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".tab"); if (!btn) return;
+  document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t === btn)));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("active", p.id === btn.dataset.pane));
+});
+</script>
+</body>
+</html>

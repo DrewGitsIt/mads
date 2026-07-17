@@ -84,3 +84,6 @@ export class FetchPipelineClient implements PipelineClient {
     };
   }
 }
+
+// Stateless — safe as a module-level singleton rather than re-created per render.
+export const pipelineClient: PipelineClient = new FetchPipelineClient();
