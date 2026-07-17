@@ -3,7 +3,14 @@ import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../../components/Toast/Toast";
 import type { RouterClient } from "../../router/client";
 import type { Task } from "../../router/types";
-import { applyEdgeStrip, invertPlan, planEdgeStrip, type EdgeStripPlan } from "./edgeOps";
+import {
+  applyEdgeStrip,
+  invertPlan,
+  planEdgeCreation,
+  planEdgesRemoval,
+  planEdgeStrip,
+  type EdgeStripPlan,
+} from "./edgeOps";
 import { GraphCanvas } from "./GraphCanvas";
 import { computeGraphLayout, type ComponentSlots } from "./layout";
 import { loadPositions, savePositions } from "./positions";
@@ -32,11 +39,15 @@ interface PendingDragOut {
   previousPosition: Point | undefined;
 }
 
-interface UndoState {
-  taskId: string;
-  plan: EdgeStripPlan;
-  previousPosition: Point | undefined;
-}
+/**
+ * `Toast.tsx` has no queue — exactly one can show at a time. Drag-out undo,
+ * removal undo, and creation/removal errors all compete for that one slot,
+ * so they're a single tagged union rather than parallel useStates.
+ */
+type GraphToast =
+  | { kind: "moved-to-tray"; taskId: string; plan: EdgeStripPlan; previousPosition: Point | undefined }
+  | { kind: "dependency-removed"; plan: EdgeStripPlan }
+  | { kind: "error"; title: string; message: string };
 
 /**
  * Cycle highlighting is authoritative and server-side (§5) — refetched
@@ -55,7 +66,7 @@ export function TaskGraphView({
   const previousSlotsRef = useRef<ComponentSlots>(new Map());
   const trayRef = useRef<HTMLDivElement>(null);
   const [pendingDragOut, setPendingDragOut] = useState<PendingDragOut | null>(null);
-  const [undoState, setUndoState] = useState<UndoState | null>(null);
+  const [toast, setToast] = useState<GraphToast | null>(null);
   const [autoLayoutSignal, setAutoLayoutSignal] = useState(0);
 
   useEffect(() => {
@@ -94,6 +105,7 @@ export function TaskGraphView({
   const unsequencedIds = new Set(
     result.canvasNodes.filter((n) => (edgeDegree.get(n.id) ?? 0) === 0).map((n) => n.id),
   );
+  const cycleNodeIds = new Set(cycles.flat());
 
   const trayTasks = trayOrder(result.trayTaskIds.map((id) => tasksById[id]));
 
@@ -106,7 +118,7 @@ export function TaskGraphView({
     if (plan.updates.length > 0) {
       void applyEdgeStrip(routerClient, plan);
     }
-    setUndoState({ taskId, plan, previousPosition });
+    setToast({ kind: "moved-to-tray", taskId, plan, previousPosition });
   }
 
   function handleDragNodeOut(taskId: string) {
@@ -143,15 +155,46 @@ export function TaskGraphView({
     setPendingDragOut(null);
   }
 
-  function handleUndoDragOut() {
-    if (!undoState) return;
-    const { taskId, plan, previousPosition } = undoState;
-    setUndoState(null);
-    if (plan.updates.length > 0) {
-      void applyEdgeStrip(routerClient, invertPlan(plan));
+  function handleUndoToast() {
+    if (!toast || toast.kind === "error") return;
+    if (toast.kind === "moved-to-tray") {
+      const { taskId, plan, previousPosition } = toast;
+      if (plan.updates.length > 0) void applyEdgeStrip(routerClient, invertPlan(plan));
+      if (previousPosition) {
+        setPositions((prev) => ({ ...prev, [taskId]: previousPosition }));
+      }
+    } else if (toast.kind === "dependency-removed") {
+      void applyEdgeStrip(routerClient, invertPlan(toast.plan));
     }
-    if (previousPosition) {
-      setPositions((prev) => ({ ...prev, [taskId]: previousPosition }));
+    setToast(null);
+  }
+
+  async function handleConnect(source: string, target: string) {
+    const plan = planEdgeCreation(source, target, tasksById);
+    if (!plan) return; // self-loop or duplicate — silent no-op, not an error
+    try {
+      await applyEdgeStrip(routerClient, plan);
+    } catch (e) {
+      setToast({
+        kind: "error",
+        title: "Couldn't create dependency",
+        message: e instanceof Error ? e.message : "Unknown error",
+      });
+    }
+  }
+
+  async function handleDeleteEdges(pairs: { from: string; to: string }[]) {
+    const plan = planEdgesRemoval(pairs, tasksById);
+    if (plan.updates.length === 0) return;
+    try {
+      await applyEdgeStrip(routerClient, plan);
+      setToast({ kind: "dependency-removed", plan });
+    } catch (e) {
+      setToast({
+        kind: "error",
+        title: "Couldn't remove dependency",
+        message: e instanceof Error ? e.message : "Unknown error",
+      });
     }
   }
 
@@ -161,21 +204,36 @@ export function TaskGraphView({
     setAutoLayoutSignal((n) => n + 1);
   }
 
+  const toastTitle =
+    toast?.kind === "moved-to-tray"
+      ? "Moved to the unsequenced tray"
+      : toast?.kind === "dependency-removed"
+        ? "Dependency removed"
+        : (toast?.title ?? "");
+
   return (
     <div className={styles.wrapper}>
       <UnsequencedTray tasks={trayTasks} tasksById={tasksById} containerRef={trayRef} />
       <div className={styles.canvas}>
+        {cycles.length > 0 && (
+          <div className={styles.cycleBanner} role="status">
+            cycle — the pipeline will refuse to launch these
+          </div>
+        )}
         <GraphCanvas
           canvasNodes={result.canvasNodes}
           edges={result.edges}
           tasksById={tasksById}
           unsequencedIds={unsequencedIds}
+          cycleNodeIds={cycleNodeIds}
           onSelectTask={onSelectTask}
           onNodeDragStop={handleNodeDragStop}
           onDropOnCanvas={handleDropOnCanvas}
           onAutoLayout={handleAutoLayout}
           extent={result.extent}
           autoLayoutSignal={autoLayoutSignal}
+          onConnect={handleConnect}
+          onDeleteEdges={handleDeleteEdges}
         />
       </div>
       <ConfirmDialog
@@ -186,12 +244,14 @@ export function TaskGraphView({
         onConfirm={handleConfirmDragOut}
         onCancel={handleCancelDragOut}
       />
-      {undoState && (
+      {toast && (
         <div className={styles.toast}>
           <Toast
-            title="Moved to the unsequenced tray"
-            action={{ label: "Undo", onClick: handleUndoDragOut }}
-            onDismiss={() => setUndoState(null)}
+            tone={toast.kind === "error" ? "bad" : "neutral"}
+            title={toastTitle}
+            description={toast.kind === "error" ? toast.message : undefined}
+            action={toast.kind === "error" ? undefined : { label: "Undo", onClick: handleUndoToast }}
+            onDismiss={() => setToast(null)}
           />
         </div>
       )}

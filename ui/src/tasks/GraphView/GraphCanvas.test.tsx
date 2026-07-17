@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { GraphCanvas } from "./GraphCanvas";
 import { computeGraphLayout } from "./layout";
 import { installXyflowMeasurements } from "./xyflowTestEnv";
@@ -105,5 +105,82 @@ describe("GraphCanvas", () => {
     const classNames = handles.map((h) => h.className);
     expect(classNames.some((c) => c.includes("handleIn"))).toBe(true);
     expect(classNames.some((c) => c.includes("handleOut"))).toBe(true);
+  });
+});
+
+describe("GraphCanvas — highlight mode", () => {
+  // Diamond: hi_a -> hi_b, hi_a -> hi_c, hi_b -> hi_d, hi_c -> hi_d.
+  // Disjoint second component: hi_e -> hi_f, shares no ids with the diamond.
+  const hi_a = task({ id: "hi_a", title: "a", created_at: "2026-02-01T00:00:00Z" });
+  const hi_b = task({ id: "hi_b", title: "b", dependencies: ["hi_a"], created_at: "2026-02-01T00:01:00Z" });
+  const hi_c = task({ id: "hi_c", title: "c", dependencies: ["hi_a"], created_at: "2026-02-01T00:02:00Z" });
+  const hi_d = task({
+    id: "hi_d",
+    title: "d",
+    dependencies: ["hi_b", "hi_c"],
+    created_at: "2026-02-01T00:03:00Z",
+  });
+  const hi_e = task({ id: "hi_e", title: "e", created_at: "2026-02-01T00:04:00Z" });
+  const hi_f = task({ id: "hi_f", title: "f", dependencies: ["hi_e"], created_at: "2026-02-01T00:05:00Z" });
+  const highlightTasks = [hi_a, hi_b, hi_c, hi_d, hi_e, hi_f];
+  const highlightTasksById = Object.fromEntries(highlightTasks.map((t) => [t.id, t]));
+
+  function isDimmed(container: HTMLElement, taskId: string): boolean {
+    const node = container.querySelector(`.react-flow__node[data-id="${taskId}"]`);
+    return Array.from(node?.querySelectorAll('[class*="dimmed"]') ?? []).length > 0;
+  }
+
+  function renderHighlightCanvas() {
+    const result = computeGraphLayout(highlightTasks, [], {}, new Map());
+    return render(
+      <GraphCanvas
+        canvasNodes={result.canvasNodes}
+        edges={result.edges}
+        tasksById={highlightTasksById}
+        unsequencedIds={new Set()}
+      />,
+    );
+  }
+
+  it("selecting a middle diamond node dims its sibling branch but not its ancestors/descendants", () => {
+    const { container } = renderHighlightCanvas();
+    fireEvent.click(container.querySelector('.react-flow__node[data-id="hi_b"]')!);
+
+    expect(isDimmed(container, "hi_a")).toBe(false);
+    expect(isDimmed(container, "hi_b")).toBe(false);
+    expect(isDimmed(container, "hi_d")).toBe(false);
+    expect(isDimmed(container, "hi_c")).toBe(true);
+  });
+
+  it("never dims a disjoint component's own nodes when it is the one selected, and dims everything else", () => {
+    const { container } = renderHighlightCanvas();
+    fireEvent.click(container.querySelector('.react-flow__node[data-id="hi_e"]')!);
+
+    expect(isDimmed(container, "hi_e")).toBe(false);
+    expect(isDimmed(container, "hi_f")).toBe(false);
+    expect(isDimmed(container, "hi_a")).toBe(true);
+    expect(isDimmed(container, "hi_b")).toBe(true);
+    expect(isDimmed(container, "hi_c")).toBe(true);
+    expect(isDimmed(container, "hi_d")).toBe(true);
+  });
+
+  it("clears dimming on Escape", () => {
+    const { container } = renderHighlightCanvas();
+    fireEvent.click(container.querySelector('.react-flow__node[data-id="hi_b"]')!);
+    expect(isDimmed(container, "hi_c")).toBe(true);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(isDimmed(container, "hi_c")).toBe(false);
+  });
+
+  it("clears dimming on a background (pane) click", () => {
+    const { container } = renderHighlightCanvas();
+    fireEvent.click(container.querySelector('.react-flow__node[data-id="hi_b"]')!);
+    expect(isDimmed(container, "hi_c")).toBe(true);
+
+    fireEvent.click(container.querySelector(".react-flow__pane")!);
+
+    expect(isDimmed(container, "hi_c")).toBe(false);
   });
 });

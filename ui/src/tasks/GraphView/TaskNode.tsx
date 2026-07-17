@@ -10,6 +10,10 @@ export type TaskNodeData = {
   tasksById: Record<string, Task>;
   /** Computed once in TaskGraphView from edge degree — don't recompute here. */
   unsequenced: boolean;
+  /** Computed once in TaskGraphView from GET /tasks/cycles — don't recompute here. */
+  inCycle: boolean;
+  /** True when a highlight-mode selection is active and this node isn't in the selected node's ancestor/descendant set. */
+  dimmed: boolean;
 };
 
 export type TaskNodeType = Node<TaskNodeData, "taskNode">;
@@ -24,12 +28,15 @@ const TONE_VAR: Record<string, string> = {
 };
 
 export function TaskNode({ data }: NodeProps<TaskNodeType>) {
-  const { task, tasksById, unsequenced } = data;
+  const { task, tasksById, unsequenced, inCycle, dimmed } = data;
   const presentation = statusPresentation(task, tasksById);
   const borderColor = TONE_VAR[presentation.chipTone] ?? TONE_VAR.neutral;
+  const cardClassName = [styles.card, inCycle && styles.inCycle, dimmed && styles.dimmed]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <Card className={styles.card} style={{ borderColor }}>
+    <Card className={cardClassName} style={{ borderColor }}>
       <Handle type="target" position={Position.Top} className={styles.handleIn} />
       {unsequenced && (
         <span className={styles.unsequenced} title="No dependencies or dependents">

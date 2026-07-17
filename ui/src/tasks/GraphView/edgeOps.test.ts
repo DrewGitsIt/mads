@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEdgeStrip, invertPlan, planEdgeStrip } from "./edgeOps";
+import { applyEdgeStrip, invertPlan, planEdgeCreation, planEdgesRemoval, planEdgeStrip } from "./edgeOps";
 import { FakeRouterClient } from "../../router/fixtures";
 import type { Task } from "../../router/types";
 
@@ -66,5 +66,53 @@ describe("applyEdgeStrip", () => {
     const updatedC = await client.getTask("tsk_c");
     expect(updatedB.dependencies).toEqual([]);
     expect(updatedC.dependencies).toEqual([]);
+  });
+});
+
+describe("planEdgeCreation", () => {
+  it("appends the source id to the target's dependencies", () => {
+    const plan = planEdgeCreation("tsk_a", "tsk_c", tasksById([tsk_a, tsk_c]));
+    expect(plan).toEqual({ updates: [{ task: tsk_c, nextDependencies: ["tsk_b", "tsk_a"] }] });
+  });
+
+  it("returns null for a self-loop", () => {
+    expect(planEdgeCreation("tsk_a", "tsk_a", tasksById([tsk_a]))).toBeNull();
+  });
+
+  it("returns null when the dependency already exists", () => {
+    expect(planEdgeCreation("tsk_a", "tsk_b", tasksById([tsk_a, tsk_b]))).toBeNull();
+  });
+
+  it("returns null when the target id isn't a known task", () => {
+    expect(planEdgeCreation("tsk_a", "tsk_ghost", tasksById([tsk_a]))).toBeNull();
+  });
+});
+
+describe("planEdgesRemoval", () => {
+  it("prunes a single pair", () => {
+    const plan = planEdgesRemoval([{ from: "tsk_a", to: "tsk_b" }], tasksById([tsk_a, tsk_b]));
+    expect(plan.updates).toEqual([{ task: tsk_b, nextDependencies: [] }]);
+  });
+
+  it("prunes multiple pairs in one plan", () => {
+    const plan = planEdgesRemoval(
+      [
+        { from: "tsk_a", to: "tsk_b" },
+        { from: "tsk_b", to: "tsk_c" },
+      ],
+      tasksById([tsk_a, tsk_b, tsk_c]),
+    );
+    expect(plan.updates).toEqual(
+      expect.arrayContaining([
+        { task: tsk_b, nextDependencies: [] },
+        { task: tsk_c, nextDependencies: [] },
+      ]),
+    );
+    expect(plan.updates).toHaveLength(2);
+  });
+
+  it("skips a pair whose target id is dangling", () => {
+    const plan = planEdgesRemoval([{ from: "tsk_a", to: "tsk_ghost" }], tasksById([tsk_a]));
+    expect(plan.updates).toEqual([]);
   });
 });

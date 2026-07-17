@@ -28,3 +28,29 @@
 .edgeCycle :global(.react-flow__edge-path) {
   stroke: var(--bad);
 }
+
+.dimmed {
+  opacity: 0.35;
+}
+
+.edgeDeleteButton {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg1);
+  color: var(--text2);
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: all;
+}
+
+.edgeDeleteButton:hover {
+  border-color: var(--bad);
+  color: var(--bad-fg);
+}
