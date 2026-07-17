@@ -13,6 +13,8 @@ import {
 const changedFilePath = "src/example.ts";
 
 test.describe("session workspace: tasks/files/pipeline tabs", () => {
+  test.describe.configure({ mode: "serial" });
+
   let sessionId: string;
   let sessionName: string;
 
