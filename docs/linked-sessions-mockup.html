@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Linked Sessions mockup</title>
+<style>
+/* Tokens: clay (shipped default), from docs/palette-mockups.html. Layout/flow mock only. */
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.16); --ok-fg:#2e5a3c;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.15); --warn-fg:#7a5a1a;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.15); --bad-fg:#8a3a2a;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.15); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg0); color:var(--text); font:15px/1.55 system-ui,-apple-system,sans-serif; padding:28px 20px 80px; }
+.frame { max-width:1180px; margin:0 auto; }
+h1 { font-size:22px; margin:0; }
+h2 { font-size:13px; text-transform:uppercase; letter-spacing:.09em; color:var(--text3); margin:34px 0 10px; }
+.note { color:var(--text2); max-width:70ch; margin:4px 0 14px; }
+.note code { background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; font-size:.88em; }
+.toolbar { position:fixed; top:16px; right:16px; }
+.toolbar button { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; }
+.row { display:grid; grid-template-columns:340px 1fr; gap:18px; align-items:start; }
+.panel { background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px; box-shadow:var(--shadow); overflow:hidden; }
+
+/* rail */
+.rail { padding:12px 10px; font-size:13.5px; }
+.rail .h { display:flex; justify-content:space-between; align-items:center; font-size:11px; letter-spacing:.09em; color:var(--text3); text-transform:uppercase; padding:2px 8px 8px; }
+.srow { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; color:var(--text2); cursor:pointer; position:relative; }
+.srow:hover { background:var(--bg2); }
+.srow.checked { background:var(--accent-soft); color:var(--text); }
+.srow.leader { color:var(--text); font-weight:600; }
+.srow.follower { margin-left:18px; }
+.srow.follower::before { content:""; position:absolute; left:-8px; top:-6px; bottom:50%; width:10px; border-left:1px solid var(--line); border-bottom:1px solid var(--line); border-bottom-left-radius:6px; }
+.dot { width:7px; height:7px; border-radius:50%; background:var(--text3); flex:none; }
+.dot.on { background:var(--ok); }
+.cb { width:14px; height:14px; border:1.5px solid var(--line); border-radius:4px; flex:none; display:inline-flex; align-items:center; justify-content:center; font-size:10px; }
+.checked .cb { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+.linkbadge { margin-left:auto; font-size:10.5px; border-radius:5px; padding:1px 7px; background:var(--info-soft); color:var(--info-fg); letter-spacing:.04em; }
+.linkbadge.lead { background:var(--accent-soft); color:var(--accent); }
+.linkbar { display:flex; gap:8px; margin:10px 8px 2px; }
+.btn { border-radius:9px; padding:7px 14px; font-size:13px; cursor:pointer; border:1px solid transparent; }
+.btn.primary { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+.btn.primary:hover { background:var(--accent-hover); }
+.btn.ghost { background:transparent; color:var(--text2); border-color:var(--line); }
+
+/* preset chooser */
+.chooser { padding:18px 20px; }
+.chooser .title { font-weight:650; margin-bottom:2px; }
+.chooser .sub { color:var(--text2); font-size:13px; margin-bottom:14px; }
+.dir { display:flex; align-items:center; gap:10px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:10px; padding:10px 14px; font-size:13.5px; margin-bottom:14px; }
+.dir .swap { margin-left:auto; background:none; border:1px solid var(--line); color:var(--text2); border-radius:7px; padding:4px 10px; cursor:pointer; font-size:12px; }
+.dir b { color:var(--text); }
+.presets { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.preset { border:1px solid var(--line-soft); border-radius:11px; background:var(--bg2); padding:12px 14px; cursor:pointer; transition:border-color .12s ease, background .12s ease; }
+.preset:hover { background:var(--bg3); }
+.preset[aria-selected="true"] { border-color:var(--accent); background:var(--accent-soft); }
+.preset .pt { font-weight:650; font-size:14px; margin-bottom:3px; }
+.preset .pd { color:var(--text2); font-size:12.5px; min-height:52px; }
+.grants { display:flex; gap:5px; margin-top:9px; flex-wrap:wrap; }
+.grant { font-size:10.5px; font-family:ui-monospace,monospace; border-radius:5px; padding:1px 7px; background:var(--bg3); color:var(--text2); border:1px solid var(--line-soft); }
+.preset[aria-selected="true"] .grant { background:var(--bg1); }
+.chooser .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:16px; }
+.constraint { margin-top:12px; font-size:12px; color:var(--text3); }
+
+/* conversation snippets */
+.convo { padding:16px 18px; display:flex; flex-direction:column; gap:10px; }
+.msg { max-width:64ch; border-radius:12px; padding:9px 14px; font-size:13.5px; }
+.msg.user { align-self:flex-end; background:var(--accent-soft); }
+.msg.agent { align-self:flex-start; background:var(--bg2); border:1px solid var(--line-soft); }
+.msg .who { font-size:11px; color:var(--text3); margin-bottom:2px; }
+.msg.injected { align-self:flex-start; background:var(--info-soft); border:1px solid var(--line-soft); }
+.srcchip { display:inline-flex; align-items:center; gap:5px; font-size:11px; background:var(--bg1); border:1px solid var(--line-soft); color:var(--info-fg); border-radius:999px; padding:1px 9px; margin-bottom:4px; }
+.digest { align-self:stretch; border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:10px; background:var(--bg2); padding:10px 14px; font-size:13px; }
+.digest .dh { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--text3); margin-bottom:4px; }
+.digest .dh b { color:var(--info-fg); font-weight:600; }
+.digest ul { margin:4px 0 0; padding-left:18px; color:var(--text2); }
+.digest li { margin:2px 0; }
+.catchup { align-self:center; font-size:12px; color:var(--text3); }
+.queuednote { align-self:flex-start; font-size:11.5px; color:var(--text3); font-style:italic; }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">theme</button></div>
+<div class="frame">
+  <h1>Linked Sessions</h1>
+  <p class="note">L4 mockup for <code>docs/LINKED-SESSIONS-DESIGN.md</code>. Flag-gated (<code>linked-sessions</code>).
+  Presets in the chooser are clickable.</p>
+
+  <h2>1 · Creating a link — multi-select in the rail, then choose a preset</h2>
+  <div class="row">
+    <div class="panel rail">
+      <div class="h"><span>Active · 3</span><span>2 selected</span></div>
+      <div class="srow checked"><span class="cb">✓</span><span class="dot on"></span>investigator</div>
+      <div class="srow checked"><span class="cb">✓</span><span class="dot on"></span>payments refactor</div>
+      <div class="srow"><span class="cb"></span><span class="dot on"></span>Maintenance</div>
+      <div class="linkbar">
+        <button class="btn primary">Link 2 sessions…</button>
+        <button class="btn ghost">Clear</button>
+      </div>
+    </div>
+    <div class="panel chooser">
+      <div class="title">Link sessions</div>
+      <div class="sub">Choose what <b>investigator</b> may do with <b>payments refactor</b>.</div>
+      <div class="dir"><b>investigator</b> ⟶ <b>payments refactor</b><button class="swap">⇄ swap direction</button></div>
+      <div class="presets" id="presets">
+        <div class="preset" aria-selected="false">
+          <div class="pt">Monitor</div>
+          <div class="pd">Follows along: receives a digest after each of the other agent's turns. Never speaks into it.</div>
+          <div class="grants"><span class="grant">read</span></div>
+        </div>
+        <div class="preset" aria-selected="false">
+          <div class="pt">Hand-raiser</div>
+          <div class="pd">Follows along and may raise a point into the other conversation — attributed, queued after the current turn.</div>
+          <div class="grants"><span class="grant">read</span><span class="grant">inject</span></div>
+        </div>
+        <div class="preset" aria-selected="true">
+          <div class="pt">Leader</div>
+          <div class="pd">Gets a tool to message and direct the other agent. Its reach is capped by that session's own trust level.</div>
+          <div class="grants"><span class="grant">read</span><span class="grant">inject</span><span class="grant">orchestrate</span></div>
+        </div>
+      </div>
+      <div class="constraint">Links never cross different worktrees of the same repo. Pipeline runs can be monitored, not led.</div>
+      <div class="actions"><button class="btn ghost">Cancel</button><button class="btn primary">Create link</button></div>
+    </div>
+  </div>
+
+  <h2>2 · The rail shows the relationship</h2>
+  <div class="row">
+    <div class="panel rail">
+      <div class="h"><span>Active · 3</span></div>
+      <div class="srow leader"><span class="dot on"></span>investigator<span class="linkbadge lead">LEADER</span></div>
+      <div class="srow follower"><span class="dot on"></span>payments refactor<span class="linkbadge">LINKED</span></div>
+      <div class="srow"><span class="dot on"></span>Maintenance</div>
+    </div>
+    <div class="panel convo">
+      <div class="msg user"><div class="who">you · in payments refactor</div>The gateway tests are failing again after that retry change.</div>
+      <div class="msg injected"><span class="srcchip">⇄ from Leader · investigator</span>Before you rerun: can you paste the last failing test's output? I'm seeing a pattern in the breaker thresholds across your recent commits.</div>
+      <div class="queuednote">queued · delivered after the agent's current turn finished</div>
+      <div class="msg agent"><div class="who">agent · payments refactor</div>Sure — sending the failure output. (Responding within this session's <b>Limited</b> trust: I'll share output but won't rerun the suite until you confirm.)</div>
+    </div>
+  </div>
+
+  <h2>3 · The monitor's view — per-turn digests, not a stream</h2>
+  <div class="row">
+    <div class="panel rail">
+      <div class="h"><span>Active · 2</span></div>
+      <div class="srow leader"><span class="dot on"></span>architecture tutor<span class="linkbadge">MONITOR</span></div>
+      <div class="srow follower"><span class="dot on"></span>payments refactor<span class="linkbadge">WATCHED</span></div>
+    </div>
+    <div class="panel convo">
+      <div class="digest">
+        <div class="dh">⌗ digest · <b>payments refactor</b> · turn 14 · compressed 6.1k → 410 tokens</div>
+        Agent replaced the immediate-retry loop with jittered exponential backoff (cap 30s) and added a
+        circuit breaker (opens after 5 failures).
+        <ul><li>edited payments/retry.go, breaker.go · tests extended</li><li>go test ./payments/... green</li></ul>
+      </div>
+      <div class="msg user"><div class="who">you · in architecture tutor</div>Why the jitter? What breaks with plain exponential backoff?</div>
+      <div class="msg agent"><div class="who">tutor agent</div>Without jitter, every client that failed together retries together — synchronized waves that re-overwhelm the gateway the moment it recovers ("thundering herd"). The ±20% spread in that diff staggers them…</div>
+      <div class="digest">
+        <div class="dh">⌗ digest · <b>payments refactor</b> · turn 15</div>
+        Breaker threshold made configurable; agent queued two follow-up tasks (metrics, timeout budget).
+      </div>
+      <div class="catchup">cadence: per turn · <u>switch to catch-me-up only</u></div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:20px">
+  Notes: digests and injected messages are queued behind turns, never interleaved (design decision 1).
+  Attribution chips are non-impersonating (decision 2). The follower's reply in panel 2 shows trust capping
+  (decision 3) once enforcement lands. The implicit hand-raiser over a session's own pipeline run reuses
+  panel 3's digest rendering with run/task events as the source (decision 6).
+  </p>
+</div>
+<script>
+document.getElementById("presets").addEventListener("click", (e) => {
+  const p = e.target.closest(".preset"); if (!p) return;
+  document.querySelectorAll(".preset").forEach(x => x.setAttribute("aria-selected", String(x === p)));
+});
+</script>
+</body>
+</html>
