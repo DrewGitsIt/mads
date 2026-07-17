@@ -39,3 +39,42 @@ export async function applyEdgeStrip(routerClient: RouterClient, plan: EdgeStrip
 export function invertPlan(plan: EdgeStripPlan): EdgeStripPlan {
   return { updates: plan.updates.map(({ task }) => ({ task, nextDependencies: task.dependencies ?? [] })) };
 }
+
+/**
+ * Connect: bottom (source) handle of `from` dragged to top (target) handle
+ * of `to` means "to depends on from" (dagre TB ranks `from` above `to`,
+ * `buildEdges` already encodes edges as {from: depId, to: dependentId}).
+ * Returns null for a no-op: self-loop, or the dependency already exists
+ * (task_deps has PRIMARY KEY (task_id, depends_on) — a duplicate INSERT in
+ * the same PUT payload would 500, so this guard is load-bearing, not
+ * cosmetic).
+ */
+export function planEdgeCreation(
+  from: string,
+  to: string,
+  tasksById: Record<string, Task>,
+): EdgeStripPlan | null {
+  const target = tasksById[to];
+  if (!target || from === to) return null;
+  const deps = target.dependencies ?? [];
+  if (deps.includes(from)) return null;
+  return { updates: [{ task: target, nextDependencies: [...deps, from] }] };
+}
+
+/**
+ * Remove: one entry per deleted edge (Backspace can multi-select and delete
+ * more than one edge at once — the single-edge X-button click is just a
+ * one-element call of the same fn).
+ */
+export function planEdgesRemoval(
+  pairs: { from: string; to: string }[],
+  tasksById: Record<string, Task>,
+): EdgeStripPlan {
+  const updates: EdgeStripPlan["updates"] = [];
+  for (const { from, to } of pairs) {
+    const target = tasksById[to];
+    if (!target) continue;
+    updates.push({ task: target, nextDependencies: (target.dependencies ?? []).filter((d) => d !== from) });
+  }
+  return { updates };
+}

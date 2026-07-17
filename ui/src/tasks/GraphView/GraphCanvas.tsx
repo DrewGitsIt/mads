@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   MiniMap,
   Panel as FlowPanel,
   ReactFlow,
   ReactFlowProvider,
   applyNodeChanges,
+  getBezierPath,
   useReactFlow,
   type Edge,
+  type EdgeProps,
   type NodeMouseHandler,
+  type OnConnect,
+  type OnEdgesDelete,
   type OnNodeDrag,
   type OnNodesChange,
   type OnSelectionChangeFunc,
@@ -17,6 +23,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { Button } from "../../components/Button/Button";
 import type { Task } from "../../router/types";
+import { computeHighlightSet } from "./highlight";
 import type { GraphEdgeLayout, GraphNodeLayout } from "./layout";
 import { TASK_ID_DRAG_TYPE } from "./tray";
 import { TaskNode, type TaskNodeType } from "./TaskNode";
@@ -24,7 +31,13 @@ import styles from "./GraphCanvas.module.css";
 
 const NODE_TYPES = { taskNode: TaskNode };
 
-export type TaskEdgeType = Edge<{ inCycle: boolean }>;
+// Stable identity for the "no cycles" default — a `= new Set()` parameter
+// default would otherwise construct a fresh Set every render, which sits in
+// a useEffect dependency array below and would re-fire (and re-render) forever.
+const EMPTY_CYCLE_IDS: Set<string> = new Set();
+
+export type TaskEdgeData = { inCycle: boolean; onDelete?: () => void };
+export type TaskEdgeType = Edge<TaskEdgeData, "depEdge">;
 
 export interface GraphCanvasProps {
   canvasNodes: GraphNodeLayout[];
@@ -32,6 +45,8 @@ export interface GraphCanvasProps {
   tasksById: Record<string, Task>;
   /** Degree-0 canvas node ids — computed once by the caller from edge degree (§8), not recomputed here. */
   unsequencedIds: Set<string>;
+  /** Ids of every node participating in a cycle (union of GET /tasks/cycles' result) — computed once by the caller, not recomputed here. */
+  cycleNodeIds?: Set<string>;
   onSelectTask?: (task: Task) => void;
   /** Fires after a canvas-internal drag settles, both the raw client point (for tray hit-testing) and the resolved flow position. */
   onNodeDragStop?: (
@@ -46,18 +61,34 @@ export interface GraphCanvasProps {
   extent?: { minX: number; minY: number; maxX: number; maxY: number };
   /** Bumped by the caller each time auto-layout runs; a change (not the value itself) triggers the re-fit. */
   autoLayoutSignal?: number;
+  /** Fires when a drag from a node's bottom (source) handle completes on another node's top (target) handle. */
+  onConnect?: (source: string, target: string) => void;
+  /** Fires on Backspace/Delete with one or more edges selected, and from the per-edge X affordance. */
+  onDeleteEdges?: (pairs: { from: string; to: string }[]) => void;
 }
 
 function toXYNodes(
   canvasNodes: GraphNodeLayout[],
   tasksById: Record<string, Task>,
   unsequencedIds: Set<string>,
+  cycleNodeIds: Set<string>,
+  highlightSet: Set<string> | null,
 ): TaskNodeType[] {
   return canvasNodes.map((n) => ({
     id: n.id,
     type: "taskNode",
     position: { x: n.x - n.width / 2, y: n.y - n.height / 2 },
-    data: { task: n.task, tasksById, unsequenced: unsequencedIds.has(n.id) },
+    // Selecting a node for highlight also selects it in xyflow's own
+    // built-in sense; without this, Backspace with a node selected would
+    // ALSO delete the node via onNodesDelete, not just the intended edges.
+    deletable: false,
+    data: {
+      task: n.task,
+      tasksById,
+      unsequenced: unsequencedIds.has(n.id),
+      inCycle: cycleNodeIds.has(n.id),
+      dimmed: highlightSet !== null && !highlightSet.has(n.id),
+    },
   }));
 }
 
@@ -77,18 +108,48 @@ function toXYEdges(
   edges: GraphEdgeLayout[],
   tasksById: Record<string, Task>,
   selectedEdgeIds: Set<string>,
+  highlightSet: Set<string> | null,
+  onDeleteEdge?: (from: string, to: string) => void,
 ): TaskEdgeType[] {
-  return edges.map((e) => ({
-    id: e.id,
-    source: e.from,
-    target: e.to,
-    markerEnd: markerFor(e, selectedEdgeIds),
-    animated: tasksById[e.from]?.status === "in_progress",
-    // Token-driven line color (markers alone aren't enough — see GraphCanvas.module.css).
-    className: e.inCycle ? styles.edgeCycle : undefined,
-    data: { inCycle: e.inCycle },
-  }));
+  return edges.map((e) => {
+    const dimmed = highlightSet !== null && !(highlightSet.has(e.from) && highlightSet.has(e.to));
+    return {
+      id: e.id,
+      source: e.from,
+      target: e.to,
+      type: "depEdge",
+      markerEnd: markerFor(e, selectedEdgeIds),
+      animated: tasksById[e.from]?.status === "in_progress",
+      // Token-driven line color (markers alone aren't enough — see GraphCanvas.module.css).
+      className: [e.inCycle ? styles.edgeCycle : "", dimmed ? styles.dimmed : ""].filter(Boolean).join(" ") || undefined,
+      data: { inCycle: e.inCycle, onDelete: onDeleteEdge ? () => onDeleteEdge(e.from, e.to) : undefined },
+    };
+  });
 }
+
+/** Custom edge type: renders the base bezier path plus an X-button affordance when selected (§5). */
+function DepEdge({ id, sourceX, sourceY, targetX, targetY, markerEnd, style, selected, data }: EdgeProps<TaskEdgeType>) {
+  const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY });
+  return (
+    <>
+      <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+      {selected && (
+        <EdgeLabelRenderer>
+          <button
+            type="button"
+            className={styles.edgeDeleteButton}
+            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+            onClick={data?.onDelete}
+            aria-label="Remove dependency"
+          >
+            ✕
+          </button>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+const EDGE_TYPES = { depEdge: DepEdge };
 
 /**
  * Nested inside `<ReactFlowProvider>` so `useReactFlow` (needed for
@@ -99,18 +160,32 @@ function GraphCanvasInner({
   edges,
   tasksById,
   unsequencedIds,
+  cycleNodeIds = EMPTY_CYCLE_IDS,
   onSelectTask,
   onNodeDragStop,
   onDropOnCanvas,
   onAutoLayout,
   extent,
   autoLayoutSignal,
+  onConnect,
+  onDeleteEdges,
 }: GraphCanvasProps) {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const highlightSet = selectedNodeId ? computeHighlightSet(selectedNodeId, edges) : null;
   const [nodes, setNodes] = useState<TaskNodeType[]>(() =>
-    toXYNodes(canvasNodes, tasksById, unsequencedIds),
+    toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet),
   );
   const { screenToFlowPosition, fitBounds } = useReactFlow();
+
+  useEffect(() => {
+    if (selectedNodeId === null) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setSelectedNodeId(null);
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [selectedNodeId]);
 
   // fitView's `fitView` boolean prop only fires on mount. Re-fit after
   // auto-layout by watching for a signal bump (not node/extent identity,
@@ -134,17 +209,24 @@ function GraphCanvasInner({
   // parent is the source of truth for node membership/position (§7); local
   // state below only exists to make in-progress drags feel responsive.
   useEffect(() => {
-    setNodes(toXYNodes(canvasNodes, tasksById, unsequencedIds));
-  }, [canvasNodes, tasksById, unsequencedIds]);
+    setNodes(toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet));
+    // highlightSet is intentionally omitted: it's derived from selectedNodeId
+    // + edges (already deps below) every render, re-listing it here would
+    // just be a redundant identity-changes-every-render trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canvasNodes, tasksById, unsequencedIds, cycleNodeIds, selectedNodeId, edges]);
 
-  const xyEdges = toXYEdges(edges, tasksById, selectedEdgeIds);
+  const xyEdges = toXYEdges(edges, tasksById, selectedEdgeIds, highlightSet, onDeleteEdges && ((from, to) => onDeleteEdges([{ from, to }])));
 
   const handleNodesChange: OnNodesChange<TaskNodeType> = useCallback((changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));
   }, []);
 
   const handleNodeClick: NodeMouseHandler<TaskNodeType> = useCallback(
-    (_event, node) => onSelectTask?.(node.data.task),
+    (_event, node) => {
+      onSelectTask?.(node.data.task);
+      setSelectedNodeId(node.id);
+    },
     [onSelectTask],
   );
 
@@ -174,17 +256,35 @@ function GraphCanvasInner({
     [onDropOnCanvas, screenToFlowPosition],
   );
 
+  const handleConnect: OnConnect = useCallback(
+    (connection) => {
+      if (connection.source && connection.target) onConnect?.(connection.source, connection.target);
+    },
+    [onConnect],
+  );
+
+  const handleEdgesDelete: OnEdgesDelete<TaskEdgeType> = useCallback(
+    (deleted) => {
+      onDeleteEdges?.(deleted.map((e) => ({ from: e.source, to: e.target })));
+    },
+    [onDeleteEdges],
+  );
+
   return (
     <ReactFlow
       nodes={nodes}
       edges={xyEdges}
       nodeTypes={NODE_TYPES}
+      edgeTypes={EDGE_TYPES}
       onNodesChange={handleNodesChange}
       onNodeDragStop={handleNodeDragStop}
       onDrop={handleDrop}
       onDragOver={(event) => event.preventDefault()}
       onNodeClick={handleNodeClick}
       onSelectionChange={handleSelectionChange}
+      onConnect={handleConnect}
+      onEdgesDelete={handleEdgesDelete}
+      onPaneClick={() => setSelectedNodeId(null)}
       fitView
     >
       <Background />

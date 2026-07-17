@@ -29,6 +29,14 @@
   color: var(--text3);
 }
 
+.inCycle {
+  box-shadow: 0 0 0 2px var(--warn-soft);
+}
+
+.dimmed {
+  opacity: 0.35;
+}
+
 .unsequenced {
   position: absolute;
   top: -1px;

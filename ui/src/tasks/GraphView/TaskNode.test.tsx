@@ -18,13 +18,16 @@ function task(overrides: Partial<Task>): Task {
   };
 }
 
-function renderNode(t: Task, unsequenced = false) {
+function renderNode(
+  t: Task,
+  { unsequenced = false, inCycle = false, dimmed = false } = {},
+) {
   const tasksById = { [t.id]: t };
   const node: TaskNodeType = {
     id: t.id,
     type: "taskNode",
     position: { x: 0, y: 0 },
-    data: { task: t, tasksById, unsequenced },
+    data: { task: t, tasksById, unsequenced, inCycle, dimmed },
   };
   return render(
     <ReactFlowProvider>
@@ -45,13 +48,33 @@ describe("TaskNode", () => {
   });
 
   it("omits the unsequenced marker when data.unsequenced is false", () => {
-    renderNode(task({}), false);
+    renderNode(task({}), { unsequenced: false });
     expect(screen.queryByText("unsequenced")).toBeNull();
   });
 
   it("shows the unsequenced marker when data.unsequenced is true", () => {
-    renderNode(task({}), true);
+    renderNode(task({}), { unsequenced: true });
     expect(screen.getByText("unsequenced")).toBeTruthy();
+  });
+
+  it("has no cycle-ring class when data.inCycle is false", () => {
+    const { container } = renderNode(task({}), { inCycle: false });
+    expect(container.querySelector('[class*="inCycle"]')).toBeNull();
+  });
+
+  it("gets a cycle-ring class when data.inCycle is true", () => {
+    const { container } = renderNode(task({}), { inCycle: true });
+    expect(container.querySelector('[class*="inCycle"]')).toBeTruthy();
+  });
+
+  it("has no dimmed class when data.dimmed is false", () => {
+    const { container } = renderNode(task({}), { dimmed: false });
+    expect(container.querySelector('[class*="dimmed"]')).toBeNull();
+  });
+
+  it("gets a dimmed class when data.dimmed is true", () => {
+    const { container } = renderNode(task({}), { dimmed: true });
+    expect(container.querySelector('[class*="dimmed"]')).toBeTruthy();
   });
 
   it("uses statusPresentation for the status chip, same as TaskRow", () => {
