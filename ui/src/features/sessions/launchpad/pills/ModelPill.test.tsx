@@ -31,4 +31,46 @@ describe("ModelPill", () => {
     );
     vi.unstubAllGlobals();
   });
+
+  it("shows the resolved display name on the closed pill when the model is known", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: URL) => {
+      const url = input.toString();
+      if (url.endsWith("/providers")) {
+        return Promise.resolve(new Response(JSON.stringify([{ name: "claude-code", matrix: {} }]), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true }] }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ModelPill provider="claude-code" model="claude-sonnet-5" onChange={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText(/Claude Sonnet 5/)).toBeTruthy());
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to the raw model ID on the closed pill when the model is unknown", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: URL) => {
+      const url = input.toString();
+      if (url.endsWith("/providers")) {
+        return Promise.resolve(new Response(JSON.stringify([{ name: "claude-code", matrix: {} }]), { status: 200 }));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true }] }),
+          { status: 200 },
+        ),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ModelPill provider="claude-code" model="claude-retired-1" onChange={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText(/claude-retired-1/)).toBeTruthy());
+    vi.unstubAllGlobals();
+  });
 });

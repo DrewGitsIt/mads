@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -171,6 +172,18 @@ func TestRateLimitSurfaces(t *testing.T) {
 func TestRegistersCleanly(t *testing.T) {
 	if err := provider.NewRegistry().Register(New(Config{})); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Guards against DefaultModels regressing to bare family names (e.g.
+// "Claude Sonnet" instead of "Claude Sonnet 5") — the UI shows this Name
+// verbatim and must never display an ambiguous, unversioned model identity.
+func TestDefaultModelsAreVersionQualified(t *testing.T) {
+	digit := regexp.MustCompile(`[0-9]`)
+	for _, m := range DefaultModels {
+		if !digit.MatchString(m.Name) {
+			t.Errorf("model %q name %q has no version number", m.ID, m.Name)
+		}
 	}
 }
 

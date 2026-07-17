@@ -44,9 +44,9 @@ type Config struct {
 // DefaultModels is the pinned model list — claude-code has no discovery
 // call, hence model_discovery: emulated in the matrix.
 var DefaultModels = []provider.Model{
-	{ID: "sonnet", Name: "Claude Sonnet", Default: true},
-	{ID: "opus", Name: "Claude Opus"},
-	{ID: "haiku", Name: "Claude Haiku"},
+	{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Default: true},
+	{ID: "claude-opus-4-8", Name: "Claude Opus 4.8"},
+	{ID: "claude-haiku-4-5-20251001", Name: "Claude Haiku 4.5"},
 }
 
 type Provider struct {
