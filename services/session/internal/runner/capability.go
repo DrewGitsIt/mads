@@ -7,6 +7,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // setupCapabilities resolves sess.Agent's declared capabilities (spec §12,
@@ -97,6 +98,57 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 	}
 	healthy, reason := capability.Health(ctx, c, r.MCPRegistry.Running(c.Name))
 	r.reportHealth(ctx, c.Name, healthy, reason)
+}
+
+// setupOrchestrate materializes the leader capability (docs/
+// LINKED-SESSIONS-DESIGN.md decisions 1-3): a synthetic, session-scoped MCP
+// server exposing list_links/get_summary/send_message, spawned only when
+// this session actually holds at least one orchestrate grant. Unlike
+// setupCapabilities' declared capabilities, this one is never stored via
+// r.data.Capability — it's system-generated per session, not user-registry
+// content, so it's built here and handed straight to EnsureStarted.
+// Re-checked once at Start; a grant acquired mid-session doesn't retroactively
+// spawn the tool (matching L3's own "next turn boundary" tolerance for the
+// analogous hand-raiser case).
+func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *provider.MCPServerRef {
+	if r.MCPRegistry == nil {
+		return nil
+	}
+	cfg, err := r.data.Config(ctx)
+	if err != nil {
+		log.Printf("runner: load config for orchestrate capability: %v", err)
+		return nil
+	}
+	if !cfg.FeatureFlags.LinkedSessions {
+		return nil
+	}
+	links, err := r.data.LinksForSession(ctx, r.sessionID)
+	if err != nil {
+		log.Printf("runner: load links for orchestrate capability: %v", err)
+		return nil
+	}
+	hasOrchestrateGrant := false
+	for _, l := range links {
+		if l.GrantingSessionID == r.sessionID && l.HasGrant(contracts.GrantOrchestrate) {
+			hasOrchestrateGrant = true
+			break
+		}
+	}
+	if !hasOrchestrateGrant {
+		return nil
+	}
+
+	c := contracts.Capability{
+		Name:   "orchestrate-" + r.sessionID,
+		Type:   contracts.CapabilityMCP,
+		Config: contracts.CapabilityConfig{Command: "mads internal orchestrate-mcp"},
+	}
+	env := []string{"MADS_ROUTER_URL=" + r.RouterURL, "MADS_SESSION_ID=" + r.sessionID}
+	if _, err := r.MCPRegistry.EnsureStarted(ctx, c, env); err != nil {
+		log.Printf("runner: start orchestrate capability: %v", err)
+		return nil
+	}
+	return &provider.MCPServerRef{Name: c.Name, Command: c.Config.Command, Env: env}
 }
 
 // resolveCredentialEnv resolves names from the local store first, then —

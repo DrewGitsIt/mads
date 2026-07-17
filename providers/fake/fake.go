@@ -52,6 +52,10 @@ type Fake struct {
 	// a live session — the guarantee SwitchTransport's hard-sequencing
 	// (old process fully dead before the new one starts) depends on.
 	liveRefs map[string]bool
+	// mcpServers records each Start call's opts.MCPServers by ref, mirroring
+	// how trust is observable via fakeSession — lets tests assert on
+	// materialization without a real subprocess round-trip.
+	mcpServers map[string][]provider.MCPServerRef
 }
 
 // New returns a fake running only the built-in dialect.
@@ -65,7 +69,7 @@ func NewWithScenario(sc Scenario) (*Fake, error) {
 	if err := sc.Validate(); err != nil {
 		return nil, err
 	}
-	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}, liveRefs: map[string]bool{}}, nil
+	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}, liveRefs: map[string]bool{}, mcpServers: map[string][]provider.MCPServerRef{}}, nil
 }
 
 func (f *Fake) Name() string { return "fake" }
@@ -114,6 +118,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 		return nil, fmt.Errorf("start: session ref %q already attached", ref)
 	}
 	f.liveRefs[ref] = true
+	f.mcpServers[ref] = opts.MCPServers
 	f.mu.Unlock()
 
 	trust := opts.Trust
@@ -178,6 +183,15 @@ func (f *Fake) Models(context.Context) ([]provider.Model, error) {
 		return append([]provider.Model{}, f.scenario.Models...), nil
 	}
 	return append([]provider.Model{}, DefaultModels...), nil
+}
+
+// MCPServers returns the MCPServers a Start call for ref was given —
+// nil if ref is unknown or Start was called with none. Test-only accessor,
+// mirroring how Trust is observed indirectly via tool-refusal behavior.
+func (f *Fake) MCPServers(ref string) []provider.MCPServerRef {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.mcpServers[ref]
 }
 
 func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, error) {

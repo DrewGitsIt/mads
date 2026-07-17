@@ -71,6 +71,21 @@ type StartOptions struct {
 	// design decision 3). Zero value "" behaves exactly like TrustFull in
 	// every provider — existing call sites that don't set it never regress.
 	Trust Trust
+	// MCPServers lists MCP servers the agent's own process should be able to
+	// call as tools (docs/LINKED-SESSIONS-DESIGN.md, the orchestrate
+	// capability). claudecode and kirocli do not yet consume this field —
+	// wiring it into their actual launch args is a fast-follow.
+	MCPServers []MCPServerRef
+}
+
+// MCPServerRef describes one MCP server the provider's launch could point an
+// agent at (e.g. by writing a .mcp.json or an equivalent --mcp-config
+// entry). Command is a shell-splittable launch string, matching
+// contracts.CapabilityConfig.Command's convention.
+type MCPServerRef struct {
+	Name    string
+	Command string
+	Env     []string
 }
 
 // OneShotRequest is a single non-interactive invocation — the Fast Model

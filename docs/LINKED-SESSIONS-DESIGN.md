@@ -108,7 +108,20 @@ Links are directed edges; nothing is 1:1 by design:
 4. **L2b Digest path**: turn-completion → fast-model digest → queued delivery
    to monitor sessions; cadence knob on the link.
 5. **L2c Leader capability**: agent tool (message subject / fetch summary /
-   list links), async replies as events.
+   list links), async replies as events. Shipped: Router endpoints
+   (`GET /sessions/{id}/orchestrate/subjects`, `GET .../orchestrate/summary`,
+   `POST /links/{id}/orchestrate/message` with an optional `wait_ms` bounded
+   wait, per decision 1's async-with-quick-question-ergonomics carve-out) plus
+   an MCP-over-stdio server (`pkg/orchestratemcp`, hand-rolled JSON-RPC 2.0
+   framing — no SDK dependency) exposing `list_links`/`get_summary`/
+   `send_message`, materialized only when a session holds an `orchestrate`
+   grant and the `linked-sessions` flag is on (`Runner.setupOrchestrate`),
+   via a new `StartOptions.MCPServers` descriptor on `provider.Provider`.
+   **Not shipped** (fast-follow): wiring `StartOptions.MCPServers` into any
+   real provider's actual launch args/config (`claudecode`/`kirocli` writing
+   `.mcp.json`/`--mcp-config`) — today only `providers/fake` records and
+   exposes what it received, so the capability is real and tested end-to-end
+   over the fake provider but not yet reachable by a live agent process.
 6. **L3 Implicit hand-raiser**: pipeline start/session-activation hooks
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +

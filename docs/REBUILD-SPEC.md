@@ -1224,6 +1224,7 @@ System agents are editable (user can customize their skills/prompts) but ship wi
 - Skills are just documents — no special runtime, no categorization, no execution engine. They're text that goes into the agent's context.
 - The current system has four capability types (CLI, MCP, skill, builtin). The rebuild simplifies to Skills + MCP only.
 - Shared/team registries are supported via the remote package server. Local registry is the user's own; remote is the community/team source.
+- One exception to "MCP servers are system-wide" (#5): the linked-sessions leader capability (`docs/LINKED-SESSIONS-DESIGN.md` decomposition item 5) is a synthetic, session-scoped MCP server — spawned per leader session that actually holds an `orchestrate` grant, never registered in the user-facing capability registry. It reuses the same `pkg/capability.Registry` process-lifecycle machinery, just with a runtime-built `contracts.Capability` instead of a stored one.
 
 ## 13. Credentials & Secrets
 

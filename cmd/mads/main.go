@@ -35,6 +35,8 @@ func main() {
 		err = cmdUninstall(os.Args[2:], os.Stdin, os.Stdout)
 	case "update":
 		err = cmdUpdate(os.Args[2:], os.Stdin, os.Stdout)
+	case "internal":
+		err = cmdInternal(os.Args[2:])
 	case "-v", "--version", "version":
 		fmt.Println("mads " + version)
 	case "-h", "--help", "help":
