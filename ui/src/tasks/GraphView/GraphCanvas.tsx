@@ -22,11 +22,13 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { Button } from "../../components/Button/Button";
+import type { TaskRunState } from "../../pipeline/state/usePipelineRun";
 import type { Task } from "../../router/types";
 import { computeHighlightSet } from "./highlight";
 import type { GraphEdgeLayout, GraphNodeLayout } from "./layout";
 import { TASK_ID_DRAG_TYPE } from "./tray";
 import { TaskNode, type TaskNodeType } from "./TaskNode";
+import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import styles from "./GraphCanvas.module.css";
 
 const NODE_TYPES = { taskNode: TaskNode };
@@ -47,6 +49,12 @@ export interface GraphCanvasProps {
   unsequencedIds: Set<string>;
   /** Ids of every node participating in a cycle (union of GET /tasks/cycles' result) — computed once by the caller, not recomputed here. */
   cycleNodeIds?: Set<string>;
+  /** Live run-fold state, keyed by task id — undefined when no run is being observed. */
+  taskRunState?: Record<string, TaskRunState>;
+  /** Ordered stage ids for the live run — undefined when no run is being observed. */
+  columns?: string[];
+  /** Ids dimmed by the status filter strip's hover-spotlight/click-isolate — combined additively with highlight-mode dimming. */
+  statusDimmedIds?: Set<string> | null;
   onSelectTask?: (task: Task) => void;
   /** Fires after a canvas-internal drag settles, both the raw client point (for tray hit-testing) and the resolved flow position. */
   onNodeDragStop?: (
@@ -73,6 +81,10 @@ function toXYNodes(
   unsequencedIds: Set<string>,
   cycleNodeIds: Set<string>,
   highlightSet: Set<string> | null,
+  taskRunState: Record<string, TaskRunState> | undefined,
+  columns: string[] | undefined,
+  statusDimmedIds: Set<string> | null | undefined,
+  reducedMotion: boolean,
 ): TaskNodeType[] {
   return canvasNodes.map((n) => ({
     id: n.id,
@@ -85,9 +97,12 @@ function toXYNodes(
     data: {
       task: n.task,
       tasksById,
+      taskRunState: taskRunState?.[n.id],
+      columns,
+      reducedMotion,
       unsequenced: unsequencedIds.has(n.id),
       inCycle: cycleNodeIds.has(n.id),
-      dimmed: highlightSet !== null && !highlightSet.has(n.id),
+      dimmed: (highlightSet !== null && !highlightSet.has(n.id)) || (statusDimmedIds?.has(n.id) ?? false),
     },
   }));
 }
@@ -109,19 +124,37 @@ function toXYEdges(
   tasksById: Record<string, Task>,
   selectedEdgeIds: Set<string>,
   highlightSet: Set<string> | null,
+  statusDimmedIds: Set<string> | null | undefined,
+  reducedMotion: boolean,
   onDeleteEdge?: (from: string, to: string) => void,
 ): TaskEdgeType[] {
   return edges.map((e) => {
-    const dimmed = highlightSet !== null && !(highlightSet.has(e.from) && highlightSet.has(e.to));
+    const dimmed =
+      (highlightSet !== null && !(highlightSet.has(e.from) && highlightSet.has(e.to))) ||
+      (statusDimmedIds?.has(e.from) ?? false) ||
+      (statusDimmedIds?.has(e.to) ?? false);
+    const fromStatus = tasksById[e.from]?.status;
+    const toStatus = tasksById[e.to]?.status;
+    const isLive = fromStatus === "in_progress";
     return {
       id: e.id,
       source: e.from,
       target: e.to,
       type: "depEdge",
       markerEnd: markerFor(e, selectedEdgeIds),
-      animated: tasksById[e.from]?.status === "in_progress",
+      animated: isLive && !reducedMotion,
       // Token-driven line color (markers alone aren't enough — see GraphCanvas.module.css).
-      className: [e.inCycle ? styles.edgeCycle : "", dimmed ? styles.dimmed : ""].filter(Boolean).join(" ") || undefined,
+      className:
+        [
+          fromStatus === "done" && styles.edgeDone,
+          isLive && !reducedMotion && styles.edgeLive,
+          isLive && reducedMotion && styles.edgeLiveStatic,
+          toStatus === "blocked" && styles.edgeIntoBlocked,
+          e.inCycle && styles.edgeCycle,
+          dimmed && styles.dimmed,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined,
       data: { inCycle: e.inCycle, onDelete: onDeleteEdge ? () => onDeleteEdge(e.from, e.to) : undefined },
     };
   });
@@ -161,6 +194,9 @@ function GraphCanvasInner({
   tasksById,
   unsequencedIds,
   cycleNodeIds = EMPTY_CYCLE_IDS,
+  taskRunState,
+  columns,
+  statusDimmedIds,
   onSelectTask,
   onNodeDragStop,
   onDropOnCanvas,
@@ -173,8 +209,9 @@ function GraphCanvasInner({
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const highlightSet = selectedNodeId ? computeHighlightSet(selectedNodeId, edges) : null;
+  const reducedMotion = usePrefersReducedMotion();
   const [nodes, setNodes] = useState<TaskNodeType[]>(() =>
-    toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet),
+    toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet, taskRunState, columns, statusDimmedIds, reducedMotion),
   );
   const { screenToFlowPosition, fitBounds } = useReactFlow();
 
@@ -209,14 +246,24 @@ function GraphCanvasInner({
   // parent is the source of truth for node membership/position (§7); local
   // state below only exists to make in-progress drags feel responsive.
   useEffect(() => {
-    setNodes(toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet));
+    setNodes(
+      toXYNodes(canvasNodes, tasksById, unsequencedIds, cycleNodeIds, highlightSet, taskRunState, columns, statusDimmedIds, reducedMotion),
+    );
     // highlightSet is intentionally omitted: it's derived from selectedNodeId
     // + edges (already deps below) every render, re-listing it here would
     // just be a redundant identity-changes-every-render trigger.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canvasNodes, tasksById, unsequencedIds, cycleNodeIds, selectedNodeId, edges]);
+  }, [canvasNodes, tasksById, unsequencedIds, cycleNodeIds, selectedNodeId, edges, taskRunState, columns, statusDimmedIds, reducedMotion]);
 
-  const xyEdges = toXYEdges(edges, tasksById, selectedEdgeIds, highlightSet, onDeleteEdges && ((from, to) => onDeleteEdges([{ from, to }])));
+  const xyEdges = toXYEdges(
+    edges,
+    tasksById,
+    selectedEdgeIds,
+    highlightSet,
+    statusDimmedIds,
+    reducedMotion,
+    onDeleteEdges && ((from, to) => onDeleteEdges([{ from, to }])),
+  );
 
   const handleNodesChange: OnNodesChange<TaskNodeType> = useCallback((changes) => {
     setNodes((nds) => applyNodeChanges(changes, nds));

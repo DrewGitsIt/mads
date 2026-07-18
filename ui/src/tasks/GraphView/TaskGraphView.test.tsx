@@ -5,6 +5,7 @@ import { useTaskStore } from "../useTaskStore";
 import { FakeRouterClient } from "../../router/fixtures";
 import { fixtureTasks } from "../../router/fixtures";
 import { installXyflowMeasurements } from "./xyflowTestEnv";
+import { graphStatusOf } from "./graphStatus";
 import type { RouterClient } from "../../router/client";
 import type { Task } from "../../router/types";
 
@@ -187,7 +188,7 @@ describe("TaskGraphView", () => {
     const { container } = render(
       <TaskGraphView sessionId="session-long" routerClient={client} tasks={[a, b]} tasksById={byId} />,
     );
-    const title = container.querySelector('.react-flow__node[data-id="tsk_long_a"] [title]');
+    const title = container.querySelector('.react-flow__node[data-id="tsk_long_a"] [title][class*="title"]');
     expect(title?.getAttribute("title")).toBe(longTitle);
     expect(title?.className).toMatch(/title/);
   });
@@ -219,6 +220,79 @@ describe("TaskGraphView", () => {
     expect(JSON.parse(localStorage.getItem("mads.taskGraph.positions.session-persist")!)).toEqual({
       tsk_pos_a: { x: 40, y: 60 },
     });
+  });
+
+  it("toggles a status filter to dim nodes of every other status, and clears on a second click", () => {
+    const a = task({ id: "tsk_filt_a", status: "ready", title: "a", created_at: "2026-01-01T00:00:00Z" });
+    const b = task({
+      id: "tsk_filt_b",
+      status: "done",
+      title: "b",
+      dependencies: ["tsk_filt_a"],
+      created_at: "2026-01-01T00:01:00Z",
+    });
+    const byId = { [a.id]: a, [b.id]: b };
+    const client = new FakeRouterClient();
+    const { container } = render(
+      <TaskGraphView sessionId="session-filter" routerClient={client} tasks={[a, b]} tasksById={byId} />,
+    );
+    const isDimmed = (taskId: string) =>
+      Array.from(
+        container.querySelector(`.react-flow__node[data-id="${taskId}"]`)?.querySelectorAll('[class*="dimmed"]') ??
+          [],
+      ).length > 0;
+
+    fireEvent.click(screen.getByRole("button", { name: /ready$/ }));
+    expect(isDimmed("tsk_filt_a")).toBe(false);
+    expect(isDimmed("tsk_filt_b")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: /ready$/ }));
+    expect(isDimmed("tsk_filt_a")).toBe(false);
+    expect(isDimmed("tsk_filt_b")).toBe(false);
+  });
+
+  it("dims by status on hover (spotlight) without needing a click, and un-dims on mouse leave", () => {
+    const a = task({ id: "tsk_spot_a", status: "ready", title: "a", created_at: "2026-01-01T00:00:00Z" });
+    const b = task({
+      id: "tsk_spot_b",
+      status: "done",
+      title: "b",
+      dependencies: ["tsk_spot_a"],
+      created_at: "2026-01-01T00:01:00Z",
+    });
+    const byId = { [a.id]: a, [b.id]: b };
+    const client = new FakeRouterClient();
+    const { container } = render(
+      <TaskGraphView sessionId="session-spotlight" routerClient={client} tasks={[a, b]} tasksById={byId} />,
+    );
+    const isDimmed = (taskId: string) =>
+      Array.from(
+        container.querySelector(`.react-flow__node[data-id="${taskId}"]`)?.querySelectorAll('[class*="dimmed"]') ??
+          [],
+      ).length > 0;
+
+    const doneChip = screen.getByRole("button", { name: /done$/ });
+    fireEvent.mouseEnter(doneChip);
+    expect(isDimmed("tsk_spot_a")).toBe(true);
+    expect(isDimmed("tsk_spot_b")).toBe(false);
+
+    fireEvent.mouseLeave(doneChip);
+    expect(isDimmed("tsk_spot_a")).toBe(false);
+    expect(isDimmed("tsk_spot_b")).toBe(false);
+  });
+
+  it("updates the status filter strip's counts live as tasks change", () => {
+    const client = new FakeRouterClient();
+    render(
+      <TaskGraphView
+        sessionId="session-active"
+        routerClient={client}
+        tasks={fixtureTasks}
+        tasksById={tasksById}
+      />,
+    );
+    const readyCount = fixtureTasks.filter((t) => graphStatusOf(t) === "ready").length;
+    expect(screen.getByRole("button", { name: new RegExp(`^${readyCount} ready$`) })).toBeTruthy();
   });
 
   it("re-fits the view after Auto-layout is clicked", async () => {

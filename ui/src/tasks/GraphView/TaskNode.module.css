@@ -29,6 +29,72 @@
   color: var(--text3);
 }
 
+.status_done {
+  opacity: 0.55;
+}
+.status_done .title {
+  color: var(--text2);
+  font-weight: 500;
+}
+
+.status_in_progress {
+  background: var(--info-soft);
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px var(--info-soft);
+}
+
+.status_blocked {
+  background: var(--bad-soft);
+  border-color: var(--bad);
+  border-left-width: 6px;
+  border-image: repeating-linear-gradient(135deg, var(--bad) 0 4px, transparent 4px 8px) 1;
+}
+.reason {
+  color: var(--bad-fg);
+  font-size: var(--fs-chip);
+  margin-top: var(--space-1);
+}
+
+.status_draft {
+  border-style: dashed;
+  border-color: var(--draft);
+  background: transparent;
+  opacity: 0.75;
+}
+
+/* status_ready: intentionally no override — Card's own bg1/line-soft base
+   already reads as "crisp neutral, default weight" per the mockup. */
+
+.pips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-1);
+}
+.pip {
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg4);
+}
+.pipPast {
+  background: var(--info);
+  opacity: 0.45;
+}
+.pipNow {
+  background: var(--info);
+  box-shadow: 0 0 6px var(--info);
+}
+.pipLabel {
+  font-size: 10px;
+  color: var(--info-fg);
+  margin-left: 4px;
+}
+
+/* .inCycle/.dimmed declared last so a done/in-progress node that's also
+   flagged inCycle still shows the cycle ring — CSS Modules rules compile in
+   source order, and equal-specificity conflicts resolve by declaration
+   order, not by className string order. */
 .inCycle {
   box-shadow: 0 0 0 2px var(--warn-soft);
 }

@@ -197,6 +197,29 @@ every node/edge outside its ancestor+descendant set (Escape or a background
 click clears it); tray nodes can't participate since they have no edges by
 definition.
 
+Status reads from the card itself, not a text tag — `src/tasks/GraphView/
+graphStatus.ts` buckets the 6-value `TaskStatus` (via `statusPresentation`,
+never forked) down to 5 treatments, each using one channel: `done` recedes
+(luminance — lower opacity, muted title, filled-disc glyph), `in_progress` is
+the only loud card (fill — info-soft background/border/glow, spinning-arc
+glyph, motion), `blocked` reads as danger (fill — bad-soft background,
+hatched left spine, stop-octagon glyph, inline block reason from the
+dependency-queued/failed-stage/blocker-note fallback chain), `draft` is a
+ghost (shape — dashed border, transparent fill), and `ready` is the crisp
+neutral default (no override). The exact text status survives for
+accessibility as the card's `aria-label`/`title`, and the same glyphs repeat
+at chip scale in the tray. `prefers-reduced-motion` (`usePrefersReducedMotion.
+ts`) swaps the spinner and animated edge dashes for static equivalents.
+`in_progress` cards additionally show stage pips (past/now, current stage
+named) fed by `useGraphRunState`, which folds the same `usePipelineRun.ts`
+event stream a live Pipeline tab would use — reused, not refetched — and is
+strictly opt-in: no `EventSource` is ever opened unless a `pipelineClient`
+prop is passed in. A filter strip above the canvas (`StatusFilterStrip.tsx`)
+shows a live count per status; hovering a chip spotlights that status
+(dimming everything else) without changing the click-to-toggle filter
+underneath, and both combine additively with click-to-highlight-mode's own
+dimming — a node only stays undimmed if it satisfies every active filter.
+
 ## Files tab
 
 ```sh

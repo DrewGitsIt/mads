@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { PipelineClient } from "../pipeline/client/pipelineClient";
 import type { RouterClient } from "../router/client";
 import { Button } from "../components/Button/Button";
 import { ContentColumn } from "../components/ContentColumn/ContentColumn";
@@ -12,6 +13,8 @@ import styles from "./TasksTab.module.css";
 export interface TasksTabProps {
   sessionId: string;
   routerClient: RouterClient;
+  /** Opt-in — threaded to the graph's live stage-pip run-state subscription only. */
+  pipelineClient?: PipelineClient;
 }
 
 type ViewMode = "list" | "graph";
@@ -22,7 +25,7 @@ type OpenSheet = "detail" | "import" | null;
  * open" piece of state, not two independent booleans (§5, kit has no Modal,
  * bulk import reuses SideSheet).
  */
-export function TasksTab({ sessionId, routerClient }: TasksTabProps) {
+export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabProps) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -73,6 +76,7 @@ export function TasksTab({ sessionId, routerClient }: TasksTabProps) {
               routerClient={routerClient}
               tasks={tasks}
               tasksById={tasksById}
+              pipelineClient={pipelineClient}
               onSelectTask={(task) => selectTask(task.id)}
             />
           )}
