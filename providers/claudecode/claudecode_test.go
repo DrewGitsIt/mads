@@ -349,6 +349,51 @@ func TestPTYSessionHasNoSelfDiscovery(t *testing.T) {
 	}
 }
 
+// TestPTYSessionSetRefWriteBack proves the Runner's SessionLocator backstop
+// (services/session/internal/runner's persistProviderRef) has somewhere to
+// write a discovered ref back to: without this, TestPTYSessionHasNoSelfDiscovery
+// above stays true forever for a live process, leaving Transcript() and
+// SwitchTransport's resume handle permanently blank/empty even after
+// discovery succeeds.
+func TestPTYSessionSetRefWriteBack(t *testing.T) {
+	s := &ptySession{}
+	if s.Ref() != "" {
+		t.Fatalf("Ref() = %q before SetRef, want empty", s.Ref())
+	}
+	s.SetRef("discovered-ref")
+	if got := s.Ref(); got != "discovered-ref" {
+		t.Fatalf("Ref() = %q after SetRef, want %q", got, "discovered-ref")
+	}
+	// A second SetRef (e.g. a stale/duplicate backstop result) must never
+	// clobber the first-discovered ref.
+	s.SetRef("other-ref")
+	if got := s.Ref(); got != "discovered-ref" {
+		t.Fatalf("Ref() = %q after a second SetRef, want unchanged %q", got, "discovered-ref")
+	}
+}
+
+// TestStreamSessionSetRefWriteBack is streamSession's counterpart to
+// TestPTYSessionSetRefWriteBack: the ACP backstop's own target scenario is a
+// wire announcement that never arrives at all, in which case handleLine
+// never learns s.ref on its own and SetRef is the only way it's ever set.
+func TestStreamSessionSetRefWriteBack(t *testing.T) {
+	s := &streamSession{}
+	if s.Ref() != "" {
+		t.Fatalf("Ref() = %q before SetRef, want empty", s.Ref())
+	}
+	s.SetRef("discovered-ref")
+	if got := s.Ref(); got != "discovered-ref" {
+		t.Fatalf("Ref() = %q after SetRef, want %q", got, "discovered-ref")
+	}
+	// A ref the wire already delivered (e.g. handleLine won the race) must
+	// never be overwritten by a later backstop result.
+	s2 := &streamSession{ref: "wire-ref"}
+	s2.SetRef("backstop-ref")
+	if got := s2.Ref(); got != "wire-ref" {
+		t.Fatalf("Ref() = %q after SetRef raced a known wire ref, want unchanged %q", got, "wire-ref")
+	}
+}
+
 func TestStartPTYMCPServersMatchesOrchestrateShape(t *testing.T) {
 	p := testProvider(t)
 	sess, err := p.Start(context.Background(), provider.StartOptions{

@@ -156,6 +156,21 @@ func (s *streamSession) Ref() string {
 	return s.ref
 }
 
+// SetRef implements provider.RefSetter: the Runner's SessionLocator backstop
+// (locate.go) calls this for the rare case the wire's system/init line never
+// carries a session_id at all, so handleLine never learns s.ref on its own.
+// Guarded the same way handleLine's own ref learning is — never overwrite a
+// ref this session already knows, whether from opts.Resume or a session_id
+// that did arrive on the wire after all (a race between the wire and the
+// backstop, wire wins since it's authoritative).
+func (s *streamSession) SetRef(ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ref == "" {
+		s.ref = ref
+	}
+}
+
 func (s *streamSession) Mode() provider.Mode { return provider.ModeACP }
 
 // RefAnnounced implements provider.RefAnnouncer — see announced's doc comment.

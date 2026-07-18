@@ -441,6 +441,37 @@ func (s *fakeSession) Resize(int, int) error         { return nil }
 // RefAnnounced implements provider.RefAnnouncer — see refCh's doc comment.
 func (s *fakeSession) RefAnnounced() <-chan string { return s.refCh }
 
+// SetRef implements provider.RefSetter, the Runner backstop's write-back
+// path (runner_test.go's TestTranscriptAfterLocateBackstop exercises it).
+// Unlike a real provider, a fakeSession always knows its true ref from Start
+// (deterministic "fake-N" generation, used as the record/history key from
+// the very first Send) — announced is what actually models "unknown until
+// discovered." So this only flips that visibility switch; it doesn't
+// overwrite s.ref, which stays a fixed, lock-free-readable value for the
+// whole session lifetime (Send and friends read it without s.mu).
+func (s *fakeSession) SetRef(string) {
+	s.mu.Lock()
+	if s.announced {
+		s.mu.Unlock()
+		return
+	}
+	s.announced = true
+	// RefAnnounceNever already closed refCh in Start (models "no
+	// announcement mechanism at all") — sending on it now would panic. The
+	// backstop's own goroutine (Runner's watchRefAnnounce) already observed
+	// that close-with-nothing-sent and moved on; there's no reader left to
+	// deliver to.
+	never := s.refAnnounce == RefAnnounceNever
+	s.mu.Unlock()
+	if never {
+		return
+	}
+	select {
+	case s.refCh <- s.ref:
+	default:
+	}
+}
+
 func (s *fakeSession) Interrupt(context.Context) error {
 	select {
 	case s.interrupt <- struct{}{}:

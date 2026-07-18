@@ -108,32 +108,48 @@ present).
   transport switch already has a ref (or the session wouldn't have gotten
   that far). Noted in the field doc on `Runner.locateArmed`.
 
-## Reviewer, please scrutinize this
+## Follow-up pass: live-session ref write-back (review fix)
 
-**`Runner.Transcript()` (`transcript.go:23-29`) prefers a live `sess.Ref()`
-over `r.lastRef` whenever `r.sess != nil`.** For a PTY session discovered
-*only* through this task's `SessionLocator` backstop, `sess.Ref()`
-(`ptySession.ref`) never becomes non-empty — the old `fire()` method that
-used to set it directly is gone, and nothing in this change replaces that
-write. `locateProviderRef` does correctly persist the ref to the Data
-Service and to `r.lastRef` via `persistProviderRef`, so **the acceptance
-criteria's "persisted through the salvaged recordMu path" is genuinely
-met** — but `Transcript()` will keep returning an empty transcript for the
-entire remaining life of that live session (not just until discovery: every
-call, for as long as `r.sess` stays the same live PTY session), because it
-never falls through to the now-correct `r.lastRef`. This is a real
-regression versus the pre-this-task behavior, where `fire()` kept
-`ptySession.ref` in sync so `sess.Ref()` reflected the discovered value
-immediately. I left it unfixed: the architect's design explicitly scoped
-this task to discovery + persistence, not to closing this pre-existing
-`Transcript()` read-path gap, and the acceptance criteria as given don't
-require the live transcript pane to reflect a PTY-backstop-only ref before
-the session ends. If this matters for the shell dock's live view, the fix
-is either a small `RefSetter`-style optional interface `ptySession` can
-implement (letting `locateProviderRef` push the value back into the live
-session object, not just the Data Service), or changing `Transcript()`'s
-preference order to `r.lastRef` first. Worth a follow-up task.
+The first review pass failed on exactly the gap flagged above in this file:
+`Transcript()` reads `sess.Ref()` directly, and nothing wrote a
+backstop-discovered ref back into the *live* `provider.Session` object — a
+permanently blank transcript pane for any session discovered only through
+`SessionLocator`. Fixed by adding the write-back path rather than reordering
+`Transcript()`'s preference (the more complete fix: `SwitchTransport`'s
+`resumeRef := old.Ref()` reads the same stale field and would have had the
+identical gap the first time a backstop-discovered session tried to switch
+transport).
+
+- **`providers/provider/provider.go`** — new optional interface `RefSetter`
+  (`SetRef(ref string)`), the write side of `SessionLocator`.
+- **`services/session/internal/runner/runner.go`** — `persistProviderRef`
+  now also does `r.sess.(provider.RefSetter)` and calls `SetRef(ref)` under
+  the same `r.mu` critical section it already uses to update `r.lastRef` —
+  one lock hold, so `Transcript()` (which takes the same lock) can never
+  observe `r.lastRef` and `sess.Ref()` disagreeing.
+- **`providers/claudecode`** — `ptySession.SetRef`/`streamSession.SetRef`:
+  set `s.ref` only if currently empty (never clobber `opts.Resume` or a ref
+  the wire already delivered — wire wins any race with the backstop).
+- **`providers/fake`** — `fakeSession.SetRef`: the fake already knows its
+  true ref from `Start` (deterministic `fake-N` generation used as the
+  history-recording key from the first `Send`, unlike a real session whose
+  `Ref()` genuinely starts unknown) — `announced` is what models "unknown
+  until discovered," so `SetRef` only flips that visibility switch rather
+  than overwriting `s.ref`, which stays a fixed, lock-free-readable value
+  for the session's lifetime (`Send` and friends already read it without
+  `s.mu`). Guards against sending on `refCh` when `RefAnnounceNever` already
+  closed it in `Start` — an early version of this panicked exactly there
+  under `TestRefLocatePTYDiscoversRefFromScriptedLocator`.
+
+New tests: `TestPTYSessionSetRefWriteBack` /
+`TestStreamSessionSetRefWriteBack` (claudecode, unit-level: sets, then
+proves a second/racing `SetRef` never clobbers), and
+`TestTranscriptAfterLocateBackstop` (runner_test.go) — the actual regression
+test, an ACP session with `RefAnnounceNever` + a scripted `LocateRef`
+matching the fake's own real generated ref, proving `Transcript()` returns
+the real turn content (not empty) once the backstop lands.
 
 Everything else — the interface shape, the Runner arm/fire wiring, both
 locate rungs, the fake scripting, and the test matrix — should be
-reviewable as a normal diff.
+reviewable as a normal diff. `make check` and `make ui-smoke` both pass
+green after this fix.

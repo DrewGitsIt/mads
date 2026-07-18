@@ -1187,6 +1187,78 @@ func TestRefLocateACPDiscoversRefFromScriptedLocator(t *testing.T) {
 	}
 }
 
+// TestTranscriptAfterLocateBackstop is the regression test for the review
+// finding on the eager-ref backstop: a ref discovered only through
+// locateProviderRef must reach the LIVE session object too (via
+// provider.RefSetter), not just the persisted record — otherwise
+// Transcript() (which reads ref straight off r.sess, spec §15) stays
+// permanently blank for that session's entire live process, even though
+// the Data Service already has the right ProviderRef.
+func TestTranscriptAfterLocateBackstop(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	// LocateRef matches the fake's own deterministic first-fresh-session ref
+	// ("fake-1", fake.go's ref = fmt.Sprintf("fake-%d", f.seq)) — the
+	// realistic case, where the backstop discovers the session's own true
+	// ref rather than some unrelated string.
+	lf, err := fake.NewLocatingWithScenario(fake.Scenario{
+		Name:        "acp-locate-transcript",
+		RefAnnounce: fake.RefAnnounceNever,
+		LocateRef:   "fake-1",
+		LocateDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(lf); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	pollDeadline := time.After(5 * time.Second)
+	for {
+		got, err := data.Session(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("load session: %v", err)
+		}
+		if got.ProviderRef == "fake-1" {
+			break
+		}
+		select {
+		case <-pollDeadline:
+			t.Fatalf("provider_ref never became the locator's ref, got %q", got.ProviderRef)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	msgs := r.Transcript(ctx)
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2 (transcript blank despite a persisted ref): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo hi" {
+		t.Errorf("msgs[0] = %+v, want {role: user, text: echo hi}", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
+		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
+	}
+}
+
 // TestRefLocateNeverOverridesWireAnnouncement proves the wire announcement
 // stays authoritative even when a SessionLocator is scripted and would
 // resolve to a different ref: on RefAnnounceOnConnect, Ref() is already

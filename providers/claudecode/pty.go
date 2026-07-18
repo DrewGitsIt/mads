@@ -70,6 +70,20 @@ func (s *ptySession) Ref() string {
 	defer s.mu.Unlock()
 	return s.ref
 }
+
+// SetRef implements provider.RefSetter: the Runner's SessionLocator backstop
+// (locate.go) calls this once it discovers this session's ref, since a fresh
+// PTY session has no way to learn it on its own. Guarded against overwriting
+// an already-known ref (the resumed case, where ref is opts.Resume from the
+// start) — the backstop only ever runs for a session whose ref started
+// empty, but this keeps the method's own contract self-evidently safe.
+func (s *ptySession) SetRef(ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ref == "" {
+		s.ref = ref
+	}
+}
 func (s *ptySession) Mode() provider.Mode           { return provider.ModePTY }
 func (s *ptySession) Events() <-chan provider.Event { return nil }
 func (s *ptySession) Terminal() io.ReadWriter       { return s.master }

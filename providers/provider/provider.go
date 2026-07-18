@@ -204,3 +204,16 @@ type RefAnnouncer interface {
 type SessionLocator interface {
 	LocateSession(ctx context.Context, cwd string, spawnedAfter time.Time, firstMessage string) (ref string, ok bool)
 }
+
+// RefSetter is the write side of SessionLocator: implemented by a Session
+// whose Ref() starts empty and has no self-announcement mechanism (PTY), or
+// whose announcement never arrived (a degraded ACP session). Once the
+// Runner's SessionLocator backstop resolves a ref, it calls SetRef so the
+// live session object itself starts reporting it — every caller that reads
+// Ref() directly off the live session (Transcript, SwitchTransport's resume
+// handle) sees the discovered ref too, not just the Runner's own persisted
+// copy. A session that always knows its own ref has no need to implement
+// this.
+type RefSetter interface {
+	SetRef(ref string)
+}

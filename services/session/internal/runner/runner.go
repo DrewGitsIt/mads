@@ -722,12 +722,23 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 // under recordMu, so the turn-end fallback blocks behind an in-flight
 // announce write instead of skipping on its optimism, and a failed write
 // gets retried at the next turn end rather than swallowed.
+//
+// It also writes ref back into the live session itself, if r.sess implements
+// provider.RefSetter: without this, a ref discovered only through the
+// SessionLocator backstop (locateProviderRef) never reaches the session
+// object's own Ref() — which Transcript and SwitchTransport's resume handle
+// both read directly — leaving them permanently blank/empty for that
+// session's whole live process even though the ref is correctly persisted
+// here.
 func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 	if ref == "" {
 		return
 	}
 	r.mu.Lock()
 	r.lastRef = ref
+	if setter, ok := r.sess.(provider.RefSetter); ok {
+		setter.SetRef(ref)
+	}
 	r.mu.Unlock()
 
 	r.recordMu.Lock()
