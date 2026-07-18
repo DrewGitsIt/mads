@@ -34,6 +34,9 @@ test.describe("pipeline drill-in: live output + resize persistence", () => {
         "name: drill-in",
         "rules:",
         `  - match: "Task: ${taskTitle}"`,
+        "    tools:",
+        "      - name: Read",
+        "        path: engine.go",
         "    chunks:",
         '      - "Reading task context...\\n"',
         '      - "Editing engine.go...\\n"',
@@ -92,6 +95,10 @@ test.describe("pipeline drill-in: live output + resize persistence", () => {
     // xterm's DOM renderer splits a line across several inline nodes —
     // toContainText checks the container's aggregate textContent, unlike
     // getByText, which expects one element/text node holding the whole string.
+    // The structured log format (services/pipeline/engine/outputlog.go):
+    // header line, tool-use marker, then the streamed chunks.
+    await expect(terminal).toContainText("stage=executor", { timeout: 10_000 });
+    await expect(terminal).toContainText("⏺ Read engine.go", { timeout: 10_000 });
     await expect(terminal).toContainText("Reading task context", { timeout: 10_000 });
     await expect(terminal).toContainText("Editing engine.go", { timeout: 10_000 });
   });
@@ -125,6 +132,42 @@ test.describe("pipeline drill-in: live output + resize persistence", () => {
     const reopenedPanel = page.locator('[data-testid="resize-handle"]').locator("..");
     const reopenedHeight = await reopenedPanel.evaluate((el) => (el as HTMLElement).style.height);
     expect(reopenedHeight).toBe(draggedHeight);
+  });
+
+  test("drill-in pane drags to at least 85% of the tab height", async ({ page, routerURL }) => {
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Pipeline" }).click();
+    await page.getByRole("button", { name: taskTitle }).click();
+
+    // The tab's actual rendered geometry, not a hardcoded pixel guess — the
+    // CI viewport size isn't something to depend on. workspace-panel-pipeline
+    // is the tabpanel PipelineTab's root fills (height: 100%/flex: 1), so its
+    // box height is the same value PipelineTab.tsx's ResizeObserver measures
+    // as tabHeight.
+    const tabBox = await page.locator("#workspace-panel-pipeline").boundingBox();
+    if (!tabBox) throw new Error("pipeline tabpanel has no bounding box");
+    // BOARD_SLIVER in TaskDrillIn.tsx / .boardArea min-height in
+    // PipelineTab.module.css — kept in sync by comment cross-reference there.
+    const BOARD_SLIVER = 96;
+    const expectedMax = Math.min(tabBox.height * 0.85, tabBox.height - BOARD_SLIVER);
+
+    const handle = page.locator('[data-testid="resize-handle"]');
+    const panel = handle.locator("..");
+    const box = await handle.boundingBox();
+    if (!box) throw new Error("resize handle has no bounding box");
+
+    // Drag far past any real clamp — the panel must stop at the max, not
+    // follow the cursor to the top of the viewport.
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2, -1000, { steps: 10 });
+    await page.mouse.up();
+
+    const draggedHeight = await panel.evaluate((el) => parseInt((el as HTMLElement).style.height, 10));
+    expect(draggedHeight).toBeGreaterThanOrEqual(tabBox.height * 0.85 - 2);
+    expect(draggedHeight).toBeLessThanOrEqual(expectedMax + 2);
   });
 });
 

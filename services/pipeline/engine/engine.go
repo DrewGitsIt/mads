@@ -656,24 +656,32 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	e.mu.Lock()
 	attempt := e.loops[task.ID+"|"+st.Name] + 1
 	e.mu.Unlock()
-	log := openOutputLog(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt)
+	log := openOutputLog(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt, model)
 
 	res, err := e.cfg.Provider.OneShot(ctx, provider.OneShotRequest{
-		Prompt:  taskPrompt(st.Name, task, feedback),
-		System:  agent.Prompt,
-		Model:   model,
-		Cwd:     dir,
-		OnChunk: log.write,
+		Prompt: taskPrompt(st.Name, task, feedback),
+		System: agent.Prompt,
+		Model:  model,
+		Cwd:    dir,
+		OnEvent: func(ev provider.Event) {
+			switch ev.Kind {
+			case provider.EventText:
+				log.write(ev.Text)
+			case provider.EventToolUse:
+				log.tool(ev.Tool)
+			}
+		},
 	})
 	if err != nil {
-		log.close(err.Error())
+		log.close("error", err.Error())
 		return "", fmt.Errorf("agent %s: %w", name, err)
 	}
-	log.close(res.Text)
 	e.recordUsage(ctx, task.ID, res.Usage)
 	if line := lastLine(res.Text); strings.HasPrefix(strings.ToUpper(line), strings.ToUpper(FailMarker)) {
+		log.close("fail", res.Text)
 		return res.Text, fmt.Errorf("agent %s failed the stage: %s", name, line)
 	}
+	log.close("pass", res.Text)
 	return res.Text, nil
 }
 

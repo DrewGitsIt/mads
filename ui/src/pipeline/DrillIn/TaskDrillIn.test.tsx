@@ -32,6 +32,86 @@ describe("TaskDrillIn", () => {
     expect(screen.getByText("2 files touched")).toBeTruthy();
   });
 
+  it("clamps drag height to tabHeight minus the board sliver when that's tighter than the 85vh cap", () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 2000 });
+    try {
+      const source = makeStubSource();
+      const { container } = render(
+        <TaskDrillIn
+          task={flakyApi}
+          attempts={attempts}
+          touchedFiles={[]}
+          outputSource={source}
+          tabHeight={400}
+        />,
+      );
+      const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement;
+      const panel = handle.parentElement as HTMLElement;
+
+      fireEvent.mouseDown(handle, { clientY: 1000 });
+      fireEvent.mouseMove(window, { clientY: -100000 }); // drag far past any real clamp
+      fireEvent.mouseUp(window);
+
+      // tabHeight(400) - BOARD_SLIVER(96) = 304, well below 2000 * 0.85.
+      expect(panel.style.height).toBe("304px");
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+    }
+  });
+
+  it("clamps drag height to 85% of tabHeight, not 85% of the full window, when that's tighter", () => {
+    const originalInnerHeight = window.innerHeight;
+    // A much taller window than the tab itself (app chrome above the
+    // tabpanel) — the 85% cap must be measured against tabHeight, or this
+    // would wrongly let the panel grow to tabHeight - BOARD_SLIVER (604).
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 2000 });
+    try {
+      const source = makeStubSource();
+      const { container } = render(
+        <TaskDrillIn
+          task={flakyApi}
+          attempts={attempts}
+          touchedFiles={[]}
+          outputSource={source}
+          tabHeight={700}
+        />,
+      );
+      const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement;
+      const panel = handle.parentElement as HTMLElement;
+
+      fireEvent.mouseDown(handle, { clientY: 1000 });
+      fireEvent.mouseMove(window, { clientY: -100000 });
+      fireEvent.mouseUp(window);
+
+      // tabHeight(700) * 0.85 = 595, tighter than tabHeight - BOARD_SLIVER (604).
+      expect(panel.style.height).toBe("595px");
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+    }
+  });
+
+  it("falls back to the 85vh cap when no tabHeight is measured", () => {
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 1000 });
+    try {
+      const source = makeStubSource();
+      const { container } = render(
+        <TaskDrillIn task={flakyApi} attempts={attempts} touchedFiles={[]} outputSource={source} />,
+      );
+      const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement;
+      const panel = handle.parentElement as HTMLElement;
+
+      fireEvent.mouseDown(handle, { clientY: 1000 });
+      fireEvent.mouseMove(window, { clientY: -100000 });
+      fireEvent.mouseUp(window);
+
+      expect(panel.style.height).toBe("850px");
+    } finally {
+      Object.defineProperty(window, "innerHeight", { configurable: true, value: originalInnerHeight });
+    }
+  });
+
   it("calls onClose when the close control is clicked", () => {
     const source = makeStubSource();
     const onClose = vi.fn();

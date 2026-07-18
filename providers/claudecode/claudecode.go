@@ -105,7 +105,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// --mcp-config + --strict-mcp-config threads a real MCP server into
 		// the launch on both transports — see mcp.go and README.
 		provider.BehaviorMCPServers: provider.Native,
-		// OnChunk set ⇒ --output-format stream-json --verbose, the same
+		// OnEvent set ⇒ --output-format stream-json --verbose, the same
 		// wire format the interactive transport already parses.
 		provider.BehaviorOneShotStream: provider.Native,
 		// The structured transport's system/init line announces the ref at
@@ -151,7 +151,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 }
 
 func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
-	if req.OnChunk != nil {
+	if req.OnEvent != nil {
 		return p.oneShotStream(ctx, req)
 	}
 	args := []string{"-p", req.Prompt, "--output-format", "json"}
@@ -187,9 +187,9 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 }
 
 // oneShotStream runs the same one-shot invocation on the stream-json wire
-// format so req.OnChunk sees assistant text as it arrives. The final
-// result — parsed from the stream's terminal "result" line via the same
-// parseOneShot used by the non-streaming path — is unchanged either way.
+// format so req.OnEvent sees text deltas and tool use as they arrive. The
+// final result — parsed from the stream's terminal "result" line via the
+// same parseOneShot used by the non-streaming path — is unchanged either way.
 func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
 	args := []string{"-p", req.Prompt, "--output-format", "stream-json", "--verbose"}
 	if req.Model != "" {
@@ -222,10 +222,8 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 			if json.Unmarshal(bytes.TrimSpace(raw), &l) == nil {
 				switch l.Type {
 				case "assistant":
-					for _, b := range l.Message.blocks() {
-						if b.Type == "text" && b.Text != "" {
-							req.OnChunk(b.Text)
-						}
+					for _, ev := range l.events(false) {
+						req.OnEvent(ev)
 					}
 				case "result":
 					resultLine = append([]byte{}, bytes.TrimSpace(raw)...)
