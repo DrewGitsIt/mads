@@ -62,6 +62,47 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	}
 }
 
+// OnChunk switches OneShot to the stream-json wire format and fires as
+// assistant text lines arrive; the final result is equivalent to the
+// non-streaming path (same reply, concatenation of the streamed chunks).
+func TestOneShotStreamsChunks(t *testing.T) {
+	p := testProvider(t)
+	var chunks []string
+	res, err := p.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "echo hello there friend",
+		OnChunk: func(text string) {
+			chunks = append(chunks, text)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("want more than one chunk, got %v", chunks)
+	}
+	if got := strings.Join(chunks, ""); got != res.Text {
+		t.Errorf("chunk concatenation %q != final Text %q", got, res.Text)
+	}
+	if !strings.Contains(res.Text, "hello there") {
+		t.Errorf("text: %q", res.Text)
+	}
+}
+
+// Rate limits and crashes surface identically through the streaming path —
+// stderr is inspected the same way regardless of output format.
+func TestOneShotStreamsRateLimitAndCrash(t *testing.T) {
+	p := testProvider(t)
+	noop := func(string) {}
+	_, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "ratelimit", OnChunk: noop})
+	var rle *provider.RateLimitError
+	if !errors.As(err, &rle) {
+		t.Fatalf("want RateLimitError, got %v", err)
+	}
+	if _, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "crash", OnChunk: noop}); err == nil {
+		t.Fatal("want an error for a scripted crash")
+	}
+}
+
 // Transcript normalization is golden-pinned: the fixture mirrors the on-disk
 // format (string and block user content, thinking blocks, tool results,
 // sidechains, bookkeeping lines) and the golden holds exactly what the

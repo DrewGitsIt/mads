@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { RunHeader } from "./RunHeader/RunHeader";
 import { StageBoard } from "./Board/StageBoard";
 import { BlockedPanel } from "./Board/BlockedPanel";
@@ -17,7 +17,6 @@ export interface PipelineTabProps {
 /** Top-level Pipeline tab: composes the run header, run picker, stage board, blocked-tasks panel, and drill-in. */
 export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
   const live = usePipelineRun(sessionId, pipelineClient);
-  const [runId, setRunId] = useState<string | undefined>();
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
 
   // Once a live run has ever started this mount, it preempts the historical
@@ -45,6 +44,21 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
   const selectedTask = live.tasks.find((t) => t.id === selectedTaskId);
   const selectedRunState = selectedTaskId ? taskRunState[selectedTaskId] : undefined;
 
+  // Opening an EventSource is a side effect — it must happen once per task
+  // selection, not once per re-render (PipelineTab re-renders on every live
+  // polling tick), and the connection must be explicitly closed on switch/unmount.
+  const outputSource = useMemo(
+    () => (selectedTask ? pipelineClient.streamTaskOutput(sessionId, selectedTask.id) : undefined),
+    // selectedTask?.id (not selectedTask) is deliberate — live.tasks is a new
+    // array each poll, so the object identity changes every tick even when
+    // the selected id doesn't, which would otherwise reopen the stream.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipelineClient, sessionId, selectedTask?.id],
+  );
+  useEffect(() => {
+    return () => outputSource?.close();
+  }, [outputSource]);
+
   return (
     <div className={styles.tab}>
       <RunHeader
@@ -55,7 +69,6 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
         runStartedAt={headerStartedAt}
         runEndedAt={headerEndedAt}
         tasks={live.tasks}
-        onRunStarted={setRunId}
       />
       {showHistoryPicker && (
         <RunPicker runs={history.runs} selectedRunSeq={history.selectedRunSeq} onSelect={history.selectRun} />
@@ -80,12 +93,12 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
           />
         </>
       )}
-      {selectedTask && (
+      {selectedTask && outputSource && (
         <TaskDrillIn
           task={selectedTask}
           attempts={selectedRunState?.attempts ?? []}
           touchedFiles={selectedRunState?.touchedFiles ?? []}
-          outputSource={pipelineClient.streamTaskOutput(runId ?? "", selectedTask.id)}
+          outputSource={outputSource}
           onClose={() => setSelectedTaskId(undefined)}
         />
       )}

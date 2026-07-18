@@ -155,6 +155,7 @@ func cmdRun(args []string, out io.Writer) error {
 		Template: tpl, Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		Isolated: *isolated, WorktreeRoot: root, DataURL: *data,
+		MadsHome: defaultMadsHome(),
 	})
 	if err == nil {
 		select { // let the completion event land in the terminal

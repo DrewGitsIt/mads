@@ -86,6 +86,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		// kiro-cli's own launch — see README.md. Sessions simply start
 		// without the descriptor materialized.
 		provider.BehaviorMCPServers: provider.Unsupported,
+		// No streaming JSON mode on `kiro-cli chat --no-interactive` — see
+		// README.md. OneShot never calls OnChunk; the engine falls back to
+		// a single end-of-run chunk.
+		provider.BehaviorOneShotStream: provider.Unsupported,
 	}
 }
 

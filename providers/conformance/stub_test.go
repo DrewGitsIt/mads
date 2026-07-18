@@ -94,6 +94,9 @@ func (s *stub) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	if s.lies.oneShotWrong {
 		text = "whatever"
 	}
+	if req.OnChunk != nil {
+		req.OnChunk(text)
+	}
 	res := &provider.OneShotResult{Text: text, Usage: s.usage(text)}
 	return res, nil
 }

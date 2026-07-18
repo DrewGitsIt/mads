@@ -109,6 +109,8 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorTrustReadOnly: provider.Native,
 		// The fake already fully records/exposes it via MCPServers(ref).
 		provider.BehaviorMCPServers: provider.Native,
+		// OneShot streams scripted chunks with their scripted delay.
+		provider.BehaviorOneShotStream: provider.Native,
 	}
 }
 
@@ -174,11 +176,21 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		}
 	}
 	// Delay on cue holds for one-shots too — downstream timing tests rely
-	// on scripted turns taking as long as the scenario says.
-	if plan.delay > 0 {
-		time.Sleep(plan.delay * time.Duration(len(plan.chunks)))
+	// on scripted turns taking as long as the scenario says. Chunks stream
+	// through OnChunk (when set) with that same delay between them, so a
+	// caller watching for incremental output sees genuine pacing rather
+	// than one wait followed by the whole result at once.
+	var b strings.Builder
+	for _, chunk := range plan.chunks {
+		if plan.delay > 0 {
+			time.Sleep(plan.delay)
+		}
+		b.WriteString(chunk)
+		if req.OnChunk != nil {
+			req.OnChunk(chunk)
+		}
 	}
-	text := strings.Join(plan.chunks, "")
+	text := b.String()
 	return &provider.OneShotResult{Text: text, Usage: applyUsageOverride(usage(req.Prompt, text), plan.usage)}, nil
 }
 

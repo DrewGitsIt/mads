@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { subscribeToEvents } from "../../router/events";
+import { WORKSPACE_SESSION_EVENT_TYPES } from "../../router/sessionEventTypes";
 import type { Envelope, Task } from "../../router/types";
 import type { PipelineClient } from "../client/pipelineClient";
 
@@ -23,8 +24,6 @@ export const FOLD_EVENT_TYPES = [
   "stage.skipped",
   "file.changed",
 ];
-
-const ALL_EVENT_TYPES = [...METADATA_EVENT_TYPES, ...FOLD_EVENT_TYPES];
 
 export type RunPhase = "idle" | "running" | "finished";
 export type StageAttemptStatus = "started" | "completed" | "failed" | "skipped";
@@ -223,7 +222,7 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
   useEffect(() => {
     mounted.current = true;
     void refetchTasks();
-    const unsubscribe = subscribeToEvents({ sessionId, types: ALL_EVENT_TYPES }, (env) => {
+    const unsubscribe = subscribeToEvents({ sessionId, types: WORKSPACE_SESSION_EVENT_TYPES }, (env) => {
       if (FOLD_EVENT_TYPES.includes(env.type)) dispatch(env);
       if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
     });

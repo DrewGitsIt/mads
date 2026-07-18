@@ -99,7 +99,7 @@ export class FakePipelineClient implements PipelineClient {
     throw new Error("not supported by the current pipeline engine");
   }
 
-  streamTaskOutput(_runId: string, _taskId: string): PipelineOutputSource {
+  streamTaskOutput(_sessionId: string, _taskId: string): PipelineOutputSource {
     return new FakePipelineOutputSource();
   }
 

@@ -65,6 +65,12 @@ const (
 	// writes and command execution. Expected, same honesty requirement as
 	// BehaviorTrustLimited.
 	BehaviorTrustReadOnly Behavior = "trust_read_only"
+	// BehaviorOneShotStream — OneShotRequest.OnChunk actually fires with
+	// incremental text during the invocation, rather than only the final
+	// result being available once OneShot returns. Optional: a provider
+	// with no incremental output mechanism simply never calls OnChunk; the
+	// engine falls back to a single end-of-run chunk.
+	BehaviorOneShotStream Behavior = "one_shot_stream"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -115,6 +121,7 @@ var requirements = map[Behavior]Level{
 	BehaviorMCPServers:     LevelOptional,
 	BehaviorTrustLimited:   LevelExpected,
 	BehaviorTrustReadOnly:  LevelExpected,
+	BehaviorOneShotStream:  LevelOptional,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""

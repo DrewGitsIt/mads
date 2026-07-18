@@ -100,6 +100,8 @@ func fakeClaudeMain() {
 	switch {
 	case a.print && a.outputFormat == "json":
 		fcOneShot(a)
+	case a.print && a.outputFormat == "stream-json" && a.inputFormat == "":
+		fcOneShotStream(a)
 	case a.print && a.inputFormat == "stream-json":
 		fcStream(a)
 	default:
@@ -144,6 +146,40 @@ func fcOneShot(a fcArgs) {
 		"modelUsage": map[string]any{"fake-sonnet": map[string]any{}},
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+
+// fcOneShotStream mimics `-p --output-format stream-json --verbose`: the
+// reply streams as several assistant text lines (so tests can observe
+// OnChunk firing more than once), closed by the same result line shape
+// fcOneShot produces — the concatenation of the streamed pieces must equal
+// the result line's "result" field.
+func fcOneShotStream(a fcArgs) {
+	if a.prompt == "ratelimit" {
+		fmt.Fprintln(os.Stderr, "Rate limit reached. Try again at 5pm.")
+		os.Exit(1)
+	}
+	reply, crash := fcReply(a.prompt, nil)
+	if crash {
+		fmt.Fprintln(os.Stderr, "boom")
+		os.Exit(1)
+	}
+	words := strings.Fields(reply)
+	if len(words) == 0 {
+		words = []string{reply}
+	}
+	for i, w := range words {
+		text := w
+		if i < len(words)-1 {
+			text += " "
+		}
+		fcEmit(fcAssistantText("fc-oneshot", text))
+	}
+	fcEmit(map[string]any{
+		"type": "result", "subtype": "success", "is_error": false,
+		"result": reply, "session_id": "fc-oneshot",
+		"usage":      map[string]any{"input_tokens": 7, "output_tokens": 11},
+		"modelUsage": map[string]any{"fake-sonnet": map[string]any{}},
+	})
 }
 
 func fcEmit(v map[string]any) {

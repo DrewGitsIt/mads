@@ -33,6 +33,7 @@ type server struct {
 	vaultSources []vault.Source
 	registry     *registryclient.Client
 	version      string
+	runsDir      string
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -60,6 +61,7 @@ type Options struct {
 	StaticHandler http.Handler
 	Version       string
 	Registry      *registryclient.Client
+	RunsDir       string
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
@@ -79,7 +81,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -100,6 +102,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /events", s.handleEvents)
 	mux.HandleFunc("GET /sessions/{id}/output", s.handleSessionOutput)
 	mux.HandleFunc("GET /pipelines/{id}/output", s.handlePipelineOutput)
+	mux.HandleFunc("GET /sessions/{id}/pipeline/tasks/{taskId}/output", s.handlePipelineTaskOutput)
 	mux.HandleFunc("POST /agents/generate", s.handleGenerateAgent)
 	mux.HandleFunc("GET /agents/{id}", s.handleGetAgent)
 	mux.HandleFunc("POST /agents", s.handleCreateAgent)

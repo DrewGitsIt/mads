@@ -110,6 +110,7 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 
 	oneShot, oneShotErr := c.oneShot()
 	c.add(provider.BehaviorOneShot, oneShotErr, "")
+	c.add(provider.BehaviorOneShotStream, c.oneShotStream(), "")
 
 	if m[provider.BehaviorResume].Works() {
 		if structured {
@@ -329,6 +330,31 @@ func (c *checker) oneShot() (*provider.OneShotResult, error) {
 		return res, fmt.Errorf("one-shot reply %q does not contain marker %q", res.Text, marker)
 	}
 	return res, nil
+}
+
+// oneShotStream probes BehaviorOneShotStream: a declared-working provider
+// must call OnChunk at least once, with the collected chunks containing the
+// marker; a declared-unsupported provider must never call it at all.
+func (c *checker) oneShotStream() error {
+	marker := "mk-oneshot-stream"
+	var chunks []string
+	_, err := c.p.OneShot(c.ctx, provider.OneShotRequest{
+		Prompt:  c.s.Echo(marker),
+		OnChunk: func(text string) { chunks = append(chunks, text) },
+	})
+	if err != nil {
+		return fmt.Errorf("OneShot: %w", err)
+	}
+	working := c.m[provider.BehaviorOneShotStream].Works()
+	switch {
+	case working && len(chunks) == 0:
+		return errors.New("declared working but OnChunk was never called")
+	case working && !strings.Contains(strings.Join(chunks, ""), marker):
+		return fmt.Errorf("streamed chunks %q do not contain marker %q", strings.Join(chunks, ""), marker)
+	case !working && len(chunks) != 0:
+		return fmt.Errorf("declared unsupported but OnChunk fired %d times", len(chunks))
+	}
+	return nil
 }
 
 // resume proves conversation context survives a close/reattach cycle: a
