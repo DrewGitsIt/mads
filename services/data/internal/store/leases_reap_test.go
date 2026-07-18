@@ -168,6 +168,42 @@ func TestReclaimMismatchedIdentity(t *testing.T) {
 	}
 }
 
+func TestReclaimForeignHolder(t *testing.T) {
+	leases, tasks, l := newLeaseStore(t)
+	ctx := context.Background()
+	task := mkTask(t, tasks, contracts.Task{Title: "A", Status: contracts.StatusInProgress})
+
+	identity := contracts.LeaseIdentity{MachineID: "m1", BootID: "b1", PID: 42, PIDStartTicks: 999}
+	if _, err := leases.ClaimWithIdentity(ctx, task.ID, "other", time.Minute, &identity); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same machine, same identity, but the lease is held by a different
+	// actor: the engine must never touch another actor's lease.
+	ok, err := leases.Reclaim(ctx, task.ID, "pipeline", identity, "evidence")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("Reclaim: want ok=false when the lease is held by a different actor")
+	}
+
+	var count int
+	if err := l.db.QueryRow("SELECT COUNT(*) FROM task_leases WHERE task_id = ?", task.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Error("lease was removed despite belonging to a different actor")
+	}
+	got, err := tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != contracts.StatusInProgress {
+		t.Errorf("task status after foreign-holder Reclaim = %s, want in_progress (untouched)", got.Status)
+	}
+}
+
 func TestReclaimAlreadyGone(t *testing.T) {
 	leases, _, _ := newLeaseStore(t)
 	ctx := context.Background()
