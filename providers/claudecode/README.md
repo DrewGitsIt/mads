@@ -23,49 +23,56 @@ history.
 | TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available. |
 | TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
-| RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing; a fresh PTY session's ref is instead discovered from the on-disk transcript, a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
+| RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
 
 ## Ref announcement, transport by transport
 
-`BehaviorRefAnnounce` (`providers/provider.RefAnnouncer`) lets the runner
-persist a session's provider-native ref the moment it's known, instead of
-only at turn end — the defense against a crash losing an unresumable
-session.
+`BehaviorRefAnnounce` lets the runner persist a session's provider-native
+ref the moment it's known, instead of only at turn end — the defense
+against a crash losing an unresumable session. Two independent mechanisms
+feed it:
 
-**Structured transport:** `startStream()`'s `system`/`init` line already
-carries `session_id` before any user turn is sent (confirmed against the
-scripted stand-in's `fcStream`, which emits it immediately on connect,
-mirroring real claude-code 2.1.207 behavior). `handleLine` fires
-`streamSession.announced` the first time `session_id` is seen, which for a
-fresh session is on that very first line.
+**Wire announcement (primary, `providers/provider.RefAnnouncer`):**
+`startStream()`'s `system`/`init` line already carries `session_id` before
+any user turn is sent (confirmed against the scripted stand-in's
+`fcStream`, which emits it immediately on connect, mirroring real
+claude-code 2.1.207 behavior). `handleLine` fires `streamSession.announced`
+the first time `session_id` is seen, which for a fresh session is on that
+very first line. The terminal transport has no equivalent — `ptySession`
+does not implement `RefAnnouncer` at all.
 
-**Terminal transport:** claude does not print a session id anywhere on the
-pty. Instead, `startPTY()` spawns `watchRefDiscovery()`, a bounded
-background poll (never blocking `Start`) that looks for a transcript under
-`TranscriptDir` that unambiguously belongs to this session:
+**Content-correlation backstop (`providers/provider.SessionLocator`,
+`locate.go`):** the Runner calls `LocateSession(ctx, cwd, spawnedAfter,
+firstMessage)` with the exact first message it sent whenever the wire
+announcement never arrives — always for a PTY session, and also for a
+structured session whose announcement is dropped or delayed past its
+window. `LocateSession` retries two rungs on a short interval until `ctx`
+is done:
 
-1. The file's mtime is after the PTY process was spawned (backdated by a
-   small margin to absorb clock/filesystem timestamp-granularity noise
-   between this process capturing the spawn time and the child's first
-   write, which can otherwise land a genuine transcript's mtime a few
-   microseconds "before" spawn).
-2. The transcript's own `cwd` field (present on every line) matches the
-   session's cwd — read via a small scan, not a reimplementation of claude's
-   undocumented path-slug scheme (`Transcript()`'s existing glob already
-   sidesteps that the same way).
-3. The same unambiguous, non-empty candidate is seen on two consecutive poll
-   ticks — proof it's a real, stable transcript. This is a stability check,
-   not a literal growth-between-ticks check: a fast turn can write its whole
-   transcript in well under one 750ms tick, so by the time discovery first
-   observes the file it may already be done growing.
+1. **Rung 1 — `locateFromHistory`:** scan claude-code's own append-only
+   prompt index, `Config.HistoryFile` (default `~/.claude/history.jsonl`),
+   for the one entry whose `project` matches `cwd`, whose `timestamp` is no
+   earlier than `spawnedAfter` (minus a small clock-skew margin), and whose
+   `display` corresponds to `firstMessage` (exact, or a prefix match in
+   either direction to tolerate claude's pasted-content placeholder
+   mangling). A history scan is far cheaper than walking every transcript
+   file, so it runs first whenever the index has a usable entry. Its result
+   is never trusted on its own — `verifyRef` confirms it names exactly one
+   real transcript under `TranscriptDir` with a matching `cwd` before
+   `LocateSession` returns it.
+2. **Rung 2 — `discoverRefByContent`:** the fallback when the index has no
+   usable entry (or is unavailable). `candidateTranscripts` filters every
+   transcript under `TranscriptDir` to those modified after `spawnedAfter`
+   (same clock-skew margin) whose stamped `cwd` matches; `discoverRefByContent`
+   then narrows those survivors to the one whose first user-role message is
+   exactly `firstMessage`.
 
-Two or more surviving candidates is treated exactly like zero: discovery
-declines rather than guesses, because a wrong ref would silently resume
-someone else's conversation, which is worse than no ref. If discovery never
-finds an unambiguous candidate before the session closes, the ref is simply
-never announced — logged, never surfaced to the user as an error, and the
-session works exactly as it did before this mechanism existed (resume-less
-until reattached with an explicit ref).
+Both rungs decline (rather than guess) on zero or multiple matches — a
+wrong ref would silently resume someone else's conversation, which is worse
+than no ref. If neither rung ever resolves before the caller's `ctx` is
+done, the ref is simply never discovered — logged, never surfaced to the
+user as an error, and the session works exactly as it did before this
+mechanism existed (resume-less until reattached with an explicit ref).
 
 ## Trust enforcement, transport by transport
 

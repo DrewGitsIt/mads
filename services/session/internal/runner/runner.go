@@ -177,6 +177,28 @@ type Runner struct {
 	prov     provider.Provider
 	baseOpts provider.StartOptions
 
+	// spawnedAt and providerCwd are captured once in Start, right before
+	// p.Start(ctx, opts) and from the same resolved cwd that went into
+	// opts.Cwd (post-worktree-isolation) — the exact (cwd, spawnedAfter)
+	// pair locateProviderRef needs to hand a provider.SessionLocator.
+	spawnedAt   time.Time
+	providerCwd string
+	// locateArmed guards the SessionLocator backstop to fire at most once
+	// per Runner: it's armed on the very first Send, when the first message
+	// text becomes known. SwitchTransport does not re-arm it — by the time a
+	// session has switched transports mid-conversation, either the wire
+	// announcement already fired or PTY discovery already had a chance to
+	// succeed; the acceptance criteria only cover a fresh session's first
+	// message, so this is a known, accepted gap rather than something built
+	// for.
+	locateArmed bool
+
+	// shutdownCh is closed exactly once, alongside r.closing being set in
+	// Shutdown, and cancels locateProviderRef's best-effort-forever PTY
+	// window — the Runner-level lifetime signal mirroring ptySession's old
+	// internal "done" channel one layer up.
+	shutdownCh chan struct{}
+
 	// touched tracks paths already reported this run, so recordFileChange
 	// can tell an "added" first sighting from a later "modified" one.
 	touched map[string]bool
@@ -202,6 +224,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		hub:              newHub(),
 		touched:          make(map[string]bool),
 		turnAttributions: make(map[int]contracts.Attribution),
+		shutdownCh:       make(chan struct{}),
 	}
 }
 
@@ -250,6 +273,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}
 	}
+	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("runner: start provider session: %w", err)
@@ -290,6 +314,8 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.prov = p
 	r.baseOpts = opts
 	r.lastRef = provSess.Ref()
+	r.spawnedAt = spawnedAt
+	r.providerCwd = cwd
 	r.mu.Unlock()
 
 	r.watchRefAnnounce(ctx, provSess)
@@ -442,9 +468,26 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		r.mu.Unlock()
 		return ErrTurnInFlight
 	}
+	var armed bool
+	var prov provider.Provider
+	var mode provider.Mode
+	var cwd string
+	var spawnedAt time.Time
+	if !r.locateArmed && r.lastRef == "" && r.sentTurns == 0 {
+		r.locateArmed = true
+		armed = true
+		prov = r.prov
+		mode = r.baseOpts.Mode
+		cwd = r.providerCwd
+		spawnedAt = r.spawnedAt
+	}
 	r.deliverLocked(nil)
 	sess := r.sess
 	r.mu.Unlock()
+
+	if armed {
+		go r.locateProviderRef(prov, mode, cwd, spawnedAt, text)
+	}
 
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text)
@@ -679,12 +722,23 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 // under recordMu, so the turn-end fallback blocks behind an in-flight
 // announce write instead of skipping on its optimism, and a failed write
 // gets retried at the next turn end rather than swallowed.
+//
+// It also writes ref back into the live session itself, if r.sess implements
+// provider.RefSetter: without this, a ref discovered only through the
+// SessionLocator backstop (locateProviderRef) never reaches the session
+// object's own Ref() — which Transcript and SwitchTransport's resume handle
+// both read directly — leaving them permanently blank/empty for that
+// session's whole live process even though the ref is correctly persisted
+// here.
 func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 	if ref == "" {
 		return
 	}
 	r.mu.Lock()
 	r.lastRef = ref
+	if setter, ok := r.sess.(provider.RefSetter); ok {
+		setter.SetRef(ref)
+	}
 	r.mu.Unlock()
 
 	r.recordMu.Lock()
@@ -737,6 +791,53 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 		}
 		r.persistProviderRef(context.Background(), ref)
 	}()
+}
+
+// refLocateACPWindow bounds the SessionLocator backstop on ACP: the wire
+// announcement is the primary, near-instant path there (session.go's
+// system/init line fires at connect, before Send is ever called — the
+// common case never even reaches this goroutine, since r.lastRef is already
+// non-empty by then). This only matters on the rare miss, so it doesn't run
+// forever. PTY has no bound: it's the ONLY mechanism on that transport
+// (mirrors the "best-effort forever" ptySession poll it replaces), so it
+// runs for the rest of the session's life (shutdownCh).
+const refLocateACPWindow = 2 * time.Minute
+
+// locateProviderRef runs the SessionLocator backstop, armed once by Send on
+// the first turn. A no-op if prov doesn't implement provider.SessionLocator
+// at all (most providers: the wire announcement or turn-end sync already
+// covers them). Not re-armed by SwitchTransport — a known, accepted gap; see
+// the locateArmed field doc.
+func (r *Runner) locateProviderRef(prov provider.Provider, mode provider.Mode, cwd string, spawnedAt time.Time, firstMessage string) {
+	locator, ok := prov.(provider.SessionLocator)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if mode != provider.ModePTY {
+		var boundCancel context.CancelFunc
+		ctx, boundCancel = context.WithTimeout(ctx, refLocateACPWindow)
+		defer boundCancel()
+	}
+	go func() {
+		select {
+		case <-r.shutdownCh:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	ref, ok := locator.LocateSession(ctx, cwd, spawnedAt, firstMessage)
+	if !ok {
+		return
+	}
+	r.mu.Lock()
+	closing := r.closing
+	r.mu.Unlock()
+	if closing {
+		return
+	}
+	r.persistProviderRef(context.Background(), ref)
 }
 
 // TerminalWrite writes raw bytes to the current transport's pty, bypassing
@@ -814,6 +915,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	r.closing = true
+	close(r.shutdownCh)
 	sess := r.sess
 	r.mu.Unlock()
 

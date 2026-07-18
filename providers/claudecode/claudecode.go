@@ -38,6 +38,12 @@ type Config struct {
 	// TranscriptDir is where claude-code keeps project transcripts
 	// (default ~/.claude/projects).
 	TranscriptDir string
+	// HistoryFile is claude-code's own append-only prompt-submission index
+	// (default ~/.claude/history.jsonl) — LocateSession's rung 1 (locate.go).
+	// A history scan is far cheaper than walking every transcript file, so
+	// it runs first whenever the index has a usable entry; rung 2 (a direct
+	// transcript content scan) is the fallback when it doesn't.
+	HistoryFile string
 	// Models overrides the pinned discovery list.
 	Models []provider.Model
 }
@@ -61,6 +67,11 @@ func New(cfg Config) *Provider {
 	if cfg.TranscriptDir == "" {
 		if home, err := os.UserHomeDir(); err == nil {
 			cfg.TranscriptDir = filepath.Join(home, ".claude", "projects")
+		}
+	}
+	if cfg.HistoryFile == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.HistoryFile = filepath.Join(home, ".claude", "history.jsonl")
 		}
 	}
 	if len(cfg.Models) == 0 {
@@ -98,11 +109,14 @@ func (p *Provider) Matrix() provider.Matrix {
 		// wire format the interactive transport already parses.
 		provider.BehaviorOneShotStream: provider.Native,
 		// The structured transport's system/init line announces the ref at
-		// connect (session.go); the terminal transport prints nothing, so a
-		// fresh PTY session's ref is instead discovered from the on-disk
-		// transcript (pty.go's watchRefDiscovery) — a weaker, best-effort
-		// mechanism than the wire announcement, hence Emulated as the
-		// one-row summary across both transports. See README.
+		// connect (session.go). The terminal transport prints nothing, and a
+		// structured session's own announcement can itself be dropped or
+		// delayed past its window — either way, LocateSession (locate.go)
+		// backstops it by content-correlating the Runner's exact first sent
+		// message against claude-code's own local session index
+		// (history.jsonl, rung 1) or its on-disk transcripts directly
+		// (rung 2). Weaker and slower than the wire announcement, hence
+		// Emulated as the one-row summary across both transports. See README.
 		provider.BehaviorRefAnnounce: provider.Emulated,
 	}
 }

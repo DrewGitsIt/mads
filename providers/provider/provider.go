@@ -189,3 +189,31 @@ type TranscriptReader interface {
 type RefAnnouncer interface {
 	RefAnnounced() <-chan string
 }
+
+// SessionLocator is the optional strategy backing BehaviorRefAnnounce when a
+// session has no wire-level announcement (PTY) or the announcement never
+// arrives (a dropped/degraded structured session). It identifies the
+// session started in cwd no earlier than spawnedAfter whose first user turn
+// was firstMessage — content correlation against the provider's own local
+// session index/transcripts, not a heuristic. Implementations must verify
+// any candidate before returning it and decline on ambiguity: ok=false on 0
+// or 2+ matching candidates, timeout, or cancellation. A wrong ref would
+// silently resume someone else's conversation, so guessing is never
+// acceptable — callers may call LocateSession repeatedly (best-effort
+// forever) until ctx is done.
+type SessionLocator interface {
+	LocateSession(ctx context.Context, cwd string, spawnedAfter time.Time, firstMessage string) (ref string, ok bool)
+}
+
+// RefSetter is the write side of SessionLocator: implemented by a Session
+// whose Ref() starts empty and has no self-announcement mechanism (PTY), or
+// whose announcement never arrived (a degraded ACP session). Once the
+// Runner's SessionLocator backstop resolves a ref, it calls SetRef so the
+// live session object itself starts reporting it — every caller that reads
+// Ref() directly off the live session (Transcript, SwitchTransport's resume
+// handle) sees the discovered ref too, not just the Runner's own persisted
+// copy. A session that always knows its own ref has no need to implement
+// this.
+type RefSetter interface {
+	SetRef(ref string)
+}

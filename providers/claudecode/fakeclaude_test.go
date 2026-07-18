@@ -429,5 +429,8 @@ func testProvider(t *testing.T) *Provider {
 		Bin:           exe,
 		Env:           []string{"MADS_FAKE_CLAUDE=1", "MADS_FAKE_CLAUDE_DIR=" + dir},
 		TranscriptDir: dir,
+		// Isolated and, by default, nonexistent — a test provider must never
+		// read the real machine's ~/.claude/history.jsonl.
+		HistoryFile: filepath.Join(dir, "history.jsonl"),
 	})
 }

@@ -441,6 +441,37 @@ func (s *fakeSession) Resize(int, int) error         { return nil }
 // RefAnnounced implements provider.RefAnnouncer — see refCh's doc comment.
 func (s *fakeSession) RefAnnounced() <-chan string { return s.refCh }
 
+// SetRef implements provider.RefSetter, the Runner backstop's write-back
+// path (runner_test.go's TestTranscriptAfterLocateBackstop exercises it).
+// Unlike a real provider, a fakeSession always knows its true ref from Start
+// (deterministic "fake-N" generation, used as the record/history key from
+// the very first Send) — announced is what actually models "unknown until
+// discovered." So this only flips that visibility switch; it doesn't
+// overwrite s.ref, which stays a fixed, lock-free-readable value for the
+// whole session lifetime (Send and friends read it without s.mu).
+func (s *fakeSession) SetRef(string) {
+	s.mu.Lock()
+	if s.announced {
+		s.mu.Unlock()
+		return
+	}
+	s.announced = true
+	// RefAnnounceNever already closed refCh in Start (models "no
+	// announcement mechanism at all") — sending on it now would panic. The
+	// backstop's own goroutine (Runner's watchRefAnnounce) already observed
+	// that close-with-nothing-sent and moved on; there's no reader left to
+	// deliver to.
+	never := s.refAnnounce == RefAnnounceNever
+	s.mu.Unlock()
+	if never {
+		return
+	}
+	select {
+	case s.refCh <- s.ref:
+	default:
+	}
+}
+
 func (s *fakeSession) Interrupt(context.Context) error {
 	select {
 	case s.interrupt <- struct{}{}:
@@ -596,4 +627,42 @@ func (s *fakeSession) emit(ev provider.Event) bool {
 type terminal struct {
 	io.Reader
 	io.Writer
+}
+
+// LocatingFake wraps Fake to add provider.SessionLocator support, scripted
+// via Scenario.LocateRef/LocateDelay. Kept as a distinct type from Fake
+// rather than a method on Fake itself: Go interface satisfaction is
+// structural, so a LocateSession method on Fake would make every fake
+// locate-capable with no way to model "this provider has no SessionLocator
+// at all" — a case runner tests need to cover alongside the scripted-hit
+// and scripted-never-finds cases.
+type LocatingFake struct {
+	*Fake
+}
+
+// NewLocatingWithScenario returns a fake scripted by sc (validated) that
+// also implements provider.SessionLocator.
+func NewLocatingWithScenario(sc Scenario) (*LocatingFake, error) {
+	f, err := NewWithScenario(sc)
+	if err != nil {
+		return nil, err
+	}
+	return &LocatingFake{Fake: f}, nil
+}
+
+// LocateSession implements provider.SessionLocator: it resolves to
+// Scenario.LocateRef after Scenario.LocateDelay, or declines (empty
+// LocateRef, or ctx done first) — the scripted stand-in for a real
+// provider's history/transcript scan.
+func (lf *LocatingFake) LocateSession(ctx context.Context, cwd string, spawnedAfter time.Time, firstMessage string) (string, bool) {
+	if lf.scenario.LocateRef == "" {
+		<-ctx.Done()
+		return "", false
+	}
+	select {
+	case <-time.After(lf.scenario.LocateDelay):
+		return lf.scenario.LocateRef, true
+	case <-ctx.Done():
+		return "", false
+	}
 }

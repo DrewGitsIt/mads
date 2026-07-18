@@ -45,7 +45,7 @@ type transcriptLine struct {
 	IsSidechain bool         `json:"isSidechain"`
 	Message     *wireMessage `json:"message"`
 	// Cwd is the session's working directory, stamped on every line —
-	// discoverRef's candidate filter, not read by normalizeTranscript.
+	// candidateTranscripts's filter, not read by normalizeTranscript.
 	Cwd string `json:"cwd"`
 }
 
@@ -101,22 +101,28 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 	return msgs, nil
 }
 
-// discoverRef scans dir for exactly one candidate transcript belonging to
-// this session: a JSONL file under dir/*/ (mirroring Transcript's glob
-// shape — the path-slug scheme is claude's, not ours) modified after
-// spawnedAt whose content's cwd field matches sessionCwd. Ambiguity (0 or
-// 2+ survivors) returns ok=false — a wrong ref would silently resume
-// someone else's conversation, which is worse than no ref, so this never
-// guesses.
-func discoverRef(dir, sessionCwd string, spawnedAt time.Time) (candidatePath string, ok bool) {
+// candidateTranscripts returns every transcript under dir (a JSONL file
+// under dir/*/, mirroring Transcript's glob shape — the path-slug scheme is
+// claude's, not ours) modified after spawnedAfter whose content's cwd field
+// matches sessionCwd. A small clock-skew margin is subtracted from
+// spawnedAfter before comparing: a transcript write racing microseconds
+// behind this process's own spawn timestamp can otherwise carry an mtime
+// that compares before it.
+//
+// Ambiguity is the caller's problem — this returns every survivor (0, 1, or
+// many); a caller that needs a single answer must narrow further (see
+// discoverRefByContent) and decline rather than guess, since a wrong ref
+// would silently resume someone else's conversation.
+func candidateTranscripts(dir, sessionCwd string, spawnedAfter time.Time) []string {
+	margin := spawnedAfter.Add(-2 * time.Second)
 	matches, err := filepath.Glob(filepath.Join(dir, "*", "*.jsonl"))
 	if err != nil {
-		return "", false
+		return nil
 	}
 	var survivors []string
 	for _, m := range matches {
 		fi, err := os.Stat(m)
-		if err != nil || !fi.ModTime().After(spawnedAt) {
+		if err != nil || !fi.ModTime().After(margin) {
 			continue
 		}
 		cwd, ok := probeCwd(m)
@@ -125,10 +131,63 @@ func discoverRef(dir, sessionCwd string, spawnedAt time.Time) (candidatePath str
 		}
 		survivors = append(survivors, m)
 	}
+	return survivors
+}
+
+// firstUserText returns the text of the first non-sidechain user-role
+// message in the transcript at path, and whether one was found at all.
+func firstUserText(path string) (string, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer func() { _ = f.Close() }()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for sc.Scan() {
+		raw := strings.TrimSpace(sc.Text())
+		if raw == "" {
+			continue
+		}
+		var l transcriptLine
+		if err := json.Unmarshal([]byte(raw), &l); err != nil {
+			continue
+		}
+		if l.IsSidechain || l.Type != "user" || l.Message == nil {
+			continue
+		}
+		var texts []string
+		for _, b := range l.Message.blocks() {
+			if b.Type == "text" && b.Text != "" {
+				texts = append(texts, b.Text)
+			}
+		}
+		if len(texts) > 0 {
+			return strings.Join(texts, "\n"), true
+		}
+	}
+	return "", false
+}
+
+// discoverRefByContent narrows candidateTranscripts's survivors (cwd- and
+// spawn-time-filtered already) to the one whose first user-role message is
+// exactly firstMessage — SessionLocator's rung 2 (locate.go), a direct
+// content scan used when the cheaper history.jsonl index (rung 1) has no
+// usable entry. Declines (ok=false) on 0 or 2+ matches, the same
+// never-guess rule as candidateTranscripts.
+func discoverRefByContent(dir, sessionCwd string, spawnedAfter time.Time, firstMessage string) (ref string, ok bool) {
+	var survivors []string
+	for _, path := range candidateTranscripts(dir, sessionCwd, spawnedAfter) {
+		text, found := firstUserText(path)
+		if !found || text != firstMessage {
+			continue
+		}
+		survivors = append(survivors, path)
+	}
 	if len(survivors) != 1 {
 		return "", false
 	}
-	return survivors[0], true
+	return refFromPath(survivors[0]), true
 }
 
 // probeCwd scans a transcript's lines for the first non-empty cwd field.
