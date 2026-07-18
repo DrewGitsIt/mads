@@ -60,6 +60,18 @@ type Fake struct {
 	// how trust is observable via fakeSession — lets tests assert on
 	// materialization without a real subprocess round-trip.
 	mcpServers map[string][]provider.MCPServerRef
+	// starts records every Start call's StartOptions, in order — lets tests
+	// assert what Resume value a switch's Start call actually received (e.g.
+	// SwitchTransport resuming the provider-announced ref), not just infer
+	// it from the resulting session's Ref().
+	starts []provider.StartOptions
+}
+
+// StartCalls returns every Start call's StartOptions, in order.
+func (f *Fake) StartCalls() []provider.StartOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]provider.StartOptions{}, f.starts...)
 }
 
 // New returns a fake running only the built-in dialect.
@@ -105,6 +117,7 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
 	f.mu.Lock()
+	f.starts = append(f.starts, opts)
 	ref := opts.Resume
 	if ref == "" {
 		f.seq++
@@ -132,7 +145,12 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 		trust = provider.TrustFull
 	}
 	s := &fakeSession{
-		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
+		// announced models providers/claudecode's real behavior
+		// (session.go): a resumed session's ref is already known from
+		// opts.Resume, but a fresh session's real session id is only learned
+		// later, off the wire — modeled here as becoming known once the
+		// first turn begins (see Send).
+		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust, announced: opts.Resume != "",
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -351,8 +369,9 @@ type fakeSession struct {
 	ptyR      *io.PipeReader
 	ptyW      *io.PipeWriter
 
-	mu     sync.Mutex
-	closed bool
+	mu        sync.Mutex
+	closed    bool
+	announced bool // see Start's construction comment
 }
 
 // toolAllowed reports whether ts is permitted at the session's trust level,
@@ -372,7 +391,17 @@ func (s *fakeSession) toolAllowed(ts ToolStep) (bool, string) {
 	return true, ""
 }
 
-func (s *fakeSession) Ref() string                   { return s.ref }
+// Ref returns "" until the ref is known — immediately for a resumed session,
+// only once the first turn begins for a fresh one (see Start's construction
+// comment).
+func (s *fakeSession) Ref() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.announced {
+		return ""
+	}
+	return s.ref
+}
 func (s *fakeSession) Mode() provider.Mode           { return s.mode }
 func (s *fakeSession) Events() <-chan provider.Event { return s.events }
 func (s *fakeSession) Terminal() io.ReadWriter       { return terminal{s.ptyR, io.Discard} }
@@ -411,6 +440,7 @@ func (s *fakeSession) Send(_ context.Context, text string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("session %s is closed", s.ref)
 	}
+	s.announced = true
 	s.mu.Unlock()
 
 	history := s.f.history(s.ref)

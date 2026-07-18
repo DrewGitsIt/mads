@@ -148,10 +148,13 @@ type Runner struct {
 	// transcript has no metadata channel to persist into.
 	turnAttributions map[int]contracts.Attribution
 
-	// lastRef is the provider-native ref of the most recently started
-	// session, kept even while sess == nil mid-switch — SwitchTransport
-	// resumes it, and Transcript falls back to it so the live transcript
-	// keeps serving during a switch instead of going blank.
+	// lastRef is the last-observed provider-native ref, kept in sync by
+	// syncProviderRef as the provider announces it (see providers/
+	// claudecode/session.go: a fresh session's real ref is only learned late,
+	// off the wire) and kept even while sess == nil mid-switch. It's the
+	// SwitchTransport fallback when there's no outgoing session to read
+	// old.Ref() from directly, and Transcript falls back to it so the live
+	// transcript keeps serving during a switch instead of going blank.
 	lastRef string
 
 	// prov and baseOpts are captured once at the end of Start and reused by
@@ -592,6 +595,9 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	}
 	old := r.sess
 	resumeRef := r.lastRef
+	if old != nil {
+		resumeRef = old.Ref()
+	}
 	prov := r.prov
 	opts := r.baseOpts
 	// Nil sess before releasing the lock: Send/Interrupt/TerminalWrite see
@@ -634,6 +640,36 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	}
 
 	return newSess.Ref(), nil
+}
+
+// syncProviderRef re-checks sess's provider-native ref and, if it has
+// changed since this runner last observed it (announced late by the
+// provider — see providers/claudecode/session.go), persists it to both
+// r.lastRef and the Data Service's session record. Called once per turn
+// end, not per event, so this is a cheap in-memory compare in the common
+// case (ref already known) and one Data Service round trip the one time it
+// changes.
+func (r *Runner) syncProviderRef(ctx context.Context, sess provider.Session) {
+	ref := sess.Ref()
+	if ref == "" {
+		return
+	}
+	r.mu.Lock()
+	changed := ref != r.lastRef
+	r.lastRef = ref
+	r.mu.Unlock()
+	if !changed {
+		return
+	}
+	cur, err := r.data.Session(ctx, r.sessionID)
+	if err != nil {
+		log.Printf("runner: load session to sync provider ref: %v", err)
+		return
+	}
+	cur.ProviderRef = ref
+	if err := r.data.UpdateSession(ctx, &cur); err != nil {
+		log.Printf("runner: persist provider ref: %v", err)
+	}
 }
 
 // TerminalWrite writes raw bytes to the current transport's pty, bypassing
@@ -753,6 +789,7 @@ func (r *Runner) pump(sess provider.Session) {
 	for ev := range sess.Events() {
 		if ev.Kind == provider.EventTurnEnd {
 			r.onTurnEnd()
+			r.syncProviderRef(context.Background(), sess)
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 			r.recordFileChange(ev.Tool.Path)
@@ -809,6 +846,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			for ev := range events {
 				if ev.Kind == provider.EventTurnEnd {
 					r.onTurnEnd()
+					r.syncProviderRef(context.Background(), sess)
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 					r.recordFileChange(ev.Tool.Path)

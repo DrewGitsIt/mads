@@ -280,6 +280,11 @@ func TestDoubleAttachRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	// A fresh session's ref is only known once the first turn begins (models
+	// providers/claudecode's late wire announcement — see fakeSession.Ref).
+	if err := first.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
 	ref := first.Ref()
 
 	if _, err := f.Start(ctx, provider.StartOptions{Mode: provider.ModePTY, Resume: ref}); err == nil {

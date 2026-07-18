@@ -211,8 +211,9 @@ func TestSwitchTransportPreservesRef(t *testing.T) {
 	sess := newSession(t, base)
 	data := dataclient.New(base, sess.ID)
 
+	fp := fake.New()
 	reg := provider.NewRegistry()
-	if err := reg.Register(fake.New()); err != nil {
+	if err := reg.Register(fp); err != nil {
 		t.Fatalf("register fake: %v", err)
 	}
 
@@ -238,6 +239,21 @@ func TestSwitchTransportPreservesRef(t *testing.T) {
 	ref1, err := r.SwitchTransport(ctx, provider.ModePTY)
 	if err != nil {
 		t.Fatalf("switch to terminal: %v", err)
+	}
+	if ref1 == "" {
+		t.Fatal("ref1 is empty, want the chat turn's announced ref")
+	}
+
+	// The switch to terminal must have resumed the ref the chat turn
+	// announced — the regression this test guards against: the PTY launch
+	// silently dropping --resume because the runner captured a stale (empty)
+	// snapshot instead of the outgoing session's live ref.
+	starts := fp.StartCalls()
+	if len(starts) == 0 {
+		t.Fatal("no Start calls recorded")
+	}
+	if got := starts[len(starts)-1].Resume; got != ref1 {
+		t.Fatalf("terminal Start's Resume = %q, want %q", got, ref1)
 	}
 
 	// The fake's Send doesn't gate on mode — this is fake-specific
@@ -284,6 +300,115 @@ func TestSwitchTransportPreservesRef(t *testing.T) {
 		if texts[i] != want[i] {
 			t.Fatalf("transcript[%d] = %q, want %q (full: %v)", i, texts[i], want[i], texts)
 		}
+	}
+}
+
+// TestProviderRefPersistedAfterFirstTurn is the acceptance test for
+// syncProviderRef: a fresh session's ProviderRef is empty right after Start
+// (the provider hasn't announced it yet) and becomes the real announced ref
+// once the first turn completes.
+func TestProviderRefPersistedAfterFirstTurn(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef != "" {
+		t.Fatalf("provider_ref = %q right after Start, want empty (fresh session, unannounced)", got.ProviderRef)
+	}
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	r.mu.Lock()
+	observed := r.lastRef
+	r.mu.Unlock()
+	if observed == "" {
+		t.Fatal("runner never observed an announced ref")
+	}
+
+	got2, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got2.ProviderRef != observed {
+		t.Fatalf("provider_ref = %q, want the announced ref %q", got2.ProviderRef, observed)
+	}
+}
+
+// TestSwitchTransportWithPreexistingRef proves the old.Ref() capture in
+// SwitchTransport doesn't regress the already-working case: a session
+// resumed with a known ProviderRef (so Ref() is non-empty from Start,
+// no announcement delay) still switches transport with the right Resume.
+func TestSwitchTransportWithPreexistingRef(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	shared := fake.New()
+
+	reg1 := provider.NewRegistry()
+	if err := reg1.Register(shared); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r1 := New(sess.ID, data, reg1)
+	if err := r1.Start(ctx); err != nil {
+		t.Fatalf("start r1: %v", err)
+	}
+	ch1, unsub1 := r1.Subscribe()
+	if err := r1.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send r1: %v", err)
+	}
+	drainText(t, ch1)
+	unsub1()
+	if err := r1.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown r1: %v", err)
+	}
+
+	origRef, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if origRef.ProviderRef == "" {
+		t.Fatal("provider_ref not persisted after r1's turn")
+	}
+
+	reg2 := provider.NewRegistry()
+	if err := reg2.Register(shared); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r2 := New(sess.ID, data, reg2)
+	if err := r2.Start(ctx); err != nil {
+		t.Fatalf("start r2: %v", err)
+	}
+	t.Cleanup(func() { _ = r2.Shutdown(ctx) })
+
+	ref, err := r2.SwitchTransport(ctx, provider.ModePTY)
+	if err != nil {
+		t.Fatalf("switch to terminal: %v", err)
+	}
+	if ref != origRef.ProviderRef {
+		t.Fatalf("switch ref = %q, want the pre-existing ref %q", ref, origRef.ProviderRef)
 	}
 }
 

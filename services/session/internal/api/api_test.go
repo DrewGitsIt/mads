@@ -212,6 +212,75 @@ func TestSwitchTransportRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(New(r))
 	t.Cleanup(srv.Close)
 
+	// Drive one chat turn first: a genuinely fresh, zero-turn session has no
+	// announced provider ref yet (providers/claudecode learns it late, off
+	// the wire), so a terminal switch straight off Start would resume "" —
+	// matching real behavior, not a bug. Wait for the turn to actually reach
+	// turn_end (not just the 202 accepting it) — SwitchTransport refuses
+	// mid-turn, and the fake's echo turn, though instant, still resolves on
+	// a separate goroutine that can lose the race against an immediate
+	// switch.
+	streamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/output", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamReq.Header.Set("Accept", "text/event-stream")
+	streamResp, err := srv.Client().Do(streamReq)
+	if err != nil {
+		t.Fatalf("GET /output: %v", err)
+	}
+	t.Cleanup(func() { _ = streamResp.Body.Close() })
+
+	events := make(chan provider.Event, 64)
+	go func() {
+		defer close(events)
+		sc := bufio.NewScanner(streamResp.Body)
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			line := sc.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			var ev provider.Event
+			if json.Unmarshal([]byte(strings.TrimSpace(line[len("data:"):])), &ev) != nil {
+				continue
+			}
+			events <- ev
+		}
+	}()
+
+	msgBody, err := json.Marshal(map[string]string{"text": "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgResp, err := srv.Client().Post(srv.URL+"/messages", "application/json", bytes.NewReader(msgBody))
+	if err != nil {
+		t.Fatalf("POST /messages: %v", err)
+	}
+	_ = msgResp.Body.Close()
+	if msgResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /messages status = %d, want 202", msgResp.StatusCode)
+	}
+
+	deadline := time.After(5 * time.Second)
+waitTurnEnd:
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				t.Fatal("stream closed before turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				break waitTurnEnd
+			}
+			if ev.Kind == provider.EventError {
+				t.Fatalf("unexpected error event: %s", ev.Text)
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for turn_end")
+		}
+	}
+
 	toTerminal, err := json.Marshal(map[string]string{"mode": "terminal"})
 	if err != nil {
 		t.Fatal(err)
