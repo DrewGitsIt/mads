@@ -55,8 +55,10 @@ type wireBlock struct {
 }
 
 type wireUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 }
 
 // blocks decodes message content: a bare string becomes one text block.
@@ -117,9 +119,11 @@ func (l *wireLine) events(interrupted bool) []provider.Event {
 		ev := provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
 		if l.Usage != nil {
 			ev.Usage = &provider.Usage{
-				InputTokens:  l.Usage.InputTokens,
-				OutputTokens: l.Usage.OutputTokens,
-				Model:        l.model(),
+				InputTokens:              l.Usage.InputTokens,
+				OutputTokens:             l.Usage.OutputTokens,
+				CacheCreationInputTokens: l.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     l.Usage.CacheReadInputTokens,
+				Model:                    l.model(),
 			}
 		}
 		if l.IsError {
