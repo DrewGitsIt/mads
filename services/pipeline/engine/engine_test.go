@@ -112,6 +112,28 @@ func (h *harness) task(t *testing.T, id string) contracts.Task {
 	return task
 }
 
+// waitStatus polls until task id reaches status, failing the test if it
+// doesn't within timeout. Replaces fixed sleeps used to synchronize with
+// the engine's real scheduling latency, which a fixed sleep can't bound
+// once the suite runs under load.
+func (h *harness) waitStatus(t *testing.T, id string, status contracts.TaskStatus, timeout time.Duration) contracts.Task {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		task, err := h.data.Task(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == status {
+			return task
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task %s: status %s not reached within %s (last seen: %s)", id, status, timeout, task.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (h *harness) events(t *testing.T, types ...string) []contracts.Envelope {
 	t.Helper()
 	evs, err := h.data.Events(context.Background(), 0, h.sess.ID, types)

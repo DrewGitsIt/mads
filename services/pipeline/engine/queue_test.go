@@ -23,7 +23,7 @@ func TestMidRunTaskPickup(t *testing.T) {
 	f := mustScenario(t, fake.Rule{
 		Match: "Task: long-runner", Chunks: []string{"working ", "still ", "done"}, DelayMs: 300,
 	})
-	h.seed(contracts.Task{Title: "long-runner"})
+	seeded := h.seed(contracts.Task{Title: "long-runner"})
 
 	src := "name: solo\nstages:\n  - name: executor\n    agent: executor\n"
 	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
@@ -45,8 +45,10 @@ func TestMidRunTaskPickup(t *testing.T) {
 		done <- outcome{sum, err}
 	}()
 
-	// Insert mid-run (the long-runner needs ~900ms).
-	time.Sleep(200 * time.Millisecond)
+	// Wait for the engine to actually claim and start the seeded task
+	// before inserting mid-run — a fixed sleep can't be sized reliably
+	// once the suite runs under load.
+	h.waitStatus(t, seeded[0].ID, contracts.StatusInProgress, 5*time.Second)
 	late := contracts.Task{Title: "late arrival", SessionID: h.sess.ID, Source: "pipeline"}
 	if err := h.data.CreateTask(context.Background(), &late); err != nil {
 		t.Fatal(err)
@@ -71,7 +73,7 @@ func TestMidRunCycleRejected(t *testing.T) {
 	f := mustScenario(t, fake.Rule{
 		Match: "Task: long-runner", Chunks: []string{"working ", "still ", "done"}, DelayMs: 300,
 	})
-	h.seed(contracts.Task{Title: "long-runner"})
+	seeded := h.seed(contracts.Task{Title: "long-runner"})
 
 	src := "name: solo\nstages:\n  - name: executor\n    agent: executor\n"
 	tpl, _ := template.Check([]byte(src), func(string) bool { return true })
@@ -89,11 +91,16 @@ func TestMidRunCycleRejected(t *testing.T) {
 		done <- sum
 	}()
 
-	time.Sleep(200 * time.Millisecond)
-	// Import a mutually-dependent pair — legal at rest (§3.6), never runnable.
+	h.waitStatus(t, seeded[0].ID, contracts.StatusInProgress, 5*time.Second)
+	// Import as drafts: a draft is excluded from runnable() (engine.go)
+	// regardless of its dependency state, so neither task can be picked up
+	// as valid work during the two writes below that build the cycle.
+	// Confirming afterward makes them live mid-run inserts — the real
+	// scenario under test — without ever exposing a half-built-cycle,
+	// fully-runnable task to the scheduler.
 	pair, err := h.data.ImportTasks(context.Background(), []contracts.Task{
-		{Title: "chicken", SessionID: h.sess.ID, Source: "pipeline"},
-		{Title: "egg", SessionID: h.sess.ID, Source: "pipeline"},
+		{Title: "chicken", SessionID: h.sess.ID, Source: "pipeline", Draft: true},
+		{Title: "egg", SessionID: h.sess.ID, Source: "pipeline", Draft: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +110,11 @@ func TestMidRunCycleRejected(t *testing.T) {
 	b.Dependencies = []string{a.ID}
 	for _, task := range []*contracts.Task{&a, &b} {
 		if err := h.data.UpdateTask(context.Background(), task); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		if err := h.data.ConfirmTask(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
 	}
