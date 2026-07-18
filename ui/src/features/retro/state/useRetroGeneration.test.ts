@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useRetroGeneration } from "./useRetroGeneration";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 
+let nextSeq = 1;
 function envelope(type: string, payload: unknown) {
-  return JSON.stringify({ seq: 1, type, actor: "system", payload });
+  return JSON.stringify({ seq: nextSeq++, type, actor: "system", payload });
 }
 
 describe("useRetroGeneration", () => {
   beforeEach(() => {
+    nextSeq = 1;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
   });

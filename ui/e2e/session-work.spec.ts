@@ -81,6 +81,31 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByText("e2e session-work task")).toBeVisible();
   });
 
+  // Reproduces tsk_15aa8fee6de66967's blocker: with the rail and the Tasks
+  // tab both mounted (each a live SSE subscriber), a task Save PUT used to
+  // queue behind a saturated HTTP/1.1 connection pool and hang indefinitely.
+  // The tight timeout below fails loudly instead of just eventually timing
+  // out at Playwright's default if that regresses.
+  test("editing and saving a task from a loaded workspace completes promptly", async ({
+    page,
+    routerURL,
+  }) => {
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Tasks" }).click();
+
+    await page.getByText(workTask.title, { exact: true }).click();
+    await page.getByLabel("Title").fill(`${workTask.title} (edited)`);
+    await page.getByRole("button", { name: "Save" }).click();
+
+    // handleSave doesn't close the sheet — the Save button toggling back
+    // from "Saving…" is the only post-save UI signal, and it must happen
+    // promptly, not after Playwright's default (much longer) timeout.
+    await expect(page.getByRole("button", { name: "Saving…" })).toHaveCount(0, { timeout: 5000 });
+    await expect(page.getByLabel("Title")).toHaveValue(`${workTask.title} (edited)`);
+  });
+
   test("files tab shows the pipeline's changed files", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');

@@ -38,4 +38,11 @@ export class FakeEventSource {
       handler({ data } as MessageEvent<string>);
     }
   }
+
+  /** Simulates a dropped connection — fires registered "error" listeners. */
+  simulateError(): void {
+    for (const handler of this.listeners.get("error") ?? []) {
+      handler({} as Event as MessageEvent);
+    }
+  }
 }

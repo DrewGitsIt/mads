@@ -236,8 +236,28 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
     void refetchTasks();
     let unsubscribe: (() => void) | undefined;
 
+    function handleEnvelope(env: Envelope) {
+      if (FOLD_EVENT_TYPES.includes(env.type)) dispatch({ kind: "envelope", env });
+      if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
+    }
+
     async function resumeAndSubscribe() {
-      let since: number | undefined;
+      // Register with the bus before the REST catch-up starts, buffering
+      // incoming envelopes locally instead of folding them yet — this closes
+      // the race between "what REST returns" and "what arrives live while
+      // REST is in flight" without needing a dedicated since-scoped
+      // connection outside the shared bus (HANDOFF.md §3).
+      const buffered: Envelope[] = [];
+      let live = false;
+      unsubscribe = subscribeToEvents(
+        { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
+        (env) => {
+          if (live) handleEnvelope(env);
+          else buffered.push(env);
+        },
+      );
+
+      let caughtUpSeq = 0;
       try {
         const runs = await client.listRuns(sessionId);
         const inFlight = runs.find((r) => r.outcome === "running");
@@ -246,25 +266,19 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
           if (!mounted.current) return;
           const seeded = events.reduce(foldReducer, initialRunFoldState);
           dispatch({ kind: "seed", state: seeded });
-          since = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : inFlight.run_seq - 1;
+          caughtUpSeq = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : inFlight.run_seq - 1;
         }
       } catch {
         // Best-effort: fall through to a live-only tail, same as today's behavior.
       }
       if (!mounted.current) return;
       setResuming(false);
-      // `since` is only set when resuming an in-flight run — that gives this
-      // mount a dedicated SSE connection outside events.ts's pool-by-URL
-      // (types+sessionId+since), instead of sharing the pool with
-      // SessionWorkspace/ConversationTab/MergeBackFlow. Accepted trade-off
-      // (HANDOFF.md §2c) — don't "fix" this into always omitting `since`.
-      unsubscribe = subscribeToEvents(
-        { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES, since },
-        (env) => {
-          if (FOLD_EVENT_TYPES.includes(env.type)) dispatch({ kind: "envelope", env });
-          if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
-        },
-      );
+      live = true;
+      // Flush what arrived live during catch-up, deduping the overlap edge
+      // against what REST already returned.
+      for (const env of buffered) {
+        if (env.seq > caughtUpSeq) handleEnvelope(env);
+      }
     }
 
     void resumeAndSubscribe();

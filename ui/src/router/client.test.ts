@@ -126,26 +126,6 @@ describe("FetchRouterClient", () => {
     expect(result.conflicted).toBe(false);
   });
 
-  it("streamControlEvents opens /events with session_id and types filters", () => {
-    // happy-dom (this suite's test environment) doesn't implement
-    // EventSource, so stub the global the same way mockFetchOnce stubs
-    // fetch — this only asserts the URL construction, not real SSE framing.
-    class StubEventSource {
-      constructor(public url: string) {}
-      close(): void {}
-    }
-    vi.stubGlobal("EventSource", StubEventSource);
-
-    const client = new FetchRouterClient("http://router.local");
-    const source = client.streamControlEvents({
-      sessionId: "s1",
-      types: ["merge.attempted", "merge.completed"],
-    });
-    expect((source as unknown as StubEventSource).url).toBe(
-      "http://router.local/events?session_id=s1&types=merge.attempted%2Cmerge.completed",
-    );
-  });
-
   it("getEvents GETs /events with session_id, since, and types query params, no Accept header", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchRouterClient("http://router.local");

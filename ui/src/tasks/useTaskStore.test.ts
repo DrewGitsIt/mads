@@ -1,11 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { useTaskStore } from "./useTaskStore";
 import { FakeRouterClient, fixtureTasks } from "../router/fixtures";
+import { FakeEventSource } from "../router/testFakeEventSource";
+import type { Envelope } from "../router/types";
 
 const sessionActiveTaskCount = fixtureTasks.filter((t) => t.session_id === "session-active").length;
 
+let nextSeq = 1;
+function emitTaskEvent(envelope: Omit<Envelope, "seq" | "timestamp" | "actor">) {
+  const full: Envelope = { seq: nextSeq++, timestamp: new Date().toISOString(), actor: "test", ...envelope };
+  FakeEventSource.instances[0].emit(full.type, JSON.stringify(full));
+}
+
 describe("useTaskStore", () => {
+  beforeEach(() => {
+    nextSeq = 1;
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("loads tasks for the session on mount", async () => {
     const client = new FakeRouterClient();
     const { result } = renderHook(() => useTaskStore(client, "session-active"));
@@ -22,7 +40,7 @@ describe("useTaskStore", () => {
     await waitFor(() => expect(result.current.tasks.length).toBe(sessionActiveTaskCount));
 
     await client.updateTask({ ...result.current.tasksById["tsk_ready"], title: "Renamed via event" });
-    client.taskEventSource.dispatch({
+    emitTaskEvent({
       type: "task.updated",
       task_id: "tsk_ready",
       session_id: "session-active",
@@ -42,7 +60,7 @@ describe("useTaskStore", () => {
       session_id: "session-active",
       title: "Created via event",
     });
-    client.taskEventSource.dispatch({
+    emitTaskEvent({
       type: "task.created",
       task_id: created.id,
       session_id: "session-active",
@@ -59,7 +77,7 @@ describe("useTaskStore", () => {
     await waitFor(() => expect(result.current.tasks.length).toBe(sessionActiveTaskCount));
 
     await client.discardTask("tsk_draft");
-    client.taskEventSource.dispatch({
+    emitTaskEvent({
       type: "task.discarded",
       task_id: "tsk_draft",
       session_id: "session-active",

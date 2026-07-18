@@ -18,6 +18,25 @@ export default tseslint.config(
       // interface-mandated but intentionally-unused args (e.g. stub
       // methods matching a shared client interface).
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name='EventSource']",
+          message:
+            "Don't open a raw EventSource — control-plane subscribers use " +
+            "subscribeToEvents() (src/router/events.ts); data-plane streams " +
+            "are already bounded in router/client.ts's streamSession and " +
+            "pipeline/client/pipelineClient.ts's streamTaskOutput.",
+        },
+      ],
     },
+  },
+  {
+    files: [
+      "src/router/events.ts",
+      "src/router/client.ts",
+      "src/pipeline/client/pipelineClient.ts",
+    ],
+    rules: { "no-restricted-syntax": "off" },
   },
 );

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { FakeRouterClient } from "../../router/fixtures";
 import { useTaskStore } from "../useTaskStore";
+import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { RouterClient } from "../../router/client";
-import type { Task } from "../../router/types";
+import type { Envelope, Task } from "../../router/types";
 import type { GraphCanvasProps } from "./GraphCanvas";
 import { TaskGraphView } from "./TaskGraphView";
 
@@ -47,9 +48,22 @@ function DragHarness({ routerClient, sessionId }: { routerClient: RouterClient; 
   );
 }
 
+let nextSeq = 1;
+function emitTaskEvent(envelope: Omit<Envelope, "seq" | "timestamp" | "actor">) {
+  const full: Envelope = { seq: nextSeq++, timestamp: new Date().toISOString(), actor: "test", ...envelope };
+  FakeEventSource.instances[0].emit(full.type, JSON.stringify(full));
+}
+
 beforeEach(() => {
   capturedProps = null;
   localStorage.clear();
+  nextSeq = 1;
+  FakeEventSource.instances = [];
+  vi.stubGlobal("EventSource", FakeEventSource);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("TaskGraphView — tray -> canvas drop", () => {
@@ -123,7 +137,7 @@ describe("TaskGraphView — canvas -> tray drag-out", () => {
     // Mirrors what the real app does after any updateTask call: the owning
     // useTaskStore refetches on a streamed task.updated envelope.
     act(() => {
-      client.taskEventSource.dispatch({ type: "task.updated", task_id: "tsk_b", session_id: "ses_1" });
+      emitTaskEvent({ type: "task.updated", task_id: "tsk_b", session_id: "ses_1" });
     });
     await waitFor(() => expect(capturedProps!.canvasNodes.some((n) => n.id === "tsk_a")).toBe(false));
 
@@ -134,7 +148,7 @@ describe("TaskGraphView — canvas -> tray drag-out", () => {
     expect(updateSpy).toHaveBeenLastCalledWith(expect.objectContaining({ id: "tsk_b", dependencies: ["tsk_a"] }));
 
     act(() => {
-      client.taskEventSource.dispatch({ type: "task.updated", task_id: "tsk_b", session_id: "ses_1" });
+      emitTaskEvent({ type: "task.updated", task_id: "tsk_b", session_id: "ses_1" });
     });
     await waitFor(() => expect(capturedProps!.canvasNodes.some((n) => n.id === "tsk_a")).toBe(true));
   });
