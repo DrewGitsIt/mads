@@ -25,6 +25,26 @@
   stroke-width: 1.5px;
 }
 
+/* Declared before .edgeCycle so a cycle edge (most urgent signal) always
+   wins by source order on equal-specificity conflicts — e.g. a live edge
+   into a blocked node still yields to a cycle tint if both apply. */
+.edgeDone :global(.react-flow__edge-path) {
+  opacity: 0.5;
+}
+
+.edgeLive :global(.react-flow__edge-path) {
+  stroke: var(--info);
+}
+
+.edgeLiveStatic :global(.react-flow__edge-path) {
+  stroke: var(--info);
+  stroke-dasharray: 6 5;
+}
+
+.edgeIntoBlocked :global(.react-flow__edge-path) {
+  stroke: var(--bad);
+}
+
 .edgeCycle :global(.react-flow__edge-path) {
   stroke: var(--bad);
 }

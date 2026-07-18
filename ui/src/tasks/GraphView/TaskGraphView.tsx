@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../../components/Toast/Toast";
+import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../router/client";
 import type { Task } from "../../router/types";
 import {
@@ -12,9 +13,13 @@ import {
   type EdgeStripPlan,
 } from "./edgeOps";
 import { GraphCanvas } from "./GraphCanvas";
+import { graphStatusOf, type GraphStatus } from "./graphStatus";
 import { computeGraphLayout, type ComponentSlots } from "./layout";
 import { loadPositions, savePositions } from "./positions";
+import { StatusFilterStrip } from "./StatusFilterStrip";
 import { trayOrder } from "./tray";
+import { useGraphRunState } from "./useGraphRunState";
+import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 import { UnsequencedTray } from "./UnsequencedTray";
 import styles from "./TaskGraphView.module.css";
 
@@ -23,6 +28,8 @@ export interface TaskGraphViewProps {
   routerClient: RouterClient;
   tasks: Task[];
   tasksById: Record<string, Task>;
+  /** Opt-in — no live run-state subscription (and no EventSource) is ever created without it. */
+  pipelineClient?: PipelineClient;
   onSelectTask?: (task: Task) => void;
 }
 
@@ -59,6 +66,7 @@ export function TaskGraphView({
   routerClient,
   tasks,
   tasksById,
+  pipelineClient,
   onSelectTask,
 }: TaskGraphViewProps) {
   const [cycles, setCycles] = useState<string[][]>([]);
@@ -68,6 +76,18 @@ export function TaskGraphView({
   const [pendingDragOut, setPendingDragOut] = useState<PendingDragOut | null>(null);
   const [toast, setToast] = useState<GraphToast | null>(null);
   const [autoLayoutSignal, setAutoLayoutSignal] = useState(0);
+  const runState = useGraphRunState(sessionId, pipelineClient);
+  const reducedMotion = usePrefersReducedMotion();
+  const [statusFilter, setStatusFilter] = useState<GraphStatus | null>(null);
+  const [statusSpotlight, setStatusSpotlight] = useState<GraphStatus | null>(null);
+  const activeStatus = statusSpotlight ?? statusFilter;
+  const statusDimmedIds = activeStatus
+    ? new Set(tasks.filter((t) => graphStatusOf(t) !== activeStatus).map((t) => t.id))
+    : null;
+
+  function handleToggleStatusFilter(status: GraphStatus) {
+    setStatusFilter((prev) => (prev === status ? null : status));
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -213,7 +233,18 @@ export function TaskGraphView({
 
   return (
     <div className={styles.wrapper}>
-      <UnsequencedTray tasks={trayTasks} tasksById={tasksById} containerRef={trayRef} />
+      <UnsequencedTray
+        tasks={trayTasks}
+        tasksById={tasksById}
+        containerRef={trayRef}
+        reducedMotion={reducedMotion}
+      />
+      <StatusFilterStrip
+        tasks={tasks}
+        activeFilter={statusFilter}
+        onHoverStatus={setStatusSpotlight}
+        onToggleFilter={handleToggleStatusFilter}
+      />
       <div className={styles.canvas}>
         {cycles.length > 0 && (
           <div className={styles.cycleBanner} role="status">
@@ -226,6 +257,9 @@ export function TaskGraphView({
           tasksById={tasksById}
           unsequencedIds={unsequencedIds}
           cycleNodeIds={cycleNodeIds}
+          taskRunState={runState?.taskRunState}
+          columns={runState?.columns}
+          statusDimmedIds={statusDimmedIds}
           onSelectTask={onSelectTask}
           onNodeDragStop={handleNodeDragStop}
           onDropOnCanvas={handleDropOnCanvas}

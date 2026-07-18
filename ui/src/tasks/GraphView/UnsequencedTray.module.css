@@ -32,6 +32,12 @@
   cursor: grabbing;
 }
 
+/* Done recedes here too, same principle as the canvas card — finished work
+   shouldn't compete for attention even while waiting in the tray. */
+.done {
+  opacity: 0.55;
+}
+
 .title {
   font-size: var(--fs-sm);
   color: var(--text);

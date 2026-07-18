@@ -49,8 +49,8 @@ function ConversationTabView({
   );
 }
 
-function TasksTabView({ sessionId, routerClient }: WorkspaceTabContext) {
-  return <TasksTab sessionId={sessionId} routerClient={routerClient} />;
+function TasksTabView({ sessionId, routerClient, pipelineClient }: WorkspaceTabContext) {
+  return <TasksTab sessionId={sessionId} routerClient={routerClient} pipelineClient={pipelineClient} />;
 }
 
 function FilesTabView({ sessionId, routerClient }: WorkspaceTabContext) {

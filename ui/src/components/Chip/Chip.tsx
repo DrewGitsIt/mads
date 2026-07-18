@@ -9,6 +9,8 @@ export interface ChipProps {
   className?: string;
   onClick?: () => void;
   pressed?: boolean;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
 }
 
 export function Chip({
@@ -17,6 +19,8 @@ export function Chip({
   className,
   onClick,
   pressed,
+  onMouseEnter,
+  onMouseLeave,
 }: ChipProps) {
   const classes = [styles.chip, styles[tone], className]
     .filter(Boolean)
@@ -28,10 +32,16 @@ export function Chip({
         className={classes}
         aria-pressed={pressed}
         onClick={onClick}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
       >
         {children}
       </button>
     );
   }
-  return <span className={classes}>{children}</span>;
+  return (
+    <span className={classes} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave}>
+      {children}
+    </span>
+  );
 }

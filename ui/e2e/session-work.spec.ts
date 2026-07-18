@@ -165,5 +165,17 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByText("Runs when a slot opens", { exact: false })).toBeVisible();
     await expect(page.getByText("e2e session-work task")).toBeVisible(); // tray
     await expect(page.locator(".react-flow__node").getByText("e2e graph dependent")).toBeVisible(); // canvas
+
+    // All 4 seeded tasks end up "done" once both scripted pipeline runs
+    // finish — the status-filter strip's live counts must reflect that.
+    await expect(page.getByRole("button", { name: "4 done" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "0 in progress" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "0 ready" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "0 blocked" })).toBeVisible();
+
+    // The seeded workTask ended "done" and lives in the tray (no deps) — it
+    // must visibly recede there too, same as a done canvas card would.
+    const workTaskCard = page.getByText(workTask.title).locator("..");
+    await expect(workTaskCard).toHaveCSS("opacity", "0.55");
   });
 });

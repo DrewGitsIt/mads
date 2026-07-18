@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { GraphCanvas } from "./GraphCanvas";
 import { computeGraphLayout } from "./layout";
@@ -105,6 +105,28 @@ describe("GraphCanvas", () => {
     const classNames = handles.map((h) => h.className);
     expect(classNames.some((c) => c.includes("handleIn"))).toBe(true);
     expect(classNames.some((c) => c.includes("handleOut"))).toBe(true);
+  });
+
+  describe("prefers-reduced-motion", () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("replaces the animated dash with a static edgeLiveStatic class and drops the xyflow animated class", () => {
+      vi.stubGlobal("matchMedia", (query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      }));
+      const { container } = renderCanvas();
+      const g = container.querySelector('.react-flow__edge[data-id="tsk_a->tsk_b"]');
+      expect(g?.classList.contains("animated")).toBe(false);
+      expect(Array.from(g?.classList ?? []).some((c) => c.includes("edgeLiveStatic"))).toBe(true);
+      expect(Array.from(g?.classList ?? []).some((c) => c.includes("edgeLive") && !c.includes("edgeLiveStatic"))).toBe(
+        false,
+      );
+    });
   });
 });
 
