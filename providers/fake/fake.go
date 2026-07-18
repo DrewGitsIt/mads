@@ -111,6 +111,9 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorMCPServers: provider.Native,
 		// OneShot streams scripted chunks with their scripted delay.
 		provider.BehaviorOneShotStream: provider.Native,
+		// The fake implements RefAnnouncer and scripts timing via
+		// Scenario.RefAnnounce for conformance/runner test coverage.
+		provider.BehaviorRefAnnounce: provider.Native,
 	}
 }
 
@@ -146,13 +149,24 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	if trust == "" {
 		trust = provider.TrustFull
 	}
+	// announced models providers/claudecode's real behavior (session.go): a
+	// resumed session's ref is already known from opts.Resume regardless of
+	// scenario timing. A fresh session's timing is scripted by
+	// Scenario.RefAnnounce: on_connect fires immediately, the default fires
+	// once the first turn begins (see Send), never leaves it unknown
+	// forever (models PTY discovery giving up).
+	timing := f.scenario.RefAnnounce
+	announced := opts.Resume != "" || timing == RefAnnounceOnConnect
+	refCh := make(chan string, 1)
+	switch {
+	case announced:
+		refCh <- ref
+	case timing == RefAnnounceNever:
+		close(refCh)
+	}
 	s := &fakeSession{
-		// announced models providers/claudecode's real behavior
-		// (session.go): a resumed session's ref is already known from
-		// opts.Resume, but a fresh session's real session id is only learned
-		// later, off the wire — modeled here as becoming known once the
-		// first turn begins (see Send).
-		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust, announced: opts.Resume != "",
+		f: f, ref: ref, mode: opts.Mode, cwd: opts.Cwd, trust: trust,
+		announced: announced, refAnnounce: timing, refCh: refCh,
 		events:    make(chan provider.Event, 256),
 		interrupt: make(chan struct{}, 1),
 	}
@@ -371,15 +385,20 @@ func usage(prompt, reply string) provider.Usage {
 }
 
 type fakeSession struct {
-	f         *Fake
-	ref       string
-	mode      provider.Mode
-	cwd       string
-	trust     provider.Trust
-	events    chan provider.Event
-	interrupt chan struct{}
-	ptyR      *io.PipeReader
-	ptyW      *io.PipeWriter
+	f           *Fake
+	ref         string
+	mode        provider.Mode
+	cwd         string
+	trust       provider.Trust
+	refAnnounce RefAnnounceTiming
+	events      chan provider.Event
+	interrupt   chan struct{}
+	ptyR        *io.PipeReader
+	ptyW        *io.PipeWriter
+	// refCh delivers ref exactly once (Start, for on_connect/resume, or Send,
+	// for the default first-turn timing) and closes with nothing sent if
+	// refAnnounce is RefAnnounceNever — see RefAnnounced.
+	refCh chan string
 
 	mu        sync.Mutex
 	closed    bool
@@ -419,6 +438,9 @@ func (s *fakeSession) Events() <-chan provider.Event { return s.events }
 func (s *fakeSession) Terminal() io.ReadWriter       { return terminal{s.ptyR, io.Discard} }
 func (s *fakeSession) Resize(int, int) error         { return nil }
 
+// RefAnnounced implements provider.RefAnnouncer — see refCh's doc comment.
+func (s *fakeSession) RefAnnounced() <-chan string { return s.refCh }
+
 func (s *fakeSession) Interrupt(context.Context) error {
 	select {
 	case s.interrupt <- struct{}{}:
@@ -452,8 +474,21 @@ func (s *fakeSession) Send(_ context.Context, text string) error {
 		s.mu.Unlock()
 		return fmt.Errorf("session %s is closed", s.ref)
 	}
-	s.announced = true
+	// Only the default (first-turn) timing learns the ref here; on_connect
+	// already announced it in Start, and RefAnnounceNever must never learn
+	// it at all (models a transport with no announcement mechanism, e.g.
+	// PTY discovery that never finds a candidate).
+	first := s.refAnnounce == RefAnnounceOnFirstTurn && !s.announced
+	if first {
+		s.announced = true
+	}
 	s.mu.Unlock()
+	if first {
+		select {
+		case s.refCh <- s.ref:
+		default:
+		}
+	}
 
 	history := s.f.history(s.ref)
 	s.f.record(s.ref, provider.Message{Role: "user", Text: text})

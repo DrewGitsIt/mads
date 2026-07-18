@@ -123,6 +123,13 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 		c.add(provider.BehaviorResume, c.resumeRefused(), "")
 	}
 
+	if structured {
+		c.add(provider.BehaviorRefAnnounce, c.refAnnounce(), "")
+	} else {
+		c.add(provider.BehaviorRefAnnounce, nil,
+			"not probed: ref announcement verification needs the structured transport")
+	}
+
 	c.add(provider.BehaviorTranscript, c.transcript(structured), "")
 	c.add(provider.BehaviorModelDiscovery, c.models(), "")
 
@@ -390,6 +397,63 @@ func (c *checker) resume() error {
 		return fmt.Errorf("resumed session lost context: recall reply %q missing marker %q", text, marker)
 	}
 	return nil
+}
+
+// refAnnounce probes BehaviorRefAnnounce over ACP: a declared-working
+// provider must make Ref() non-empty, or announce one via RefAnnouncer,
+// strictly before a full echo turn completes. A declared-unsupported
+// provider must never do either.
+func (c *checker) refAnnounce() error {
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		return fmt.Errorf("Start(acp): %w", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	working := c.m[provider.BehaviorRefAnnounce].Works()
+
+	if ref := sess.Ref(); ref != "" {
+		if !working {
+			return errors.New("declared unsupported but Ref() is non-empty at Start-return")
+		}
+		return nil
+	}
+
+	announcer, ok := sess.(provider.RefAnnouncer)
+	if !ok {
+		if working {
+			return errors.New("declared working but Ref() is empty and provider does not implement RefAnnouncer")
+		}
+		return nil
+	}
+
+	turnDone := make(chan struct{})
+	go func() {
+		_, _, _ = c.turn(sess, c.s.Echo("mk-refannounce"))
+		close(turnDone)
+	}()
+
+	select {
+	case ref, ok := <-announcer.RefAnnounced():
+		if !working {
+			if ok && ref != "" {
+				return errors.New("declared unsupported but RefAnnounced delivered a ref")
+			}
+			return nil
+		}
+		if !ok || ref == "" {
+			return errors.New("declared working but RefAnnounced closed with no ref")
+		}
+		<-turnDone
+		return nil
+	case <-turnDone:
+		if working {
+			return errors.New("turn completed before ref was announced")
+		}
+		return nil
+	case <-time.After(c.s.timeout()):
+		return fmt.Errorf("no ref announcement or turn end within %s", c.s.timeout())
+	}
 }
 
 // resumeRefused checks the unsupported declaration is honest: a resume

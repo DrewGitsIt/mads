@@ -90,6 +90,13 @@ func (p *Provider) Matrix() provider.Matrix {
 		// README.md. OneShot never calls OnChunk; the engine falls back to
 		// a single end-of-run chunk.
 		provider.BehaviorOneShotStream: provider.Unsupported,
+		// ACP's session/new response carries the ref synchronously, before
+		// Start even returns (session.go) — no announcement subscription
+		// needed there. The terminal transport prints nothing and has no
+		// on-disk transcript format to discover from (unlike claude-code),
+		// so a fresh PTY session's ref is never learned. Emulated as the
+		// one-row summary across both transports. See README.
+		provider.BehaviorRefAnnounce: provider.Emulated,
 	}
 }
 
