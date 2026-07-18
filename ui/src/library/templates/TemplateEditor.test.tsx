@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TemplateEditor } from "./TemplateEditor";
 import type { Template } from "../../router/types";
+import { FakeEventSource } from "../../router/testFakeEventSource";
 
 vi.mock("@monaco-editor/react", () => ({
   Editor: (props: { value: string; onChange?: (value: string) => void }) => (
@@ -14,6 +15,16 @@ vi.mock("@monaco-editor/react", () => ({
 }));
 
 describe("TemplateEditor", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("an edit in visual mode is reflected in the YAML view's source", async () => {
     render(
       <TemplateEditor

@@ -177,6 +177,7 @@ export interface TemplateStage {
   command?: string;
   when?: string;
   on_fail?: { loop_back?: string; max_loops?: number; then?: string };
+  model?: string; // freeform model id; empty/absent = inherit (agent pref, then provider default)
 }
 
 export interface ParsedTemplate {

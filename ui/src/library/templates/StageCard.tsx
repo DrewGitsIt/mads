@@ -9,6 +9,8 @@ export interface StageCardProps {
   index: number;
   earlierStageNames: string[];
   errors: FieldError[]; // pre-filtered to this stage, field already stripped of "stages[N]." prefix
+  knownModelIds: string[];
+  inheritedModel?: string;
   onChange: (stage: TemplateStage) => void;
   onRemove: () => void;
 }
@@ -18,7 +20,16 @@ function errorFor(errors: FieldError[], field: string): string | undefined {
 }
 
 /** One pipeline stage's fields, covering pkg/template's actual grammar (§6). */
-export function StageCard({ stage, index, earlierStageNames, errors, onChange, onRemove }: StageCardProps) {
+export function StageCard({
+  stage,
+  index,
+  earlierStageNames,
+  errors,
+  knownModelIds,
+  inheritedModel,
+  onChange,
+  onRemove,
+}: StageCardProps) {
   const mode = stage.command !== undefined ? "command" : "agent";
   const stageError = errorFor(errors, "");
 
@@ -68,6 +79,25 @@ export function StageCard({ stage, index, earlierStageNames, errors, onChange, o
             <input value={stage.agent ?? ""} onChange={(e) => onChange({ ...stage, agent: e.target.value })} />
           </label>
           {errorFor(errors, "agent") && <div className={styles.error}>{errorFor(errors, "agent")}</div>}
+
+          <label className={styles.field}>
+            Model
+            <input
+              list={`model-options-${index}`}
+              value={stage.model ?? ""}
+              placeholder={inheritedModel ? `${inheritedModel} (inherited)` : "Inherit"}
+              onChange={(e) => {
+                const trimmed = e.target.value.trim();
+                onChange({ ...stage, model: trimmed || undefined });
+              }}
+            />
+            <datalist id={`model-options-${index}`}>
+              {knownModelIds.map((id) => (
+                <option key={id} value={id} />
+              ))}
+            </datalist>
+          </label>
+          {errorFor(errors, "model") && <div className={styles.error}>{errorFor(errors, "model")}</div>}
         </>
       ) : (
         <label className={styles.field}>

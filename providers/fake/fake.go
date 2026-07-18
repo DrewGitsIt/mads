@@ -208,7 +208,11 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		}
 	}
 	text := b.String()
-	return &provider.OneShotResult{Text: text, Usage: applyUsageOverride(usage(req.Prompt, text), plan.usage)}, nil
+	u := usage(req.Prompt, text)
+	if req.Model != "" {
+		u.Model = req.Model
+	}
+	return &provider.OneShotResult{Text: text, Usage: applyUsageOverride(u, plan.usage)}, nil
 }
 
 // applyUsageOverride layers a scripted override onto the deterministic

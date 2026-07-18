@@ -1,5 +1,7 @@
 import { Button } from "../../components/Button/Button";
+import { useAgents } from "../agents/useAgents";
 import type { ParsedTemplate, TemplateStage } from "../../router/types";
+import { useProviderModels } from "../../router/useProviderModels";
 import { StageCard } from "./StageCard";
 import type { FieldError } from "./useTemplateValidation";
 import styles from "./VisualStageList.module.css";
@@ -33,6 +35,16 @@ function newStage(): TemplateStage {
 
 /** Pure render+edit projection of `source` (via the parsed prop) — see TemplateEditor. */
 export function VisualStageList({ parsed, parseError, errors, onChange }: VisualStageListProps) {
+  const { agents } = useAgents();
+  const modelsByProvider = useProviderModels();
+  const knownModelIds = Array.from(new Set(Object.values(modelsByProvider).flat().map((m) => m.id)));
+
+  function inheritedModelFor(stage: TemplateStage): string | undefined {
+    if (stage.command !== undefined) return undefined;
+    const name = stage.agent === "auto" ? "executor" : stage.agent;
+    return agents.find((a) => a.name === name)?.preferences?.model;
+  }
+
   if (parseError || !parsed) {
     return (
       <div className={styles.parseError}>
@@ -77,6 +89,8 @@ export function VisualStageList({ parsed, parseError, errors, onChange }: Visual
           index={index}
           earlierStageNames={parsed.stages.slice(0, index).map((s) => s.name)}
           errors={errorsForStage(errors, index)}
+          knownModelIds={knownModelIds}
+          inheritedModel={inheritedModelFor(stage)}
           onChange={(next) => updateStage(index, next)}
           onRemove={() => removeStage(index)}
         />

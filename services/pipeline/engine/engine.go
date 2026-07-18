@@ -656,6 +656,9 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	agent := e.agents[name]
 	model := e.cfg.Model
 	if model == "" {
+		model = st.Model
+	}
+	if model == "" {
 		model = agent.Preferences.Model
 	}
 
