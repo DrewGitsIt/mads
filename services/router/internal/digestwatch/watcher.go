@@ -17,11 +17,45 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 )
+
+// digestwatchInitialBackoff/digestwatchMaxBackoff bound subscribeRetry's
+// exponential backoff for both watchers below.
+const (
+	digestwatchInitialBackoff = 1 * time.Second
+	digestwatchMaxBackoff     = 30 * time.Second
+)
+
+// subscribeRetry calls subscribe until it succeeds or ctx is done, doubling
+// backoff (capped at maxBackoff) between attempts and logging every failure
+// and the eventual success. A subsystem that can't subscribe must keep
+// retrying and keep logging, not die silently once at boot. Returns nil if
+// ctx is done before subscribe ever succeeds.
+func subscribeRetry(ctx context.Context, name string, initialBackoff, maxBackoff time.Duration, subscribe func() (<-chan contracts.Envelope, error)) <-chan contracts.Envelope {
+	backoff := initialBackoff
+	for {
+		ch, err := subscribe()
+		if err == nil {
+			log.Printf("digestwatch: subscribed to %s", name)
+			return ch
+		}
+		log.Printf("digestwatch: subscribe %s: %v (retrying in %s)", name, err, backoff)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return nil
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
 
 // Watcher subscribes to session.turn_ended envelopes and spawns a digest job
 // for each.
@@ -35,13 +69,14 @@ func NewWatcher(data *dataclient.Client, jobs *job.Runner) *Watcher {
 }
 
 // Run blocks, subscribing to session.turn_ended envelopes across every
-// session and spawning a digest job for each. Returns when ctx is done or
-// the underlying stream ends (e.g. the Data Service is unreachable) — callers
-// run it on its own goroutine for the life of the process.
+// session and spawning a digest job for each. Retries the subscribe with
+// backoff on failure; returns only once ctx is done. Callers run it on its
+// own goroutine for the life of the process.
 func (w *Watcher) Run(ctx context.Context) {
-	ch, err := w.data.Stream(ctx, 0, "", []string{string(contracts.TurnEnded)})
-	if err != nil {
-		log.Printf("digestwatch: subscribe: %v", err)
+	ch := subscribeRetry(ctx, "session.turn_ended", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, 0, "", []string{string(contracts.TurnEnded)})
+	})
+	if ch == nil {
 		return
 	}
 	for env := range ch {
@@ -71,13 +106,14 @@ func NewRunWatcher(data *dataclient.Client, jobs *job.Runner) *RunWatcher {
 
 // Run blocks, subscribing to task.status_changed envelopes across every
 // session and spawning a run digest job for each task reaching done or
-// blocked. Returns when ctx is done or the underlying stream ends (e.g. the
-// Data Service is unreachable) — callers run it on its own goroutine for the
-// life of the process.
+// blocked. Retries the subscribe with backoff on failure; returns only once
+// ctx is done. Callers run it on its own goroutine for the life of the
+// process.
 func (w *RunWatcher) Run(ctx context.Context) {
-	ch, err := w.data.Stream(ctx, 0, "", []string{string(contracts.TaskStatusChanged)})
-	if err != nil {
-		log.Printf("digestwatch: subscribe: %v", err)
+	ch := subscribeRetry(ctx, "task.status_changed", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, 0, "", []string{string(contracts.TaskStatusChanged)})
+	})
+	if ch == nil {
 		return
 	}
 	for env := range ch {

@@ -13,12 +13,22 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"sync"
 	"time"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
+)
+
+var (
+	injectionsMu sync.Mutex
+	injections   []contracts.InjectRequest
 )
 
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
 	_ = flag.String("session-id", "", "ignored — matches the real session service's argv shape")
+	_ = flag.String("router-url", "", "ignored — matches the real session service's argv shape")
+	_ = flag.String("data-url", "", "ignored — matches the real session/pipeline service's argv shape")
 	flag.Parse()
 
 	ln, err := net.Listen("tcp", *addr)
@@ -115,6 +125,37 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "[]\n")
+	})
+	// Mirrors the real Session Service's POST /inject contract (decode
+	// contracts.InjectRequest, 202 Accepted) so router-level tests can
+	// observe digest delivery landing on a monitor session's child.
+	mux.HandleFunc("POST /inject", func(w http.ResponseWriter, r *http.Request) {
+		var body contracts.InjectRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		injectionsMu.Lock()
+		injections = append(injections, body)
+		injectionsMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"status":"accepted"}`)
+	})
+	// Test-only read-back: the real Session Service has no equivalent, but
+	// boot_test.go runs testchild as a separate OS process and can't share
+	// in-memory state, so it polls this over HTTP instead.
+	mux.HandleFunc("GET /injections", func(w http.ResponseWriter, r *http.Request) {
+		injectionsMu.Lock()
+		body, err := json.Marshal(injections)
+		injectionsMu.Unlock()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }
