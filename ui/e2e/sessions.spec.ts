@@ -1,4 +1,5 @@
 import { test, expect } from "./fixtures";
+import { createSessionNoSpawn } from "./lib/seed";
 
 test("sessions journey: hero goal opens the conversation and gets a reply", async ({ page, routerURL }) => {
   await page.goto(routerURL);
@@ -156,4 +157,37 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await railDialog.getByRole("button", { name: "Delete", exact: true }).click();
 
   await expect(sessionRow).toHaveCount(0);
+});
+
+test("sessions journey: sending a message wakes a dormant session", async ({ page, routerURL }) => {
+  const dataURL = process.env.MADS_DATA_URL!;
+  const name = `e2e wake journey ${Date.now()}`;
+  const session = await createSessionNoSpawn(dataURL, { name, provider: "fake" });
+  // ConversationTab opens its live-output SSE subscription (GET /output) on
+  // mount regardless of activity, independent of the composer's own
+  // wake-on-send path — for a session with no child yet, that first
+  // connection attempt 404s until the send below wakes it. Same class of
+  // expected race as the "close, resume affordance, delete" journey's own
+  // allowStatus(sessionId) call.
+  page.allowStatus(session.id);
+
+  await page.goto(routerURL);
+  const rail = page.locator('[aria-label="Session list"]');
+  await rail.getByText(name, { exact: true }).click();
+
+  const composer = page.getByPlaceholder("Message the agent — @ to mention, / for commands");
+  await expect(composer).toBeVisible();
+  const token = `${Date.now()}`;
+  await composer.fill(`echo ${token}`);
+
+  const [sendResponse] = await Promise.all([
+    page.waitForResponse(
+      (res) => res.request().method() === "POST" && res.url().includes(`/sessions/${session.id}/messages`),
+    ),
+    page.getByRole("button", { name: "Send" }).click(),
+  ]);
+  expect(sendResponse.status()).toBe(202);
+
+  await expect(page.getByText(`echo ${token}`)).toBeVisible();
+  await expect(page.getByText(`you said ${token}`)).toBeVisible();
 });

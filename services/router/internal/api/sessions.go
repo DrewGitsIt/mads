@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -78,6 +79,62 @@ func (s *server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"addr": addr})
+}
+
+// wakeError distinguishes why wakeSession failed so the UI can show a
+// specific reason instead of a bare "session not running" — mirrors
+// services/session/internal/api's writeSwitchError/TransportSwitchError
+// convention (code/retryable in the JSON body).
+type wakeError struct {
+	code string // "provider_missing" | "spawn_failed"
+	err  error
+}
+
+func (e *wakeError) Error() string { return e.err.Error() }
+
+// wakeSession spawns a child for a session with no tracked child, so a
+// composer send resumes it transparently — no manual "Resume" step. Reuses
+// Supervisor.SpawnSession, the exact path handleResumeSession already
+// calls; provider continuity (ProviderRef, empty for a session that never
+// conversed) is handled entirely inside the child on startup, same as an
+// explicit resume. Callers must already have confirmed no child is tracked
+// (SessionAddr false) before calling this.
+func (s *server) wakeSession(ctx context.Context, id string) (string, error) {
+	sess, err := s.data.Session(ctx, id)
+	if err != nil {
+		return "", err // not-found etc. — handled by writeError, same as any other lookup
+	}
+	if _, err := s.providers.Get(sess.Provider); err != nil {
+		return "", &wakeError{code: "provider_missing", err: fmt.Errorf("wake session: %w", err)}
+	}
+	// Truth-enforce activity before respawning — exactly TerminateSession's
+	// no-child branch (reconcileInactiveSession), reused rather than forked:
+	// a stale "active" record left by a pre-restart orphan (Supervisor state
+	// is in-memory only) must not be spawned over silently. No-op if the
+	// record is already inactive. Safe here because the caller already
+	// confirmed no child is tracked, so this never kills a live child.
+	if err := s.sup.TerminateSession(ctx, id); err != nil {
+		return "", &wakeError{code: "spawn_failed", err: fmt.Errorf("wake session: reconcile: %w", err)}
+	}
+	addr, err := s.sup.SpawnSession(ctx, id)
+	if err != nil {
+		return "", &wakeError{code: "spawn_failed", err: fmt.Errorf("wake session: %w", err)}
+	}
+	return addr, nil
+}
+
+func writeWakeError(w http.ResponseWriter, err error) {
+	we, ok := err.(*wakeError)
+	if !ok {
+		writeError(w, err) // not-found etc.
+		return
+	}
+	switch we.code {
+	case "provider_missing":
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": we.err.Error(), "code": we.code, "retryable": false})
+	default: // spawn_failed
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": we.err.Error(), "code": we.code, "retryable": true})
+	}
 }
 
 func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {

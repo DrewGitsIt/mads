@@ -37,14 +37,23 @@ func (s *server) handlePipelineOutput(w http.ResponseWriter, r *http.Request) {
 // POST /messages and POST /interrupt — the child already implements both
 // (services/session/internal/api/api.go); the Router previously had no
 // route for either, a documented gap (route_manifest_test.go's
-// knownGapRoutes). Request and response bodies pass through unmodified —
-// the child owns turn semantics (busy/409, not-ready/503), the Router is
-// just the address lookup in front of it.
+// knownGapRoutes). Request and response bodies pass through unmodified once
+// a child is addressed — the child owns turn semantics (busy/409,
+// not-ready/503), the Router is just the address lookup in front of it.
+// handleSessionMessages differs from handleSessionInterrupt in one respect:
+// if no child is tracked, it first wakes the session (see wakeSession,
+// sessions.go) rather than 404ing — a composer send should never surface
+// "session not running" to the UI.
 func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
-	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	id := r.PathValue("id")
+	addr, ok := s.sup.SessionAddr(id)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
-		return
+		var err error
+		addr, err = s.wakeSession(r.Context(), id)
+		if err != nil {
+			writeWakeError(w, err)
+			return
+		}
 	}
 	s.proxyTo(w, r, addr, "/messages")
 }

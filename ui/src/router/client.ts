@@ -272,6 +272,23 @@ export class TransportSwitchError extends Error {
   }
 }
 
+/**
+ * Thrown by `sendMessage` on a non-2xx from `POST /messages` whose body
+ * carries a `code` (services/router's wakeSession/writeWakeError) — i.e. the
+ * session had no live child and the wake-then-deliver path failed before
+ * ever reaching the child. Lets ConversationTab show a specific reason
+ * ("provider_missing" vs "spawn_failed") instead of a bare error string.
+ */
+export class SessionWakeError extends Error {
+  constructor(
+    message: string,
+    readonly code: string,
+    readonly retryable: boolean,
+  ) {
+    super(message);
+  }
+}
+
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
 // components. The Router's address is exposed via VITE_ROUTER_URL; the
 // default matches the Router's own `-addr` flag default (localhost:8080).
@@ -368,7 +385,28 @@ export class FetchRouterClient implements RouterClient {
     sessionId: string,
     body: { text: string; mentions?: string[] },
   ): Promise<void> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/messages`, body);
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errBody = (await res.json().catch(() => null)) as {
+        error?: string;
+        code?: string;
+        retryable?: boolean;
+      } | null;
+      if (errBody?.code) {
+        throw new SessionWakeError(
+          errBody.error ?? `router request failed: ${res.status}`,
+          errBody.code,
+          errBody.retryable ?? false,
+        );
+      }
+      const text = await res.text();
+      throw new Error(`router request failed: ${res.status} ${text}`);
+    }
+    await readJSON(res);
   }
 
   async interrupt(sessionId: string): Promise<void> {

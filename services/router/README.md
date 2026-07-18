@@ -94,6 +94,18 @@ never called peer-to-peer.
   session record exists or any child is spawned — never a spawned-then-crashed child
   surfaced as a bare 502. `POST /retros/{id}/follow-up-session` resolves and validates the
   same way for the same reason.
+- `POST /sessions/{id}/messages` — deliver a conversation turn to the
+  session's child. If no child is tracked, this first **wakes** the
+  session (spawns one via the same path `POST /sessions/{id}/resume`
+  uses) and then delivers, transparently — the UI never sees a bare 404
+  "session not running" from the composer. Pre-checks the resolved
+  provider before spawning (400 `{"code": "provider_missing"}` if it's
+  gone); a spawn failure itself is 502 `{"code": "spawn_failed"}`. A
+  session that never had an interactive child (empty `ProviderRef`,
+  e.g. a pipeline-grouping session) starts a fresh conversation on
+  wake — expected, not an error. Once a child is tracked, this is a
+  pure reverse proxy to the child's own `POST /messages`, same as
+  `/interrupt`.
 - `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL); 204. The
   session record survives, left inactive, with a summary generated shortly after (session
   summaries are triggered by the child-exit hook — see "Critical paths" below). This is
@@ -131,7 +143,7 @@ never called peer-to-peer.
   — chat/terminal transport handoff for a session's single provider conversation (Chat and
   Terminal are two transports over one ref, not simultaneous mirrors). Pure reverse proxies
   to the running child's own `POST /transport`, `POST /input`, `POST /resize`, same pattern
-  as `/messages`/`/interrupt`: 404 if the session isn't running, otherwise the child's
+  as `/interrupt`: 404 if the session isn't running, otherwise the child's
   response passes through untouched, including its 409 (switch refused mid-turn) and 502
   (resume failed after the old transport closed) — the Router does no status-code
   special-casing on this path. `/transport` body is `{"mode": "chat"|"terminal"}`; `/input`
@@ -313,6 +325,14 @@ the Router picks up a new build without a restart.
   surfaces the Session Service's crash as a 502, not a 400 — this is a known, accepted gap
   (see the task's HANDOFF for the considered, not-implemented sentinel-propagation
   approach), left for a future change if it proves to matter in practice.
+- **`handleSessionMessages`'s wake-on-send reuses `TerminateSession`'s
+  no-child reconcile branch and `SpawnSession`, not a forked spawn path.**
+  `wakeSession` (`internal/api/sessions.go`) calls `s.sup.TerminateSession`
+  before spawning specifically because it's already confirmed (via
+  `SessionAddr`) that no child is tracked — in that state
+  `TerminateSession` only runs `reconcileInactiveSession` (truth-enforces
+  a stale "active" record), never kills a live child. This is the same
+  machinery `POST /resume` already relies on.
 
 - **Task/note/file-change proxying is a pure pass-through, zero Router-side state** —
   same framing as the rest of this doc's "holds no business logic" claim. `internal/api/tasks.go`

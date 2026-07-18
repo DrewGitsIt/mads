@@ -22,6 +22,35 @@ export async function createSession(
   return { id: data.session.id, name: data.session.name, addr: data.addr };
 }
 
+/**
+ * Writes a session straight to the Data Service, bypassing Router's
+ * POST /sessions (which always spawns a child immediately,
+ * handleCreateSession, services/router/internal/api/sessions.go). Used to
+ * seed a session that genuinely never had a live child — the "sending a
+ * message wakes a dormant session" journey needs this starting state, which
+ * the UI itself can't reach (Launchpad always auto-sends the goal on
+ * create).
+ */
+export async function createSessionNoSpawn(
+  dataURL: string,
+  body: { name: string; provider: string; workspace?: string },
+): Promise<{ id: string; name: string }> {
+  const res = await fetch(`${dataURL}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    // activity: "inactive" mirrors the steady state a real never-spawned
+    // session settles into after Router's boot sweep (ReconcileOrphanedSessions)
+    // — the Data Service store defaults a bare create to "active"
+    // (services/data/internal/store/sessions.go), which would otherwise
+    // suppress ConversationTab's session.activity-gated waking indicator
+    // even though the Router genuinely has to wake it on send.
+    body: JSON.stringify({ ...body, activity: "inactive" }),
+  });
+  if (!res.ok) throw new Error(`createSessionNoSpawn: status ${res.status}`);
+  const data = (await res.json()) as { id: string; name: string };
+  return { id: data.id, name: data.name };
+}
+
 export async function importTasks(
   routerURL: string,
   sessionID: string,
