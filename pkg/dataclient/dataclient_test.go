@@ -121,6 +121,64 @@ func TestClientRoundTrip(t *testing.T) {
 	}
 }
 
+// TestClientReclaimWireRoundTrip covers ClaimWithIdentity -> Leases ->
+// ReclaimLease's JSON shapes against a real Data Service (reap-on-launch).
+func TestClientReclaimWireRoundTrip(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "pipeline")
+
+	sess := contracts.Session{Name: "reap"}
+	if err := c.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	task := contracts.Task{Title: "A", SessionID: sess.ID, Source: "user"}
+	if err := c.CreateTask(ctx, &task); err != nil {
+		t.Fatal(err)
+	}
+
+	identity := contracts.LeaseIdentity{MachineID: "m1", BootID: "b1", PID: 42, PIDStartTicks: 999}
+	if err := c.ClaimWithIdentity(ctx, task.ID, time.Minute, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	leases, err := c.Leases(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].TaskID != task.ID || leases[0].Identity == nil || *leases[0].Identity != identity {
+		t.Fatalf("Leases = %+v, want one lease for %s with identity %+v", leases, task.ID, identity)
+	}
+
+	task.Status = contracts.StatusInProgress
+	if err := c.UpdateTask(ctx, &task); err != nil {
+		t.Fatal(err)
+	}
+
+	ok, err := c.ReclaimLease(ctx, task.ID, identity, "provably dead")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ReclaimLease: want reclaimed=true for a matching identity")
+	}
+	got, err := c.Task(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != contracts.StatusReady {
+		t.Errorf("task status after reclaim = %s, want ready", got.Status)
+	}
+
+	leases, err = c.Leases(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 0 {
+		t.Errorf("Leases after reclaim = %+v, want none", leases)
+	}
+}
+
 // TestClientHealth checks Health against a real running Data Service and
 // against an unreachable one.
 func TestClientHealth(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
+	"github.com/drewkidwell/mads/pkg/procid"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -154,6 +155,9 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	}
 
 	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}}
+	if own, ok := procid.Current(procid.Default); ok {
+		e.identity = own
+	}
 	if cfg.Isolated {
 		if cfg.WorktreeRoot == "" {
 			return nil, errors.New("isolated runs require WorktreeRoot")
@@ -204,10 +208,11 @@ func parseConds(t *template.Template) ([]*template.Cond, error) {
 }
 
 type engine struct {
-	cfg    Config
-	agents map[string]contracts.Agent
-	conds  []*template.Cond
-	wt     *worktrees // nil unless Isolated
+	cfg      Config
+	agents   map[string]contracts.Agent
+	conds    []*template.Cond
+	wt       *worktrees              // nil unless Isolated
+	identity contracts.LeaseIdentity // this engine's own process identity (reap-on-launch); zero value if unavailable
 
 	mu     sync.Mutex
 	loops  map[string]int // task|stage → loop-backs taken
@@ -215,6 +220,7 @@ type engine struct {
 }
 
 func (e *engine) run(ctx context.Context) (*Summary, error) {
+	e.reapDeadLeases(ctx)
 	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", map[string]any{
 		"template":    e.cfg.Template.Name,
 		"concurrency": e.cfg.Concurrency,
@@ -364,7 +370,7 @@ func (e *engine) runnable(tasks []contracts.Task, byID map[string]contracts.Task
 // meter.
 func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.TaskStatus {
 	ttl := e.cfg.LeaseTTL
-	if err := e.cfg.Data.Claim(ctx, task.ID, ttl); err != nil {
+	if err := e.cfg.Data.ClaimWithIdentity(ctx, task.ID, ttl, e.identity); err != nil {
 		return task.Status // someone else holds it; not ours this run
 	}
 	// Writes renew the lease meter, but an agent stage can be silent for
@@ -384,7 +390,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			case <-ctx.Done():
 				return
 			case <-tick.C:
-				err := e.cfg.Data.Claim(ctx, taskID, ttl)
+				err := e.cfg.Data.ClaimWithIdentity(ctx, taskID, ttl, e.identity)
 				if errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
 					lost.Store(true)
 					cancelTask()

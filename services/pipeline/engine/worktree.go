@@ -61,6 +61,12 @@ func (w *worktrees) create(ctx context.Context, task contracts.Task) (dir, branc
 	}
 	branch = "mads/" + task.ID
 	dir = filepath.Join(w.root, task.ID)
+	// A reclaimed task (reap-on-launch) may still have its dead run's
+	// worktree/branch on disk; discard both so `worktree add` starts
+	// clean instead of failing on an existing path/ref. Harmless no-op
+	// (remove already discards its own errors) when there's nothing to
+	// remove — the common case.
+	w.remove(ctx, dir, branch)
 	if _, err := w.git(ctx, w.primary, "worktree", "add", "-b", branch, dir); err != nil {
 		return "", "", err
 	}

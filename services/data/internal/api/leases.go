@@ -15,7 +15,8 @@ const (
 
 func (s *server) handleClaimLease(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TTLSeconds int `json:"ttl_seconds"`
+		TTLSeconds int                      `json:"ttl_seconds"`
+		Identity   *contracts.LeaseIdentity `json:"identity,omitempty"`
 	}
 	if r.ContentLength != 0 && !decode(w, r, &body) {
 		return
@@ -30,12 +31,43 @@ func (s *server) handleClaimLease(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	lease, err := s.leases.Claim(r.Context(), r.PathValue("id"), actor(r), ttl)
+	lease, err := s.leases.ClaimWithIdentity(r.Context(), r.PathValue("id"), actor(r), ttl, body.Identity)
 	if err != nil {
 		writeStoreError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, lease)
+}
+
+// handleListLeases lists every live lease held by the caller's own actor
+// (spec: reap-on-launch) — the reclaim candidate set. Scoped implicitly via
+// X-Mads-Actor, same as every other lease-mutating route; no query param.
+func (s *server) handleListLeases(w http.ResponseWriter, r *http.Request) {
+	leases, err := s.leases.ByHolder(r.Context(), actor(r))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, leases)
+}
+
+// handleReclaimLease is the proof-or-nothing transition (spec: reap-on-
+// launch): the caller has already established, via pkg/procid, that
+// identity's process is provably dead.
+func (s *server) handleReclaimLease(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identity contracts.LeaseIdentity `json:"identity"`
+		Evidence string                  `json:"evidence"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	ok, err := s.leases.Reclaim(r.Context(), r.PathValue("id"), actor(r), body.Identity, body.Evidence)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"reclaimed": ok})
 }
 
 func (s *server) handleReleaseLease(w http.ResponseWriter, r *http.Request) {

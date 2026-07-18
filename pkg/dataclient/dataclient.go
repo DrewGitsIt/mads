@@ -206,6 +206,44 @@ func (c *Client) ReleaseAll(ctx context.Context, holder, reason string) error {
 		map[string]any{"holder": holder, "reason": reason}, nil)
 }
 
+// ClaimWithIdentity is Claim plus this process's lease identity (spec:
+// reap-on-launch) — recorded so a future engine launch on this machine
+// can prove this holder died. identity's zero value means "couldn't
+// establish identity" (pkg/procid); the lease then carries none and is
+// never provable, same as a pre-migration row.
+func (c *Client) ClaimWithIdentity(ctx context.Context, taskID string, ttl time.Duration, identity contracts.LeaseIdentity) error {
+	body := map[string]any{}
+	if ttl > 0 {
+		body["ttl_seconds"] = int(ttl.Seconds())
+	}
+	if identity != (contracts.LeaseIdentity{}) {
+		body["identity"] = identity
+	}
+	return c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/claim", body, nil)
+}
+
+// Leases lists every live lease held by this client's own actor — the
+// reap-on-launch candidate set.
+func (c *Client) Leases(ctx context.Context) ([]contracts.Lease, error) {
+	var leases []contracts.Lease
+	err := c.do(ctx, http.MethodGet, "/leases", nil, &leases)
+	return leases, err
+}
+
+// ReclaimLease is the proof-or-nothing transition (reap-on-launch): if
+// the lease still matches identity exactly, it's released and the task
+// requeued in_progress -> ready with evidence on the event. reclaimed is
+// false when the lease moved on since the caller established proof (a
+// safe no-op, not an error).
+func (c *Client) ReclaimLease(ctx context.Context, taskID string, identity contracts.LeaseIdentity, evidence string) (bool, error) {
+	var out struct {
+		Reclaimed bool `json:"reclaimed"`
+	}
+	err := c.do(ctx, http.MethodPost, "/tasks/"+url.PathEscape(taskID)+"/reclaim",
+		map[string]any{"identity": identity, "evidence": evidence}, &out)
+	return out.Reclaimed, err
+}
+
 // --- Sessions (spec §1) ---
 
 func (c *Client) CreateSession(ctx context.Context, s *contracts.Session) error {
