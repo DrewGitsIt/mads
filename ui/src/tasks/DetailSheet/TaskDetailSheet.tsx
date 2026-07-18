@@ -7,8 +7,11 @@ import {
 } from "../../components/SideSheet/SideSheet";
 import { Button } from "../../components/Button/Button";
 import { Markdown } from "../../conversation/ChatRenderer/markdown";
+import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../router/client";
 import type { Note, NoteType, Task, TaskStatus } from "../../router/types";
+import { useGraphRunState } from "../GraphView/useGraphRunState";
+import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
 import { DependencyPicker } from "./DependencyPicker";
 import { NoteGroup } from "./NoteGroup";
 import styles from "./TaskDetailSheet.module.css";
@@ -20,6 +23,9 @@ export interface TaskDetailSheetProps {
   routerClient: RouterClient;
   onClose: () => void;
   onSaved?: (task: Task) => void;
+  /** Opt-in — no live run-state subscription (and no EventSource) is ever created without it. */
+  pipelineClient?: PipelineClient;
+  onSelectTask?: (task: Task) => void;
 }
 
 const STATUS_OPTIONS: TaskStatus[] = [
@@ -52,11 +58,15 @@ export function TaskDetailSheet({
   routerClient,
   onClose,
   onSaved,
+  pipelineClient,
+  onSelectTask,
 }: TaskDetailSheetProps) {
   const [draft, setDraft] = useState<Task>(task);
   const [notes, setNotes] = useState<Note[]>(task.notes ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const runState = useGraphRunState(draft.session_id, pipelineClient);
+  const reducedMotion = usePrefersReducedMotion();
 
   useEffect(() => {
     setDraft(task);
@@ -158,16 +168,16 @@ export function TaskDetailSheet({
           <textarea value={draft.scope ?? ""} onChange={(e) => set("scope", e.target.value)} />
         </label>
 
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>Dependencies</span>
-          <DependencyPicker
-            task={draft}
-            tasksById={tasksById}
-            sessionTasks={sessionTasks}
-            dependencies={draft.dependencies ?? []}
-            onChange={(dependencies) => set("dependencies", dependencies)}
-          />
-        </div>
+        <DependencyPicker
+          task={draft}
+          tasksById={tasksById}
+          sessionTasks={sessionTasks}
+          dependencies={draft.dependencies ?? []}
+          onChange={(dependencies) => set("dependencies", dependencies)}
+          onSelectTask={onSelectTask}
+          taskRunState={runState?.taskRunState}
+          reducedMotion={reducedMotion}
+        />
 
         <div className={styles.notes}>
           {NOTE_GROUPS.map(({ type, label }) => (

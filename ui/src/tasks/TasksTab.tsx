@@ -90,6 +90,8 @@ export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabPr
           sessionTasks={tasks}
           routerClient={routerClient}
           onClose={() => setOpenSheet(null)}
+          pipelineClient={pipelineClient}
+          onSelectTask={(task) => selectTask(task.id)}
         />
       )}
 

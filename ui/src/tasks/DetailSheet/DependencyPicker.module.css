@@ -1,22 +1,316 @@
 .picker {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
-.row {
+.sec,
+.secUnblocks {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--fs-body);
-  color: var(--text);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text3);
+  margin: 0 0 var(--space-2);
 }
 
-.title {
+.secUnblocks {
+  margin-top: var(--space-5);
+}
+
+.sum {
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: auto;
+  font-size: var(--fs-sm);
+  color: var(--text2);
+}
+
+.ribbon {
+  display: flex;
+  gap: 3px;
+  height: 5px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 0 0 var(--space-2);
+}
+
+.ribbon i {
   flex: 1;
 }
 
-.warning {
+.rDone {
+  background: var(--ok);
+  opacity: 0.55;
+}
+
+.rProg {
+  background: var(--info);
+}
+
+.rReady {
+  background: var(--bg4);
+}
+
+.rBlocked {
+  background: var(--bad);
+}
+
+.deps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dep {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  position: relative;
+}
+
+.depMain {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  min-width: 0;
+}
+
+.dep:hover .depMain {
+  border-color: var(--line);
+}
+
+.dep:hover .remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.depText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.depTitle {
   font-size: var(--fs-sm);
+  line-height: 1.35;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.depSub {
+  font-size: var(--fs-chip);
+  color: var(--text3);
+  margin-top: 2px;
+}
+
+.go {
+  align-self: center;
+  color: var(--text3);
+  font-size: var(--fs-ui);
+  flex: none;
+}
+
+.remove {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--bg3);
+  color: var(--text2);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.remove:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.empty {
+  border: 1.5px dashed var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text3);
+}
+
+.empty b {
+  color: var(--text2);
+  font-weight: 600;
+  display: block;
+  margin-bottom: 2px;
+}
+
+.addbtn {
+  margin-top: var(--space-2);
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1.5px dashed var(--line);
+  color: var(--text2);
+  border-radius: var(--r-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.addbtn:hover,
+.addbtn:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+  outline: none;
+}
+
+/* Bleeds out to the edges of Popover's own padding rather than overriding
+   its module CSS via cascade order (import order across modules isn't
+   something to depend on for style precedence). */
+.pickerBox {
+  margin: calc(var(--space-2) * -1);
+  min-width: 260px;
+}
+
+.pickerInput {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: var(--bg2);
+  color: var(--text);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: var(--r) var(--r) 0 0;
+  box-sizing: border-box;
+}
+
+.cands {
+  max-height: 216px;
+  overflow-y: auto;
+}
+
+.cand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.cand:hover,
+.candHighlighted {
+  background: var(--bg3);
+}
+
+.candTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.candDisabled {
+  cursor: not-allowed;
+  color: var(--text3);
+}
+
+.candDisabled:hover,
+.candDisabled.candHighlighted {
+  background: none;
+}
+
+.warn {
+  margin-left: auto;
+  flex: none;
+  font-size: 10.5px;
   color: var(--warn-fg);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.already {
+  margin-left: auto;
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text3);
+}
+
+.pickhint {
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  font-size: 11px;
+  color: var(--text3);
+  border-top: 1px solid var(--line-soft);
+}
+
+.unblocksList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ub {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  padding: var(--space-1) 2px;
+  border-radius: var(--r-sm);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.ub:hover,
+.ub:focus-visible {
+  color: var(--text);
+}
+
+.ub span:not(.arr) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.arr {
+  color: var(--text3);
+  font-size: 11px;
+  flex: none;
 }

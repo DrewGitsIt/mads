@@ -21,6 +21,9 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
   let sessionId: string;
   let sessionName: string;
   let workTask: { id: string; title: string };
+  let depTask: { id: string; title: string };
+  let dependentTask: { id: string; title: string };
+  let secondRunTask: { id: string; title: string };
   let commitHash: string;
   // The two pipeline runs' own run_seq (== their pipeline.started event's
   // seq), oldest first — seeded so the "run picker replays historical runs"
@@ -37,7 +40,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     const session = await createSession(routerURL, { name: sessionName, provider: "fake" });
     sessionId = session.id;
     [workTask] = await importTasks(routerURL, sessionId, ["e2e session-work task"]);
-    const [depTask, dependentTask] = await importTasks(routerURL, sessionId, [
+    [depTask, dependentTask] = await importTasks(routerURL, sessionId, [
       "e2e graph dep",
       "e2e graph dependent",
     ]);
@@ -62,7 +65,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     // A second, independent run (a fresh task, no dependency on anything
     // above) — dependentTask stays untouched (still blocked on depTask),
     // so this doesn't disturb the graph-mode journey below.
-    await importTasks(routerURL, sessionId, ["e2e second pipeline run task"]);
+    [secondRunTask] = await importTasks(routerURL, sessionId, ["e2e second pipeline run task"]);
     runFakePipeline(runFakePipelineOpts);
 
     const runsRes = await fetch(`${routerURL}/metrics/pipelines?session_id=${sessionId}`);
@@ -211,5 +214,43 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     // must visibly recede there too, same as a done canvas card would.
     const workTaskCard = page.getByText(workTask.title).locator("..");
     await expect(workTaskCard).toHaveCSS("opacity", "0.55");
+  });
+
+  test("dependencies pane: statuses visible, add via picker, save, edge shows on the graph", async ({
+    page,
+    routerURL,
+  }) => {
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Tasks" }).click();
+
+    await page.getByText(dependentTask.title, { exact: true }).click();
+    // Scoped to the open detail sheet — depTask/secondRunTask's own list-view
+    // rows sit behind it in the DOM with the same title text.
+    const sheet = page.getByRole("complementary");
+    await expect(sheet.getByText(depTask.title, { exact: true })).toBeVisible();
+    await expect(sheet.getByText(/^done · landed/)).toBeVisible();
+    await expect(sheet.getByText("1 · 1 done")).toBeVisible();
+
+    await sheet.getByText("+ Add dependency…").click();
+    await sheet.getByPlaceholder("Search tasks…").fill(secondRunTask.title);
+    await sheet.getByText(secondRunTask.title, { exact: true }).click();
+    await page.keyboard.press("Escape");
+
+    await expect(sheet.getByText(secondRunTask.title, { exact: true })).toBeVisible();
+    await expect(sheet.getByText("2 · 2 done")).toBeVisible();
+
+    await sheet.getByRole("button", { name: "Save" }).click();
+    await expect(sheet.getByRole("button", { name: "Saving…" })).toHaveCount(0, { timeout: 5000 });
+
+    // Both dependency rows must still be there after the save round-trips.
+    await expect(sheet.getByText(depTask.title, { exact: true })).toBeVisible();
+    await expect(sheet.getByText(secondRunTask.title, { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: "Graph", exact: true }).click();
+    await expect(
+      page.locator(`.react-flow__edge[data-id="${secondRunTask.id}->${dependentTask.id}"]`),
+    ).toBeVisible();
   });
 });

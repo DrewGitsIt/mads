@@ -6,6 +6,15 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TaskDetailSheet } from "./TaskDetailSheet";
 import { FakeRouterClient, fixtureTasks } from "../../router/fixtures";
 
+// jsdom (unlike the suite's default happy-dom) has no matchMedia — usePrefersReducedMotion
+// needs one, same stub shape as GraphCanvas.test.tsx.
+vi.stubGlobal("matchMedia", (query: string) => ({
+  matches: false,
+  media: query,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+}));
+
 const tasksById = Object.fromEntries(fixtureTasks.map((t) => [t.id, t]));
 
 function byId(id: string) {
