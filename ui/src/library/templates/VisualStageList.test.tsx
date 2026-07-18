@@ -1,9 +1,31 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { VisualStageList } from "./VisualStageList";
 import type { ParsedTemplate } from "../../router/types";
+import { FakeEventSource } from "../../router/testFakeEventSource";
+
+function stubEmptyFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((url: string) => {
+      if (url.includes("/agents")) return Promise.resolve(new Response("[]", { status: 200 }));
+      if (url.includes("/providers")) return Promise.resolve(new Response("[]", { status: 200 }));
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    }),
+  );
+}
 
 describe("VisualStageList", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    stubEmptyFetch();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders a StageCard per stage and adds a new one", () => {
     const onChange = vi.fn();
     const parsed: ParsedTemplate = {
@@ -54,5 +76,56 @@ describe("VisualStageList", () => {
     expect(screen.getByText("name: required")).toBeTruthy();
     expect(screen.getByText('duplicate stage name "build" (also stages[0])')).toBeTruthy();
     expect(screen.getByText("unknown agent")).toBeTruthy();
+  });
+
+  it("passes known model ids and the resolved agent's inherited model down to each StageCard", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        if (url.includes("/providers/fake/models")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ models: [{ id: "claude-sonnet-5", name: "Claude Sonnet 5" }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        if (url.includes("/providers")) {
+          return Promise.resolve(new Response(JSON.stringify([{ name: "fake" }]), { status: 200 }));
+        }
+        if (url.includes("/agents")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify([
+                {
+                  id: "a1",
+                  name: "executor",
+                  prompt: "p",
+                  created_at: "t",
+                  updated_at: "t",
+                  preferences: { model: "sonnet" },
+                },
+              ]),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }),
+    );
+    const parsed: ParsedTemplate = {
+      name: "deploy",
+      stages: [{ name: "executor", agent: "auto" }],
+    };
+    render(<VisualStageList parsed={parsed} parseError={null} errors={[]} onChange={vi.fn()} />);
+
+    await waitFor(() => {
+      const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
+      expect(input.placeholder).toBe("sonnet (inherited)");
+    });
+    const options = Array.from(document.querySelectorAll("datalist option")).map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(options).toEqual(["claude-sonnet-5"]);
   });
 });

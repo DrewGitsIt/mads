@@ -28,6 +28,11 @@ type Stage struct {
 	Command string  `yaml:"command,omitempty"`
 	When    string  `yaml:"when,omitempty"`
 	OnFail  *OnFail `yaml:"on_fail,omitempty"`
+	// Model overrides the resolved agent's model for this stage only
+	// (engine precedence: CLI -model > stage Model > agent Preferences.Model).
+	// Agent stages only — freeform, unvalidated (the provider is the
+	// authority on valid ids, spec §11's "fail loud" for bad models).
+	Model string `yaml:"model,omitempty"`
 }
 
 // OnFail routes a failed stage (spec §6): loop back to an earlier stage up to
@@ -84,6 +89,8 @@ func Validate(t *Template, knownAgent func(string) bool) *contracts.ValidationEr
 			v.Add(field, "a stage needs an agent: or a command:")
 		case s.Agent != "" && s.Agent != "auto" && !knownAgent(s.Agent):
 			v.Add(field+".agent", fmt.Sprintf("unknown agent %q — not in the registry (spec §9)", s.Agent))
+		case s.Command != "" && s.Model != "":
+			v.Add(field+".model", "model is only valid on agent stages")
 		}
 
 		if _, err := ParseCond(s.When); err != nil {

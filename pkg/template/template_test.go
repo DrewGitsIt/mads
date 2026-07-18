@@ -16,6 +16,7 @@ name: default-implementation
 stages:
   - name: architect
     agent: architect
+    model: claude-haiku-4-5-20251001
     when: '!contains(labels, "trivial")'
   - name: executor
     agent: executor
@@ -46,6 +47,12 @@ func TestCheckAcceptsFullGrammar(t *testing.T) {
 	if tpl.Stages[0].When == "" {
 		t.Error("when condition lost in parse")
 	}
+	if tpl.Stages[0].Model != "claude-haiku-4-5-20251001" {
+		t.Errorf("model = %q, want claude-haiku-4-5-20251001", tpl.Stages[0].Model)
+	}
+	if tpl.Stages[1].Model != "" {
+		t.Errorf("stage without model set got %q, want empty", tpl.Stages[1].Model)
+	}
 }
 
 func TestValidateReportsEverythingAtOnce(t *testing.T) {
@@ -64,20 +71,24 @@ stages:
   - name: bad_then
     command: make test
     on_fail: { loop_back: bad_then, max_loops: 1, then: explode }
+  - name: bad_model
+    command: make lint
+    model: claude-haiku-4-5-20251001
 `
 	_, verr := Check([]byte(src), known)
 	if verr == nil {
 		t.Fatal("broken template accepted")
 	}
 	wantFragments := []string{
-		"unknown agent",        // stage 0
-		"duplicate stage name", // stage 1
-		"does not exist",       // loop target "later"
-		"at least 1",           // max_loops 0
-		"not both",             // stage 2
-		"needs an agent",       // stage 3
-		"not an earlier stage", // self loop
-		`only "block"`,         // then: explode
+		"unknown agent",              // stage 0
+		"duplicate stage name",       // stage 1
+		"does not exist",             // loop target "later"
+		"at least 1",                 // max_loops 0
+		"not both",                   // stage 2
+		"needs an agent",             // stage 3
+		"not an earlier stage",       // self loop
+		`only "block"`,               // then: explode
+		"only valid on agent stages", // stage 5 model on a command stage
 	}
 	all := verr.Error()
 	for _, frag := range wantFragments {
