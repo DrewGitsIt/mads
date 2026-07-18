@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { subscribeToEvents } from "../../router/events";
 import { WORKSPACE_SESSION_EVENT_TYPES } from "../../router/sessionEventTypes";
-import type { Envelope, Task } from "../../router/types";
+import type { Envelope, PipelineRun, Task } from "../../router/types";
 import type { PipelineClient } from "../client/pipelineClient";
 
 // Task.status_changed/updated/created and note.created carry no full payload
@@ -208,37 +208,39 @@ export interface UsePipelineRunResult {
   refetchTasks: () => Promise<void>;
 }
 
-// Seeds the task list and keeps it live via refetch-on-event
-// (useSessionsList's idiom), while separately folding pipeline/stage/
-// file.changed envelopes into local board state — there's no read endpoint
-// for "current stage per task" to refetch instead (HANDOFF.md §2).
-export function usePipelineRun(sessionId: string, client: PipelineClient): UsePipelineRunResult {
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+/**
+ * Shared resume-then-subscribe fold: buffers live envelopes behind a flag
+ * while REST catch-up (listRuns -> pickRun -> getRunEvents) seeds the fold
+ * with the historical prefix, then flushes the buffer past the caught-up
+ * seq. Extracted so usePipelineRun and useGraphRunState can't drift the way
+ * usePipelineRun's own resume fix once did (HANDOFF.md) — pickRun is the
+ * only thing that differs between callers' notion of "the run to resume".
+ */
+export function useResumingRunFold(
+  sessionId: string,
+  client: PipelineClient | undefined,
+  pickRun: (runs: PipelineRun[]) => PipelineRun | undefined,
+  onEnvelope?: (env: Envelope) => void,
+): { state: RunFoldState; resuming: boolean } {
+  const [state, dispatch] = useReducer(runReducer, initialRunFoldState);
   const [resuming, setResuming] = useState(true);
-  const [runState, dispatch] = useReducer(runReducer, initialRunFoldState);
   const mounted = useRef(true);
-
-  const refetchTasks = useCallback(async () => {
-    try {
-      const list = await client.listTasks(sessionId);
-      if (mounted.current) setTasks(list);
-    } catch (err) {
-      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      if (mounted.current) setLoading(false);
-    }
-  }, [client, sessionId]);
+  const clientRef = useRef(client);
+  clientRef.current = client;
+  const pickRunRef = useRef(pickRun);
+  pickRunRef.current = pickRun;
+  const onEnvelopeRef = useRef(onEnvelope);
+  onEnvelopeRef.current = onEnvelope;
 
   useEffect(() => {
+    const client = clientRef.current;
+    if (!client) return;
     mounted.current = true;
-    void refetchTasks();
     let unsubscribe: (() => void) | undefined;
 
     function handleEnvelope(env: Envelope) {
       if (FOLD_EVENT_TYPES.includes(env.type)) dispatch({ kind: "envelope", env });
-      if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
+      onEnvelopeRef.current?.(env);
     }
 
     async function resumeAndSubscribe() {
@@ -259,14 +261,14 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
 
       let caughtUpSeq = 0;
       try {
-        const runs = await client.listRuns(sessionId);
-        const inFlight = runs.find((r) => r.outcome === "running");
-        if (inFlight) {
-          const events = await client.getRunEvents(sessionId, inFlight.run_seq - 1);
+        const runs = await client!.listRuns(sessionId);
+        const target = pickRunRef.current(runs);
+        if (target) {
+          const events = await client!.getRunEvents(sessionId, target.run_seq - 1);
           if (!mounted.current) return;
           const seeded = events.reduce(foldReducer, initialRunFoldState);
           dispatch({ kind: "seed", state: seeded });
-          caughtUpSeq = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : inFlight.run_seq - 1;
+          caughtUpSeq = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : target.run_seq - 1;
         }
       } catch {
         // Best-effort: fall through to a live-only tail, same as today's behavior.
@@ -286,7 +288,51 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
       mounted.current = false;
       unsubscribe?.();
     };
-  }, [client, refetchTasks, sessionId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, !!client]);
+
+  return { state, resuming };
+}
+
+// Seeds the task list and keeps it live via refetch-on-event
+// (useSessionsList's idiom), while separately folding pipeline/stage/
+// file.changed envelopes into local board state — there's no read endpoint
+// for "current stage per task" to refetch instead (HANDOFF.md §2).
+export function usePipelineRun(sessionId: string, client: PipelineClient): UsePipelineRunResult {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  const refetchTasks = useCallback(async () => {
+    try {
+      const list = await client.listTasks(sessionId);
+      if (mounted.current) setTasks(list);
+    } catch (err) {
+      if (mounted.current) setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (mounted.current) setLoading(false);
+    }
+  }, [client, sessionId]);
+
+  useEffect(() => {
+    mounted.current = true;
+    void refetchTasks();
+    return () => {
+      mounted.current = false;
+    };
+  }, [refetchTasks]);
+
+  const onEnvelope = useCallback(
+    (env: Envelope) => {
+      if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
+    },
+    [refetchTasks],
+  );
+
+  const pickRun = useCallback((runs: PipelineRun[]) => runs.find((r) => r.outcome === "running"), []);
+
+  const { state: runState, resuming } = useResumingRunFold(sessionId, client, pickRun, onEnvelope);
 
   return {
     tasks,

@@ -1,0 +1,29 @@
+.feedback {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note {
+  font: var(--fs-sm) var(--mono);
+  color: var(--text2);
+  white-space: pre-wrap;
+}
+
+.note[data-type="blocker"] {
+  color: var(--bad-fg);
+  font-weight: 650;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.error {
+  font: var(--fs-sm) var(--mono);
+  color: var(--bad-fg);
+}
