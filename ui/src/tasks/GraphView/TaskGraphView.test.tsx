@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TaskGraphView } from "./TaskGraphView";
 import { useTaskStore } from "../useTaskStore";
@@ -6,8 +6,9 @@ import { FakeRouterClient } from "../../router/fixtures";
 import { fixtureTasks } from "../../router/fixtures";
 import { installXyflowMeasurements } from "./xyflowTestEnv";
 import { graphStatusOf } from "./graphStatus";
+import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { RouterClient } from "../../router/client";
-import type { Task } from "../../router/types";
+import type { Envelope, Task } from "../../router/types";
 
 const tasksById = Object.fromEntries(fixtureTasks.map((t) => [t.id, t]));
 
@@ -18,6 +19,12 @@ beforeAll(() => {
 afterAll(() => {
   uninstall();
 });
+
+let nextSeq = 1;
+function emitTaskEvent(envelope: Omit<Envelope, "seq" | "timestamp" | "actor">) {
+  const full: Envelope = { seq: nextSeq++, timestamp: new Date().toISOString(), actor: "test", ...envelope };
+  FakeEventSource.instances[0].emit(full.type, JSON.stringify(full));
+}
 
 /**
  * TaskGraphView takes tasks/tasksById as plain props (§4/§6) — it does not
@@ -63,6 +70,16 @@ function task(overrides: Partial<Task>): Task {
 }
 
 describe("TaskGraphView", () => {
+  beforeEach(() => {
+    nextSeq = 1;
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders one graph node per task and fetches the authoritative cycle set", async () => {
     const client = new FakeRouterClient();
     render(
@@ -127,7 +144,7 @@ describe("TaskGraphView", () => {
       session_id: "session-active",
       title: "Streamed into the graph",
     });
-    client.taskEventSource.dispatch({
+    emitTaskEvent({
       type: "task.created",
       task_id: created.id,
       session_id: "session-active",
@@ -149,7 +166,7 @@ describe("TaskGraphView", () => {
       ...fixtureTasks.find((t) => t.id === "tsk_ready")!,
       title: "Renamed via streamed event",
     });
-    client.taskEventSource.dispatch({
+    emitTaskEvent({
       type: "task.updated",
       task_id: "tsk_ready",
       session_id: "session-active",

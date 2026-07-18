@@ -102,12 +102,10 @@ export interface RouterClient {
   confirmNote(taskId: string, noteId: number): Promise<void>;
   discardNote(taskId: string, noteId: number): Promise<void>;
   getSessionChanges(sessionId: string): Promise<FileChange[]>;
-  streamTaskEvents(sessionId: string): SessionEventSource;
 
   // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
-  // for which of these are real Router routes today (only
-  // streamControlEvents is) vs. documented-but-unimplemented contracts this
-  // client is built ahead of.
+  // for which of these are real Router routes today vs.
+  // documented-but-unimplemented contracts this client is built ahead of.
   getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
   getCommits(sessionId: string): Promise<Commit[]>;
   getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
@@ -115,11 +113,9 @@ export interface RouterClient {
   getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff>;
   openInEditor(path: string): Promise<void>;
   mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
-  streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource;
 
-  // Batch (non-streaming) read of the same GET /events route
-  // streamControlEvents subscribes to — a plain fetch (no explicit Accept
-  // header) takes the Router's JSON branch instead of the SSE branch
+  // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
+  // Accept header) takes the Router's JSON branch instead of the SSE branch
   // (Pipeline tab HANDOFF.md §2/§3). Used to replay historical pipeline runs.
   getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]>;
 
@@ -533,15 +529,9 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/files`);
   }
 
-  streamTaskEvents(sessionId: string): SessionEventSource {
-    const q = new URLSearchParams({ session_id: sessionId, types: "task.*,note.*" });
-    return new EventSource(`${this.baseUrl}/events?${q.toString()}`);
-  }
-
   // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
-  // for which of these are real Router routes today (only
-  // streamControlEvents is) vs. documented-but-unimplemented contracts this
-  // client is built ahead of.
+  // for which of these are real Router routes today vs.
+  // documented-but-unimplemented contracts this client is built ahead of.
   async getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/files`, { task_id: taskId });
   }
@@ -573,16 +563,6 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/merge`, {
       target_branch: targetBranch,
     });
-  }
-
-  // The one real route here today: GET /events?session_id=&types= (HANDOFF
-  // §1/§3), already proxied by the Router straight through to the Data
-  // Service's control-plane event log.
-  streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource {
-    const params = new URLSearchParams();
-    if (filter.sessionId) params.set("session_id", filter.sessionId);
-    if (filter.types?.length) params.set("types", filter.types.join(","));
-    return new EventSource(`${this.baseUrl}/events?${params}`);
   }
 
   async getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]> {

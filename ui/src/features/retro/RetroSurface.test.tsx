@@ -4,8 +4,9 @@ import { RetroSurface } from "./RetroSurface";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import { fixtureRetro, fixtureSessions } from "../../router/fixtures";
 
+let nextSeq = 1;
 function envelope(type: string, payload: unknown) {
-  return JSON.stringify({ seq: 1, type, actor: "system", payload });
+  return JSON.stringify({ seq: nextSeq++, type, actor: "system", payload });
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -14,6 +15,7 @@ function jsonResponse(body: unknown, status = 200) {
 
 describe("RetroSurface", () => {
   beforeEach(() => {
+    nextSeq = 1;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
   });

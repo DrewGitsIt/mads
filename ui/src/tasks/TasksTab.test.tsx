@@ -1,9 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { TasksTab } from "./TasksTab";
 import { FakeRouterClient } from "../router/fixtures";
+import { FakeEventSource } from "../router/testFakeEventSource";
 
 describe("TasksTab", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("loads tasks and renders the list view by default", async () => {
     const client = new FakeRouterClient();
     render(<TasksTab sessionId="session-active" routerClient={client} />);

@@ -25,13 +25,14 @@ function rail() {
   return within(screen.getByLabelText("Session list"));
 }
 
-/** Stubs fetch to serve the session list plus the per-session endpoints ConversationTab calls. */
+/** Stubs fetch to serve the session list plus the per-session endpoints ConversationTab (and, when needed, the Tasks tab) call. */
 function stubSessionsAndConversationFetch(sessions: Session[]) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: URL) => {
       const url = input.toString();
       if (url.match(/\/sessions\/[^/]+\/transcript/)) return json([]);
+      if (url.includes("/tasks")) return json([]);
       if (url.match(/\/sessions\/[^/]+$/)) {
         const id = url.split("/sessions/")[1];
         const session = sessions.find((s) => s.id === id);
@@ -222,6 +223,24 @@ describe("SessionsSurface", () => {
     );
     await waitFor(() => expect(rail().getByText("Fix the deploy script")).toBeTruthy());
     expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy();
+  });
+
+  it("a fully-loaded session workspace holds at most 2 EventSource connections", async () => {
+    const sessions = [makeSession({ id: "s1", name: "Alpha" })];
+    stubSessionsAndConversationFetch(sessions);
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    fireEvent.click(rail().getByText("Alpha"));
+    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
+
+    await waitFor(() => {
+      const open = FakeEventSource.instances.filter((s) => !s.closed);
+      expect(open.length).toBeLessThanOrEqual(2);
+    });
   });
 
   it("selecting an inactive session renders without crashing", async () => {

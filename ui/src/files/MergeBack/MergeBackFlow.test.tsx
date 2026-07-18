@@ -4,15 +4,20 @@ import { MergeBackFlow } from "./MergeBackFlow";
 import { FakeRouterClient, fixtureConflictedMerge } from "../../router/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 
+let nextSeq = 1;
 function emitMerge(sessionId: string, type: string, payload: unknown) {
   const source = FakeEventSource.instances.find((s) => s.url.includes("merge.attempted"));
   act(() => {
-    source?.emit(type, JSON.stringify({ seq: 1, type, actor: "user", session_id: sessionId, payload }));
+    source?.emit(
+      type,
+      JSON.stringify({ seq: nextSeq++, type, actor: "user", session_id: sessionId, payload }),
+    );
   });
 }
 
 describe("MergeBackFlow", () => {
   beforeEach(() => {
+    nextSeq = 1;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
   });

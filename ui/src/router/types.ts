@@ -408,20 +408,6 @@ export interface MergeResult {
   files?: string[];
 }
 
-// mirrors pkg/contracts/event.go Envelope (subset fields the Files tab reads).
-// `type` is intentionally `string`, not a closed union — the vocabulary
-// grows as services land (see event.go's own comment) and this tab only
-// ever branches on the three merge.* values it cares about.
-export interface ControlEvent {
-  seq: number;
-  timestamp: string;
-  type: string;
-  session_id?: string;
-  task_id?: string;
-  actor: string;
-  payload?: unknown;
-}
-
 // Matches GET /sessions/{id}/commits/{hash}/diff's fileDiff response
 // (services/router/internal/api/commit_diff.go). GET /sessions/{id}/changes
 // (getFileDiff, working-change diffs) has no Router route yet — see

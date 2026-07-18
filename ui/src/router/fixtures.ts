@@ -10,7 +10,6 @@ import type {
   CapabilityUsage,
   Commit,
   Config,
-  ControlEvent,
   CostMetrics,
   DiagnoseResult,
   Envelope,
@@ -480,9 +479,7 @@ const taskTabFileChanges: FileChange[] = [
 
 /**
  * Dispatch-capable stream source for component tests (ui/src/tasks/HANDOFF.md
- * §3) — also backs the Conversation tab's streamSession, whose data-plane
- * events (`emit`) route by kind the same way FakeControlEventSource routes
- * by type.
+ * §3) — also backs the Conversation tab's streamSession.
  */
 export class FakeSessionEventSource implements SessionEventSource {
   private listeners = new Map<string, Set<(ev: MessageEvent<string>) => void>>();
@@ -503,12 +500,6 @@ export class FakeSessionEventSource implements SessionEventSource {
   emit(event: StreamEvent): void {
     const data = { data: JSON.stringify(event) } as MessageEvent<string>;
     this.listeners.get(event.kind)?.forEach((listener) => listener(data));
-  }
-
-  /** streamTaskEvents-style consumers (useTaskStore) register under the generic "message" type and read `type` from the payload themselves — unchanged for those callers. */
-  dispatch(envelope: Partial<Envelope> & { type: string }): void {
-    const ev = { data: JSON.stringify(envelope) } as MessageEvent<string>;
-    this.listeners.get("message")?.forEach((listener) => listener(ev));
   }
 }
 
@@ -697,50 +688,6 @@ export const fixtureConflictMarkers = `<<<<<<< HEAD
 `;
 
 /**
- * Driveable fake for the Router's control-plane SSE stream
- * (GET /events?session_id=&types=). Unlike FakeSessionEventSource this one
- * has a real (in-memory) transport: `emit` dispatches a named-event
- * MessageEvent to every listener registered for that type, with `ev.data`
- * JSON-holding a full envelope (mirroring the real `id:/event:/data:` wire
- * format, where `data` is the whole `contracts.Envelope`, not just its
- * payload — see services/router/internal/api/events.go), so
- * MergeBackFlow.test.tsx can simulate merge.attempted/conflicted/completed
- * arriving over the wire (HANDOFF §7).
- */
-export class FakeControlEventSource implements SessionEventSource {
-  private listeners = new Map<string, Set<(ev: MessageEvent<string>) => void>>();
-
-  addEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void {
-    const set = this.listeners.get(type) ?? new Set();
-    set.add(listener);
-    this.listeners.set(type, set);
-  }
-
-  removeEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void {
-    this.listeners.get(type)?.delete(listener);
-  }
-
-  close(): void {
-    this.listeners.clear();
-  }
-
-  emit(type: string, envelope: Partial<ControlEvent> = {}): void {
-    const full: ControlEvent = { seq: 0, timestamp: new Date().toISOString(), actor: "test", ...envelope, type };
-    const data = JSON.stringify(full);
-    const event = { data, type } as MessageEvent<string>;
-    this.listeners.get(type)?.forEach((listener) => listener(event));
-  }
-}
-
-export function createFakeControlEventSource(): {
-  source: FakeControlEventSource;
-  emit: (type: string, envelope?: Partial<ControlEvent>) => void;
-} {
-  const source = new FakeControlEventSource();
-  return { source, emit: (type, envelope) => source.emit(type, envelope) };
-}
-
-/**
  * In-memory RouterClient for dev-mode demo mounting and component tests.
  * Every test outside client.test.ts should inject this rather than mocking
  * fetch — see ui/src/conversation/HANDOFF.md §3.
@@ -752,10 +699,6 @@ export class FakeRouterClient implements RouterClient {
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
   private nextLinkSeq = 1000;
-  /** Test-only: set to return a specific instance from streamTaskEvents so a test can hold a reference to dispatch on. */
-  taskEventSource: FakeSessionEventSource;
-  /** Every control-event source this client has handed out, in creation order — tests grab the latest and call `.emit(...)` on it (HANDOFF §7). */
-  readonly controlEventSources: FakeControlEventSource[] = [];
   /** Every data-plane stream source this client has handed out via streamSession, in creation order — tests grab the latest and call `.emit(...)` on it. */
   readonly sessionEventSources: FakeSessionEventSource[] = [];
   /** Paths passed to openInEditor, in call order — lets tests assert the button fired without a real editor to open. */
@@ -782,7 +725,6 @@ export class FakeRouterClient implements RouterClient {
     );
     this.tasks = new Map(tasks.map((t) => [t.id, structuredClone(t)]));
     this.links = new Map(links.map((l) => [l.id, structuredClone(l)]));
-    this.taskEventSource = new FakeSessionEventSource();
   }
 
   async getSession(id: string): Promise<Session> {
@@ -967,10 +909,6 @@ export class FakeRouterClient implements RouterClient {
     );
   }
 
-  streamTaskEvents(): SessionEventSource {
-    return this.taskEventSource;
-  }
-
   async getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]> {
     const changes = this.fileChanges[sessionId] ?? [];
     return taskId ? changes.filter((c) => c.task_id === taskId) : changes;
@@ -998,12 +936,6 @@ export class FakeRouterClient implements RouterClient {
 
   async mergeSession(sessionId: string): Promise<MergeResult> {
     return this.mergeResults[sessionId] ?? fixtureCleanMerge;
-  }
-
-  streamControlEvents(): SessionEventSource {
-    const source = new FakeControlEventSource();
-    this.controlEventSources.push(source);
-    return source;
   }
 
   async getEvents(): Promise<Envelope[]> {

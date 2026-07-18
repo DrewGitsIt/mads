@@ -11,14 +11,12 @@ const client = new FakeRouterClient();
 const SESSION_ID = "session-active";
 
 /**
- * Mounts the Tasks tab and Context Rail side by side, per HANDOFF.md §8 —
- * this is what surfaces the §7 sharing question. TasksTab owns its own
- * useTaskStore (§4); the rail is fed by a second instance here so it can be
- * reused standalone by whatever real container ends up mounting it. Against
- * FakeRouterClient this is free (streamTaskEvents returns one shared source),
- * but a real Session Workspace container should lift a single store and pass
- * tasks/tasksById into both instead of letting each open its own SSE
- * connection — see HANDOFF.md's executor notes.
+ * Mounts the Tasks tab and Context Rail side by side. TasksTab owns its own
+ * useTaskStore; the rail is fed by a second instance here so it can be reused
+ * standalone by whatever real container ends up mounting it. Both instances
+ * share identical {sessionId, types}, so they collapse onto the same bus
+ * connection — a real Session Workspace container could still lift a single
+ * store and pass tasks/tasksById into both to avoid the duplicate fetch/state.
  */
 export function TasksDemo() {
   const { tasks, tasksById } = useTaskStore(client, SESSION_ID);
