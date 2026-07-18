@@ -2,7 +2,7 @@
 // ChatRenderer/SessionSummaryCard render markdown through DOMPurify, which
 // doesn't sanitize correctly under happy-dom (see ChatRenderer/markdown.test.tsx).
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
@@ -379,5 +379,150 @@ describe("ConversationTab", () => {
 
     await waitFor(() => expect(screen.getByText(/⇄ from Leader · Leader Session/)).toBeTruthy());
     expect(screen.getByText("kick off the payments refactor")).toBeTruthy();
+  });
+
+  // Chat replies stream live with a working indicator — the stream rides
+  // the same eventSource SessionTerminalBridge uses for terminal mode;
+  // FakeRouterClient.sessionEventSources tracks each instance streamSession
+  // hands out so a test can grab the latest and call .emit(...) on it.
+
+  it("renders a reply that arrives long after send, well past the old ~3s bounded-poll window", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { role: "user", text: "hello" },
+        { role: "agent", text: "a reply after a long gap" },
+      ]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    const textarea = screen.getByPlaceholderText(/message the agent/i);
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
+
+    const source = client.sessionEventSources.at(-1)!;
+    // Real (short) delay standing in for "long after send" — the old
+    // pollForReply gave up after ~3s (10 x 300ms) of real elapsed time, so a
+    // stream chunk that only arrives after the event loop has turned over
+    // several times, with nothing having polled or timed out in between,
+    // proves there's no bounded window standing in the way anymore.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    act(() => {
+      source.emit({ kind: "text", text: "a reply after a long gap" });
+      source.emit({ kind: "turn_end" });
+    });
+
+    expect(screen.getByText("a reply after a long gap")).toBeTruthy();
+  });
+
+  it("names the tool in the working indicator, then clears it once text starts streaming", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { name: "Read" } });
+    });
+    expect(screen.getByRole("status", { name: "Using Read…" })).toBeTruthy();
+
+    act(() => {
+      source.emit({ kind: "text", text: "here's what I found" });
+    });
+    expect(screen.queryByRole("status", { name: "Using Read…" })).toBeNull();
+  });
+
+  it("clears the streamed bubble and replaces it with the persisted transcript on turn_end", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ role: "agent", text: "the persisted reply" }]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "text", text: "streaming so far" });
+    });
+    expect(screen.getByText("streaming so far")).toBeTruthy();
+
+    act(() => {
+      source.emit({ kind: "turn_end" });
+    });
+
+    await waitFor(() => expect(screen.getByText("the persisted reply")).toBeTruthy());
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("surfaces a stream error via the existing toast and clears the indicator", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { name: "Read" } });
+    });
+    expect(screen.getByRole("status", { name: "Using Read…" })).toBeTruthy();
+
+    act(() => {
+      source.emit({ kind: "error", text: "the agent process crashed" });
+    });
+
+    await waitFor(() => expect(screen.getByText("Couldn't send your message")).toBeTruthy());
+    expect(screen.getByText("the agent process crashed")).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "Using Read…" })).toBeNull();
+  });
+
+  it("shows the working indicator on mount mid-turn, with no send ever made by this client", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    // No composer interaction anywhere in this test — the tool_use event is
+    // the first thing that's happened to this turn, same as a linked-session
+    // inject arriving into a session this viewer never sent to.
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { name: "Grep" } });
+    });
+
+    expect(screen.getByRole("status", { name: "Using Grep…" })).toBeTruthy();
+  });
+
+  it("calls getTranscript at most twice across a full send→turn_end cycle — no unbounded polling", async () => {
+    const client = new FakeRouterClient();
+    const getTranscript = vi
+      .spyOn(client, "getTranscript")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        { role: "user", text: "hello" },
+        { role: "agent", text: "reply" },
+      ]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    const textarea = screen.getByPlaceholderText(/message the agent/i);
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.getByText("hello")).toBeTruthy());
+
+    const source = client.sessionEventSources.at(-1)!;
+    act(() => {
+      source.emit({ kind: "text", text: "reply" });
+      source.emit({ kind: "turn_end" });
+    });
+
+    await waitFor(() => expect(screen.getByText("reply")).toBeTruthy());
+    expect(getTranscript.mock.calls.length).toBe(2);
   });
 });

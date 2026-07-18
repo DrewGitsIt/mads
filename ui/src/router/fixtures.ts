@@ -33,6 +33,7 @@ import type {
   Retro,
   Session,
   SessionDefaults,
+  StreamEvent,
   Task,
   TaskOutcomes,
   TaskStatus,
@@ -479,28 +480,35 @@ const taskTabFileChanges: FileChange[] = [
 
 /**
  * Dispatch-capable stream source for component tests (ui/src/tasks/HANDOFF.md
- * §3) — unlike the Conversation tab's streamSession (still a total no-op,
- * nothing consumes it yet), this task's acceptance criteria requires a fake
- * that can push a server-emitted envelope so a test can assert on the
- * resulting re-render.
+ * §3) — also backs the Conversation tab's streamSession, whose data-plane
+ * events (`emit`) route by kind the same way FakeControlEventSource routes
+ * by type.
  */
 export class FakeSessionEventSource implements SessionEventSource {
-  private listeners: ((ev: MessageEvent<string>) => void)[] = [];
+  private listeners = new Map<string, Set<(ev: MessageEvent<string>) => void>>();
 
-  addEventListener(_type: "message", fn: (ev: MessageEvent<string>) => void): void {
-    this.listeners.push(fn);
+  addEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void {
+    const set = this.listeners.get(type) ?? new Set();
+    set.add(listener);
+    this.listeners.set(type, set);
   }
 
-  removeEventListener(_type: "message", fn: (ev: MessageEvent<string>) => void): void {
-    this.listeners = this.listeners.filter((l) => l !== fn);
+  removeEventListener(type: string, listener: (ev: MessageEvent<string>) => void): void {
+    this.listeners.get(type)?.delete(listener);
   }
 
   close(): void {}
 
-  /** Test-only: simulate a server-pushed envelope, wire-shaped like a real SSE `data:` line. */
+  /** Test-only: simulate one normalized StreamEvent (providers/provider/event.go), SSE-encoded with event: <kind>. */
+  emit(event: StreamEvent): void {
+    const data = { data: JSON.stringify(event) } as MessageEvent<string>;
+    this.listeners.get(event.kind)?.forEach((listener) => listener(data));
+  }
+
+  /** streamTaskEvents-style consumers (useTaskStore) register under the generic "message" type and read `type` from the payload themselves — unchanged for those callers. */
   dispatch(envelope: Partial<Envelope> & { type: string }): void {
     const ev = { data: JSON.stringify(envelope) } as MessageEvent<string>;
-    this.listeners.forEach((fn) => fn(ev));
+    this.listeners.get("message")?.forEach((listener) => listener(ev));
   }
 }
 
@@ -737,6 +745,8 @@ export class FakeRouterClient implements RouterClient {
   taskEventSource: FakeSessionEventSource;
   /** Every control-event source this client has handed out, in creation order — tests grab the latest and call `.emit(...)` on it (HANDOFF §7). */
   readonly controlEventSources: FakeControlEventSource[] = [];
+  /** Every data-plane stream source this client has handed out via streamSession, in creation order — tests grab the latest and call `.emit(...)` on it. */
+  readonly sessionEventSources: FakeSessionEventSource[] = [];
   /** Paths passed to openInEditor, in call order — lets tests assert the button fired without a real editor to open. */
   readonly openedPaths: string[] = [];
 
@@ -774,7 +784,9 @@ export class FakeRouterClient implements RouterClient {
   }
 
   streamSession(): SessionEventSource {
-    return new FakeSessionEventSource();
+    const source = new FakeSessionEventSource();
+    this.sessionEventSources.push(source);
+    return source;
   }
 
   async sendMessage(): Promise<void> {}

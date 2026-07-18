@@ -1,8 +1,9 @@
 import { Chip } from "../../components/Chip/Chip";
 import { FLAGS } from "../../featureFlags";
-import type { Link, TranscriptMessage } from "../../router/types";
+import type { Link, ToolUse, TranscriptMessage } from "../../router/types";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./ToolCard";
+import { WorkingIndicator } from "./WorkingIndicator";
 import styles from "./ChatRenderer.module.css";
 
 export interface ChatRendererProps {
@@ -10,6 +11,10 @@ export interface ChatRendererProps {
   /** Linked sessions (flag-gated): links touching the viewed session, used to resolve an attributed message as an inject chip vs. a digest card (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
   links?: Link[];
   viewedSessionId?: string;
+  /** In-progress assistant text for the turn currently streaming — appended after `messages`, replaced by the persisted transcript on turn_end. */
+  streamingText?: string;
+  /** Pre-first-chunk "agent is working" state; carries the most recent tool_use so the indicator can name it. Ignored once streamingText is set. */
+  working?: { tool?: ToolUse } | false;
 }
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
@@ -22,7 +27,13 @@ const CADENCE_LABEL: Record<Link["cadence"], string> = {
  * prose wrapper is capped at the ~92ch reading measure — tool cards and
  * code blocks use the available room (MADS-UX §3.3).
  */
-export function ChatRenderer({ messages, links = [], viewedSessionId }: ChatRendererProps) {
+export function ChatRenderer({
+  messages,
+  links = [],
+  viewedSessionId,
+  streamingText,
+  working,
+}: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   return (
     <div className={styles.stream}>
@@ -64,6 +75,12 @@ export function ChatRenderer({ messages, links = [], viewedSessionId }: ChatRend
           </div>
         );
       })}
+      {streamingText !== undefined && (
+        <div className={styles.agent}>
+          <Markdown className={styles.prose} text={streamingText} />
+        </div>
+      )}
+      {!streamingText && working && <WorkingIndicator tool={working.tool} />}
     </div>
   );
 }

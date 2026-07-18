@@ -55,11 +55,16 @@ test("sessions journey: agent replies to a composer message", async ({ page, rou
 
   const token = `${Date.now()}`;
   const composer = page.getByPlaceholder("Message the agent — @ to mention, / for commands");
-  await composer.fill(`echo ${token}`);
+  // "echo slowly" paces the fake provider's reply word-by-word (250ms/chunk,
+  // providers/fake/fake.go) so the working indicator has an observable
+  // in-flight window — no second send anywhere in this arc.
+  await composer.fill(`echo slowly ${token}`);
   await page.getByRole("button", { name: "Send" }).click();
 
-  await expect(page.getByText(`echo ${token}`)).toBeVisible();
+  await expect(page.getByText(`echo slowly ${token}`)).toBeVisible();
+  await expect(page.getByRole("status", { name: /Working…|Using / })).toBeVisible();
   await expect(page.getByText(`you said ${token}`)).toBeVisible();
+  await expect(page.getByRole("status", { name: /Working…|Using / })).not.toBeVisible();
 });
 
 test("sessions journey: close, resume affordance, delete", async ({ page, routerURL }) => {
