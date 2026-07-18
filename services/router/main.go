@@ -177,6 +177,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Supervisor state is in-memory only, so a prior Router process's
+	// active sessions are orphaned by this restart: reconcile them to
+	// inactive before serving, unless a live task lease proves an external
+	// engine (e.g. a CLI `mads run`) is still genuinely driving one.
+	sweepCtx, sweepCancel := context.WithTimeout(ctx, 30*time.Second)
+	sup.ReconcileOrphanedSessions(sweepCtx)
+	sweepCancel()
+
 	watcher := digestwatch.NewWatcher(data, jobs)
 	go watcher.Run(ctx)
 

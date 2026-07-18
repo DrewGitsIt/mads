@@ -113,17 +113,90 @@ func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID string)
 
 // TerminateSession stops sessionID's child (expected-exit path: SIGTERM,
 // grace period, then SIGKILL). Returns once the child's exit handling
-// (including its lease ReleaseAll) has completed. A no-op, successful call
-// if no child is tracked under sessionID. Does not itself emit an event —
-// the caller (api layer) is responsible for the "why" (e.g. SessionDeleted).
+// (including its lease ReleaseAll) has completed. If no child is tracked
+// under sessionID, this is truth-enforcement, not a no-op: the session
+// record may still say active from before a Router restart orphaned it
+// (Supervisor state is in-memory only) — reconcileInactiveSession flips it
+// to inactive so the UI and summary job react exactly as a real exit
+// would. Does not itself emit an activity_changed "why" beyond that — the
+// caller (api layer) is responsible for anything further (e.g.
+// SessionDeleted).
 func (s *Supervisor) TerminateSession(ctx context.Context, sessionID string) error {
 	s.mu.Lock()
 	p := s.sessions[sessionID]
 	s.mu.Unlock()
 	if p == nil {
-		return nil
+		return s.reconcileInactiveSession(ctx, sessionID)
 	}
 	return p.Terminate(ctx, terminateGrace)
+}
+
+// reconcileInactiveSession enforces the truth that no child is tracked
+// under sessionID: if the record still says active, flips it to inactive.
+// dataclient.UpdateSession itself emits session.activity_changed when
+// Activity changes (services/data/internal/store/sessions.go Update) — no
+// manual Append needed here, same as onSessionExit's crash-path flip
+// below. Also spawns the same session-summary job a real exit would (spec
+// §16: every active→inactive transition triggers one), matching
+// onSessionExit's unconditional spawn. No-op if the session is already
+// inactive, or doesn't exist.
+func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID string) error {
+	sess, err := s.data.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Activity != contracts.SessionActive {
+		return nil
+	}
+	sess.Activity = contracts.SessionInactive
+	if err := s.data.UpdateSession(ctx, &sess); err != nil {
+		return err
+	}
+	if s.jobs != nil {
+		if _, err := s.jobs.Spawn(ctx, job.SessionSummaryKind, sessionID, job.GenerateSessionSummary(sessionID)); err != nil {
+			log.Printf("supervisor: spawn session summary for %s: %v", sessionID, err)
+		}
+	}
+	return nil
+}
+
+// ReconcileOrphanedSessions flips every session marked active with no
+// tracked child back to inactive — the boot-time fix for sessions
+// orphaned by a prior Router process's restart (Supervisor state is
+// in-memory only, spec §15). Guards against a live external engine (a CLI
+// `mads run`, never spawned or tracked by this Supervisor) by checking for
+// an unexpired task write-lease under the session first: a live lease
+// means leave it alone and log, since flipping it would fight a genuinely
+// running pipeline. Best-effort — logs and continues past per-session
+// errors rather than aborting the sweep or failing Router startup.
+func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
+	sessions, err := s.data.Sessions(ctx, string(contracts.SessionActive))
+	if err != nil {
+		log.Printf("supervisor: boot sweep: list active sessions: %v", err)
+		return
+	}
+	for _, sess := range sessions {
+		s.mu.Lock()
+		_, tracked := s.sessions[sess.ID]
+		s.mu.Unlock()
+		if tracked {
+			continue // a real child is live for this session; nothing to do
+		}
+		live, err := s.data.SessionActiveLease(ctx, sess.ID)
+		if err != nil {
+			log.Printf("supervisor: boot sweep: check active lease for %s: %v", sess.ID, err)
+			continue // can't prove it's safe to flip; leave active rather than risk killing a live run
+		}
+		if live {
+			log.Printf("supervisor: boot sweep: session %s has a live task lease (external engine); leaving active", sess.ID)
+			continue
+		}
+		if err := s.reconcileInactiveSession(ctx, sess.ID); err != nil {
+			log.Printf("supervisor: boot sweep: reconcile %s: %v", sess.ID, err)
+			continue
+		}
+		log.Printf("supervisor: boot sweep: reconciled orphaned-active session %s to inactive", sess.ID)
+	}
 }
 
 // TerminatePipeline stops runID's child. See TerminateSession.
