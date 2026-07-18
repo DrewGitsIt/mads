@@ -142,14 +142,13 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Pipeline" }).click();
 
-    const picker = page.getByRole("combobox", { name: "Pipeline run" });
-    await expect(picker).toBeVisible();
-    await expect(picker.locator("option")).toHaveCount(2);
-    // Newest-first default selection.
-    await expect(picker).toHaveValue(String(secondRunSeq));
+    const trigger = page.getByRole("button", { name: "Run history" });
+    await expect(trigger).toBeVisible();
+    const initialLabel = await trigger.textContent();
 
-    const statusLine = page.getByText(/^Run \w+ .* · done \d+ · blocked \d+$/);
-    const initialStatusText = await statusLine.textContent();
+    await trigger.click();
+    const options = page.getByRole("button", { name: /Run · started/ });
+    await expect(options).toHaveCount(2);
 
     // Selecting the older run must fetch and fold *that* run's own event
     // window from the real backend — not just flip a client-side label.
@@ -157,12 +156,12 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
       page.waitForResponse(
         (res) => res.url().includes("/events") && res.url().includes(`since=${firstRunSeq - 1}`),
       ),
-      picker.selectOption(String(firstRunSeq)),
+      // Newest run is listed/selected first — click the second (older) option.
+      options.nth(1).click(),
     ]);
     expect(response.ok()).toBeTruthy();
 
-    await expect(picker).toHaveValue(String(firstRunSeq));
-    await expect(statusLine).not.toHaveText(initialStatusText ?? "");
+    await expect(trigger).not.toHaveText(initialLabel ?? "");
   });
 
   test("graph mode shows the unsequenced tray and a canvas node", async ({ page, routerURL }) => {

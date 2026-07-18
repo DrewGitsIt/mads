@@ -25,9 +25,9 @@ export function StageTimeline({ attempts }: StageTimelineProps) {
   }
 
   return (
-    <ol className={styles.timeline}>
+    <ol className={styles.timeline} data-testid="stage-timeline">
       {attempts.map((attempt, i) => (
-        <li key={i} className={styles.entry}>
+        <li key={i} className={styles.entry} data-testid="stage-timeline-entry">
           <div className={styles.row}>
             <span className={styles.stage}>{attempt.stage}</span>
             {attempt.attempt > 1 && <Chip tone="warn">loop-back {attempt.attempt}</Chip>}

@@ -18,6 +18,10 @@ function makeRun(overrides: Partial<PipelineRun>): PipelineRun {
   };
 }
 
+function openMenu() {
+  fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+}
+
 describe("RunPicker", () => {
   it("renders options newest-first", () => {
     const runs = [
@@ -25,34 +29,41 @@ describe("RunPicker", () => {
       makeRun({ run_seq: 7, outcome: "incomplete" }),
     ];
     render(<RunPicker runs={runs} selectedRunSeq={100} onSelect={vi.fn()} />);
+    openMenu();
 
-    const options = screen.getAllByRole("option") as HTMLOptionElement[];
-    expect(options.map((o) => o.value)).toEqual(["100", "7"]);
+    const options = screen.getAllByRole("button", { name: /Run · started/ });
+    expect(options.map((o) => o.textContent)).toEqual([
+      expect.stringContaining("completed"),
+      expect.stringContaining("incomplete"),
+    ]);
   });
 
   it("fires onSelect with the chosen run's run_seq", () => {
-    const runs = [makeRun({ run_seq: 100 }), makeRun({ run_seq: 7 })];
+    const runs = [makeRun({ run_seq: 100 }), makeRun({ run_seq: 7, outcome: "incomplete" })];
     const onSelect = vi.fn();
     render(<RunPicker runs={runs} selectedRunSeq={100} onSelect={onSelect} />);
+    openMenu();
 
-    fireEvent.change(screen.getByRole("combobox"), { target: { value: "7" } });
+    fireEvent.click(screen.getByRole("button", { name: /incomplete/ }));
     expect(onSelect).toHaveBeenCalledWith(7);
   });
 
-  it("shows a done/blocked status line for a terminal run", () => {
+  it("shows a done/blocked count for a terminal run", () => {
     const run = makeRun({ run_seq: 7, outcome: "incomplete", tasks_done: 4, tasks_blocked: 1 });
     render(<RunPicker runs={[run]} selectedRunSeq={7} onSelect={vi.fn()} />);
 
-    expect(screen.getByText(/Run incomplete/)).toBeTruthy();
-    expect(screen.getByText(/done 4/)).toBeTruthy();
-    expect(screen.getByText(/blocked 1/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run history" }).textContent).toContain(
+      "4 done / 1 blocked",
+    );
   });
 
-  it("omits the ended time for a dangling 'running' run", () => {
+  it("labels a 'running' run 'in progress' with no done/blocked-implying finished claim", () => {
     const run = makeRun({ run_seq: 7, outcome: "running", ended_at: undefined });
     render(<RunPicker runs={[run]} selectedRunSeq={7} onSelect={vi.fn()} />);
 
-    expect(screen.getByText(/Run started/)).toBeTruthy();
-    expect(screen.queryByText(/done \d/)).toBeNull();
+    const label = screen.getByRole("button", { name: "Run history" }).textContent ?? "";
+    expect(label).toContain("in progress");
+    expect(label).not.toContain("completed");
+    expect(label).not.toContain("incomplete");
   });
 });

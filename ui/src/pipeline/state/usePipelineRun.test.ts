@@ -125,4 +125,77 @@ describe("usePipelineRun", () => {
     const cliTask = result.current.tasks.find((t) => t.id === recordedTaskIds.cli);
     expect(cliTask?.status).toBe("ready");
   });
+
+  it("resumes an in-flight run from listRuns/getRunEvents, then keeps folding live SSE from the cursor", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        started_at: "2026-07-16T05:00:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+      {
+        seq: 101,
+        timestamp: "2026-07-16T05:00:01Z",
+        type: "stage.started",
+        session_id: recordedSessionId,
+        task_id: recordedTaskIds.coreLib,
+        actor: "pipeline",
+        payload: { stage: "architect" },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.phase).toBe("running");
+    expect(result.current.columns).toEqual(["architect"]);
+    expect(result.current.taskRunState[recordedTaskIds.coreLib]?.currentStage).toBe("architect");
+
+    act(() => {
+      const env = {
+        seq: 102,
+        timestamp: "2026-07-16T05:00:02Z",
+        type: "stage.completed",
+        session_id: recordedSessionId,
+        task_id: recordedTaskIds.coreLib,
+        actor: "pipeline",
+        payload: { stage: "architect" },
+      };
+      FakeEventSource.instances[0].emit(env.type, JSON.stringify(env));
+    });
+
+    await waitFor(() =>
+      expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.status).toBe(
+        "completed",
+      ),
+    );
+  });
+
+  it("with no in-flight run, resuming resolves promptly and phase stays idle until a live pipeline.started arrives (regression guard)", async () => {
+    const client = newClient();
+    client.runs = [];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.phase).toBe("idle");
+
+    playRecordedRun();
+
+    await waitFor(() => expect(result.current.phase).toBe("finished"));
+  });
 });

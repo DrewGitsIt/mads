@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { PipelineTab } from "./PipelineTab";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { FakePipelineClient } from "./client/fixtures";
-import { recordedEnvelopes, recordedSessionId, recordedTasks } from "./client/recordedRun";
+import { recordedEnvelopes, recordedSessionId, recordedTaskIds, recordedTasks } from "./client/recordedRun";
 import type { Envelope, PipelineRun } from "../router/types";
 
 function makeRun(overrides: Partial<PipelineRun>): PipelineRun {
@@ -138,7 +138,7 @@ describe("PipelineTab", () => {
     expect(screen.queryByText("idle")).toBeNull();
     expect(screen.getByText("Done")).toBeTruthy();
     expect(screen.getAllByText("1 blocked").length).toBe(2);
-    expect(screen.getByRole("combobox", { name: "Pipeline run" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Run history" })).toBeTruthy();
   });
 
   it("switches folded runs via the run picker", async () => {
@@ -155,11 +155,79 @@ describe("PipelineTab", () => {
     await waitFor(() => expect(screen.getByText("architect")).toBeTruthy());
     expect(screen.queryByText("executor")).toBeNull();
 
-    fireEvent.change(screen.getByRole("combobox", { name: "Pipeline run" }), {
-      target: { value: "7" },
-    });
+    fireEvent.click(screen.getByRole("button", { name: "Run history" }));
+    fireEvent.click(screen.getByRole("button", { name: /incomplete/ }));
 
     // Run 7 (the full recorded run) folds all six stages, including executor.
     await waitFor(() => expect(screen.getByText("executor")).toBeTruthy());
+  });
+
+  it("resumes an in-flight run's board/picker/drill-in on mount, then keeps folding live events", async () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    const coreLib = recordedTaskIds.coreLib;
+    client.runs = [makeRun({ run_seq: 100, outcome: "running", tasks_done: 0, tasks_blocked: 0 })];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-16T05:00:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+      {
+        seq: 101,
+        timestamp: "2026-07-16T05:00:01Z",
+        type: "stage.started",
+        session_id: recordedSessionId,
+        task_id: coreLib,
+        actor: "pipeline",
+        payload: { stage: "architect" },
+      },
+    ];
+    render(<PipelineTab sessionId={recordedSessionId} pipelineClient={client} />);
+
+    // Board reflects the seeded prefix: the task is in the "architect" column, not Queued.
+    await waitFor(() => expect(screen.getByText("architect")).toBeTruthy());
+
+    // Picker labels the resumed run "in progress".
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Run history" }).textContent).toContain(
+        "in progress",
+      ),
+    );
+
+    // Drill-in reflects the resumed fold, not an empty timeline.
+    fireEvent.click(screen.getByRole("button", { name: "core lib" }));
+    await waitFor(() => expect(screen.queryByText("No stages started yet.")).toBeNull());
+
+    // A subsequent live stage event moves the card into the next column.
+    const source = FakeEventSource.instances[0];
+    const stageCompleted: Envelope = {
+      seq: 102,
+      timestamp: "2026-07-16T05:00:02Z",
+      type: "stage.completed",
+      session_id: recordedSessionId,
+      task_id: coreLib,
+      actor: "pipeline",
+      payload: { stage: "architect" },
+    };
+    const executorStarted: Envelope = {
+      seq: 103,
+      timestamp: "2026-07-16T05:00:03Z",
+      type: "stage.started",
+      session_id: recordedSessionId,
+      task_id: coreLib,
+      actor: "pipeline",
+      payload: { stage: "executor" },
+    };
+    act(() => {
+      source.emit(stageCompleted.type, JSON.stringify(stageCompleted));
+      source.emit(executorStarted.type, JSON.stringify(executorStarted));
+    });
+
+    // "executor" now appears both as the new column header and in the
+    // reopened drill-in's timeline — assert at least one exists.
+    await waitFor(() => expect(screen.getAllByText("executor").length).toBeGreaterThan(0));
   });
 });
