@@ -27,6 +27,8 @@ export interface ComposerProps {
    * mounts asynchronously, well after its parent.
    */
   onAutoSendStart?: () => void;
+  /** Fires synchronously at the start of every send (manual or auto) — lets the caller show an in-flight indicator before the request resolves. */
+  onSendStart?: () => void;
 }
 
 /**
@@ -45,6 +47,7 @@ export function Composer({
   autoSendInitial,
   onSendError,
   onAutoSendStart,
+  onSendStart,
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue ?? "");
   const [cursor, setCursor] = useState(0);
@@ -108,6 +111,7 @@ export function Composer({
   async function handleSend() {
     const text = value.trim();
     if (!text) return;
+    onSendStart?.();
     const mentions = injected.map((i) => i.id);
     try {
       await routerClient.sendMessage(sessionId, { text, mentions });

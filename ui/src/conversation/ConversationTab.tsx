@@ -79,6 +79,7 @@ export function ConversationTab({
   const [shellOpen, setShellOpen] = useState(false);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
+  const [waking, setWaking] = useState(false);
   const links = useSessionLinks([sessionId]);
 
   useEffect(() => {
@@ -333,16 +334,28 @@ export function ConversationTab({
                   )}
                 </div>
               )}
+              {waking && (
+                <div className={styles.transportBanner}>
+                  <span>Waking the agent…</span>
+                </div>
+              )}
               <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}
                 agentId={session.agent}
-                disabled={transport.status !== "idle"}
+                disabled={transport.status !== "idle" || waking}
                 initialValue={pendingFirstMessage}
                 autoSendInitial={Boolean(pendingFirstMessage)}
-                onSendError={setSendError}
+                onSendStart={() => {
+                  if (session.activity !== "active") setWaking(true);
+                }}
+                onSendError={(msg) => {
+                  setWaking(false);
+                  setSendError(msg);
+                }}
                 onAutoSendStart={onPendingFirstMessageHandled}
                 onSent={(text) => {
+                  setWaking(false);
                   setMessages((m) => [...m, { role: "user", text }]);
                   void pollForReply();
                 }}

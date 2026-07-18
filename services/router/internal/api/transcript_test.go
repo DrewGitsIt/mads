@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -215,6 +216,85 @@ func TestSessionTranscriptProxiesLiveChild(t *testing.T) {
 
 	if tresp := postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil); tresp.StatusCode != http.StatusNoContent {
 		t.Fatalf("terminate status = %d, want 204", tresp.StatusCode)
+	}
+}
+
+// TestMessagesWakesChildlessSession is the topology test for wake-on-send:
+// a session with no tracked child (createSessionDirect bypasses Router's
+// spawn-on-create) gets a message via POST /messages, which must wake it
+// (spawn a real child) and then deliver, all within one request.
+func TestMessagesWakesChildlessSession(t *testing.T) {
+	srv, base := newTestServerWithRealSession(t)
+	id := createSessionDirect(t, base, contracts.Session{Name: "wake-me", Provider: "fake"})
+
+	mresp := postJSON(t, srv.URL+"/sessions/"+id+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+
+	var msgs []contracts.TranscriptMessage
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		tresp, err := http.Get(srv.URL + "/sessions/" + id + "/transcript")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs = decodeJSON[[]contracts.TranscriptMessage](t, tresp)
+		if len(msgs) >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo hi" {
+		t.Errorf("msgs[0] = %+v, want {role: user, text: echo hi}", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
+		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
+	}
+}
+
+func TestMessagesWakeUnknownProviderReturnsStructuredError(t *testing.T) {
+	srv, base := newTestServerWithRealSession(t)
+	id := createSessionDirect(t, base, contracts.Session{Name: "wake-bad-provider", Provider: "nonexistent"})
+
+	resp := postJSON(t, srv.URL+"/sessions/"+id+"/messages", map[string]string{"text": "hi"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]any](t, resp)
+	if body["code"] != "provider_missing" {
+		t.Fatalf("code = %v, want provider_missing: %+v", body["code"], body)
+	}
+}
+
+// newTestServerWithBrokenSessionSpawn wires a Supervisor whose session argv
+// points at a nonexistent binary, so SpawnSession always fails — used to
+// exercise wakeSession's spawn-failure path.
+func newTestServerWithBrokenSessionSpawn(t *testing.T) (*httptest.Server, string) {
+	t.Helper()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{filepath.Join(t.TempDir(), "no-such-binary")}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
+	return srv, base
+}
+
+func TestMessagesWakeSpawnFailureReturnsStructuredError(t *testing.T) {
+	srv, base := newTestServerWithBrokenSessionSpawn(t)
+	id := createSessionDirect(t, base, contracts.Session{Name: "wake-spawn-fail", Provider: "fake"})
+
+	resp := postJSON(t, srv.URL+"/sessions/"+id+"/messages", map[string]string{"text": "hi"})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]any](t, resp)
+	if body["code"] != "spawn_failed" {
+		t.Fatalf("code = %v, want spawn_failed: %+v", body["code"], body)
 	}
 }
 

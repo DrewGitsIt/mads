@@ -6,7 +6,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
-import { TransportSwitchError } from "../router/client";
+import { TransportSwitchError, SessionWakeError } from "../router/client";
 import { FLAGS } from "../featureFlags";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import type { Link } from "../router/types";
@@ -114,6 +114,46 @@ describe("ConversationTab", () => {
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
     );
+  });
+
+  it("shows a waking indicator while a message to a dormant session is in flight", async () => {
+    const client = new FakeRouterClient();
+    let resolveSend!: () => void;
+    vi.spyOn(client, "sendMessage").mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSend = () => resolve(undefined);
+      }),
+    );
+    render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    const textarea = screen.getByPlaceholderText(/message the agent/i);
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText("Waking the agent…")).toBeTruthy());
+    const sendButton = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(true);
+
+    resolveSend();
+    await waitFor(() => expect(screen.queryByText("Waking the agent…")).toBeNull());
+  });
+
+  it("keeps the composer text and shows the structured reason when waking a dormant session fails", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "sendMessage").mockRejectedValue(
+      new SessionWakeError("provider gone", "provider_missing", false),
+    );
+    render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    const textarea = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText("Couldn't send your message")).toBeTruthy());
+    expect(screen.getByText("provider gone")).toBeTruthy();
+    expect(textarea.value).toBe("hello");
   });
 
   it("shows a busy failure with an interrupt-and-switch escape hatch", async () => {
