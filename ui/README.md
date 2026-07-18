@@ -149,15 +149,14 @@ so this demo mount remains the only place to review it.
 
 Both `TasksTab` and `ContextRail` read live task state via `useTaskStore`
 (`src/tasks/useTaskStore.ts`), which subscribes to `task.*`/`note.*` events
-off `GET /events` and always refetches the affected task rather than trusting
-the (sparse) event payload. `TasksTab` owns its own instance per the module
-layout in `src/tasks/HANDOFF.md` §4; `ContextRail` instead takes
-`tasks`/`tasksById` as props, so the demo mount runs a second instance to
-supply the rail. Against `FakeRouterClient` this is free (`streamTaskEvents`
-always returns one shared fake event source), but a real container mounting
-both tabs together should lift a single `useTaskStore` call and pass the
-result into each instead of opening two live subscriptions for one session —
-see `src/tasks/HANDOFF.md`'s executor notes.
+via `subscribeToEvents` (`src/router/events.ts`) and always refetches the
+affected task rather than trusting the (sparse) event payload. `TasksTab`
+owns its own instance per the module layout in `src/tasks/HANDOFF.md` §4;
+`ContextRail` instead takes `tasks`/`tasksById` as props, so the demo mount
+runs a second instance to supply the rail. `subscribeToEvents` demultiplexes
+every subscriber through the one window-singleton `/events` `EventSource`
+(`src/router/events.ts`), so this never opens a second live connection for
+one session — see `src/tasks/HANDOFF.md`'s executor notes.
 
 Task list/graph rendering follows the Queued display rule (`src/tasks/
 ListView/statusPresentation.ts`): a `"blocked"` task with an unfinished
@@ -254,10 +253,11 @@ tests — component tests mock `@monaco-editor/react` instead of loading real
 Monaco (see `DiffViewer.test.tsx`/`ConflictResolution.test.tsx`).
 
 The merge-back flow's status (attempting/conflicted/completed) is driven
-entirely by parsed `merge.*` control-plane events from
-`RouterClient.streamControlEvents`, not by the `mergeSession()` promise
-result — `MergeBackFlow.test.tsx` drives this against a fake, in-memory
-control-event source (`FakeControlEventSource.emit(type, envelope)`).
+entirely by parsed `merge.*` control-plane events from `subscribeToEvents`
+(`src/router/events.ts`), not by the `mergeSession()` promise result —
+`MergeBackFlow.test.tsx` drives this against `FakeEventSource`
+(`src/router/testFakeEventSource.ts`), the fake backing the window's one
+`/events` connection.
 Conflict resolution has one real, usable action (open the session's
 worktree in an external editor) and one seed-only stub (`MergeEditor`, a
 raw-text Monaco instance over a fixture conflict-marker string) — there is
