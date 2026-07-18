@@ -268,7 +268,7 @@ func (s *Leases) ByHolder(ctx context.Context, holder string) ([]contracts.Lease
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var leases []contracts.Lease
 	for rows.Next() {
 		var (

@@ -8,6 +8,8 @@ import {
 import { Button } from "../../components/Button/Button";
 import { Markdown } from "../../conversation/ChatRenderer/markdown";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
+import { BlockedTaskFeedback } from "../../pipeline/Board/BlockedTaskFeedback";
+import { StageTimeline } from "../../pipeline/DrillIn/StageTimeline";
 import type { RouterClient } from "../../router/client";
 import type { Note, NoteType, Task, TaskStatus } from "../../router/types";
 import { useGraphRunState } from "../GraphView/useGraphRunState";
@@ -126,6 +128,35 @@ export function TaskDetailSheet({
             ))}
           </select>
         </label>
+
+        {pipelineClient && (() => {
+          const taskFold = runState?.taskRunState[draft.id];
+          const hasRunHistory = !!taskFold && (taskFold.attempts.length > 0 || !!taskFold.currentStage);
+          if (!hasRunHistory && draft.status !== "blocked") return null;
+          return (
+            <div
+              className={styles.runState}
+              data-blocked={draft.status === "blocked" || undefined}
+            >
+              <span className={styles.fieldLabel}>Pipeline run</span>
+              {hasRunHistory && (
+                <>
+                  {taskFold?.currentStage && (
+                    <p className={styles.stage}>
+                      {draft.status === "blocked"
+                        ? `blocked at ${taskFold.currentStage}`
+                        : taskFold.currentStage}
+                    </p>
+                  )}
+                  <StageTimeline attempts={taskFold?.attempts ?? []} />
+                </>
+              )}
+              {draft.status === "blocked" && (
+                <BlockedTaskFeedback taskId={draft.id} notes={notes} client={pipelineClient} />
+              )}
+            </div>
+          );
+        })()}
 
         <label className={styles.field}>
           <span className={styles.fieldLabel}>Labels</span>

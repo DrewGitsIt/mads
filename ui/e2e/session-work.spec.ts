@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test, expect } from "./fixtures";
@@ -252,5 +252,82 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(
       page.locator(`.react-flow__edge[data-id="${secondRunTask.id}->${dependentTask.id}"]`),
     ).toBeVisible();
+  });
+});
+
+test.describe("session workspace: blocked task review from Tasks tab", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const taskTitle = "e2e blocked task";
+  let sessionName: string;
+
+  test.beforeAll(async () => {
+    const routerURL = process.env.MADS_ROUTER_URL!;
+    const dataURL = process.env.MADS_DATA_URL!;
+    const workspaceDir = mkdtempSync(path.join(tmpdir(), "mads-ui-smoke-blocked-"));
+    setupWorkspace(workspaceDir);
+    sessionName = `e2e blocked task journey ${Date.now()}`;
+    const session = await createSession(routerURL, { name: sessionName, provider: "fake" });
+    await importTasks(routerURL, session.id, [taskTitle]);
+
+    // Fails the default template's code_review stage every time (mirrors
+    // services/pipeline/engine/engine_test.go's TestDefaultTemplateReviewLoopBack)
+    // so the task loops back max_loops(2) times, then blocks. Every other
+    // stage's prompt falls through to the catch-all and passes.
+    const scenarioPath = path.join(workspaceDir, "scenario.yaml");
+    writeFileSync(
+      scenarioPath,
+      [
+        "name: blocked-review",
+        "rules:",
+        `  - match: "code_review\\nTask: ${taskTitle}"`,
+        '    reply: "This won\'t do.\\nSTAGE: fail — missing error handling"',
+        '  - match: ""',
+        '    reply: "STAGE: pass"',
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      runFakePipeline({
+        madsBin: process.env.MADS_BIN!,
+        dataURL,
+        sessionID: session.id,
+        workspace: workspaceDir,
+        worktreeRoot: path.join(workspaceDir, ".worktrees"),
+        env: process.env,
+        scenarioPath,
+      });
+    } catch {
+      // cmd/mads/run.go returns a non-zero exit whenever a run ends with a
+      // blocked task — exactly the outcome this scenario seeds, not a
+      // genuine seeding failure.
+    }
+  });
+
+  test("Tasks tab: blocked task's detail sheet shows the blocker note and a working Retry", async ({
+    page,
+    routerURL,
+  }) => {
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Tasks" }).click();
+
+    await page.getByText(taskTitle, { exact: true }).click();
+    const sheet = page.getByRole("complementary");
+    await expect(sheet.getByRole("combobox")).toHaveValue("blocked");
+    // The blocker note is intentionally duplicated: once in the Pipeline run
+    // section's BlockedTaskFeedback, once in the generic notes list further
+    // down (TaskDetailSheet.test.tsx) — assert at least one is visible.
+    await expect(sheet.getByText(/code_review/).first()).toBeVisible();
+
+    const retryButton = sheet.getByRole("button", { name: "Retry" });
+    await expect(retryButton).toBeVisible();
+    await retryButton.click();
+
+    // The retried task's task.status_changed event drives useTaskStore's
+    // live refetch, which flips the sheet's Status field out of "blocked".
+    await expect(sheet.getByRole("combobox")).not.toHaveValue("blocked");
   });
 });

@@ -198,6 +198,8 @@ export function runFakePipeline(opts: {
   workspace: string;
   worktreeRoot: string;
   env: NodeJS.ProcessEnv;
+  /** -fake-scenario path — scripts a stage's reply (e.g. a `STAGE: fail` rule to seed a blocked task). */
+  scenarioPath?: string;
 }): void {
   mkdirSync(opts.worktreeRoot, { recursive: true });
   execFileSync(
@@ -212,6 +214,7 @@ export function runFakePipeline(opts: {
       opts.workspace,
       "-provider",
       "fake",
+      ...(opts.scenarioPath ? ["-fake-scenario", opts.scenarioPath] : []),
       "-stage-timeout",
       "30s",
       "-worktree-root",
