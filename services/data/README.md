@@ -72,6 +72,10 @@ Lease routes (spec §15 — holder = `X-Mads-Actor`):
 - `POST /tasks/{id}/release` — idempotent; only the holder may release
 - `POST /leases/release-all` `{holder, reason?}` — the Router's supervision call:
   frees everything a dead child held, blocking its mid-flight tasks with events
+- `GET /sessions/{id}/lease-active` — `{"active": bool}`, read-only, no actor/attribution:
+  whether any task under the session currently has an unexpired write-lease (any holder) —
+  the Router boot sweep's signal that a live engine (e.g. a CLI `mads run`) is still
+  genuinely working under a session it has no other way to see
 - Enforcement: while a task is live-leased, every task mutation by a non-holder
   returns 409; each holder write renews the meter. Unleased tasks are writable by
   anyone. The sweep (2s ticker in main) collects expired leases.

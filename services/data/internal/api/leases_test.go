@@ -47,6 +47,39 @@ func TestLeaseFlowOverHTTP(t *testing.T) {
 	}
 }
 
+func TestSessionLeaseActiveOverHTTP(t *testing.T) {
+	srv, _ := newTestServer(t)
+	var task contracts.Task
+	doJSON(t, srv, "POST", "/tasks", contracts.Task{Title: "A", SessionID: "ses_lease", Source: "user"}, &task)
+
+	var before struct {
+		Active bool `json:"active"`
+	}
+	doJSON(t, srv, "GET", "/sessions/ses_lease/lease-active", nil, &before)
+	if before.Active {
+		t.Error("no claim yet, want active=false")
+	}
+
+	req, _ := http.NewRequest("POST", srv.URL+"/tasks/"+task.ID+"/claim", nil)
+	req.Header.Set("X-Mads-Actor", "pipeline")
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("claim: status %d", resp.StatusCode)
+	}
+
+	var after struct {
+		Active bool `json:"active"`
+	}
+	doJSON(t, srv, "GET", "/sessions/ses_lease/lease-active", nil, &after)
+	if !after.Active {
+		t.Error("claimed lease, want active=true")
+	}
+}
+
 func TestClaimValidatesTTL(t *testing.T) {
 	srv, _ := newTestServer(t)
 	var task contracts.Task

@@ -1,11 +1,13 @@
 package api_test
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 func TestGetSession(t *testing.T) {
@@ -137,6 +139,51 @@ func TestCreateSessionWorkspaceDefaultsOverrideConfig(t *testing.T) {
 	}](t, resp2)
 	if created2.Session.Model != "fake-fast" {
 		t.Errorf("model = %q, want explicit %q to win over workspace default", created2.Session.Model, "fake-fast")
+	}
+}
+
+// Terminate on a session orphaned by a prior Router restart (Activity says
+// active, nothing tracked — Supervisor state is in-memory only) must
+// reconcile Activity to inactive, unblocking Resume end-to-end: Resume's
+// existing 409 guards were the reason it looked broken on an orphan, not a
+// bug in Resume itself.
+func TestTerminateOrphanThenResumeEndToEnd(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "router")
+
+	sess := contracts.Session{Name: "orphaned via api", Provider: "fake"}
+	if err := data.CreateSession(context.Background(), &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Never spawned through the Router — simulates a session left active by
+	// a prior process that no longer tracks this session's child.
+
+	resp := postJSON(t, srv.URL+"/sessions/"+sess.ID+"/terminate", nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("terminate orphan status = %d, want 204", resp.StatusCode)
+	}
+
+	got, err := http.Get(srv.URL + "/sessions/" + sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("get session after terminate status = %d, want 200", got.StatusCode)
+	}
+	gotSess := decodeJSON[contracts.Session](t, got)
+	if gotSess.Activity != contracts.SessionInactive {
+		t.Fatalf("session activity after terminating an orphan = %q, want inactive", gotSess.Activity)
+	}
+
+	resp = postJSON(t, srv.URL+"/sessions/"+sess.ID+"/resume", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resume status = %d, want 200", resp.StatusCode)
+	}
+	resumed := decodeJSON[struct {
+		Addr string `json:"addr"`
+	}](t, resp)
+	if resumed.Addr == "" {
+		t.Fatal("resume after orphan reconciliation: no addr discovered from spawned child")
 	}
 }
 

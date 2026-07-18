@@ -228,6 +228,24 @@ func (s *Leases) releaseAndBlock(tx *Tx, taskID, reason string) error {
 	})
 }
 
+// ActiveForSession reports whether any task under sessionID currently has
+// an unexpired write-lease — the signal that a live engine (an interactive
+// child, or a CLI `mads run` with no other visible liveness signal) is
+// working under this session right now, independent of which actor string
+// holds the lease. The heartbeat in services/pipeline/engine/engine.go
+// keeps this honest even when a task is silent for its whole run: writes
+// alone are not a frequent enough signal (see that file's LeaseTTL comment).
+func (s *Leases) ActiveForSession(ctx context.Context, sessionID string) (bool, error) {
+	var n int
+	err := s.log.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_leases tl
+		 JOIN tasks t ON t.id = tl.task_id
+		 WHERE t.session_id = ? AND tl.expires_at > ?`,
+		sessionID, s.now().Format(time.RFC3339Nano),
+	).Scan(&n)
+	return n > 0, err
+}
+
 // checkAndRenew enforces only-holder-may-write inside a task mutation and
 // renews the holder's meter as a side effect of the write (spec §15). Free
 // tasks (no live lease) are writable by anyone.

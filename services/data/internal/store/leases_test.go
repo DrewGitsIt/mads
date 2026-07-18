@@ -203,6 +203,43 @@ func TestReleaseAllForCrashedHolder(t *testing.T) {
 	}
 }
 
+func TestActiveForSessionReflectsLiveLease(t *testing.T) {
+	leases, tasks, _ := newLeaseStore(t)
+	ctx := context.Background()
+	taskX := mkTask(t, tasks, contracts.Task{Title: "A", SessionID: "ses_x"})
+	mkTask(t, tasks, contracts.Task{Title: "B", SessionID: "ses_y"})
+
+	start := time.Now().UTC()
+	leases.now = func() time.Time { return start }
+	if _, err := leases.Claim(ctx, taskX.ID, "pipeline", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	active, err := leases.ActiveForSession(ctx, "ses_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !active {
+		t.Error("ses_x has a live lease, want active=true")
+	}
+	active, err = leases.ActiveForSession(ctx, "ses_y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Error("ses_y has no lease, want active=false")
+	}
+
+	leases.now = func() time.Time { return start.Add(2 * time.Minute) }
+	active, err = leases.ActiveForSession(ctx, "ses_x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active {
+		t.Error("ses_x's lease expired, want active=false")
+	}
+}
+
 // Contention: many claimants race for one task; exactly one lease exists
 // afterward and losers got LeaseHeldError, not corruption.
 func TestClaimContention(t *testing.T) {

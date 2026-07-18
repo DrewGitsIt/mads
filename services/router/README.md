@@ -97,7 +97,12 @@ never called peer-to-peer.
 - `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL); 204. The
   session record survives, left inactive, with a summary generated shortly after (session
   summaries are triggered by the child-exit hook — see "Critical paths" below). This is
-  what the UI calls "Close" ("I'm done for now").
+  what the UI calls "Close" ("I'm done for now"). If no child is tracked under the session
+  (e.g. it was orphaned by a prior Router restart — Supervisor state is in-memory only),
+  this is truth-enforcement, not a no-op: a still-`active` record is flipped to `inactive`
+  and the same summary job spawned, so Close always resolves an orphaned-active session
+  instead of hanging forever waiting for an SSE event that will never come — see "Critical
+  paths" below.
 - `POST /sessions/{id}/resume` — spawn a fresh child bound to an existing, inactive session
   record; 200 with `{"addr": ...}`. Provider continuity (`--resume`-style) comes from the
   record's `ProviderRef`, handled entirely inside the Session Service child on startup, not
@@ -324,6 +329,31 @@ the Router picks up a new build without a restart.
   in well under a second, proving it's supervision catching the exit and not the TTL
   expiring underneath it. `TestPipelineExternalKillReleasesLeasesAndEmitsFailedEvent`
   covers the same for Pipeline Engine children and `pipeline.failed`.
+- **Orphaned-active sessions are reconciled, not left to rot.** Supervisor state
+  (`sessions`/`pipelines` maps) is in-memory only, so every Router restart forgets every
+  tracked child while `Session.Activity` in the Data Service still says `active` — nothing
+  ever told it otherwise. `reconcileInactiveSession` is the shared fix, called from two
+  places: `TerminateSession`'s no-child branch (unconditional — an explicit "Close" click is
+  authoritative and always wins, even against a live external `mads run`) and
+  `Supervisor.ReconcileOrphanedSessions`, a boot-time sweep `main.go` runs once, synchronously,
+  before the server starts accepting connections. The sweep must never fight a genuinely live
+  pipeline engine — a session can be legitimately active under a CLI `mads run` that the
+  Router never spawned or tracks — so, unlike `TerminateSession`, it gates each orphan on
+  `dataclient.SessionActiveLease` (`GET /sessions/{id}/lease-active`, backed by
+  `Leases.ActiveForSession`): an unexpired task write-lease under the session is treated as
+  proof a live engine is working, and the sweep leaves it active and logs instead of flipping
+  it. Task write-leases were chosen over "recent pipeline events" as the liveness signal
+  because the pipeline engine heartbeats its lease independently of task writes (see
+  `services/pipeline/engine/engine.go`'s `LeaseTTL` comment) — an agent stage can run silently
+  for a task's full duration with zero intermediate writes, so absence of recent events does
+  not mean absence of a live engine. `TestTerminateReconcilesOrphanedActiveSession` and
+  `TestTerminateOrphanedActiveSessionTriggersSessionSummary` prove the Terminate path end to
+  end (activity flip, event, summary job); `TestBootSweepReconcilesOrphanedActiveSession`
+  proves the sweep heals a true orphan while leaving both a lease-active session and a
+  tracked-child session untouched; `TestTerminateOrphanThenResumeEndToEnd`
+  (`internal/api`) proves Resume, unmodified, starts working again once Terminate stops
+  being a no-op — Resume's existing `Activity == active` / tracked-child 409 guards were the
+  reason it looked broken on an orphan, not a bug in Resume itself.
 - **Expected exits don't cry wolf** — `Terminate` (and its callers, `TerminateSession` /
   `TerminatePipeline` / `BounceSession`) marks the exit expected *before* signaling, so the
   crash-detection path is skipped: `TestTerminateDoesNotEmitCrashEvent`,
@@ -407,12 +437,14 @@ the Router picks up a new build without a restart.
   redundant agent. The draft itself is never written to the agent registry; only an
   explicit later `POST /agents` against the Data Service persists it.
 - **Session summaries are triggered by a child-exit hook, not an event subscription.**
-  `contracts.Session.Activity` only ever flips to `Inactive` in two places: the Session
-  Service child's own graceful `Shutdown` (before it exits) and `onSessionExit`'s
-  unexpected-exit branch (the child crashed before it could do that itself). Since every
-  session-child exit — expected or crash — leaves `Activity == Inactive` by the time
-  `onSessionExit` runs, that callback is the trigger point (spec §16: "generated on session
-  deactivation"): it unconditionally spawns a `job.SessionSummaryKind` job via
+  `contracts.Session.Activity` only ever flips to `Inactive` in three places: the Session
+  Service child's own graceful `Shutdown` (before it exits), `onSessionExit`'s
+  unexpected-exit branch (the child crashed before it could do that itself), and
+  `reconcileInactiveSession` (the orphan-reconciliation path above, reached from
+  `TerminateSession`'s no-child branch and the boot sweep). Since every session-child exit —
+  expected or crash — leaves `Activity == Inactive` by the time `onSessionExit` runs, that
+  callback is the trigger point (spec §16: "generated on session deactivation"): it
+  unconditionally spawns a `job.SessionSummaryKind` job via
   `job.GenerateSessionSummary`, whose body (`pkg/sessionsummary`) derives the three-section
   narrative from the session's task data — titles, statuses, handoffs, and confirmed
   `decision`-type notes, never transcripts — and overwrites `session.summary` via

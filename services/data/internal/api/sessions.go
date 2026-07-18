@@ -123,4 +123,14 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		}
 		writeJSON(w, http.StatusOK, list)
 	})
+
+	leases := store.NewLeases(log)
+	mux.HandleFunc("GET /sessions/{id}/lease-active", func(w http.ResponseWriter, r *http.Request) {
+		active, err := leases.ActiveForSession(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"active": active})
+	})
 }

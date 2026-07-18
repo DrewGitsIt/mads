@@ -463,6 +463,162 @@ func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
 	})
 }
 
+// TerminateSession must reconcile a session that says active but has no
+// tracked child — the post-Router-restart orphan case (Supervisor state is
+// in-memory only). Truth-enforcement, not a no-op: flips Activity and
+// emits the same session.activity_changed event a real exit would.
+func TestTerminateReconcilesOrphanedActiveSession(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "orphaned session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Never spawned — simulates a session left active by a prior Router
+	// process that no longer has this session's child tracked.
+
+	if err := sup.TerminateSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if got.Activity != contracts.SessionInactive {
+		t.Fatalf("Activity after Terminate on orphan = %q, want inactive", got.Activity)
+	}
+
+	events, err := data.Events(ctx, 0, sess.ID, []string{"session.activity_changed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no session.activity_changed event after reconciling an orphaned-active session")
+	}
+}
+
+// The orphan-reconciliation path must trigger the same session-summary job
+// a real exit would (spec §16: every active → inactive transition triggers
+// one) — proving reconcileInactiveSession isn't a partial imitation of
+// onSessionExit.
+func TestTerminateOrphanedActiveSessionTriggersSessionSummary(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "orphan-summary", Rules: []fake.Rule{{
+		Match: "seed task",
+		Reply: `{"accomplished":"Did the seed task.","decisions":"","remaining":""}`,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
+	jobs := job.New(data, fm, registryclient.New(""))
+
+	sup := newSupervisor(t, data, jobs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "orphan summary session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := data.CreateTask(ctx, &contracts.Task{
+		SessionID: sess.ID, Title: "seed task", Source: "test", Status: contracts.StatusDone,
+	}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+
+	if err := sup.TerminateSession(ctx, sess.ID); err != nil {
+		t.Fatalf("TerminateSession: %v", err)
+	}
+
+	want := "## What was accomplished\n\nDid the seed task."
+	eventually(t, 5*time.Second, func() bool {
+		got, err := data.Session(ctx, sess.ID)
+		return err == nil && got.Summary == want
+	})
+}
+
+// The boot sweep must reconcile orphaned-active sessions to inactive while
+// never fighting a live pipeline engine (a session with an unexpired task
+// write-lease — the signal a CLI `mads run` is genuinely driving it — or a
+// session with a real tracked child).
+func TestBootSweepReconcilesOrphanedActiveSession(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Session A: orphan, no lease — the sweep must flip it to inactive.
+	orphan := contracts.Session{Name: "boot sweep orphan"}
+	if err := data.CreateSession(ctx, &orphan); err != nil {
+		t.Fatalf("CreateSession (orphan): %v", err)
+	}
+
+	// Session B: active with a live task lease — simulates a CLI `mads run`
+	// with no Router-tracked child. The sweep must leave it alone.
+	engineActive := contracts.Session{Name: "boot sweep engine-active"}
+	if err := data.CreateSession(ctx, &engineActive); err != nil {
+		t.Fatalf("CreateSession (engine-active): %v", err)
+	}
+	engineTask := contracts.Task{
+		SessionID: engineActive.ID, Title: "engine task", Source: "test", Status: contracts.StatusInProgress,
+	}
+	if err := data.CreateTask(ctx, &engineTask); err != nil {
+		t.Fatalf("CreateTask (engine-active): %v", err)
+	}
+	engineClient := dataclient.New(base, "external-mads-run")
+	if err := engineClient.Claim(ctx, engineTask.ID, 30*time.Second); err != nil {
+		t.Fatalf("Claim (engine-active): %v", err)
+	}
+
+	// Session C: active with a real tracked child, no lease. The `tracked`
+	// check must short-circuit before ever consulting leases.
+	tracked := contracts.Session{Name: "boot sweep tracked"}
+	if err := data.CreateSession(ctx, &tracked); err != nil {
+		t.Fatalf("CreateSession (tracked): %v", err)
+	}
+	if _, err := sup.SpawnSession(ctx, tracked.ID); err != nil {
+		t.Fatalf("SpawnSession (tracked): %v", err)
+	}
+
+	sup.ReconcileOrphanedSessions(ctx)
+
+	got, err := data.Session(ctx, orphan.ID)
+	if err != nil {
+		t.Fatalf("Session (orphan): %v", err)
+	}
+	if got.Activity != contracts.SessionInactive {
+		t.Fatalf("orphan session Activity after sweep = %q, want inactive", got.Activity)
+	}
+
+	got, err = data.Session(ctx, engineActive.ID)
+	if err != nil {
+		t.Fatalf("Session (engine-active): %v", err)
+	}
+	if got.Activity != contracts.SessionActive {
+		t.Fatalf("engine-active session Activity after sweep = %q, want active (must not fight a live engine)", got.Activity)
+	}
+
+	got, err = data.Session(ctx, tracked.ID)
+	if err != nil {
+		t.Fatalf("Session (tracked): %v", err)
+	}
+	if got.Activity != contracts.SessionActive {
+		t.Fatalf("tracked session Activity after sweep = %q, want active", got.Activity)
+	}
+}
+
 // TestSessionResumeAfterGracefulStopRestart verifies the update lifecycle's
 // "sessions resume" requirement (spec §14.4, W7.5) using only APIs that
 // already exist: activity and task/worktree state are durable in the Data

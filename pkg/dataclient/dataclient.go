@@ -238,6 +238,18 @@ func (c *Client) Sessions(ctx context.Context, activity string) ([]contracts.Ses
 	return out, err
 }
 
+// SessionActiveLease reports whether any task under sessionID currently
+// has a live write-lease — the Router boot sweep's guard against
+// reconciling a session that's genuinely active under an engine it has no
+// other way to see (e.g. a CLI `mads run`).
+func (c *Client) SessionActiveLease(ctx context.Context, sessionID string) (bool, error) {
+	var out struct {
+		Active bool `json:"active"`
+	}
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/lease-active", nil, &out)
+	return out.Active, err
+}
+
 // --- Session file tracking & commit linkage (spec §5) ---
 
 // RecordFileChange reports one file the session touched. fc.SessionID
