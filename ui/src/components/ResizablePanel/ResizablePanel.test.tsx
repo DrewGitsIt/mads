@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ResizablePanel } from "./ResizablePanel";
 
@@ -76,5 +76,23 @@ describe("ResizablePanel", () => {
     fireEvent.mouseMove(window, { clientY: 0 });
 
     expect(panel.style.height).toBe("250px");
+  });
+
+  it("calls onResizeEnd with the final size on mouseup", () => {
+    const onResizeEnd = vi.fn();
+    render(
+      <ResizablePanel defaultSize={200} minSize={100} maxSize={400} onResizeEnd={onResizeEnd}>
+        content
+      </ResizablePanel>,
+    );
+    const handle = screen.getByTestId("resize-handle");
+
+    fireEvent.mouseDown(handle, { clientY: 500 });
+    fireEvent.mouseMove(window, { clientY: 450 });
+    expect(onResizeEnd).not.toHaveBeenCalled();
+    fireEvent.mouseUp(window);
+
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
+    expect(onResizeEnd).toHaveBeenCalledWith(250);
   });
 });

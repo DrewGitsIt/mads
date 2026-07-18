@@ -86,6 +86,11 @@ type Config struct {
 	// config so the installed post-commit hook can report commits with task
 	// context (spec §5).
 	DataURL string
+	// MadsHome, when set, captures each agent stage attempt's streamed
+	// output to $MadsHome/runs/<session_id>/<run_seq>/<task_id>/
+	// <stage>-attempt-<n>.log — the Router serves these to the Pipeline
+	// tab's drill-in. Empty (the default) is a no-op: no log capture.
+	MadsHome string
 }
 
 // Summary is the run's outcome.
@@ -204,12 +209,13 @@ type engine struct {
 	conds  []*template.Cond
 	wt     *worktrees // nil unless Isolated
 
-	mu    sync.Mutex
-	loops map[string]int // task|stage → loop-backs taken
+	mu     sync.Mutex
+	loops  map[string]int // task|stage → loop-backs taken
+	runSeq int64          // the pipeline.started event's seq; written once before any task goroutine starts
 }
 
 func (e *engine) run(ctx context.Context) (*Summary, error) {
-	e.event(ctx, contracts.PipelineStarted, "", map[string]any{
+	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", map[string]any{
 		"template":    e.cfg.Template.Name,
 		"concurrency": e.cfg.Concurrency,
 	})
@@ -646,15 +652,24 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	if model == "" {
 		model = agent.Preferences.Model
 	}
+
+	e.mu.Lock()
+	attempt := e.loops[task.ID+"|"+st.Name] + 1
+	e.mu.Unlock()
+	log := openOutputLog(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt)
+
 	res, err := e.cfg.Provider.OneShot(ctx, provider.OneShotRequest{
-		Prompt: taskPrompt(st.Name, task, feedback),
-		System: agent.Prompt,
-		Model:  model,
-		Cwd:    dir,
+		Prompt:  taskPrompt(st.Name, task, feedback),
+		System:  agent.Prompt,
+		Model:   model,
+		Cwd:     dir,
+		OnChunk: log.write,
 	})
 	if err != nil {
+		log.close(err.Error())
 		return "", fmt.Errorf("agent %s: %w", name, err)
 	}
+	log.close(res.Text)
 	e.recordUsage(ctx, task.ID, res.Usage)
 	if line := lastLine(res.Text); strings.HasPrefix(strings.ToUpper(line), strings.ToUpper(FailMarker)) {
 		return res.Text, fmt.Errorf("agent %s failed the stage: %s", name, line)
@@ -721,14 +736,20 @@ func (e *engine) recordUsage(ctx context.Context, taskID string, usage provider.
 	}
 }
 
-func (e *engine) event(ctx context.Context, t contracts.EventType, taskID string, payload map[string]any) {
+// event posts one envelope and returns the server-assigned Seq (0 if the
+// post failed) — the caller decides whether that matters (run() captures
+// PipelineStarted's Seq as the run's stable identity; every other call site
+// discards it).
+func (e *engine) event(ctx context.Context, t contracts.EventType, taskID string, payload map[string]any) int64 {
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		raw = []byte(`{}`)
 	}
-	_ = e.cfg.Data.Append(context.WithoutCancel(ctx), &contracts.Envelope{
+	env := &contracts.Envelope{
 		Type: t, SessionID: e.cfg.SessionID, TaskID: taskID, Payload: raw,
-	})
+	}
+	_ = e.cfg.Data.Append(context.WithoutCancel(ctx), env)
+	return env.Seq
 }
 
 func stageIndex(stages []template.Stage, name string) int {

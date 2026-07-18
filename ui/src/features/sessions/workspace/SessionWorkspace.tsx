@@ -6,7 +6,10 @@ import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import { WORKSPACE_SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
+import {
+  SESSION_SHELL_REFETCH_EVENT_TYPES,
+  WORKSPACE_SESSION_EVENT_TYPES,
+} from "../../../router/sessionEventTypes";
 import type { Session } from "../../../router/types";
 import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
@@ -75,9 +78,12 @@ export function SessionWorkspace({
       (envelope) => {
         if ((RUN_EVENT_TYPES as string[]).includes(envelope.type)) {
           setRunning(envelope.type === "pipeline.started");
-        } else {
+        } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
           refetchSession();
         }
+        // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
+        // file.changed/note.created) is there only for usePipelineRun's
+        // shared subscription — this shell has nothing to do with it.
       },
     );
   }, [refetchSession, sessionId]);

@@ -149,6 +149,7 @@ export interface Topology {
   madsBin: string;
   sessionBin: string;
   tmpDir: string;
+  homeDir: string;
   teardown(): Promise<void>;
 }
 
@@ -216,5 +217,5 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     rmSync(tmpDir, { recursive: true, force: true });
   };
 
-  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, teardown };
+  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, teardown };
 }

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { ResizablePanel } from "../../components/ResizablePanel/ResizablePanel";
 import type { Task } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
@@ -5,7 +6,12 @@ import type { PipelineOutputSource } from "../client/pipelineClient";
 import { StageTimeline } from "./StageTimeline";
 import { AgentOutputView } from "./AgentOutputView";
 import { TaskFiles } from "./TaskFiles";
+import { loadDrillInHeight, saveDrillInHeight } from "./drillInHeight";
 import styles from "./TaskDrillIn.module.css";
+
+const MIN_HEIGHT = 200;
+const MAX_HEIGHT = () => Math.min(800, window.innerHeight * 0.7);
+const DEFAULT_HEIGHT = () => window.innerHeight * 0.4;
 
 export interface TaskDrillInProps {
   task: Task;
@@ -22,8 +28,19 @@ export interface TaskDrillInProps {
  * terminal stream.
  */
 export function TaskDrillIn({ task, attempts, touchedFiles, outputSource, onClose }: TaskDrillInProps) {
+  // Computed once per mount, not on every window resize — an initial
+  // default, not a live percentage layout (HANDOFF.md §5).
+  const [defaultHeight] = useState(() => loadDrillInHeight() ?? DEFAULT_HEIGHT());
+  const [maxHeight] = useState(MAX_HEIGHT);
   return (
-    <ResizablePanel direction="vertical" defaultSize={320} className={styles.drillIn}>
+    <ResizablePanel
+      direction="vertical"
+      defaultSize={defaultHeight}
+      minSize={MIN_HEIGHT}
+      maxSize={maxHeight}
+      onResizeEnd={saveDrillInHeight}
+      className={styles.drillIn}
+    >
       <div className={styles.header}>
         <span className={styles.title}>{task.title}</span>
         {onClose && (

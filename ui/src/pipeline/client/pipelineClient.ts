@@ -1,4 +1,4 @@
-import { router, type RouterClient } from "../../router/client";
+import { router, ROUTER_BASE, type RouterClient } from "../../router/client";
 import type { Envelope, PipelineRun, Task } from "../../router/types";
 import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 
@@ -33,7 +33,7 @@ export interface PipelineClient {
   pausePipeline(runId: string): Promise<void>;
   resumePipeline(runId: string): Promise<void>;
   reassignTask(taskId: string, agent: string): Promise<void>;
-  streamTaskOutput(runId: string, taskId: string): PipelineOutputSource;
+  streamTaskOutput(sessionId: string, taskId: string): PipelineOutputSource;
   // Historical run replay (HANDOFF.md §4) — the Pipeline tab's run picker.
   listRuns(sessionId: string): Promise<PipelineRun[]>;
   getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
@@ -74,17 +74,20 @@ export class FetchPipelineClient implements PipelineClient {
     throw new Error(NOT_SUPPORTED);
   }
 
-  /**
-   * `services/pipeline`'s HTTP server isn't wired to the engine yet, and
-   * even once it is, `GET /pipelines/{id}/output` has no per-task tagging
-   * (HANDOFF.md §6) — there is nothing to subscribe to. Returns an inert
-   * source that never emits, rather than hitting a route that can't answer
-   * the question "which task's output is this."
-   */
-  streamTaskOutput(_runId: string, _taskId: string): PipelineOutputSource {
+  streamTaskOutput(sessionId: string, taskId: string): PipelineOutputSource {
+    const es = new EventSource(
+      `${ROUTER_BASE}/sessions/${sessionId}/pipeline/tasks/${taskId}/output`,
+    );
+    es.addEventListener("end", () => es.close());
     return {
-      onChunk: () => () => {},
-      close: () => {},
+      onChunk(listener: (chunk: string) => void): () => void {
+        const handler = (ev: MessageEvent<string>) => listener(JSON.parse(ev.data) as string);
+        es.addEventListener("message", handler);
+        return () => es.removeEventListener("message", handler);
+      },
+      close(): void {
+        es.close();
+      },
     };
   }
 

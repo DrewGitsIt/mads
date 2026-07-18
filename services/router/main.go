@@ -74,7 +74,7 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string) http.Handler {
 	return api.New(api.Options{
 		Data:          data,
 		Sup:           sup,
@@ -87,6 +87,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		StaticHandler: staticHandler,
 		Version:       version,
 		Registry:      registry,
+		RunsDir:       runsDir,
 	})
 }
 
@@ -172,7 +173,7 @@ func main() {
 	}
 	defer func() { _ = os.Remove(pidPath) }()
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"))}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

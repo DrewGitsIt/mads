@@ -97,6 +97,12 @@ type OneShotRequest struct {
 	System string
 	Model  string
 	Cwd    string
+	// OnChunk, if set, is called with normalized text as it arrives during
+	// the invocation — best-effort. A provider with no incremental output
+	// mechanism simply never calls it; callers must not assume it fires at
+	// all. Final OneShotResult semantics (Text, Usage, FailMarker detection
+	// on the full text) are unchanged either way.
+	OnChunk func(text string)
 }
 
 // OneShotResult is the completed invocation.

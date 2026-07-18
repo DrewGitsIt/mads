@@ -9,6 +9,7 @@
 package claudecode
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -93,6 +94,9 @@ func (p *Provider) Matrix() provider.Matrix {
 		// --mcp-config + --strict-mcp-config threads a real MCP server into
 		// the launch on both transports — see mcp.go and README.
 		provider.BehaviorMCPServers: provider.Native,
+		// OnChunk set ⇒ --output-format stream-json --verbose, the same
+		// wire format the interactive transport already parses.
+		provider.BehaviorOneShotStream: provider.Native,
 	}
 }
 
@@ -126,6 +130,9 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 }
 
 func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+	if req.OnChunk != nil {
+		return p.oneShotStream(ctx, req)
+	}
 	args := []string{"-p", req.Prompt, "--output-format", "json"}
 	if req.Model != "" {
 		args = append(args, "--model", req.Model)
@@ -156,6 +163,72 @@ func (p *Provider) OneShot(ctx context.Context, req provider.OneShotRequest) (*p
 		return nil, fmt.Errorf("claude -p: %w: %s", err, detail)
 	}
 	return parseOneShot(stdout.Bytes())
+}
+
+// oneShotStream runs the same one-shot invocation on the stream-json wire
+// format so req.OnChunk sees assistant text as it arrives. The final
+// result — parsed from the stream's terminal "result" line via the same
+// parseOneShot used by the non-streaming path — is unchanged either way.
+func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotRequest) (*provider.OneShotResult, error) {
+	args := []string{"-p", req.Prompt, "--output-format", "stream-json", "--verbose"}
+	if req.Model != "" {
+		args = append(args, "--model", req.Model)
+	}
+	if req.System != "" {
+		args = append(args, "--append-system-prompt", req.System)
+	}
+	args = append(args, p.cfg.ExtraArgs...)
+
+	cmd := exec.CommandContext(ctx, p.cfg.Bin, args...)
+	cmd.Dir = req.Cwd
+	cmd.Env = p.env(nil)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start %s: %w", p.cfg.Bin, err)
+	}
+
+	var resultLine []byte
+	r := bufio.NewReaderSize(stdout, 64*1024)
+	for {
+		raw, rerr := r.ReadBytes('\n')
+		if len(raw) > 0 {
+			var l wireLine
+			if json.Unmarshal(bytes.TrimSpace(raw), &l) == nil {
+				switch l.Type {
+				case "assistant":
+					for _, b := range l.Message.blocks() {
+						if b.Type == "text" && b.Text != "" {
+							req.OnChunk(b.Text)
+						}
+					}
+				case "result":
+					resultLine = append([]byte{}, bytes.TrimSpace(raw)...)
+				}
+			}
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		if rle := rateLimit(stderr.String()); rle != nil {
+			return nil, rle
+		}
+		detail := strings.TrimSpace(stderr.String())
+		if len(detail) > 600 {
+			detail = detail[:600] + " …"
+		}
+		return nil, fmt.Errorf("claude -p: %w: %s", err, detail)
+	}
+	if resultLine == nil {
+		return nil, fmt.Errorf("claude -p: no result line in stream-json output")
+	}
+	return parseOneShot(resultLine)
 }
 
 // parseOneShot decodes the --output-format json result object.

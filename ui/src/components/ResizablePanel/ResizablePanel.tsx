@@ -10,6 +10,7 @@ export interface ResizablePanelProps {
   minSize?: number;
   maxSize?: number;
   className?: string;
+  onResizeEnd?: (size: number) => void;
 }
 
 export function ResizablePanel({
@@ -19,8 +20,11 @@ export function ResizablePanel({
   minSize = 120,
   maxSize = 640,
   className,
+  onResizeEnd,
 }: ResizablePanelProps) {
   const [size, setSize] = useState(defaultSize);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
   const dragState = useRef<{ start: number; startSize: number } | null>(null);
 
   const handleMouseMove = useCallback(
@@ -30,18 +34,22 @@ export function ResizablePanel({
         direction === "vertical"
           ? dragState.current.start - e.clientY
           : e.clientX - dragState.current.start;
-      setSize(
-        Math.min(maxSize, Math.max(minSize, dragState.current.startSize + delta)),
-      );
+      const next = Math.min(maxSize, Math.max(minSize, dragState.current.startSize + delta));
+      sizeRef.current = next;
+      setSize(next);
     },
     [direction, minSize, maxSize],
   );
 
+  // Reads sizeRef, not `size` — this callback is registered on window at
+  // mousedown time and must see the latest dragged value, not the value
+  // closed over then.
   const handleMouseUp = useCallback(() => {
     dragState.current = null;
     window.removeEventListener("mousemove", handleMouseMove);
     window.removeEventListener("mouseup", handleMouseUp);
-  }, [handleMouseMove]);
+    onResizeEnd?.(sizeRef.current);
+  }, [handleMouseMove, onResizeEnd]);
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {

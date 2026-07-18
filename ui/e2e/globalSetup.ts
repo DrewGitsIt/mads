@@ -32,6 +32,11 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   process.env.MADS_BIN = topology.madsBin;
   process.env.MADS_WORKSPACE_ID = workspace.id;
   process.env.MADS_WORKSPACE_DIR = workspaceDir;
+  // runFakePipeline (called with env: process.env by specs) must resolve the
+  // same $MADS_HOME the Router was booted with (-mads-home topology.homeDir,
+  // above) — otherwise `mads run`'s output logs land somewhere the Pipeline
+  // tab's drill-in endpoint can never find them (HANDOFF §3).
+  process.env.MADS_HOME = topology.homeDir;
 
   return async () => {
     await topology.teardown();

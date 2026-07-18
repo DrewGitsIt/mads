@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FetchPipelineClient } from "./pipelineClient";
+import { FakeEventSource } from "../../router/testFakeEventSource";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
   const fetchMock = vi.fn().mockResolvedValue({
@@ -96,13 +97,59 @@ describe("FetchPipelineClient", () => {
     );
   });
 
-  it("streamTaskOutput returns an inert source that never emits", () => {
-    const client = new FetchPipelineClient();
-    const source = client.streamTaskOutput("run_1", "t1");
-    const listener = vi.fn();
-    const unsubscribe = source.onChunk(listener);
-    unsubscribe();
-    source.close();
-    expect(listener).not.toHaveBeenCalled();
+  describe("streamTaskOutput", () => {
+    beforeEach(() => {
+      FakeEventSource.instances = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+    });
+
+    it("opens an EventSource against the task output route", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskOutput("ses_1", "t1");
+      expect(FakeEventSource.instances[0].url).toBe(
+        "http://localhost:8080/sessions/ses_1/pipeline/tasks/t1/output",
+      );
+    });
+
+    it("delivers JSON-decoded message frames to onChunk listeners", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskOutput("ses_1", "t1");
+      const listener = vi.fn();
+      source.onChunk(listener);
+
+      FakeEventSource.instances[0].emit("message", JSON.stringify("hello"));
+
+      expect(listener).toHaveBeenCalledWith("hello");
+    });
+
+    it("unsubscribing onChunk stops delivering further frames", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskOutput("ses_1", "t1");
+      const listener = vi.fn();
+      const unsubscribe = source.onChunk(listener);
+      unsubscribe();
+
+      FakeEventSource.instances[0].emit("message", JSON.stringify("hello"));
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("closes the EventSource on the server's terminal 'end' event", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskOutput("ses_1", "t1");
+      const es = FakeEventSource.instances[0];
+
+      es.emit("end", "");
+
+      expect(es.closed).toBe(true);
+    });
+
+    it("close() closes the underlying EventSource", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskOutput("ses_1", "t1");
+      source.close();
+
+      expect(FakeEventSource.instances[0].closed).toBe(true);
+    });
   });
 });
