@@ -157,6 +157,19 @@ type Runner struct {
 	// keeps serving during a switch instead of going blank.
 	lastRef string
 
+	// recordMu serializes every load-modify-write of the session RECORD
+	// (UpdateSession round trips). watchRefAnnounce made the runner's ref
+	// persist a background write for the first time — unserialized, it can
+	// interleave with Start's or Shutdown's own read-modify-write and
+	// silently clobber fields either direction (a lost update, seen as
+	// nondeterministic runner-test failures under load). persistedRef is
+	// guarded by recordMu: it holds the last ref actually written, so
+	// dedupe happens on persisted success, never on the in-memory lastRef
+	// — marking lastRef before the write lands made the turn-end fallback
+	// skip while the announce write was still in flight (or had failed).
+	recordMu     sync.Mutex
+	persistedRef string
+
 	// prov and baseOpts are captured once at the end of Start and reused by
 	// SwitchTransport, which only overrides Mode/Resume — switching
 	// transport doesn't redo worktree creation, hook install, or capability
@@ -246,9 +259,13 @@ func (r *Runner) Start(ctx context.Context) error {
 	// after this point still leaves a resumable ref recorded.
 	sess.ProviderRef = provSess.Ref()
 	sess.Activity = contracts.SessionActive
+	r.recordMu.Lock()
 	if err := r.data.UpdateSession(ctx, &sess); err != nil {
+		r.recordMu.Unlock()
 		return fmt.Errorf("runner: persist provider ref: %w", err)
 	}
+	r.persistedRef = sess.ProviderRef
+	r.recordMu.Unlock()
 
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type:      contracts.SessionProvisioning,
@@ -381,7 +398,15 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 
 	m.Remove(context.WithoutCancel(ctx), sess.WorktreeDir, sess.WorktreeBranch)
 	sess.WorktreeDir, sess.WorktreeBranch = "", ""
-	if err := r.data.UpdateSession(ctx, &sess); err != nil {
+	r.recordMu.Lock()
+	// sess was loaded before this lock; don't let this write revert a ref
+	// that persistProviderRef landed in the meantime.
+	if r.persistedRef != "" {
+		sess.ProviderRef = r.persistedRef
+	}
+	err = r.data.UpdateSession(ctx, &sess)
+	r.recordMu.Unlock()
+	if err != nil {
 		return contracts.MergeResult{}, fmt.Errorf("runner: clear worktree fields: %w", err)
 	}
 	if err := r.data.Append(ctx, &contracts.Envelope{
@@ -646,19 +671,25 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	return newSess.Ref(), nil
 }
 
-// persistProviderRef updates r.lastRef and, only if it actually changed,
-// writes the ref to the Data Service. Shared by the turn-end sync path
-// (syncProviderRef) and the eager announcement path (watchRefAnnounce) so
-// both funnel through one dedupe and one round trip.
+// persistProviderRef updates r.lastRef and writes the ref to the Data
+// Service unless that exact ref already landed. Shared by the turn-end sync
+// path (syncProviderRef) and the eager announcement path (watchRefAnnounce)
+// so both funnel through one dedupe and one round trip. Dedupe is on
+// persistedRef — the last ref that actually made it to the Data Service —
+// under recordMu, so the turn-end fallback blocks behind an in-flight
+// announce write instead of skipping on its optimism, and a failed write
+// gets retried at the next turn end rather than swallowed.
 func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 	if ref == "" {
 		return
 	}
 	r.mu.Lock()
-	changed := ref != r.lastRef
 	r.lastRef = ref
 	r.mu.Unlock()
-	if !changed {
+
+	r.recordMu.Lock()
+	defer r.recordMu.Unlock()
+	if ref == r.persistedRef {
 		return
 	}
 	cur, err := r.data.Session(ctx, r.sessionID)
@@ -669,7 +700,9 @@ func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 	cur.ProviderRef = ref
 	if err := r.data.UpdateSession(ctx, &cur); err != nil {
 		log.Printf("runner: persist provider ref: %v", err)
+		return
 	}
+	r.persistedRef = ref
 }
 
 // syncProviderRef re-checks sess's provider-native ref and persists it if it
@@ -789,6 +822,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 		closeErr = sess.Close()
 	}
 
+	r.recordMu.Lock()
 	if cur, err := r.data.Session(ctx, r.sessionID); err != nil {
 		log.Printf("runner: load session for shutdown: %v", err)
 	} else {
@@ -797,6 +831,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 			log.Printf("runner: mark session inactive: %v", err)
 		}
 	}
+	r.recordMu.Unlock()
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type:      contracts.SessionActivityChanged,
 		SessionID: r.sessionID,
