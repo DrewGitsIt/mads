@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Task detail: dependencies section mockup</title>
+<style>
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#5b9b6f; --ok-soft:rgba(124,179,137,.2); --ok-fg:#2e5a3c;
+  --warn:#b8933d; --warn-soft:rgba(211,175,94,.18); --warn-fg:#7a5a1a;
+  --bad:#c04f39; --bad-soft:rgba(210,96,74,.16); --bad-fg:#8a3a2a;
+  --info:#5c7fa3; --info-soft:rgba(150,175,199,.2); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg0); color:var(--text); font:15px/1.5 system-ui,-apple-system,sans-serif; padding:26px 20px 60px; }
+.frame { max-width:1240px; margin:0 auto; }
+h1 { font-size:21px; margin:0 0 2px; }
+h2 { font-size:12.5px; text-transform:uppercase; letter-spacing:.09em; color:var(--text3); margin:26px 0 10px; }
+.note { color:var(--text2); font-size:13.5px; max-width:86ch; margin:2px 0 10px; }
+.toolbar { position:fixed; top:14px; right:16px; z-index:50; }
+.toolbar button { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:6px 13px; cursor:pointer; font-size:13px; }
+
+.cols { display:grid; grid-template-columns:repeat(3, 1fr); gap:18px; align-items:start; }
+@media (max-width:1000px){ .cols { grid-template-columns:1fr; } }
+
+/* a slice of the detail sheet (right pane) */
+.sheet { background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px; box-shadow:var(--shadow); overflow:hidden; }
+.sheet .cap { padding:10px 16px; border-bottom:1px solid var(--line-soft); font-size:13.5px; font-weight:650; }
+.sheet .cap small { display:block; font-weight:400; color:var(--text3); font-size:11.5px; }
+.sheet .bodyp { padding:14px 16px 16px; }
+.sec { font-size:11px; text-transform:uppercase; letter-spacing:.09em; color:var(--text3); margin:0 0 8px; display:flex; align-items:center; gap:8px; }
+.sec .sum { text-transform:none; letter-spacing:0; margin-left:auto; font-size:11.5px; color:var(--text2); }
+
+/* dependency progress ribbon */
+.ribbon { display:flex; gap:3px; height:5px; border-radius:3px; overflow:hidden; margin:0 0 10px; }
+.ribbon i { flex:1; }
+.r-done { background:var(--ok); opacity:.55; }
+.r-prog { background:var(--info); }
+.r-ready { background:var(--bg4); }
+.r-blocked { background:var(--bad); }
+
+/* dep rows — status glyphs shared with the graph's encoding */
+.deps { display:flex; flex-direction:column; gap:6px; margin:0; padding:0; list-style:none; }
+.dep { display:flex; align-items:flex-start; gap:9px; padding:8px 9px 8px 11px; border:1px solid var(--line-soft);
+  border-radius:9px; background:var(--bg2); cursor:pointer; position:relative; }
+.dep:hover { border-color:var(--line); }
+.dep:hover .go { opacity:1; }
+.dep .t { font-size:12.6px; line-height:1.35; font-weight:600; }
+.dep .sub { font-size:11px; color:var(--text3); margin-top:2px; }
+.dep .go { margin-left:auto; align-self:center; color:var(--text3); opacity:0; font-size:14px; flex:none; }
+.dep .rm { position:absolute; top:-7px; right:-7px; width:18px; height:18px; border-radius:50%; border:1px solid var(--line);
+  background:var(--bg3); color:var(--text2); font-size:11px; line-height:1; cursor:pointer; display:none; align-items:center; justify-content:center; }
+.dep:hover .rm { display:flex; }
+.g { flex:none; width:15px; height:15px; margin-top:1px; position:relative; }
+.g-ready::before { content:""; display:block; width:11px; height:11px; border:2.5px solid var(--text2); border-radius:50%; }
+.g-prog::before { content:""; display:block; width:11px; height:11px; border-radius:50%;
+  border:2.5px solid var(--info); border-top-color:transparent; animation:spin 1s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.g-done { background:var(--ok); border-radius:50%; }
+.g-done::before { content:"✓"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:10px; color:var(--accent-ink); font-weight:800; }
+.g-blocked { background:var(--bad); clip-path:polygon(30% 0,70% 0,100% 30%,100% 70%,70% 100%,30% 100%,0 70%,0 30%); }
+.g-blocked::before { content:"!"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:10px; color:var(--accent-ink); font-weight:800; }
+.dep.is-done { opacity:.6; }
+.dep.is-done .t { font-weight:500; color:var(--text2); }
+.dep.is-prog { background:var(--info-soft); border-color:var(--info); }
+.dep.is-blocked { background:var(--bad-soft); border-color:var(--bad); }
+.dep.is-blocked .sub { color:var(--bad-fg); }
+
+/* add affordance + picker */
+.addbtn { margin-top:9px; width:100%; text-align:left; background:none; border:1.5px dashed var(--line); color:var(--text2);
+  border-radius:9px; padding:8px 11px; font-size:12.5px; cursor:pointer; }
+.addbtn:hover { border-color:var(--accent); color:var(--text); }
+.picker { margin-top:9px; border:1.5px solid var(--accent); border-radius:10px; background:var(--bg2); overflow:hidden; }
+.picker input { width:100%; border:none; outline:none; background:var(--bg2); color:var(--text); padding:9px 12px;
+  font-size:12.8px; border-bottom:1px solid var(--line-soft); }
+.picker input::placeholder { color:var(--text3); }
+.cands { max-height:216px; overflow-y:auto; }
+.cand { display:flex; align-items:center; gap:9px; padding:7px 11px; font-size:12.4px; cursor:pointer; }
+.cand:hover { background:var(--bg3); }
+.cand .g { margin-top:0; }
+.cand.disabled { cursor:not-allowed; color:var(--text3); }
+.cand.disabled:hover { background:none; }
+.cand .warn { margin-left:auto; flex:none; font-size:10.5px; color:var(--warn-fg); background:var(--warn-soft);
+  border:1px solid var(--warn); border-radius:999px; padding:1px 8px; }
+.cand .already { margin-left:auto; flex:none; font-size:10.5px; color:var(--text3); }
+.pickhint { padding:6px 12px 8px; font-size:11px; color:var(--text3); border-top:1px solid var(--line-soft); }
+
+/* unblocks (reverse edges, read-only) */
+.unblocks { display:flex; flex-direction:column; gap:5px; margin:0; padding:0; list-style:none; }
+.ub { display:flex; align-items:center; gap:8px; font-size:12.3px; color:var(--text2); padding:4px 2px; cursor:pointer; border-radius:6px; }
+.ub:hover { color:var(--text); }
+.ub .g { width:13px; height:13px; }
+.ub .arr { color:var(--text3); font-size:11px; flex:none; }
+
+/* empty state */
+.emptydeps { border:1.5px dashed var(--line-soft); border-radius:9px; padding:12px; font-size:12.5px; color:var(--text3); }
+.emptydeps b { color:var(--text2); font-weight:600; display:block; margin-bottom:2px; }
+
+/* rationale cards */
+.legend { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+@media (max-width:1000px){ .legend { grid-template-columns:1fr; } }
+.lg { background:var(--bg1); border:1px solid var(--line-soft); border-radius:11px; padding:12px 14px; font-size:12.5px; }
+.lg b { display:block; font-size:13px; margin-bottom:3px; }
+.lg span { color:var(--text2); }
+
+@media (prefers-reduced-motion:reduce){ .g-prog::before { animation:none; border-top-color:var(--info); } }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="const h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">theme</button></div>
+<div class="frame">
+  <h1>Task detail — dependencies, redesigned</h1>
+  <p class="note">Replaces the all-tasks checkbox wall. <b>Depends on</b> shows only the real dependencies, wearing the
+  graph's status vocabulary (checkbox ≠ membership anymore — a ✓ disc means <i>done</i>, exactly what you expected it to mean).
+  Rows click through to that task; hover reveals remove. Adding goes through a searchable picker instead of fifty checkboxes.
+  <b>Unblocks</b> is the read-only reverse view. Panels below are live — remove rows, open the picker, type to filter.</p>
+
+  <div class="cols">
+
+    <!-- A: populated -->
+    <section class="sheet">
+      <div class="cap">Pipeline drill-in: live agent output and a real panel<small>with dependencies · hover a row for remove, click-through chevron</small></div>
+      <div class="bodyp">
+        <div class="sec">Depends on <span class="sum" id="sumA">4 · 1 done · 1 running · 1 ready · 1 blocked</span></div>
+        <div class="ribbon" id="ribA">
+          <i class="r-done"></i><i class="r-prog"></i><i class="r-ready"></i><i class="r-blocked"></i>
+        </div>
+        <ul class="deps" id="depsA">
+          <li class="dep is-done" data-s="done"><span class="g g-done"></span>
+            <span><span class="t">Chat replies stream live with a working indicator</span><span class="sub">done · landed 00:57</span></span>
+            <span class="go">›</span><button class="rm" title="Remove dependency">×</button></li>
+          <li class="dep is-prog" data-s="prog"><span class="g g-prog"></span>
+            <span><span class="t">Committed files open their diffs</span><span class="sub">in progress · Executor · attempt 1</span></span>
+            <span class="go">›</span><button class="rm" title="Remove dependency">×</button></li>
+          <li class="dep" data-s="ready"><span class="g g-ready"></span>
+            <span><span class="t">Capture the provider conversation ref eagerly at connect</span><span class="sub">ready · queued</span></span>
+            <span class="go">›</span><button class="rm" title="Remove dependency">×</button></li>
+          <li class="dep is-blocked" data-s="blocked"><span class="g g-blocked"></span>
+            <span><span class="t">Transport switch resumes the real conversation</span><span class="sub">blocked · verify failed — TestSwitchResume</span></span>
+            <span class="go">›</span><button class="rm" title="Remove dependency">×</button></li>
+        </ul>
+        <button class="addbtn" onclick="this.style.display='none';document.getElementById('pickerA').style.display='block';document.querySelector('#pickerA input').focus()">+ Add dependency…</button>
+        <div class="picker" id="pickerA" style="display:none">
+          <input placeholder="Search tasks…" oninput="filterCands(this)">
+          <div class="cands">
+            <div class="cand"><span class="g g-done"></span><span>Sending a message wakes a dormant session</span></div>
+            <div class="cand"><span class="g g-done"></span><span>Task graph 3: at-a-glance status encoding</span></div>
+            <div class="cand disabled"><span class="g g-ready"></span><span>Session lifecycle: orphaned-active reconcile</span><span class="warn">would create a cycle</span></div>
+            <div class="cand"><span class="g g-done"></span><span>digestwatch: subscribe retry with backoff</span></div>
+            <div class="cand disabled"><span class="g g-prog"></span><span>Committed files open their diffs</span><span class="already">already a dependency</span></div>
+          </div>
+          <div class="pickhint">↑↓ to move · Enter to add · Esc to close — done tasks allowed (edge is already satisfied)</div>
+        </div>
+
+        <div class="sec" style="margin-top:18px">Unblocks <span class="sum">2 tasks wait on this one</span></div>
+        <ul class="unblocks">
+          <li class="ub"><span class="arr">◇→</span><span class="g g-ready"></span> Merge queue surface (mockup approved)</li>
+          <li class="ub"><span class="arr">◇→</span><span class="g g-ready"></span> Pipeline run history export</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- B: picker open -->
+    <section class="sheet">
+      <div class="cap">Committed files open their diffs<small>picker open · type-to-filter, cycle + duplicate rows disabled inline</small></div>
+      <div class="bodyp">
+        <div class="sec">Depends on <span class="sum">1 · 1 done</span></div>
+        <div class="ribbon"><i class="r-done"></i></div>
+        <ul class="deps">
+          <li class="dep is-done"><span class="g g-done"></span>
+            <span><span class="t">Files tab: show pipeline commits, not just observed changes</span><span class="sub">done · landed yesterday</span></span>
+            <span class="go">›</span><button class="rm" title="Remove dependency">×</button></li>
+        </ul>
+        <div class="picker">
+          <input placeholder="Search tasks…" value="task graph" oninput="filterCands(this)">
+          <div class="cands">
+            <div class="cand"><span class="g g-done"></span><span>Task graph 1: unsequenced tray, xyflow canvas</span></div>
+            <div class="cand"><span class="g g-done"></span><span>Task graph 2: dependency editing on the canvas</span></div>
+            <div class="cand"><span class="g g-done"></span><span>Task graph 3: at-a-glance status encoding</span></div>
+          </div>
+          <div class="pickhint">↑↓ to move · Enter to add · Esc to close</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- C: empty -->
+    <section class="sheet">
+      <div class="cap">Capture the provider conversation ref eagerly at connect<small>no dependencies — the honest empty state, not fifty unchecked boxes</small></div>
+      <div class="bodyp">
+        <div class="sec">Depends on</div>
+        <div class="emptydeps"><b>No dependencies</b>Runs as soon as a pipeline slot frees. Add one to sequence it behind another task.</div>
+        <button class="addbtn">+ Add dependency…</button>
+        <div class="sec" style="margin-top:18px">Unblocks</div>
+        <div class="emptydeps">Nothing waits on this task.</div>
+      </div>
+    </section>
+  </div>
+
+  <h2>Why this shape</h2>
+  <div class="legend">
+    <div class="lg"><b>Checkbox ≠ membership</b><span>A checkbox beside a task title reads as done/not-done everywhere else in the product. Membership is now shown by presence in the list; status is shown by the graph's own glyphs — one vocabulary, twice deployed.</span></div>
+    <div class="lg"><b>Signal over inventory</b><span>The old wall listed every task in the session (50 rows on Maintenance) to encode "no dependencies". The new empty state says it in six words, and the summary line + ribbon answer "how close is this to unblocked?" at a glance.</span></div>
+    <div class="lg"><b>Same rules, better door</b><span>The picker keeps the existing cycle heads-up (server check stays authoritative on save) and disables duplicates inline. Rows click through to the dependency's own pane; remove is the hover ×, matching the canvas's edge-delete.</span></div>
+  </div>
+</div>
+<script>
+function filterCands(input){
+  const q = input.value.toLowerCase();
+  input.closest(".picker").querySelectorAll(".cand").forEach(c => {
+    c.style.display = c.textContent.toLowerCase().includes(q) ? "flex" : "none";
+  });
+}
+document.querySelectorAll(".rm").forEach(b => b.addEventListener("click", e => {
+  e.stopPropagation(); b.closest(".dep").remove();
+}));
+document.querySelectorAll("#pickerA .cand:not(.disabled), .cols section:nth-child(2) .cand").forEach(c =>
+  c.addEventListener("click", () => {
+    const sheet = c.closest(".sheet");
+    const li = document.createElement("li");
+    li.className = "dep"; li.dataset.s = "ready";
+    li.innerHTML = '<span class="g ' + c.querySelector(".g").className.split(" ")[1] + '"></span><span><span class="t">'
+      + c.querySelector("span:nth-child(2)").textContent + '</span><span class="sub">added — save to persist</span></span><span class="go">›</span><button class="rm">×</button>';
+    li.querySelector(".rm").addEventListener("click", ev => { ev.stopPropagation(); li.remove(); });
+    sheet.querySelector(".deps").appendChild(li);
+  }));
+</script>
+</body>
+</html>
