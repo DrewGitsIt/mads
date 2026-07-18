@@ -91,6 +91,16 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByText(commitMessage)).toBeVisible();
     await expect(page.getByText(commitHash.slice(0, 7))).toBeVisible();
     await expect(page.getByText(workTask.title)).toBeVisible();
+
+    // The seeded commit's file (src/commit-file.ts, added against a real
+    // parent commit that didn't contain it — recordRealCommit) opens its
+    // diff on click, exercising the endpoint's added-file/empty-original path.
+    await page.getByText("src/commit-file.ts").click();
+    // .monaco-diff-editor is the DiffEditor widget's own top-level container —
+    // unlike .monaco-editor, which Monaco also applies to several nested
+    // internal panes/gutters, so it isn't reliably "the" visible editor root.
+    await expect(page.locator(".monaco-diff-editor").first()).toBeVisible();
+    await expect(page.getByText(`Diff from commit ${commitHash.slice(0, 7)}`)).toBeVisible();
   });
 
   test("pipeline tab shows the completed run", async ({ page, routerURL }) => {

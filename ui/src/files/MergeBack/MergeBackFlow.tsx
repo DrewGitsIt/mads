@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Chip, type ChipTone } from "../../components/Chip/Chip";
-import type { RouterClient, SessionEventSource } from "../../router/client";
-import type { ControlEvent } from "../../router/types";
+import type { RouterClient } from "../../router/client";
+import { subscribeToEvents } from "../../router/events";
+import { WORKSPACE_SESSION_EVENT_TYPES } from "../../router/sessionEventTypes";
 import { ConflictResolution } from "./ConflictResolution";
 import styles from "./MergeBackFlow.module.css";
 
@@ -50,8 +51,6 @@ const STATUS_LABEL: Record<MergeStatus, string> = {
   error: "Merge failed",
 };
 
-const MERGE_EVENT_TYPES = ["merge.attempted", "merge.conflicted", "merge.completed"];
-
 /**
  * Target-branch pick -> auto-attempt via mergeSession() -> status driven by
  * merge.* control events (HANDOFF §7), not by the mergeSession() promise
@@ -70,22 +69,13 @@ export function MergeBackFlow({
   const [status, setStatus] = useState<MergeStatus>("idle");
   const [conflict, setConflict] = useState<ConflictInfo | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | undefined>();
-  const sourceRef = useRef<SessionEventSource | null>(null);
 
+  // Shares SessionWorkspace's session-scoped subscription (see
+  // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own — an
+  // unpooled EventSource here would push a Files-tab-open session over
+  // Chromium's 6-per-origin socket cap and starve unrelated fetches.
   useEffect(() => {
-    const source = routerClient.streamControlEvents({
-      sessionId,
-      types: MERGE_EVENT_TYPES,
-    });
-    sourceRef.current = source;
-
-    function onEvent(ev: MessageEvent<string>) {
-      let envelope: ControlEvent;
-      try {
-        envelope = JSON.parse(ev.data) as ControlEvent;
-      } catch {
-        return;
-      }
+    return subscribeToEvents({ sessionId, types: WORKSPACE_SESSION_EVENT_TYPES }, (envelope) => {
       const payload = (envelope.payload ?? {}) as MergePayload;
       if (envelope.type === "merge.attempted") {
         setStatus("attempting");
@@ -96,18 +86,8 @@ export function MergeBackFlow({
         setConflict(null);
         setStatus("completed");
       }
-    }
-
-    for (const type of MERGE_EVENT_TYPES) {
-      source.addEventListener(type, onEvent);
-    }
-    return () => {
-      for (const type of MERGE_EVENT_TYPES) {
-        source.removeEventListener(type, onEvent);
-      }
-      source.close();
-    };
-  }, [routerClient, sessionId]);
+    });
+  }, [sessionId]);
 
   function attemptMerge() {
     setStatus("attempting");

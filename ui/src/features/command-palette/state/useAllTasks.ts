@@ -19,11 +19,18 @@ export function useAllTasks(): Task[] {
   useEffect(() => {
     mounted.current = true;
     void refetch();
+    // A reconnecting/backfilling SSE stream can dispatch a large burst of
+    // task.* events in one go (e.g. full history replay on connect) —
+    // debounce so that burst collapses into a single refetch instead of one
+    // GET /tasks per event.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const unsubscribe = subscribeToEvents({ types: TASK_EVENT_TYPES }, () => {
-      void refetch();
+      clearTimeout(timer);
+      timer = setTimeout(() => void refetch(), 50);
     });
     return () => {
       mounted.current = false;
+      clearTimeout(timer);
       unsubscribe();
     };
   }, [refetch]);

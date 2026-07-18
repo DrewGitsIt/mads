@@ -664,6 +664,17 @@ export const fixtureFileDiffs: Record<string, FileDiff> = {
   },
 };
 
+// Keyed by `${hash}:${path}` — a commit's file diffs, distinct from
+// fixtureFileDiffs (working-change diffs, keyed by path alone).
+export const fixtureCommitFileDiffs: Record<string, FileDiff> = {
+  "a1b2c3d:services/data/internal/backoff.go": {
+    path: "services/data/internal/backoff.go",
+    language: "go",
+    original: "",
+    modified: "func backoff() time.Duration {\n\treturn baseDelay\n}\n",
+  },
+};
+
 export const fixtureCleanMerge: MergeResult = {
   conflicted: false,
   branch: "mads/tsk_retry-backoff",
@@ -759,6 +770,7 @@ export class FakeRouterClient implements RouterClient {
     private readonly fileChanges = fixtureFileChanges,
     private readonly commits = fixtureCommits,
     private readonly fileDiffs = fixtureFileDiffs,
+    private readonly commitFileDiffs = fixtureCommitFileDiffs,
     private readonly mergeResults: Record<string, MergeResult> = {
       "session-files-conflict": fixtureConflictedMerge,
     },
@@ -971,6 +983,12 @@ export class FakeRouterClient implements RouterClient {
   async getFileDiff(_sessionId: string, path: string): Promise<FileDiff> {
     const diff = this.fileDiffs[path];
     if (!diff) throw new Error(`fixture diff not found: ${path}`);
+    return diff;
+  }
+
+  async getCommitFileDiff(_sessionId: string, hash: string, path: string): Promise<FileDiff> {
+    const diff = this.commitFileDiffs[`${hash}:${path}`];
+    if (!diff) throw new Error(`no fixture diff for commit ${hash} path ${path}`);
     return diff;
   }
 

@@ -1,9 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MergeBackFlow } from "./MergeBackFlow";
 import { FakeRouterClient, fixtureConflictedMerge } from "../../router/fixtures";
+import { FakeEventSource } from "../../router/testFakeEventSource";
+
+function emitMerge(sessionId: string, type: string, payload: unknown) {
+  const source = FakeEventSource.instances.find((s) => s.url.includes("merge.attempted"));
+  act(() => {
+    source?.emit(type, JSON.stringify({ seq: 1, type, actor: "user", session_id: sessionId, payload }));
+  });
+}
 
 describe("MergeBackFlow", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("starts in the Not merged state", () => {
     const client = new FakeRouterClient();
     render(<MergeBackFlow sessionId="session-files-clean" routerClient={client} />);
@@ -18,7 +35,9 @@ describe("MergeBackFlow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Merge back" }));
 
     expect(screen.getByText("Merging…")).toBeTruthy();
-    await waitFor(() => expect(client.controlEventSources.length).toBe(1));
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url.includes("merge.attempted"))).toBe(true),
+    );
   });
 
   it("reaches a Merged state once the control stream emits merge.attempted then merge.completed", async () => {
@@ -26,17 +45,12 @@ describe("MergeBackFlow", () => {
     render(<MergeBackFlow sessionId="session-files-clean" routerClient={client} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge back" }));
-    await waitFor(() => expect(client.controlEventSources.length).toBe(1));
-    const source = client.controlEventSources[0];
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url.includes("merge.attempted"))).toBe(true),
+    );
 
-    source.emit("merge.attempted", {
-      session_id: "session-files-clean",
-      payload: { branch: "mads/tsk_retry-backoff" },
-    });
-    source.emit("merge.completed", {
-      session_id: "session-files-clean",
-      payload: { branch: "mads/tsk_retry-backoff" },
-    });
+    emitMerge("session-files-clean", "merge.attempted", { branch: "mads/tsk_retry-backoff" });
+    emitMerge("session-files-clean", "merge.completed", { branch: "mads/tsk_retry-backoff" });
 
     await waitFor(() => expect(screen.getByText("Merged")).toBeTruthy());
   });
@@ -46,16 +60,14 @@ describe("MergeBackFlow", () => {
     render(<MergeBackFlow sessionId="session-files-conflict" routerClient={client} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Merge back" }));
-    await waitFor(() => expect(client.controlEventSources.length).toBe(1));
-    const source = client.controlEventSources[0];
+    await waitFor(() =>
+      expect(FakeEventSource.instances.some((s) => s.url.includes("merge.attempted"))).toBe(true),
+    );
 
-    source.emit("merge.attempted", {
-      session_id: "session-files-conflict",
-      payload: { branch: fixtureConflictedMerge.branch },
-    });
-    source.emit("merge.conflicted", {
-      session_id: "session-files-conflict",
-      payload: { branch: fixtureConflictedMerge.branch, files: fixtureConflictedMerge.files },
+    emitMerge("session-files-conflict", "merge.attempted", { branch: fixtureConflictedMerge.branch });
+    emitMerge("session-files-conflict", "merge.conflicted", {
+      branch: fixtureConflictedMerge.branch,
+      files: fixtureConflictedMerge.files,
     });
 
     await waitFor(() => expect(screen.getByText("Merge conflicted")).toBeTruthy());

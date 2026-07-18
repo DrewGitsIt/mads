@@ -17,6 +17,8 @@ export interface FilesTabProps {
 
 type Scope = "session" | "task";
 
+type Selection = { source: "working"; path: string } | { source: "commit"; hash: string; path: string };
+
 /**
  * Files tab (MADS-UX §3.3/§5/§17, W6.5). Composes the change/commit lists,
  * the diff viewer, and the merge-back flow. `taskId` is optional so this
@@ -29,7 +31,7 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
   const [changes, setChanges] = useState<FileChange[]>([]);
   const [commits, setCommits] = useState<Commit[]>([]);
   const [taskTitles, setTaskTitles] = useState<Map<string, string>>(new Map());
-  const [selectedPath, setSelectedPath] = useState<string | undefined>();
+  const [selection, setSelection] = useState<Selection | null>(null);
   const [diff, setDiff] = useState<FileDiff | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | undefined>();
@@ -73,7 +75,7 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
   }, [routerClient, sessionId, scopedTaskId]);
 
   useEffect(() => {
-    if (!selectedPath) {
+    if (!selection) {
       setDiff(null);
       setDiffError(undefined);
       return;
@@ -81,8 +83,11 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
     let cancelled = false;
     setDiffLoading(true);
     setDiffError(undefined);
-    routerClient
-      .getFileDiff(sessionId, selectedPath, scopedTaskId)
+    const request =
+      selection.source === "working"
+        ? routerClient.getFileDiff(sessionId, selection.path, scopedTaskId)
+        : routerClient.getCommitFileDiff(sessionId, selection.hash, selection.path);
+    request
       .then((d) => {
         if (!cancelled) setDiff(d);
       })
@@ -98,7 +103,7 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
     return () => {
       cancelled = true;
     };
-  }, [routerClient, sessionId, selectedPath, scopedTaskId]);
+  }, [routerClient, sessionId, selection, scopedTaskId]);
 
   return (
     <div className={styles.tab}>
@@ -128,7 +133,16 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
               <Panel>
                 <PanelHeader>Committed</PanelHeader>
                 <PanelBody>
-                  <CommitList commits={commits} taskTitles={taskTitles} />
+                  <CommitList
+                    commits={commits}
+                    taskTitles={taskTitles}
+                    selectedFile={
+                      selection?.source === "commit"
+                        ? { hash: selection.hash, path: selection.path }
+                        : undefined
+                    }
+                    onSelectFile={(hash, path) => setSelection({ source: "commit", hash, path })}
+                  />
                 </PanelBody>
               </Panel>
             )}
@@ -136,7 +150,11 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
               <Panel>
                 <PanelHeader>Working changes</PanelHeader>
                 <PanelBody>
-                  <ChangeList changes={changes} selectedPath={selectedPath} onSelect={setSelectedPath} />
+                  <ChangeList
+                    changes={changes}
+                    selectedPath={selection?.source === "working" ? selection.path : undefined}
+                    onSelect={(path) => setSelection({ source: "working", path })}
+                  />
                 </PanelBody>
               </Panel>
             )}
@@ -151,7 +169,8 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
       </div>
 
       <DiffViewer
-        path={selectedPath}
+        path={selection?.path}
+        commitHash={selection?.source === "commit" ? selection.hash : undefined}
         diff={diff}
         loading={diffLoading}
         error={diffError}

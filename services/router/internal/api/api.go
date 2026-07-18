@@ -153,6 +153,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /links/{id}/orchestrate/message", s.requireLinkedSessions(s.handleOrchestrateMessage))
 	mux.HandleFunc("GET /sessions/{id}/files", s.handleSessionFiles)
 	mux.HandleFunc("GET /sessions/{id}/commits", s.handleSessionCommits)
+	mux.HandleFunc("GET /sessions/{id}/commits/{hash}/diff", s.handleSessionCommitDiff)
 	mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /sessions", s.handleListSessions)
