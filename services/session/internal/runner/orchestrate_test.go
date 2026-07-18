@@ -136,6 +136,17 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 	t.Cleanup(func() { _ = r.Shutdown(ctx) })
 	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
 
+	// MCPServers is keyed by the fake's internal ref, but ProviderRef isn't
+	// persisted until the provider announces it (fresh session — see
+	// syncProviderRef); drive one turn so providerMCPServers' ProviderRef
+	// lookup resolves to the ref Start actually used.
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+
 	refs := providerMCPServers(t, leaderData, fp, leader.ID)
 	if len(refs) != 1 {
 		t.Fatalf("MCPServers = %+v, want 1 entry", refs)
