@@ -14,6 +14,8 @@ import type {
   FileChange,
   FileDiff,
   GenerateAgentBody,
+  Link,
+  LinkRequest,
   Mentionable,
   MergeResult,
   Model,
@@ -232,6 +234,11 @@ export interface RouterClient {
     version?: string,
   ): Promise<{ job_id: string }>;
   publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }>;
+
+  // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
+  getSessionLinks(sessionId: string): Promise<Link[]>;
+  createLink(req: LinkRequest): Promise<Link>;
+  deleteLink(id: string): Promise<void>;
 }
 
 /**
@@ -850,6 +857,18 @@ export class FetchRouterClient implements RouterClient {
 
   async publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }> {
     return routerPost(this.baseUrl, "/registry/publish", { items });
+  }
+
+  async getSessionLinks(sessionId: string): Promise<Link[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/links`);
+  }
+
+  async createLink(req: LinkRequest): Promise<Link> {
+    return routerPost(this.baseUrl, "/links", req);
+  }
+
+  async deleteLink(id: string): Promise<void> {
+    return routerDelete(this.baseUrl, `/links/${id}`);
   }
 }
 

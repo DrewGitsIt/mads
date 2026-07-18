@@ -8,6 +8,8 @@ export interface SessionActionsMenuProps {
   onClose: () => void;
   onResume: () => void;
   onDeleteRequest: () => void;
+  /** Linked sessions (flag-gated): only passed for a row that is an actual link subject. */
+  onUnlinkRequest?: () => void;
   className?: string;
 }
 
@@ -17,6 +19,7 @@ export function SessionActionsMenu({
   onClose,
   onResume,
   onDeleteRequest,
+  onUnlinkRequest,
   className,
 }: SessionActionsMenuProps) {
   const close = closeState(activity);
@@ -59,6 +62,13 @@ export function SessionActionsMenu({
               {del.reason && <span className={styles.reason}>{del.reason}</span>}
             </button>
           </li>
+          {onUnlinkRequest && (
+            <li>
+              <button type="button" className={styles.menuItem} onClick={onUnlinkRequest}>
+                Unlink
+              </button>
+            </li>
+          )}
         </ul>
       </PanelBody>
     </Panel>

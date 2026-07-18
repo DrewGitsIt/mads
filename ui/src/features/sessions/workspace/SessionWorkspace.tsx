@@ -6,12 +6,12 @@ import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import { SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
+import { WORKSPACE_SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
 import type { Session } from "../../../router/types";
 import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
-import { usePipelineRunning } from "./usePipelineRunning";
+import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
 
 export interface SessionWorkspaceProps {
@@ -57,15 +57,29 @@ export function SessionWorkspace({
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
-  const running = usePipelineRunning(sessionId);
+  const [running, setRunning] = useState(false);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
   }, [routerClient, sessionId]);
 
+  // One session-scoped subscription for everything this shell and its
+  // Conversation tab need (session lifecycle, linked-session inject,
+  // pipeline run status) instead of three — see
+  // WORKSPACE_SESSION_EVENT_TYPES's own comment for why.
   useEffect(() => {
     refetchSession();
-    return subscribeToEvents({ sessionId, types: SESSION_EVENT_TYPES }, refetchSession);
+    setRunning(false);
+    return subscribeToEvents(
+      { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
+      (envelope) => {
+        if ((RUN_EVENT_TYPES as string[]).includes(envelope.type)) {
+          setRunning(envelope.type === "pipeline.started");
+        } else {
+          refetchSession();
+        }
+      },
+    );
   }, [refetchSession, sessionId]);
 
   function closeSession() {

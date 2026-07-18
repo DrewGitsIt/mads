@@ -17,6 +17,8 @@ import type {
   FileChange,
   FileDiff,
   GenerateAgentBody,
+  Link,
+  LinkRequest,
   Mentionable,
   MergeResult,
   Model,
@@ -40,6 +42,9 @@ import type {
   VersionInfo,
   Workspace,
 } from "./types";
+import { PRESET_GRANTS } from "./types";
+
+export const fixtureLinks: Link[] = [];
 
 export const fixtureSessions: Record<string, Session> = {
   "session-active": {
@@ -724,8 +729,10 @@ export function createFakeControlEventSource(): {
 export class FakeRouterClient implements RouterClient {
   private sessions: Map<string, Session>;
   private tasks: Map<string, Task>;
+  private links: Map<string, Link>;
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
+  private nextLinkSeq = 1000;
   /** Test-only: set to return a specific instance from streamTaskEvents so a test can hold a reference to dispatch on. */
   taskEventSource: FakeSessionEventSource;
   /** Every control-event source this client has handed out, in creation order — tests grab the latest and call `.emit(...)` on it (HANDOFF §7). */
@@ -746,11 +753,13 @@ export class FakeRouterClient implements RouterClient {
       "session-files-conflict": fixtureConflictedMerge,
     },
     private readonly sessionDefaults: SessionDefaults = fixtureSessionDefaults,
+    links: Link[] = fixtureLinks,
   ) {
     this.sessions = new Map(
       Object.entries(sessions).map(([id, s]) => [id, structuredClone(s)]),
     );
     this.tasks = new Map(tasks.map((t) => [t.id, structuredClone(t)]));
+    this.links = new Map(links.map((l) => [l.id, structuredClone(l)]));
     this.taskEventSource = new FakeSessionEventSource();
   }
 
@@ -1248,6 +1257,49 @@ export class FakeRouterClient implements RouterClient {
 
   async publishRegistryItems(): Promise<{ job_id: string }> {
     throw new Error("not fixtured: publishRegistryItems");
+  }
+
+  async getSessionLinks(sessionId: string): Promise<Link[]> {
+    return [...this.links.values()].filter(
+      (l) => l.granting_session_id === sessionId || l.subject_session_id === sessionId,
+    );
+  }
+
+  async createLink(req: LinkRequest): Promise<Link> {
+    if (req.granting_session_id === req.subject_session_id) {
+      throw new RouterValidationError([
+        { field: "subject_session_id", message: "a session cannot link to itself" },
+      ]);
+    }
+    const reverse = [...this.links.values()].find(
+      (l) =>
+        l.granting_session_id === req.subject_session_id &&
+        l.subject_session_id === req.granting_session_id,
+    );
+    if (reverse) {
+      throw new RouterValidationError([
+        {
+          field: "subject_session_id",
+          message: "a link already exists in the opposite direction",
+        },
+      ]);
+    }
+    const now = new Date().toISOString();
+    const link: Link = {
+      id: `link-${this.nextLinkSeq++}`,
+      granting_session_id: req.granting_session_id,
+      subject_session_id: req.subject_session_id,
+      grants: req.grants ?? (req.preset ? PRESET_GRANTS[req.preset] : []),
+      cadence: req.cadence ?? "per_turn",
+      created_at: now,
+      updated_at: now,
+    };
+    this.links.set(link.id, link);
+    return link;
+  }
+
+  async deleteLink(id: string): Promise<void> {
+    this.links.delete(id);
   }
 }
 

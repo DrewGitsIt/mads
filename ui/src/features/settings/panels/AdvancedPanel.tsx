@@ -14,7 +14,7 @@ const TOGGLES: Array<{ key: keyof FeatureFlags; label: string; description: stri
   {
     key: "linked_sessions",
     label: "Linked sessions",
-    description: "Enable leader/monitor session linking (toggle only — no UI yet).",
+    description: "Enable leader/monitor session linking: rail multi-select, link chooser, and attributed inject/digest rendering.",
   },
   {
     key: "remote_registry",

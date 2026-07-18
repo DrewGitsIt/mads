@@ -1,13 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionRail } from "./SessionRail";
-import type { Session } from "../../../router/types";
+import { FLAGS } from "../../../featureFlags";
+import { FakeRouterClient } from "../../../router/fixtures";
+import type { Link, Session } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
     id: "s1",
     name: "session",
     activity: "active",
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function makeLink(overrides: Partial<Link>): Link {
+  return {
+    id: "link-1",
+    granting_session_id: "granter",
+    subject_session_id: "subject",
+    grants: ["read"],
+    cadence: "per_turn",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides,
@@ -197,5 +212,103 @@ describe("SessionRail", () => {
     fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Delete"));
 
     expect(onDelete).toHaveBeenCalledWith("r1");
+  });
+});
+
+describe("SessionRail — linked sessions (flag-gated)", () => {
+  afterEach(() => {
+    FLAGS.linkedSessions = false;
+  });
+
+  const lead = makeSession({ id: "lead", name: "investigator" });
+  const a = makeSession({ id: "a", name: "payments refactor" });
+  const link = makeLink({
+    id: "l1",
+    granting_session_id: "lead",
+    subject_session_id: "a",
+    grants: ["read", "inject", "orchestrate"],
+  });
+
+  it("renders zero linked-sessions DOM when the flag is off, even with links present", () => {
+    FLAGS.linkedSessions = false;
+    render(
+      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} />,
+    );
+    expect(screen.queryByText("LEADER")).toBeNull();
+    expect(screen.queryAllByRole("checkbox").length).toBe(0);
+    // Flag off: no nesting either, so the subject still renders as its own flat row.
+    expect(screen.getByText("payments refactor")).toBeTruthy();
+  });
+
+  it("shows the holder badge and nests the subject row with a LINKED badge when the flag is on", () => {
+    FLAGS.linkedSessions = true;
+    render(
+      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} />,
+    );
+    expect(screen.getByText("LEADER")).toBeTruthy();
+    expect(screen.getByText("LINKED")).toBeTruthy();
+    expect(screen.getAllByRole("checkbox").length).toBe(2);
+  });
+
+  it("shows a Link N sessions… bar once 2+ rows are checked, and Clear resets it", () => {
+    FLAGS.linkedSessions = true;
+    const b = makeSession({ id: "b", name: "gateway hardening" });
+    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
+
+    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select investigator"));
+    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
+    fireEvent.click(screen.getByLabelText("Select gateway hardening"));
+    expect(screen.getByText("Link 2 sessions…")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Clear"));
+    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
+  });
+
+  it("opens the chooser dialog and creates a link via the router client", async () => {
+    FLAGS.linkedSessions = true;
+    const b = makeSession({ id: "b", name: "gateway hardening" });
+    const client = new FakeRouterClient();
+    const createLinkSpy = vi.spyOn(client, "createLink");
+    render(
+      <SessionRail sessions={[lead, b]} openTaskCounts={{}} routerClient={client} />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Select investigator"));
+    fireEvent.click(screen.getByLabelText("Select gateway hardening"));
+    fireEvent.click(screen.getByText("Link 2 sessions…"));
+
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    fireEvent.click(screen.getByText("Create 1 link"));
+
+    await waitFor(() => expect(createLinkSpy).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("offers Unlink only on the nested subject row, and confirming deletes the link via the router client", async () => {
+    FLAGS.linkedSessions = true;
+    const client = new FakeRouterClient();
+    const deleteLinkSpy = vi.spyOn(client, "deleteLink");
+    render(
+      <SessionRail
+        sessions={[lead, a]}
+        openTaskCounts={{}}
+        links={[link]}
+        routerClient={client}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "investigator actions" }));
+    expect(within(screen.getByRole("list")).queryByText("Unlink")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "investigator actions" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "payments refactor actions" }));
+    fireEvent.click(within(screen.getByRole("list")).getByText("Unlink"));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("payments refactor");
+    fireEvent.click(within(dialog).getByText("Unlink"));
+
+    await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
   });
 });

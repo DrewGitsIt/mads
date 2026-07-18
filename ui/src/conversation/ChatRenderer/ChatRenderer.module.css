@@ -56,3 +56,33 @@
   border-radius: var(--r);
   padding: var(--space-2) var(--space-3);
 }
+
+.digest {
+  align-self: stretch;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--info);
+  border-radius: var(--r);
+  background: var(--bg2);
+  padding: var(--space-3);
+}
+
+.digest .prose {
+  max-width: none;
+}
+
+.digestHeader {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  margin-bottom: var(--space-2);
+}
+
+.digestHeader b {
+  color: var(--info-fg);
+  font-weight: 600;
+}
+
+.digestCadence {
+  margin-top: var(--space-2);
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--text3);
+}
