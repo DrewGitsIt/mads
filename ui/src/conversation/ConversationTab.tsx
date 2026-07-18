@@ -6,7 +6,10 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
-import { WORKSPACE_SESSION_EVENT_TYPES } from "../router/sessionEventTypes";
+import {
+  SESSION_SHELL_REFETCH_EVENT_TYPES,
+  WORKSPACE_SESSION_EVENT_TYPES,
+} from "../router/sessionEventTypes";
 import type { Session, StreamEvent, ToolUse, TranscriptMessage } from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
@@ -153,9 +156,13 @@ export function ConversationTab({
       (envelope) => {
         if (envelope.type === "link.message_injected") {
           void routerClient.getTranscript(sessionId).then(setMessages);
-        } else {
+        } else if ((SESSION_SHELL_REFETCH_EVENT_TYPES as string[]).includes(envelope.type)) {
           refetchSession();
         }
+        // Anything else in WORKSPACE_SESSION_EVENT_TYPES (task.*/stage.*/
+        // file.changed/note.created/pipeline.*) is there only for other
+        // subscribers sharing this bus (usePipelineRun) — this tab has
+        // nothing to do with them.
       },
     );
   }, [refetchSession, routerClient, sessionId]);

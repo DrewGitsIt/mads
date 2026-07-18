@@ -525,4 +525,65 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText("reply")).toBeTruthy());
     expect(getTranscript.mock.calls.length).toBe(2);
   });
+
+  // Regression for the 89-GETs-in-17ms duplicate-request storm: a burst of
+  // envelopes that are only relevant to usePipelineRun's shared subscription
+  // (task.*/stage.*/file.changed) must not trigger a Session refetch here —
+  // only SESSION_SHELL_REFETCH_EVENT_TYPES membership should.
+  it("does not refetch the session for a burst of pipeline/task/stage/file events unrelated to the Session object", async () => {
+    const client = new FakeRouterClient();
+    const getSession = vi.spyOn(client, "getSession");
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    getSession.mockClear();
+
+    const source = FakeEventSource.instances.find((s) => s.url.includes("task.status_changed"));
+    expect(source).toBeTruthy();
+
+    act(() => {
+      for (let i = 0; i < 89; i++) {
+        source!.emit(
+          "task.status_changed",
+          JSON.stringify({
+            seq: i + 1,
+            type: "task.status_changed",
+            actor: "system",
+            session_id: "session-active",
+          }),
+        );
+      }
+    });
+
+    expect(getSession).not.toHaveBeenCalled();
+  });
+
+  it("still refetches the session on a session.activity_changed event", async () => {
+    const client = new FakeRouterClient();
+    const getSession = vi.spyOn(client, "getSession");
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    getSession.mockClear();
+
+    const source = FakeEventSource.instances.find((s) => s.url.includes("task.status_changed"));
+
+    act(() => {
+      source!.emit(
+        "session.activity_changed",
+        JSON.stringify({
+          seq: 1,
+          type: "session.activity_changed",
+          actor: "system",
+          session_id: "session-active",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(getSession).toHaveBeenCalledTimes(1));
+  });
 });
