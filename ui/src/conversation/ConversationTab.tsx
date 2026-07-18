@@ -7,7 +7,7 @@ import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
 import { WORKSPACE_SESSION_EVENT_TYPES } from "../router/sessionEventTypes";
-import type { Session, TranscriptMessage } from "../router/types";
+import type { Session, StreamEvent, ToolUse, TranscriptMessage } from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
@@ -55,6 +55,15 @@ type TransportState =
       retryable: boolean;
     };
 
+// Driven purely by the stream, not by "who sent the message" — the same
+// transition applies whether this client's own send started the turn or a
+// linked-session inject/mid-turn mount is the first thing observed, so both
+// fall out of the same code path with no separate case to maintain.
+type TurnState =
+  | { phase: "idle" }
+  | { phase: "waiting"; tool?: ToolUse } // turn started, no text chunk yet this turn
+  | { phase: "streaming"; text: string }; // >=1 text chunk arrived this turn
+
 /**
  * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the header,
  * the chat/terminal display-mode switch, the inactive-session summary
@@ -80,6 +89,18 @@ export function ConversationTab({
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
   const [waking, setWaking] = useState(false);
+  const [turn, setTurn] = useState<TurnState>({ phase: "idle" });
+  // A mount against a dormant session opens /output before any child
+  // exists; the Router 404s and the browser's EventSource, per spec, never
+  // auto-reconnects a connection whose *initial* handshake failed (only a
+  // previously-established one retries on a later drop). streamBroken flags
+  // exactly that dead-on-arrival case; streamGeneration is bumped once the
+  // session is confirmed active again (session.activity_changed, picked up
+  // by the WORKSPACE_SESSION_EVENT_TYPES subscription below) to force one
+  // fresh connection — not a timer/backoff loop, just a single deliberate
+  // re-open keyed to a real state transition.
+  const [streamBroken, setStreamBroken] = useState(false);
+  const [streamGeneration, setStreamGeneration] = useState(0);
   const links = useSessionLinks([sessionId]);
 
   useEffect(() => {
@@ -93,6 +114,7 @@ export function ConversationTab({
     setLoadError(false);
     setSession(null);
     setMessages([]);
+    setTurn({ phase: "idle" });
     void routerClient
       .getSession(sessionId)
       .then((s) => {
@@ -120,11 +142,11 @@ export function ConversationTab({
 
   // Shares SessionWorkspace's session-scoped subscription (see
   // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own — GET
-  // /transcript has no push notification of its own (see pollForReply
+  // /transcript has no push notification of its own (see refetchAfterTurn
   // below), and a linked-session inject/digest lands on this session's
   // transcript out of band from anything this viewer sent, so it needs a
-  // server-scoped trigger to refetch rather than waiting on a poll that
-  // never starts.
+  // server-scoped trigger to refetch rather than waiting on the stream's
+  // own turn_end (which only fires for turns this session's provider runs).
   useEffect(() => {
     return subscribeToEvents(
       { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
@@ -147,11 +169,22 @@ export function ConversationTab({
   useEffect(() => {
     const source = routerClient.streamSession(sessionId);
     setEventSource(source);
+    setStreamBroken(false);
     return () => {
       source.close();
       setEventSource(null);
     };
-  }, [routerClient, sessionId]);
+  }, [routerClient, sessionId, streamGeneration]);
+
+  // Reconnects the stream exactly once a dead-on-arrival connection
+  // (streamBroken) coincides with the session having gone active — see the
+  // streamBroken/streamGeneration declaration above.
+  useEffect(() => {
+    if (streamBroken && session?.activity === "active") {
+      setStreamBroken(false);
+      setStreamGeneration((g) => g + 1);
+    }
+  }, [streamBroken, session?.activity]);
 
   const terminalBridge = useMemo(
     () =>
@@ -200,24 +233,76 @@ export function ConversationTab({
   messagesRef.current = messages;
 
   // GET /transcript has no push notification for turn completion (no domain
-  // event fires per-turn, only on session start/shutdown), so a reply only
-  // becomes visible by re-fetching. Bounded poll, not a general subscription:
-  // gives up quietly after ~3s rather than polling indefinitely.
-  const pollForReply = useCallback(async () => {
+  // event fires per-turn, only on session start/shutdown), so the persisted
+  // reply only becomes visible by re-fetching once the stream's turn_end
+  // frame says the turn is over. One fetch, one retry 300ms later if the
+  // transcript hasn't caught up yet (or the fetch throws) — never an
+  // unbounded poll; the frozen streamed bubble is the fallback if both fail.
+  const refetchAfterTurn = useCallback(async () => {
     const baseline = messagesRef.current.length;
-    for (let attempt = 0; attempt < 10; attempt++) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const fresh = await routerClient.getTranscript(sessionId);
-        if (fresh.length > baseline) {
+        if (fresh.length > baseline || attempt === 1) {
           setMessages(fresh);
           return;
         }
       } catch {
-        // transient — keep polling, last attempt just gives up quietly
+        if (attempt === 1) return;
       }
+      await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }, [routerClient, sessionId]);
+
+  // Consumes the same live output stream SessionTerminalBridge rides for
+  // terminal mode (set up above) — chat mode folds its text/tool_use/
+  // turn_end/error frames into the turn-state machine instead of opening a
+  // second stream.
+  useEffect(() => {
+    if (!eventSource) return;
+    const onText = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "text") return;
+      setTurn((t) => ({
+        phase: "streaming",
+        text: (t.phase === "streaming" ? t.text : "") + parsed.text,
+      }));
+    };
+    const onTool = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "tool_use") return;
+      setTurn((t) => (t.phase === "streaming" ? t : { phase: "waiting", tool: parsed.tool }));
+    };
+    const onTurnEnd = () => {
+      // Only the pre-first-chunk indicator clears immediately — a streamed
+      // bubble stays frozen-visible until the persisted refetch replaces it,
+      // so there's never a flash back to empty.
+      setTurn((t) => (t.phase === "streaming" ? t : { phase: "idle" }));
+      void refetchAfterTurn().finally(() => setTurn({ phase: "idle" }));
+    };
+    const onError = (ev: MessageEvent<string>) => {
+      // A native transport-level failure (e.g. the initial GET /output 404
+      // against a dormant session) fires a plain Event, not a MessageEvent —
+      // no `.data` to parse, and not a StreamEvent from the provider at all.
+      if (typeof ev.data !== "string") {
+        setStreamBroken(true);
+        return;
+      }
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      setTurn({ phase: "idle" });
+      setSendError(parsed.kind === "error" ? parsed.text : "The agent hit an error.");
+    };
+    eventSource.addEventListener("text", onText);
+    eventSource.addEventListener("tool_use", onTool);
+    eventSource.addEventListener("turn_end", onTurnEnd);
+    eventSource.addEventListener("error", onError);
+    return () => {
+      eventSource.removeEventListener("text", onText);
+      eventSource.removeEventListener("tool_use", onTool);
+      eventSource.removeEventListener("turn_end", onTurnEnd);
+      eventSource.removeEventListener("error", onError);
+    };
+  }, [eventSource, refetchAfterTurn]);
 
   if (loadError) {
     return (
@@ -249,6 +334,9 @@ export function ConversationTab({
         ? transport.to
         : transport.attemptedMode;
   const showHistory = transport.status !== "idle" || transport.mode === "chat";
+  // Never shown mid-switch/terminal — terminal mode already has its own live
+  // view via SessionTerminalBridge on the same stream.
+  const liveTurn = activeMode === "chat" ? turn : { phase: "idle" as const };
 
   return (
     <div className={styles.tab}>
@@ -287,10 +375,16 @@ export function ConversationTab({
                 </div>
               )}
               <SessionSummaryCard session={session} />
-              {messages.length === 0 ? (
+              {messages.length === 0 && liveTurn.phase === "idle" ? (
                 <div className={styles.emptyTranscript}>No conversation yet</div>
               ) : (
-                <ChatRenderer messages={messages} links={links} viewedSessionId={sessionId} />
+                <ChatRenderer
+                  messages={messages}
+                  links={links}
+                  viewedSessionId={sessionId}
+                  streamingText={liveTurn.phase === "streaming" ? liveTurn.text : undefined}
+                  working={liveTurn.phase === "waiting" ? { tool: liveTurn.tool } : false}
+                />
               )}
               {transport.status !== "idle" && (
                 <div className={styles.transportBanner}>
@@ -348,6 +442,7 @@ export function ConversationTab({
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {
                   if (session.activity !== "active") setWaking(true);
+                  setTurn((t) => (t.phase === "idle" ? { phase: "waiting" } : t));
                 }}
                 onSendError={(msg) => {
                   setWaking(false);
@@ -355,9 +450,20 @@ export function ConversationTab({
                 }}
                 onAutoSendStart={onPendingFirstMessageHandled}
                 onSent={(text) => {
+                  // A send against a dormant session wakes it (Router:
+                  // handleSessionMessages) synchronously within the POST's
+                  // own request/response cycle — for a fast reply, the whole
+                  // turn (including turn_end) can complete before this
+                  // mount's /output stream (opened before the child existed,
+                  // permanently dead per the WHATWG EventSource spec — see
+                  // streamBroken above) ever reconnects. Piggyback the same
+                  // bounded refetch turn_end normally triggers, rather than
+                  // depending on a stream that's known-unreliable for this
+                  // specific turn.
+                  const wasDormant = session.activity !== "active";
                   setWaking(false);
                   setMessages((m) => [...m, { role: "user", text }]);
-                  void pollForReply();
+                  if (wasDormant) void refetchAfterTurn();
                 }}
               />
             </>

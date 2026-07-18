@@ -8,6 +8,10 @@
 // limit on cue) and a built-in dialect that always backstops it:
 //
 //	"echo <x>"  → reply containing <x>
+//	"echo slowly <x>" → same reply as "echo <x>", streamed as separate word
+//	                    chunks with a 250ms delay between them — the
+//	                    observable pacing lever ui-smoke's streaming
+//	                    journey needs
 //	"slow"      → streams until interrupted
 //	"recall"    → replies with markers echoed earlier in the conversation
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
@@ -237,6 +241,18 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 		return p
 	}
 	switch {
+	case strings.HasPrefix(prompt, "echo slowly "):
+		full := "you said " + strings.TrimPrefix(prompt, "echo slowly ")
+		words := strings.Split(full, " ")
+		chunks := make([]string, len(words))
+		for i, w := range words {
+			if i < len(words)-1 {
+				chunks[i] = w + " "
+			} else {
+				chunks[i] = w
+			}
+		}
+		return turnPlan{chunks: chunks, delay: 250 * time.Millisecond}
 	case strings.HasPrefix(prompt, "echo "):
 		return turnPlan{chunks: []string{"you said " + strings.TrimPrefix(prompt, "echo ")}}
 	case prompt == "slow":

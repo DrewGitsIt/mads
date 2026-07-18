@@ -19,6 +19,15 @@ export class FakeEventSource {
     this.listeners.set(type, handlers);
   }
 
+  removeEventListener(type: string, handler: EventListener): void {
+    const handlers = this.listeners.get(type);
+    if (!handlers) return;
+    this.listeners.set(
+      type,
+      handlers.filter((h) => h !== handler),
+    );
+  }
+
   close(): void {
     this.closed = true;
   }
