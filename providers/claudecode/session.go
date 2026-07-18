@@ -61,6 +61,11 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		events:        make(chan provider.Event, 256),
 		ref:           opts.Resume,
 		mcpConfigPath: mcpConfigPath,
+		announced:     make(chan string, 1),
+	}
+	if opts.Resume != "" {
+		s.refFired = true
+		s.announced <- opts.Resume
 	}
 	go s.read(stdout)
 	return s, nil
@@ -71,6 +76,12 @@ type streamSession struct {
 	cmd           *exec.Cmd
 	events        chan provider.Event
 	mcpConfigPath string
+	// announced delivers ref exactly once — on Start for a resumed session,
+	// or from handleLine the moment the wire's system/init line carries a
+	// session_id (claude-code announces this at connect, before any turn:
+	// see fakeclaude_test.go's fcStream) — and closes with nothing sent if
+	// the process dies before that ever happens.
+	announced chan string
 
 	mu          sync.Mutex
 	stdin       io.WriteCloser
@@ -79,6 +90,7 @@ type streamSession struct {
 	interrupted bool // an interrupt was requested this turn
 	reqSeq      int
 	closed      bool
+	refFired    bool // guards announced against a double-send
 }
 
 // read is the sole owner of the events channel: it normalizes stdout lines
@@ -87,6 +99,14 @@ type streamSession struct {
 // providers/provider).
 func (s *streamSession) read(stdout io.Reader) {
 	defer close(s.events)
+	defer func() {
+		s.mu.Lock()
+		if !s.refFired {
+			s.refFired = true
+			close(s.announced)
+		}
+		s.mu.Unlock()
+	}()
 	r := bufio.NewReaderSize(stdout, 64*1024)
 	for {
 		raw, err := r.ReadBytes('\n')
@@ -107,6 +127,10 @@ func (s *streamSession) handleLine(raw []byte) {
 	s.mu.Lock()
 	if l.SessionID != "" {
 		s.ref = l.SessionID
+	}
+	if !s.refFired && s.ref != "" {
+		s.refFired = true
+		s.announced <- s.ref
 	}
 	if m := l.model(); m != "" {
 		s.model = m
@@ -133,6 +157,9 @@ func (s *streamSession) Ref() string {
 }
 
 func (s *streamSession) Mode() provider.Mode { return provider.ModeACP }
+
+// RefAnnounced implements provider.RefAnnouncer — see announced's doc comment.
+func (s *streamSession) RefAnnounced() <-chan string { return s.announced }
 
 func (s *streamSession) Events() <-chan provider.Event { return s.events }
 

@@ -29,6 +29,7 @@ best-effort research, not fact.
 | TrustLimited | **Emulated** | Enforced on the ACP transport by auto-denying `session/request_permission` requests for command-execution-kind tool calls (see below); on PTY, the corresponding restriction is a human declining kiro-cli's own interactive confirmation prompt, not an automated guarantee. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
 | TrustReadOnly | **Emulated** | Same mechanism, denying both command execution and file mutation kinds. Same ACP-vs-PTY asymmetry as TrustLimited. |
 | MCPServers | **Unsupported** | No documented flag or config mechanism threads an MCP server into kiro-cli's own launch was found in its public docs/GitHub issues (same citation bar as the rest of this table — kiro-cli is not installed in this environment). A session simply starts without the descriptor materialized; the L2c leader capability (`docs/LINKED-SESSIONS-DESIGN.md` item 5) never reaches a kiro-cli-backed agent. Revisit with `MADS_KIRO_SMOKE=1` against a real binary. |
+| RefAnnounce | **Emulated** | ACP's `session/new` response carries the ref synchronously, before `Start` even returns — no announcement subscription is needed there (Native-strength). The PTY transport prints nothing and has no on-disk transcript format to discover from (unlike claude-code) — a fresh terminal session's ref is simply never learned. Emulated is the honest one-row summary across both. |
 
 Net shape vs. claude-code: kiro-cli is **more capable** on ModelDiscovery,
 Interrupt, and Transcript (all Native here vs. claude-code's
@@ -39,6 +40,25 @@ both. MCPServers is also Unsupported here, unlike claude-code's Native
 `--mcp-config` wiring — the L2c orchestrate capability simply doesn't
 materialize for kiro-cli sessions. This asymmetry is the point of W7.1 —
 the matrix is not a copy of claude-code's.
+
+## Ref announcement, transport by transport
+
+`BehaviorRefAnnounce` (`providers/provider.RefAnnouncer`) lets the runner
+persist a session's provider-native ref the moment it's known, instead of
+only at turn end.
+
+- **ACP transport:** `startACP()` sets `s.ref` from `session/new`'s
+  synchronous JSON-RPC response before `Start` returns at all — so
+  `Session.Ref()` is already non-empty by the time the caller has a
+  session in hand. No `RefAnnouncer` implementation is needed; the runner's
+  early-return `if ref := sess.Ref(); ref != ""` path covers this case for
+  every provider, not just kiro-cli.
+- **PTY transport:** kiro-cli's `chat` REPL does not print its session id
+  anywhere on exit (kirodotdev/Kiro#7788), and unlike claude-code there is
+  no documented on-disk transcript format this adapter could discover a ref
+  from. `ptySession` simply does not implement `RefAnnouncer` — the
+  runner's `watchRefAnnounce` treats a missing interface as the same
+  "never announces" case as a closed-empty channel, so this never hangs.
 
 ## Trust enforcement, transport by transport
 

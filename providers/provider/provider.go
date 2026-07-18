@@ -176,3 +176,16 @@ type ModelDiscoverer interface {
 type TranscriptReader interface {
 	Transcript(ctx context.Context, ref string) ([]Message, error)
 }
+
+// RefAnnouncer is the optional strategy for BehaviorRefAnnounce: a session
+// whose Ref() is already non-empty at Start-return needs no subscription —
+// callers must check Ref() first. Otherwise, if the session implements this
+// interface, RefAnnounced returns a channel that delivers exactly one
+// non-empty ref and closes, or closes with no value sent if no announcement
+// will ever come (e.g. a transport that never announces, or PTY discovery
+// giving up). A session that will never announce and does not implement
+// this interface at all is the same "never" case — callers must not block
+// waiting for an interface assertion that isn't there.
+type RefAnnouncer interface {
+	RefAnnounced() <-chan string
+}

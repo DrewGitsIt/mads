@@ -97,6 +97,13 @@ func (p *Provider) Matrix() provider.Matrix {
 		// OnChunk set ⇒ --output-format stream-json --verbose, the same
 		// wire format the interactive transport already parses.
 		provider.BehaviorOneShotStream: provider.Native,
+		// The structured transport's system/init line announces the ref at
+		// connect (session.go); the terminal transport prints nothing, so a
+		// fresh PTY session's ref is instead discovered from the on-disk
+		// transcript (pty.go's watchRefDiscovery) — a weaker, best-effort
+		// mechanism than the wire announcement, hence Emulated as the
+		// one-row summary across both transports. See README.
+		provider.BehaviorRefAnnounce: provider.Emulated,
 	}
 }
 

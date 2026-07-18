@@ -149,12 +149,12 @@ type Runner struct {
 	turnAttributions map[int]contracts.Attribution
 
 	// lastRef is the last-observed provider-native ref, kept in sync by
-	// syncProviderRef as the provider announces it (see providers/
-	// claudecode/session.go: a fresh session's real ref is only learned late,
-	// off the wire) and kept even while sess == nil mid-switch. It's the
-	// SwitchTransport fallback when there's no outgoing session to read
-	// old.Ref() from directly, and Transcript falls back to it so the live
-	// transcript keeps serving during a switch instead of going blank.
+	// watchRefAnnounce as soon as the provider announces it (see providers/
+	// provider.RefAnnouncer) and by syncProviderRef as a turn-end fallback,
+	// and kept even while sess == nil mid-switch. It's the SwitchTransport
+	// fallback when there's no outgoing session to read old.Ref() from
+	// directly, and Transcript falls back to it so the live transcript
+	// keeps serving during a switch instead of going blank.
 	lastRef string
 
 	// prov and baseOpts are captured once at the end of Start and reused by
@@ -274,6 +274,8 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.baseOpts = opts
 	r.lastRef = provSess.Ref()
 	r.mu.Unlock()
+
+	r.watchRefAnnounce(ctx, provSess)
 
 	go r.pump(provSess)
 	return nil
@@ -628,6 +630,8 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	r.lastRef = newSess.Ref()
 	r.mu.Unlock()
 
+	r.watchRefAnnounce(ctx, newSess)
+
 	// Dispatch on the requested mode, not a type assertion on newSess: a
 	// concrete session type may structurally satisfy PTYSession (Terminal/
 	// Resize methods present) even when it was started in ACP mode and has
@@ -642,15 +646,11 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	return newSess.Ref(), nil
 }
 
-// syncProviderRef re-checks sess's provider-native ref and, if it has
-// changed since this runner last observed it (announced late by the
-// provider — see providers/claudecode/session.go), persists it to both
-// r.lastRef and the Data Service's session record. Called once per turn
-// end, not per event, so this is a cheap in-memory compare in the common
-// case (ref already known) and one Data Service round trip the one time it
-// changes.
-func (r *Runner) syncProviderRef(ctx context.Context, sess provider.Session) {
-	ref := sess.Ref()
+// persistProviderRef updates r.lastRef and, only if it actually changed,
+// writes the ref to the Data Service. Shared by the turn-end sync path
+// (syncProviderRef) and the eager announcement path (watchRefAnnounce) so
+// both funnel through one dedupe and one round trip.
+func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 	if ref == "" {
 		return
 	}
@@ -663,13 +663,47 @@ func (r *Runner) syncProviderRef(ctx context.Context, sess provider.Session) {
 	}
 	cur, err := r.data.Session(ctx, r.sessionID)
 	if err != nil {
-		log.Printf("runner: load session to sync provider ref: %v", err)
+		log.Printf("runner: load session to persist provider ref: %v", err)
 		return
 	}
 	cur.ProviderRef = ref
 	if err := r.data.UpdateSession(ctx, &cur); err != nil {
 		log.Printf("runner: persist provider ref: %v", err)
 	}
+}
+
+// syncProviderRef re-checks sess's provider-native ref and persists it if it
+// has changed since this runner last observed it. Called once per turn end,
+// not per event — the fallback path for providers/transports that never
+// announce eagerly (watchRefAnnounce below), and a no-op in the common case
+// where the ref was already captured at connect.
+func (r *Runner) syncProviderRef(ctx context.Context, sess provider.Session) {
+	r.persistProviderRef(ctx, sess.Ref())
+}
+
+// watchRefAnnounce persists sess's ref the moment it becomes known, without
+// polling. If Ref() is already non-empty (kiro-cli ACP, any resumed
+// session), persist synchronously right here. Otherwise, if the session
+// implements provider.RefAnnouncer, wait on its channel in a background
+// goroutine — a closed-empty receive (no announcement coming, e.g. PTY
+// discovery giving up or a transport with no mechanism at all) is a no-op,
+// not an error; syncProviderRef at turn end remains the fallback.
+func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
+	if ref := sess.Ref(); ref != "" {
+		r.persistProviderRef(ctx, ref)
+		return
+	}
+	announcer, ok := sess.(provider.RefAnnouncer)
+	if !ok {
+		return
+	}
+	go func() {
+		ref, ok := <-announcer.RefAnnounced()
+		if !ok || ref == "" {
+			return
+		}
+		r.persistProviderRef(context.Background(), ref)
+	}()
 }
 
 // TerminalWrite writes raw bytes to the current transport's pty, bypassing

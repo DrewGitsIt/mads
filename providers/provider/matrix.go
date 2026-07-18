@@ -71,6 +71,13 @@ const (
 	// with no incremental output mechanism simply never calls OnChunk; the
 	// engine falls back to a single end-of-run chunk.
 	BehaviorOneShotStream Behavior = "one_shot_stream"
+	// BehaviorRefAnnounce — the session's provider-native ref becomes knowable
+	// before the first turn completes, via RefAnnouncer, rather than only
+	// after a turn ends. Expected: every provider takes an honest stance, even
+	// if that stance ends up Unsupported for a transport with no mechanism at
+	// all (a provider is allowed to declare this Unsupported if it genuinely
+	// has nothing — none of the three shipped providers do).
+	BehaviorRefAnnounce Behavior = "ref_announce"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -122,6 +129,7 @@ var requirements = map[Behavior]Level{
 	BehaviorTrustLimited:   LevelExpected,
 	BehaviorTrustReadOnly:  LevelExpected,
 	BehaviorOneShotStream:  LevelOptional,
+	BehaviorRefAnnounce:    LevelExpected,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""

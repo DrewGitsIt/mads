@@ -18,7 +18,29 @@ type Scenario struct {
 	Name   string           `yaml:"name"`
 	Models []provider.Model `yaml:"models,omitempty"` // replaces the default list when set
 	Rules  []Rule           `yaml:"rules,omitempty"`
+	// RefAnnounce selects when a fresh session's ref becomes knowable —
+	// models the timing variance across real providers (BehaviorRefAnnounce)
+	// for conformance and runner tests. The zero value, RefAnnounceOnFirstTurn,
+	// matches the fake's long-standing default behavior.
+	RefAnnounce RefAnnounceTiming `yaml:"ref_announce,omitempty"`
 }
+
+// RefAnnounceTiming selects when a fake session's ref becomes knowable.
+type RefAnnounceTiming string
+
+const (
+	// RefAnnounceOnFirstTurn announces only once the first turn begins (the
+	// fake's original modeling of providers/claudecode's stream-json: a
+	// fresh session's real id is learned late, off the wire).
+	RefAnnounceOnFirstTurn RefAnnounceTiming = ""
+	// RefAnnounceOnConnect announces immediately at Start, before any turn —
+	// models a provider whose ref is known at connect time.
+	RefAnnounceOnConnect RefAnnounceTiming = "on_connect"
+	// RefAnnounceNever never announces — models a transport with no
+	// announcement mechanism at all (e.g. claude-code PTY with no
+	// discoverable transcript).
+	RefAnnounceNever RefAnnounceTiming = "never"
+)
 
 // Rule is one scripted response.
 type Rule struct {

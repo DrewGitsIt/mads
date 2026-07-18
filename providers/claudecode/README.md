@@ -23,6 +23,49 @@ history.
 | TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available. |
 | TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
+| RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing; a fresh PTY session's ref is instead discovered from the on-disk transcript, a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
+
+## Ref announcement, transport by transport
+
+`BehaviorRefAnnounce` (`providers/provider.RefAnnouncer`) lets the runner
+persist a session's provider-native ref the moment it's known, instead of
+only at turn end — the defense against a crash losing an unresumable
+session.
+
+**Structured transport:** `startStream()`'s `system`/`init` line already
+carries `session_id` before any user turn is sent (confirmed against the
+scripted stand-in's `fcStream`, which emits it immediately on connect,
+mirroring real claude-code 2.1.207 behavior). `handleLine` fires
+`streamSession.announced` the first time `session_id` is seen, which for a
+fresh session is on that very first line.
+
+**Terminal transport:** claude does not print a session id anywhere on the
+pty. Instead, `startPTY()` spawns `watchRefDiscovery()`, a bounded
+background poll (never blocking `Start`) that looks for a transcript under
+`TranscriptDir` that unambiguously belongs to this session:
+
+1. The file's mtime is after the PTY process was spawned (backdated by a
+   small margin to absorb clock/filesystem timestamp-granularity noise
+   between this process capturing the spawn time and the child's first
+   write, which can otherwise land a genuine transcript's mtime a few
+   microseconds "before" spawn).
+2. The transcript's own `cwd` field (present on every line) matches the
+   session's cwd — read via a small scan, not a reimplementation of claude's
+   undocumented path-slug scheme (`Transcript()`'s existing glob already
+   sidesteps that the same way).
+3. The same unambiguous, non-empty candidate is seen on two consecutive poll
+   ticks — proof it's a real, stable transcript. This is a stability check,
+   not a literal growth-between-ticks check: a fast turn can write its whole
+   transcript in well under one 750ms tick, so by the time discovery first
+   observes the file it may already be done growing.
+
+Two or more surviving candidates is treated exactly like zero: discovery
+declines rather than guesses, because a wrong ref would silently resume
+someone else's conversation, which is worse than no ref. If discovery never
+finds an unambiguous candidate before the session closes, the ref is simply
+never announced — logged, never surfaced to the user as an error, and the
+session works exactly as it did before this mechanism existed (resume-less
+until reattached with an explicit ref).
 
 ## Trust enforcement, transport by transport
 

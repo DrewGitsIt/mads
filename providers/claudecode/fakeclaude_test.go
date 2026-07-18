@@ -329,6 +329,18 @@ func fcStream(a fcArgs) {
 // fcTerminal mimics the interactive UI for PTY probes: prompt, echo, prompt.
 func fcTerminal(a fcArgs) {
 	fmt.Print("> ")
+	// Mirrors real claude-code PTY behavior: the transcript file appears
+	// only once the first prompt is submitted, never at process spawn — a
+	// fresh id since the terminal transport never announces one to resume.
+	dir := os.Getenv("MADS_FAKE_CLAUDE_DIR")
+	id := a.resume
+	if id == "" {
+		id = fmt.Sprintf("fc-%d", os.Getpid())
+	}
+	transcript := ""
+	if dir != "" {
+		transcript = filepath.Join(dir, "proj", id+".jsonl")
+	}
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		text := strings.TrimSpace(sc.Text())
@@ -337,15 +349,20 @@ func fcTerminal(a fcArgs) {
 			continue
 		}
 		reply, crash := fcReply(text, nil)
+		fcAppendTranscript(transcript, "user", text, "")
 		if crash {
 			os.Exit(1)
 		}
+		fcAppendTranscript(transcript, "assistant", reply, "")
 		fmt.Printf("%s\r\n> ", reply)
 	}
 }
 
 // fcAppendTranscript writes claude's on-disk transcript format — string
-// content for user lines, block content for assistant lines.
+// content for user lines, block content for assistant lines. Every line
+// carries cwd (the subprocess's own working directory, set via cmd.Dir by
+// the real adapter) — discoverRef's candidate filter reads exactly this
+// field back.
 func fcAppendTranscript(path, role, text, toolPath string) {
 	if path == "" {
 		return
@@ -356,19 +373,20 @@ func fcAppendTranscript(path, role, text, toolPath string) {
 		return
 	}
 	defer func() { _ = f.Close() }()
+	cwd, _ := os.Getwd()
 	var line map[string]any
 	switch {
 	case role == "user":
-		line = map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}}
+		line = map[string]any{"type": "user", "cwd": cwd, "message": map[string]any{"role": "user", "content": text}}
 	case toolPath != "":
-		line = map[string]any{"type": "assistant", "message": map[string]any{
+		line = map[string]any{"type": "assistant", "cwd": cwd, "message": map[string]any{
 			"role": "assistant",
 			"content": []map[string]any{{
 				"type": "tool_use", "name": "Edit", "input": map[string]any{"file_path": toolPath},
 			}},
 		}}
 	default:
-		line = map[string]any{"type": "assistant", "message": map[string]any{
+		line = map[string]any{"type": "assistant", "cwd": cwd, "message": map[string]any{
 			"role":    "assistant",
 			"content": []map[string]any{{"type": "text", "text": text}},
 		}}

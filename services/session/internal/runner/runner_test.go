@@ -867,3 +867,157 @@ func TestTurnEndDigestDoesNotLeakAcrossTurns(t *testing.T) {
 		t.Fatalf("deltas = %q, %q, want each scoped to its own turn", first.Delta, second.Delta)
 	}
 }
+
+// TestProviderRefPersistedOnConnect is the acceptance test for the
+// announce-on-connect fake timing: a fresh session's ProviderRef must be
+// persisted before any turn even begins, not just before it completes.
+func TestProviderRefPersistedOnConnect(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "on-connect", RefAnnounce: fake.RefAnnounceOnConnect})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(f); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef == "" {
+		t.Fatal("provider_ref empty right after Start for an on_connect fake, want it persisted before any turn")
+	}
+}
+
+// TestProviderRefAnnouncedDuringTurnNotJustAtEnd proves watchRefAnnounce's
+// eager path, not just syncProviderRef's turn-end fallback: for the default
+// (first-turn) fake timing, the ref must land in the Data Service while a
+// turn is still streaming, not only once it finishes. "slow" streams
+// indefinitely until interrupted, giving a wide window to observe this.
+func TestProviderRefAnnouncedDuringTurnNotJustAtEnd(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef != "" {
+		t.Fatalf("provider_ref = %q right after Start, want empty (fresh session, unannounced)", got.ProviderRef)
+	}
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	// Drain a couple of "slow" events so the turn is genuinely in flight,
+	// then check the ref landed without waiting for turn end.
+	deadline := time.After(5 * time.Second)
+	seen := false
+	for !seen {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before turn_end")
+			}
+			if ev.Kind == provider.EventText {
+				seen = true
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the slow turn to produce any text")
+		}
+	}
+
+	pollDeadline := time.After(5 * time.Second)
+	for {
+		mid, err := data.Session(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("load session: %v", err)
+		}
+		if mid.ProviderRef != "" {
+			break
+		}
+		select {
+		case <-pollDeadline:
+			t.Fatal("provider_ref never persisted while the turn was still in flight")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	drainText(t, ch)
+}
+
+// TestRefAnnounceNeverDoesNotHang proves the never-announcing fake timing
+// (modeling a transport with no announcement mechanism at all, e.g.
+// claude-code PTY when discovery gives up) never blocks Start, a turn, or
+// Shutdown, and leaves ProviderRef empty exactly like an un-resumable
+// session does today.
+func TestRefAnnounceNeverDoesNotHang(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "never", RefAnnounce: fake.RefAnnounceNever})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(f); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	if err := r.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef != "" {
+		t.Fatalf("provider_ref = %q, want empty: a never-announcing transport must never learn a ref", got.ProviderRef)
+	}
+}
