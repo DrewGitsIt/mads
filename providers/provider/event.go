@@ -50,6 +50,12 @@ type Usage struct {
 	InputTokens  int    `json:"input_tokens"`
 	OutputTokens int    `json:"output_tokens"`
 	Model        string `json:"model,omitempty"`
+	// CacheCreationInputTokens and CacheReadInputTokens are the prompt-cache
+	// halves of context Claude Code bills separately from InputTokens —
+	// without them InputTokens wildly understates real context on any turn
+	// that hit the cache.
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 	// CostUSD is the caller-computed dollar cost, when the provider reports
 	// it (BehaviorCostReporting). Zero when unknown — the platform does no
 	// pricing math of its own (spec §11's hookpoint for usage.recorded).

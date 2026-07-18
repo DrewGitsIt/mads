@@ -61,6 +61,9 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	if res.Usage.CostUSD != 0.0212739 {
 		t.Errorf("cost: %v, want total_cost_usd from the fixture", res.Usage.CostUSD)
 	}
+	if res.Usage.CacheCreationInputTokens != 8827 || res.Usage.CacheReadInputTokens != 28169 {
+		t.Errorf("cache usage: %+v, want cache_creation_input_tokens 8827 and cache_read_input_tokens 28169 from the fixture", res.Usage)
+	}
 }
 
 // OnEvent switches OneShot to the stream-json wire format and fires as

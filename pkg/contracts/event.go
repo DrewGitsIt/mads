@@ -218,9 +218,14 @@ const (
 	// caller-computed dollar cost — the Data Service does no pricing math itself). SessionID
 	// is always set; TaskID is set for a pipeline stage's usage, empty for an interactive
 	// session turn. Payload: {"model": string, "input_tokens": int, "output_tokens": int,
-	// "cost_usd": float64}. Emission is future wiring (services/session's runner on
-	// EventTurnEnd, services/pipeline's stage runs); W5.7's cost metrics view is the
-	// consumer this type exists for.
+	// "cache_creation_input_tokens": int, "cache_read_input_tokens": int, "cost_usd":
+	// float64, "stage": string, "attempt": int}. stage/attempt attribute a pipeline
+	// one-shot to the template stage and loop iteration that produced it — empty/zero for
+	// an interactive session turn. All fields are additive: events recorded before a given
+	// field existed simply lack that key, which readers must treat as unknown, not zero.
+	// Emission from services/pipeline's stage runs is live; services/session's runner on
+	// EventTurnEnd is future wiring. W5.7's cost metrics view is the consumer this type
+	// exists for.
 	UsageRecorded EventType = "usage.recorded"
 	// CapabilityInvoked fires when a session injects or calls a declared capability
 	// mid-turn — skill injection or an MCP tool use (spec §12.4). Payload: {"capability":

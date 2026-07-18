@@ -682,7 +682,7 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 		log.close("error", err.Error())
 		return "", fmt.Errorf("agent %s: %w", name, err)
 	}
-	e.recordUsage(ctx, task.ID, res.Usage)
+	e.recordUsage(ctx, task.ID, st.Name, attempt, res.Usage)
 	if line := lastLine(res.Text); strings.HasPrefix(strings.ToUpper(line), strings.ToUpper(FailMarker)) {
 		log.close("fail", res.Text)
 		return res.Text, fmt.Errorf("agent %s failed the stage: %s", name, line)
@@ -729,15 +729,21 @@ func (e *engine) note(ctx context.Context, taskID string, kind contracts.NoteTyp
 }
 
 // recordUsage posts a usage.recorded event for one agent one-shot (spec §8's
-// cost metrics hookpoint). Best-effort: a post that fails never fails the
-// stage — the one-shot already succeeded, and cost data is a nice-to-have,
-// not a correctness gate.
-func (e *engine) recordUsage(ctx context.Context, taskID string, usage provider.Usage) {
+// cost metrics hookpoint). stage and attempt attribute the shot directly —
+// without them, per-stage cost analysis needs a fragile seq-adjacency join
+// against stage.completed, which breaks under interleaved histories.
+// Best-effort: a post that fails never fails the stage — the one-shot
+// already succeeded, and cost data is a nice-to-have, not a correctness gate.
+func (e *engine) recordUsage(ctx context.Context, taskID, stage string, attempt int, usage provider.Usage) {
 	raw, err := json.Marshal(map[string]any{
-		"model":         usage.Model,
-		"input_tokens":  usage.InputTokens,
-		"output_tokens": usage.OutputTokens,
-		"cost_usd":      usage.CostUSD,
+		"model":                       usage.Model,
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+		"cache_read_input_tokens":     usage.CacheReadInputTokens,
+		"cost_usd":                    usage.CostUSD,
+		"stage":                       stage,
+		"attempt":                     attempt,
 	})
 	if err != nil {
 		raw = []byte(`{}`)

@@ -127,3 +127,51 @@ func TestUsageRecordFailureDoesNotBlockStage(t *testing.T) {
 		t.Errorf("cost metrics: %+v, want none — every usage post was made to fail", got)
 	}
 }
+
+// usage.recorded names the stage that ran the shot and its loop attempt
+// number, so per-stage cost analysis doesn't need a fragile seq-adjacency
+// join against stage.completed (which breaks under interleaved histories).
+// code_review fails every time and loops back to executor (default
+// template), so code_review itself runs three times (initial + two
+// loop-backs) — its own attempt count must climb 1, 2, 3 across those runs.
+func TestUsageRecordedNamesStageAndAttempt(t *testing.T) {
+	h := newHarness(t)
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "review-fail-attribution", Rules: []fake.Rule{
+		{Match: "code_review\nTask: flaky api", Reply: "This won't do.\nSTAGE: fail — missing error handling"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.seed(contracts.Task{Title: "flaky api", Labels: []string{"trivial"}})
+
+	h.run(t, f, h.defaultTemplate(), 1)
+
+	type stageAttempt struct {
+		Stage   string `json:"stage"`
+		Attempt int    `json:"attempt"`
+	}
+	var executorAttempts, codeReviewAttempts []int
+	for _, ev := range h.events(t, "usage.recorded") {
+		var p stageAttempt
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		switch p.Stage {
+		case "executor":
+			executorAttempts = append(executorAttempts, p.Attempt)
+		case "code_review":
+			codeReviewAttempts = append(codeReviewAttempts, p.Attempt)
+		case "":
+			t.Errorf("usage.recorded missing stage: %s", ev.Payload)
+		default:
+			t.Errorf("usage.recorded for unexpected stage: %s", ev.Payload)
+		}
+	}
+	if len(executorAttempts) != 3 {
+		t.Errorf("executor usage.recorded events: %v, want 3 (one per loop-back re-run)", executorAttempts)
+	}
+	if want := []int{1, 2, 3}; len(codeReviewAttempts) != len(want) ||
+		codeReviewAttempts[0] != want[0] || codeReviewAttempts[1] != want[1] || codeReviewAttempts[2] != want[2] {
+		t.Errorf("code_review attempts: %v, want %v (climbing across its own loop-backs)", codeReviewAttempts, want)
+	}
+}

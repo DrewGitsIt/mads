@@ -269,6 +269,8 @@ func parseOneShot(raw []byte) (*provider.OneShotResult, error) {
 	if l.Usage != nil {
 		res.Usage.InputTokens = l.Usage.InputTokens
 		res.Usage.OutputTokens = l.Usage.OutputTokens
+		res.Usage.CacheCreationInputTokens = l.Usage.CacheCreationInputTokens
+		res.Usage.CacheReadInputTokens = l.Usage.CacheReadInputTokens
 		res.Usage.Model = l.model()
 	}
 	return res, nil
