@@ -184,12 +184,23 @@ export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
   }
 }
 
+// Wraps foldReducer so the same useReducer can also accept a pre-folded
+// seed state (the historical prefix of an in-flight run) without changing
+// foldReducer's own signature, which usePipelineRunHistory.ts depends on.
+type RunAction = { kind: "envelope"; env: Envelope } | { kind: "seed"; state: RunFoldState };
+
+function runReducer(state: RunFoldState, action: RunAction): RunFoldState {
+  return action.kind === "seed" ? action.state : foldReducer(state, action.env);
+}
+
 export interface UsePipelineRunResult {
   tasks: Task[];
   loading: boolean;
   error: string | null;
+  resuming: boolean;
   phase: RunPhase;
   outcome?: string;
+  runStartSeq?: number;
   runStartedAt?: string;
   runEndedAt?: string;
   columns: string[];
@@ -205,7 +216,8 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [runState, dispatch] = useReducer(foldReducer, initialRunFoldState);
+  const [resuming, setResuming] = useState(true);
+  const [runState, dispatch] = useReducer(runReducer, initialRunFoldState);
   const mounted = useRef(true);
 
   const refetchTasks = useCallback(async () => {
@@ -222,22 +234,54 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
   useEffect(() => {
     mounted.current = true;
     void refetchTasks();
-    const unsubscribe = subscribeToEvents({ sessionId, types: WORKSPACE_SESSION_EVENT_TYPES }, (env) => {
-      if (FOLD_EVENT_TYPES.includes(env.type)) dispatch(env);
-      if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
-    });
+    let unsubscribe: (() => void) | undefined;
+
+    async function resumeAndSubscribe() {
+      let since: number | undefined;
+      try {
+        const runs = await client.listRuns(sessionId);
+        const inFlight = runs.find((r) => r.outcome === "running");
+        if (inFlight) {
+          const events = await client.getRunEvents(sessionId, inFlight.run_seq - 1);
+          if (!mounted.current) return;
+          const seeded = events.reduce(foldReducer, initialRunFoldState);
+          dispatch({ kind: "seed", state: seeded });
+          since = events.length > 0 ? Math.max(...events.map((e) => e.seq)) : inFlight.run_seq - 1;
+        }
+      } catch {
+        // Best-effort: fall through to a live-only tail, same as today's behavior.
+      }
+      if (!mounted.current) return;
+      setResuming(false);
+      // `since` is only set when resuming an in-flight run — that gives this
+      // mount a dedicated SSE connection outside events.ts's pool-by-URL
+      // (types+sessionId+since), instead of sharing the pool with
+      // SessionWorkspace/ConversationTab/MergeBackFlow. Accepted trade-off
+      // (HANDOFF.md §2c) — don't "fix" this into always omitting `since`.
+      unsubscribe = subscribeToEvents(
+        { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES, since },
+        (env) => {
+          if (FOLD_EVENT_TYPES.includes(env.type)) dispatch({ kind: "envelope", env });
+          if (METADATA_EVENT_TYPES.includes(env.type)) void refetchTasks();
+        },
+      );
+    }
+
+    void resumeAndSubscribe();
     return () => {
       mounted.current = false;
-      unsubscribe();
+      unsubscribe?.();
     };
-  }, [refetchTasks, sessionId]);
+  }, [client, refetchTasks, sessionId]);
 
   return {
     tasks,
     loading,
     error,
+    resuming,
     phase: runState.phase,
     outcome: runState.outcome,
+    runStartSeq: runState.runStartSeq,
     runStartedAt: runState.runStartedAt,
     runEndedAt: runState.runEndedAt,
     columns: runState.columns,

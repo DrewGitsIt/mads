@@ -322,3 +322,27 @@ export async function pollTranscriptContains(
   }
   throw new Error(`pollTranscriptContains: ${sessionID} transcript never contained "${textSubstring}"`);
 }
+
+/**
+ * Polls the Router's batch GET /events endpoint until it has recorded at
+ * least one envelope of the given type — decouples "wait for the pipeline
+ * to actually be mid-run" from navigating to the UI, so a resume-on-mount
+ * journey can start the run first and mount the tab after (pipeline/HANDOFF.md §6).
+ */
+export async function pollEventOfType(
+  routerURL: string,
+  sessionId: string,
+  eventType: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${routerURL}/events?session_id=${sessionId}&types=${eventType}`);
+    if (res.ok) {
+      const events = (await res.json()) as { type: string }[];
+      if (events.some((e) => e.type === eventType)) return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`pollEventOfType: ${sessionId} never emitted ${eventType}`);
+}

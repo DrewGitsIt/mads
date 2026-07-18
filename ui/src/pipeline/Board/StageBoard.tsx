@@ -51,7 +51,7 @@ export function StageBoard({ columns, tasks, taskRunState, onSelectTask }: Stage
   return (
     <div className={styles.board}>
       {board.map((column) => (
-        <div className={styles.column} key={column.id}>
+        <div className={styles.column} key={column.id} data-testid={`stage-column-${column.id}`}>
           <div className={styles.columnHeader}>
             <span className={styles.columnLabel}>{column.label}</span>
             <span className={styles.columnCount}>{column.tasks.length}</span>
