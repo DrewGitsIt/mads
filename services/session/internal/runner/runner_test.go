@@ -1021,3 +1021,229 @@ func TestRefAnnounceNeverDoesNotHang(t *testing.T) {
 		t.Fatalf("provider_ref = %q, want empty: a never-announcing transport must never learn a ref", got.ProviderRef)
 	}
 }
+
+// TestRefLocatePTYDiscoversRefFromScriptedLocator is the acceptance test for
+// the SessionLocator backstop on a PTY-mode session whose wire announcement
+// never arrives: Send arms the backstop with the exact first message, and
+// the fake's scripted LocateRef (standing in for claude-code's
+// history.jsonl/transcript scan) lands as the persisted ProviderRef.
+func TestRefLocatePTYDiscoversRefFromScriptedLocator(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	lf, err := fake.NewLocatingWithScenario(fake.Scenario{
+		Name:        "pty-locate",
+		RefAnnounce: fake.RefAnnounceNever,
+		LocateRef:   "located-ref-pty",
+		LocateDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(lf); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	// Switch to PTY before any turn: the first Send below arms the backstop
+	// for a genuinely PTY-mode session, not just ACP.
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != nil {
+		t.Fatalf("switch to pty: %v", err)
+	}
+
+	// RefAnnounceNever means the fake session's own Ref() never becomes
+	// non-empty (it models a transport with no self-reported ref at all), so
+	// neither Transcript() (which prefers the live session's Ref()) nor the
+	// hub (pumpPTY never rebroadcasts turn_end) can observe this turn — only
+	// the Data Service's persisted ProviderRef, written by the backstop, can.
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	pollDeadline := time.After(5 * time.Second)
+	for {
+		got, err := data.Session(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("load session: %v", err)
+		}
+		if got.ProviderRef == "located-ref-pty" {
+			break
+		}
+		select {
+		case <-pollDeadline:
+			t.Fatalf("provider_ref never became the locator's ref, got %q", got.ProviderRef)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestRefLocateNoSessionLocatorNeverHangs proves a provider with no
+// SessionLocator implementation at all behaves exactly like
+// TestRefAnnounceNeverDoesNotHang on PTY: ProviderRef stays empty forever,
+// Send and Shutdown never block on the missing backstop.
+func TestRefLocateNoSessionLocatorNeverHangs(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "no-locator", RefAnnounce: fake.RefAnnounceNever})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(f); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != nil {
+		t.Fatalf("switch to pty: %v", err)
+	}
+
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	// No transcript/hub signal is available for a RefAnnounceNever PTY
+	// session (see TestRefLocatePTYDiscoversRefFromScriptedLocator); a short
+	// settle window stands in for "the turn had a chance to run" before
+	// proving Shutdown itself doesn't hang.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := r.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef != "" {
+		t.Fatalf("provider_ref = %q, want empty: a provider with no SessionLocator must never learn a ref", got.ProviderRef)
+	}
+}
+
+// TestRefLocateACPDiscoversRefFromScriptedLocator is the ACP-transport twin
+// of TestRefLocatePTYDiscoversRefFromScriptedLocator: same backstop, same
+// scripted locator, exercised without ever switching transport.
+func TestRefLocateACPDiscoversRefFromScriptedLocator(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	lf, err := fake.NewLocatingWithScenario(fake.Scenario{
+		Name:        "acp-locate",
+		RefAnnounce: fake.RefAnnounceNever,
+		LocateRef:   "located-ref-acp",
+		LocateDelay: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(lf); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	pollDeadline := time.After(5 * time.Second)
+	for {
+		got, err := data.Session(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("load session: %v", err)
+		}
+		if got.ProviderRef == "located-ref-acp" {
+			break
+		}
+		select {
+		case <-pollDeadline:
+			t.Fatalf("provider_ref never became the locator's ref, got %q", got.ProviderRef)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// TestRefLocateNeverOverridesWireAnnouncement proves the wire announcement
+// stays authoritative even when a SessionLocator is scripted and would
+// resolve to a different ref: on RefAnnounceOnConnect, Ref() is already
+// non-empty before the first Send, so Send's arm condition (r.lastRef == "")
+// never fires and the backstop never runs at all — persistProviderRef's
+// dedupe is never even asked to break a tie.
+func TestRefLocateNeverOverridesWireAnnouncement(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	lf, err := fake.NewLocatingWithScenario(fake.Scenario{
+		Name:        "on-connect-with-locator",
+		RefAnnounce: fake.RefAnnounceOnConnect,
+		LocateRef:   "wrong-ref-from-locator",
+		LocateDelay: 5 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("scenario: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(lf); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	announced, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if announced.ProviderRef == "" || announced.ProviderRef == "wrong-ref-from-locator" {
+		t.Fatalf("provider_ref = %q right after Start, want the announced on-connect ref", announced.ProviderRef)
+	}
+	wantRef := announced.ProviderRef
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	// Give the scripted locator's delay plenty of margin to have fired if it
+	// were ever going to run.
+	time.Sleep(50 * time.Millisecond)
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if got.ProviderRef != wantRef {
+		t.Fatalf("provider_ref = %q after a scripted-wrong locator had time to fire, want unchanged %q", got.ProviderRef, wantRef)
+	}
+}

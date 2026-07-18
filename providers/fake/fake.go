@@ -597,3 +597,41 @@ type terminal struct {
 	io.Reader
 	io.Writer
 }
+
+// LocatingFake wraps Fake to add provider.SessionLocator support, scripted
+// via Scenario.LocateRef/LocateDelay. Kept as a distinct type from Fake
+// rather than a method on Fake itself: Go interface satisfaction is
+// structural, so a LocateSession method on Fake would make every fake
+// locate-capable with no way to model "this provider has no SessionLocator
+// at all" — a case runner tests need to cover alongside the scripted-hit
+// and scripted-never-finds cases.
+type LocatingFake struct {
+	*Fake
+}
+
+// NewLocatingWithScenario returns a fake scripted by sc (validated) that
+// also implements provider.SessionLocator.
+func NewLocatingWithScenario(sc Scenario) (*LocatingFake, error) {
+	f, err := NewWithScenario(sc)
+	if err != nil {
+		return nil, err
+	}
+	return &LocatingFake{Fake: f}, nil
+}
+
+// LocateSession implements provider.SessionLocator: it resolves to
+// Scenario.LocateRef after Scenario.LocateDelay, or declines (empty
+// LocateRef, or ctx done first) — the scripted stand-in for a real
+// provider's history/transcript scan.
+func (lf *LocatingFake) LocateSession(ctx context.Context, cwd string, spawnedAfter time.Time, firstMessage string) (string, bool) {
+	if lf.scenario.LocateRef == "" {
+		<-ctx.Done()
+		return "", false
+	}
+	select {
+	case <-time.After(lf.scenario.LocateDelay):
+		return lf.scenario.LocateRef, true
+	case <-ctx.Done():
+		return "", false
+	}
+}

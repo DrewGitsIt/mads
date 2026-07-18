@@ -189,3 +189,18 @@ type TranscriptReader interface {
 type RefAnnouncer interface {
 	RefAnnounced() <-chan string
 }
+
+// SessionLocator is the optional strategy backing BehaviorRefAnnounce when a
+// session has no wire-level announcement (PTY) or the announcement never
+// arrives (a dropped/degraded structured session). It identifies the
+// session started in cwd no earlier than spawnedAfter whose first user turn
+// was firstMessage — content correlation against the provider's own local
+// session index/transcripts, not a heuristic. Implementations must verify
+// any candidate before returning it and decline on ambiguity: ok=false on 0
+// or 2+ matching candidates, timeout, or cancellation. A wrong ref would
+// silently resume someone else's conversation, so guessing is never
+// acceptable — callers may call LocateSession repeatedly (best-effort
+// forever) until ctx is done.
+type SessionLocator interface {
+	LocateSession(ctx context.Context, cwd string, spawnedAfter time.Time, firstMessage string) (ref string, ok bool)
+}

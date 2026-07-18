@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -23,6 +24,16 @@ type Scenario struct {
 	// for conformance and runner tests. The zero value, RefAnnounceOnFirstTurn,
 	// matches the fake's long-standing default behavior.
 	RefAnnounce RefAnnounceTiming `yaml:"ref_announce,omitempty"`
+	// LocateRef scripts provider.SessionLocator support (see LocatingFake):
+	// the ref LocateSession returns once LocateDelay elapses. Empty models a
+	// locate attempt that never finds a match — a scenario that wants "no
+	// SessionLocator at all" should use plain Fake (NewWithScenario) instead
+	// of LocatingFake, since Go interface satisfaction can't be toggled at
+	// runtime on a single type.
+	LocateRef string `yaml:"locate_ref,omitempty"`
+	// LocateDelay simulates the latency of a real locate scan (history.jsonl
+	// / transcript polling) before LocateSession resolves.
+	LocateDelay time.Duration `yaml:"locate_delay,omitempty"`
 }
 
 // RefAnnounceTiming selects when a fake session's ref becomes knowable.

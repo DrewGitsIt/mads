@@ -59,6 +59,11 @@ only at turn end.
   from. `ptySession` simply does not implement `RefAnnouncer` — the
   runner's `watchRefAnnounce` treats a missing interface as the same
   "never announces" case as a closed-empty channel, so this never hangs.
+  `Provider` also does not implement `providers/provider.SessionLocator`
+  (no `LocateSession` method): claude-code's backstop content-correlates
+  against its own local `history.jsonl` index and on-disk transcripts,
+  and kiro-cli has neither, so there is nothing for a locator to scan. A
+  fresh PTY session's ref is simply never learned by any mechanism.
 
 ## Trust enforcement, transport by transport
 

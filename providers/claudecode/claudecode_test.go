@@ -312,12 +312,14 @@ func TestStartStreamMCPServersMatchesOrchestrateShape(t *testing.T) {
 
 // The terminal transport wires the identical --mcp-config/--strict-mcp-config
 // args and file — the task's "BOTH transports" requirement.
-// TestPTYSessionDiscoversRefFromTranscript proves BehaviorRefAnnounce's PTY
-// path end to end: a fresh terminal session has no ref at Start, but once
-// the scripted stand-in writes its transcript (mimicking real timing — see
-// fcTerminal) and a second turn proves the file is still actively growing,
-// discovery announces it and Ref() reflects the same value.
-func TestPTYSessionDiscoversRefFromTranscript(t *testing.T) {
+// TestPTYSessionHasNoSelfDiscovery documents the current split of
+// responsibility: claude prints no session id on the terminal transport, so
+// a fresh ptySession's Ref() starts and stays empty, and the session no
+// longer implements provider.RefAnnouncer — discovery is the Runner's job
+// now, driven by calling Provider.LocateSession (locate.go, see
+// TestLocateSession* in locate_test.go for the content-correlation coverage
+// this superseded).
+func TestPTYSessionHasNoSelfDiscovery(t *testing.T) {
 	p := testProvider(t)
 	cwd := t.TempDir()
 	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModePTY, Cwd: cwd})
@@ -335,81 +337,15 @@ func TestPTYSessionDiscoversRefFromTranscript(t *testing.T) {
 	if sess.Ref() != "" {
 		t.Fatalf("Ref() = %q right after Start, want empty (fresh pty session, undiscovered)", sess.Ref())
 	}
-
 	if err := sess.Send(context.Background(), "echo hi"); err != nil {
 		t.Fatalf("send: %v", err)
 	}
-	// Let the discovery loop's first tick (750ms) observe the file at its
-	// post-first-turn size before a second turn grows it further — proof
-	// the candidate is actively being written, not a stale leftover.
-	time.Sleep(900 * time.Millisecond)
-	if err := sess.Send(context.Background(), "echo bye"); err != nil {
-		t.Fatalf("send: %v", err)
+	time.Sleep(50 * time.Millisecond)
+	if sess.Ref() != "" {
+		t.Fatalf("Ref() = %q after a turn, want empty: ptySession no longer self-discovers", sess.Ref())
 	}
-
-	announcer, ok := sess.(provider.RefAnnouncer)
-	if !ok {
-		t.Fatal("ptySession does not implement RefAnnouncer")
-	}
-	select {
-	case ref, ok := <-announcer.RefAnnounced():
-		if !ok || ref == "" {
-			t.Fatal("RefAnnounced closed with no ref, want a discovered ref")
-		}
-		if got := sess.Ref(); got != ref {
-			t.Fatalf("Ref() = %q after announcement, want %q", got, ref)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("timed out waiting for pty ref discovery")
-	}
-}
-
-// TestPTYSessionAmbiguousDiscoveryNeverAnnounces proves the decline path: a
-// second candidate transcript with the same cwd, planted alongside the
-// session's own real one, must make discovery decline rather than guess —
-// a wrong ref would silently resume someone else's conversation, which is
-// worse than no ref.
-func TestPTYSessionAmbiguousDiscoveryNeverAnnounces(t *testing.T) {
-	p := testProvider(t)
-	cwd := t.TempDir()
-	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModePTY, Cwd: cwd})
-	if err != nil {
-		t.Fatalf("start pty: %v", err)
-	}
-
-	pty, ok := sess.(provider.PTYSession)
-	if !ok {
-		t.Fatal("session does not implement PTYSession")
-	}
-	go func() { _, _ = io.Copy(io.Discard, pty.Terminal()) }()
-
-	if err := sess.Send(context.Background(), "echo hi"); err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond) // let the real transcript's first write land first
-	writeTranscriptFixture(t, p.cfg.TranscriptDir, "proj-collision", "planted-collision", cwd)
-
-	announcer := sess.(provider.RefAnnouncer)
-	select {
-	case ref, ok := <-announcer.RefAnnounced():
-		t.Fatalf("RefAnnounced fired (ok=%v ref=%q) despite an ambiguous pair of candidates", ok, ref)
-	case <-time.After(2 * time.Second):
-		// expected: discovery must keep declining while both candidates exist.
-	}
-
-	if err := sess.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-	select {
-	case ref, ok := <-announcer.RefAnnounced():
-		if ok && ref != "" {
-			t.Fatalf("RefAnnounced delivered %q after Close, want a closed empty channel", ref)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("RefAnnounced never closed after Close")
-	}
-	if got := sess.Ref(); got != "" {
-		t.Fatalf("Ref() = %q, want empty: ambiguous discovery must never guess", got)
+	if _, ok := sess.(provider.RefAnnouncer); ok {
+		t.Fatal("ptySession implements RefAnnouncer, want false: discovery moved to the Runner+SessionLocator")
 	}
 }
 
