@@ -240,6 +240,44 @@ export interface TranscriptMessage {
   attribution?: Attribution;
 }
 
+// mirrors pkg/contracts/link.go Grant
+export type Grant = "read" | "inject" | "orchestrate";
+
+// mirrors pkg/contracts/link.go LinkPreset. "hand_raiser" is system-only —
+// never offered via the user-facing link chooser or the user CRUD route.
+export type LinkPreset = "monitor" | "hand_raiser" | "leader";
+
+// mirrors pkg/contracts/link.go PresetGrants
+export const PRESET_GRANTS: Record<LinkPreset, Grant[]> = {
+  monitor: ["read"],
+  hand_raiser: ["read", "inject"],
+  leader: ["read", "inject", "orchestrate"],
+};
+
+// mirrors pkg/contracts/link.go LinkCadence
+export type LinkCadence = "per_turn" | "manual_only";
+
+// mirrors pkg/contracts/link.go Link
+export interface Link {
+  id: string;
+  granting_session_id: string;
+  subject_session_id: string;
+  grants: Grant[];
+  cadence: LinkCadence;
+  implicit?: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// mirrors pkg/contracts/link.go LinkRequest
+export interface LinkRequest {
+  granting_session_id: string;
+  subject_session_id: string;
+  grants?: Grant[];
+  preset?: LinkPreset;
+  cadence?: LinkCadence;
+}
+
 // mirrors providers/provider/event.go Event (normalized data-plane stream)
 export type StreamEvent =
   | { kind: "text"; text: string }

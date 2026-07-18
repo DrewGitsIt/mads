@@ -6,8 +6,9 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
-import { SESSION_EVENT_TYPES } from "../router/sessionEventTypes";
+import { WORKSPACE_SESSION_EVENT_TYPES } from "../router/sessionEventTypes";
 import type { Session, TranscriptMessage } from "../router/types";
+import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
@@ -78,6 +79,7 @@ export function ConversationTab({
   const [shellOpen, setShellOpen] = useState(false);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
+  const links = useSessionLinks([sessionId]);
 
   useEffect(() => {
     const handler = () => setShellOpen((x) => !x);
@@ -115,9 +117,25 @@ export function ConversationTab({
     void routerClient.getSession(sessionId).then(setSession);
   }, [routerClient, sessionId]);
 
+  // Shares SessionWorkspace's session-scoped subscription (see
+  // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own — GET
+  // /transcript has no push notification of its own (see pollForReply
+  // below), and a linked-session inject/digest lands on this session's
+  // transcript out of band from anything this viewer sent, so it needs a
+  // server-scoped trigger to refetch rather than waiting on a poll that
+  // never starts.
   useEffect(() => {
-    return subscribeToEvents({ sessionId, types: SESSION_EVENT_TYPES }, refetchSession);
-  }, [refetchSession, sessionId]);
+    return subscribeToEvents(
+      { sessionId, types: WORKSPACE_SESSION_EVENT_TYPES },
+      (envelope) => {
+        if (envelope.type === "link.message_injected") {
+          void routerClient.getTranscript(sessionId).then(setMessages);
+        } else {
+          refetchSession();
+        }
+      },
+    );
+  }, [refetchSession, routerClient, sessionId]);
 
   // The session's live data-plane stream (services/session's GET /output,
   // proxied via the Router) — one subscription per session, independent of
@@ -271,7 +289,7 @@ export function ConversationTab({
               {messages.length === 0 ? (
                 <div className={styles.emptyTranscript}>No conversation yet</div>
               ) : (
-                <ChatRenderer messages={messages} />
+                <ChatRenderer messages={messages} links={links} viewedSessionId={sessionId} />
               )}
               {transport.status !== "idle" && (
                 <div className={styles.transportBanner}>

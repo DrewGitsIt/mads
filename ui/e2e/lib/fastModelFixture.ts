@@ -12,11 +12,21 @@ const DPA_CONTENT = JSON.stringify({
   ],
 });
 
-const BODY = JSON.stringify({
-  model: "e2esmoke-fixture",
-  choices: [{ message: { content: DPA_CONTENT } }],
-  usage: { prompt_tokens: 1, completion_tokens: 1 },
-});
+// Sentinel text asserted on by linked-sessions.spec.ts's digest-card check.
+export const DIGEST_FIXTURE_TEXT =
+  "Fixture digest: the agent completed the requested change and updated the tests accordingly.";
+
+function bodyFor(requestText: string): string {
+  // digest.go's digestSystemPrompt is the only Fast Model consumer whose
+  // system prompt mentions "digest" — every other job (retros) wants the
+  // DPA-shaped JSON this fixture originally returned.
+  const content = requestText.includes("digest") ? DIGEST_FIXTURE_TEXT : DPA_CONTENT;
+  return JSON.stringify({
+    model: "e2esmoke-fixture",
+    choices: [{ message: { content } }],
+    usage: { prompt_tokens: 1, completion_tokens: 1 },
+  });
+}
 
 export interface FastModelFixture {
   url: string;
@@ -26,9 +36,14 @@ export interface FastModelFixture {
 /** A scripted OpenAI-compatible Fast Model endpoint, ported from scripts/e2esmoke/main_test.go's fastModelFixture. */
 export function startFastModelFixture(): Promise<FastModelFixture> {
   return new Promise((resolve, reject) => {
-    const server = http.createServer((_req, res) => {
-      res.setHeader("Content-Type", "application/json");
-      res.end(BODY);
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        const requestText = Buffer.concat(chunks).toString("utf8");
+        res.setHeader("Content-Type", "application/json");
+        res.end(bodyFor(requestText));
+      });
     });
     server.on("error", reject);
     server.listen(0, "127.0.0.1", () => {

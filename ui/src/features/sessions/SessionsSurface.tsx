@@ -9,6 +9,7 @@ import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
+import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
 import { SessionWorkspace } from "./workspace/SessionWorkspace";
 import type { WorkspaceTabId } from "./workspace/tabRegistry";
@@ -24,6 +25,7 @@ export interface SessionsSurfaceProps {
 export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: SessionsSurfaceProps) {
   const { sessions, loading, error, createSession } = useSessionsList();
   const openTaskCounts = useOpenTaskCounts();
+  const links = useSessionLinks(sessions.map((s) => s.id));
   const [selectedId, setSelectedId] = useState<string>();
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [actionError, setActionError] = useState<string>();
@@ -58,6 +60,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           <SessionRail
             sessions={sessions}
             openTaskCounts={openTaskCounts}
+            links={links}
+            routerClient={router}
             selectedId={selectedId}
             onSelect={(id) => {
               setSelectedId((cur) => (cur === id ? undefined : id));

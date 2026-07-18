@@ -234,3 +234,62 @@ export async function pollRetro(
   }
   throw new Error(`pollRetro: ${retroId} did not complete in time`);
 }
+
+/**
+ * POST /sessions/{id}/messages — drives a real chat turn against a running
+ * (fake-provider) session, mirroring what Composer.tsx sends. Used to
+ * trigger the real digest pipeline (session.turn_ended -> digestwatch ->
+ * job.GenerateDigest), not a shortcut around it (linked-sessions.spec.ts,
+ * ui/src/features/sessions/HANDOFF.md decision D7).
+ */
+export async function sendChatMessage(
+  routerURL: string,
+  sessionID: string,
+  text: string,
+): Promise<void> {
+  const res = await fetch(`${routerURL}/sessions/${sessionID}/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`sendChatMessage: status ${res.status}`);
+}
+
+/** POST /links/{id}/inject — the "inject via the API" step of the linked-sessions journey. */
+export async function injectLinkMessage(
+  routerURL: string,
+  linkID: string,
+  text: string,
+): Promise<void> {
+  const res = await fetch(`${routerURL}/links/${linkID}/inject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error(`injectLinkMessage: status ${res.status}`);
+}
+
+/**
+ * Polls GET /sessions/{id}/transcript for a message whose text contains
+ * substring — decouples "wait for the async digest pipeline
+ * (session.turn_ended -> digestwatch -> job.GenerateDigest -> FastModel ->
+ * deliverDigest)" from the UI assertion that the digest card renders,
+ * mirroring pollRetro's approach to the retro pipeline.
+ */
+export async function pollTranscriptContains(
+  routerURL: string,
+  sessionID: string,
+  textSubstring: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${routerURL}/sessions/${sessionID}/transcript`);
+    if (res.ok) {
+      const messages = (await res.json()) as { text?: string }[];
+      if (messages.some((m) => m.text?.includes(textSubstring))) return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`pollTranscriptContains: ${sessionID} transcript never contained "${textSubstring}"`);
+}

@@ -7,7 +7,9 @@ import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { TransportSwitchError } from "../router/client";
+import { FLAGS } from "../featureFlags";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
+import type { Link } from "../router/types";
 
 // jsdom has no matchMedia; xterm.js needs it to mount. happy-dom has one,
 // but this file needs jsdom for DOMPurify (see comment above).
@@ -52,6 +54,7 @@ describe("ConversationTab", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    FLAGS.linkedSessions = false;
   });
 
   it("renders the chat display mode by default", async () => {
@@ -307,5 +310,34 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() => expect(onPendingFirstMessageHandled).toHaveBeenCalledOnce());
+  });
+
+  it("with the linked-sessions flag on, fetches this session's links and renders an attributed inject in the transcript", async () => {
+    FLAGS.linkedSessions = true;
+    const link: Link = {
+      id: "lnk_1",
+      granting_session_id: "leader-session",
+      subject_session_id: "session-active",
+      grants: ["read", "inject", "orchestrate"],
+      cadence: "per_turn",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-01T00:00:00Z",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify([link]), { status: 200 })),
+    );
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([
+      {
+        role: "user",
+        text: "kick off the payments refactor",
+        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+      },
+    ]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText(/⇄ from Leader · Leader Session/)).toBeTruthy());
+    expect(screen.getByText("kick off the payments refactor")).toBeTruthy();
   });
 });
