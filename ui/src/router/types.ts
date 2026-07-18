@@ -422,11 +422,12 @@ export interface ControlEvent {
   payload?: unknown;
 }
 
-// Frontend-only — NO Go equivalent exists anywhere (ui/src/files/HANDOFF.md
-// §1: no diff-content endpoint at all). Flag for whoever builds GET
-// .../diff to reconcile field names. `language` is a Monaco language id,
-// guessed client-side from the path extension — fine to get wrong, it only
-// affects syntax highlighting.
+// Matches GET /sessions/{id}/commits/{hash}/diff's fileDiff response
+// (services/router/internal/api/commit_diff.go). GET /sessions/{id}/changes
+// (getFileDiff, working-change diffs) has no Router route yet — see
+// knownGapRoutes in route_manifest_test.go — but the shape is shared.
+// `language` is a Monaco language id, guessed client-side from the path
+// extension — fine to get wrong, it only affects syntax highlighting.
 export interface FileDiff {
   path: string;
   language?: string;

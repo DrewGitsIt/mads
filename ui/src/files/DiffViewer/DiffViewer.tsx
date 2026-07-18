@@ -36,6 +36,8 @@ function guessLanguage(path: string): string {
 export interface DiffViewerProps {
   /** The selected file's path — kept even when `diff` fails to load, since "Open in editor" stays visible either way (MADS-UX §3.3). */
   path?: string;
+  /** Short hash of the commit this diff is from, when the selection is a committed file rather than a working change. */
+  commitHash?: string;
   diff: FileDiff | null;
   loading?: boolean;
   error?: string;
@@ -43,7 +45,7 @@ export interface DiffViewerProps {
 }
 
 /** Side-by-side/inline Monaco diff viewer, plus the always-visible "Open in editor" action. */
-export function DiffViewer({ path, diff, loading, error, onOpenInEditor }: DiffViewerProps) {
+export function DiffViewer({ path, commitHash, diff, loading, error, onOpenInEditor }: DiffViewerProps) {
   const [sideBySide, setSideBySide] = useState(true);
 
   return (
@@ -55,6 +57,7 @@ export function DiffViewer({ path, diff, loading, error, onOpenInEditor }: DiffV
         <Chip tone="neutral" pressed={!sideBySide} onClick={() => setSideBySide(false)}>
           Inline
         </Chip>
+        {commitHash && <Chip tone="neutral">Diff from commit {commitHash.slice(0, 7)}</Chip>}
         <div className={styles.spacer} />
         <Button
           variant="secondary"

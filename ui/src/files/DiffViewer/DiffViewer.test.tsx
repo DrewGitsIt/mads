@@ -74,4 +74,16 @@ describe("DiffViewer", () => {
     fireEvent.click(screen.getByText("Open in editor"));
     expect(onOpenInEditor).toHaveBeenCalledWith(diff.path);
   });
+
+  it("shows the commit label when commitHash is passed", () => {
+    render(
+      <DiffViewer path={diff.path} commitHash="a1b2c3d4e5f6" diff={diff} onOpenInEditor={vi.fn()} />,
+    );
+    expect(screen.getByText("Diff from commit a1b2c3d")).toBeTruthy();
+  });
+
+  it("omits the commit label when commitHash is absent", () => {
+    render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={vi.fn()} />);
+    expect(screen.queryByText(/diff from commit/i)).toBeNull();
+  });
 });

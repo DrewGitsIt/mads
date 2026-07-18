@@ -111,6 +111,8 @@ export interface RouterClient {
   getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
   getCommits(sessionId: string): Promise<Commit[]>;
   getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
+
+  getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff>;
   openInEditor(path: string): Promise<void>;
   mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
   streamControlEvents(filter: { sessionId?: string; types?: string[] }): SessionEventSource;
@@ -552,6 +554,10 @@ export class FetchRouterClient implements RouterClient {
   // MADS-UX-named path so it's a rename, not a redesign, once one lands.
   async getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId });
+  }
+
+  async getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/commits/${hash}/diff`, { path });
   }
 
   // MADS-UX §3.3's open-in-editor action; no `/system/open-editor` route

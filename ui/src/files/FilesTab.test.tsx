@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FilesTab } from "./FilesTab";
 import { FakeRouterClient } from "../router/fixtures";
+import { FakeEventSource } from "../router/testFakeEventSource";
 
 vi.mock("@monaco-editor/react", () => ({
   DiffEditor: (props: { original: string; modified: string }) => (
@@ -10,6 +11,15 @@ vi.mock("@monaco-editor/react", () => ({
 }));
 
 describe("FilesTab", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("renders the session's file changes and commits", async () => {
     const client = new FakeRouterClient();
     render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
@@ -74,6 +84,38 @@ describe("FilesTab", () => {
 
     expect(await screen.findByText("Committed")).toBeTruthy();
     expect(screen.queryByText("Working changes")).toBeNull();
+  });
+
+  it("shows the diff for a selected committed file, labeled with its commit", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
+
+    fireEvent.click(await screen.findByText("services/data/internal/backoff.go"));
+
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-modified")).toBe(
+      "func backoff() time.Duration {\n\treturn baseDelay\n}\n",
+    );
+    expect(screen.getByText("Diff from commit a1b2c3d")).toBeTruthy();
+  });
+
+  it("working-change and committed-file selections are mutually exclusive", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
+
+    const workingRow = (await screen.findByText("services/data/internal/ingest.go")).closest(
+      "button",
+    );
+    fireEvent.click(workingRow!);
+    await screen.findByTestId("fake-diff-editor");
+    expect(workingRow?.getAttribute("data-selected")).toBe("true");
+
+    const commitRow = screen.getByText("services/data/internal/backoff.go").closest("button");
+    fireEvent.click(commitRow!);
+    await screen.findByText("Diff from commit a1b2c3d");
+
+    expect(workingRow?.getAttribute("data-selected")).toBe("false");
+    expect(commitRow?.getAttribute("data-selected")).toBe("true");
   });
 
   it("renders commits newest-first", async () => {
