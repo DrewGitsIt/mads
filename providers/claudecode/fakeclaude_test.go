@@ -150,13 +150,26 @@ func fcOneShot(a fcArgs) {
 
 // fcOneShotStream mimics `-p --output-format stream-json --verbose`: the
 // reply streams as several assistant text lines (so tests can observe
-// OnChunk firing more than once), closed by the same result line shape
+// OnEvent firing more than once), closed by the same result line shape
 // fcOneShot produces — the concatenation of the streamed pieces must equal
 // the result line's "result" field.
 func fcOneShotStream(a fcArgs) {
 	if a.prompt == "ratelimit" {
 		fmt.Fprintln(os.Stderr, "Rate limit reached. Try again at 5pm.")
 		os.Exit(1)
+	}
+	if strings.HasPrefix(a.prompt, "edit ") {
+		path := strings.TrimPrefix(a.prompt, "edit ")
+		fcEmit(map[string]any{
+			"type": "assistant", "session_id": "fc-oneshot",
+			"message": map[string]any{
+				"role": "assistant",
+				"content": []map[string]any{{
+					"type": "tool_use", "name": "Edit",
+					"input": map[string]any{"file_path": path, "old_string": "a", "new_string": "b"},
+				}},
+			},
+		})
 	}
 	reply, crash := fcReply(a.prompt, nil)
 	if crash {

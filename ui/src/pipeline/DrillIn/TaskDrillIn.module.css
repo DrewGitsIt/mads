@@ -41,4 +41,13 @@
 .right {
   flex: 1;
   min-width: 0;
+  display: flex;
+  justify-content: center;
+}
+
+.measure {
+  width: 100%;
+  max-width: 120ch;
+  min-width: 0;
+  height: 100%;
 }

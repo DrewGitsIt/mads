@@ -1,6 +1,7 @@
 .panel {
   position: relative;
   display: flex;
+  flex: none;
   background: var(--bg1);
   border: 1px solid var(--line-soft);
   border-radius: var(--r);

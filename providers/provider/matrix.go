@@ -65,11 +65,11 @@ const (
 	// writes and command execution. Expected, same honesty requirement as
 	// BehaviorTrustLimited.
 	BehaviorTrustReadOnly Behavior = "trust_read_only"
-	// BehaviorOneShotStream — OneShotRequest.OnChunk actually fires with
-	// incremental text during the invocation, rather than only the final
-	// result being available once OneShot returns. Optional: a provider
-	// with no incremental output mechanism simply never calls OnChunk; the
-	// engine falls back to a single end-of-run chunk.
+	// BehaviorOneShotStream — OneShotRequest.OnEvent actually fires with
+	// incremental text (and tool use) during the invocation, rather than
+	// only the final result being available once OneShot returns. Optional:
+	// a provider with no incremental output mechanism simply never calls
+	// OnEvent; the engine falls back to a single end-of-run chunk.
 	BehaviorOneShotStream Behavior = "one_shot_stream"
 	// BehaviorRefAnnounce — the session's provider-native ref becomes knowable
 	// before the first turn completes, via RefAnnouncer, rather than only

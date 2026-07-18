@@ -151,6 +151,45 @@ func TestScenarioToolsAndChunks(t *testing.T) {
 	}
 }
 
+// A scripted Rule.Tools entry produces an EventToolUse through OnEvent when
+// OneShot is driven directly, not just through the interactive Session path
+// (TestScenarioToolsAndChunks above).
+func TestOneShotToolUseEmitsEvent(t *testing.T) {
+	sc, err := fake.LoadScenario("testdata/demo.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := fake.NewWithScenario(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	var kinds []provider.EventKind
+	var tool *provider.ToolUse
+	res, err := f.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "please add auth",
+		Cwd:    cwd,
+		OnEvent: func(ev provider.Event) {
+			kinds = append(kinds, ev.Kind)
+			if ev.Kind == provider.EventToolUse {
+				tool = ev.Tool
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool == nil || tool.Path != "auth/login.go" {
+		t.Errorf("tool event: %+v", tool)
+	}
+	if len(kinds) < 2 || kinds[0] != provider.EventToolUse {
+		t.Errorf("want tool use before text, got %v", kinds)
+	}
+	if res.Text != "Working on auth. Done." {
+		t.Errorf("text: %q", res.Text)
+	}
+}
+
 // Crash on cue: the event stream closes with NO turn end — exactly the
 // signal downstream supervision (Router) watches for.
 func TestCrashOnCue(t *testing.T) {

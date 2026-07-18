@@ -87,7 +87,7 @@ func (p *Provider) Matrix() provider.Matrix {
 		// without the descriptor materialized.
 		provider.BehaviorMCPServers: provider.Unsupported,
 		// No streaming JSON mode on `kiro-cli chat --no-interactive` — see
-		// README.md. OneShot never calls OnChunk; the engine falls back to
+		// README.md. OneShot never calls OnEvent; the engine falls back to
 		// a single end-of-run chunk.
 		provider.BehaviorOneShotStream: provider.Unsupported,
 		// ACP's session/new response carries the ref synchronously, before

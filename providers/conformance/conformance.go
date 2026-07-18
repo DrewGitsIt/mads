@@ -340,14 +340,19 @@ func (c *checker) oneShot() (*provider.OneShotResult, error) {
 }
 
 // oneShotStream probes BehaviorOneShotStream: a declared-working provider
-// must call OnChunk at least once, with the collected chunks containing the
-// marker; a declared-unsupported provider must never call it at all.
+// must call OnEvent at least once with text, with the collected chunks
+// containing the marker; a declared-unsupported provider must never call it
+// at all.
 func (c *checker) oneShotStream() error {
 	marker := "mk-oneshot-stream"
 	var chunks []string
 	_, err := c.p.OneShot(c.ctx, provider.OneShotRequest{
-		Prompt:  c.s.Echo(marker),
-		OnChunk: func(text string) { chunks = append(chunks, text) },
+		Prompt: c.s.Echo(marker),
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventText {
+				chunks = append(chunks, ev.Text)
+			}
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("OneShot: %w", err)
@@ -355,11 +360,11 @@ func (c *checker) oneShotStream() error {
 	working := c.m[provider.BehaviorOneShotStream].Works()
 	switch {
 	case working && len(chunks) == 0:
-		return errors.New("declared working but OnChunk was never called")
+		return errors.New("declared working but OnEvent was never called")
 	case working && !strings.Contains(strings.Join(chunks, ""), marker):
 		return fmt.Errorf("streamed chunks %q do not contain marker %q", strings.Join(chunks, ""), marker)
 	case !working && len(chunks) != 0:
-		return fmt.Errorf("declared unsupported but OnChunk fired %d times", len(chunks))
+		return fmt.Errorf("declared unsupported but OnEvent fired %d times", len(chunks))
 	}
 	return nil
 }

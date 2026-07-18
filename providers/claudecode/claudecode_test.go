@@ -63,7 +63,7 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	}
 }
 
-// OnChunk switches OneShot to the stream-json wire format and fires as
+// OnEvent switches OneShot to the stream-json wire format and fires as
 // assistant text lines arrive; the final result is equivalent to the
 // non-streaming path (same reply, concatenation of the streamed chunks).
 func TestOneShotStreamsChunks(t *testing.T) {
@@ -71,8 +71,10 @@ func TestOneShotStreamsChunks(t *testing.T) {
 	var chunks []string
 	res, err := p.OneShot(context.Background(), provider.OneShotRequest{
 		Prompt: "echo hello there friend",
-		OnChunk: func(text string) {
-			chunks = append(chunks, text)
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind == provider.EventText {
+				chunks = append(chunks, ev.Text)
+			}
 		},
 	})
 	if err != nil {
@@ -93,14 +95,44 @@ func TestOneShotStreamsChunks(t *testing.T) {
 // stderr is inspected the same way regardless of output format.
 func TestOneShotStreamsRateLimitAndCrash(t *testing.T) {
 	p := testProvider(t)
-	noop := func(string) {}
-	_, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "ratelimit", OnChunk: noop})
+	noop := func(provider.Event) {}
+	_, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "ratelimit", OnEvent: noop})
 	var rle *provider.RateLimitError
 	if !errors.As(err, &rle) {
 		t.Fatalf("want RateLimitError, got %v", err)
 	}
-	if _, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "crash", OnChunk: noop}); err == nil {
+	if _, err := p.OneShot(context.Background(), provider.OneShotRequest{Prompt: "crash", OnEvent: noop}); err == nil {
 		t.Fatal("want an error for a scripted crash")
+	}
+}
+
+// Tool use in a one-shot stream arrives as a normalized EventToolUse before
+// the text/result — the same events() normalization the interactive path
+// uses (TestStreamToolUseNormalization), just driven through OnEvent.
+func TestOneShotStreamsToolUse(t *testing.T) {
+	p := testProvider(t)
+	var kinds []provider.EventKind
+	var tool *provider.ToolUse
+	res, err := p.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "edit api/login.go",
+		OnEvent: func(ev provider.Event) {
+			kinds = append(kinds, ev.Kind)
+			if ev.Kind == provider.EventToolUse {
+				tool = ev.Tool
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool == nil || tool.Name != "Edit" || tool.Path != "api/login.go" {
+		t.Errorf("tool event: %+v", tool)
+	}
+	if len(kinds) < 2 || kinds[0] != provider.EventToolUse {
+		t.Errorf("want tool use before text, got %v", kinds)
+	}
+	if res.Text != "ok" {
+		t.Errorf("text: %q", res.Text)
 	}
 }
 

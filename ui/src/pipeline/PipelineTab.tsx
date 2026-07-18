@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RunHeader } from "./RunHeader/RunHeader";
 import { StageBoard } from "./Board/StageBoard";
 import { BlockedPanel } from "./Board/BlockedPanel";
@@ -41,6 +41,18 @@ function liveRunEntry(sessionId: string, live: UsePipelineRunResult): PipelineRu
 export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
   const live = usePipelineRun(sessionId, pipelineClient);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
+  const tabRef = useRef<HTMLDivElement>(null);
+  const [tabHeight, setTabHeight] = useState(0);
+
+  useEffect(() => {
+    const el = tabRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setTabHeight(entry.contentRect.height);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Once a live run has ever started this mount, it preempts the historical
   // view for the rest of the mount, even after it finishes (HANDOFF.md §4e).
@@ -89,7 +101,7 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
   }, [outputSource]);
 
   return (
-    <div className={styles.tab}>
+    <div className={styles.tab} ref={tabRef}>
       <RunHeader
         sessionId={sessionId}
         client={pipelineClient}
@@ -111,7 +123,7 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
           <p className={styles.emptyTitle}>No pipeline runs yet</p>
         </div>
       ) : (
-        <>
+        <div className={styles.boardArea}>
           <BlockedPanel
             tasks={live.tasks}
             taskRunState={taskRunState}
@@ -124,7 +136,7 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
             taskRunState={taskRunState}
             onSelectTask={setSelectedTaskId}
           />
-        </>
+        </div>
       )}
       {selectedTask && outputSource && (
         <TaskDrillIn
@@ -133,6 +145,7 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
           touchedFiles={selectedRunState?.touchedFiles ?? []}
           outputSource={outputSource}
           onClose={() => setSelectedTaskId(undefined)}
+          tabHeight={tabHeight}
         />
       )}
     </div>

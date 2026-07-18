@@ -188,10 +188,13 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		if err := executeTool(ts, req.Cwd); err != nil {
 			return nil, err
 		}
+		if req.OnEvent != nil {
+			req.OnEvent(toolEvent(ts))
+		}
 	}
 	// Delay on cue holds for one-shots too — downstream timing tests rely
 	// on scripted turns taking as long as the scenario says. Chunks stream
-	// through OnChunk (when set) with that same delay between them, so a
+	// through OnEvent (when set) with that same delay between them, so a
 	// caller watching for incremental output sees genuine pacing rather
 	// than one wait followed by the whole result at once.
 	var b strings.Builder
@@ -200,8 +203,8 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 			time.Sleep(plan.delay)
 		}
 		b.WriteString(chunk)
-		if req.OnChunk != nil {
-			req.OnChunk(chunk)
+		if req.OnEvent != nil {
+			req.OnEvent(provider.Event{Kind: provider.EventText, Text: chunk})
 		}
 	}
 	text := b.String()
