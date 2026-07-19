@@ -88,7 +88,7 @@ export function TemplateEditor({ template, onClose, onCreate, onUpdate, onDelete
       <SideSheetBody>
         <div className={styles.form}>
           <label className={styles.field}>
-            Description
+            <span className={styles.fieldLabel}>Description</span>
             <input value={description} onChange={(e) => setDescription(e.target.value)} />
           </label>
 

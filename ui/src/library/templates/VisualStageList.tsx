@@ -73,7 +73,7 @@ export function VisualStageList({ parsed, parseError, errors, onChange }: Visual
   return (
     <div className={styles.list}>
       <label className={styles.nameField}>
-        Template name
+        <span className={styles.fieldLabel}>Template name</span>
         <input value={parsed.name} onChange={(e) => onChange({ ...parsed, name: e.target.value })} />
       </label>
       {topErrors.map((e) => (

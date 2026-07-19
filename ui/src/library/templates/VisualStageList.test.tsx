@@ -123,9 +123,9 @@ describe("VisualStageList", () => {
       const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
       expect(input.placeholder).toBe("sonnet (inherited)");
     });
-    const options = Array.from(document.querySelectorAll("datalist option")).map(
-      (o) => (o as HTMLOptionElement).value,
-    );
+    const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
+    fireEvent.focus(input);
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual(["claude-sonnet-5"]);
   });
 });

@@ -1,5 +1,8 @@
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
+import { Chip } from "../../components/Chip/Chip";
+import { Combobox } from "../../components/Combobox/Combobox";
+import { Select } from "../../components/Select/Select";
 import type { TemplateStage } from "../../router/types";
 import type { FieldError } from "./useTemplateValidation";
 import styles from "./StageCard.module.css";
@@ -14,6 +17,11 @@ export interface StageCardProps {
   onChange: (stage: TemplateStage) => void;
   onRemove: () => void;
 }
+
+const THEN_OPTIONS = [
+  { value: "", label: "—" },
+  { value: "block", label: "Block" },
+];
 
 function errorFor(errors: FieldError[], field: string): string | undefined {
   return errors.find((e) => e.field === field)?.message;
@@ -32,6 +40,11 @@ export function StageCard({
 }: StageCardProps) {
   const mode = stage.command !== undefined ? "command" : "agent";
   const stageError = errorFor(errors, "");
+
+  const loopBackOptions = [
+    { value: "", label: "—" },
+    ...earlierStageNames.map((name) => ({ value: name, label: name })),
+  ];
 
   function setMode(next: "agent" | "command") {
     if (next === "agent") {
@@ -55,104 +68,94 @@ export function StageCard({
       </div>
 
       <label className={styles.field}>
-        Name
+        <span className={styles.fieldLabel}>Name</span>
         <input value={stage.name} onChange={(e) => onChange({ ...stage, name: e.target.value })} />
       </label>
       {errorFor(errors, "name") && <div className={styles.error}>{errorFor(errors, "name")}</div>}
 
-      <div className={styles.modeToggle}>
-        <label>
-          <input type="radio" checked={mode === "agent"} onChange={() => setMode("agent")} />
+      <div className={styles.modeToggle} role="group" aria-label="Stage type">
+        <Chip tone="neutral" pressed={mode === "agent"} onClick={() => setMode("agent")}>
           Agent
-        </label>
-        <label>
-          <input type="radio" checked={mode === "command"} onChange={() => setMode("command")} />
+        </Chip>
+        <Chip tone="neutral" pressed={mode === "command"} onClick={() => setMode("command")}>
           Command
-        </label>
+        </Chip>
       </div>
       {stageError && <div className={styles.error}>{stageError}</div>}
 
       {mode === "agent" ? (
         <>
           <label className={styles.field}>
-            Agent
+            <span className={styles.fieldLabel}>Agent</span>
             <input value={stage.agent ?? ""} onChange={(e) => onChange({ ...stage, agent: e.target.value })} />
           </label>
           {errorFor(errors, "agent") && <div className={styles.error}>{errorFor(errors, "agent")}</div>}
 
           <label className={styles.field}>
-            Model
-            <input
-              list={`model-options-${index}`}
+            <span className={styles.fieldLabel}>Model</span>
+            <Combobox
               value={stage.model ?? ""}
+              options={knownModelIds}
               placeholder={inheritedModel ? `${inheritedModel} (inherited)` : "Inherit"}
-              onChange={(e) => {
-                const trimmed = e.target.value.trim();
+              onChange={(next) => {
+                const trimmed = next.trim();
                 onChange({ ...stage, model: trimmed || undefined });
               }}
             />
-            <datalist id={`model-options-${index}`}>
-              {knownModelIds.map((id) => (
-                <option key={id} value={id} />
-              ))}
-            </datalist>
           </label>
           {errorFor(errors, "model") && <div className={styles.error}>{errorFor(errors, "model")}</div>}
         </>
       ) : (
         <label className={styles.field}>
-          Command
+          <span className={styles.fieldLabel}>Command</span>
           <input value={stage.command ?? ""} onChange={(e) => onChange({ ...stage, command: e.target.value })} />
         </label>
       )}
 
       <label className={styles.field}>
-        When
+        <span className={styles.fieldLabel}>When</span>
         <input value={stage.when ?? ""} onChange={(e) => onChange({ ...stage, when: e.target.value })} />
       </label>
       {errorFor(errors, "when") && <div className={styles.error}>{errorFor(errors, "when")}</div>}
 
       <details className={styles.onFail} open={!!stage.on_fail}>
-        <summary>On fail</summary>
-        <label className={styles.field}>
-          Loop back to
-          <select
-            value={stage.on_fail?.loop_back ?? ""}
-            onChange={(e) => setOnFail({ loop_back: e.target.value || undefined })}
-          >
-            <option value="">—</option>
-            {earlierStageNames.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {errorFor(errors, "on_fail.loop_back") && (
-          <div className={styles.error}>{errorFor(errors, "on_fail.loop_back")}</div>
-        )}
-        <label className={styles.field}>
-          Max loops
-          <input
-            type="number"
-            min={1}
-            value={stage.on_fail?.max_loops ?? ""}
-            onChange={(e) => setOnFail({ max_loops: Number(e.target.value) || undefined })}
-          />
-        </label>
-        {errorFor(errors, "on_fail.max_loops") && (
-          <div className={styles.error}>{errorFor(errors, "on_fail.max_loops")}</div>
-        )}
-        <label className={styles.field}>
-          Then
-          <select value={stage.on_fail?.then ?? ""} onChange={(e) => setOnFail({ then: e.target.value || undefined })}>
-            <option value="">—</option>
-            <option value="block">Block</option>
-          </select>
-        </label>
-        {errorFor(errors, "on_fail.then") && (
-          <div className={styles.error}>{errorFor(errors, "on_fail.then")}</div>
-        )}
+        <summary className={styles.onFailSummary}>On fail</summary>
+        <div className={styles.onFailBody}>
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Loop back to</span>
+            <Select
+              value={stage.on_fail?.loop_back ?? ""}
+              options={loopBackOptions}
+              onChange={(next) => setOnFail({ loop_back: next || undefined })}
+            />
+          </label>
+          {errorFor(errors, "on_fail.loop_back") && (
+            <div className={styles.error}>{errorFor(errors, "on_fail.loop_back")}</div>
+          )}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Max loops</span>
+            <input
+              type="number"
+              min={1}
+              value={stage.on_fail?.max_loops ?? ""}
+              onChange={(e) => setOnFail({ max_loops: Number(e.target.value) || undefined })}
+            />
+          </label>
+          {errorFor(errors, "on_fail.max_loops") && (
+            <div className={styles.error}>{errorFor(errors, "on_fail.max_loops")}</div>
+          )}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Then</span>
+            <Select
+              value={stage.on_fail?.then ?? ""}
+              options={THEN_OPTIONS}
+              onChange={(next) => setOnFail({ then: next || undefined })}
+            />
+          </label>
+          {errorFor(errors, "on_fail.then") && (
+            <div className={styles.error}>{errorFor(errors, "on_fail.then")}</div>
+          )}
+        </div>
       </details>
     </Card>
   );
