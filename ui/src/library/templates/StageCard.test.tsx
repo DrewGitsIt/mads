@@ -74,7 +74,9 @@ describe("StageCard", () => {
       />,
     );
 
-    const options = screen.getAllByRole("option").map((o) => (o as HTMLOptionElement).value);
+    const loopBackTrigger = screen.getByText("Loop back to").closest("label")!.querySelector("button")!;
+    fireEvent.click(loopBackTrigger);
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options).toContain("build");
     expect(options).not.toContain("test");
   });
@@ -150,7 +152,7 @@ describe("StageCard", () => {
     expect(input.placeholder).toBe("sonnet (inherited)");
   });
 
-  it("populates the model datalist from knownModelIds", () => {
+  it("shows model suggestions from knownModelIds on focus", () => {
     render(
       <StageCard
         stage={{ name: "build", agent: "architect" }}
@@ -162,9 +164,55 @@ describe("StageCard", () => {
         onRemove={vi.fn()}
       />,
     );
-    const options = Array.from(document.querySelectorAll("datalist option")).map(
-      (o) => (o as HTMLOptionElement).value,
-    );
+    const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
+    fireEvent.focus(input);
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
     expect(options).toEqual(["claude-sonnet-5", "claude-haiku-4-5-20251001"]);
+  });
+
+  it("still accepts a model id that isn't in knownModelIds (provider is the authority)", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "architect" }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={["claude-sonnet-5"]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+    const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
+    fireEvent.change(input, { target: { value: "some-future-model" } });
+    expect(onChange).toHaveBeenCalledWith({
+      name: "build",
+      agent: "architect",
+      model: "some-future-model",
+    });
+  });
+
+  it("navigates model suggestions with the keyboard and selects on Enter", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "architect" }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={["claude-sonnet-5", "claude-haiku-4-5-20251001"]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+    const input = screen.getByText("Model").closest("label")!.querySelector("input")!;
+    fireEvent.focus(input);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith({
+      name: "build",
+      agent: "architect",
+      model: "claude-haiku-4-5-20251001",
+    });
   });
 });
