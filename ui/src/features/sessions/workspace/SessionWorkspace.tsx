@@ -124,7 +124,9 @@ export function SessionWorkspace({
           ✕
         </Button>
         <span className={styles.name}>
-          {session ? session.name || "Untitled session" : "Loading…"}
+          <span className={styles.nameText}>
+            {session ? session.name || "Untitled session" : "Loading…"}
+          </span>
           {session && (
             <Chip tone={session.activity === "active" ? "ok" : "neutral"}>{session.activity}</Chip>
           )}

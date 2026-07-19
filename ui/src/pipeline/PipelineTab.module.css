@@ -3,11 +3,13 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  min-width: 0;
 }
 
 .boardArea {
   flex: 1 1 auto;
   min-height: 96px;
+  min-width: 0;
   overflow-y: auto;
 }
 
