@@ -29,7 +29,7 @@ func defaultDataDir() string {
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:8081", "listen address")
+	addr := flag.String("addr", "localhost:0", "listen address")
 	dataDir := flag.String("data-dir", defaultDataDir(), "mads data directory (env MADS_DATA_DIR)")
 	flag.Parse()
 

@@ -92,7 +92,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:8080", "listen address")
+	addr := flag.String("addr", "localhost:0", "listen address")
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")
