@@ -1,3 +1,17 @@
+/* the layout slot is what participates in the surrounding flex row — its
+   width only ever changes on the deliberate, click-initiated pin/unpin
+   (.expanded), never on hover/focus. This is what keeps the peek from
+   shoving adjacent content around. */
+.slot {
+  position: relative;
+  display: flex;
+  flex: none;
+  width: 44px;
+}
+.slot.expanded {
+  width: 176px;
+}
+
 .rail {
   display: flex;
   flex-direction: column;
@@ -7,17 +21,26 @@
   border-right: 1px solid var(--line-soft);
   padding: var(--space-2);
   gap: 2px;
-  transition: width 0.15s ease;
   overflow: hidden;
 }
 
-/* collapsed rail: icons-only, peeks open to full width on hover/focus — CSS only */
+/* collapsed rail: icons-only, positioned over the slot so its hover/focus
+   peek overlays adjacent content instead of resizing the in-flow slot. */
 .rail.collapsed {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
   width: 44px;
+  z-index: 20;
+  transition:
+    width 0.15s ease,
+    box-shadow 0.15s ease;
 }
 .rail.collapsed:hover,
 .rail.collapsed:focus-within {
   width: 176px;
+  box-shadow: var(--shadow);
 }
 
 /* a collapse just happened while the pointer/focus was still on the rail —
@@ -26,6 +49,7 @@
 .rail.collapsed[data-peek-suppressed="true"]:hover,
 .rail.collapsed[data-peek-suppressed="true"]:focus-within {
   width: 44px;
+  box-shadow: none;
 }
 
 .item {

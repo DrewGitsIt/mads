@@ -92,4 +92,23 @@ describe("IconRail", () => {
     fireEvent.mouseLeave(nav);
     expect(nav.getAttribute("data-peek-suppressed")).toBe("false");
   });
+
+  it("collapsed rail's layout slot is not marked expanded (peek must not reserve layout width)", () => {
+    render(<IconRail items={items} defaultCollapsed />);
+    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
+    const slot = nav.parentElement!;
+
+    expect(nav.getAttribute("data-collapsed")).toBe("true");
+    expect(slot.className).not.toMatch(/expanded/);
+  });
+
+  it("pinning open marks the layout slot expanded (deliberate, click-initiated layout change)", () => {
+    render(<IconRail items={items} defaultCollapsed />);
+    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
+    const slot = nav.parentElement!;
+
+    fireEvent.click(screen.getByLabelText("Pin rail open"));
+    expect(nav.getAttribute("data-collapsed")).toBe("false");
+    expect(slot.className).toMatch(/expanded/);
+  });
 });
