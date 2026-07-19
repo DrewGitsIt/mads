@@ -67,38 +67,44 @@ export function IconRail({
   }
 
   return (
-    <nav
-      data-collapsed={collapsed}
-      data-peek-suppressed={peekSuppressed}
-      onClick={handleBackgroundClick}
-      onMouseLeave={() => setPeekSuppressed(false)}
-      onBlur={handleNavBlur}
-      className={[styles.rail, collapsed ? styles.collapsed : "", className]
+    <div
+      className={[styles.slot, collapsed ? "" : styles.expanded, className]
         .filter(Boolean)
         .join(" ")}
     >
-      {items.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          aria-selected={item.id === activeId}
-          className={styles.item}
-          aria-label={item.label}
-          onClick={handleItemClick(item.id)}
-        >
-          <span className={styles.icon}>{item.icon}</span>
-          <span className={styles.label}>{item.label}</span>
-        </button>
-      ))}
-      <div className={styles.spacer} />
-      <button
-        type="button"
-        className={styles.toggle}
-        aria-label={collapsed ? "Pin rail open" : "Collapse rail"}
-        onClick={handleToggle}
+      <nav
+        data-collapsed={collapsed}
+        data-peek-suppressed={peekSuppressed}
+        onClick={handleBackgroundClick}
+        onMouseLeave={() => setPeekSuppressed(false)}
+        onBlur={handleNavBlur}
+        className={[styles.rail, collapsed ? styles.collapsed : ""]
+          .filter(Boolean)
+          .join(" ")}
       >
-        {collapsed ? "»" : "«"}
-      </button>
-    </nav>
+        {items.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            aria-selected={item.id === activeId}
+            className={styles.item}
+            aria-label={item.label}
+            onClick={handleItemClick(item.id)}
+          >
+            <span className={styles.icon}>{item.icon}</span>
+            <span className={styles.label}>{item.label}</span>
+          </button>
+        ))}
+        <div className={styles.spacer} />
+        <button
+          type="button"
+          className={styles.toggle}
+          aria-label={collapsed ? "Pin rail open" : "Collapse rail"}
+          onClick={handleToggle}
+        >
+          {collapsed ? "»" : "«"}
+        </button>
+      </nav>
+    </div>
   );
 }
