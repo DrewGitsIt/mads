@@ -119,6 +119,21 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
   await expect(resumeAffordance).toBeVisible();
+  // Rail regroups live, no reload: "Active"/"Recent" are two stacked
+  // sections with no DOM hook beyond their header text (see
+  // railGroups.ts/SessionRail.tsx), and other e2e tests running in parallel
+  // against the same backend may keep an Active section on-screen too — so
+  // proving this row left Active means checking its position against the
+  // Recent header, not just that the header exists.
+  const recentHeader = rail.getByText("Recent", { exact: true });
+  await expect(recentHeader).toBeVisible();
+  await expect(async () => {
+    const rowBox = await sessionRow.boundingBox();
+    const recentHeaderBox = await recentHeader.boundingBox();
+    expect(rowBox).not.toBeNull();
+    expect(recentHeaderBox).not.toBeNull();
+    expect(rowBox!.y).toBeGreaterThan(recentHeaderBox!.y);
+  }).toPass();
   await page.getByLabel("Workspace actions").click();
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
   // Close is now disabled-with-reason rather than absent — same discovery-

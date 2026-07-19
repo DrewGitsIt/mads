@@ -109,7 +109,7 @@ describe("subscribeToEvents", () => {
     expect(second).toHaveBeenCalledWith(expect.objectContaining({ type: "task.created" }));
   });
 
-  it("widens the type filter by closing the current connection and opening a new one resuming from the last delivered seq", () => {
+  it("widens the type filter by closing the current connection and opening a new one, resuming per-type", () => {
     subscribe({ types: ["session.created"] }, () => {});
     const first = FakeEventSource.instances[0];
     first.emit("session.created", JSON.stringify(envelope(5, "session.created")));
@@ -121,7 +121,35 @@ describe("subscribeToEvents", () => {
     const second = FakeEventSource.instances[1];
     const url = new URL(second.url);
     expect(url.searchParams.get("types")).toBe("session.created,task.created");
-    expect(url.searchParams.get("since")).toBe("5");
+    // The resume cursor is the *minimum* high-water-mark across the unioned
+    // types, not the single scalar "highest seq ever seen": task.created has
+    // no observed history on this connection, so the resume must be absent
+    // (full replay of task.created, deduped against session.created's seq 5)
+    // rather than "5", which would silently skip any earlier task.created
+    // history that was never delivered.
+    expect(url.searchParams.get("since")).toBeNull();
+  });
+
+  it("never permanently loses an earlier event of a newly-widened type, even after another type's later event advanced its own cursor", () => {
+    const first = vi.fn();
+    subscribe({ types: ["session.created"] }, first);
+    const firstSource = FakeEventSource.instances[0];
+
+    // session.created advances well past a task.created event this
+    // connection never carried and so never delivered.
+    firstSource.emit("session.created", JSON.stringify(envelope(10, "session.created")));
+
+    const second = vi.fn();
+    subscribe({ types: ["task.created"] }, second);
+    expect(FakeEventSource.instances).toHaveLength(2);
+    const secondSource = FakeEventSource.instances[1];
+
+    // The earlier, never-delivered task.created event (seq 3, lower than
+    // session.created's seq 10) must still reach the new subscriber — a
+    // scalar cursor keyed off session.created's seq 10 would wrongly treat
+    // it as already-seen and drop it forever.
+    secondSource.emit("task.created", JSON.stringify(envelope(3, "task.created")));
+    expect(second).toHaveBeenCalledWith(expect.objectContaining({ seq: 3, type: "task.created" }));
   });
 
   it("delivers every seq exactly once across a dropped connection resumed via cursor", () => {
