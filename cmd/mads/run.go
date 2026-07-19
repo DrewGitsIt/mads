@@ -32,7 +32,10 @@ func cmdRun(args []string, out io.Writer) error {
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
 	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, or fake")
 	model := fs.String("model", "", "model override for agent stages")
-	concurrency := fs.Int("concurrency", 2, "simultaneous tasks")
+	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
+		"this cap; dependencies express prerequisites, not anti-collision. Integration is always "+
+		"serialized by the land queue regardless of this value: collisions are its job, and a real "+
+		"conflict comes back as a blocked task with attribution, never a broken trunk")
 	isolated := fs.Bool("isolated", true, "worktree-per-task isolation (spec §6, §17)")
 	worktreeRoot := fs.String("worktree-root", "", "where task worktrees live (default ~/.mads/worktrees/<session>)")
 	claudeArgs := fs.String("claude-args", "--dangerously-skip-permissions",
