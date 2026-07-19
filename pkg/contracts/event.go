@@ -233,6 +233,14 @@ const (
 	// injection paths, services/session/internal/runner); W5.7's capability-usage metric
 	// (including never-used capabilities) is the consumer this type exists for.
 	CapabilityInvoked EventType = "capability.invoked"
+
+	// StageAttemptRef fires as soon as a pipeline stage's agent one-shot
+	// announces its provider-native session ref (e.g. claude-code's
+	// session_id), before the one-shot completes — exact attribution for
+	// transcript lookup by task+stage+attempt, no path guessing. Payload:
+	// {"stage": string, "attempt": int, "ref": string}. Providers with no
+	// wire-level ref announcement never emit this.
+	StageAttemptRef EventType = "stage.attempt_ref"
 )
 
 // EventTypes is the full registry, for validation and enumeration.
@@ -256,6 +264,7 @@ var EventTypes = []EventType{
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted,
 	UsageRecorded, CapabilityInvoked,
+	StageAttemptRef,
 }
 
 var eventTypeSet = func() map[EventType]struct{} {

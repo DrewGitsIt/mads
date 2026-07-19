@@ -214,12 +214,20 @@ func (p *Provider) oneShotStream(ctx context.Context, req provider.OneShotReques
 	}
 
 	var resultLine []byte
+	var refAnnounced bool
 	r := bufio.NewReaderSize(stdout, 64*1024)
 	for {
 		raw, rerr := r.ReadBytes('\n')
 		if len(raw) > 0 {
 			var l wireLine
 			if json.Unmarshal(bytes.TrimSpace(raw), &l) == nil {
+				// session_id rides every wire line; announce it once, as
+				// soon as it's known, so callers get exact transcript
+				// attribution before the invocation finishes.
+				if !refAnnounced && l.SessionID != "" {
+					refAnnounced = true
+					req.OnEvent(provider.Event{Kind: provider.EventSessionRef, Ref: l.SessionID})
+				}
 				switch l.Type {
 				case "assistant":
 					for _, ev := range l.events(false) {
@@ -265,7 +273,7 @@ func parseOneShot(raw []byte) (*provider.OneShotResult, error) {
 	// total_cost_usd is a top-level result-line field, independent of whether
 	// the nested usage object is present — surface it unconditionally so a
 	// response with cost but no token breakdown still feeds cost metrics.
-	res := &provider.OneShotResult{Text: l.Result, Usage: provider.Usage{CostUSD: l.TotalCostUSD}}
+	res := &provider.OneShotResult{Text: l.Result, Ref: l.SessionID, Usage: provider.Usage{CostUSD: l.TotalCostUSD}}
 	if l.Usage != nil {
 		res.Usage.InputTokens = l.Usage.InputTokens
 		res.Usage.OutputTokens = l.Usage.OutputTokens

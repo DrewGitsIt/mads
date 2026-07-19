@@ -1,5 +1,5 @@
 import { router, ROUTER_BASE, type RouterClient } from "../../router/client";
-import type { Envelope, PipelineRun, Task } from "../../router/types";
+import type { Envelope, PipelineRun, Task, TranscriptMessage } from "../../router/types";
 import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 
 /**
@@ -10,6 +10,19 @@ import { FOLD_EVENT_TYPES } from "../state/usePipelineRun";
 export interface PipelineOutputSource {
   /** Returns an unsubscribe function. */
   onChunk(listener: (chunk: string) => void): () => void;
+  close(): void;
+}
+
+/**
+ * A single task's normalized-turns transcript stream (GET .../turns) — the
+ * transparency-first drill-in feed, sourced from the provider's own
+ * transcript rather than the tee'd prose log. Each frame is the full turn
+ * array so far, not a delta; empty for tasks with no recorded provider
+ * transcript (the caller's cue to fall back to streamTaskOutput).
+ */
+export interface PipelineTurnsSource {
+  /** Returns an unsubscribe function. */
+  onTurns(listener: (turns: TranscriptMessage[]) => void): () => void;
   close(): void;
 }
 
@@ -34,6 +47,7 @@ export interface PipelineClient {
   resumePipeline(runId: string): Promise<void>;
   reassignTask(taskId: string, agent: string): Promise<void>;
   streamTaskOutput(sessionId: string, taskId: string): PipelineOutputSource;
+  streamTaskTurns(sessionId: string, taskId: string): PipelineTurnsSource;
   // Historical run replay (HANDOFF.md §4) — the Pipeline tab's run picker.
   listRuns(sessionId: string): Promise<PipelineRun[]>;
   getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
@@ -82,6 +96,24 @@ export class FetchPipelineClient implements PipelineClient {
     return {
       onChunk(listener: (chunk: string) => void): () => void {
         const handler = (ev: MessageEvent<string>) => listener(JSON.parse(ev.data) as string);
+        es.addEventListener("message", handler);
+        return () => es.removeEventListener("message", handler);
+      },
+      close(): void {
+        es.close();
+      },
+    };
+  }
+
+  streamTaskTurns(sessionId: string, taskId: string): PipelineTurnsSource {
+    const es = new EventSource(
+      `${ROUTER_BASE}/sessions/${sessionId}/pipeline/tasks/${taskId}/turns`,
+    );
+    es.addEventListener("end", () => es.close());
+    return {
+      onTurns(listener: (turns: TranscriptMessage[]) => void): () => void {
+        const handler = (ev: MessageEvent<string>) =>
+          listener(JSON.parse(ev.data) as TranscriptMessage[]);
         es.addEventListener("message", handler);
         return () => es.removeEventListener("message", handler);
       },

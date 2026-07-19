@@ -1,0 +1,126 @@
+.feed {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg1);
+  font: var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.metaTask {
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font: var(--fs-body) var(--mono);
+}
+
+.time {
+  flex: none;
+  color: var(--text3);
+  font: var(--fs-chip) var(--mono);
+  width: 6.5em;
+}
+
+.prose {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+}
+
+.prose[data-role="agent"] {
+  background: var(--accent-soft);
+}
+
+.prose[data-role="user"] {
+  background: var(--bg2);
+}
+
+.speaker {
+  flex: none;
+  color: var(--text3);
+  text-transform: uppercase;
+  font: 650 var(--fs-chip) var(--sans);
+}
+
+.text {
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+.tool {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text2);
+}
+
+.tool[data-pending] {
+  background: var(--warn-soft);
+  border-radius: var(--r-sm);
+}
+
+.toolMark {
+  flex: none;
+  color: var(--accent);
+}
+
+.toolName {
+  flex: none;
+  font: 650 var(--fs-sm) var(--mono);
+  color: var(--text);
+}
+
+.toolResult {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 0 var(--space-2) 0 calc(var(--space-2) + 1.5em);
+  color: var(--text3);
+  font: var(--fs-chip) var(--mono);
+}
+
+.resultMark {
+  flex: none;
+  color: var(--ok-fg);
+}
+
+.arg {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.liveness {
+  flex: none;
+  margin-left: auto;
+  color: var(--warn-fg);
+  font: 650 var(--fs-chip) var(--sans);
+}

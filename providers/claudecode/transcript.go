@@ -47,12 +47,16 @@ type transcriptLine struct {
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
 	Cwd string `json:"cwd"`
+	// Timestamp is claude-code's own RFC3339 stamp on every conversation
+	// line. Unparseable or absent leaves the zero time.Time.
+	Timestamp string `json:"timestamp"`
 }
 
 // normalizeTranscript maps transcript JSONL onto the provider-independent
-// Message form consumed by synthesis and retro (spec §4, §7): user text,
-// agent text, and tool invocations; subagent sidechains and tool results
-// are dropped.
+// Message form consumed by synthesis, retro, and the pipeline drill-in feed
+// (spec §4, §7): user text, agent text, tool invocations, and tool results
+// (Role "tool_result", correlated back to its tool_use via Tool.ID); subagent
+// sidechains are dropped.
 func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 	var msgs []provider.Message
 	sc := bufio.NewScanner(r)
@@ -69,28 +73,44 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 		if l.IsSidechain || l.Message == nil {
 			continue
 		}
+		var ts time.Time
+		if l.Timestamp != "" {
+			if parsed, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
+				ts = parsed
+			}
+		}
 		switch l.Type {
 		case "user":
 			var texts []string
 			for _, b := range l.Message.blocks() {
-				if b.Type == "text" && b.Text != "" {
-					texts = append(texts, b.Text)
+				switch b.Type {
+				case "text":
+					if b.Text != "" {
+						texts = append(texts, b.Text)
+					}
+				case "tool_result":
+					msgs = append(msgs, provider.Message{
+						Role:      "tool_result",
+						Text:      toolResultText(b.Content),
+						Tool:      &provider.ToolUse{ID: b.ToolUseID},
+						Timestamp: ts,
+					})
 				}
 			}
 			if len(texts) > 0 {
-				msgs = append(msgs, provider.Message{Role: "user", Text: strings.Join(texts, "\n")})
+				msgs = append(msgs, provider.Message{Role: "user", Text: strings.Join(texts, "\n"), Timestamp: ts})
 			}
 		case "assistant":
 			for _, b := range l.Message.blocks() {
 				switch b.Type {
 				case "text":
 					if b.Text != "" {
-						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text})
+						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts})
 					}
 				case "tool_use":
 					msgs = append(msgs, provider.Message{Role: "tool", Tool: &provider.ToolUse{
-						Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
-					}})
+						ID: b.ID, Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
+					}, Timestamp: ts})
 				}
 			}
 		}

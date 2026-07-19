@@ -1,6 +1,9 @@
 package provider
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // EventKind classifies one normalized session event. Every adapter maps its
 // harness's wire format onto these — the platform above the provider layer
@@ -20,6 +23,14 @@ const (
 	// limit, protocol error). The session may or may not survive; a
 	// subsequent channel close without EventTurnEnd means it did not.
 	EventError EventKind = "error"
+	// EventSessionRef — the provider announced its native session ref
+	// (Ref) mid-invocation, before the turn finished. OneShot callers that
+	// need exact attribution before completion (e.g. the pipeline engine,
+	// to record which transcript belongs to a running stage attempt) rely
+	// on this rather than waiting for OneShotResult.Ref. Fired at most
+	// once per invocation; providers with no such wire-level announcement
+	// never emit it.
+	EventSessionRef EventKind = "session_ref"
 )
 
 // Event is one entry in a session's normalized stream.
@@ -33,10 +44,15 @@ type Event struct {
 	Usage *Usage `json:"usage,omitempty"`
 	// Interrupted marks a turn ended by Interrupt rather than completion.
 	Interrupted bool `json:"interrupted,omitempty"`
+	// Ref for EventSessionRef: the provider-native session ref.
+	Ref string `json:"ref,omitempty"`
 }
 
 // ToolUse is a normalized tool invocation.
 type ToolUse struct {
+	// ID is the provider-native tool_use identifier, when the wire format
+	// has one — the correlation key back to a matching tool_result.
+	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input,omitempty"`
 	// Path is set when the tool touched a file — the provider layer's
@@ -65,7 +81,10 @@ type Usage struct {
 // Message is one normalized transcript entry (TranscriptReader). Synthesis
 // and retro (spec §4, §7) read this shape regardless of harness.
 type Message struct {
-	Role string   `json:"role"` // "user", "agent", or "tool"
-	Text string   `json:"text,omitempty"`
+	Role string `json:"role"` // "user", "agent", "tool", or "tool_result"
+	Text string `json:"text,omitempty"`
 	Tool *ToolUse `json:"tool,omitempty"`
+	// Timestamp is when the provider recorded this entry, when the wire
+	// format carries one. Zero value when unknown.
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }

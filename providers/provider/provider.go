@@ -108,7 +108,12 @@ type OneShotRequest struct {
 
 // OneShotResult is the completed invocation.
 type OneShotResult struct {
-	Text  string `json:"text"`
+	Text string `json:"text"`
+	// Ref is the provider-native session ref for this invocation, when the
+	// provider's wire format announces one (e.g. claude-code's session_id
+	// on every stream line) — exact attribution for transcript lookup,
+	// no path guessing. Empty when the provider has no such concept.
+	Ref   string `json:"ref,omitempty"`
 	Usage Usage  `json:"usage"`
 }
 

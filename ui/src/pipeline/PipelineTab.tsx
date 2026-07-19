@@ -100,6 +100,15 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
     return () => outputSource?.close();
   }, [outputSource]);
 
+  const turnsSource = useMemo(
+    () => (selectedTask ? pipelineClient.streamTaskTurns(sessionId, selectedTask.id) : undefined),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pipelineClient, sessionId, selectedTask?.id],
+  );
+  useEffect(() => {
+    return () => turnsSource?.close();
+  }, [turnsSource]);
+
   return (
     <div className={styles.tab} ref={tabRef}>
       <RunHeader
@@ -138,12 +147,13 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
           />
         </div>
       )}
-      {selectedTask && outputSource && (
+      {selectedTask && outputSource && turnsSource && (
         <TaskDrillIn
           task={selectedTask}
           attempts={selectedRunState?.attempts ?? []}
           touchedFiles={selectedRunState?.touchedFiles ?? []}
           outputSource={outputSource}
+          turnsSource={turnsSource}
           onClose={() => setSelectedTaskId(undefined)}
           tabHeight={tabHeight}
         />

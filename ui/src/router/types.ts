@@ -213,6 +213,7 @@ export interface Envelope {
 
 // mirrors providers/provider/event.go ToolUse
 export interface ToolUse {
+  id?: string;
   name: string;
   input?: unknown; // json.RawMessage
   path?: string;
@@ -235,10 +236,11 @@ export interface Attribution {
 
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool";
+  role: "user" | "agent" | "tool" | "tool_result";
   text?: string;
   tool?: ToolUse;
   attribution?: Attribution;
+  timestamp?: string; // RFC3339, when the provider recorded this entry
 }
 
 // mirrors pkg/contracts/link.go Grant
