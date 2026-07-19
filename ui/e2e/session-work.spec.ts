@@ -197,7 +197,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     const rail = page.locator('[aria-label="Session list"]');
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
-    await page.getByRole("button", { name: "Graph" }).click();
+    await page.getByRole("button", { name: "Graph", exact: true }).click();
 
     await expect(page.getByText("Runs when a slot opens", { exact: false })).toBeVisible();
     await expect(page.getByText("e2e session-work task")).toBeVisible(); // tray
