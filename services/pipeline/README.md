@@ -41,7 +41,27 @@ tasks whose merges introduced the conflicting changes (walked via `Task:`
 trailers since the branch's base). With no `loop_back` configured, that's
 still "task blocked, worktree and branch kept for inspection" as before; with
 a template-level `merge_resolve` stage (see `on_loop` below), that failure
-output is exactly the prompt a resolving agent needs. The primary-side abort
+output is exactly the prompt a resolving agent needs.
+
+Both the rebase-before-merge `git merge` and the trunk-side merge go through
+[mergiraf](https://mergiraf.org) — a syntax-aware structural merge tool —
+when it's available: `ensureSetup` registers it as a git merge driver
+(`merge.mergiraf.driver` config + `* merge=mergiraf` in the shared repo's
+`.git/info/attributes`, mergiraf's own documented integration, not a bespoke
+whole-tree invocation) once per run, so adjacent, non-overlapping edits
+between two task branches resolve automatically instead of conflicting on
+shared diff context. Mergiraf's own conservative defaults still apply —
+genuinely overlapping edits are left conflicted and flow into the same
+`attributeConflict` path unchanged, diff3 markers and all. `Config.MergirafPath`
+picks the binary explicitly (falling back cleanly if it doesn't resolve to a
+real executable); empty falls back to a `PATH` lookup for `mergiraf`; not
+found at all means plain `git merge`, silently and without error — either
+way, which driver ran is on every `merge.attempted` event's `merge_driver`
+field ("mergiraf" or "git"). Pinned version for this machine: **mergiraf
+0.18.0**, installed via `cargo install --locked mergiraf` to
+`~/.cargo/bin/mergiraf`.
+
+The primary-side abort
 in `worktrees.merge` remains as a rare defensive fallback for conflicts that
 somehow reach the trunk merge itself. Uncommitted agent work is
 auto-committed with the task trailer before merging (never lost, always
@@ -167,6 +187,20 @@ never a mock of either contract.
   conflicting change: TestConflictingPairBlocksSecond (a real same-lines
   conflict needs both branches off a common base — concurrent tasks, not
   sequential ones).
+- **Mergiraf shrinks the conflict surface without softening real conflicts**
+  — adjacent, non-overlapping edits to the same Go and TS files across two
+  branches rebase clean through the driver: TestMergirafResolvesAdjacentEdits.
+  Genuinely overlapping edits still conflict and still produce the
+  `merge.conflicted` attribution event even with mergiraf active — its
+  cautious defaults never silently resolve a suspicious case:
+  TestMergirafStillConflictsOnOverlappingEdits. With the binary unavailable
+  (a bad `Config.MergirafPath` or none found on `PATH`), the engine falls
+  back to plain `git merge` with no behavior change beyond losing the
+  auto-resolution — the same adjacent-edit scenario conflicts instead:
+  TestMergirafAbsentFallsBackToPlainGit. All three assert which driver ran
+  from the `merge.attempted` event's `merge_driver` field; these tests skip
+  (rather than fail) on a machine without mergiraf installed, since it's an
+  external, optional binary.
 - **`on_loop` validates, skips the happy path, and enters after a loop-back**
   — a template with a `merge_resolve` stage guarded by `when: on_loop` and
   wired as the merge stage's `loop_back` target: TestOnLoopValidatesSkipsThenEntersMergeResolve.

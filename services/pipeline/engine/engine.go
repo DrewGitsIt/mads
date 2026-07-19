@@ -92,6 +92,16 @@ type Config struct {
 	// <stage>-attempt-<n>.log — the Router serves these to the Pipeline
 	// tab's drill-in. Empty (the default) is a no-op: no log capture.
 	MadsHome string
+
+	// MergirafPath is the path to the mergiraf binary (mergiraf.org),
+	// registered as the land queue's git merge driver so adjacent-edit
+	// conflicts between parallel task branches resolve automatically while
+	// genuinely overlapping edits still conflict for attribution. Empty
+	// (the default) skips detection: Run falls back to a PATH lookup for
+	// "mergiraf"; if that also fails, land attempts use plain git merge.
+	// Pinned version for this machine: mergiraf 0.18.0, installed via
+	// `cargo install --locked mergiraf` to ~/.cargo/bin/mergiraf.
+	MergirafPath string
 }
 
 // Summary is the run's outcome.
@@ -162,10 +172,25 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		if cfg.WorktreeRoot == "" {
 			return nil, errors.New("isolated runs require WorktreeRoot")
 		}
+		mergirafPath := cfg.MergirafPath
+		if mergirafPath == "" {
+			if found, err := exec.LookPath("mergiraf"); err == nil {
+				mergirafPath = found
+			}
+		} else if _, err := exec.LookPath(mergirafPath); err != nil {
+			// A configured-but-unusable path must fall back cleanly, same
+			// as no configuration at all — not surface as a broken driver.
+			mergirafPath = ""
+		}
+		if mergirafPath != "" {
+			log.Printf("engine: land queue merge driver: mergiraf (%s)", mergirafPath)
+		} else {
+			log.Printf("engine: land queue merge driver: git (mergiraf not found)")
+		}
 		e.wt = &worktrees{
 			primary: cfg.Cwd, root: cfg.WorktreeRoot,
 			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
-			data: cfg.Data,
+			data: cfg.Data, mergirafPath: mergirafPath,
 		}
 	}
 	return e.run(ctx)
@@ -668,8 +693,13 @@ func (g *gateFailure) Unwrap() error { return g.err }
 // future merge_resolve stage and the Merge Queue UI consume.
 func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []template.Stage, run *taskRun, task contracts.Task) error {
 	forkSHA := e.wt.fork(task.ID)
+	mergeDriver := "git"
+	if e.wt.mergirafPath != "" {
+		mergeDriver = mergirafDriverName
+	}
 	e.event(ctx, contracts.MergeAttempted, task.ID, map[string]any{
 		"branch": run.branch, "target_branch": "trunk", "fork_sha": forkSHA,
+		"merge_driver": mergeDriver,
 	})
 
 	err := e.wt.commitStray(ctx, run.dir, task)
