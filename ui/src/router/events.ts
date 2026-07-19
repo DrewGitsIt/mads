@@ -16,7 +16,7 @@ interface Subscription {
 // generous margin, not a tuning knob. SSE has no app-level backpressure; if
 // the dispatch queue would ever exceed this, the durable log + cursor is the
 // recovery mechanism, not an in-memory buffer — drop the connection and
-// resume from lastDeliveredSeq rather than buffer unboundedly.
+// resume from resumeSince() rather than buffer unboundedly.
 const MAX_QUEUE = 500;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
@@ -35,7 +35,15 @@ const BACKOFF_MAX_MS = 30000;
 // concern instead — see dispatchOne's `sub.sessionId` check.
 let source: EventSource | null = null;
 const subscriptions = new Set<Subscription>();
-let lastDeliveredSeq = 0;
+// Per type, not one scalar: a single "highest seq ever delivered" cursor
+// conflates "seen for type A" with "seen for type B." If a subscriber
+// widens the union to a type this connection has never carried, and some
+// other already-covered type's traffic had already pushed a scalar cursor
+// past an earlier, never-delivered event of the new type, that event would
+// look already-seen and be skipped forever — the resumed connection's
+// `since` would start past it, and even if the server resent it anyway,
+// the scalar dedupe below would still drop it as "already delivered."
+let lastDeliveredSeqByType = new Map<string, number>();
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
@@ -57,13 +65,30 @@ function buildUrl(types: string[], since: number): string {
   return url.toString();
 }
 
+// The resume point for a (re)connection: the minimum high-water-mark across
+// every currently-subscribed type, defaulting an as-yet-unseen type to 0.
+// Taking the min (not the max, and not the old single scalar) guarantees
+// that widening to a type this connection has never carried resumes from
+// 0 for that type's history — replayed envelopes of already-covered types
+// are simply deduped below, not lost.
+function resumeSince(): number {
+  let since = Infinity;
+  for (const type of unionTypes()) {
+    since = Math.min(since, lastDeliveredSeqByType.get(type) ?? 0);
+  }
+  return Number.isFinite(since) ? since : 0;
+}
+
 function dispatchOne(env: Envelope): void {
   // Belt-and-suspenders: the Go log's Since is documented "strictly greater
   // than" already, so server-side overlap on resume shouldn't happen — but
   // this dedupe is what makes the exactly-once guarantee independent of
-  // that implementation detail.
-  if (env.seq <= lastDeliveredSeq) return;
-  lastDeliveredSeq = env.seq;
+  // that implementation detail. Per-type, for the same reason resumeSince
+  // resumes per-type: a scalar cursor would let one type's traffic mask
+  // another type's still-undelivered history.
+  const lastForType = lastDeliveredSeqByType.get(env.type) ?? 0;
+  if (env.seq <= lastForType) return;
+  lastDeliveredSeqByType.set(env.type, env.seq);
   reconnectAttempt = 0; // live data flowing — connection is healthy
   for (const sub of subscriptions) {
     if (sub.sessionId && env.session_id !== sub.sessionId) continue;
@@ -108,7 +133,7 @@ function scheduleReconnect(): void {
 function openConnection(): void {
   source?.close();
   const types = unionTypes();
-  source = new EventSource(buildUrl(types, lastDeliveredSeq));
+  source = new EventSource(buildUrl(types, resumeSince()));
   for (const type of types) source.addEventListener(type, handleFrame as EventListener);
   // A native EventSource auto-reconnects to the exact same URL (same
   // original `since`, or none), which would silently replay a huge or
@@ -125,8 +150,8 @@ function openConnection(): void {
  * The server-side `types` filter is the union of every active subscription's
  * types, recomputed on each subscribe/unsubscribe. Widening the union (a new
  * type not already covered) closes the current connection and opens a new
- * one immediately, resuming from `since=lastDeliveredSeq` so nothing is
- * replayed or lost. Unsubscribing never narrows the filter, to avoid
+ * one immediately, resuming from `since=resumeSince()` — the minimum
+ * per-type high-water-mark across the union — so nothing is lost. Unsubscribing never narrows the filter, to avoid
  * reconnect thrash as components mount/unmount — the connection only tears
  * down fully at zero subscribers.
  */
@@ -145,7 +170,7 @@ export function subscribeToEvents(
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = undefined;
     reconnectAttempt = 0;
-    openConnection(); // deliberate widen — no backoff, resumes from lastDeliveredSeq
+    openConnection(); // deliberate widen — no backoff, resumes from resumeSince()
   }
 
   return () => {
@@ -156,7 +181,7 @@ export function subscribeToEvents(
       reconnectAttempt = 0;
       source?.close();
       source = null;
-      lastDeliveredSeq = 0;
+      lastDeliveredSeqByType = new Map();
       queue = [];
       draining = false;
     }
