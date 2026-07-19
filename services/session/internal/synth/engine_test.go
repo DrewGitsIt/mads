@@ -77,6 +77,14 @@ type noteSummary struct {
 	Source  string               `json:"source"`
 }
 
+func totalNotes(tasks []contracts.Task) int {
+	n := 0
+	for _, t := range tasks {
+		n += len(t.Notes)
+	}
+	return n
+}
+
 func summarize(tasks []contracts.Task) []taskSummary {
 	out := make([]taskSummary, 0, len(tasks))
 	for _, t := range tasks {
@@ -98,12 +106,15 @@ func TestFullModeSurfacesAllDrafts(t *testing.T) {
 
 	e.OnEvent(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{Name: "edit", Path: "uploader.go"}})
 
+	// Wait for notes too, not just task count: write() creates tasks first
+	// and attaches notes in a later step of the same background goroutine,
+	// so task count alone can be satisfied before the notes land.
 	eventually(t, 5*time.Second, func() bool {
 		tasks, err := verify.Tasks(ctx, "ses_full", "")
 		if err != nil {
 			t.Fatalf("Tasks: %v", err)
 		}
-		return len(tasks) == 2
+		return len(tasks) == 2 && totalNotes(tasks) == 2
 	})
 
 	tasks, err := verify.Tasks(ctx, "ses_full", "")
@@ -126,12 +137,15 @@ func TestLightModeSurfacesOnlyHighConfidence(t *testing.T) {
 
 	e.OnEvent(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{Name: "edit", Path: "uploader.go"}})
 
+	// Wait for notes too, not just task count: write() creates tasks first
+	// and attaches notes in a later step of the same background goroutine,
+	// so task count alone can be satisfied before the notes land.
 	eventually(t, 5*time.Second, func() bool {
 		tasks, err := verify.Tasks(ctx, "ses_light", "")
 		if err != nil {
 			t.Fatalf("Tasks: %v", err)
 		}
-		return len(tasks) == 1
+		return len(tasks) == 1 && totalNotes(tasks) == 1
 	})
 
 	tasks, err := verify.Tasks(ctx, "ses_light", "")

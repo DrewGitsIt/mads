@@ -18,7 +18,7 @@ up() { curl -sf -o /dev/null "$1" 2>/dev/null; }
 
 if ! up http://localhost:8081/health; then
   go build -o bin/data ./services/data
-  ./bin/data >> /tmp/mads-data.log 2>&1 &
+  ./bin/data -addr localhost:8081 >> /tmp/mads-data.log 2>&1 &
   started+=($!)
   until up http://localhost:8081/health; do sleep 0.2; done
   echo "app.sh: started data service (:8081)"
@@ -27,7 +27,7 @@ fi
 if ! up http://localhost:8080/health; then
   go build -o bin/router ./services/router
   go build -o bin/session ./services/session
-  ./bin/router -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
+  ./bin/router -addr localhost:8080 -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
   started+=($!)
   until up http://localhost:8080/health; do sleep 0.2; done
   echo "app.sh: started router (:8080)"

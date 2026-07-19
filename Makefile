@@ -52,9 +52,17 @@ e2e-smoke:
 # VITE_ROUTER_URL="" bakes a relative (same-origin) router base into ui/dist
 # instead of the localhost:8080 default (client.ts's ROUTER_BASE) — the
 # Router serves this build itself on an ephemeral port, never 8080.
+# `flock` around the install: the shared ~/.cache/ms-playwright browser
+# cache is safe to reuse concurrently once populated (Playwright checks a
+# marker file and no-ops), but a concurrent *cold* install from two
+# worktrees races two extractions into the same target directory with no
+# lock of its own — see playwright-core's downloadBrowserWithProgressBar.
+# Serializing just this step (not the whole test run) avoids that without
+# giving up the warm-cache fast path on every other run.
 ui-smoke: ui-deps
 	VITE_ROUTER_URL="" npm --prefix ui run build
-	npx --prefix ui playwright install chromium
+	mkdir -p ~/.cache/ms-playwright
+	flock ~/.cache/ms-playwright/.install.lock npx --prefix ui playwright install chromium
 	npm --prefix ui run test:e2e
 
 # Release gate: cross-platform build matrix + install/update smokes against
