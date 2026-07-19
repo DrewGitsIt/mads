@@ -502,12 +502,29 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			continue
 		}
 		feedback = err.Error()
-		e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
-			"stage": st.Name, "reason": trim(feedback, 2000),
-		})
 
-		if of := st.OnFail; of != nil && of.LoopBack != "" {
-			key := task.ID + "|" + st.Name
+		// A post-rebase gate ("verify") failure is an ordinary on_fail-
+		// capable stage failure — only WHEN it runs moved into the land
+		// attempt (spec: "the gate always runs post-rebase"), not what
+		// happens on failure. Route it through the gate stage's own
+		// on_fail, not the merge stage's, and attribute the failed/blocked
+		// event to the gate by name — landAttempt already emitted the
+		// gate's own stage.failed, so don't double-report it under the
+		// merge stage's name here.
+		failedStage := st
+		var gf *gateFailure
+		if errors.As(err, &gf) {
+			if gidx, ok := gateStage(stages); ok {
+				failedStage = stages[gidx]
+			}
+		} else {
+			e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+				"stage": st.Name, "reason": trim(feedback, 2000),
+			})
+		}
+
+		if of := failedStage.OnFail; of != nil && of.LoopBack != "" {
+			key := task.ID + "|" + failedStage.Name
 			e.mu.Lock()
 			e.loops[key]++
 			taken := e.loops[key]
@@ -515,14 +532,14 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			if taken <= of.MaxLoops {
 				e.note(ctx, task.ID, contracts.NoteObservation, fmt.Sprintf(
 					"stage %s failed (loop-back %d/%d to %s): %s",
-					st.Name, taken, of.MaxLoops, of.LoopBack, trim(output, 2000)))
+					failedStage.Name, taken, of.MaxLoops, of.LoopBack, trim(output, 2000)))
 				i = stageIndex(stages, of.LoopBack)
 				loopedInto = true
 				continue
 			}
 		}
 		terminal.Store(true)
-		e.block(ctx, &task, st.Name, blockReason(trim(output, 2000)))
+		e.block(ctx, &task, failedStage.Name, blockReason(trim(output, 2000)))
 		return contracts.StatusBlocked
 	}
 
@@ -612,6 +629,9 @@ func buildStageCommand(stages []template.Stage) (string, bool) {
 // task's earlier green in its own worktree does not count for landing") —
 // landAttempt runs it directly instead of the normal stage loop, which
 // skips over its index once the land attempt that consumed it succeeds.
+// Only WHEN it runs moved into the land attempt: its own on_fail (loop_back
+// included) still governs what happens when its command fails — see
+// gateFailure and its handling in runTask.
 func gateStage(stages []template.Stage) (idx int, ok bool) {
 	for i, st := range stages {
 		if st.Name == "verify" && st.Command != "" {
@@ -620,6 +640,15 @@ func gateStage(stages []template.Stage) (idx int, ok bool) {
 	}
 	return 0, false
 }
+
+// gateFailure marks a post-rebase gate ("verify") command failure, distinct
+// from a rebase/merge conflict, so runTask's on_fail routing (above) can
+// attribute it — and any loop_back — to the gate stage itself rather than
+// the merge stage whose land attempt ran it.
+type gateFailure struct{ err error }
+
+func (g *gateFailure) Error() string { return g.err.Error() }
+func (g *gateFailure) Unwrap() error { return g.err }
 
 // landAttempt runs one FIFO-serialized land attempt for the merge stage:
 // commit stray work, rebase the branch onto current trunk, run the
@@ -658,10 +687,11 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 			gname, gcmd := stages[gidx].Name, stages[gidx].Command
 			e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
 			if _, gerr := e.runCommand(ctx, gcmd, run.dir); gerr != nil {
-				err = e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
+				gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
 				e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
-					"stage": gname, "reason": trim(err.Error(), 2000),
+					"stage": gname, "reason": trim(gfErr.Error(), 2000),
 				})
+				err = &gateFailure{err: gfErr}
 			} else {
 				e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
 			}

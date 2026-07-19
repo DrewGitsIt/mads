@@ -483,6 +483,81 @@ func TestHostileTaskTitleMergesCleanly(t *testing.T) {
 	}
 }
 
+// The gate ("verify") stage's command runs inside the merge stage's land
+// attempt, post-rebase — but its own on_fail (loop_back included) must still
+// govern what happens when the command fails; the merge stage's on_fail is a
+// different, unrelated route. Silently ignoring the gate's own on_fail would
+// leave a template author's "loop back to fix it" configuration dead —
+// exactly the mismatch between what the template editor shows and what the
+// engine does that the redesign must not introduce.
+func TestGateFailureHonorsVerifyOwnOnFailLoopBack(t *testing.T) {
+	h := newHarness(t)
+	makefile := "build:\n\t@true\ntest:\n\t@grep -q PASS status.txt\n"
+	if err := os.WriteFile(filepath.Join(h.cwd, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.cwd, "status.txt"), []byte("PASS\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "add", "Makefile", "status.txt")
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed gate")
+
+	const tpl = `name: gate-loop
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+    on_fail: { loop_back: executor, max_loops: 2 }
+`
+	f := mustScenario(t,
+		// Checked first: only matches once a loop-back retry's feedback (the
+		// gate's own suspect-set message) has landed in the prompt.
+		fake.Rule{Match: "gates passed at fork", Reply: "fixed it\nSTAGE: pass",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "status.txt", Content: "PASS\n"}}},
+		fake.Rule{Match: "Pipeline stage: executor\nTask: gate-loop-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "status.txt", Content: "FAIL\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "gate-loop-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+
+	var gateFails, gateStarts, mergeFails int
+	for _, ev := range h.events(t, "stage.failed") {
+		if ev.TaskID != seeded[0].ID {
+			continue
+		}
+		switch {
+		case strings.Contains(string(ev.Payload), `"stage":"verify"`):
+			gateFails++
+		case strings.Contains(string(ev.Payload), `"stage":"merge"`):
+			mergeFails++
+		}
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateStarts++
+		}
+	}
+	if gateFails != 1 {
+		t.Errorf("stage.failed for verify: %d, want 1 (the first gate run, before the loop-back retry)", gateFails)
+	}
+	if gateStarts != 2 {
+		t.Errorf("stage.started for verify: %d, want 2 (initial failure + retry after loop-back)", gateStarts)
+	}
+	// The gate failure must route through the gate's own on_fail, never the
+	// merge stage's — and never get double-reported under the merge stage's
+	// name.
+	if mergeFails != 0 {
+		t.Errorf("stage.failed misattributed to the merge stage: %d, want 0", mergeFails)
+	}
+}
+
 // The installed post-commit hook reports commits from a task worktree to the
 // Data Service with the task trailer, and the linkage chain resolves it
 // (spec §5). curl talks to the real datatest server.
