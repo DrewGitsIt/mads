@@ -349,3 +349,27 @@ export async function pollEventOfType(
   }
   throw new Error(`pollEventOfType: ${sessionId} never emitted ${eventType}`);
 }
+
+/**
+ * Like pollEventOfType, but for "stage.started" narrowed to one named stage
+ * — a multi-stage pipeline emits one per stage, and a journey that needs to
+ * catch a *specific* stage mid-run (not just "the pipeline is running some
+ * stage") needs the payload, not just the event type.
+ */
+export async function pollStageStarted(
+  routerURL: string,
+  sessionId: string,
+  stage: string,
+  timeoutMs = 20_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${routerURL}/events?session_id=${sessionId}&types=stage.started`);
+    if (res.ok) {
+      const events = (await res.json()) as { type: string; payload?: { stage?: string } }[];
+      if (events.some((e) => e.type === "stage.started" && e.payload?.stage === stage)) return;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`pollStageStarted: ${sessionId} stage ${stage} never started`);
+}

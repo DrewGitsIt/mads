@@ -63,19 +63,27 @@ func cmdRun(args []string, out io.Writer) error {
 		return fmt.Errorf("template %q fails launch checks: %w", *tplName, verr)
 	}
 
+	madsHome := defaultMadsHome()
+
 	var prov provider.Provider
 	switch *providerName {
 	case "fake":
+		// WithTranscriptDir makes an announced ref's history durable to
+		// disk under $MADS_HOME, readable by the Router's own separate fake
+		// instance (services/router/main.go) once the drill-in feed asks
+		// for it — the same cross-process bridge claude-code gets for free
+		// from its transcript files living on disk already.
+		fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
 		if *fakeScenario != "" {
 			sc, err := fake.LoadScenario(*fakeScenario)
 			if err != nil {
 				return err
 			}
-			if prov, err = fake.NewWithScenario(sc); err != nil {
+			if prov, err = fake.NewWithScenario(sc, fakeOpt); err != nil {
 				return err
 			}
 		} else {
-			prov = fake.New()
+			prov = fake.New(fakeOpt)
 		}
 	case "claude-code":
 		prov = claudecode.New(claudecode.Config{ExtraArgs: strings.Fields(*claudeArgs)})
@@ -155,7 +163,7 @@ func cmdRun(args []string, out io.Writer) error {
 		Template: tpl, Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		Isolated: *isolated, WorktreeRoot: root, DataURL: *data,
-		MadsHome: defaultMadsHome(),
+		MadsHome: madsHome,
 	})
 	if err == nil {
 		select { // let the completion event land in the terminal

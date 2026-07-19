@@ -190,6 +190,151 @@ func TestOneShotToolUseEmitsEvent(t *testing.T) {
 	}
 }
 
+// Scenario.AnnounceOneShotRef opts a fake into the claude-code-shaped
+// behavior: OneShot announces provider.EventSessionRef before the invocation
+// completes, OneShotResult.Ref carries the same value, and Transcript(ref)
+// backs it with a normalized history (tool_use, tool_result, agent text) — a
+// caller polling mid-invocation sees the tool_use turn with no matching
+// tool_result yet, exactly the "still working" state the drill-in's liveness
+// row renders.
+func TestOneShotAnnouncesRefAndBacksTranscript(t *testing.T) {
+	sc, err := fake.LoadScenario("testdata/demo.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.AnnounceOneShotRef = true
+	f, err := fake.NewWithScenario(sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+
+	var announced string
+	var midFlightRoles []string
+	res, err := f.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt: "please add auth",
+		Cwd:    cwd,
+		OnEvent: func(ev provider.Event) {
+			if ev.Kind != provider.EventSessionRef {
+				return
+			}
+			announced = ev.Ref
+			// The ref is announced before the chunked reply streams (demo.yaml's
+			// tool runs first) — Transcript(ref) at this instant must already
+			// show the tool_use turn, with no tool_result after it yet.
+			msgs, err := f.Transcript(context.Background(), ev.Ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, m := range msgs {
+				midFlightRoles = append(midFlightRoles, m.Role)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if announced == "" {
+		t.Fatal("OneShot never announced a session ref")
+	}
+	if res.Ref != announced {
+		t.Errorf("OneShotResult.Ref = %q, want the announced ref %q", res.Ref, announced)
+	}
+	if len(midFlightRoles) != 1 || midFlightRoles[0] != "user" {
+		t.Errorf("mid-flight (at announcement) transcript roles: %v, want just [user]", midFlightRoles)
+	}
+
+	msgs, err := f.Transcript(context.Background(), res.Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	want := []string{"user", "tool", "tool_result", "agent"}
+	if len(roles) != len(want) {
+		t.Fatalf("final transcript roles: %v, want %v", roles, want)
+	}
+	for i := range want {
+		if roles[i] != want[i] {
+			t.Errorf("final transcript role %d: %q, want %q (all: %v)", i, roles[i], want[i], roles)
+		}
+	}
+}
+
+// The zero-value scenario keeps OneShot's original behavior: no ref
+// announced, no transcript to back it — the fallback-to-raw-log case.
+func TestOneShotNoRefWithoutAnnounceOptIn(t *testing.T) {
+	f := fake.New()
+	var kinds []provider.EventKind
+	res, err := f.OneShot(context.Background(), provider.OneShotRequest{
+		Prompt:  "echo hi",
+		OnEvent: func(ev provider.Event) { kinds = append(kinds, ev.Kind) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref != "" {
+		t.Errorf("OneShotResult.Ref = %q, want empty without AnnounceOneShotRef", res.Ref)
+	}
+	for _, k := range kinds {
+		if k == provider.EventSessionRef {
+			t.Fatalf("unexpected EventSessionRef without AnnounceOneShotRef: %v", kinds)
+		}
+	}
+}
+
+// TestOneShotTranscriptDirBridgesSeparateInstances proves WithTranscriptDir
+// closes the real gap: in production, the process that runs OneShot (`mads
+// run`) and the process that later reads Transcript(ref) (the Router,
+// serving the drill-in feed) are never the same *fake.Fake — separate Go
+// processes, each with its own New()/NewWithScenario() call. A second,
+// entirely distinct Fake instance pointed at the same dir must still see
+// the first instance's announced ref.
+func TestOneShotTranscriptDirBridgesSeparateInstances(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := fake.NewWithScenario(fake.Scenario{
+		Name:               "writer",
+		AnnounceOneShotRef: true,
+		Rules: []fake.Rule{
+			{Match: "please add auth", Tools: []fake.ToolStep{{Name: "Bash", Input: `{"command":"make test"}`}}, Chunks: []string{"done"}},
+		},
+	}, fake.WithTranscriptDir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := writer.OneShot(context.Background(), provider.OneShotRequest{Prompt: "please add auth", Cwd: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref == "" {
+		t.Fatal("OneShot never announced a session ref")
+	}
+
+	reader := fake.New(fake.WithTranscriptDir(dir))
+	if _, err := reader.Transcript(context.Background(), "no-such-ref"); err == nil {
+		t.Fatal("reader resolved a ref it was never told about")
+	}
+	msgs, err := reader.Transcript(context.Background(), res.Ref)
+	if err != nil {
+		t.Fatalf("reader (a separate Fake instance) could not read writer's ref: %v", err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.Role)
+	}
+	want := []string{"user", "tool", "tool_result", "agent"}
+	if len(roles) != len(want) {
+		t.Fatalf("roles = %v, want %v", roles, want)
+	}
+	for i, r := range want {
+		if roles[i] != r {
+			t.Errorf("roles[%d] = %q, want %q (roles=%v)", i, roles[i], r, roles)
+		}
+	}
+}
+
 // Crash on cue: the event stream closes with NO turn end — exactly the
 // signal downstream supervision (Router) watches for.
 func TestCrashOnCue(t *testing.T) {
