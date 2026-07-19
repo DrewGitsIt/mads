@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -183,5 +184,54 @@ func TestMergirafAbsentFallsBackToPlainGit(t *testing.T) {
 		if got := mergeDriverOf(t, ev); got != "git" {
 			t.Errorf("task %s merge.attempted merge_driver: %q, want git", ev.TaskID, got)
 		}
+	}
+}
+
+// Regression: ensureMergirafDriver used to join `git rev-parse
+// --git-common-dir`'s output onto w.primary unconditionally. That's only
+// correct when w.primary is a normal checkout, where --git-common-dir prints
+// a path relative to it (e.g. ".git"). When w.primary is ITSELF a linked
+// worktree — e.g. the pipeline's own workspace was created via `git worktree
+// add`, pointing at a main checkout elsewhere — --git-common-dir prints an
+// ABSOLUTE path, and joining that onto w.primary silently produced a bogus
+// nested path nobody ever reads: registration no-op'd without returning an
+// error, leaving the merge.attempted event's merge_driver field claiming
+// "mergiraf" while git never actually ran it.
+func TestEnsureMergirafDriverInLinkedWorktreeTopology(t *testing.T) {
+	root := t.TempDir()
+	main := filepath.Join(root, "main")
+	if err := os.Mkdir(main, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, main, "init", "-q", "-b", "main")
+	gitRun(t, main, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+	linked := filepath.Join(root, "linked")
+	gitRun(t, main, "worktree", "add", "-q", "-b", "feature", linked)
+
+	w := &worktrees{primary: linked, mergirafPath: "mergiraf"}
+	if err := w.ensureMergirafDriver(context.Background()); err != nil {
+		t.Fatalf("ensureMergirafDriver: %v", err)
+	}
+
+	// The attributes file must land in the REAL common dir (main/.git/info),
+	// not get lost under a bogus double-joined path.
+	attrPath := filepath.Join(main, ".git", "info", "attributes")
+	raw, err := os.ReadFile(attrPath)
+	if err != nil {
+		t.Fatalf("attributes file missing at the real common dir %s: %v", attrPath, err)
+	}
+	if !strings.Contains(string(raw), "* merge=mergiraf") {
+		t.Errorf("attributes file %s missing merge=mergiraf rule: %q", attrPath, raw)
+	}
+
+	// The double-join bug's exact symptom: linked/<main>/.git/info.
+	bogus := filepath.Join(linked, main, ".git", "info")
+	if _, err := os.Stat(bogus); !os.IsNotExist(err) {
+		t.Errorf("bogus double-joined path exists (the regression this test guards against): %s", bogus)
+	}
+
+	driver := gitOut(t, linked, "config", "--get", "merge.mergiraf.driver")
+	if !strings.Contains(driver, "mergiraf merge --git") {
+		t.Errorf("merge.mergiraf.driver: %q", driver)
 	}
 }

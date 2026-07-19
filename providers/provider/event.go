@@ -81,8 +81,8 @@ type Usage struct {
 // Message is one normalized transcript entry (TranscriptReader). Synthesis
 // and retro (spec §4, §7) read this shape regardless of harness.
 type Message struct {
-	Role string `json:"role"` // "user", "agent", "tool", or "tool_result"
-	Text string `json:"text,omitempty"`
+	Role string   `json:"role"` // "user", "agent", "tool", or "tool_result"
+	Text string   `json:"text,omitempty"`
 	Tool *ToolUse `json:"tool,omitempty"`
 	// Timestamp is when the provider recorded this entry, when the wire
 	// format carries one. Zero value when unknown.

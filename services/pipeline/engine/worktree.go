@@ -126,7 +126,18 @@ func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	infoDir := filepath.Join(w.primary, strings.TrimSpace(gitDir), "info")
+	gitDir = strings.TrimSpace(gitDir)
+	// --git-common-dir is relative to w.primary (typically ".git") when
+	// w.primary is a normal checkout, but ABSOLUTE — pointing at the main
+	// worktree's .git, elsewhere on disk entirely — when w.primary is itself
+	// a linked worktree (e.g. the pipeline's own workspace was created via
+	// `git worktree add`). Joining an absolute gitDir onto w.primary would
+	// silently produce a bogus nested path that git never reads, making this
+	// registration a no-op without ever returning an error.
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(w.primary, gitDir)
+	}
+	infoDir := filepath.Join(gitDir, "info")
 	if err := os.MkdirAll(infoDir, 0o755); err != nil {
 		return err
 	}
