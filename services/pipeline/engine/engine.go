@@ -434,12 +434,6 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		}
 		run.dir, run.worktree, run.branch = dir, dir, branch
 	}
-	mergeHeld := false
-	defer func() {
-		if mergeHeld {
-			e.wt.mergeMu.Unlock()
-		}
-	}()
 	// A blocked task keeps its worktree for inspection; say where it is.
 	blockReason := func(reason string) string {
 		if run.worktree != "" && !run.merged {
@@ -475,34 +469,11 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		var output string
 		var err error
 		if e.wt != nil && isMergeStage(st) {
-			// One merge at a time, and the lock is held through the
-			// remaining stages so verify sees exactly this merge.
-			if !mergeHeld {
-				e.wt.mergeMu.Lock()
-				mergeHeld = true
-			}
-			err = e.wt.commitStray(ctx, run.dir, task)
-			var rebased bool
-			if err == nil {
-				rebased, err = e.wt.rebaseBeforeMerge(ctx, run.dir, task)
-			}
-			if err == nil && rebased {
-				if buildCmd, ok := buildStageCommand(stages); ok {
-					if _, berr := e.runCommand(ctx, buildCmd, run.dir); berr != nil {
-						err = fmt.Errorf("post-rebase sanity build failed: %w", berr)
-					}
-				}
-			}
-			if err == nil {
-				err = e.wt.sweepHandoff(ctx, run.dir, task)
-			}
-			if err == nil {
-				err = e.wt.merge(ctx, st.Command, task, run.branch)
-			}
-			if err == nil {
-				run.dir = e.cfg.Cwd // post-merge stages run on the merged tree
-				run.merged = true
-			}
+			// Exactly one land attempt (rebase -> gate -> merge) at a
+			// time, stable FIFO order (spec: "Not Rocket Science Rule").
+			release := e.wt.land.acquire()
+			err = e.landAttempt(ctx, st, stages, &run, task)
+			release()
 			output = ""
 			if err != nil {
 				output = err.Error()
@@ -520,15 +491,40 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		if err == nil {
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": st.Name})
 			i++
+			// The gate stage's command already ran (as the land attempt's
+			// pre-land gate, landAttempt); don't run it again as a normal
+			// stage.
+			if e.wt != nil && isMergeStage(st) {
+				if gidx, ok := gateStage(stages); ok && gidx >= i {
+					i = gidx + 1
+				}
+			}
 			continue
 		}
 		feedback = err.Error()
-		e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
-			"stage": st.Name, "reason": trim(feedback, 2000),
-		})
 
-		if of := st.OnFail; of != nil && of.LoopBack != "" {
-			key := task.ID + "|" + st.Name
+		// A post-rebase gate ("verify") failure is an ordinary on_fail-
+		// capable stage failure — only WHEN it runs moved into the land
+		// attempt (spec: "the gate always runs post-rebase"), not what
+		// happens on failure. Route it through the gate stage's own
+		// on_fail, not the merge stage's, and attribute the failed/blocked
+		// event to the gate by name — landAttempt already emitted the
+		// gate's own stage.failed, so don't double-report it under the
+		// merge stage's name here.
+		failedStage := st
+		var gf *gateFailure
+		if errors.As(err, &gf) {
+			if gidx, ok := gateStage(stages); ok {
+				failedStage = stages[gidx]
+			}
+		} else {
+			e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+				"stage": st.Name, "reason": trim(feedback, 2000),
+			})
+		}
+
+		if of := failedStage.OnFail; of != nil && of.LoopBack != "" {
+			key := task.ID + "|" + failedStage.Name
 			e.mu.Lock()
 			e.loops[key]++
 			taken := e.loops[key]
@@ -536,14 +532,14 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			if taken <= of.MaxLoops {
 				e.note(ctx, task.ID, contracts.NoteObservation, fmt.Sprintf(
 					"stage %s failed (loop-back %d/%d to %s): %s",
-					st.Name, taken, of.MaxLoops, of.LoopBack, trim(output, 2000)))
+					failedStage.Name, taken, of.MaxLoops, of.LoopBack, trim(output, 2000)))
 				i = stageIndex(stages, of.LoopBack)
 				loopedInto = true
 				continue
 			}
 		}
 		terminal.Store(true)
-		e.block(ctx, &task, st.Name, blockReason(trim(output, 2000)))
+		e.block(ctx, &task, failedStage.Name, blockReason(trim(output, 2000)))
 		return contracts.StatusBlocked
 	}
 
@@ -624,6 +620,115 @@ func buildStageCommand(stages []template.Stage) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// gateStage finds the stage literally named "verify" with a non-empty
+// command, by the same naming convention as buildStageCommand. Its command
+// is the land queue's gate: run post-rebase, immediately before every land
+// attempt's merge (spec: "the gate always runs post-rebase; a task's
+// earlier green in its own worktree does not count for landing") —
+// landAttempt runs it directly instead of the normal stage loop, which
+// skips over its index once the land attempt that consumed it succeeds.
+// Only WHERE it runs moved into the land attempt: its own `when:` guard
+// still governs WHETHER it runs at all (landAttempt evaluates e.conds[gidx]
+// exactly as the normal stage loop would, so the template editor's "when"
+// field on a verify stage means the same thing it says), and its own
+// on_fail (loop_back included) still governs what happens when its command
+// fails — see gateFailure and its handling in runTask.
+func gateStage(stages []template.Stage) (idx int, ok bool) {
+	for i, st := range stages {
+		if st.Name == "verify" && st.Command != "" {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// gateFailure marks a post-rebase gate ("verify") command failure, distinct
+// from a rebase/merge conflict, so runTask's on_fail routing (above) can
+// attribute it — and any loop_back — to the gate stage itself rather than
+// the merge stage whose land attempt ran it.
+type gateFailure struct{ err error }
+
+func (g *gateFailure) Error() string { return g.err.Error() }
+func (g *gateFailure) Unwrap() error { return g.err }
+
+// landAttempt runs one FIFO-serialized land attempt for the merge stage:
+// commit stray work, rebase the branch onto current trunk, run the
+// post-rebase sanity build (if a "build" stage exists) when the rebase
+// actually moved the branch, sweep any stray HANDOFF.md, gate the rebased
+// result (the "verify" stage's command, if any and if its own `when:` guard
+// passes — its command always runs post-rebase rather than counting an
+// earlier green in the task's own worktree, per spec, but the guard still
+// decides whether it runs at all), then merge into the primary. Must be
+// called with the land queue held. Emits
+// merge.attempted/merge.conflicted/merge.completed naming the task's fork
+// SHA and the trunk HEAD this attempt gated and landed against, plus (on
+// conflict) structured pairwise attribution — the acceptance criterion a
+// future merge_resolve stage and the Merge Queue UI consume.
+func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []template.Stage, run *taskRun, task contracts.Task) error {
+	forkSHA := e.wt.fork(task.ID)
+	e.event(ctx, contracts.MergeAttempted, task.ID, map[string]any{
+		"branch": run.branch, "target_branch": "trunk", "fork_sha": forkSHA,
+	})
+
+	err := e.wt.commitStray(ctx, run.dir, task)
+	var trunkHead string
+	var rebased bool
+	if err == nil {
+		rebased, trunkHead, err = e.wt.rebaseBeforeMerge(ctx, run.dir, task)
+	}
+	if err == nil && rebased {
+		if buildCmd, ok := buildStageCommand(stages); ok {
+			if _, berr := e.runCommand(ctx, buildCmd, run.dir); berr != nil {
+				err = fmt.Errorf("post-rebase sanity build failed: %w", berr)
+			}
+		}
+	}
+	if err == nil {
+		err = e.wt.sweepHandoff(ctx, run.dir, task)
+	}
+	if err == nil {
+		if gidx, ok := gateStage(stages); ok {
+			gname, gcmd := stages[gidx].Name, stages[gidx].Command
+			if !e.conds[gidx].Eval(task.Labels, false) {
+				e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
+					"stage": gname, "when": stages[gidx].When,
+				})
+			} else {
+				e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
+				if _, gerr := e.runCommand(ctx, gcmd, run.dir); gerr != nil {
+					gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
+					e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+						"stage": gname, "reason": trim(gfErr.Error(), 2000),
+					})
+					err = &gateFailure{err: gfErr}
+				} else {
+					e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+				}
+			}
+		}
+	}
+	if err == nil {
+		err = e.wt.merge(ctx, st.Command, task, run.branch, trunkHead)
+	}
+	if err != nil {
+		var ce *ConflictError
+		if errors.As(err, &ce) {
+			e.event(ctx, contracts.MergeConflicted, task.ID, map[string]any{
+				"branch": run.branch, "target_branch": "trunk", "files": ce.Files,
+				"hunks": ce.Hunks, "landed_task_ids": ce.LandedTaskIDs,
+				"fork_sha": forkSHA, "trunk_head": trunkHead,
+			})
+		}
+		return err
+	}
+	run.dir = e.cfg.Cwd // post-merge stages run on the merged tree
+	run.merged = true
+	e.event(ctx, contracts.MergeCompleted, task.ID, map[string]any{
+		"branch": run.branch, "target_branch": "trunk", "fork_sha": forkSHA, "trunk_head": trunkHead,
+	})
+	return nil
 }
 
 // runStage executes one stage in dir; a nil error is a pass. output carries

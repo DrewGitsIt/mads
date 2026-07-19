@@ -121,6 +121,45 @@ func TestIndependentTasksMergeCleanly(t *testing.T) {
 	if branches := gitOut(t, h.cwd, "branch", "--list", "mads/*"); strings.TrimSpace(branches) != "" {
 		t.Errorf("task branches survived cleanup:\n%s", branches)
 	}
+
+	// Fork SHA recorded at worktree creation is visible in the land
+	// attempt's own events (merge.attempted and merge.completed), per task.
+	for _, task := range seeded {
+		var attempted, completed *contracts.Envelope
+		for _, ev := range h.events(t, "merge.attempted") {
+			if ev.TaskID == task.ID {
+				attempted = &ev
+			}
+		}
+		for _, ev := range h.events(t, "merge.completed") {
+			if ev.TaskID == task.ID {
+				completed = &ev
+			}
+		}
+		if attempted == nil || completed == nil {
+			t.Fatalf("task %s: merge.attempted=%v merge.completed=%v", task.ID, attempted, completed)
+		}
+		var attemptedPayload, completedPayload struct {
+			ForkSHA   string `json:"fork_sha"`
+			TrunkHead string `json:"trunk_head"`
+		}
+		if err := json.Unmarshal(attempted.Payload, &attemptedPayload); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(completed.Payload, &completedPayload); err != nil {
+			t.Fatal(err)
+		}
+		if attemptedPayload.ForkSHA == "" {
+			t.Errorf("task %s: merge.attempted fork_sha empty", task.ID)
+		}
+		if completedPayload.ForkSHA != attemptedPayload.ForkSHA {
+			t.Errorf("task %s: fork_sha differs between merge.attempted (%s) and merge.completed (%s)",
+				task.ID, attemptedPayload.ForkSHA, completedPayload.ForkSHA)
+		}
+		if completedPayload.TrunkHead == "" {
+			t.Errorf("task %s: merge.completed trunk_head empty", task.ID)
+		}
+	}
 }
 
 // The done criterion, second half: a same-lines conflict blocks the second
@@ -183,6 +222,45 @@ func TestConflictingPairBlocksSecond(t *testing.T) {
 	// The loser's branch survives for manual merge-back.
 	if branches := gitOut(t, h.cwd, "branch", "--list", "mads/*"); !strings.Contains(branches, "mads/"+blocked.ID) {
 		t.Errorf("blocked task's branch is gone:\n%s", branches)
+	}
+
+	// merge.conflicted names both task ids (winner via attribution, loser as
+	// the event's own TaskID), the conflicted file, and at least one hunk —
+	// the structured attribution a future merge_resolve stage and the Merge
+	// Queue UI consume (spec: "acceptance criterion, not a nice-to-have").
+	winner := h.task(t, sum.Done[0])
+	conflicts := h.events(t, "merge.conflicted")
+	if len(conflicts) != 1 {
+		t.Fatalf("merge.conflicted events: %d, want 1", len(conflicts))
+	}
+	var payload struct {
+		Branch        string         `json:"branch"`
+		Files         []string       `json:"files"`
+		Hunks         []ConflictHunk `json:"hunks"`
+		LandedTaskIDs []string       `json:"landed_task_ids"`
+		ForkSHA       string         `json:"fork_sha"`
+		TrunkHead     string         `json:"trunk_head"`
+	}
+	if err := json.Unmarshal(conflicts[0].Payload, &payload); err != nil {
+		t.Fatalf("merge.conflicted payload: %v", err)
+	}
+	if conflicts[0].TaskID != blocked.ID {
+		t.Errorf("merge.conflicted TaskID: %q, want the blocked task %q", conflicts[0].TaskID, blocked.ID)
+	}
+	if len(payload.Files) != 1 || payload.Files[0] != "shared.txt" {
+		t.Errorf("merge.conflicted files: %v, want [shared.txt]", payload.Files)
+	}
+	if len(payload.LandedTaskIDs) != 1 || payload.LandedTaskIDs[0] != winner.ID {
+		t.Errorf("merge.conflicted landed_task_ids: %v, want [%s]", payload.LandedTaskIDs, winner.ID)
+	}
+	if len(payload.Hunks) == 0 {
+		t.Errorf("merge.conflicted hunks: empty, want at least one")
+	}
+	if payload.ForkSHA == "" {
+		t.Errorf("merge.conflicted fork_sha: empty")
+	}
+	if payload.TrunkHead == "" {
+		t.Errorf("merge.conflicted trunk_head: empty")
 	}
 }
 
@@ -275,14 +353,90 @@ func TestVerifyCatchesQuietConflict(t *testing.T) {
 		t.Fatalf("summary: %+v; tasks: %+v %+v", sum, h.task(t, seeded[0].ID), h.task(t, seeded[1].ID))
 	}
 	blocked := h.task(t, sum.Blocked[0])
-	found := false
-	for _, n := range blocked.Notes {
-		if n.Type == contracts.NoteBlocker && strings.Contains(n.Content, "verify") {
-			found = true
+	var note *contracts.Note
+	for i := range blocked.Notes {
+		if blocked.Notes[i].Type == contracts.NoteBlocker && strings.Contains(blocked.Notes[i].Content, "verify") {
+			note = &blocked.Notes[i]
 		}
 	}
-	if !found {
-		t.Errorf("blocked without a verify blocker note: %+v", blocked.Notes)
+	if note == nil {
+		t.Fatalf("blocked without a verify blocker note: %+v", blocked.Notes)
+	}
+	// The gate ran post-rebase, before landing (Not Rocket Science Rule): the
+	// suspect set is explicit rather than requiring bisection. Concurrency 1
+	// here means "two" forked after "one" already landed, so trunk hasn't
+	// moved since — the regression is fully attributable to "two"'s own
+	// change combined with the trunk state it forked from.
+	for _, want := range []string{"gates passed at fork", "trunk unchanged since fork"} {
+		if !strings.Contains(note.Content, want) {
+			t.Errorf("blocker note missing %q:\n%s", want, note.Content)
+		}
+	}
+	// The bug this redesign fixes: the gate must never let a quiet conflict
+	// reach trunk first. Trunk still holds only "one"'s landed work — "two"'s
+	// merge never happened because its post-rebase gate failed first.
+	if _, err := os.Stat(filepath.Join(h.cwd, "two.marker")); !os.IsNotExist(err) {
+		t.Errorf("two.marker reached trunk despite the failed gate (err: %v)", err)
+	}
+	if status := gitOut(t, h.cwd, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+		t.Errorf("trunk dirty after blocked land attempt:\n%s", status)
+	}
+}
+
+// The other half of the quiet-conflict suspect set: at concurrency 2 both
+// tasks fork from the SAME trunk state, so the second one's land attempt
+// really does rebase over trunk movement (the first task's own land) between
+// its fork and its gate — the block note must name that task explicitly
+// rather than the "trunk unchanged since fork" variant above.
+func TestVerifyCatchesQuietConflictNamesSuspectSet(t *testing.T) {
+	h := newHarness(t)
+	makefile := "build:\n\t@true\ntest:\n\t@test $$(ls *.marker 2>/dev/null | wc -l) -le 1\n"
+	if err := os.WriteFile(filepath.Join(h.cwd, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "add", "Makefile")
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "tighten test")
+
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: one", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "one.marker", Content: "1"}}},
+		fake.Rule{Match: "Task: two", Reply: "done", DelayMs: 300,
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "two.marker", Content: "2"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "one"}, contracts.Task{Title: "two"})
+	sum, worktreeRoot := h.runIsolated(t, f, isolatedTemplate, 2)
+
+	if len(sum.Done) != 1 || len(sum.Blocked) != 1 {
+		t.Fatalf("summary: %+v; tasks: %+v %+v", sum, h.task(t, seeded[0].ID), h.task(t, seeded[1].ID))
+	}
+	winner := h.task(t, sum.Done[0])
+	blocked := h.task(t, sum.Blocked[0])
+	if blocked.Title != "two" {
+		t.Fatalf("expected the delayed task to lose the race and block, got %q", blocked.Title)
+	}
+	// Direct proof the gate never gates on a stale/cached trunk: "two"'s own
+	// worktree (kept, since it's blocked) shows BOTH markers — its post-rebase
+	// gate really did see "one"'s already-landed change, not just its own
+	// work in isolation.
+	if _, err := os.Stat(filepath.Join(worktreeRoot, blocked.ID, "one.marker")); err != nil {
+		t.Errorf("blocked task's worktree lacks the winner's rebased-in change: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktreeRoot, blocked.ID, "two.marker")); err != nil {
+		t.Errorf("blocked task's worktree lacks its own change: %v", err)
+	}
+	var note *contracts.Note
+	for i := range blocked.Notes {
+		if blocked.Notes[i].Type == contracts.NoteBlocker && strings.Contains(blocked.Notes[i].Content, "verify") {
+			note = &blocked.Notes[i]
+		}
+	}
+	if note == nil {
+		t.Fatalf("blocked without a verify blocker note: %+v", blocked.Notes)
+	}
+	for _, want := range []string{"gates passed at fork", "failed after rebasing over", winner.Title} {
+		if !strings.Contains(note.Content, want) {
+			t.Errorf("blocker note missing %q:\n%s", want, note.Content)
+		}
 	}
 }
 
@@ -326,6 +480,133 @@ func TestHostileTaskTitleMergesCleanly(t *testing.T) {
 				t.Errorf("trunk dirty after merge:\n%s", status)
 			}
 		})
+	}
+}
+
+// The gate ("verify") stage's command runs inside the merge stage's land
+// attempt, post-rebase — but its own on_fail (loop_back included) must still
+// govern what happens when the command fails; the merge stage's on_fail is a
+// different, unrelated route. Silently ignoring the gate's own on_fail would
+// leave a template author's "loop back to fix it" configuration dead —
+// exactly the mismatch between what the template editor shows and what the
+// engine does that the redesign must not introduce.
+func TestGateFailureHonorsVerifyOwnOnFailLoopBack(t *testing.T) {
+	h := newHarness(t)
+	makefile := "build:\n\t@true\ntest:\n\t@grep -q PASS status.txt\n"
+	if err := os.WriteFile(filepath.Join(h.cwd, "Makefile"), []byte(makefile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(h.cwd, "status.txt"), []byte("PASS\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "add", "Makefile", "status.txt")
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed gate")
+
+	const tpl = `name: gate-loop
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+    on_fail: { loop_back: executor, max_loops: 2 }
+`
+	f := mustScenario(t,
+		// Checked first: only matches once a loop-back retry's feedback (the
+		// gate's own suspect-set message) has landed in the prompt.
+		fake.Rule{Match: "gates passed at fork", Reply: "fixed it\nSTAGE: pass",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "status.txt", Content: "PASS\n"}}},
+		fake.Rule{Match: "Pipeline stage: executor\nTask: gate-loop-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "status.txt", Content: "FAIL\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "gate-loop-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+
+	var gateFails, gateStarts, mergeFails int
+	for _, ev := range h.events(t, "stage.failed") {
+		if ev.TaskID != seeded[0].ID {
+			continue
+		}
+		switch {
+		case strings.Contains(string(ev.Payload), `"stage":"verify"`):
+			gateFails++
+		case strings.Contains(string(ev.Payload), `"stage":"merge"`):
+			mergeFails++
+		}
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateStarts++
+		}
+	}
+	if gateFails != 1 {
+		t.Errorf("stage.failed for verify: %d, want 1 (the first gate run, before the loop-back retry)", gateFails)
+	}
+	if gateStarts != 2 {
+		t.Errorf("stage.started for verify: %d, want 2 (initial failure + retry after loop-back)", gateStarts)
+	}
+	// The gate failure must route through the gate's own on_fail, never the
+	// merge stage's — and never get double-reported under the merge stage's
+	// name.
+	if mergeFails != 0 {
+		t.Errorf("stage.failed misattributed to the merge stage: %d, want 0", mergeFails)
+	}
+}
+
+// The gate ("verify") stage's `when:` guard must be honored by the land
+// attempt exactly as the normal stage loop would honor it — landAttempt runs
+// the gate command directly instead of going through the per-stage loop, and
+// a prior pass ran it unconditionally regardless of `when:`, which left the
+// template editor's "when" field on a verify stage live in appearance but
+// dead in effect. Here the guard evaluates false for the task, so the gate
+// command (which would fail — there's no Makefile) must be skipped, not run.
+func TestGateHonorsOwnWhenGuard(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-when
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+    when: contains(labels, "needs-verify")
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Pipeline stage: executor", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "gated.txt", Content: "gated\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "gate-when-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "gated.txt")); err != nil {
+		t.Errorf("gated.txt missing from merged trunk: %v", err)
+	}
+
+	var gateSkipped, gateStarted bool
+	for _, ev := range h.events(t, "stage.skipped") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateSkipped = true
+		}
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateStarted = true
+		}
+	}
+	if !gateSkipped {
+		t.Errorf("no stage.skipped for verify; the gate's when: guard was not evaluated")
+	}
+	if gateStarted {
+		t.Errorf("verify stage.started fired; the gate ran despite its when: guard evaluating false")
 	}
 }
 

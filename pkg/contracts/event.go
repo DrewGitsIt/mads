@@ -203,14 +203,26 @@ const (
 
 	// MergeAttempted fires when a session's isolated worktree branch begins
 	// merging back into a target branch. Payload: {"branch": string,
-	// "target_branch": string}.
+	// "target_branch": string}. The pipeline engine's land queue (spec: "Not
+	// Rocket Science Rule") reuses this same type for each land attempt
+	// (rebase -> gate -> merge), with an additive "fork_sha" field: the
+	// task's trunk HEAD at worktree creation, TaskID-scoped.
 	MergeAttempted EventType = "merge.attempted"
 	// MergeConflicted fires when a merge attempt aborts due to conflicts; the
 	// worktree and branch are kept for manual resolution. Payload: {"branch":
-	// string, "target_branch": string, "files": []string}.
+	// string, "target_branch": string, "files": []string}. The pipeline
+	// engine's land queue additionally sets "fork_sha", "trunk_head", "hunks"
+	// ([]ConflictHunk-shaped objects: file, start_line, end_line, commit,
+	// task_id — best-effort, per hunk), and "landed_task_ids" ([]string): the
+	// deterministic pairwise attribution naming which task's already-landed
+	// commit each conflicting hunk traces to (spec: "this attribution
+	// payload is an acceptance criterion, not a nice-to-have").
 	MergeConflicted EventType = "merge.conflicted"
 	// MergeCompleted fires when a merge lands cleanly and the worktree/branch
 	// are cleaned up. Payload: {"branch": string, "target_branch": string}.
+	// The pipeline engine's land queue additionally sets "fork_sha" and
+	// "trunk_head": the trunk state this land attempt gated and landed
+	// against.
 	MergeCompleted EventType = "merge.completed"
 
 	// UsageRecorded fires when a provider turn or pipeline stage one-shot completes with
