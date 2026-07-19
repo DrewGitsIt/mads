@@ -141,6 +141,51 @@ func TestGenerateSessionSummaryOverwritesOnSecondRun(t *testing.T) {
 	}
 }
 
+// An unconfigured Fast Model backend (production's default — providers/fake
+// with no scripted rules, standing in until -fastmodel-base-url is set) must
+// complete the job normally with no summary, never a job.failed event — a
+// session close must never fail or block on summarization (spec §16).
+func TestGenerateSessionSummarySkipsWithoutFastModelBackend(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	fm := scriptedFastModel(t, fake.Scenario{Name: "summary-job-unconfigured"})
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "unconfigured session"})
+	mustCreateSummaryTask(t, data, contracts.Task{
+		SessionID: sess.ID, Title: "Fix the login bug", Source: "user", Status: contracts.StatusDone,
+	})
+
+	runner := job.New(data, fm, registryclient.New(""))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := runner.Spawn(ctx, job.SessionSummaryKind, sess.ID, job.GenerateSessionSummary(sess.ID)); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	verify := dataclient.New(base, "test-verify")
+	eventually(t, 5*time.Second, func() bool {
+		evs, err := verify.Events(ctx, 0, sess.ID, []string{"job.completed"})
+		return err == nil && len(evs) > 0
+	})
+
+	evs, err := verify.Events(ctx, 0, sess.ID, []string{"job.failed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("job.failed events with an unconfigured Fast Model backend: %v, want none", evs)
+	}
+
+	got, err := verify.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if got.Summary != "" {
+		t.Fatalf("Summary = %q, want empty with an unconfigured Fast Model backend", got.Summary)
+	}
+}
+
 // A session deleted before the job runs must be a no-op, not a failure — the
 // terminate-then-delete race the trigger's guard exists for.
 func TestGenerateSessionSummaryNoopForDeletedSession(t *testing.T) {

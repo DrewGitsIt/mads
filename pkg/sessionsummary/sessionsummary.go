@@ -66,7 +66,10 @@ func (d *draft) Validate() error {
 
 // Generate derives sessionID's compressed narrative from its task data. A
 // session with no tasks has nothing to summarize and returns "", nil without
-// spending a Fast Model call.
+// spending a Fast Model call. An unconfigured Fast Model backend (spec §16:
+// degrade gracefully, same best-effort stance as GenerateDigest) also
+// returns "", nil rather than an error — a session close must never fail or
+// block on summarization.
 func (g *Generator) Generate(ctx context.Context, sessionID string) (string, error) {
 	tasks, err := g.Data.Tasks(ctx, sessionID, "")
 	if err != nil {
@@ -78,6 +81,9 @@ func (g *Generator) Generate(ctx context.Context, sessionID string) (string, err
 
 	var d draft
 	if _, err := g.FastModel.Do(ctx, fastmodel.Job{System: generationSystem, Prompt: buildPrompt(tasks)}, &d); err != nil {
+		if errors.Is(err, fastmodel.ErrUnusableOutput) {
+			return "", nil
+		}
 		return "", fmt.Errorf("sessionsummary: generate: %w", err)
 	}
 	return render(d), nil

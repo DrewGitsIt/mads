@@ -104,3 +104,25 @@ func TestGenerateNoTasksSkipsModelCall(t *testing.T) {
 		t.Fatalf("Generate = %q, want empty string for a session with no tasks", got)
 	}
 }
+
+// An unconfigured Fast Model backend — production's default, providers/fake
+// with no scripted rules, always falls back to its builtin "ok" reply, which
+// is never valid JSON — must degrade to "", nil, not an error. This is the
+// exact shape a session close hits when -fastmodel-base-url is unset (spec
+// §16: never block or fail a close on summarization).
+func TestGenerateSkipsSilentlyOnUnconfiguredBackend(t *testing.T) {
+	g, c := setup(t, fake.Scenario{Name: "unconfigured-backend"})
+
+	sessionID := "ses_unconfigured"
+	mustCreateTask(t, c, contracts.Task{
+		SessionID: sessionID, Title: "Fix the login bug", Source: "user", Status: contracts.StatusDone,
+	})
+
+	got, err := g.Generate(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("Generate: %v, want nil (unconfigured backend must skip silently)", err)
+	}
+	if got != "" {
+		t.Fatalf("Generate = %q, want empty string when the backend can't produce structured output", got)
+	}
+}
