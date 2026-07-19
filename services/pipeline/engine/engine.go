@@ -624,14 +624,17 @@ func buildStageCommand(stages []template.Stage) (string, bool) {
 
 // gateStage finds the stage literally named "verify" with a non-empty
 // command, by the same naming convention as buildStageCommand. Its command
-// is the land queue's gate: run always, post-rebase, immediately before
-// every land attempt's merge (spec: "the gate always runs post-rebase; a
-// task's earlier green in its own worktree does not count for landing") —
+// is the land queue's gate: run post-rebase, immediately before every land
+// attempt's merge (spec: "the gate always runs post-rebase; a task's
+// earlier green in its own worktree does not count for landing") —
 // landAttempt runs it directly instead of the normal stage loop, which
 // skips over its index once the land attempt that consumed it succeeds.
-// Only WHEN it runs moved into the land attempt: its own on_fail (loop_back
-// included) still governs what happens when its command fails — see
-// gateFailure and its handling in runTask.
+// Only WHERE it runs moved into the land attempt: its own `when:` guard
+// still governs WHETHER it runs at all (landAttempt evaluates e.conds[gidx]
+// exactly as the normal stage loop would, so the template editor's "when"
+// field on a verify stage means the same thing it says), and its own
+// on_fail (loop_back included) still governs what happens when its command
+// fails — see gateFailure and its handling in runTask.
 func gateStage(stages []template.Stage) (idx int, ok bool) {
 	for i, st := range stages {
 		if st.Name == "verify" && st.Command != "" {
@@ -654,8 +657,11 @@ func (g *gateFailure) Unwrap() error { return g.err }
 // commit stray work, rebase the branch onto current trunk, run the
 // post-rebase sanity build (if a "build" stage exists) when the rebase
 // actually moved the branch, sweep any stray HANDOFF.md, gate the rebased
-// result (the "verify" stage's command, if any — always, per spec), then
-// merge into the primary. Must be called with the land queue held. Emits
+// result (the "verify" stage's command, if any and if its own `when:` guard
+// passes — its command always runs post-rebase rather than counting an
+// earlier green in the task's own worktree, per spec, but the guard still
+// decides whether it runs at all), then merge into the primary. Must be
+// called with the land queue held. Emits
 // merge.attempted/merge.conflicted/merge.completed naming the task's fork
 // SHA and the trunk HEAD this attempt gated and landed against, plus (on
 // conflict) structured pairwise attribution — the acceptance criterion a
@@ -685,15 +691,21 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 	if err == nil {
 		if gidx, ok := gateStage(stages); ok {
 			gname, gcmd := stages[gidx].Name, stages[gidx].Command
-			e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
-			if _, gerr := e.runCommand(ctx, gcmd, run.dir); gerr != nil {
-				gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
-				e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
-					"stage": gname, "reason": trim(gfErr.Error(), 2000),
+			if !e.conds[gidx].Eval(task.Labels, false) {
+				e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
+					"stage": gname, "when": stages[gidx].When,
 				})
-				err = &gateFailure{err: gfErr}
 			} else {
-				e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+				e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
+				if _, gerr := e.runCommand(ctx, gcmd, run.dir); gerr != nil {
+					gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
+					e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+						"stage": gname, "reason": trim(gfErr.Error(), 2000),
+					})
+					err = &gateFailure{err: gfErr}
+				} else {
+					e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+				}
 			}
 		}
 	}

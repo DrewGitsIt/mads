@@ -558,6 +558,58 @@ stages:
 	}
 }
 
+// The gate ("verify") stage's `when:` guard must be honored by the land
+// attempt exactly as the normal stage loop would honor it — landAttempt runs
+// the gate command directly instead of going through the per-stage loop, and
+// a prior pass ran it unconditionally regardless of `when:`, which left the
+// template editor's "when" field on a verify stage live in appearance but
+// dead in effect. Here the guard evaluates false for the task, so the gate
+// command (which would fail — there's no Makefile) must be skipped, not run.
+func TestGateHonorsOwnWhenGuard(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-when
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+    when: contains(labels, "needs-verify")
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Pipeline stage: executor", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "gated.txt", Content: "gated\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "gate-when-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "gated.txt")); err != nil {
+		t.Errorf("gated.txt missing from merged trunk: %v", err)
+	}
+
+	var gateSkipped, gateStarted bool
+	for _, ev := range h.events(t, "stage.skipped") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateSkipped = true
+		}
+	}
+	for _, ev := range h.events(t, "stage.started") {
+		if ev.TaskID == seeded[0].ID && strings.Contains(string(ev.Payload), `"stage":"verify"`) {
+			gateStarted = true
+		}
+	}
+	if !gateSkipped {
+		t.Errorf("no stage.skipped for verify; the gate's when: guard was not evaluated")
+	}
+	if gateStarted {
+		t.Errorf("verify stage.started fired; the gate ran despite its when: guard evaluating false")
+	}
+}
+
 // The installed post-commit hook reports commits from a task worktree to the
 // Data Service with the task trailer, and the linkage chain resolves it
 // (spec §5). curl talks to the real datatest server.
