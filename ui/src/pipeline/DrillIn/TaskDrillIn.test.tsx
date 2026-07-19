@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { TaskDrillIn } from "./TaskDrillIn";
-import type { PipelineOutputSource } from "../client/pipelineClient";
+import type { PipelineOutputSource, PipelineTurnsSource } from "../client/pipelineClient";
 import type { StageAttempt } from "../state/usePipelineRun";
 import { recordedTaskIds, recordedTasks } from "../client/recordedRun";
 
@@ -16,11 +16,24 @@ function makeStubSource(): PipelineOutputSource {
   return { onChunk: vi.fn(() => () => {}), close: vi.fn() };
 }
 
+// Never delivers a turn — every TaskDrillIn test here exercises the
+// fallback-to-raw-output path, same as today, since the enhanced feed's own
+// behavior is covered by AgentFeedView.test.tsx/DrillInFeed.test.tsx.
+function makeStubTurnsSource(): PipelineTurnsSource {
+  return { onTurns: vi.fn(() => () => {}), close: vi.fn() };
+}
+
 describe("TaskDrillIn", () => {
   it("mounts a resizable panel hosting the timeline, touched files, and agent output", async () => {
     const source = makeStubSource();
     const { container } = render(
-      <TaskDrillIn task={flakyApi} attempts={attempts} touchedFiles={["a.go", "b.go"]} outputSource={source} />,
+      <TaskDrillIn
+        task={flakyApi}
+        attempts={attempts}
+        touchedFiles={["a.go", "b.go"]}
+        outputSource={source}
+        turnsSource={makeStubTurnsSource()}
+      />,
     );
 
     expect(container.querySelector('[data-testid="resize-handle"]')).toBeTruthy();
@@ -43,6 +56,7 @@ describe("TaskDrillIn", () => {
           attempts={attempts}
           touchedFiles={[]}
           outputSource={source}
+          turnsSource={makeStubTurnsSource()}
           tabHeight={400}
         />,
       );
@@ -74,6 +88,7 @@ describe("TaskDrillIn", () => {
           attempts={attempts}
           touchedFiles={[]}
           outputSource={source}
+          turnsSource={makeStubTurnsSource()}
           tabHeight={700}
         />,
       );
@@ -97,7 +112,13 @@ describe("TaskDrillIn", () => {
     try {
       const source = makeStubSource();
       const { container } = render(
-        <TaskDrillIn task={flakyApi} attempts={attempts} touchedFiles={[]} outputSource={source} />,
+        <TaskDrillIn
+          task={flakyApi}
+          attempts={attempts}
+          touchedFiles={[]}
+          outputSource={source}
+          turnsSource={makeStubTurnsSource()}
+        />,
       );
       const handle = container.querySelector('[data-testid="resize-handle"]') as HTMLElement;
       const panel = handle.parentElement as HTMLElement;
@@ -121,6 +142,7 @@ describe("TaskDrillIn", () => {
         attempts={attempts}
         touchedFiles={[]}
         outputSource={source}
+        turnsSource={makeStubTurnsSource()}
         onClose={onClose}
       />,
     );

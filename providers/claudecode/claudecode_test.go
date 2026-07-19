@@ -64,6 +64,9 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	if res.Usage.CacheCreationInputTokens != 8827 || res.Usage.CacheReadInputTokens != 28169 {
 		t.Errorf("cache usage: %+v, want cache_creation_input_tokens 8827 and cache_read_input_tokens 28169 from the fixture", res.Usage)
 	}
+	if res.Ref != "30fc99b6-4dce-4fd4-869d-4faa311b4ff7" {
+		t.Errorf("ref: %q, want session_id from the fixture", res.Ref)
+	}
 }
 
 // OnEvent switches OneShot to the stream-json wire format and fires as
@@ -111,7 +114,8 @@ func TestOneShotStreamsRateLimitAndCrash(t *testing.T) {
 
 // Tool use in a one-shot stream arrives as a normalized EventToolUse before
 // the text/result — the same events() normalization the interactive path
-// uses (TestStreamToolUseNormalization), just driven through OnEvent.
+// uses (TestStreamToolUseNormalization), just driven through OnEvent. An
+// EventSessionRef fires first, as soon as the wire line carries session_id.
 func TestOneShotStreamsToolUse(t *testing.T) {
 	p := testProvider(t)
 	var kinds []provider.EventKind
@@ -131,8 +135,8 @@ func TestOneShotStreamsToolUse(t *testing.T) {
 	if tool == nil || tool.Name != "Edit" || tool.Path != "api/login.go" {
 		t.Errorf("tool event: %+v", tool)
 	}
-	if len(kinds) < 2 || kinds[0] != provider.EventToolUse {
-		t.Errorf("want tool use before text, got %v", kinds)
+	if len(kinds) < 3 || kinds[0] != provider.EventSessionRef || kinds[1] != provider.EventToolUse {
+		t.Errorf("want session ref then tool use before text, got %v", kinds)
 	}
 	if res.Text != "ok" {
 		t.Errorf("text: %q", res.Text)

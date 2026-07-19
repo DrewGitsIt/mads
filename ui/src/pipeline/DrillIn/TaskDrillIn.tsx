@@ -2,9 +2,9 @@ import { useState } from "react";
 import { ResizablePanel } from "../../components/ResizablePanel/ResizablePanel";
 import type { Task } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
-import type { PipelineOutputSource } from "../client/pipelineClient";
+import type { PipelineOutputSource, PipelineTurnsSource } from "../client/pipelineClient";
 import { StageTimeline } from "./StageTimeline";
-import { AgentOutputView } from "./AgentOutputView";
+import { DrillInFeed } from "./DrillInFeed";
 import { TaskFiles } from "./TaskFiles";
 import { loadDrillInHeight, saveDrillInHeight } from "./drillInHeight";
 import styles from "./TaskDrillIn.module.css";
@@ -20,6 +20,7 @@ export interface TaskDrillInProps {
   attempts: StageAttempt[];
   touchedFiles: string[];
   outputSource: PipelineOutputSource;
+  turnsSource: PipelineTurnsSource;
   onClose?: () => void;
   /**
    * Measured height of the pipeline tab's root container (PipelineTab.tsx's
@@ -41,6 +42,7 @@ export function TaskDrillIn({
   attempts,
   touchedFiles,
   outputSource,
+  turnsSource,
   onClose,
   tabHeight = Number.POSITIVE_INFINITY,
 }: TaskDrillInProps) {
@@ -84,7 +86,13 @@ export function TaskDrillIn({
         </div>
         <div className={styles.right}>
           <div className={styles.measure}>
-            <AgentOutputView key={task.id} source={outputSource} />
+            <DrillInFeed
+              key={task.id}
+              task={task}
+              attempts={attempts}
+              outputSource={outputSource}
+              turnsSource={turnsSource}
+            />
           </div>
         </div>
       </div>

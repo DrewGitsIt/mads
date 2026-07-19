@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -48,10 +49,16 @@ type wireMessage struct {
 
 type wireBlock struct {
 	Type     string          `json:"type"`
+	ID       string          `json:"id"`
 	Text     string          `json:"text"`
 	Thinking string          `json:"thinking"`
 	Name     string          `json:"name"`
 	Input    json.RawMessage `json:"input"`
+	// tool_result-block fields (only present in a "user" role message that
+	// feeds a tool's outcome back into context).
+	ToolUseID string          `json:"tool_use_id"`
+	Content   json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 type wireUsage struct {
@@ -75,6 +82,30 @@ func (m *wireMessage) blocks() []wireBlock {
 		return nil
 	}
 	return bs
+}
+
+// toolResultText decodes a tool_result block's content: a bare string, or an
+// array of blocks (mirroring wireMessage.blocks' string-vs-array handling) —
+// only text blocks contribute.
+func toolResultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	var bs []wireBlock
+	if err := json.Unmarshal(raw, &bs); err != nil {
+		return ""
+	}
+	var texts []string
+	for _, b := range bs {
+		if b.Type == "text" && b.Text != "" {
+			texts = append(texts, b.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
 }
 
 // toolPath digs the touched file out of a tool input, if any — the §5
@@ -110,7 +141,7 @@ func (l *wireLine) events(interrupted bool) []provider.Event {
 				}
 			case "tool_use":
 				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
-					Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
+					ID: b.ID, Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
 				}})
 			}
 		}

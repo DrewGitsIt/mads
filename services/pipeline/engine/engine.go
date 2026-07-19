@@ -678,6 +678,8 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 				log.write(ev.Text)
 			case provider.EventToolUse:
 				log.tool(ev.Tool)
+			case provider.EventSessionRef:
+				e.recordRef(ctx, task.ID, st.Name, attempt, ev.Ref)
 			}
 		},
 	})
@@ -756,6 +758,28 @@ func (e *engine) recordUsage(ctx context.Context, taskID, stage string, attempt 
 	})
 	if err != nil {
 		log.Printf("engine: post usage.recorded for task %s: %v", taskID, err)
+	}
+}
+
+// recordRef posts a stage.attempt_ref event as soon as the provider
+// announces its native session ref for this one-shot — exact attribution for
+// transcript lookup by task+stage+attempt (no path guessing), available
+// before the one-shot completes so a live drill-in can tail the transcript.
+// Best-effort, like recordUsage: a post that fails never fails the stage.
+func (e *engine) recordRef(ctx context.Context, taskID, stage string, attempt int, ref string) {
+	raw, err := json.Marshal(map[string]any{
+		"stage":   stage,
+		"attempt": attempt,
+		"ref":     ref,
+	})
+	if err != nil {
+		raw = []byte(`{}`)
+	}
+	err = e.cfg.Data.Append(context.WithoutCancel(ctx), &contracts.Envelope{
+		Type: contracts.StageAttemptRef, SessionID: e.cfg.SessionID, TaskID: taskID, Payload: raw,
+	})
+	if err != nil {
+		log.Printf("engine: post stage.attempt_ref for task %s: %v", taskID, err)
 	}
 }
 

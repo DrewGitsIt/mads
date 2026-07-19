@@ -65,6 +65,32 @@ type Fake struct {
 	// SwitchTransport resuming the provider-announced ref), not just infer
 	// it from the resulting session's Ref().
 	starts []provider.StartOptions
+	// transcriptDir, when set (WithTranscriptDir), makes ref-backed history
+	// durable to disk under it — the fake's mirror of claude-code's
+	// transcript file (providers/claudecode/transcript.go). Unset, history
+	// lives only in this process's memory, which is all any in-process
+	// caller (most tests) needs.
+	transcriptDir string
+}
+
+// Option configures a Fake at construction. The zero value of every Option
+// is a no-op, so New() and NewWithScenario(sc) with no options keep every
+// existing caller's behavior unchanged.
+type Option func(*Fake)
+
+// WithTranscriptDir makes Scenario.AnnounceOneShotRef-backed history durable
+// to disk under dir, one JSON file per ref, so a *different* Fake instance —
+// in a different process, pointed at the same dir — can also read it via
+// Transcript(ref). Without this, history lives only in the process that ran
+// OneShot: fine for in-process tests, but invisible to, e.g., a Router
+// process reading the transcript of a `mads run` it merely spawned as a
+// child (services/router/internal/api/transcript.go's "a live turn's
+// in-memory state only ever exists in the child's process" — this closes
+// that gap for fake the way claude-code's real transcript file already
+// does, by also using the filesystem, keyed by the same $MADS_HOME both
+// processes resolve).
+func WithTranscriptDir(dir string) Option {
+	return func(f *Fake) { f.transcriptDir = dir }
 }
 
 // StartCalls returns every Start call's StartOptions, in order.
@@ -75,17 +101,21 @@ func (f *Fake) StartCalls() []provider.StartOptions {
 }
 
 // New returns a fake running only the built-in dialect.
-func New() *Fake {
-	f, _ := NewWithScenario(Scenario{Name: "builtin"})
+func New(opts ...Option) *Fake {
+	f, _ := NewWithScenario(Scenario{Name: "builtin"}, opts...)
 	return f
 }
 
 // NewWithScenario returns a fake scripted by sc (validated).
-func NewWithScenario(sc Scenario) (*Fake, error) {
+func NewWithScenario(sc Scenario, opts ...Option) (*Fake, error) {
 	if err := sc.Validate(); err != nil {
 		return nil, err
 	}
-	return &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}, liveRefs: map[string]bool{}, mcpServers: map[string][]provider.MCPServerRef{}}, nil
+	f := &Fake{scenario: sc, histories: map[string][]provider.Message{}, rateLimitHits: map[*Rule]int{}, liveRefs: map[string]bool{}, mcpServers: map[string][]provider.MCPServerRef{}}
+	for _, opt := range opts {
+		opt(f)
+	}
+	return f, nil
 }
 
 func (f *Fake) Name() string { return "fake" }
@@ -184,12 +214,34 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	case plan.crash:
 		return nil, fmt.Errorf("fake agent process exited unexpectedly (scripted crash)")
 	}
+
+	// Opt-in per Scenario.AnnounceOneShotRef: models a provider (claude-code)
+	// whose one-shot invocations announce a native session ref mid-flight and
+	// leave a transcript behind it. The zero-value fake stays "no ref, no
+	// transcript" — the fallback-to-raw-log case downstream callers depend on.
+	var ref string
+	if f.scenario.AnnounceOneShotRef {
+		ref = f.newOneShotRef()
+		f.record(ref, provider.Message{Role: "user", Text: req.Prompt, Timestamp: time.Now()})
+		if req.OnEvent != nil {
+			req.OnEvent(provider.Event{Kind: provider.EventSessionRef, Ref: ref})
+		}
+	}
+
 	for _, ts := range plan.tools {
 		if err := executeTool(ts, req.Cwd); err != nil {
 			return nil, err
 		}
+		ev := toolEvent(ts)
+		if ref != "" {
+			// Recorded before the chunk delay below elapses, so a caller
+			// polling Transcript(ref) mid-invocation sees a tool_use turn
+			// with no matching tool_result yet — the liveness signal the
+			// drill-in feed renders as "still working."
+			f.record(ref, provider.Message{Role: "tool", Tool: ev.Tool, Timestamp: time.Now()})
+		}
 		if req.OnEvent != nil {
-			req.OnEvent(toolEvent(ts))
+			req.OnEvent(ev)
 		}
 	}
 	// Delay on cue holds for one-shots too — downstream timing tests rely
@@ -208,11 +260,27 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 		}
 	}
 	text := b.String()
+	if ref != "" {
+		if len(plan.tools) > 0 {
+			f.record(ref, provider.Message{Role: "tool_result", Text: "ok", Timestamp: time.Now()})
+		}
+		f.record(ref, provider.Message{Role: "agent", Text: text, Timestamp: time.Now()})
+	}
 	u := usage(req.Prompt, text)
 	if req.Model != "" {
 		u.Model = req.Model
 	}
-	return &provider.OneShotResult{Text: text, Usage: applyUsageOverride(u, plan.usage)}, nil
+	return &provider.OneShotResult{Text: text, Ref: ref, Usage: applyUsageOverride(u, plan.usage)}, nil
+}
+
+// newOneShotRef mints a fresh session ref for an announcing one-shot,
+// distinct from Start's "fake-N" interactive refs (a one-shot never attaches
+// via Start, so there's no liveRefs bookkeeping to share).
+func (f *Fake) newOneShotRef() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seq++
+	return fmt.Sprintf("fake-oneshot-%d", f.seq)
 }
 
 // applyUsageOverride layers a scripted override onto the deterministic
@@ -251,14 +319,22 @@ func (f *Fake) MCPServers(ref string) []provider.MCPServerRef {
 	return f.mcpServers[ref]
 }
 
+// Transcript prefers this process's own in-memory history (the common case:
+// same Fake that ran the turn). A ref this instance never saw falls back to
+// transcriptDir, when configured — the cross-process case WithTranscriptDir
+// exists for.
 func (f *Fake) Transcript(_ context.Context, ref string) ([]provider.Message, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	msgs, known := f.histories[ref]
-	if !known {
+	dir := f.transcriptDir
+	f.mu.Unlock()
+	if known {
+		return append([]provider.Message{}, msgs...), nil
+	}
+	if dir == "" {
 		return nil, fmt.Errorf("unknown session ref %q", ref)
 	}
-	return append([]provider.Message{}, msgs...), nil
+	return readTranscriptFile(dir, ref)
 }
 
 // turnPlan is one prompt's resolved behavior.
@@ -337,8 +413,58 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 
 func (f *Fake) record(ref string, msg provider.Message) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.histories[ref] = append(f.histories[ref], msg)
+	var snapshot []provider.Message
+	dir := f.transcriptDir
+	if dir != "" {
+		snapshot = append([]provider.Message{}, f.histories[ref]...)
+	}
+	f.mu.Unlock()
+	if dir != "" {
+		writeTranscriptFile(dir, ref, snapshot)
+	}
+}
+
+// transcriptFilePath is where ref's history lives under dir — one JSON file
+// per ref, named after it (claude-code names its transcripts the same way:
+// <ref>.jsonl under its own tree).
+func transcriptFilePath(dir, ref string) string {
+	return filepath.Join(dir, ref+".json")
+}
+
+// writeTranscriptFile persists msgs for ref, atomically (write-to-temp then
+// rename) so a concurrent reader in another process — polling mid-turn,
+// exactly the drill-in feed's liveness case — never observes a partial
+// write. Best-effort: a failure here just leaves the reader briefly stale,
+// no different from any other transient fs hiccup the fake doesn't model.
+func writeTranscriptFile(dir, ref string, msgs []provider.Message) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	raw, err := json.Marshal(msgs)
+	if err != nil {
+		return
+	}
+	final := transcriptFilePath(dir, ref)
+	tmp := final + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, final)
+}
+
+// readTranscriptFile is writeTranscriptFile's counterpart for a Fake
+// instance that never ran ref's turns itself.
+func readTranscriptFile(dir, ref string) ([]provider.Message, error) {
+	raw, err := os.ReadFile(transcriptFilePath(dir, ref))
+	if err != nil {
+		return nil, fmt.Errorf("unknown session ref %q", ref)
+	}
+	var msgs []provider.Message
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, fmt.Errorf("transcript %s: %w", ref, err)
+	}
+	return msgs, nil
 }
 
 func (f *Fake) history(ref string) []provider.Message {

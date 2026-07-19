@@ -119,7 +119,12 @@ func main() {
 	if err := providers.Register(kirocli.New(kirocli.Config{})); err != nil {
 		log.Fatalf("router: register kiro-cli provider: %v", err)
 	}
-	if err := providers.Register(fake.New()); err != nil {
+	// WithTranscriptDir points this Router-local fake instance at the same
+	// $MADS_HOME/fake-transcripts a `mads run` child (cmd/mads/run.go) with
+	// -provider fake writes to — the two are always separate Fake
+	// instances (different processes), so an announced OneShot ref's
+	// history is otherwise invisible here (pipeline_turns.go's turnsFor).
+	if err := providers.Register(fake.New(fake.WithTranscriptDir(filepath.Join(*madsHome, "fake-transcripts")))); err != nil {
 		log.Fatalf("router: register fake provider: %v", err)
 	}
 

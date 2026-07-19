@@ -1,15 +1,18 @@
 [
   {
     "role": "user",
-    "text": "add a login endpoint"
+    "text": "add a login endpoint",
+    "timestamp": "2026-07-11T21:59:23Z"
   },
   {
     "role": "agent",
-    "text": "I'll add the endpoint now."
+    "text": "I'll add the endpoint now.",
+    "timestamp": "2026-07-11T21:59:24Z"
   },
   {
     "role": "tool",
     "tool": {
+      "id": "toolu_01",
       "name": "Edit",
       "input": {
         "file_path": "api/login.go",
@@ -17,23 +20,37 @@
         "new_string": "package api"
       },
       "path": "api/login.go"
-    }
+    },
+    "timestamp": "2026-07-11T21:59:25Z"
+  },
+  {
+    "role": "tool_result",
+    "text": "ok",
+    "tool": {
+      "id": "toolu_01",
+      "name": ""
+    },
+    "timestamp": "2026-07-11T21:59:26Z"
   },
   {
     "role": "user",
-    "text": "looks good, run the tests"
+    "text": "looks good, run the tests",
+    "timestamp": "2026-07-11T21:59:30Z"
   },
   {
     "role": "tool",
     "tool": {
+      "id": "toolu_02",
       "name": "Bash",
       "input": {
         "command": "go test ./..."
       }
-    }
+    },
+    "timestamp": "2026-07-11T21:59:31Z"
   },
   {
     "role": "agent",
-    "text": "Tests pass."
+    "text": "Tests pass.",
+    "timestamp": "2026-07-11T21:59:40Z"
   }
 ]

@@ -1,6 +1,9 @@
 package contracts
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ToolUse mirrors providers/provider/event.go ToolUse — the wire shape of a
 // normalized tool invocation inside a transcript message. Duplicated here
@@ -8,6 +11,9 @@ import "encoding/json"
 // dependency on the provider layer, same as every other cross-boundary type
 // in this package.
 type ToolUse struct {
+	// ID is the provider-native tool_use identifier, when the wire format
+	// has one — the correlation key back to a matching tool_result.
+	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input,omitempty"`
 	Path  string          `json:"path,omitempty"`
@@ -16,10 +22,13 @@ type ToolUse struct {
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
 type TranscriptMessage struct {
-	Role        string       `json:"role"` // "user", "agent", or "tool"
+	Role        string       `json:"role"` // "user", "agent", "tool", or "tool_result"
 	Text        string       `json:"text,omitempty"`
 	Tool        *ToolUse     `json:"tool,omitempty"`
 	Attribution *Attribution `json:"attribution,omitempty"`
+	// Timestamp is when the provider recorded this entry, when its wire
+	// format carries one. Zero value when unknown.
+	Timestamp time.Time `json:"timestamp,omitempty"`
 }
 
 // Attribution identifies the linked session a message was injected from

@@ -152,4 +152,63 @@ describe("FetchPipelineClient", () => {
       expect(FakeEventSource.instances[0].closed).toBe(true);
     });
   });
+
+  describe("streamTaskTurns", () => {
+    beforeEach(() => {
+      FakeEventSource.instances = [];
+      vi.stubGlobal("EventSource", FakeEventSource);
+    });
+
+    it("opens an EventSource against the task turns route", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskTurns("ses_1", "t1");
+      expect(FakeEventSource.instances[0].url).toBe(
+        "http://localhost:8080/sessions/ses_1/pipeline/tasks/t1/turns",
+      );
+    });
+
+    it("delivers JSON-decoded turn arrays to onTurns listeners", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskTurns("ses_1", "t1");
+      const listener = vi.fn();
+      source.onTurns(listener);
+
+      FakeEventSource.instances[0].emit(
+        "message",
+        JSON.stringify([{ role: "user", text: "hi" }]),
+      );
+
+      expect(listener).toHaveBeenCalledWith([{ role: "user", text: "hi" }]);
+    });
+
+    it("unsubscribing onTurns stops delivering further frames", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskTurns("ses_1", "t1");
+      const listener = vi.fn();
+      const unsubscribe = source.onTurns(listener);
+      unsubscribe();
+
+      FakeEventSource.instances[0].emit("message", JSON.stringify([]));
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("closes the EventSource on the server's terminal 'end' event", () => {
+      const client = new FetchPipelineClient();
+      client.streamTaskTurns("ses_1", "t1");
+      const es = FakeEventSource.instances[0];
+
+      es.emit("end", "");
+
+      expect(es.closed).toBe(true);
+    });
+
+    it("close() closes the underlying EventSource", () => {
+      const client = new FetchPipelineClient();
+      const source = client.streamTaskTurns("ses_1", "t1");
+      source.close();
+
+      expect(FakeEventSource.instances[0].closed).toBe(true);
+    });
+  });
 });

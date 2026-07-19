@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test, expect } from "./fixtures";
-import { createSession, importTasks, pollEventOfType, setupWorkspace } from "./lib/seed";
+import { createSession, importTasks, pollEventOfType, pollStageStarted, setupWorkspace } from "./lib/seed";
 
 test.describe("pipeline drill-in: live output + resize persistence", () => {
   test.describe.configure({ mode: "serial" });
@@ -168,6 +168,134 @@ test.describe("pipeline drill-in: live output + resize persistence", () => {
     const draggedHeight = await panel.evaluate((el) => parseInt((el as HTMLElement).style.height, 10));
     expect(draggedHeight).toBeGreaterThanOrEqual(tabBox.height * 0.85 - 2);
     expect(draggedHeight).toBeLessThanOrEqual(expectedMax + 2);
+  });
+});
+
+test.describe("pipeline drill-in: normalized turns feed", () => {
+  test.describe.configure({ mode: "serial" });
+
+  const taskTitle = "e2e feed task";
+  let sessionName: string;
+  let sessionId: string;
+  let runExit: Promise<void>;
+
+  test.beforeAll(async () => {
+    const routerURL = process.env.MADS_ROUTER_URL!;
+    const dataURL = process.env.MADS_DATA_URL!;
+    const workspaceDir = mkdtempSync(path.join(tmpdir(), "mads-ui-smoke-feed-"));
+    setupWorkspace(workspaceDir);
+    sessionName = `e2e feed journey ${Date.now()}`;
+    const session = await createSession(routerURL, { name: sessionName, provider: "fake" });
+    sessionId = session.id;
+    await importTasks(routerURL, session.id, [taskTitle]);
+
+    // announce_one_shot_ref opts the fake into claude-code's shape: OneShot
+    // announces a session ref and backs it with a transcript. This is the
+    // only way to reach AgentFeedView end to end — the fake otherwise never
+    // announces (see the other describe blocks in this file, which exercise
+    // the fallback raw-log path deliberately). The scripted tool + delay
+    // only matches the "executor" stage specifically — every other agent
+    // stage (architect, code_review) falls through to the fake's built-in
+    // instant "ok" dialect, so the pipeline doesn't accumulate several
+    // multi-second waits before the test ever gets a chance to look, and
+    // the wait below can pin down exactly the window this test needs.
+    const scenarioPath = path.join(workspaceDir, "scenario.yaml");
+    writeFileSync(
+      scenarioPath,
+      [
+        "name: drill-in-feed",
+        "announce_one_shot_ref: true",
+        "rules:",
+        '  - match: "Pipeline stage: executor"',
+        "    tools:",
+        "      - name: Bash",
+        '        input: \'{"command": "make test"}\'',
+        "    chunks:",
+        '      - "Running the test suite...\\n"',
+        '      - "STAGE: pass"',
+        "    delay_ms: 2000",
+        "",
+      ].join("\n"),
+    );
+
+    const worktreeRoot = path.join(workspaceDir, ".worktrees");
+    mkdirSync(worktreeRoot, { recursive: true });
+
+    runExit = new Promise((resolve, reject) => {
+      execFile(
+        process.env.MADS_BIN!,
+        [
+          "run",
+          "-data",
+          dataURL,
+          "-session",
+          session.id,
+          "-workspace",
+          workspaceDir,
+          "-provider",
+          "fake",
+          "-fake-scenario",
+          scenarioPath,
+          "-stage-timeout",
+          "30s",
+          "-worktree-root",
+          worktreeRoot,
+        ],
+        { env: process.env },
+        (err) => (err ? reject(err) : resolve()),
+      );
+    });
+
+    // Wait until the executor stage itself has started before navigating —
+    // that's the multi-second scripted window this test needs to land in.
+    // Waiting on the generic "any stage.attempt_ref" signal isn't specific
+    // enough here: architect's instant "ok" reply announces one too, and by
+    // the time Playwright's own startup/navigation overhead has passed, the
+    // run could already be well past it (same rationale as the "resume
+    // mid-run" block below, sharpened to a named stage).
+    await pollStageStarted(routerURL, sessionId, "executor");
+  });
+
+  test.afterAll(async () => {
+    await runExit;
+  });
+
+  test("drill-in renders tool rows, timestamps, and a ticking liveness indicator from the normalized feed", async ({
+    page,
+    routerURL,
+  }) => {
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+    await rail.getByText(sessionName, { exact: true }).click();
+    await page.getByRole("tab", { name: "Pipeline" }).click();
+    await page.getByRole("button", { name: taskTitle }).click();
+
+    // The announced ref flips DrillInFeed from the raw AgentOutputView over
+    // to the normalized AgentFeedView.
+    const feed = page.getByTestId("agent-feed");
+    await expect(feed).toBeVisible({ timeout: 10_000 });
+
+    // Tool row: distinct from prose, shows the Bash command as its salient
+    // argument, and carries a visible HH:MM:SS timestamp.
+    const toolRow = page.getByTestId("feed-tool-row").first();
+    await expect(toolRow).toBeVisible();
+    await expect(toolRow).toContainText("Bash");
+    await expect(toolRow).toContainText("make test");
+    await expect(toolRow).toContainText(/\d{2}:\d{2}:\d{2}/);
+
+    // Liveness: the tool_use has no matching tool_result yet, so the row
+    // ticks elapsed time with no new transcript entries required.
+    const liveness = page.getByTestId("feed-liveness");
+    await expect(liveness).toBeVisible();
+    const firstReading = await liveness.textContent();
+    await expect(async () => {
+      const reading = await liveness.textContent();
+      expect(reading).not.toBe(firstReading);
+    }).toPass({ timeout: 5_000 });
+
+    // Prose rows (agent/user text) are visually and structurally distinct
+    // from tool rows — a different testid entirely.
+    await expect(page.getByTestId("feed-prose-row").first()).toBeVisible({ timeout: 15_000 });
   });
 });
 

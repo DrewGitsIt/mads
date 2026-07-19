@@ -1,4 +1,4 @@
-import type { PipelineClient, PipelineOutputSource } from "./pipelineClient";
+import type { PipelineClient, PipelineOutputSource, PipelineTurnsSource } from "./pipelineClient";
 import type { Envelope, PipelineRun, Task } from "../../router/types";
 import { recordedSessionId, recordedTasks } from "./recordedRun";
 
@@ -52,6 +52,20 @@ export class FakePipelineOutputSource implements PipelineOutputSource {
 }
 
 /**
+ * Never delivers a turn — the demo mount and PipelineTab.test.tsx have no
+ * scripted provider transcript, so every fixture task exercises the
+ * fallback-to-raw-output path (DrillInFeed), same as a real fake-provider
+ * run.
+ */
+export class FakePipelineTurnsSource implements PipelineTurnsSource {
+  onTurns(): () => void {
+    return () => {};
+  }
+
+  close(): void {}
+}
+
+/**
  * In-memory PipelineClient, same shape as FakeRouterClient
  * (ui/src/router/fixtures.ts): array of fixture Task[], startPipeline
  * returns a fixed run_id, retryTask flips the fixture task back to ready.
@@ -101,6 +115,10 @@ export class FakePipelineClient implements PipelineClient {
 
   streamTaskOutput(_sessionId: string, _taskId: string): PipelineOutputSource {
     return new FakePipelineOutputSource();
+  }
+
+  streamTaskTurns(_sessionId: string, _taskId: string): PipelineTurnsSource {
+    return new FakePipelineTurnsSource();
   }
 
   async listRuns(_sessionId: string): Promise<PipelineRun[]> {

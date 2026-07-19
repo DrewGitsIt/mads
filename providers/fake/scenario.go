@@ -34,6 +34,15 @@ type Scenario struct {
 	// LocateDelay simulates the latency of a real locate scan (history.jsonl
 	// / transcript polling) before LocateSession resolves.
 	LocateDelay time.Duration `yaml:"locate_delay,omitempty"`
+	// AnnounceOneShotRef, when true, makes OneShot announce
+	// provider.EventSessionRef (via req.OnEvent, as soon as the ref is known)
+	// and back that ref with a Transcript(ref) history — modeling a provider
+	// whose one-shot invocations also leave an inspectable transcript (e.g.
+	// claude-code's session_id riding the stream-json wire). The zero value
+	// (false) is the fake's original OneShot behavior: no ref, no transcript,
+	// exactly "a provider with no announcement mechanism" — the case the
+	// drill-in's raw-log fallback exists for.
+	AnnounceOneShotRef bool `yaml:"announce_one_shot_ref,omitempty"`
 }
 
 // RefAnnounceTiming selects when a fake session's ref becomes knowable.

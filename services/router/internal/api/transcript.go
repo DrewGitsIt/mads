@@ -41,11 +41,19 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 		log.Printf("api: transcript: read session %s: %v", sess.ID, err)
 		return out
 	}
+	return normalizeTurns(msgs)
+}
+
+// normalizeTurns maps provider-native transcript messages onto the
+// contracts wire shape shared by GET /sessions/{id}/transcript and the
+// pipeline drill-in's GET .../turns (pipeline_turns.go) — the same mapping,
+// two callers.
+func normalizeTurns(msgs []provider.Message) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp}
 		if m.Tool != nil {
-			tm.Tool = &contracts.ToolUse{Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
+			tm.Tool = &contracts.ToolUse{ID: m.Tool.ID, Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
 		}
 		result[i] = tm
 	}
