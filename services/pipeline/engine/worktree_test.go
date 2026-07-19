@@ -47,19 +47,23 @@ stages:
 // runIsolated returns the summary and the worktree root, so tests can
 // construct a specific task's worktree path (filepath.Join(root, task.ID))
 // to inspect state left behind (e.g. unresolved conflict markers).
-func (h *harness) runIsolated(t *testing.T, p *fake.Fake, tpl string, concurrency int) (*Summary, string) {
+func (h *harness) runIsolated(t *testing.T, p *fake.Fake, tpl string, concurrency int, opts ...func(*Config)) (*Summary, string) {
 	t.Helper()
 	parsed, verr := template.Check([]byte(tpl), func(string) bool { return true })
 	if verr != nil {
 		t.Fatal(verr)
 	}
 	root := t.TempDir()
-	sum, err := Run(context.Background(), Config{
+	cfg := Config{
 		Data: h.data, Provider: p, SessionID: h.sess.ID,
 		Template: parsed, Cwd: h.cwd, Concurrency: concurrency,
 		StageTimeout: 30 * time.Second,
 		Isolated:     true, WorktreeRoot: root, DataURL: h.base,
-	})
+	}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	sum, err := Run(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

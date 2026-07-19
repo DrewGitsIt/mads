@@ -25,6 +25,14 @@ type worktrees struct {
 	sessionID string
 	data      *dataclient.Client // task lookups for conflict diagnostics
 
+	// mergirafPath is the mergiraf binary's path, or "" if unavailable — set
+	// once at engine start (Config.MergirafPath or a PATH lookup). Rebase/
+	// merge behavior is otherwise identical either way: this only gates
+	// whether ensureSetup registers mergiraf as the primary repo's merge
+	// driver (spec: "detect availability at engine start and fall back
+	// cleanly to plain git rebase when absent").
+	mergirafPath string
+
 	setup   sync.Once
 	setupEr error
 	land    landQueue // exactly one land attempt at a time, stable FIFO order
@@ -71,12 +79,68 @@ func (w *worktrees) git(ctx context.Context, dir string, args ...string) (string
 }
 
 // ensureSetup enables per-worktree config and installs the post-commit hook,
-// once per run.
+// and — when a mergiraf binary was detected — registers it as the git merge
+// driver for the shared repo, once per run.
 func (w *worktrees) ensureSetup(ctx context.Context) error {
 	w.setup.Do(func() {
-		w.setupEr = githook.EnsureInstalled(ctx, w.primary)
+		if w.setupEr = githook.EnsureInstalled(ctx, w.primary); w.setupEr != nil {
+			return
+		}
+		if w.mergirafPath != "" {
+			w.setupEr = w.ensureMergirafDriver(ctx)
+		}
 	})
 	return w.setupEr
+}
+
+// mergirafDriverName is the git merge driver name mergiraf is registered
+// under (see ensureMergirafDriver).
+const mergirafDriverName = "mergiraf"
+
+// ensureMergirafDriver registers mergiraf as a git merge driver (spec: the
+// land queue's rebase step should resolve adjacent-edit conflicts
+// automatically while leaving genuinely overlapping edits conflicted).
+// This is git's native per-file merge-driver mechanism — a
+// `merge.mergiraf.driver` config command template plus a `merge=mergiraf`
+// gitattributes rule — not a bespoke whole-tree invocation: mergiraf's own
+// docs (mergiraf.org/usage.html) prescribe exactly this integration, and it
+// means rebaseBeforeMerge's plain `git merge` calls pick it up for free.
+//
+// extensions.worktreeConfig (enabled by githook.EnsureInstalled above) makes
+// git config and .git/info/attributes shared across every task worktree, so
+// this only needs to run once against the primary repo's common git dir.
+//
+// The %S/%X/%Y label placeholders are only substituted by git 2.44+; on
+// older git they pass through to mergiraf as literal text, which is
+// harmless (mergiraf just uses them as conflict-marker labels on any
+// hunk it can't resolve) — see mergiraf.org/usage.html#with-a-driver.
+func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
+	if _, err := w.git(ctx, w.primary, "config", "merge.mergiraf.name", "mergiraf"); err != nil {
+		return err
+	}
+	driver := w.mergirafPath + " merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L"
+	if _, err := w.git(ctx, w.primary, "config", "merge.mergiraf.driver", driver); err != nil {
+		return err
+	}
+	gitDir, err := w.git(ctx, w.primary, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	infoDir := filepath.Join(w.primary, strings.TrimSpace(gitDir), "info")
+	if err := os.MkdirAll(infoDir, 0o755); err != nil {
+		return err
+	}
+	attrPath := filepath.Join(infoDir, "attributes")
+	if raw, err := os.ReadFile(attrPath); err == nil && strings.Contains(string(raw), "merge="+mergirafDriverName) {
+		return nil
+	}
+	f, err := os.OpenFile(attrPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = f.WriteString("* merge=mergiraf\n")
+	return err
 }
 
 // create makes the task's worktree and branch, records the fork point (trunk
