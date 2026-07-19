@@ -24,12 +24,13 @@
 
 .row {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: var(--space-1);
   width: 100%;
   padding: var(--space-2) var(--space-3);
-  background: transparent;
-  border: none;
+  margin-bottom: 2px;
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
   border-radius: var(--r-sm);
   color: var(--text);
   font: 500 var(--fs-sm) var(--sans);
@@ -43,6 +44,29 @@
 
 .selected {
   background: var(--bg3);
+  border-color: var(--line);
+}
+
+.rowTop {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.rowMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-left: 16px;
+}
+
+.summary {
+  padding-left: 16px;
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dot {
@@ -50,6 +74,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
+  margin-top: 5px;
   background: var(--text3);
 }
 
@@ -68,9 +93,11 @@
 .name {
   flex: 1;
   min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.35;
 }
 
 .openCount {
@@ -81,7 +108,7 @@
 
 .resumeAffordance {
   flex: none;
-  opacity: 0;
+  opacity: 0.65;
   background: transparent;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
@@ -89,7 +116,10 @@
   padding: 2px 7px;
   cursor: pointer;
   font: 500 var(--fs-chip) var(--sans);
-  transition: opacity 0.15s;
+  transition:
+    opacity 0.15s,
+    background-color 0.15s,
+    color 0.15s;
 }
 
 .row:hover .resumeAffordance,
@@ -102,20 +132,36 @@
   background: var(--bg3);
 }
 
+.resumeAffordance:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .rowMenuWrap {
+  flex: none;
   position: relative;
 }
 
 .rowMenuTrigger {
   flex: none;
-  opacity: 0;
+  opacity: 0.55;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
   background: transparent;
-  border: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
   color: var(--text2);
-  padding: 2px 6px;
   cursor: pointer;
   font: 500 var(--fs-sm) var(--sans);
-  transition: opacity 0.15s;
+  transition:
+    opacity 0.15s,
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .row:hover .rowMenuTrigger,
@@ -124,7 +170,16 @@
 }
 
 .rowMenuTrigger:hover {
+  opacity: 1;
   color: var(--text);
+  background: var(--bg3);
+  border-color: var(--line);
+}
+
+.rowMenuTrigger:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .rowMenu {
@@ -141,6 +196,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
+  margin-top: 3px;
   opacity: 0;
   transition: opacity 0.15s;
 }
@@ -178,11 +234,14 @@
   margin-left: 20px;
 }
 
+/* Reaches up into the previous sibling row's dot. The offset is tuned for
+   a nominal single-line row height and is only an approximation once rows
+   above vary in height (2-line titles, meta/summary lines). */
 .nestedRow::before {
   content: "";
   position: absolute;
   left: -10px;
-  top: -8px;
+  top: -16px;
   bottom: 50%;
   width: 10px;
   border-left: 1px solid var(--line);

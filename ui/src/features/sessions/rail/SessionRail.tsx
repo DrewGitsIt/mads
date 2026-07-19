@@ -254,6 +254,9 @@ function SessionRow({
 }) {
   const dot = dotState(session, openTaskCount);
   const [menuOpen, setMenuOpen] = useState(false);
+  const hasMeta =
+    openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge)) || (session.activity !== "active" && Boolean(onResume));
+  const showSummary = session.activity !== "active" && Boolean(session.summary);
   return (
     <div
       role="button"
@@ -273,81 +276,88 @@ function SessionRow({
         }
       }}
     >
-      {linkedSessionsEnabled && (
-        <span
-          className={[styles.checkboxWrap, selectionMode ? styles.checkboxVisible : ""]
-            .filter(Boolean)
-            .join(" ")}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <input
-            type="checkbox"
-            aria-label={`Select ${session.name || "session"}`}
-            checked={checked}
-            onChange={() => onToggleChecked(session.id)}
-          />
-        </span>
-      )}
-      <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
-      <span className={styles.name}>{session.name || "Untitled session"}</span>
-      {openTaskCount > 0 && <span className={styles.openCount}>{openTaskCount} open</span>}
-      {linkedSessionsEnabled && linkBadge && (
-        <span
-          className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
-            .filter(Boolean)
-            .join(" ")}
-        >
-          {linkBadge}
-        </span>
-      )}
-      {session.activity !== "active" && onResume && (
-        <button
-          type="button"
-          className={styles.resumeAffordance}
-          aria-label={`Resume ${session.name || "session"}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onResume(session.id);
-          }}
-        >
-          Resume
-        </button>
-      )}
-      <div className={styles.rowMenuWrap} onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          className={styles.rowMenuTrigger}
-          aria-label={`${session.name || "Session"} actions`}
-          onClick={() => setMenuOpen((x) => !x)}
-        >
-          ⋯
-        </button>
-        {menuOpen && (
-          <SessionActionsMenu
-            className={styles.rowMenu}
-            activity={session.activity}
-            onClose={() => {
-              setMenuOpen(false);
-              onClose?.(session.id);
-            }}
-            onResume={() => {
-              setMenuOpen(false);
-              onResume?.(session.id);
-            }}
-            onDeleteRequest={() => {
-              setMenuOpen(false);
-              onDeleteRequest(session.id);
-            }}
-            onUnlinkRequest={
-              onUnlinkRequest &&
-              (() => {
-                setMenuOpen(false);
-                onUnlinkRequest!();
-              })
-            }
-          />
+      <div className={styles.rowTop}>
+        {linkedSessionsEnabled && (
+          <span
+            className={[styles.checkboxWrap, selectionMode ? styles.checkboxVisible : ""]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              aria-label={`Select ${session.name || "session"}`}
+              checked={checked}
+              onChange={() => onToggleChecked(session.id)}
+            />
+          </span>
         )}
+        <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
+        <span className={styles.name}>{session.name || "Untitled session"}</span>
+        <div className={styles.rowMenuWrap} onClick={(e) => e.stopPropagation()}>
+          <button
+            type="button"
+            className={styles.rowMenuTrigger}
+            aria-label={`${session.name || "Session"} actions`}
+            onClick={() => setMenuOpen((x) => !x)}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <SessionActionsMenu
+              className={styles.rowMenu}
+              activity={session.activity}
+              onClose={() => {
+                setMenuOpen(false);
+                onClose?.(session.id);
+              }}
+              onResume={() => {
+                setMenuOpen(false);
+                onResume?.(session.id);
+              }}
+              onDeleteRequest={() => {
+                setMenuOpen(false);
+                onDeleteRequest(session.id);
+              }}
+              onUnlinkRequest={
+                onUnlinkRequest &&
+                (() => {
+                  setMenuOpen(false);
+                  onUnlinkRequest!();
+                })
+              }
+            />
+          )}
+        </div>
       </div>
+      {hasMeta && (
+        <div className={styles.rowMeta}>
+          {openTaskCount > 0 && <span className={styles.openCount}>{openTaskCount} open</span>}
+          {linkedSessionsEnabled && linkBadge && (
+            <span
+              className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              {linkBadge}
+            </span>
+          )}
+          {session.activity !== "active" && onResume && (
+            <button
+              type="button"
+              className={styles.resumeAffordance}
+              aria-label={`Resume ${session.name || "session"}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResume(session.id);
+              }}
+            >
+              Resume
+            </button>
+          )}
+        </div>
+      )}
+      {showSummary && <div className={styles.summary}>{session.summary}</div>}
     </div>
   );
 }
