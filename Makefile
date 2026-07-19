@@ -8,6 +8,7 @@ LINT  := $(GOBIN)/golangci-lint
 build: ui-deps
 	go build ./...
 	go build -o $(GOBIN)/mads ./cmd/mads
+	go build -o $(GOBIN)/data ./services/data
 	go build -o $(GOBIN)/router ./services/router
 	go build -o $(GOBIN)/session ./services/session
 	go build -o $(GOBIN)/pipeline ./services/pipeline

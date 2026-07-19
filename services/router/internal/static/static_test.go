@@ -79,6 +79,24 @@ func TestServesIndexAtRoot(t *testing.T) {
 	}
 }
 
+// TestServesIndexAtRootWithoutHTMLAccept covers curl/health-check-shaped
+// requests (default Accept "*/*", the same header a plain "curl
+// localhost:8080/" sends): "/" must 200 with the built index.html the same
+// as a browser navigation, not fall through to isNavigationRequest's
+// Accept-sniffing 404 meant for disambiguating unknown routes.
+func TestServesIndexAtRootWithoutHTMLAccept(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	status, body := getWithAccept(t, srv, "/", "*/*")
+	if status != http.StatusOK {
+		t.Fatalf("GET / status = %d, want 200", status)
+	}
+	if body != "<html><body>mads-ui-shell</body></html>" {
+		t.Fatalf("GET / body = %q, want the built index.html", body)
+	}
+}
+
 func TestServesRealAssetVerbatim(t *testing.T) {
 	srv := httptest.NewServer(static.New(writeUIDist(t)))
 	defer srv.Close()

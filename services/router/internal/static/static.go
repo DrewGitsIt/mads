@@ -43,6 +43,15 @@ func New(distDir string) http.Handler {
 			serveNotBuilt(w, r)
 			return
 		}
+		// The root path always serves index.html directly, unconditional on
+		// isNavigationRequest's Accept sniffing below: unlike an unknown
+		// route, "/" is never an errant API call to disambiguate from a
+		// browser navigating, so a plain curl/health-check GET (Accept
+		// "*/*", not "text/html") must 200 here the same as a browser.
+		if r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			http.ServeFile(w, r, index)
+			return
+		}
 		// filepath.Clean strips any ".." that would otherwise escape
 		// distDir before it's joined in — a rooted path (r.URL.Path always
 		// starts with "/") can't climb above root.
