@@ -19,6 +19,15 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
+// ErrUnusableOutput is the error Do returns after MaxAttempts when the
+// backend never produced parseable, valid JSON — the shape an unconfigured
+// backend (e.g. providers/fake's "ok" fallback, standing in for the Fast
+// Model until -fastmodel-base-url is set) always takes. Distinct from
+// transport failures so best-effort callers (e.g. session summaries) can
+// treat "the backend can't do structured output" as "nothing to report"
+// rather than a hard failure.
+var ErrUnusableOutput = errors.New("fastmodel: no usable structured output")
+
 // Job is one transient invocation.
 type Job struct {
 	System string
@@ -110,7 +119,7 @@ func (r *Runner) Do(ctx context.Context, job Job, out any) (provider.Usage, erro
 			"%s\n\nYour previous reply could not be used: %v.\nReply with ONLY valid JSON of the requested shape — no prose, no code fences.",
 			job.Prompt, lastErr)
 	}
-	return total, fmt.Errorf("no usable structured output after %d attempts: %w", r.maxAttempts, lastErr)
+	return total, fmt.Errorf("%w after %d attempts: %v", ErrUnusableOutput, r.maxAttempts, lastErr)
 }
 
 func (r *Runner) jobModel(job Job) string {
