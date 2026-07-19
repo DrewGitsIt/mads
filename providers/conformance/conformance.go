@@ -440,25 +440,62 @@ func (c *checker) refAnnounce() error {
 
 	select {
 	case ref, ok := <-announcer.RefAnnounced():
-		if !working {
-			if ok && ref != "" {
-				return errors.New("declared unsupported but RefAnnounced delivered a ref")
-			}
-			return nil
+		if err := verifyRefAnnounced(working, ref, ok); err != nil {
+			return err
 		}
-		if !ok || ref == "" {
-			return errors.New("declared working but RefAnnounced closed with no ref")
-		}
-		<-turnDone
+		<-turnDone // still require the turn to actually finish before returning
 		return nil
 	case <-turnDone:
-		if working {
-			return errors.New("turn completed before ref was announced")
-		}
-		return nil
+		return refAnnounceAfterTurnDone(working, announcer.RefAnnounced(), sess.Ref)
 	case <-time.After(c.s.timeout()):
 		return fmt.Errorf("no ref announcement or turn end within %s", c.s.timeout())
 	}
+}
+
+// verifyRefAnnounced checks one RefAnnounced delivery against the
+// declaration. ref/ok are exactly what a receive from RefAnnounced()
+// produced.
+func verifyRefAnnounced(working bool, ref string, ok bool) error {
+	if !working {
+		if ok && ref != "" {
+			return errors.New("declared unsupported but RefAnnounced delivered a ref")
+		}
+		return nil
+	}
+	if !ok || ref == "" {
+		return errors.New("declared working but RefAnnounced closed with no ref")
+	}
+	return nil
+}
+
+// refAnnounceAfterTurnDone resolves the case where select observed turnDone
+// as ready. That alone doesn't prove the provider announced late: select
+// gives no priority to whichever channel became ready first in real time,
+// so once both are ready it can land here even when the provider genuinely
+// announced before completing the turn (a compliant provider's announce
+// happens-before it can ever emit the turn-end event — see fakeSession.Send,
+// providers/fake/fake.go, which delivers the ref before spawning its
+// response goroutine). A single non-blocking read settles it for real:
+// RefAnnounced's value, once sent, sits in the channel until read, and
+// Ref() is guarded by the same lock the provider sets it under — both are
+// monotonic, so if the provider already delivered, it's observable now
+// regardless of how this goroutine was scheduled.
+func refAnnounceAfterTurnDone(working bool, announced <-chan string, refFn func() string) error {
+	select {
+	case ref, ok := <-announced:
+		return verifyRefAnnounced(working, ref, ok)
+	default:
+	}
+	if r := refFn(); r != "" {
+		if !working {
+			return errors.New("declared unsupported but Ref() is non-empty after the turn completed")
+		}
+		return nil
+	}
+	if working {
+		return errors.New("turn completed before ref was announced")
+	}
+	return nil
 }
 
 // resumeRefused checks the unsupported declaration is honest: a resume
