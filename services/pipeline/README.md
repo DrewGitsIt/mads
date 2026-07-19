@@ -61,6 +61,29 @@ field ("mergiraf" or "git"). Pinned version for this machine: **mergiraf
 0.18.0**, installed via `cargo install --locked mergiraf` to
 `~/.cargo/bin/mergiraf`.
 
+**Wide concurrency, serialized integration.** `Config.Concurrency` (default
+5) caps how many tasks run their *agent* stages at once — it is not a
+collision-avoidance knob. A template dependency expresses a prerequisite
+("this task's work needs that task's output"), not "don't run these two at
+the same time"; two tasks with no dependency between them are meant to
+overlap. What keeps that safe is the land queue, not the scheduler: every
+task's merge stage — gate included, since the post-rebase gate runs inside
+the same land attempt — funnels through `landQueue.acquire()`, a single
+FIFO gate around `landAttempt` (`runTask`'s `release := e.wt.land.acquire()`
+above). Exactly one land attempt is ever in flight, in stable arrival order,
+regardless of how many agent stages are running concurrently — the
+Not-Rocket-Science Rule (one trunk, one integrator at a time) applied to an
+engine instead of a person. Raising `Concurrency` only widens how much agent
+work overlaps *before* the land queue; it never lets two merges race each
+other, and it never needs to, because a genuine collision already has a
+correct outcome: the losing task blocks with the conflicted file and the
+trunk-side task that landed first named in its blocker note (spec: real
+conflicts come back with attribution, not silently broken trunk). Don't
+"optimize" this by sharding the land queue per task or running merges off
+the FIFO — that reintroduces exactly the interleaved-integration bugs this
+design exists to rule out; if merges ever need to run faster, the answer is
+a faster gate command, not more concurrent integrators.
+
 The primary-side abort
 in `worktrees.merge` remains as a rare defensive fallback for conflicts that
 somehow reach the trunk merge itself. Uncommitted agent work is
@@ -187,6 +210,12 @@ never a mock of either contract.
   conflicting change: TestConflictingPairBlocksSecond (a real same-lines
   conflict needs both branches off a common base — concurrent tasks, not
   sequential ones).
+- **Wide concurrency never interleaves integration** — a 3-task batch (two
+  racing for the same trunk position, one independent) run at the engine's
+  actual default concurrency lands or blocks every task with attribution,
+  keeps trunk green, and never opens a second land attempt's window before
+  the first one's closes, even with agent stages running fully parallel:
+  TestDefaultConcurrencyBatchLandsSerialized.
 - **Mergiraf shrinks the conflict surface without softening real conflicts**
   — adjacent, non-overlapping edits to the same Go and TS files across two
   branches rebase clean through the driver: TestMergirafResolvesAdjacentEdits.

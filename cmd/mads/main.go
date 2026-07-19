@@ -59,7 +59,7 @@ func usage() {
   mads tasks       -session ID                     [-data URL]
   mads run         -session ID -workspace DIR      [-data URL]
       [-template default-implementation] [-provider claude-code|fake]
-      [-model M] [-concurrency 2] [-isolated=true] [-worktree-root DIR]
+      [-model M] [-concurrency 5] [-isolated=true] [-worktree-root DIR]
       [-claude-args "--dangerously-skip-permissions"] [-stage-timeout 30m]
   mads uninstall   [-keep-data] [-yes]
   mads update check [-router URL]
@@ -67,5 +67,15 @@ func usage() {
   mads --version
 
 The Data Service must be running (make -C services/data run).
+
+-concurrency caps how many tasks run their agent stages at once (default 5).
+Template dependencies express prerequisites, not anti-collision: two tasks
+with no dependency between them are meant to run in parallel. Collision
+avoidance is the land queue's job, not the scheduler's — every task's merge
+funnels through one FIFO queue, so integration is always serialized no
+matter how high -concurrency goes. A real collision comes back as a blocked
+task naming the conflicting file and the trunk-side task that landed first,
+never a silently broken trunk. Pass -concurrency 1 to serialize everything,
+including agent stages, if you want that instead.
 `)
 }

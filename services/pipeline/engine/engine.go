@@ -43,7 +43,16 @@ type Config struct {
 	// Cwd is where command stages run and agent one-shots execute. W3.2
 	// replaces this with per-task worktrees.
 	Cwd string
-	// Concurrency caps simultaneously-running tasks (default 2).
+	// Concurrency caps simultaneously-running tasks (default 5). Dependencies
+	// in the template graph express prerequisites, not anti-collision — two
+	// tasks with no dependency between them are safe to run as agent stages
+	// in parallel because collision avoidance is the land queue's job, not
+	// the scheduler's: every merge stage funnels through the single FIFO
+	// landQueue (Not-Rocket-Science Rule, see landAttempt), so integration
+	// itself always serializes regardless of how many stages run at once.
+	// Real collisions come back as a blocked task with attribution (the
+	// conflicting file plus the trunk-side task that landed first), not a
+	// silent trunk break.
 	Concurrency int
 	// Actor is the run's lease identity (e.g. "pipeline"). Default "pipeline".
 	Actor string
@@ -116,7 +125,7 @@ type Summary struct {
 // breakage — task-level failure is a Summary outcome, not an error.
 func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 2
+		cfg.Concurrency = 5
 	}
 	if cfg.Actor == "" {
 		cfg.Actor = "pipeline"

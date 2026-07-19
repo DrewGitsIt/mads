@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -265,6 +266,95 @@ func TestConflictingPairBlocksSecond(t *testing.T) {
 	}
 	if payload.TrunkHead == "" {
 		t.Errorf("merge.conflicted trunk_head: empty")
+	}
+}
+
+// The wide-concurrency paradigm switch's integration proof: a 3-task batch,
+// two of them racing for the same trunk position, run at the engine's
+// DEFAULT concurrency (Config.Concurrency left unset — 0 here means "don't
+// override", not "serial"). Every task must land or block with attribution,
+// trunk must stay green, and — the actual invariant under test — no two
+// land attempts (gate + merge, funneled through landQueue) ever interleave,
+// even though "first" and "third"'s agent stages run fully in parallel.
+func TestDefaultConcurrencyBatchLandsSerialized(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: first", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "shared.txt", Content: "first version\n"}}},
+		fake.Rule{Match: "Task: second", Reply: "done", DelayMs: 300,
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "shared.txt", Content: "second version\n"}}},
+		fake.Rule{Match: "Task: third", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "third.txt", Content: "third\n"}}},
+	)
+	h.seed(contracts.Task{Title: "first"}, contracts.Task{Title: "second"}, contracts.Task{Title: "third"})
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 0)
+
+	if len(sum.Skipped) != 0 || len(sum.Done)+len(sum.Blocked) != 3 {
+		t.Fatalf("summary: %+v — every task must land or block, none skipped", sum)
+	}
+	if len(sum.Blocked) != 1 {
+		t.Fatalf("summary: %+v, want exactly 1 blocked (the losing overlapping task)", sum)
+	}
+	blocked := h.task(t, sum.Blocked[0])
+	if blocked.Title != "second" {
+		t.Fatalf("blocked task: %+v, want the delayed overlapping task", blocked)
+	}
+	var note *contracts.Note
+	for i := range blocked.Notes {
+		if blocked.Notes[i].Type == contracts.NoteBlocker {
+			note = &blocked.Notes[i]
+		}
+	}
+	if note == nil {
+		t.Fatal("no blocker note on the conflicting task")
+	}
+	for _, want := range []string{"shared.txt", "conflict", "first"} {
+		if !strings.Contains(note.Content, want) {
+			t.Errorf("blocker note missing %q (attribution): %s", want, note.Content)
+		}
+	}
+
+	// Trunk stays green: clean tree, the two non-conflicting tasks' work
+	// present, the conflicting task's loser version absent.
+	if status := gitOut(t, h.cwd, "status", "--porcelain"); strings.TrimSpace(status) != "" {
+		t.Errorf("trunk dirty after the batch:\n%s", status)
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "third.txt")); err != nil {
+		t.Errorf("third.txt missing from merged trunk: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(h.cwd, "shared.txt"))
+	if err != nil || string(raw) != "first version\n" {
+		t.Errorf("trunk shared.txt: %q, %v", raw, err)
+	}
+
+	assertLandAttemptsSerialized(t, h.events(t, "merge.attempted", "merge.completed", "merge.conflicted"))
+}
+
+// assertLandAttemptsSerialized checks, in server seq order, that no land
+// attempt's window (merge.attempted → merge.completed/merge.conflicted)
+// opens for one task before the previous one's has closed — the
+// Not-Rocket-Science invariant: exactly one land attempt in flight at a
+// time, no matter how many agent stages ran ahead of it in parallel.
+func assertLandAttemptsSerialized(t *testing.T, events []contracts.Envelope) {
+	t.Helper()
+	sort.Slice(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
+	open := ""
+	for _, ev := range events {
+		switch ev.Type {
+		case contracts.MergeAttempted:
+			if open != "" {
+				t.Fatalf("land attempt for %s opened while %s's was still open (interleaved integration)", ev.TaskID, open)
+			}
+			open = ev.TaskID
+		case contracts.MergeCompleted, contracts.MergeConflicted:
+			if open != ev.TaskID {
+				t.Fatalf("land attempt closed for %s but %s was the open one", ev.TaskID, open)
+			}
+			open = ""
+		}
+	}
+	if open != "" {
+		t.Fatalf("land attempt for %s never closed", open)
 	}
 }
 
