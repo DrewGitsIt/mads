@@ -118,6 +118,10 @@ export function ConversationTab({
     setSession(null);
     setMessages([]);
     setTurn({ phase: "idle" });
+    // Reset to the chat default up front — the mode lookup below is async,
+    // so a stale mode carried over from whatever session was mounted before
+    // this one must never leak into this session's initial render.
+    setTransport({ status: "idle", mode: "chat" });
     void routerClient
       .getSession(sessionId)
       .then((s) => {
@@ -134,6 +138,19 @@ export function ConversationTab({
       .catch(() => {
         if (!cancelled) setLoadError(true);
       });
+    // The session service's current transport mode IS the persistence
+    // mechanism for the toggle's last state — every switch is a real
+    // SwitchTransport, so there's nothing else to read the "last choice"
+    // from. A single read on mount, never a switch: a dormant session with
+    // no live child (and so no transport history) answers "chat", which is
+    // already this effect's default above, so a failed/degenerate lookup
+    // just leaves that default standing.
+    void routerClient
+      .getTransportMode(sessionId)
+      .then(({ mode }) => {
+        if (!cancelled) setTransport({ status: "idle", mode });
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };

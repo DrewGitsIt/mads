@@ -95,6 +95,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /sessions/{id}/messages", s.handleSessionMessages)
 	mux.HandleFunc("POST /sessions/{id}/interrupt", s.handleSessionInterrupt)
 	mux.HandleFunc("POST /sessions/{id}/transport", s.handleSessionTransport)
+	mux.HandleFunc("GET /sessions/{id}/transport", s.handleGetSessionTransport)
 	mux.HandleFunc("POST /sessions/{id}/input", s.handleSessionInput)
 	mux.HandleFunc("POST /sessions/{id}/resize", s.handleSessionResize)
 	mux.HandleFunc("POST /pipelines", s.handleStartPipeline)

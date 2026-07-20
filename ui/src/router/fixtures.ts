@@ -703,6 +703,8 @@ export class FakeRouterClient implements RouterClient {
   readonly sessionEventSources: FakeSessionEventSource[] = [];
   /** Paths passed to openInEditor, in call order — lets tests assert the button fired without a real editor to open. */
   readonly openedPaths: string[] = [];
+  /** Per-session live transport mode, mutated by switchTransport and read back by getTransportMode — mirrors the real child's runner-held mode being the single source of truth (no live child = no entry = defaults "chat"). */
+  private readonly transportModes = new Map<string, "chat" | "terminal">();
 
   constructor(
     sessions: Record<string, Session> = fixtureSessions,
@@ -751,12 +753,20 @@ export class FakeRouterClient implements RouterClient {
 
   // Fixture-backed no-ops, same convention as sendMessage/interrupt/bounce
   // above — tests override via vi.spyOn when they need to exercise the
-  // switching flow (ui/src/conversation/HANDOFF.md).
+  // switching flow (ui/src/conversation/HANDOFF.md). Does record the mode
+  // into transportModes though, so a plain (non-spied) switch followed by
+  // a remount/getTransportMode read sees it stuck, the same as the real
+  // Router/session-service round trip.
   async switchTransport(
-    _sessionId: string,
+    sessionId: string,
     mode: "chat" | "terminal",
   ): Promise<{ mode: string; ref: string }> {
+    this.transportModes.set(sessionId, mode);
     return { mode, ref: "fake-ref" };
+  }
+
+  async getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }> {
+    return { mode: this.transportModes.get(sessionId) ?? "chat" };
   }
 
   async terminalWrite(): Promise<void> {}

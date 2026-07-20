@@ -23,6 +23,13 @@ import (
 var (
 	injectionsMu sync.Mutex
 	injections   []contracts.InjectRequest
+
+	// transportMu/transportMode back GET /transport (the read side
+	// router-level tests use to confirm a POST /transport switch stuck) —
+	// mirrors the real Session Service's runner-held mode, starting at
+	// "chat" like a freshly started runner.
+	transportMu   sync.Mutex
+	transportMode = "chat"
 )
 
 func main() {
@@ -93,9 +100,20 @@ func main() {
 			w.WriteHeader(http.StatusBadGateway)
 			_, _ = fmt.Fprint(w, `{"error":"resume failed","code":"resume_failed","retryable":true}`)
 		default:
+			transportMu.Lock()
+			transportMode = req.Mode
+			transportMu.Unlock()
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"mode":%q,"ref":"test-ref"}`, req.Mode)
 		}
+	})
+	mux.HandleFunc("GET /transport", func(w http.ResponseWriter, r *http.Request) {
+		transportMu.Lock()
+		mode := transportMode
+		transportMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"mode":%q}`, mode)
 	})
 	mux.HandleFunc("POST /input", func(w http.ResponseWriter, r *http.Request) {
 		if _, err := io.ReadAll(r.Body); err != nil {
