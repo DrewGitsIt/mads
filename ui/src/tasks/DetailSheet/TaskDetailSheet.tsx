@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   SideSheet,
   SideSheetBody,
@@ -47,6 +47,114 @@ const NOTE_GROUPS: { type: NoteType; label: string }[] = [
   { type: "follow_up", label: "Follow-up" },
   { type: "observation", label: "Observation" },
 ];
+
+function autosize(el: HTMLTextAreaElement) {
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight}px`;
+}
+
+/**
+ * Resting state is the rendered Markdown (or a placeholder when empty);
+ * clicking or pressing Enter on it swaps in an autofocused textarea with
+ * the raw text. Commits to the draft on blur or Cmd/Ctrl+Enter — Escape
+ * discards the in-flight edit without touching the draft.
+ */
+function EditableTextField({
+  label,
+  value,
+  placeholder,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onCommit: (value: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draftValue, setDraftValue] = useState(value);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const skipBlurRef = useRef(false);
+
+  function startEditing() {
+    skipBlurRef.current = false;
+    setDraftValue(value);
+    setEditing(true);
+  }
+
+  function commit() {
+    setEditing(false);
+    onCommit(draftValue);
+  }
+
+  function cancel() {
+    skipBlurRef.current = true;
+    setEditing(false);
+  }
+
+  useEffect(() => {
+    if (!editing || !textareaRef.current) return;
+    const el = textareaRef.current;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+    autosize(el);
+  }, [editing]);
+
+  if (editing) {
+    return (
+      <textarea
+        ref={textareaRef}
+        className={styles.editor}
+        value={draftValue}
+        aria-label={label}
+        onChange={(e) => {
+          setDraftValue(e.target.value);
+          autosize(e.target);
+        }}
+        onBlur={() => {
+          if (skipBlurRef.current) {
+            skipBlurRef.current = false;
+            return;
+          }
+          commit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className={styles.editableField}
+      tabIndex={0}
+      role="button"
+      aria-label={`Edit ${label}`}
+      onClick={startEditing}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          startEditing();
+        }
+      }}
+    >
+      {value ? (
+        <Markdown text={value} className={styles.preview} />
+      ) : (
+        <span className={styles.placeholder}>{placeholder}</span>
+      )}
+      <span className={styles.editIcon} aria-hidden="true">
+        ✎
+      </span>
+    </div>
+  );
+}
 
 /**
  * Local form state is always a full Task draft object — every save is a
@@ -174,30 +282,35 @@ export function TaskDetailSheet({
           />
         </label>
 
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span className={styles.fieldLabel}>Description</span>
-          <textarea
+          <EditableTextField
+            label="Description"
             value={draft.description ?? ""}
-            onChange={(e) => set("description", e.target.value)}
+            placeholder="Add a description…"
+            onCommit={(value) => set("description", value)}
           />
-          {draft.description && <Markdown text={draft.description} className={styles.preview} />}
-        </label>
+        </div>
 
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span className={styles.fieldLabel}>Acceptance criteria</span>
-          <textarea
+          <EditableTextField
+            label="Acceptance criteria"
             value={draft.acceptance_criteria ?? ""}
-            onChange={(e) => set("acceptance_criteria", e.target.value)}
+            placeholder="Add acceptance criteria…"
+            onCommit={(value) => set("acceptance_criteria", value)}
           />
-          {draft.acceptance_criteria && (
-            <Markdown text={draft.acceptance_criteria} className={styles.preview} />
-          )}
-        </label>
+        </div>
 
-        <label className={styles.field}>
+        <div className={styles.field}>
           <span className={styles.fieldLabel}>Scope</span>
-          <textarea value={draft.scope ?? ""} onChange={(e) => set("scope", e.target.value)} />
-        </label>
+          <EditableTextField
+            label="Scope"
+            value={draft.scope ?? ""}
+            placeholder="Add scope…"
+            onCommit={(value) => set("scope", value)}
+          />
+        </div>
 
         <DependencyPicker
           task={draft}

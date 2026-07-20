@@ -106,6 +106,153 @@ describe("TaskDetailSheet", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  describe("click-to-edit long-text fields", () => {
+    it("shows only the rendered preview at rest, no textarea, for a populated field", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(screen.getByText("Exponential backoff with jitter, capped at 30s.")).toBeTruthy();
+      expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+    });
+
+    it("shows a clickable placeholder for an empty field", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      expect(screen.getByText("Add scope…")).toBeTruthy();
+      const scopeField = screen.getByRole("button", { name: "Edit Scope" });
+      fireEvent.click(scopeField);
+      expect((screen.getByRole("textbox", { name: "Scope" }) as HTMLTextAreaElement).value).toBe(
+        "",
+      );
+    });
+
+    it("switches to an autofocused textarea with the raw text on click", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+      const textarea = screen.getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement;
+      expect(textarea.value).toBe("Exponential backoff with jitter, capped at 30s.");
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    it("begins editing on Enter when the preview is keyboard-focused", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.keyDown(screen.getByRole("button", { name: "Edit Description" }), {
+        key: "Enter",
+      });
+      expect(screen.getByRole("textbox", { name: "Description" })).toBeTruthy();
+    });
+
+    it("commits the edit to the draft on blur", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+      const textarea = screen.getByRole("textbox", { name: "Description" });
+      fireEvent.change(textarea, { target: { value: "Retry with jitter, revised." } });
+      fireEvent.blur(textarea);
+
+      expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+      expect(screen.getByText("Retry with jitter, revised.")).toBeTruthy();
+    });
+
+    it("commits the edit on Cmd/Ctrl+Enter", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+      const textarea = screen.getByRole("textbox", { name: "Description" });
+      fireEvent.change(textarea, { target: { value: "Committed via Cmd+Enter." } });
+      fireEvent.keyDown(textarea, { key: "Enter", metaKey: true });
+
+      expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+      expect(screen.getByText("Committed via Cmd+Enter.")).toBeTruthy();
+    });
+
+    it("discards the in-flight edit on Escape, leaving the draft unchanged", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+      const textarea = screen.getByRole("textbox", { name: "Description" });
+      fireEvent.change(textarea, { target: { value: "This should never be saved." } });
+      fireEvent.keyDown(textarea, { key: "Escape" });
+
+      expect(screen.queryByRole("textbox", { name: "Description" })).toBeNull();
+      expect(screen.queryByText("This should never be saved.")).toBeNull();
+      expect(screen.getByText("Exponential backoff with jitter, capped at 30s.")).toBeTruthy();
+    });
+
+    it("saves the committed edit through the existing draft/save plumbing", async () => {
+      const client = new FakeRouterClient();
+      const onSaved = vi.fn();
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Edit Description" }));
+      const textarea = screen.getByRole("textbox", { name: "Description" });
+      fireEvent.change(textarea, { target: { value: "Saved via draft plumbing." } });
+      fireEvent.blur(textarea);
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(onSaved.mock.calls[0][0].description).toBe("Saved via draft plumbing.");
+    });
+  });
+
   describe("pipeline run section", () => {
     beforeEach(() => {
       FakeEventSource.instances = [];
