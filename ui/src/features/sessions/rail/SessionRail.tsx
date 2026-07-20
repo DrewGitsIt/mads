@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkChooserDialog } from "./LinkChooserDialog";
@@ -16,7 +15,6 @@ export interface SessionRailProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
-  onClose?: (id: string) => void;
   onDelete?: (id: string) => void;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
@@ -30,7 +28,6 @@ export function SessionRail({
   selectedId,
   onSelect,
   onResume,
-  onClose,
   onDelete,
   links = [],
   routerClient = router,
@@ -57,8 +54,6 @@ export function SessionRail({
     });
   }
 
-  const selectionMode = linkedSessionsEnabled && checkedIds.size > 0;
-
   return (
     <div className={[styles.rail, className].filter(Boolean).join(" ")} aria-label="Session list">
       {linkedSessionsEnabled && checkedIds.size >= 2 && (
@@ -84,13 +79,11 @@ export function SessionRail({
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
-              onClose={onClose}
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
               checkedIds={checkedIds}
               onToggleChecked={toggleChecked}
-              selectionMode={selectionMode}
             />
           ))}
         </div>
@@ -106,13 +99,11 @@ export function SessionRail({
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
-              onClose={onClose}
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
               checkedIds={checkedIds}
               onToggleChecked={toggleChecked}
-              selectionMode={selectionMode}
             />
           ))}
         </div>
@@ -158,26 +149,22 @@ function RailRowGroup({
   selectedId,
   onSelect,
   onResume,
-  onClose,
   onDeleteRequest,
   onUnlinkRequest,
   linkedSessionsEnabled,
   checkedIds,
   onToggleChecked,
-  selectionMode,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, number>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
-  onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
   checkedIds: Set<string>;
   onToggleChecked: (id: string) => void;
-  selectionMode: boolean;
 }) {
   return (
     <>
@@ -187,13 +174,11 @@ function RailRowGroup({
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
-        onClose={onClose}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
         linkedSessionsEnabled={linkedSessionsEnabled}
-        checked={checkedIds.has(row.session.id)}
+        linkChecked={checkedIds.has(row.session.id)}
         onToggleChecked={onToggleChecked}
-        selectionMode={selectionMode}
       />
       {linkedSessionsEnabled &&
         row.subjects.map((sub) => (
@@ -204,7 +189,6 @@ function RailRowGroup({
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
-            onClose={onClose}
             onDeleteRequest={onDeleteRequest}
             linkBadge={sub.badge}
             nested
@@ -212,9 +196,8 @@ function RailRowGroup({
               onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
             }
             linkedSessionsEnabled={linkedSessionsEnabled}
-            checked={checkedIds.has(sub.session.id)}
+            linkChecked={checkedIds.has(sub.session.id)}
             onToggleChecked={onToggleChecked}
-            selectionMode={selectionMode}
           />
         ))}
     </>
@@ -227,36 +210,38 @@ function SessionRow({
   selected,
   onSelect,
   onResume,
-  onClose,
   onDeleteRequest,
   linkBadge,
   nested,
   onUnlinkRequest,
   linkedSessionsEnabled,
-  checked,
+  linkChecked,
   onToggleChecked,
-  selectionMode,
 }: {
   session: Session;
   openTaskCount: number;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
-  onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
   nested?: boolean;
   onUnlinkRequest?: () => void;
   linkedSessionsEnabled: boolean;
-  checked: boolean;
+  linkChecked: boolean;
   onToggleChecked: (id: string) => void;
-  selectionMode: boolean;
 }) {
   const dot = dotState(session, openTaskCount);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const hasMeta =
-    openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge)) || (session.activity !== "active" && Boolean(onResume));
-  const showSummary = session.activity !== "active" && Boolean(session.summary);
+  const name = session.name || "Untitled session";
+  const isPaused = session.activity !== "active";
+  const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge));
+  const showSummary = isPaused && Boolean(session.summary);
+
+  function activate() {
+    if (isPaused && onResume) onResume(session.id);
+    onSelect?.(session.id);
+  }
+
   return (
     <div
       role="button"
@@ -268,68 +253,21 @@ function SessionRow({
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={() => onSelect?.(session.id)}
+      onClick={activate}
       onKeyDown={(e) => {
+        // Ignore keydowns that bubbled up from a nested action button —
+        // those are handled by the button itself and shouldn't also
+        // re-trigger the row's own activate().
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          onSelect?.(session.id);
+          activate();
         }
       }}
     >
       <div className={styles.rowTop}>
-        {linkedSessionsEnabled && (
-          <span
-            className={[styles.checkboxWrap, selectionMode ? styles.checkboxVisible : ""]
-              .filter(Boolean)
-              .join(" ")}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <input
-              type="checkbox"
-              aria-label={`Select ${session.name || "session"}`}
-              checked={checked}
-              onChange={() => onToggleChecked(session.id)}
-            />
-          </span>
-        )}
         <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
-        <span className={styles.name}>{session.name || "Untitled session"}</span>
-        <div className={styles.rowMenuWrap} onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className={styles.rowMenuTrigger}
-            aria-label={`${session.name || "Session"} actions`}
-            onClick={() => setMenuOpen((x) => !x)}
-          >
-            ⋯
-          </button>
-          {menuOpen && (
-            <SessionActionsMenu
-              className={styles.rowMenu}
-              sessionId={session.id}
-              activity={session.activity}
-              onClose={() => {
-                setMenuOpen(false);
-                onClose?.(session.id);
-              }}
-              onResume={() => {
-                setMenuOpen(false);
-                onResume?.(session.id);
-              }}
-              onDeleteRequest={() => {
-                setMenuOpen(false);
-                onDeleteRequest(session.id);
-              }}
-              onUnlinkRequest={
-                onUnlinkRequest &&
-                (() => {
-                  setMenuOpen(false);
-                  onUnlinkRequest!();
-                })
-              }
-            />
-          )}
-        </div>
+        <span className={styles.name}>{name}</span>
       </div>
       {hasMeta && (
         <div className={styles.rowMeta}>
@@ -343,22 +281,68 @@ function SessionRow({
               {linkBadge}
             </span>
           )}
-          {session.activity !== "active" && onResume && (
-            <button
-              type="button"
-              className={styles.resumeAffordance}
-              aria-label={`Resume ${session.name || "session"}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onResume(session.id);
-              }}
-            >
-              Resume
-            </button>
-          )}
         </div>
       )}
       {showSummary && <div className={styles.summary}>{session.summary}</div>}
+      <div className={styles.actionCluster} role="group" aria-label={`${name} actions`}>
+        {isPaused && onResume && (
+          <button
+            type="button"
+            className={styles.actionButton}
+            title="Resume"
+            aria-label={`Resume ${name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onResume(session.id);
+            }}
+          >
+            ▶
+          </button>
+        )}
+        {linkedSessionsEnabled && !nested && (
+          <button
+            type="button"
+            className={styles.actionButton}
+            title="Link"
+            aria-pressed={linkChecked}
+            aria-label={
+              linkChecked ? `Remove ${name} from link selection` : `Add ${name} to link selection`
+            }
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleChecked(session.id);
+            }}
+          >
+            🔗
+          </button>
+        )}
+        {linkedSessionsEnabled && nested && onUnlinkRequest && (
+          <button
+            type="button"
+            className={styles.actionButton}
+            title="Unlink"
+            aria-label={`Unlink ${name}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              onUnlinkRequest();
+            }}
+          >
+            ✕
+          </button>
+        )}
+        <button
+          type="button"
+          className={[styles.actionButton, styles.actionButtonDanger].join(" ")}
+          title="Archive"
+          aria-label={`Archive ${name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeleteRequest(session.id);
+          }}
+        >
+          🗑
+        </button>
+      </div>
     </div>
   );
 }

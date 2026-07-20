@@ -117,7 +117,7 @@ describe("SessionRail", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("renders a ⋯ actions trigger for every row, active and inactive alike", () => {
+  it("shows no checkbox gutter or persistent kebab on any row", () => {
     render(
       <SessionRail
         sessions={[
@@ -127,38 +127,14 @@ describe("SessionRail", () => {
         openTaskCounts={{}}
       />,
     );
-    expect(screen.getByRole("button", { name: "live one actions" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "resume me actions" })).toBeTruthy();
+    expect(screen.queryAllByRole("checkbox").length).toBe(0);
+    expect(screen.queryByRole("button", { name: "live one actions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "resume me actions" })).toBeNull();
+    expect(screen.queryByText("⋯")).toBeNull();
   });
 
-  it("⋯ trigger opens a menu with all three actions, disabled to match the row's activity", () => {
-    render(
-      <SessionRail
-        sessions={[makeSession({ id: "a1", name: "live one", activity: "active" })]}
-        openTaskCounts={{}}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "live one actions" }));
-
-    // Scoped to the popover's list — the row itself is also role="button"
-    // and its computed accessible name folds in all descendant text
-    // (including "Resume"/"Delete"), so an unscoped regex query would match
-    // both the row and the menu item.
-    const menu = within(screen.getByRole("list"));
-    expect((menu.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(
-      false,
-    );
-    expect(
-      (menu.getByRole("button", { name: /Resume/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-    expect(
-      (menu.getByRole("button", { name: /Delete/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-
-  it("clicking an enabled Close/Resume in the row menu calls onClose/onResume with the row's id, not onSelect", () => {
+  it("clicking a paused card resumes and opens it; clicking an active card only opens it", () => {
     const onSelect = vi.fn();
-    const onClose = vi.fn();
     const onResume = vi.fn();
     render(
       <SessionRail
@@ -168,23 +144,50 @@ describe("SessionRail", () => {
         ]}
         openTaskCounts={{}}
         onSelect={onSelect}
-        onClose={onClose}
         onResume={onResume}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "live one actions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(onClose).toHaveBeenCalledWith("a1");
+    fireEvent.click(screen.getByText("live one"));
+    expect(onSelect).toHaveBeenCalledWith("a1");
+    expect(onResume).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "resume me actions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(screen.getByText("resume me"));
     expect(onResume).toHaveBeenCalledWith("r1");
-
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelect).toHaveBeenCalledWith("r1");
   });
 
-  it("clicking Delete in the row menu opens the shared confirm dialog; confirming targets the right row, canceling calls neither", () => {
+  it("pressing Enter on a paused row resumes and opens it (keyboard-driven)", () => {
+    const onSelect = vi.fn();
+    const onResume = vi.fn();
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
+        openTaskCounts={{}}
+        onSelect={onSelect}
+        onResume={onResume}
+      />,
+    );
+    const row = screen.getByText("resume me").closest('[role="button"]')!;
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(onResume).toHaveBeenCalledWith("r1");
+    expect(onSelect).toHaveBeenCalledWith("r1");
+  });
+
+  it("action cluster exposes labeled resume and archive buttons, grouped under an aria-label", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
+        openTaskCounts={{}}
+        onResume={vi.fn()}
+      />,
+    );
+    const cluster = screen.getByRole("group", { name: "resume me actions" });
+    expect(within(cluster).getByRole("button", { name: "Resume resume me" })).toBeTruthy();
+    expect(within(cluster).getByRole("button", { name: "Archive resume me" })).toBeTruthy();
+  });
+
+  it("clicking Archive opens the shared confirm dialog; confirming targets the right row, canceling calls neither", () => {
     const onDelete = vi.fn();
     render(
       <SessionRail
@@ -197,8 +200,7 @@ describe("SessionRail", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "delete me actions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive delete me" }));
 
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toContain("event log survive");
@@ -207,8 +209,7 @@ describe("SessionRail", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(onDelete).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "delete me actions" }));
-    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive delete me" }));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByText("Delete"));
 
     expect(onDelete).toHaveBeenCalledWith("r1");
@@ -236,6 +237,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
     expect(screen.queryByText("LEADER")).toBeNull();
     expect(screen.queryAllByRole("checkbox").length).toBe(0);
+    expect(screen.queryByRole("button", { name: /to link selection$/ })).toBeNull();
     // Flag off: no nesting either, so the subject still renders as its own flat row.
     expect(screen.getByText("payments refactor")).toBeTruthy();
   });
@@ -247,19 +249,26 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
     expect(screen.getByText("LEADER")).toBeTruthy();
     expect(screen.getByText("LINKED")).toBeTruthy();
-    expect(screen.getAllByRole("checkbox").length).toBe(2);
+    // Holder row gets a link-toggle button; nested subject row gets Unlink instead.
+    expect(screen.getByRole("button", { name: "Add investigator to link selection" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Unlink payments refactor" })).toBeTruthy();
   });
 
-  it("shows a Link N sessions… bar once 2+ rows are checked, and Clear resets it", () => {
+  it("shows a Link N sessions… bar once 2+ rows have their link action toggled on, and Clear resets it", () => {
     FLAGS.linkedSessions = true;
     const b = makeSession({ id: "b", name: "gateway hardening" });
     render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
 
     expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
-    fireEvent.click(screen.getByLabelText("Select investigator"));
+    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
     expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
-    fireEvent.click(screen.getByLabelText("Select gateway hardening"));
+    fireEvent.click(screen.getByRole("button", { name: "Add gateway hardening to link selection" }));
     expect(screen.getByText("Link 2 sessions…")).toBeTruthy();
+
+    // Toggling on flips the button's own label/pressed state.
+    expect(
+      screen.getByRole("button", { name: "Remove investigator from link selection" }),
+    ).toBeTruthy();
 
     fireEvent.click(screen.getByText("Clear"));
     expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
@@ -274,8 +283,8 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       <SessionRail sessions={[lead, b]} openTaskCounts={{}} routerClient={client} />,
     );
 
-    fireEvent.click(screen.getByLabelText("Select investigator"));
-    fireEvent.click(screen.getByLabelText("Select gateway hardening"));
+    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Add gateway hardening to link selection" }));
     fireEvent.click(screen.getByText("Link 2 sessions…"));
 
     expect(screen.getByRole("dialog")).toBeTruthy();
@@ -298,12 +307,9 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "investigator actions" }));
-    expect(within(screen.getByRole("list")).queryByText("Unlink")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "investigator actions" }));
+    expect(screen.queryByRole("button", { name: "Unlink investigator" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "payments refactor actions" }));
-    fireEvent.click(within(screen.getByRole("list")).getByText("Unlink"));
+    fireEvent.click(screen.getByRole("button", { name: "Unlink payments refactor" }));
 
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toContain("payments refactor");

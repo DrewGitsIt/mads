@@ -85,11 +85,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 setActionError(err instanceof Error ? err.message : String(err));
               });
             }}
-            onClose={(id) => {
-              router.closeSession(id).catch((err: unknown) => {
-                setActionError(err instanceof Error ? err.message : String(err));
-              });
-            }}
             onDelete={(id) => {
               router.deleteSession(id).catch((err: unknown) => {
                 setActionError(err instanceof Error ? err.message : String(err));
