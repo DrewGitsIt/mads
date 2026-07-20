@@ -111,9 +111,14 @@ func (s *server) handleMerge(w http.ResponseWriter, r *http.Request) {
 
 // handleStream is the data plane's live event feed (spec §15): every
 // provider event for this session's lifetime, fanned out from the runner's
-// hub. There is no replay/cursor here — that's the Data Service's job for
-// anything durable (transcript, activity); this is the ephemeral stream a
-// connected UI rides while it's open.
+// hub. There is no replay/cursor here for chat events — that's the Data
+// Service's job for anything durable (transcript, activity); this is the
+// ephemeral stream a connected UI rides while it's open. Terminal (PTY)
+// output is the one exception: SubscribeTerminal replays the hub's bounded
+// PTY ring buffer as a single leading EventPTYOutput before live events, so
+// a newly attached terminal (reattach, or first attach after PTY bytes
+// already flowed) gets scrollback instead of only bytes from here on —
+// scoped to that event kind, so chat-mode consumers are unaffected.
 func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -125,10 +130,29 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	ch, unsubscribe := s.runner.Subscribe()
+	replay, ch, unsubscribe := s.runner.SubscribeTerminal()
 	defer unsubscribe()
 
 	var seq int64
+	writeEvent := func(ev provider.Event) bool {
+		data, err := json.Marshal(ev)
+		if err != nil {
+			return false
+		}
+		seq++
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, ev.Kind, data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+
+	if len(replay) > 0 {
+		if !writeEvent(provider.Event{Kind: provider.EventPTYOutput, Text: string(replay)}) {
+			return
+		}
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -137,15 +161,9 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			data, err := json.Marshal(ev)
-			if err != nil {
+			if !writeEvent(ev) {
 				return
 			}
-			seq++
-			if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", seq, ev.Kind, data); err != nil {
-				return
-			}
-			flusher.Flush()
 		}
 	}
 }
