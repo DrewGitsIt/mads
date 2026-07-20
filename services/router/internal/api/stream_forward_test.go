@@ -252,6 +252,76 @@ func TestSessionTransportNotRunning(t *testing.T) {
 	}
 }
 
+// TestGetSessionTransportForwarding proves the read side (GET, used by the
+// UI to initialize its display-mode toggle on mount) reflects a switch made
+// through the write side (POST) — both routes proxy to the same running
+// child.
+func TestGetSessionTransportForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "transport status test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	before, err := http.Get(srv.URL + "/sessions/" + created.Session.ID + "/transport")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeGot := decodeJSON[struct {
+		Mode string `json:"mode"`
+	}](t, before)
+	if beforeGot.Mode != "chat" {
+		t.Fatalf("mode before switching = %q, want %q", beforeGot.Mode, "chat")
+	}
+
+	tResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/transport", "application/json", bytes.NewBufferString(`{"mode":"terminal"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tResp.StatusCode != http.StatusOK {
+		t.Fatalf("switch status = %d, want 200", tResp.StatusCode)
+	}
+	_ = tResp.Body.Close()
+
+	after, err := http.Get(srv.URL + "/sessions/" + created.Session.ID + "/transport")
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterGot := decodeJSON[struct {
+		Mode string `json:"mode"`
+	}](t, after)
+	if afterGot.Mode != "terminal" {
+		t.Fatalf("mode after switching to terminal = %q, want %q", afterGot.Mode, "terminal")
+	}
+}
+
+// TestGetSessionTransportNotRunning is the dormant-session case: no child
+// means no transport history to report, so this answers "chat" (the UI's
+// own default) rather than 404ing like every write-side proxy in this file.
+func TestGetSessionTransportNotRunning(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+	resp, err := http.Get(srv.URL + "/sessions/does-not-exist/transport")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[struct {
+		Mode string `json:"mode"`
+	}](t, resp)
+	if got.Mode != "chat" {
+		t.Fatalf("mode = %q, want %q", got.Mode, "chat")
+	}
+}
+
 func TestSessionInputForwarding(t *testing.T) {
 	srv, _ := newTestServerWithData(t)
 

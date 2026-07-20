@@ -31,6 +31,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /output", s.handleStream)
 	mux.HandleFunc("POST /transport", s.handleTransport)
+	mux.HandleFunc("GET /transport", s.handleTransportStatus)
 	mux.HandleFunc("POST /input", s.handleTerminalInput)
 	mux.HandleFunc("POST /resize", s.handleTerminalResize)
 	mux.HandleFunc("GET /files", s.handleFiles)
@@ -177,6 +178,20 @@ func (s *server) handleTransport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"mode": body.Mode, "ref": ref})
+}
+
+// handleTransportStatus reports the transport mode currently live on this
+// session — read straight off the runner (Mode()), not a separately
+// tracked/cached value, since SwitchTransport is the only writer and the
+// runner is the single source of truth. Lets the UI initialize its
+// Chat/Terminal toggle to whatever's actually running on mount, without
+// ever having to fire a switch just to find out.
+func (s *server) handleTransportStatus(w http.ResponseWriter, r *http.Request) {
+	mode := "chat"
+	if s.runner.Mode() == provider.ModePTY {
+		mode = "terminal"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"mode": mode})
 }
 
 // handleTerminalInput writes raw terminal input to the session's current

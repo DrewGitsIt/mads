@@ -81,6 +81,12 @@ export interface RouterClient {
     sessionId: string,
     mode: "chat" | "terminal",
   ): Promise<{ mode: string; ref: string }>;
+  // The read side of the same handoff — the session's current live mode,
+  // straight from the running child (single source of truth; the Router
+  // proxy answers "chat" when there's no live child/transport history at
+  // all). Used to initialize the display-mode toggle on mount, never as a
+  // trigger for a switch.
+  getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }>;
   terminalWrite(sessionId: string, data: string): Promise<void>;
   terminalResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
@@ -437,6 +443,10 @@ export class FetchRouterClient implements RouterClient {
       );
     }
     return (await res.json()) as { mode: string; ref: string };
+  }
+
+  async getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/transport`);
   }
 
   // Raw bytes, not JSON-wrapped — the child's POST /input reads the

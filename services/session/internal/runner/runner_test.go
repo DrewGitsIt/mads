@@ -329,6 +329,55 @@ func TestSwitchTransportPreservesRef(t *testing.T) {
 	}
 }
 
+// TestModeReflectsCurrentTransport is the acceptance test backing GET
+// /transport: Mode() must report chat right after Start (the only mode
+// Start ever launches) and flip to whatever SwitchTransport last
+// established, in both directions — the read path a mounting UI relies on
+// to initialize its display-mode toggle without ever switching anything
+// itself.
+func TestModeReflectsCurrentTransport(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	if got := r.Mode(); got != provider.ModeACP {
+		t.Fatalf("Mode() after Start = %q, want %q", got, provider.ModeACP)
+	}
+
+	ch, unsub := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsub()
+
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != nil {
+		t.Fatalf("switch to terminal: %v", err)
+	}
+	if got := r.Mode(); got != provider.ModePTY {
+		t.Fatalf("Mode() after switching to terminal = %q, want %q", got, provider.ModePTY)
+	}
+
+	if _, err := r.SwitchTransport(ctx, provider.ModeACP); err != nil {
+		t.Fatalf("switch to chat: %v", err)
+	}
+	if got := r.Mode(); got != provider.ModeACP {
+		t.Fatalf("Mode() after switching back to chat = %q, want %q", got, provider.ModeACP)
+	}
+}
+
 // TestProviderRefPersistedAfterFirstTurn is the acceptance test for
 // syncProviderRef: a fresh session's ProviderRef is empty right after Start
 // (the provider hasn't announced it yet) and becomes the real announced ref
