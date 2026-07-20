@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"regexp"
 	"sync/atomic"
@@ -55,13 +56,19 @@ type Process struct {
 // discovered (or errors and kills the child on timeout/early exit). onExit
 // is invoked exactly once from a background goroutine after the process
 // exits, with whether the exit was expected (Terminate was called) or not,
-// and the exit error (nil for a clean exit).
-func Spawn(ctx context.Context, id string, argv []string, onExit func(p *Process, expected bool, err error)) (*Process, error) {
+// and the exit error (nil for a clean exit). env, if non-nil, is appended on
+// top of this process's own environment (os.Environ()) — additive, not a
+// replacement, so the child still inherits PATH etc. A nil/empty env is the
+// pre-existing full-inheritance behavior.
+func Spawn(ctx context.Context, id string, argv []string, env []string, onExit func(p *Process, expected bool, err error)) (*Process, error) {
 	if len(argv) == 0 {
 		return nil, fmt.Errorf("child: empty argv")
 	}
 	full := append(append([]string{}, argv...), "-addr", "localhost:0")
 	cmd := exec.Command(full[0], full[1:]...) //nolint:gosec // argv is operator-configured, not user input
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
 	// Own process group (Pgid left zero, so the child becomes its own group
 	// leader): anything it forks without calling setpgid itself — a "go
 	// run" wrapper's compiled binary, a "sh -c" chain — inherits the same

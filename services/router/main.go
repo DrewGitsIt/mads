@@ -147,6 +147,7 @@ func main() {
 		log.Printf("router: open credential store: %v (credential endpoints disabled)", err)
 		creds = nil
 	}
+	sup.SetCreds(creds)
 
 	// Same best-effort philosophy as the credstore open above — a vault-refs
 	// failure disables ref CRUD, not the whole Router.

@@ -13,6 +13,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -156,6 +157,17 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
+	})
+	// Test-only read-back: lets supervisor tests, which spawn this as a
+	// separate OS process and so can't share in-memory state, assert on the
+	// process's actual OS environment (credential injection, spec §13).
+	// Reports presence only, never the value, mirroring the vault's own
+	// values-never-cross-the-wire invariant even in this test fixture.
+	mux.HandleFunc("GET /env", func(w http.ResponseWriter, r *http.Request) {
+		_, present := os.LookupEnv(r.URL.Query().Get("name"))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"present":%t}`, present)
 	})
 	log.Fatal(http.Serve(ln, mux))
 }
