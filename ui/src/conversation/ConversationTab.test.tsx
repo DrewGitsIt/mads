@@ -201,6 +201,67 @@ describe("ConversationTab", () => {
     );
   });
 
+  it("mounts directly into terminal mode when that's the session's live transport, without switching", async () => {
+    const client = new FakeRouterClient();
+    await client.switchTransport("session-active", "terminal");
+    const switchSpy = vi.spyOn(client, "switchTransport");
+
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+    expect(
+      screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(switchSpy).not.toHaveBeenCalled();
+  });
+
+  it("opens a dormant session with no transport history in chat", async () => {
+    const client = new FakeRouterClient();
+
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    expect(document.querySelector('[data-testid="terminal-view"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("keeps a session's mode intact after navigating to another session and back, without an implicit switch", async () => {
+    const client = new FakeRouterClient();
+    const { rerender } = render(
+      <ConversationTab sessionId="session-active" routerClient={client} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByText("Terminal"));
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+
+    const switchSpy = vi.spyOn(client, "switchTransport");
+
+    rerender(<ConversationTab sessionId="session-inactive" routerClient={client} />);
+    await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
+    expect(document.querySelector('[data-testid="terminal-view"]')).toBeNull();
+
+    rerender(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+    expect(
+      screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    expect(switchSpy).not.toHaveBeenCalled();
+  });
+
   it("shows the summary card for an inactive session with a summary", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
