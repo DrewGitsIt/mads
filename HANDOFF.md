@@ -59,6 +59,43 @@ tool_result) followed by a successful bash call, asserting both
 `Tool.ID` and `IsError` propagate correctly end-to-end through
 `normalizeTranscript`. New test `TestTranscriptNormalizationDenialGolden`.
 
+## Addendum: fixed a downstream `make test` flake
+
+A prior CI run of `make build && make test` failed on
+`TestSwitchTransportPreservesRef` (`services/session/internal/runner`) with
+`runner: cannot switch transport mid-turn`. This test file has zero diff
+between this branch and its parent commit, and `runner/transcript.go`'s
+change here is a pure additive field copy — so the failure isn't caused by
+this task's diff. Root cause: in PTY mode, `providers/fake`'s `finish()`
+records the turn's reply into transcript history and *then* emits
+`EventTurnEnd` on the session's event channel; a separate goroutine in
+`pumpPTY` consumes that event, calls `onTurnEnd()` (which does a blocking
+`data.Append` before clearing `busy`, deliberately — see its doc, needed for
+digest-buffer correctness). The test's `waitForTranscriptLen` polls for the
+new transcript entry as a proxy for "turn finished," but that entry becomes
+visible strictly before `busy` clears, and the gap between the two is only
+reliably small under low system load — under full-suite parallel load (`go
+test -race ./...` across every package) it's wide enough that the test's
+immediate follow-up `SwitchTransport` call sometimes lands while `busy` is
+still true. Confirmed by running the full suite repeatedly: this branch and
+its parent both flake, non-deterministically, at a similar rate.
+
+Fixed by making the test tolerate the transient `ErrSwitchBusy` instead of
+reordering any production code: `switchTransportWhenIdle` (new helper in
+`runner_test.go`) retries `SwitchTransport` with a short backoff until it
+either succeeds or a 5s deadline elapses, and only the PTY→ACP switch (the
+one following the racy path) uses it — the earlier ACP→PTY switch has no
+such race, since `pump` (the non-PTY path) calls `onTurnEnd()` synchronously
+before broadcasting `EventTurnEnd` to the hub, so `drainText` returning
+already implies `busy` is clear. Ran `go test -race -count=1 ./...` five
+times after the fix with no failures (previously ~1-in-5).
+
+**Reviewer should scrutinize:** this is a test-only fix for a pre-existing,
+unrelated race; production `onTurnEnd`/`pumpPTY` ordering was intentionally
+left untouched. If this flake resurfaces with a different error or in a
+different test, treat it as a separate, real bug rather than re-applying
+this pattern reflexively.
+
 ## What wasn't done
 
 - Did not add a Router-level (`services/router/internal/api`) HTTP test
