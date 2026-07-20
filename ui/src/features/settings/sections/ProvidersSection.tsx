@@ -1,7 +1,7 @@
 import { Chip } from "../../../components/Chip/Chip";
 import { useProviderMatrix } from "../state/useProviderMatrix";
 import type { ProviderSupport } from "../../../router/types";
-import styles from "./ProvidersPanel.module.css";
+import styles from "./ProvidersSection.module.css";
 
 const TONE: Record<ProviderSupport, "ok" | "warn" | "bad"> = {
   native: "ok",
@@ -10,7 +10,7 @@ const TONE: Record<ProviderSupport, "ok" | "warn" | "bad"> = {
 };
 
 /** Provider capability matrix table — rows are behaviors, columns are providers (§11). */
-export function ProvidersPanel() {
+export function ProvidersSection() {
   const { providers, behaviors, loading } = useProviderMatrix();
 
   if (loading) return <div className={styles.loading}>Loading providers…</div>;

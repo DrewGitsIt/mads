@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AppearancePanel } from "./AppearancePanel";
+import { AppearanceSection } from "./AppearanceSection";
 import { fixtureConfig } from "../../../router/fixtures";
 import type { UseConfig } from "../state/useConfig";
 
@@ -20,7 +20,7 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   };
 }
 
-describe("AppearancePanel", () => {
+describe("AppearanceSection", () => {
   beforeEach(() => {
     delete document.documentElement.dataset.theme;
     delete document.documentElement.dataset.palette;
@@ -28,7 +28,7 @@ describe("AppearancePanel", () => {
 
   it("switches palette live and persists it via save()", () => {
     const config = makeConfig();
-    render(<AppearancePanel config={config} />);
+    render(<AppearanceSection config={config} />);
 
     fireEvent.click(screen.getByText("space"));
 
@@ -39,7 +39,7 @@ describe("AppearancePanel", () => {
 
   it("switches theme live and persists it via save()", () => {
     const config = makeConfig();
-    render(<AppearancePanel config={config} />);
+    render(<AppearanceSection config={config} />);
 
     fireEvent.click(screen.getByText("light"));
 
@@ -49,7 +49,7 @@ describe("AppearancePanel", () => {
 
   it("reverts the live theme if save() fails", async () => {
     const config = makeConfig({ save: vi.fn().mockResolvedValue(false) });
-    render(<AppearancePanel config={config} />);
+    render(<AppearanceSection config={config} />);
 
     fireEvent.click(screen.getByText("light"));
     expect(document.documentElement.dataset.theme).toBe("light");

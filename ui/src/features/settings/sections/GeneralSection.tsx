@@ -3,22 +3,21 @@ import { Button } from "../../../components/Button/Button";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
 import type { UseConfig } from "../state/useConfig";
-import styles from "./GeneralPanel.module.css";
+import styles from "./GeneralSection.module.css";
 
-export interface GeneralPanelProps {
+export interface GeneralSectionProps {
   config: UseConfig;
 }
 
-/** Data dir (§0 non-goal — see HANDOFF; not a Config wire field), concurrency limit, log retention, editor command, display mode, keybindings, plus the "run preflight" affordance shared with the wizard's PreflightStep. */
-export function GeneralPanel({ config }: GeneralPanelProps) {
+/** Data dir (§0 non-goal — see HANDOFF; not a Config wire field), concurrency limit, log retention, synthesis debounce, editor command, display mode, keybindings, plus the "run preflight" affordance shared with the wizard's PreflightStep. */
+export function GeneralSection({ config }: GeneralSectionProps) {
   const { draft, fieldErrors, dirtyRestartFields, setDraft, save } = config;
   const preflight = usePreflight();
   const [saving, setSaving] = useState(false);
 
   if (!draft) return null;
 
-  const restartVisible = dirtyRestartFields.includes("concurrency_limit") ||
-    dirtyRestartFields.includes("log_retention_days");
+  const restartVisible = dirtyRestartFields.length > 0;
 
   const handleSave = async () => {
     setSaving(true);
@@ -56,6 +55,21 @@ export function GeneralPanel({ config }: GeneralPanelProps) {
         />
         {fieldErrors.log_retention_days && (
           <div className={styles.error}>{fieldErrors.log_retention_days}</div>
+        )}
+      </div>
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="synthesis-debounce-ms">
+          Synthesis debounce (ms)
+        </label>
+        <input
+          id="synthesis-debounce-ms"
+          type="number"
+          className={styles.input}
+          value={draft.synthesis_debounce_ms}
+          onChange={(e) => setDraft({ ...draft, synthesis_debounce_ms: Number(e.target.value) })}
+        />
+        {fieldErrors.synthesis_debounce_ms && (
+          <div className={styles.error}>{fieldErrors.synthesis_debounce_ms}</div>
         )}
       </div>
       <div className={styles.row}>

@@ -1,20 +1,44 @@
 import { useState, type FormEvent } from "react";
 import { Button } from "../../../components/Button/Button";
+import { Chip } from "../../../components/Chip/Chip";
+import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import { useCredentials } from "../state/useCredentials";
-import styles from "./CredentialsPanel.module.css";
+import type { UseConfig } from "../state/useConfig";
+import type { Profile } from "../../../router/types";
+import { isCredentialActive } from "../profileDiff";
+import styles from "./CredentialsSection.module.css";
+
+export interface CredentialsSectionProps {
+  config: UseConfig;
+  profiles: Profile[];
+}
+
+function boundProfiles(name: string, profiles: Profile[]): Profile[] {
+  return profiles.filter((p) => {
+    const bindings = p.snapshot.credential_bindings as string[] | undefined;
+    if (bindings === undefined) return false;
+    return isCredentialActive(name, bindings);
+  });
+}
 
 /**
- * Masked credential list + add/delete form + env-import picker + vault-sources
- * empty state (HANDOFF §8, the security acceptance criterion). The value
- * input is cleared synchronously in this component's own submit handler,
- * before add()'s network call is awaited — never in a .then().
+ * Masked credential list + add/delete form + env-import picker (HANDOFF §8,
+ * the security acceptance criterion). The value input is cleared
+ * synchronously in this component's own submit handler, before add()'s
+ * network call is awaited — never in a .then(). Every stored credential is
+ * always listed; ones not bound to the live draft's credential_bindings are
+ * dimmed with a toggle — toggling edits draft.credential_bindings (drift),
+ * not the vault.
  */
-export function CredentialsPanel() {
+export function CredentialsSection({ config, profiles }: CredentialsSectionProps) {
   const credentials = useCredentials();
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([]);
   const [showEnvImport, setShowEnvImport] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+
+  const draft = config.draft;
 
   const handleAdd = (e: FormEvent) => {
     e.preventDefault();
@@ -41,22 +65,46 @@ export function CredentialsPanel() {
     await credentials.loadEnvCandidates();
   };
 
+  const toggleActive = (credentialName: string) => {
+    if (!draft) return;
+    const current = draft.credential_bindings;
+    const wasActive = isCredentialActive(credentialName, current);
+    const base = current && current.length > 0 ? current : credentials.names;
+    const next = wasActive ? base.filter((n) => n !== credentialName) : [...base, credentialName];
+    config.setDraft({ ...draft, credential_bindings: next });
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    await credentials.remove(pendingDelete);
+    setPendingDelete(null);
+  };
+
+  const boundTo = pendingDelete ? boundProfiles(pendingDelete, profiles) : [];
+
   return (
     <div className={styles.panel}>
       <section>
         <h3 className={styles.heading}>Credentials</h3>
         <ul className={styles.list}>
-          {credentials.names.map((n) => (
-            <li key={n} className={styles.row}>
-              <span className={styles.name}>{n}</span>
-              <span className={styles.masked} aria-hidden="true">
-                ••••••••
-              </span>
-              <Button size="sm" variant="ghost" onClick={() => void credentials.remove(n)}>
-                Delete
-              </Button>
-            </li>
-          ))}
+          {credentials.names.map((n) => {
+            const active = isCredentialActive(n, draft?.credential_bindings);
+            return (
+              <li key={n} className={active ? styles.row : `${styles.row} ${styles.inactive}`}>
+                <span className={styles.name}>{n}</span>
+                {!active && <Chip tone="neutral">Inactive</Chip>}
+                <span className={styles.masked} aria-hidden="true">
+                  ••••••••
+                </span>
+                <Button size="sm" variant="ghost" onClick={() => toggleActive(n)}>
+                  {active ? "Deactivate" : "Use in this profile"}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setPendingDelete(n)}>
+                  Delete
+                </Button>
+              </li>
+            );
+          })}
           {credentials.names.length === 0 && <li className={styles.empty}>No credentials stored.</li>}
         </ul>
       </section>
@@ -129,6 +177,19 @@ export function CredentialsPanel() {
           No vault configured. Real vault integrations (1Password, AWS Secrets Manager) are a future release.
         </div>
       </section>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`Delete ${pendingDelete ?? ""}?`}
+        description={
+          boundTo.length > 0
+            ? `Bound to ${boundTo.map((p) => p.name).join(", ")}. Deleting removes it from the vault entirely.`
+            : "Not bound to any profile. Deleting removes it from the vault entirely."
+        }
+        confirmLabel="Delete"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
