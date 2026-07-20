@@ -584,7 +584,7 @@ describe("ConversationTab", () => {
     act(() => {
       source.emit({
         kind: "tool_result",
-        tool: { id: "toolu_1" },
+        tool: { id: "toolu_1", name: "" },
         text: "permission denied",
         is_error: true,
       });
