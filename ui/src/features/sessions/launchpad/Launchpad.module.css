@@ -47,7 +47,24 @@
   gap: var(--space-2);
 }
 
-.hint {
+.attachGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.sendGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fileInput {
+  display: none;
+}
+
+.hint,
+.attachHint {
   color: var(--text3);
   font: 500 var(--fs-chip) var(--sans);
 }
