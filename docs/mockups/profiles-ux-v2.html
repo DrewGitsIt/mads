@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-palette="glacier">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Settings as one page, profiles as snapshots (v2)</title>
+<style>
+  /* glacier/dark tokens lifted verbatim from ui/src/tokens/tokens.css */
+  :root {
+    --bg0:#03101d; --bg1:#051c31; --bg2:#09263f; --bg3:#0e304e; --bg4:#143a5c;
+    --line:#20507a; --line-soft:#0d2c47;
+    --text:#e6eef6; --text2:#a4bdd1; --text3:#7793ab;
+    --accent:#65a5c8; --accent-hover:#7cb8d8; --accent-soft:rgba(101,165,200,.16); --accent-ink:#041220;
+    --ok:#6fc2a0; --ok-soft:rgba(111,194,160,.14); --ok-fg:#6fc2a0;
+    --warn:#d4b165; --warn-soft:rgba(212,177,101,.13); --warn-fg:#d4b165;
+    --info:#afbfd2; --info-soft:rgba(175,191,210,.13); --info-fg:#afbfd2;
+    --shadow:0 12px 28px rgba(0,0,0,.5);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  html { scroll-behavior:smooth; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+
+  .frame { display:grid; grid-template-columns:190px minmax(0,1fr); max-width:1060px; margin:0 auto; gap:var(--space-6); padding:var(--space-6) var(--space-5) 140px; }
+
+  /* scroll-spy nav (replaces sub-page routing) */
+  .spy { position:sticky; top:var(--space-6); align-self:start; display:flex; flex-direction:column; gap:2px; }
+  .spy .head { font-size:var(--fs-chip); font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text3); padding:0 var(--space-3) var(--space-2); }
+  .spy a { color:var(--text2); text-decoration:none; font:600 var(--fs-sm) var(--sans); padding:5px var(--space-3); border-left:2px solid transparent; border-radius:0 var(--r-sm) var(--r-sm) 0; }
+  .spy a:hover { color:var(--text); background:var(--bg2); }
+  .spy a.here { color:var(--text); border-left-color:var(--accent); background:var(--accent-soft); }
+  .spy .note { margin-top:var(--space-4); color:var(--text3); font-size:var(--fs-sm); padding:0 var(--space-3); max-width:170px; }
+
+  main { display:flex; flex-direction:column; gap:var(--space-6); min-width:0; }
+  header.intro h1 { font-size:19px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:68ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); scroll-margin-top:var(--space-5); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:center; gap:var(--space-2); }
+  .block .body { padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-3); }
+
+  .fieldlabel { font-size:var(--fs-chip); font-weight:650; text-transform:uppercase; letter-spacing:.1em; color:var(--text3); }
+  .frow { display:grid; grid-template-columns:220px minmax(0,1fr); align-items:center; gap:var(--space-4); }
+  .frow label { color:var(--text2); font-size:var(--fs-sm); }
+  .frow .restart { display:inline-block; margin-left:6px; font-size:var(--fs-chip); color:var(--warn-fg); background:var(--warn-soft); border-radius:999px; padding:0 7px; letter-spacing:.04em; }
+  select,input[type="text"],input[type="number"] {
+    background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+    color:var(--text); font:var(--fs-sm) var(--sans); padding:5px 9px; max-width:280px;
+  }
+  select:focus-visible,input:focus-visible,button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+
+  .chips { display:flex; flex-wrap:wrap; gap:var(--space-1); }
+  .chip { font-size:var(--fs-chip); color:var(--text2); background:var(--bg1); border:1px solid var(--line-soft); border-radius:999px; padding:1px 8px; white-space:nowrap; }
+  .chip b { color:var(--text); font-weight:600; }
+
+  button.btn { font:600 var(--fs-sm) var(--sans); border-radius:var(--r-sm); cursor:pointer; padding:6px 14px; border:1px solid transparent; }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); } .btn-primary:hover { background:var(--accent-hover); }
+  .btn-ghost { background:transparent; color:var(--text2); border-color:var(--line); } .btn-ghost:hover { color:var(--text); background:var(--bg3); }
+
+  /* profile strip */
+  .pstrip { display:flex; gap:var(--space-2); flex-wrap:wrap; }
+  .pcard { position:relative; min-width:150px; text-align:left; cursor:pointer; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r); color:var(--text); font:inherit; padding:var(--space-2) var(--space-3); }
+  .pcard:hover { border-color:var(--line); background:var(--bg3); }
+  .pcard .pname { font-weight:650; font-size:var(--fs-sm); display:flex; align-items:center; gap:var(--space-2); }
+  .pcard .pdesc { color:var(--text3); font-size:var(--fs-chip); margin-top:1px; }
+  .pcard[data-active="true"] { border-color:var(--accent); background:var(--accent-soft); }
+  .badge { font-size:var(--fs-chip); letter-spacing:.06em; font-weight:700; border-radius:999px; padding:0 7px; }
+  .badge.active { background:var(--accent); color:var(--accent-ink); }
+  .badge.mod { background:var(--warn); color:var(--accent-ink); }
+
+  /* drift bar — appears when live settings diverge from active profile snapshot */
+  .driftbar { display:none; align-items:center; gap:var(--space-3); background:var(--warn-soft); border:1px solid var(--warn); border-radius:var(--r); padding:var(--space-2) var(--space-3); font-size:var(--fs-sm); color:var(--text); }
+  body[data-drift="true"] .driftbar { display:flex; }
+  .driftbar .what { color:var(--text2); flex:1; }
+
+  /* credentials */
+  .cred { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:var(--space-3); padding:var(--space-2) 0; border-bottom:1px solid var(--line-soft); }
+  .cred:last-of-type { border-bottom:none; }
+  .cred .cname { font:600 var(--fs-sm) var(--mono); }
+  .cred .cmeta { color:var(--text3); font-size:var(--fs-chip); margin-top:1px; }
+  .cred[data-on="false"] .cname, .cred[data-on="false"] .cmeta { color:var(--text3); }
+  .cred .offbadge { display:none; font-size:var(--fs-chip); color:var(--text3); border:1px dashed var(--line); border-radius:999px; padding:0 8px; }
+  .cred[data-on="false"] .offbadge { display:inline-block; }
+  .switch { position:relative; width:30px; height:17px; flex:none; cursor:pointer; }
+  .switch input { position:absolute; opacity:0; inset:0; margin:0; cursor:pointer; }
+  .switch .tr { position:absolute; inset:0; border-radius:999px; background:var(--bg4); border:1px solid var(--line); transition:background .12s; }
+  .switch .tr::after { content:""; position:absolute; top:2px; left:2px; width:11px; height:11px; border-radius:50%; background:var(--text2); transition:left .12s, background .12s; }
+  .switch input:checked + .tr { background:var(--accent); border-color:var(--accent); }
+  .switch input:checked + .tr::after { left:15px; background:var(--accent-ink); }
+  .vaultnote { color:var(--text3); font-size:var(--fs-sm); }
+
+  /* switch-diff dialog */
+  .scrim { position:fixed; inset:0; background:rgba(2,8,15,.6); display:none; align-items:flex-start; justify-content:center; padding-top:9vh; z-index:40; }
+  .scrim.open { display:flex; }
+  .dialog { width:560px; max-width:92vw; max-height:78vh; overflow:auto; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); }
+  .dialog h3 { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); font-size:var(--fs-ui); }
+  .dialog h3 .sub { display:block; font-weight:400; color:var(--text3); font-size:var(--fs-sm); margin-top:2px; }
+  .dgroup { padding:var(--space-2) var(--space-4); }
+  .dgroup .g { font-size:var(--fs-chip); font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:var(--text3); margin:var(--space-2) 0; }
+  .drow { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1fr) 20px minmax(0,1fr); gap:var(--space-2); font-size:var(--fs-sm); padding:3px 0; align-items:baseline; }
+  .drow .f { color:var(--text2); } .drow .from { color:var(--text3); text-decoration:line-through; }
+  .drow .arr { color:var(--text3); text-align:center; } .drow .to { color:var(--ok-fg); font-weight:600; }
+  .drow .to.off { color:var(--text3); font-weight:400; font-style:italic; }
+  .drow .restart { font-size:var(--fs-chip); color:var(--warn-fg); background:var(--warn-soft); border-radius:999px; padding:0 7px; margin-left:6px; }
+  .dfoot { display:flex; gap:var(--space-2); padding:var(--space-3) var(--space-4); border-top:1px solid var(--line-soft); align-items:center; }
+  .dfoot .rnote { flex:1; color:var(--warn-fg); font-size:var(--fs-sm); }
+
+  .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(12px); background:var(--bg3); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:var(--space-3) var(--space-4); display:flex; align-items:center; gap:var(--space-3); opacity:0; pointer-events:none; transition:opacity .18s,transform .18s; z-index:50; max-width:92vw; }
+  .toast.show { opacity:1; transform:translateX(-50%); pointer-events:auto; }
+  .toast .tick { color:var(--ok-fg); font-weight:700; }
+  .toast button { background:none; border:none; color:var(--accent); font:600 var(--fs-sm) var(--sans); cursor:pointer; }
+
+  .notes { display:flex; flex-direction:column; gap:var(--space-2); }
+  .note { display:flex; gap:var(--space-2); color:var(--text2); font-size:var(--fs-sm); max-width:74ch; }
+  .note .n { flex:none; width:18px; height:18px; border-radius:50%; background:var(--info-soft); color:var(--info-fg); display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-chip); font-weight:700; }
+  .marker { display:inline-flex; width:18px; height:18px; border-radius:50%; background:var(--info-soft); color:var(--info-fg); align-items:center; justify-content:center; font-size:var(--fs-chip); font-weight:700; vertical-align:2px; margin-left:6px; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } .toast { transition:none; } }
+</style>
+</head>
+<body data-drift="false">
+
+<div class="frame">
+  <!-- scroll-spy nav: one page, sections, no sub-routing -->
+  <nav class="spy" aria-label="Settings sections">
+    <div class="head">Settings</div>
+    <a href="#profiles" class="here">Profiles</a>
+    <a href="#general">General</a>
+    <a href="#pipeline">Pipeline &amp; synthesis</a>
+    <a href="#appearance">Appearance</a>
+    <a href="#credentials">Credentials</a>
+    <a href="#advanced">Advanced</a>
+    <div class="note">One continuous page — this rail is scroll-spy, not routing. Every field a profile captures is on this page.<span class="marker">1</span></div>
+  </nav>
+
+  <main>
+    <header class="intro">
+      <h1>Settings as one page, profiles as snapshots</h1>
+      <p>Flow you asked for: <b>modify settings → save as profile</b>. The page below <i>is</i> live config.
+      The active profile is a snapshot of it; edit anything and the drift bar offers Update / Save as new / Revert.
+      Switching restores a snapshot wholesale, with a grouped diff first. Interactive — edit a field, toggle a
+      credential, switch profiles.</p>
+    </header>
+
+    <!-- ============ PROFILES ============ -->
+    <section class="block" id="profiles">
+      <h2>Profiles</h2>
+      <div class="body">
+        <div class="pstrip" id="pstrip" role="radiogroup" aria-label="Active profile"></div>
+
+        <div class="driftbar" role="status">
+          <span class="badge mod">MODIFIED</span>
+          <span class="what" id="drift-what">Settings differ from “Claude Home”.</span>
+          <button class="btn btn-primary" id="drift-update">Update profile</button>
+          <button class="btn btn-ghost" id="drift-saveas">Save as new profile…</button>
+          <button class="btn btn-ghost" id="drift-revert">Revert</button>
+        </div>
+
+        <div class="notes">
+          <div class="note"><span class="n">2</span><span><b>Snapshot semantics.</b> A profile stores every setting on this page (appearance included) plus the credential bindings — not a field subset. Editing live settings marks the active profile MODIFIED; the drift bar is the save-as-profile flow, always one click away. Install state (onboarding, update feed) is excluded.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ GENERAL ============ -->
+    <section class="block" id="general">
+      <h2>General</h2>
+      <div class="body">
+        <div class="frow"><label for="f-workspace">Default workspace</label><input id="f-workspace" type="text" value="~/repo/mads" data-field></div>
+        <div class="frow"><label for="f-editor">Editor command</label><input id="f-editor" type="text" value="code --goto" data-field></div>
+        <div class="frow"><label for="f-conc">Concurrency limit<span class="restart">restart</span></label><input id="f-conc" type="number" value="5" data-field data-restart></div>
+        <div class="frow"><label for="f-logs">Log retention (days)<span class="restart">restart</span></label><input id="f-logs" type="number" value="30" data-field data-restart></div>
+        <div class="notes">
+          <div class="note"><span class="n">3</span><span>Restart-required fields carry the amber tag in place. If a profile switch changes one, the diff and the toast both say so — the switch still applies immediately; those fields take effect on mads restart.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PIPELINE ============ -->
+    <section class="block" id="pipeline">
+      <h2>Pipeline &amp; synthesis</h2>
+      <div class="body">
+        <div class="frow"><label for="f-syn">Synthesis mode</label><select id="f-syn" data-field><option>light</option><option>off</option><option>full</option></select></div>
+        <div class="frow"><label for="f-tier">Default model tier</label><select id="f-tier" data-field><option>balanced</option><option>fast</option><option>max</option></select></div>
+        <div class="frow"><label for="f-tpl">Default template</label><select id="f-tpl" data-field><option>default-implementation</option><option>review-only</option></select></div>
+        <div class="frow"><label for="f-fast">Fast model</label><input id="f-fast" type="text" value="claude-haiku-4-5" data-field></div>
+      </div>
+    </section>
+
+    <!-- ============ APPEARANCE ============ -->
+    <section class="block" id="appearance">
+      <h2>Appearance</h2>
+      <div class="body">
+        <div class="frow"><label for="f-theme">Theme</label><select id="f-theme" data-field><option>dark</option><option>light</option><option>system</option></select></div>
+        <div class="frow"><label for="f-pal">Palette</label><select id="f-pal" data-field><option>glacier</option><option>clay</option><option>space</option></select></div>
+        <div class="notes">
+          <div class="note"><span class="n">4</span><span>Appearance is in the snapshot like everything else — “work” and “home” can look different, and reverting drift restores the look too.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ CREDENTIALS ============ -->
+    <section class="block" id="credentials">
+      <h2>Credentials</h2>
+      <div class="body">
+        <div class="vaultnote">The vault is machine-level: names and values live once, in <span style="font-family:var(--mono)">$MADS_HOME</span>, never inside a profile. What the profile snapshots is each credential's <b>active</b> toggle — whether sessions see it while this profile is active.<span class="marker">5</span></div>
+
+        <div id="credlist">
+          <div class="cred" data-on="true" data-cred="ANTHROPIC_API_KEY_WORK">
+            <div><div class="cname">ANTHROPIC_API_KEY_WORK</div><div class="cmeta">added Jul 12 · used by claude-code sessions</div></div>
+            <span class="offbadge">not active in this profile</span>
+            <label class="switch"><input type="checkbox" checked aria-label="Active in this profile"><span class="tr"></span></label>
+          </div>
+          <div class="cred" data-on="false" data-cred="ANTHROPIC_API_KEY_PERSONAL">
+            <div><div class="cname">ANTHROPIC_API_KEY_PERSONAL</div><div class="cmeta">added Jul 12</div></div>
+            <span class="offbadge">not active in this profile</span>
+            <label class="switch"><input type="checkbox" aria-label="Active in this profile"><span class="tr"></span></label>
+          </div>
+          <div class="cred" data-on="true" data-cred="GITHUB_TOKEN">
+            <div><div class="cname">GITHUB_TOKEN</div><div class="cmeta">imported from env Jul 16</div></div>
+            <span class="offbadge">not active in this profile</span>
+            <label class="switch"><input type="checkbox" checked aria-label="Active in this profile"><span class="tr"></span></label>
+          </div>
+        </div>
+
+        <div><button class="btn btn-ghost">＋ Add credential to vault…</button></div>
+
+        <div class="notes">
+          <div class="note"><span class="n">5</span><span><b>All credentials always show</b> — inactive ones dim with a “not active in this profile” badge rather than disappearing, so “where did my key go?” can't happen and enabling is one toggle. The toggle edits the <i>profile</i> (it's drift, like any field edit). Add/delete edits the <i>vault</i> — global by definition, so there is no “global or profile?” dialog to answer; the two scopes are different controls. Deleting from the vault warns it affects every profile that binds the name.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ ADVANCED ============ -->
+    <section class="block" id="advanced">
+      <h2>Advanced</h2>
+      <div class="body">
+        <div class="frow"><label for="f-flag1">Linked sessions</label><select id="f-flag1" data-field><option>on</option><option>off</option></select></div>
+        <div class="frow"><label for="f-flag2">Remote registry</label><select id="f-flag2" data-field><option>off</option><option>on</option></select></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- switch-diff dialog -->
+<div class="scrim" id="scrim">
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="d-title">
+    <h3 id="d-title">Switch to “<span id="d-name"></span>”?
+      <span class="sub">Restores that snapshot. Grouped by section — unchanged sections aren't listed.<span class="marker">6</span></span>
+    </h3>
+    <div class="dgroup" id="d-body"></div>
+    <div class="dfoot">
+      <span class="rnote" id="d-restart" hidden>⟳ 1 change takes effect on mads restart</span>
+      <button class="btn btn-primary" id="d-apply">Switch profile</button>
+      <button class="btn btn-ghost" id="d-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status">
+  <span class="tick">✓</span><span id="toast-msg"></span><button id="toast-undo">Undo</button>
+</div>
+
+<script>
+  const profiles = [
+    { id:"home", name:"Claude Home", desc:"daily driver", active:true },
+    { id:"cheap", name:"Cheap & wide", desc:"haiku · synthesis off",
+      diff:{
+        "Pipeline & synthesis":[["Default model tier","balanced","fast"],["Synthesis mode","light","off"]],
+        "General":[["Concurrency limit","5","8",true]],
+        "Credentials":[["ANTHROPIC_API_KEY_PERSONAL","inactive","active"],["ANTHROPIC_API_KEY_WORK","active","inactive",false,true]],
+      } },
+    { id:"review", name:"Focused review", desc:"serial · restricted",
+      diff:{
+        "Pipeline & synthesis":[["Default template","default-implementation","review-only"]],
+        "General":[["Concurrency limit","5","1",true]],
+        "Appearance":[["Palette","glacier","space"]],
+      } },
+  ];
+  const strip = document.getElementById("pstrip");
+  let pending = null;
+
+  function render() {
+    strip.innerHTML = "";
+    for (const p of profiles) {
+      const b = document.createElement("button");
+      b.className = "pcard"; b.type = "button"; b.dataset.active = !!p.active;
+      b.setAttribute("role","radio"); b.setAttribute("aria-checked", !!p.active);
+      b.innerHTML = `<div class="pname">${p.name}${p.active ? ' <span class="badge active">ACTIVE</span>' : ''}</div><div class="pdesc">${p.desc}</div>`;
+      b.addEventListener("click", () => openDiff(p));
+      strip.appendChild(b);
+    }
+    const active = profiles.find(p => p.active);
+    document.getElementById("drift-what").textContent = `Settings differ from “${active.name}”.`;
+  }
+
+  function openDiff(p) {
+    if (p.active) return;
+    pending = p;
+    document.getElementById("d-name").textContent = p.name;
+    const body = document.getElementById("d-body");
+    body.innerHTML = "";
+    let restart = false;
+    for (const [group, rows] of Object.entries(p.diff || {})) {
+      const g = document.createElement("div"); g.className = "g"; g.textContent = group; body.appendChild(g);
+      for (const [f, a, b2, needsRestart, toOff] of rows) {
+        if (needsRestart) restart = true;
+        const r = document.createElement("div"); r.className = "drow";
+        r.innerHTML = `<span class="f">${f}${needsRestart ? '<span class="restart">restart</span>' : ''}</span><span class="from">${a}</span><span class="arr">→</span><span class="to${toOff ? ' off' : ''}">${b2}</span>`;
+        body.appendChild(r);
+      }
+    }
+    document.getElementById("d-restart").hidden = !restart;
+    document.getElementById("scrim").classList.add("open");
+    document.getElementById("d-apply").focus();
+  }
+  function closeDiff() { document.getElementById("scrim").classList.remove("open"); pending = null; }
+  document.getElementById("d-cancel").addEventListener("click", closeDiff);
+  document.getElementById("scrim").addEventListener("click", e => { if (e.target === e.currentTarget) closeDiff(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") closeDiff(); });
+
+  document.getElementById("d-apply").addEventListener("click", () => {
+    if (!pending) return;
+    const hadRestart = !document.getElementById("d-restart").hidden;
+    profiles.forEach(p => p.active = (p === pending));
+    const name = pending.name;
+    closeDiff();
+    document.body.dataset.drift = "false";
+    render();
+    toast(`Switched to “${name}”` + (hadRestart ? " — 1 setting applies on mads restart" : ""));
+  });
+
+  function toast(msg) {
+    const t = document.getElementById("toast");
+    document.getElementById("toast-msg").textContent = msg;
+    t.classList.add("show");
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 4600);
+  }
+  document.getElementById("toast-undo").addEventListener("click", () => {
+    profiles.forEach(p => p.active = p.id === "home");
+    render(); document.getElementById("toast").classList.remove("show");
+  });
+
+  // any field edit or credential toggle = drift on the active profile
+  function markDrift() { document.body.dataset.drift = "true"; }
+  for (const el of document.querySelectorAll("[data-field]")) el.addEventListener("change", markDrift);
+  for (const c of document.querySelectorAll(".cred .switch input")) {
+    c.addEventListener("change", e => { c.closest(".cred").dataset.on = e.target.checked; markDrift(); });
+  }
+  document.getElementById("drift-update").addEventListener("click", () => { document.body.dataset.drift = "false"; toast("Profile “Claude Home” updated"); });
+  document.getElementById("drift-saveas").addEventListener("click", () => { document.body.dataset.drift = "false"; toast("Saved as new profile"); });
+  document.getElementById("drift-revert").addEventListener("click", () => { document.body.dataset.drift = "false"; toast("Reverted to “Claude Home”"); });
+
+  // scroll-spy highlight — "last section whose top has passed the reading line",
+  // with an explicit end-of-page case: short bottom sections can never reach the
+  // reading line (the page can't scroll further), so at bottom the last section wins.
+  const links = [...document.querySelectorAll(".spy a")];
+  const secs = links.map(a => document.querySelector(a.getAttribute("href")));
+  function spy() {
+    const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+    let current = secs[0];
+    if (atBottom) current = secs[secs.length - 1];
+    else {
+      const line = window.innerHeight * 0.3;
+      for (const s of secs) if (s.getBoundingClientRect().top <= line) current = s;
+    }
+    links.forEach(a => a.classList.toggle("here", a.getAttribute("href") === "#" + current.id));
+  }
+  let spyTick = false;
+  addEventListener("scroll", () => { if (!spyTick) { spyTick = true; requestAnimationFrame(() => { spy(); spyTick = false; }); } }, { passive:true });
+  spy();
+
+  render();
+</script>
+</body>
+</html>

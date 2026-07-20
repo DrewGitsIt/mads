@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Session management UX (launchpad + rail options)</title>
+<style>
+  /* clay/dark tokens lifted verbatim from ui/src/tokens/tokens.css */
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    /* NOTE: current type scale — kept so pieces read at true size. #1 proposes
+       a larger hero scale layered on top (--fs-hero / --fs-lede below). */
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+    --fs-hero:24px; --fs-lede:15px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+
+  .page { max-width:1180px; margin:0 auto; padding:var(--space-6) var(--space-5) 160px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:74ch; margin-top:var(--space-2); }
+  header.intro code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:80ch; }
+  .note b { color:var(--text2); font-weight:600; }
+  .rowlabel { font-size:var(--fs-chip); font-weight:700; text-transform:uppercase; letter-spacing:.08em; color:var(--text3); margin-bottom:var(--space-2); }
+
+  /* ============================================================= #1 + #5 */
+  /* app frame so the centering reads honestly against a fixed viewport */
+  .appframe { height:560px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); display:grid; grid-template-columns:34px 1fr; overflow:hidden; }
+  .iconrail { background:var(--bg1); border-right:1px solid var(--line-soft); }
+  .surface { min-width:0; position:relative; overflow:auto; }
+
+  /* BEFORE (cramped) vs AFTER (opened up) toggle */
+  .launch { min-height:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:var(--space-6); }
+  .launch .col { width:100%; max-width:44rem; display:flex; flex-direction:column; align-items:center; }
+
+  /* AFTER spacing */
+  .launch.after { gap:var(--space-5); }
+  .launch.after .hero { font:650 var(--fs-hero)/1.2 var(--sans); letter-spacing:-.01em; }
+  .launch.after .lede { color:var(--text2); font:500 var(--fs-lede) var(--sans); margin-top:var(--space-2); }
+  .launch.after .box { margin-top:var(--space-3); padding:var(--space-4); gap:var(--space-3); }
+  .launch.after .pills { margin-top:var(--space-2); gap:var(--space-2); }
+
+  /* BEFORE spacing (today) */
+  .launch.before { gap:var(--space-4); justify-content:flex-start; padding-top:var(--space-6); }
+  .launch.before .hero { font:600 var(--fs-body) var(--sans); }
+  .launch.before .lede { color:var(--text3); font:500 var(--fs-sm) var(--sans); }
+  .launch.before .box { margin-top:var(--space-2); padding:var(--space-3); gap:var(--space-2); }
+  .launch.before .pills { margin-top:var(--space-2); gap:var(--space-2); }
+
+  .box { width:100%; display:flex; flex-direction:column; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r); text-align:left; }
+  .box:focus-within { border-color:var(--line); }
+  .ta { width:100%; min-height:64px; background:transparent; border:none; outline:none; resize:none; color:var(--text); font:500 var(--fs-body)/1.55 var(--sans); }
+  .ta::placeholder { color:var(--text3); }
+
+  /* #5 — attached-file preview chips */
+  .filestrip { display:flex; flex-wrap:wrap; gap:var(--space-2); }
+  .filechip { display:flex; align-items:center; gap:var(--space-2); background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:var(--space-1); }
+  .filechip .thumb { width:34px; height:34px; border-radius:4px; flex:none; background:var(--bg3); display:flex; align-items:center; justify-content:center; font-size:16px; color:var(--text2); overflow:hidden; }
+  .filechip .thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+  .filechip .meta { display:flex; flex-direction:column; padding-right:var(--space-1); min-width:0; }
+  .filechip .fname { font:600 var(--fs-sm) var(--sans); color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+  .filechip .fsize { font:500 var(--fs-chip) var(--sans); color:var(--text3); }
+  .filechip .x { flex:none; width:18px; height:18px; border-radius:4px; border:none; background:transparent; color:var(--text3); cursor:pointer; font-size:11px; display:flex; align-items:center; justify-content:center; }
+  .filechip .x:hover { background:var(--bad-soft); color:var(--bad-fg); }
+
+  .boxfoot { display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
+  .boxfoot .left { display:flex; align-items:center; gap:var(--space-2); }
+  .iconbtn { display:inline-flex; align-items:center; gap:6px; background:transparent; border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text2); cursor:pointer; padding:5px 9px; font:500 var(--fs-sm) var(--sans); }
+  .iconbtn:hover { color:var(--text); background:var(--bg3); }
+  .hint { color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .autoline { color:var(--text3); font:500 var(--fs-chip) var(--sans); display:flex; align-items:center; gap:6px; }
+  .autoline .dot { width:5px; height:5px; border-radius:50%; background:var(--ok); }
+
+  .btn { font:600 var(--fs-sm) var(--sans); border-radius:var(--r-sm); cursor:pointer; padding:7px 15px; border:1px solid transparent; }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); } .btn-primary:hover { background:var(--accent-hover); }
+
+  .pills { display:flex; flex-wrap:wrap; justify-content:center; width:100%; }
+  .pill { display:inline-flex; align-items:center; gap:6px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:999px; padding:5px 11px; color:var(--text2); font:500 var(--fs-sm) var(--sans); cursor:pointer; }
+  .pill:hover { border-color:var(--line); color:var(--text); }
+  .pill .k { color:var(--text3); font-size:var(--fs-chip); text-transform:uppercase; letter-spacing:.05em; }
+  .pill.fable { border-color:var(--accent); color:var(--text); }
+  .pill.fable .k { color:var(--accent); }
+
+  .toggle { display:inline-flex; border:1px solid var(--line-soft); border-radius:999px; overflow:hidden; }
+  .toggle button { background:transparent; border:none; color:var(--text3); font:600 var(--fs-sm) var(--sans); padding:5px 14px; cursor:pointer; }
+  .toggle button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+
+  /* ================================================================== #2 */
+  .railgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-4); align-items:start; }
+  .railcol .desc { color:var(--text3); font-size:var(--fs-sm); margin:var(--space-1) 0 var(--space-3); min-height:56px; }
+  .railcol .desc b { color:var(--text2); font-weight:600; }
+
+  .railpanel { background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); padding:var(--space-2); }
+  .grouphd { padding:var(--space-2) var(--space-2) var(--space-1); font:700 var(--fs-chip) var(--sans); color:var(--text3); text-transform:uppercase; letter-spacing:.06em; display:flex; align-items:center; justify-content:space-between; }
+  .grouphd .selbtn { font:600 var(--fs-chip) var(--sans); letter-spacing:.02em; text-transform:none; color:var(--text3); background:transparent; border:none; cursor:pointer; padding:2px 6px; border-radius:4px; }
+  .grouphd .selbtn:hover { color:var(--text2); background:var(--bg3); }
+
+  /* shared card base — no leading checkbox gutter in any option */
+  .scard { position:relative; display:flex; flex-direction:column; gap:2px; padding:var(--space-2) var(--space-3); margin-bottom:3px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); cursor:pointer; }
+  .scard:hover { background:var(--bg3); }
+  .scard.sel { background:var(--bg3); border-color:var(--accent); }
+  .scard .top { display:flex; align-items:center; gap:var(--space-2); }
+  .scard .dot { flex:none; width:8px; height:8px; border-radius:50%; background:var(--text3); }
+  .scard .dot.on { background:var(--ok); } .scard .dot.attn { background:var(--warn); } .scard .dot.off { background:var(--text3); }
+  .scard .nm { flex:1; min-width:0; font:600 var(--fs-sm) var(--sans); color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .scard .metarow { display:flex; align-items:center; gap:var(--space-2); padding-left:16px; }
+  .scard .open { color:var(--warn-fg); font:600 var(--fs-chip) var(--sans); }
+  .scard .summ { padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+  /* Option A — Quiet card: whole row acts; one hover-revealed overflow; right-click for the rest */
+  .optA .ov { flex:none; opacity:0; width:22px; height:22px; border-radius:4px; border:none; background:transparent; color:var(--text2); cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:14px; transition:opacity .12s; }
+  .optA .scard:hover .ov { opacity:.75; }
+  .optA .ov:hover { opacity:1; background:var(--bg4); color:var(--text); }
+
+  /* Option B — Primary action: click a paused card = resume+open; select-mode toggle lives in the header */
+  .optB .scard .go { flex:none; opacity:0; color:var(--text3); font:600 var(--fs-chip) var(--sans); display:flex; align-items:center; gap:4px; transition:opacity .12s; }
+  .optB .scard:hover .go { opacity:1; }
+  .optB .scard[data-state="paused"]:hover { border-color:var(--accent); }
+  .optB .scard[data-state="paused"]:hover .go { color:var(--accent); }
+  .optB .checkslot { flex:none; width:0; overflow:hidden; transition:width .12s; display:flex; align-items:center; }
+  .optB.selecting .checkslot { width:20px; }
+  .optB .checkslot input { width:14px; height:14px; accent-color:var(--accent); }
+
+  /* Option C — Slide actions: trailing icon buttons slide in on hover */
+  .optC .actions { position:absolute; top:0; right:0; height:100%; display:flex; align-items:center; gap:2px; padding-right:var(--space-2); transform:translateX(8px); opacity:0; transition:transform .14s, opacity .14s; background:linear-gradient(90deg, transparent, var(--bg3) 40%); padding-left:24px; }
+  .optC .scard:hover .actions { transform:translateX(0); opacity:1; }
+  .optC .actions button { width:24px; height:24px; border-radius:var(--r-sm); border:1px solid var(--line); background:var(--bg2); color:var(--text2); cursor:pointer; font-size:12px; display:flex; align-items:center; justify-content:center; }
+  .optC .actions button:hover { color:var(--text); background:var(--bg4); }
+  .optC .actions button.danger:hover { color:var(--bad-fg); border-color:var(--bad); background:var(--bad-soft); }
+
+  /* faux context menu (shared A) */
+  .ctx { position:absolute; z-index:20; min-width:150px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); box-shadow:var(--shadow); padding:4px; font:500 var(--fs-sm) var(--sans); }
+  .ctx button { display:flex; width:100%; align-items:center; gap:8px; background:transparent; border:none; color:var(--text2); padding:6px 8px; border-radius:4px; cursor:pointer; text-align:left; }
+  .ctx button:hover { background:var(--bg3); color:var(--text); }
+  .ctx button.danger:hover { background:var(--bad-soft); color:var(--bad-fg); }
+  .ctx .sep { height:1px; background:var(--line-soft); margin:4px 2px; }
+
+  .legend { display:flex; gap:var(--space-4); flex-wrap:wrap; margin-top:var(--space-3); color:var(--text3); font-size:var(--fs-chip); }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .legend .d { width:8px; height:8px; border-radius:50%; }
+  .legend b { color:var(--text2); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="intro">
+    <h1>Session management — launchpad &amp; rail exploration</h1>
+    <p>A mockup for the visual asks: <b>#1</b> open up &amp; vertically center the launchpad, <b>#2</b> harmonize the rail cards (drop the checkbox gutter, kebab, and Resume button), and <b>#5</b> show attached files as removable preview chips with auto-injected boilerplate. Answers to <b>#3</b> (open-work chips) and <b>#4</b> (<code>DefaultModels</code> in <code>providers/claudecode/claudecode.go</code>) live in the thread. Clay/dark tokens are copied from <code>ui/src/tokens/tokens.css</code>.</p>
+  </header>
+
+  <!-- ===================================================== #1 + #5 ===== -->
+  <section class="block">
+    <h2><span class="tag">#1 · #5</span> Launchpad — opened up, centered, with file preview chips
+      <span class="sub" style="margin-left:auto">
+        <span class="toggle" id="baToggle">
+          <button data-mode="before">Today</button>
+          <button data-mode="after" aria-pressed="true">Proposed</button>
+        </span>
+      </span>
+    </h2>
+    <div class="body">
+      <div class="appframe">
+        <div class="iconrail"></div>
+        <div class="surface">
+          <!-- AFTER (default) -->
+          <div class="launch after" id="launchAfter">
+            <div class="col">
+              <div class="hero">What can I help you with?</div>
+              <div class="lede">Describe your goal — I&rsquo;ll help you get there.</div>
+
+              <div class="box">
+                <textarea class="ta" placeholder="e.g. The deploy script fails on the new Ubuntu runners — help me figure out why"></textarea>
+
+                <!-- #5: attached files as preview chips, not pasted paths -->
+                <div class="filestrip" style="margin:var(--space-1) 0 var(--space-2)">
+                  <div class="filechip">
+                    <span class="thumb"><img alt="" src="data:image/svg+xml;utf8,&lt;svg xmlns='http://www.w3.org/2000/svg' width='68' height='68'&gt;&lt;defs&gt;&lt;linearGradient id='g' x1='0' y1='0' x2='1' y2='1'&gt;&lt;stop offset='0' stop-color='%23c08552'/&gt;&lt;stop offset='1' stop-color='%235e8fc9'/&gt;&lt;/linearGradient&gt;&lt;/defs&gt;&lt;rect width='68' height='68' fill='url(%23g)'/&gt;&lt;circle cx='22' cy='24' r='9' fill='%23ffffff' opacity='.85'/&gt;&lt;path d='M6 60 L30 34 L44 48 L54 40 L68 54 L68 68 L0 68 Z' fill='%23241305' opacity='.35'/&gt;&lt;/svg&gt;"></span>
+                    <span class="meta">
+                      <span class="fname">error-screenshot.png</span>
+                      <span class="fsize">image · 214 KB</span>
+                    </span>
+                    <button class="x" title="Remove">✕</button>
+                  </div>
+                  <div class="filechip">
+                    <span class="thumb">📄</span>
+                    <span class="meta">
+                      <span class="fname">deploy.yml</span>
+                      <span class="fsize">text · 3.1 KB</span>
+                    </span>
+                    <button class="x" title="Remove">✕</button>
+                  </div>
+                  <div class="filechip">
+                    <span class="thumb">📄</span>
+                    <span class="meta">
+                      <span class="fname">runner.log</span>
+                      <span class="fsize">text · 88 KB</span>
+                    </span>
+                    <button class="x" title="Remove">✕</button>
+                  </div>
+                </div>
+
+                <div class="boxfoot">
+                  <div class="left">
+                    <button class="iconbtn">📎 Attach files</button>
+                    <span class="autoline"><span class="dot"></span> Files are shared with the agent automatically</span>
+                  </div>
+                  <button class="btn btn-primary">Start session</button>
+                </div>
+              </div>
+
+              <div class="pills">
+                <span class="pill"><span class="k">workspace</span> mads</span>
+                <span class="pill"><span class="k">agent</span> claude</span>
+                <span class="pill fable"><span class="k">model</span> Fable 5 · claude-code</span>
+                <span class="pill"><span class="k">trust</span> full</span>
+                <span class="pill"><span class="k">isolation</span> worktree</span>
+              </div>
+              <div class="hint" style="margin-top:var(--space-1)">↵ to start · Shift↵ for a new line</div>
+            </div>
+          </div>
+
+          <!-- BEFORE (hidden until toggled) -->
+          <div class="launch before" id="launchBefore" style="display:none">
+            <div class="col">
+              <div class="hero">What can I help you with?</div>
+              <div class="lede">Describe your goal — I&rsquo;ll help you get there.</div>
+              <div class="box">
+                <textarea class="ta" style="min-height:52px" placeholder="e.g. The deploy script fails on the new Ubuntu runners — help me figure out why">/home/drew/repo/mads/error-screenshot.png please reference this file</textarea>
+                <div class="boxfoot">
+                  <span class="hint">↵ to start · Shift↵ for a new line</span>
+                  <button class="btn btn-primary">Start session</button>
+                </div>
+              </div>
+              <div class="pills">
+                <span class="pill"><span class="k">workspace</span> mads</span>
+                <span class="pill"><span class="k">agent</span> claude</span>
+                <span class="pill"><span class="k">model</span> Sonnet 5 · claude-code</span>
+                <span class="pill"><span class="k">trust</span> full</span>
+                <span class="pill"><span class="k">isolation</span> worktree</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="note" style="margin-top:var(--space-3)"><b>What changed:</b> the hero column is centered in the surface (not top-anchored), the greeting jumps to <code>--fs-hero</code> (24px) with a real lede, and padding steps up to <code>--space-4/5</code>. Attached files become removable chips (image files get a thumbnail); mads injects a "see these files for reference" preamble at send time so the user never writes it — mirroring the <code>InjectedContentPreview</code> pattern the conversation Composer already uses.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ #2 ==== -->
+  <section class="block">
+    <h2><span class="tag">#2</span> Rail cards — three ways to harmonize the surfaces
+      <span class="sub">every option drops the checkbox gutter, the always-on kebab, and the Resume button</span>
+    </h2>
+    <div class="body">
+      <p class="note" style="margin-bottom:var(--space-4)"><b>The problem today:</b> each card carries a hidden-but-space-reserving checkbox (the blank left gutter), a persistent <code>⋯</code> kebab, a hover Resume button, <i>and</i> a whole-row click target — four surfaces for maybe three real flows (open, resume, remove; link/unlink are flag-gated extras). All three options below collapse to <b>one primary surface (the card = open)</b> and push the rare/destructive actions to a single secondary surface.</p>
+
+      <div class="railgrid">
+
+        <!-- OPTION A -->
+        <div class="railcol optA">
+          <div class="rowlabel">Option A · Quiet card</div>
+          <div class="desc">The card is the only chrome. Click to open; opening a paused session <b>resumes it</b>. One faint <code>⋯</code> appears on hover for the rare secondary actions — and the same menu is on <b>right-click</b> anywhere in the card. Nothing competes for the eye at rest.</div>
+          <div class="railpanel">
+            <div class="grouphd">Active <span>· 2</span></div>
+            <div class="scard sel">
+              <div class="top"><span class="dot on"></span><span class="nm">Fix deploy on Ubuntu runners</span><button class="ov" title="More">⋯</button></div>
+              <div class="metarow"><span class="open">3 open</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">Session rail readability pass</span><button class="ov" title="More">⋯</button></div>
+            </div>
+            <div class="grouphd" style="margin-top:6px">Recent</div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Task detail sheet click-to-edit</span><button class="ov" title="More">⋯</button></div>
+              <div class="summ">Merged 2h ago · 12 files changed</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">Mergiraf land-queue driver</span><button class="ov" title="More">⋯</button></div>
+              <div class="metarow"><span class="open">1 open</span></div>
+            </div>
+          </div>
+          <div class="legend">
+            <span><span class="d" style="background:var(--ok)"></span> live</span>
+            <span><span class="d" style="background:var(--warn)"></span> needs attention</span>
+            <span><span class="d" style="background:var(--text3)"></span> paused</span>
+          </div>
+        </div>
+
+        <!-- OPTION B -->
+        <div class="railcol">
+          <div class="rowlabel">Option B · Primary action</div>
+          <div class="desc">Click always does the obvious thing: open a live session, <b>resume + open</b> a paused one — so no Resume button. A hover hint on the right names the action. Multi-select for linking is a <b>mode</b> you turn on from the group header, not per-row chrome.</div>
+          <div class="railpanel optB" id="optB">
+            <div class="grouphd">Active <span>· 2</span>
+              <button class="selbtn" id="selToggle">Select…</button>
+            </div>
+            <div class="scard sel" data-state="live">
+              <span class="checkslot"><input type="checkbox"></span>
+              <div class="top"><span class="dot on"></span><span class="nm">Fix deploy on Ubuntu runners</span><span class="go">open ↵</span></div>
+              <div class="metarow"><span class="open">3 open</span></div>
+            </div>
+            <div class="scard" data-state="live">
+              <span class="checkslot"><input type="checkbox"></span>
+              <div class="top"><span class="dot on"></span><span class="nm">Session rail readability pass</span><span class="go">open ↵</span></div>
+            </div>
+            <div class="grouphd" style="margin-top:6px">Recent</div>
+            <div class="scard" data-state="paused">
+              <span class="checkslot"><input type="checkbox"></span>
+              <div class="top"><span class="dot off"></span><span class="nm">Task detail sheet click-to-edit</span><span class="go">▶ resume</span></div>
+              <div class="summ">Merged 2h ago · 12 files changed</div>
+            </div>
+            <div class="scard" data-state="paused">
+              <span class="checkslot"><input type="checkbox"></span>
+              <div class="top"><span class="dot attn"></span><span class="nm">Mergiraf land-queue driver</span><span class="go">▶ resume</span></div>
+              <div class="metarow"><span class="open">1 open</span></div>
+            </div>
+          </div>
+          <div class="legend"><span>Toggle <b>Select…</b> to reveal checkboxes for linking — otherwise the row is a single click target.</span></div>
+        </div>
+
+        <!-- OPTION C -->
+        <div class="railcol optC">
+          <div class="rowlabel">Option C · Slide actions</div>
+          <div class="desc">Card is calm at rest; on hover, a small action cluster <b>slides in from the right</b> — resume (paused only), link, archive. Discoverable like an email list, no persistent icons, and destructive actions read as deliberate because they only appear on intent.</div>
+          <div class="railpanel">
+            <div class="grouphd">Active <span>· 2</span></div>
+            <div class="scard sel">
+              <div class="top"><span class="dot on"></span><span class="nm">Fix deploy on Ubuntu runners</span></div>
+              <div class="metarow"><span class="open">3 open</span></div>
+              <div class="actions"><button title="Link">🔗</button><button class="danger" title="Archive">🗑</button></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">Session rail readability pass</span></div>
+              <div class="actions"><button title="Link">🔗</button><button class="danger" title="Archive">🗑</button></div>
+            </div>
+            <div class="grouphd" style="margin-top:6px">Recent</div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Task detail sheet click-to-edit</span></div>
+              <div class="summ">Merged 2h ago · 12 files changed</div>
+              <div class="actions"><button title="Resume">▶</button><button title="Link">🔗</button><button class="danger" title="Archive">🗑</button></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">Mergiraf land-queue driver</span></div>
+              <div class="metarow"><span class="open">1 open</span></div>
+              <div class="actions"><button title="Resume">▶</button><button title="Link">🔗</button><button class="danger" title="Archive">🗑</button></div>
+            </div>
+          </div>
+          <div class="legend"><span>Hover a card to reveal its actions.</span></div>
+        </div>
+
+      </div>
+
+      <p class="note" style="margin-top:var(--space-4)"><b>My lean:</b> <b>A</b> for the resting-state calm you asked for, borrowing B's "click resumes a paused session" rule (which is what lets us delete the Resume button outright) and keeping a right-click menu as the power path. C is the most discoverable but reintroduces per-card icon chrome — the very thing #2 is trying to shed. Whichever we pick, the left checkbox gutter is gone: linking becomes a header-level <i>mode</i> or a right-click action, so a single card never reserves space for it.</p>
+    </div>
+  </section>
+
+</div>
+
+<!-- faux right-click menu for Option A -->
+<div class="ctx" id="ctxMenu" style="display:none">
+  <button>↗ Open</button>
+  <button>▶ Resume</button>
+  <button>🔗 Link with…</button>
+  <div class="sep"></div>
+  <button class="danger">🗑 Archive session</button>
+</div>
+
+<script>
+  // #1 before/after toggle
+  const bt = document.getElementById('baToggle');
+  const after = document.getElementById('launchAfter');
+  const before = document.getElementById('launchBefore');
+  bt.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    [...bt.children].forEach(x => x.setAttribute('aria-pressed', x === b));
+    const mode = b.dataset.mode;
+    after.style.display = mode === 'after' ? 'flex' : 'none';
+    before.style.display = mode === 'before' ? 'flex' : 'none';
+  });
+
+  // Option B select mode
+  const optB = document.getElementById('optB');
+  const selToggle = document.getElementById('selToggle');
+  selToggle.addEventListener('click', () => {
+    const on = optB.classList.toggle('selecting');
+    selToggle.textContent = on ? 'Done' : 'Select…';
+  });
+
+  // Option A right-click menu (demo)
+  const menu = document.getElementById('ctxMenu');
+  document.querySelectorAll('.optA .scard').forEach(card => {
+    card.addEventListener('contextmenu', e => {
+      e.preventDefault();
+      menu.style.display = 'block';
+      menu.style.left = e.pageX + 'px';
+      menu.style.top = e.pageY + 'px';
+    });
+  });
+  document.addEventListener('click', () => menu.style.display = 'none');
+
+  // chip remove (demo)
+  document.querySelectorAll('.filechip .x').forEach(x =>
+    x.addEventListener('click', () => x.closest('.filechip').remove()));
+</script>
+</body>
+</html>

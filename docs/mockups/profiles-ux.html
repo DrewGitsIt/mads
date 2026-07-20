@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-palette="glacier">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Profiles UX proposal</title>
+<style>
+  /* glacier/dark tokens lifted verbatim from ui/src/tokens/tokens.css */
+  :root {
+    --bg0:#03101d; --bg1:#051c31; --bg2:#09263f; --bg3:#0e304e; --bg4:#143a5c;
+    --line:#20507a; --line-soft:#0d2c47;
+    --text:#e6eef6; --text2:#a4bdd1; --text3:#7793ab;
+    --accent:#65a5c8; --accent-hover:#7cb8d8; --accent-soft:rgba(101,165,200,.16); --accent-ink:#041220;
+    --ok:#6fc2a0; --ok-soft:rgba(111,194,160,.14); --ok-fg:#6fc2a0;
+    --warn:#d4b165; --warn-soft:rgba(212,177,101,.13); --warn-fg:#d4b165;
+    --info:#afbfd2; --info-soft:rgba(175,191,210,.13); --info-fg:#afbfd2;
+    --shadow:0 12px 28px rgba(0,0,0,.5);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body {
+    background:var(--bg0); color:var(--text);
+    font:var(--fs-body)/1.55 var(--sans);
+    padding:var(--space-6) var(--space-5) 120px;
+  }
+  .page { max-width:880px; margin:0 auto; display:flex; flex-direction:column; gap:var(--space-6); }
+
+  header.intro h1 { font-size:19px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:66ch; margin-top:var(--space-2); }
+
+  .mock { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .mock-title {
+    display:flex; align-items:baseline; gap:var(--space-3);
+    padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); background:var(--bg2);
+  }
+  .mock-title .where { font-size:var(--fs-sm); font-weight:650; text-transform:uppercase; letter-spacing:.08em; color:var(--text3); }
+  .mock-title .what { color:var(--text2); font-size:var(--fs-sm); }
+  .mock-body { padding:var(--space-5) var(--space-4); }
+
+  .fieldlabel { font-size:var(--fs-chip); font-weight:650; text-transform:uppercase; letter-spacing:.1em; color:var(--text3); margin-bottom:var(--space-2); }
+
+  /* ---- profile switcher (General tab) ---- */
+  .switcher { display:flex; gap:var(--space-2); flex-wrap:wrap; }
+  .pcard {
+    position:relative; min-width:170px; text-align:left; cursor:pointer;
+    background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r);
+    color:var(--text); font:inherit; padding:var(--space-3);
+    transition:border-color .12s, background .12s;
+  }
+  .pcard:hover { border-color:var(--line); background:var(--bg3); }
+  .pcard:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .pcard .pname { font-weight:650; font-size:var(--fs-ui); display:flex; align-items:center; gap:var(--space-2); }
+  .pcard .pdesc { color:var(--text3); font-size:var(--fs-sm); margin-top:2px; }
+  .pcard .chips { margin-top:var(--space-2); }
+  .pcard[data-active="true"] { border-color:var(--accent); background:var(--accent-soft); }
+  .pcard[data-active="true"] .pname::after {
+    content:"ACTIVE"; font-size:var(--fs-chip); letter-spacing:.08em; font-weight:700;
+    color:var(--accent-ink); background:var(--accent); border-radius:999px; padding:1px 8px;
+  }
+  .pcard[data-drift="true"] .pname::after {
+    content:"MODIFIED"; background:var(--warn); color:var(--accent-ink);
+    font-size:var(--fs-chip); letter-spacing:.08em; font-weight:700; border-radius:999px; padding:1px 8px;
+  }
+
+  .chips { display:flex; flex-wrap:wrap; gap:var(--space-1); }
+  .chip {
+    font-size:var(--fs-chip); letter-spacing:.02em; color:var(--text2);
+    background:var(--bg1); border:1px solid var(--line-soft); border-radius:999px; padding:1px 8px;
+    white-space:nowrap;
+  }
+  .chip b { color:var(--text); font-weight:600; }
+  .pcard[data-active="true"] .chip { background:transparent; }
+
+  /* ---- diff preview ---- */
+  .diff {
+    margin-top:var(--space-4); border:1px solid var(--line); border-radius:var(--r);
+    background:var(--bg2); box-shadow:var(--shadow); overflow:hidden; max-width:560px;
+  }
+  .diff[hidden] { display:none; }
+  .diff-head { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); font-weight:650; }
+  .diff-head .sub { font-weight:400; color:var(--text3); font-size:var(--fs-sm); margin-top:2px; }
+  .diff table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  .diff td { padding:var(--space-2) var(--space-4); border-bottom:1px solid var(--line-soft); vertical-align:baseline; }
+  .diff td.f { color:var(--text2); width:38%; }
+  .diff td.from { color:var(--text3); text-decoration:line-through; text-decoration-color:var(--text3); }
+  .diff td.arrow { color:var(--text3); width:24px; text-align:center; }
+  .diff td.to { color:var(--ok-fg); font-weight:600; }
+  .diff .keeps { color:var(--text3); font-size:var(--fs-sm); padding:var(--space-2) var(--space-4); }
+  .diff-actions { display:flex; gap:var(--space-2); padding:var(--space-3) var(--space-4); }
+
+  button.btn {
+    font:600 var(--fs-sm) var(--sans); border-radius:var(--r-sm); cursor:pointer;
+    padding:6px 14px; border:1px solid transparent; transition:background .12s;
+  }
+  .btn-primary { background:var(--accent); color:var(--accent-ink); }
+  .btn-primary:hover { background:var(--accent-hover); }
+  .btn-ghost { background:transparent; color:var(--text2); border-color:var(--line); }
+  .btn-ghost:hover { color:var(--text); background:var(--bg3); }
+  .btn:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .toast {
+    position:fixed; left:50%; bottom:28px; transform:translateX(-50%) translateY(12px);
+    background:var(--bg3); border:1px solid var(--line); border-radius:var(--r);
+    box-shadow:var(--shadow); padding:var(--space-3) var(--space-4);
+    display:flex; align-items:center; gap:var(--space-3);
+    opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
+  }
+  .toast.show { opacity:1; transform:translateX(-50%); }
+  .toast .tick { color:var(--ok-fg); font-weight:700; }
+  .toast .undo { color:var(--accent); font-weight:600; cursor:pointer; background:none; border:none; font:inherit; }
+
+  /* ---- management panel ---- */
+  .mrow {
+    display:flex; align-items:flex-start; gap:var(--space-3);
+    padding:var(--space-3) 0; border-bottom:1px solid var(--line-soft);
+  }
+  .mrow:last-of-type { border-bottom:none; }
+  .mrow .grow { flex:1; min-width:0; }
+  .mrow .pname { font-weight:650; display:flex; gap:var(--space-2); align-items:center; }
+  .badge { font-size:var(--fs-chip); letter-spacing:.08em; font-weight:700; border-radius:999px; padding:1px 8px; }
+  .badge.active { background:var(--accent); color:var(--accent-ink); }
+  .badge.system { background:var(--info-soft); color:var(--info-fg); }
+  .mrow .chips { margin-top:var(--space-2); }
+  .mrow .rowactions { display:flex; gap:var(--space-1); flex:none; }
+  .iconbtn {
+    background:none; border:1px solid transparent; border-radius:var(--r-sm); cursor:pointer;
+    color:var(--text3); font:600 var(--fs-sm) var(--sans); padding:4px 10px;
+  }
+  .iconbtn:hover { color:var(--text); background:var(--bg3); border-color:var(--line-soft); }
+
+  .capture { margin-top:var(--space-4); display:flex; align-items:center; gap:var(--space-3); color:var(--text3); font-size:var(--fs-sm); }
+
+  /* ---- editor ---- */
+  .editor { border:1px solid var(--line); border-radius:var(--r); background:var(--bg2); margin-top:var(--space-4); overflow:hidden; }
+  .editor-head { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); }
+  .editor-head input {
+    background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+    color:var(--text); font:650 var(--fs-ui) var(--sans); padding:5px 10px;
+  }
+  .editor-head .hint { color:var(--text3); font-size:var(--fs-sm); }
+  .erow {
+    display:grid; grid-template-columns: 24px 200px 1fr; align-items:center; gap:var(--space-3);
+    padding:var(--space-2) var(--space-4); border-bottom:1px solid var(--line-soft);
+  }
+  .erow:hover { background:var(--bg3); }
+  .erow label.fname { color:var(--text2); font-size:var(--fs-sm); cursor:pointer; }
+  .erow input[type="checkbox"] { accent-color:var(--accent); width:14px; height:14px; cursor:pointer; }
+  .erow select, .erow input[type="number"], .erow input[type="text"] {
+    background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm);
+    color:var(--text); font:var(--fs-sm) var(--sans); padding:4px 8px; max-width:260px;
+  }
+  .erow[data-on="false"] select, .erow[data-on="false"] input:not([type="checkbox"]) { display:none; }
+  .erow .inherited { color:var(--text3); font-size:var(--fs-sm); font-style:italic; }
+  .erow[data-on="true"] .inherited { display:none; }
+  .editor-foot { display:flex; gap:var(--space-2); padding:var(--space-3) var(--space-4); }
+
+  /* ---- annotations ---- */
+  .notes { display:flex; flex-direction:column; gap:var(--space-2); margin-top:var(--space-3); }
+  .note { display:flex; gap:var(--space-2); color:var(--text2); font-size:var(--fs-sm); max-width:72ch; }
+  .note .n {
+    flex:none; width:18px; height:18px; border-radius:50%; background:var(--info-soft); color:var(--info-fg);
+    display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-chip); font-weight:700;
+  }
+  .marker {
+    display:inline-flex; width:18px; height:18px; border-radius:50%; background:var(--info-soft); color:var(--info-fg);
+    align-items:center; justify-content:center; font-size:var(--fs-chip); font-weight:700; vertical-align:2px; margin-left:6px;
+  }
+  @media (prefers-reduced-motion: reduce) { .toast, .pcard { transition:none; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="intro">
+    <h1>Profiles, rethought — switch fast, see what changed</h1>
+    <p>A profile is a named bundle of settings overrides. Today it can't hold settings (create ships an
+    empty bundle), nothing records which one is active, and activation is invisible. This mockup fixes all
+    three: profiles live in <b>General</b> where you already are, switching previews its diff before it
+    applies, and the editor makes "override vs. inherit" explicit per field. Interactive — click the
+    profile cards.</p>
+  </header>
+
+  <!-- ============ 1. GENERAL TAB ============ -->
+  <section class="mock">
+    <div class="mock-title"><span class="where">Settings · General</span><span class="what">profile switcher — first block on the tab</span></div>
+    <div class="mock-body">
+      <div class="fieldlabel">Profile</div>
+      <div class="switcher" id="switcher" role="radiogroup" aria-label="Active profile"></div>
+
+      <div class="diff" id="diff" hidden>
+        <div class="diff-head">
+          Switch to “<span id="diff-name"></span>”?<span class="marker">2</span>
+          <div class="sub">Only these settings change — everything else stays as it is now.</div>
+        </div>
+        <table id="diff-rows"></table>
+        <div class="keeps" id="diff-keeps"></div>
+        <div class="diff-actions">
+          <button class="btn btn-primary" id="diff-apply">Switch profile</button>
+          <button class="btn btn-ghost" id="diff-cancel">Cancel</button>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="note"><span class="n">1</span><span>The active profile is tracked (new <code>active_profile_id</code> on Config) and marked. Cards show each profile's overrides as chips — a profile is legible at a glance, before touching it. If you hand-edit a setting the profile pins, the badge turns <b>MODIFIED</b> — the amber state on “Focused review” — so drift is visible, never silent.</span></div>
+        <div class="note"><span class="n">2</span><span>Clicking a profile never fires blind: a diff preview lists exactly the fields that will change, current → new, and says how many pinned fields already match. Apply, or Escape/Cancel out.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. MANAGEMENT ============ -->
+  <section class="mock">
+    <div class="mock-title"><span class="where">Settings · Profiles</span><span class="what">management — list, capture, editor</span></div>
+    <div class="mock-body">
+      <div class="mrow">
+        <div class="grow">
+          <div class="pname">Claude Home <span class="badge active">ACTIVE</span></div>
+          <div class="chips">
+            <span class="chip">provider <b>claude-code</b></span>
+            <span class="chip">model tier <b>sonnet</b></span>
+            <span class="chip">concurrency <b>5</b></span>
+            <span class="chip">workspace <b>~/repo/mads</b></span>
+          </div>
+        </div>
+        <div class="rowactions"><button class="iconbtn">Edit</button><button class="iconbtn">Duplicate</button></div>
+      </div>
+      <div class="mrow">
+        <div class="grow">
+          <div class="pname">Cheap &amp; wide</div>
+          <div class="chips">
+            <span class="chip">model tier <b>haiku</b></span>
+            <span class="chip">concurrency <b>5</b></span>
+            <span class="chip">synthesis <b>off</b></span>
+          </div>
+        </div>
+        <div class="rowactions"><button class="iconbtn">Edit</button><button class="iconbtn">Duplicate</button><button class="iconbtn">Delete</button></div>
+      </div>
+      <div class="mrow">
+        <div class="grow">
+          <div class="pname">Focused review <span class="badge system">SYSTEM</span></div>
+          <div class="chips">
+            <span class="chip">template <b>review-only</b></span>
+            <span class="chip">trust <b>restricted</b></span>
+            <span class="chip">concurrency <b>1</b></span>
+          </div>
+        </div>
+        <div class="rowactions"><button class="iconbtn">Edit</button><button class="iconbtn">Duplicate</button></div>
+      </div>
+
+      <div class="capture">
+        <button class="btn btn-ghost">＋ Save current settings as profile…</button>
+        <span>the fastest way to author one: capture what you have, uncheck what shouldn't be pinned<span class="marker">3</span></span>
+      </div>
+
+      <!-- editor -->
+      <div class="editor">
+        <div class="editor-head">
+          <input value="Cheap &amp; wide" aria-label="Profile name">
+          <span class="hint">Checked = this profile pins the field. Unchecked = inherit whatever is set globally.<span class="marker">4</span></span>
+        </div>
+        <div class="erow" data-on="true">
+          <input type="checkbox" checked aria-label="Pin default model tier">
+          <label class="fname">Default model tier</label>
+          <select><option>haiku</option><option>sonnet</option><option>opus</option></select>
+        </div>
+        <div class="erow" data-on="true">
+          <input type="checkbox" checked aria-label="Pin concurrency limit">
+          <label class="fname">Concurrency limit</label>
+          <input type="number" value="5">
+        </div>
+        <div class="erow" data-on="true">
+          <input type="checkbox" checked aria-label="Pin synthesis mode">
+          <label class="fname">Synthesis mode</label>
+          <select><option>off</option><option>on</option><option>auto</option></select>
+        </div>
+        <div class="erow" data-on="false">
+          <input type="checkbox" aria-label="Pin default provider">
+          <label class="fname">Default provider</label>
+          <span class="inherited">inherits — currently claude-code</span>
+          <select><option>claude-code</option></select>
+        </div>
+        <div class="erow" data-on="false">
+          <input type="checkbox" aria-label="Pin default workspace">
+          <label class="fname">Default workspace</label>
+          <span class="inherited">inherits — currently ~/repo/mads</span>
+          <input type="text" value="~/repo/mads">
+        </div>
+        <div class="erow" data-on="false">
+          <input type="checkbox" aria-label="Pin default trust">
+          <label class="fname">Default trust</label>
+          <span class="inherited">inherits — currently standard</span>
+          <select><option>standard</option></select>
+        </div>
+        <div class="editor-foot">
+          <button class="btn btn-primary">Save profile</button>
+          <button class="btn btn-ghost">Cancel</button>
+        </div>
+      </div>
+
+      <div class="notes">
+        <div class="note"><span class="n">3</span><span>Creation is no longer an empty name+description form. “Save current settings as profile” opens this editor pre-filled from live Config with every field pinned; unchecking releases a field back to inherit. Blank-slate create uses the same editor with everything unchecked.</span></div>
+        <div class="note"><span class="n">4</span><span>The pin checkbox is the whole mental model: a profile is only the checked rows. Unchecked rows show the value they'd currently inherit, in italics, so “what does activating this actually do” is answerable while editing. Chips on the cards above are exactly the checked rows.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="toast" id="toast" role="status">
+    <span class="tick">✓</span><span id="toast-msg"></span>
+    <button class="undo" id="toast-undo">Undo</button>
+  </div>
+</div>
+
+<script>
+  // demo data: overrides per profile + the "current config" values they'd replace
+  const profiles = [
+    { id:"home",  name:"Claude Home",   desc:"daily driver",            active:true,
+      chips:{provider:"claude-code","model tier":"sonnet",concurrency:"5",workspace:"~/repo/mads"} },
+    { id:"cheap", name:"Cheap & wide",  desc:"haiku, parallel, no synthesis",
+      chips:{"model tier":"haiku",concurrency:"5",synthesis:"off"},
+      diff:[["Default model tier","sonnet","haiku"],["Synthesis mode","auto","off"]],
+      same:"concurrency 5 already matches" },
+    { id:"review", name:"Focused review", desc:"serial, restricted trust", drift:true,
+      chips:{template:"review-only",trust:"restricted",concurrency:"1"},
+      diff:[["Default template","default-implementation","review-only"],["Default trust","standard","restricted"],["Concurrency limit","5","1"]],
+      same:null },
+  ];
+  const switcher = document.getElementById("switcher");
+  const diff = document.getElementById("diff");
+  let pending = null;
+
+  function render() {
+    switcher.innerHTML = "";
+    for (const p of profiles) {
+      const b = document.createElement("button");
+      b.className = "pcard"; b.type = "button"; b.role = "radio";
+      b.dataset.active = !!p.active; b.dataset.drift = !p.active && false || (!!p.drift && !!p.active);
+      b.setAttribute("aria-checked", !!p.active);
+      b.innerHTML = `<div class="pname">${p.name}</div><div class="pdesc">${p.desc}</div>
+        <div class="chips">${Object.entries(p.chips).map(([k,v])=>`<span class="chip">${k} <b>${v}</b></span>`).join("")}</div>`;
+      b.addEventListener("click", () => preview(p));
+      switcher.appendChild(b);
+    }
+  }
+  function preview(p) {
+    if (p.active) { diff.hidden = true; return; }
+    pending = p;
+    document.getElementById("diff-name").textContent = p.name;
+    document.getElementById("diff-rows").innerHTML = (p.diff||[]).map(([f,a,b]) =>
+      `<tr><td class="f">${f}</td><td class="from">${a}</td><td class="arrow">→</td><td class="to">${b}</td></tr>`).join("");
+    document.getElementById("diff-keeps").textContent = p.same ? `Already matching: ${p.same}.` : "";
+    document.getElementById("diff-keeps").style.display = p.same ? "" : "none";
+    diff.hidden = false;
+    document.getElementById("diff-apply").focus();
+  }
+  document.getElementById("diff-cancel").addEventListener("click", () => { diff.hidden = true; pending = null; });
+  document.addEventListener("keydown", e => { if (e.key === "Escape") { diff.hidden = true; pending = null; } });
+  document.getElementById("diff-apply").addEventListener("click", () => {
+    if (!pending) return;
+    profiles.forEach(p => { p.active = (p === pending); p.drift = false; });
+    const n = (pending.diff||[]).length;
+    document.getElementById("toast-msg").textContent = `Switched to “${pending.name}” — ${n} setting${n===1?"":"s"} changed`;
+    diff.hidden = true; pending = null;
+    render();
+    const t = document.getElementById("toast");
+    t.classList.add("show");
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 4200);
+  });
+  document.getElementById("toast-undo").addEventListener("click", () => {
+    profiles.forEach(p => p.active = p.id === "home");
+    render(); document.getElementById("toast").classList.remove("show");
+  });
+  // demo the drift badge on the initially-active card? no — keep initial state honest: drift shown on "Focused review" via note only when active.
+  render();
+  // pin-checkbox demo wiring in the editor
+  for (const row of document.querySelectorAll(".erow")) {
+    row.querySelector("input[type=checkbox]").addEventListener("change", e => { row.dataset.on = e.target.checked; });
+  }
+</script>
+</body>
+</html>
