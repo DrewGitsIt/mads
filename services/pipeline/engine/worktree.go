@@ -593,3 +593,28 @@ func (w *worktrees) remove(ctx context.Context, dir, branch string) {
 	_, _ = w.git(ctx, w.primary, "worktree", "remove", "--force", dir)
 	_, _ = w.git(ctx, w.primary, "branch", "-D", branch)
 }
+
+// backupBranch force-updates backup/<taskID> to the current head of the
+// task's branch (mads/<taskID>), if that branch exists. This is the salvage
+// net for a block: create (above) deliberately wipes a reclaimed task's
+// worktree and branch before starting fresh, so anything not backed up
+// before the block is lost the moment the task gets requeued and claimed
+// again. Reports whether a branch existed to back up — false is the common
+// case for a task that blocked before ever creating a worktree (e.g. the
+// scheduler's cycle rejection), not an error.
+func (w *worktrees) backupBranch(ctx context.Context, taskID string) bool {
+	branch := "mads/" + taskID
+	if _, err := w.git(ctx, w.primary, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		return false
+	}
+	_, err := w.git(ctx, w.primary, "branch", "--force", "backup/"+taskID, branch)
+	return err == nil
+}
+
+// deleteBackupBranch removes backup/<taskID> if present — stale-backup
+// hygiene once a task's work has actually landed, mirroring what shepherds
+// were doing by hand. Best-effort: no backup branch is the common case, not
+// an error.
+func (w *worktrees) deleteBackupBranch(ctx context.Context, taskID string) {
+	_, _ = w.git(ctx, w.primary, "branch", "-D", "backup/"+taskID)
+}
