@@ -13,17 +13,25 @@ describe("restartRequired", () => {
     expect(dirty).toEqual([]);
   });
 
-  it("flags feature_flags by deep value, not reference", () => {
+  it("flags a changed synthesis_debounce_ms", () => {
+    const dirty = dirtyRestartFields(fixtureConfig, {
+      ...fixtureConfig,
+      synthesis_debounce_ms: fixtureConfig.synthesis_debounce_ms + 500,
+    });
+    expect(dirty).toEqual(["synthesis_debounce_ms"]);
+  });
+
+  it("does not flag feature_flags — it applies live, unlike Go's canonical restart set", () => {
     const dirty = dirtyRestartFields(fixtureConfig, {
       ...fixtureConfig,
       feature_flags: { ...fixtureConfig.feature_flags, multi_repo: true },
     });
-    expect(dirty).toEqual(["feature_flags"]);
+    expect(dirty).toEqual([]);
   });
 
-  it("only classifies the documented fields as restart-required", () => {
+  it("only classifies the documented fields as restart-required (mirrors pkg/contracts/config.go RestartRequiredFields)", () => {
     expect([...RESTART_REQUIRED_FIELDS].sort()).toEqual(
-      ["concurrency_limit", "feature_flags", "log_retention_days"].sort(),
+      ["concurrency_limit", "log_retention_days", "synthesis_debounce_ms"].sort(),
     );
   });
 });

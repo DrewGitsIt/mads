@@ -306,6 +306,7 @@ function SessionRow({
           {menuOpen && (
             <SessionActionsMenu
               className={styles.rowMenu}
+              sessionId={session.id}
               activity={session.activity}
               onClose={() => {
                 setMenuOpen(false);

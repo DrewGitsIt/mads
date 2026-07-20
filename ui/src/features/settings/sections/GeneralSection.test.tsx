@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GeneralPanel } from "./GeneralPanel";
+import { GeneralSection } from "./GeneralSection";
 import { fixtureConfig, fixturePreflightChecks } from "../../../router/fixtures";
 import type { UseConfig } from "../state/useConfig";
 
@@ -19,7 +19,7 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   };
 }
 
-describe("GeneralPanel", () => {
+describe("GeneralSection", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -30,7 +30,7 @@ describe("GeneralPanel", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
     const config = makeConfig({ dirtyRestartFields: ["concurrency_limit"] });
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     expect(screen.getByText(/restart required/i)).toBeTruthy();
   });
 
@@ -40,7 +40,7 @@ describe("GeneralPanel", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
     const config = makeConfig({ dirtyRestartFields: [] });
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     expect(screen.queryByText(/restart required/i)).toBeNull();
   });
 
@@ -55,7 +55,7 @@ describe("GeneralPanel", () => {
         log_retention_days: "must be at least 1",
       },
     });
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     expect(screen.getAllByText("must be at least 1")).toHaveLength(2);
   });
 
@@ -65,7 +65,7 @@ describe("GeneralPanel", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
     const config = makeConfig();
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     fireEvent.change(screen.getByLabelText(/concurrency limit/i), { target: { value: "5" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ concurrency_limit: 5 }));
   });
@@ -75,7 +75,7 @@ describe("GeneralPanel", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
-    render(<GeneralPanel config={makeConfig()} />);
+    render(<GeneralSection config={makeConfig()} />);
     expect((screen.getByLabelText(/default workspace/i) as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText(/default provider/i) as HTMLInputElement).value).toBe("");
   });
@@ -86,7 +86,7 @@ describe("GeneralPanel", () => {
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
     const config = makeConfig();
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     fireEvent.change(screen.getByLabelText(/default workspace/i), { target: { value: "ws-1" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_workspace: "ws-1" }));
     fireEvent.change(screen.getByLabelText(/default provider/i), { target: { value: "claude-code" } });
@@ -101,9 +101,23 @@ describe("GeneralPanel", () => {
     const config = makeConfig({
       draft: { ...fixtureConfig, default_workspace: "ws-1", default_provider: "claude-code" },
     });
-    render(<GeneralPanel config={config} />);
+    render(<GeneralSection config={config} />);
     fireEvent.click(screen.getByText("Save"));
     await waitFor(() => expect(config.save).toHaveBeenCalled());
+  });
+
+  it("renders synthesis_debounce_ms and edits call setDraft with the new value", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    const config = makeConfig();
+    render(<GeneralSection config={config} />);
+    expect((screen.getByLabelText(/synthesis debounce/i) as HTMLInputElement).value).toBe(
+      String(fixtureConfig.synthesis_debounce_ms),
+    );
+    fireEvent.change(screen.getByLabelText(/synthesis debounce/i), { target: { value: "3000" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ synthesis_debounce_ms: 3000 }));
   });
 
   it("renders preflight checks from usePreflight", async () => {
@@ -111,7 +125,7 @@ describe("GeneralPanel", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
-    render(<GeneralPanel config={makeConfig()} />);
+    render(<GeneralSection config={makeConfig()} />);
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
   });
 
@@ -120,7 +134,7 @@ describe("GeneralPanel", () => {
       "fetch",
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
     );
-    render(<GeneralPanel config={makeConfig()} />);
+    render(<GeneralSection config={makeConfig()} />);
     await waitFor(() => expect(screen.getByText("provider:claude-code")).toBeTruthy());
     expect(screen.getByText("install Claude Code and ensure `claude` is on PATH")).toBeTruthy();
   });
