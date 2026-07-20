@@ -23,6 +23,7 @@
 }
 
 .row {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
@@ -106,112 +107,70 @@
   font: 500 var(--fs-chip) var(--sans);
 }
 
-.resumeAffordance {
-  flex: none;
-  opacity: 0.65;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  color: var(--text2);
-  padding: 2px 7px;
-  cursor: pointer;
-  font: 500 var(--fs-chip) var(--sans);
+.actionCluster {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 24px;
+  padding-right: var(--space-2);
+  background: linear-gradient(90deg, transparent, var(--bg2) 40%);
+  opacity: 0;
+  transform: translateX(8px);
   transition:
-    opacity 0.15s,
-    background-color 0.15s,
-    color 0.15s;
+    opacity 0.14s ease-out,
+    transform 0.14s ease-out;
 }
 
-.row:hover .resumeAffordance,
-.row:focus-within .resumeAffordance {
+.row:hover .actionCluster,
+.row:focus-within .actionCluster {
   opacity: 1;
+  transform: translateX(0);
 }
 
-.resumeAffordance:hover {
-  color: var(--text);
-  background: var(--bg3);
-}
-
-.resumeAffordance:focus-visible {
-  opacity: 1;
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.rowMenuWrap {
+.actionButton {
   flex: none;
-  position: relative;
-}
-
-.rowMenuTrigger {
-  flex: none;
-  opacity: 0.55;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  background: transparent;
-  border: 1px solid transparent;
+  background: var(--bg2);
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
   color: var(--text2);
   cursor: pointer;
-  font: 500 var(--fs-sm) var(--sans);
+  font-size: 12px;
+  line-height: 1;
   transition:
-    opacity 0.15s,
     background-color 0.15s,
     border-color 0.15s,
     color 0.15s;
 }
 
-.row:hover .rowMenuTrigger,
-.row:focus-within .rowMenuTrigger {
-  opacity: 1;
-}
-
-.rowMenuTrigger:hover {
-  opacity: 1;
+.actionButton:hover {
   color: var(--text);
-  background: var(--bg3);
-  border-color: var(--line);
+  background: var(--bg4);
 }
 
-.rowMenuTrigger:focus-visible {
-  opacity: 1;
+.actionButton:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-.rowMenu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  margin-top: var(--space-1);
-  z-index: 10;
-  box-shadow: var(--shadow);
-  width: 180px;
+.actionButton[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent);
 }
 
-.checkboxWrap {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  margin-top: 3px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.row:hover .checkboxWrap,
-.row:focus-within .checkboxWrap,
-.checkboxVisible {
-  opacity: 1;
-}
-
-.checkboxWrap input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--accent);
-  cursor: pointer;
+.actionButtonDanger:hover {
+  color: var(--bad-fg);
+  background: var(--bad-soft);
+  border-color: var(--bad);
 }
 
 .linkBadge {
