@@ -4,10 +4,13 @@
 
 export type SessionActivity = "active" | "inactive";
 export type SessionTrust = "full" | "limited" | "read_only";
+export type SessionNameSource = "derived" | "user" | "generated";
 
 export interface Session {
   id: string;
   name: string;
+  /** Whether `name` is still a placeholder the auto-title job may replace ("derived"), or claimed ("user"/"generated"). */
+  name_source?: SessionNameSource;
   activity: SessionActivity;
   workspace?: string;
   provider?: string;

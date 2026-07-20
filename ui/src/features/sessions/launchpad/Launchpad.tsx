@@ -14,14 +14,15 @@ import type { StagedConfig } from "./pills/stagedConfig";
 import { SuggestionChips } from "./SuggestionChips";
 import styles from "./Launchpad.module.css";
 
-const MAX_NAME_LENGTH = 60;
-
-/** Backend requires a non-empty Session.Name with no server-side derivation — derive one from the first line of the composer text. */
+/**
+ * Backend requires a non-empty Session.Name with no server-side derivation —
+ * derive one from the first line of the composer text, stored in full. The
+ * header and rail truncate long names with CSS, not by cutting the stored
+ * string; the router job (services/router/internal/job/title.go) replaces
+ * this placeholder with a generated title after the session's first turn.
+ */
 export function deriveSessionName(text: string): string {
-  const firstLine = text.trim().split("\n")[0];
-  return firstLine.length > MAX_NAME_LENGTH
-    ? `${firstLine.slice(0, MAX_NAME_LENGTH)}…`
-    : firstLine;
+  return text.trim().split("\n")[0];
 }
 
 export interface LaunchpadProps {
@@ -58,6 +59,7 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
     try {
       const session = await createSession({
         name: deriveSessionName(trimmed),
+        name_source: "derived",
         workspace: staged.workspace,
         agent: staged.agent,
         provider: staged.provider,
