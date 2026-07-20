@@ -1294,7 +1294,7 @@ export const fixtureProfile: Profile = {
   id: "prf_focus",
   name: "focus-mode",
   description: "Fewer distractions, cheaper model tier",
-  settings: { default_model_tier: "cheapest", concurrency_limit: 1 },
+  snapshot: { default_model_tier: "cheapest", concurrency_limit: 1 },
   created_at: "2026-07-14T00:00:00Z",
   updated_at: "2026-07-14T00:00:00Z",
 };

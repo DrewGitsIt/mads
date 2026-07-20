@@ -133,6 +133,27 @@ type Config struct {
 	// Empty means the update-check feature is off — no releases exist yet, so
 	// an empty default is the honest starting state.
 	UpdateFeedURL string `json:"update_feed_url,omitempty"`
+
+	// ActiveProfileID is the currently active profile, empty if none
+	// (profiles-v2). Install state, not itself part of any profile snapshot —
+	// set by profile activation, alongside the captured fields it restores.
+	ActiveProfileID string `json:"active_profile_id,omitempty"`
+
+	// CredentialBindings is the live set of credential NAMES active for this
+	// install (profiles-v2, spec §13 — names only, values never cross into
+	// the Data Service). Empty/absent means "all stored credentials active"
+	// (backward compatible with pre-profiles-v2 installs).
+	CredentialBindings []string `json:"credential_bindings,omitempty"`
+}
+
+// RestartRequiredFields lists Config JSON field names whose change only
+// takes effect after a service restart (profiles-v2 switch UX): used to
+// badge a profile switch's restart-required fields separately from the ones
+// that apply live.
+var RestartRequiredFields = map[string]bool{
+	"concurrency_limit":     true,
+	"log_retention_days":    true,
+	"synthesis_debounce_ms": true,
 }
 
 // DefaultConfig is the config a fresh install starts with, before the

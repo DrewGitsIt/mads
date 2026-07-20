@@ -25,7 +25,7 @@ export function ProfilesPanel({ config }: ProfilesPanelProps) {
     await profiles.create({
       name: name.trim(),
       description: description.trim() || undefined,
-      settings: {},
+      snapshot: {},
     });
     setName("");
     setDescription("");

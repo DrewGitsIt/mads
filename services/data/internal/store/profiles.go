@@ -27,15 +27,6 @@ func NewProfiles(log *Log) *Registry[contracts.Profile] {
 			if p.Name == "" {
 				v.Add("name", "required")
 			}
-			if p.Settings.SynthesisMode != "" && !p.Settings.SynthesisMode.Valid() {
-				v.Add("settings.synthesis_mode", fmt.Sprintf("unknown synthesis mode %q", p.Settings.SynthesisMode))
-			}
-			if p.Settings.AgentSelectionMode != "" && !p.Settings.AgentSelectionMode.Valid() {
-				v.Add("settings.agent_selection_mode", fmt.Sprintf("unknown agent selection mode %q", p.Settings.AgentSelectionMode))
-			}
-			if p.Settings.DefaultModelTier != "" && !p.Settings.DefaultModelTier.Valid() {
-				v.Add("settings.default_model_tier", fmt.Sprintf("unknown model tier %q", p.Settings.DefaultModelTier))
-			}
 			if v.Empty() {
 				return nil
 			}
@@ -44,8 +35,8 @@ func NewProfiles(log *Log) *Registry[contracts.Profile] {
 	}
 }
 
-// ActivateProfile merges a profile's non-zero ProfileSettings fields onto
-// the current Config and persists the result, all in one transaction —
+// ActivateProfile restores a profile's captured snapshot fields onto the
+// current Config and persists the result, all in one transaction —
 // activation is a single atomic config change, not a separate profile
 // event plus a config event racing other writers.
 func ActivateProfile(ctx context.Context, log *Log, profileID, actor string) (*contracts.Config, error) {
@@ -73,14 +64,18 @@ func ActivateProfile(ctx context.Context, log *Log, profileID, actor string) (*c
 			return fmt.Errorf("config: corrupt data: %w", err)
 		}
 
-		mergeSettings(&cfg, &profile.Settings)
-		if verr := contracts.ValidateConfig(&cfg); !verr.Empty() {
+		applied, err := contracts.ApplySnapshot(&cfg, profile.Snapshot)
+		if err != nil {
+			return fmt.Errorf("profiles: apply snapshot: %w", err)
+		}
+		applied.ActiveProfileID = profile.ID
+		if verr := contracts.ValidateConfig(applied); !verr.Empty() {
 			return verr
 		}
-		if err := writeConfig(tx, &cfg, actor); err != nil {
+		if err := writeConfig(tx, applied, actor); err != nil {
 			return err
 		}
-		merged = cfg
+		merged = *applied
 		return nil
 	})
 	if err != nil {
@@ -89,33 +84,17 @@ func ActivateProfile(ctx context.Context, log *Log, profileID, actor string) (*c
 	return &merged, nil
 }
 
-// mergeSettings overlays every non-zero field of s onto cfg.
-func mergeSettings(cfg *contracts.Config, s *contracts.ProfileSettings) {
-	if s.SynthesisMode != "" {
-		cfg.SynthesisMode = s.SynthesisMode
+// CaptureConfigSnapshot reads the current Config and captures it into a
+// sparse profile snapshot (profiles-v2 "save current settings as profile" /
+// "update profile" capture path).
+func CaptureConfigSnapshot(ctx context.Context, log *Log) (contracts.ProfileSnapshot, error) {
+	var data string
+	if err := log.db.QueryRowContext(ctx, "SELECT data FROM config WHERE id = 1").Scan(&data); err != nil {
+		return nil, fmt.Errorf("config: get: %w", err)
 	}
-	if s.AgentSelectionMode != "" {
-		cfg.AgentSelectionMode = s.AgentSelectionMode
+	var cfg contracts.Config
+	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
+		return nil, fmt.Errorf("config: corrupt data: %w", err)
 	}
-	if s.DefaultModelTier != "" {
-		cfg.DefaultModelTier = s.DefaultModelTier
-	}
-	if s.DefaultWorkspace != "" {
-		cfg.DefaultWorkspace = s.DefaultWorkspace
-	}
-	if s.DefaultProvider != "" {
-		cfg.DefaultProvider = s.DefaultProvider
-	}
-	if s.DefaultTrust != "" {
-		cfg.DefaultTrust = s.DefaultTrust
-	}
-	if s.DefaultTemplate != "" {
-		cfg.DefaultTemplate = s.DefaultTemplate
-	}
-	if s.FastModel != "" {
-		cfg.FastModel = s.FastModel
-	}
-	if s.ConcurrencyLimit != 0 {
-		cfg.ConcurrencyLimit = s.ConcurrencyLimit
-	}
+	return contracts.SnapshotConfig(&cfg)
 }

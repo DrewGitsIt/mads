@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -219,7 +220,7 @@ func freshInstall(t *testing.T) (madsPath, home string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg != contracts.DefaultConfig() {
+	if !reflect.DeepEqual(cfg, contracts.DefaultConfig()) {
 		t.Fatalf("first-run config = %+v, want DefaultConfig()", cfg)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, "mads.db")); err != nil {

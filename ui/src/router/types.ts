@@ -579,28 +579,25 @@ export interface Config {
   feature_flags: FeatureFlags;
 
   onboarding_complete: boolean;
+  update_feed_url?: string;
+
+  // active_profile_id/credential_bindings mirror pkg/contracts/config.go
+  // (profiles-v2). credential_bindings holds NAMES only — never values.
+  active_profile_id?: string;
+  credential_bindings?: string[];
 }
 
-// mirrors pkg/contracts/profile.go ProfileSettings — only the fields a
-// profile can override; zero/absent means "leave the current config alone".
-export interface ProfileSettings {
-  synthesis_mode?: SynthesisMode;
-  agent_selection_mode?: AgentSelectionMode;
-  default_model_tier?: ModelTier;
-  default_workspace?: string;
-  default_provider?: string;
-  default_trust?: SessionTrust;
-  default_template?: string;
-  fast_model?: string;
-  concurrency_limit?: number;
-}
+// mirrors pkg/contracts/profile.go ProfileSnapshot — a sparse, per-field
+// capture of Config, keyed by Config's own JSON field names. Present only
+// for fields captured at save time.
+export type ProfileSnapshot = Record<string, unknown>;
 
 // mirrors pkg/contracts/profile.go Profile
 export interface Profile {
   id: string;
   name: string;
   description?: string;
-  settings: ProfileSettings;
+  snapshot: ProfileSnapshot;
   system?: boolean;
   created_at: string;
   updated_at: string;
