@@ -144,11 +144,16 @@ export function ConversationTab({
     // from. A single read on mount, never a switch: a dormant session with
     // no live child (and so no transport history) answers "chat", which is
     // already this effect's default above, so a failed/degenerate lookup
-    // just leaves that default standing.
+    // just leaves that default standing. The mode is validated rather than
+    // trusted blindly, so an unexpected response shape (e.g. a route that
+    // doesn't exist yet against a plain test fetch mock) degrades to that
+    // same default instead of forcing the tab into a broken non-chat state.
     void routerClient
       .getTransportMode(sessionId)
       .then(({ mode }) => {
-        if (!cancelled) setTransport({ status: "idle", mode });
+        if (!cancelled && (mode === "chat" || mode === "terminal")) {
+          setTransport({ status: "idle", mode });
+        }
       })
       .catch(() => {});
     return () => {
