@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -202,6 +203,34 @@ func waitForTranscriptLen(t *testing.T, ctx context.Context, r *Runner, n int) [
 	}
 }
 
+// switchTransportWhenIdle retries SwitchTransport past ErrSwitchBusy. In PTY
+// mode, busy is cleared by the events-draining goroutine in pumpPTY, a
+// different goroutine than the one recording the fake provider's transcript
+// history (providers/fake's finish records history, then emits EventTurnEnd,
+// which pumpPTY's goroutine then consumes to clear busy) — so
+// waitForTranscriptLen observing the new transcript length doesn't imply
+// busy has been cleared yet. Retrying here, rather than in production code,
+// keeps the deliberate busy-then-digest ordering in onTurnEnd intact (see
+// its doc).
+func switchTransportWhenIdle(t *testing.T, ctx context.Context, r *Runner, mode provider.Mode) string {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		ref, err := r.SwitchTransport(ctx, mode)
+		if err == nil {
+			return ref
+		}
+		if !errors.Is(err, ErrSwitchBusy) {
+			t.Fatalf("switch transport: %v", err)
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for turn to clear before switching transport")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 // TestSwitchTransportPreservesRef is the acceptance test for the core
 // design: chat, terminal, and a subsequent chat turn all land on the same
 // provider ref and appear in the shared transcript in order.
@@ -266,10 +295,7 @@ func TestSwitchTransportPreservesRef(t *testing.T) {
 	}
 	waitForTranscriptLen(t, ctx, r, 4)
 
-	ref2, err := r.SwitchTransport(ctx, provider.ModeACP)
-	if err != nil {
-		t.Fatalf("switch to chat: %v", err)
-	}
+	ref2 := switchTransportWhenIdle(t, ctx, r, provider.ModeACP)
 	if ref2 != ref1 {
 		t.Fatalf("ref changed across switches: terminal=%q chat=%q, want equal", ref1, ref2)
 	}

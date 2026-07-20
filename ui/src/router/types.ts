@@ -220,6 +220,16 @@ export interface ToolUse {
   name: string;
   input?: unknown; // json.RawMessage
   path?: string;
+  // result is attached client-side (toolPairing.ts's foldToolResults) by
+  // correlating a "tool_result" TranscriptMessage back to this tool_use by
+  // ID — never present on the wire shape itself.
+  result?: ToolResult;
+}
+
+export interface ToolResult {
+  text?: string;
+  is_error?: boolean;
+  timestamp?: string; // RFC3339
 }
 
 // mirrors providers/provider/event.go Usage
@@ -244,6 +254,7 @@ export interface TranscriptMessage {
   tool?: ToolUse;
   attribution?: Attribution;
   timestamp?: string; // RFC3339, when the provider recorded this entry
+  is_error?: boolean; // set on role "tool_result" when the tool call failed
 }
 
 // mirrors pkg/contracts/link.go Grant
