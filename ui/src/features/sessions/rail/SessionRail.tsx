@@ -22,6 +22,12 @@ export interface SessionRailProps {
   className?: string;
 }
 
+/** Link mode: anchor session (chosen by clicking a card's link action) plus every session tapped in after it. */
+interface LinkModeState {
+  anchorId: string;
+  selectedIds: Set<string>;
+}
+
 export function SessionRail({
   sessions,
   openTaskCounts,
@@ -36,7 +42,7 @@ export function SessionRail({
   const linkedSessionsEnabled = FLAGS.linkedSessions;
   const { active, recent } = groupSessions(sessions);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
-  const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
+  const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
   const [unlinkTarget, setUnlinkTarget] = useState<{ linkId: string; name: string }>();
 
@@ -44,25 +50,41 @@ export function SessionRail({
   const graph = computeRailLinks(linkedSessionsEnabled ? links : []);
   const activeRows = buildRailRows(active, allSessionsById, graph);
   const recentRows = buildRailRows(recent, allSessionsById, graph);
+  const anchorWorkspace = linkMode ? allSessionsById.get(linkMode.anchorId)?.workspace : undefined;
 
-  function toggleChecked(id: string) {
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
+  function startLinkMode(id: string) {
+    setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
+  }
+
+  function toggleLinkSelection(id: string) {
+    setLinkMode((prev) => {
+      if (!prev) return prev;
+      const next = new Set(prev.selectedIds);
       if (next.has(id)) next.delete(id);
       else next.add(id);
-      return next;
+      return { ...prev, selectedIds: next };
     });
+  }
+
+  function cancelLinkMode() {
+    setLinkMode(undefined);
   }
 
   return (
     <div className={[styles.rail, className].filter(Boolean).join(" ")} aria-label="Session list">
-      {linkedSessionsEnabled && checkedIds.size >= 2 && (
+      {linkedSessionsEnabled && linkMode && (
         <div className={styles.linkBar}>
-          <button type="button" className={styles.linkBarAction} onClick={() => setChooserOpen(true)}>
-            Link {checkedIds.size} sessions…
+          <span className={styles.linkBarCount}>{linkMode.selectedIds.size} selected</span>
+          <button
+            type="button"
+            className={styles.linkBarAction}
+            disabled={linkMode.selectedIds.size < 2}
+            onClick={() => setChooserOpen(true)}
+          >
+            Choose mode
           </button>
-          <button type="button" className={styles.linkBarClear} onClick={() => setCheckedIds(new Set())}>
-            Clear
+          <button type="button" className={styles.linkBarCancel} onClick={cancelLinkMode}>
+            Cancel
           </button>
         </div>
       )}
@@ -82,8 +104,10 @@ export function SessionRail({
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
-              checkedIds={checkedIds}
-              onToggleChecked={toggleChecked}
+              linkMode={linkMode}
+              anchorWorkspace={anchorWorkspace}
+              onStartLinkMode={startLinkMode}
+              onToggleLinkSelection={toggleLinkSelection}
             />
           ))}
         </div>
@@ -102,8 +126,10 @@ export function SessionRail({
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
-              checkedIds={checkedIds}
-              onToggleChecked={toggleChecked}
+              linkMode={linkMode}
+              anchorWorkspace={anchorWorkspace}
+              onStartLinkMode={startLinkMode}
+              onToggleLinkSelection={toggleLinkSelection}
             />
           ))}
         </div>
@@ -127,15 +153,15 @@ export function SessionRail({
           onCancel={() => setUnlinkTarget(undefined)}
         />
       )}
-      {linkedSessionsEnabled && chooserOpen && (
+      {linkedSessionsEnabled && chooserOpen && linkMode && (
         <LinkChooserDialog
-          sessionIds={[...checkedIds]}
+          sessionIds={[...linkMode.selectedIds]}
           sessions={sessions}
           routerClient={routerClient}
           onClose={() => setChooserOpen(false)}
           onCreated={() => {
             setChooserOpen(false);
-            setCheckedIds(new Set());
+            setLinkMode(undefined);
           }}
         />
       )}
@@ -152,8 +178,10 @@ function RailRowGroup({
   onDeleteRequest,
   onUnlinkRequest,
   linkedSessionsEnabled,
-  checkedIds,
-  onToggleChecked,
+  linkMode,
+  anchorWorkspace,
+  onStartLinkMode,
+  onToggleLinkSelection,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, number>;
@@ -163,9 +191,13 @@ function RailRowGroup({
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
-  checkedIds: Set<string>;
-  onToggleChecked: (id: string) => void;
+  linkMode?: LinkModeState;
+  anchorWorkspace?: string;
+  onStartLinkMode: (id: string) => void;
+  onToggleLinkSelection: (id: string) => void;
 }) {
+  const isAnchor = linkMode?.anchorId === row.session.id;
+  const isCrossWorkspace = Boolean(linkMode) && !isAnchor && row.session.workspace !== anchorWorkspace;
   return (
     <>
       <SessionRow
@@ -177,8 +209,12 @@ function RailRowGroup({
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
         linkedSessionsEnabled={linkedSessionsEnabled}
-        linkChecked={checkedIds.has(row.session.id)}
-        onToggleChecked={onToggleChecked}
+        linkModeActive={Boolean(linkMode)}
+        isLinkAnchor={isAnchor}
+        isLinkCrossWorkspace={isCrossWorkspace}
+        isLinkSelected={linkMode?.selectedIds.has(row.session.id) ?? false}
+        onStartLinkMode={() => onStartLinkMode(row.session.id)}
+        onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
       />
       {linkedSessionsEnabled &&
         row.subjects.map((sub) => (
@@ -196,8 +232,12 @@ function RailRowGroup({
               onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
             }
             linkedSessionsEnabled={linkedSessionsEnabled}
-            linkChecked={checkedIds.has(sub.session.id)}
-            onToggleChecked={onToggleChecked}
+            linkModeActive={false}
+            isLinkAnchor={false}
+            isLinkCrossWorkspace={false}
+            isLinkSelected={false}
+            onStartLinkMode={() => {}}
+            onToggleLinkSelection={() => {}}
           />
         ))}
     </>
@@ -215,8 +255,12 @@ function SessionRow({
   nested,
   onUnlinkRequest,
   linkedSessionsEnabled,
-  linkChecked,
-  onToggleChecked,
+  linkModeActive,
+  isLinkAnchor,
+  isLinkCrossWorkspace,
+  isLinkSelected,
+  onStartLinkMode,
+  onToggleLinkSelection,
 }: {
   session: Session;
   openTaskCount: number;
@@ -228,8 +272,12 @@ function SessionRow({
   nested?: boolean;
   onUnlinkRequest?: () => void;
   linkedSessionsEnabled: boolean;
-  linkChecked: boolean;
-  onToggleChecked: (id: string) => void;
+  linkModeActive: boolean;
+  isLinkAnchor: boolean;
+  isLinkCrossWorkspace: boolean;
+  isLinkSelected: boolean;
+  onStartLinkMode: () => void;
+  onToggleLinkSelection: () => void;
 }) {
   const dot = dotState(session, openTaskCount);
   const name = session.name || "Untitled session";
@@ -242,18 +290,30 @@ function SessionRow({
     onSelect?.(session.id);
   }
 
+  function activateOrToggle() {
+    if (linkModeActive) {
+      if (isLinkAnchor || isLinkCrossWorkspace) return;
+      onToggleLinkSelection();
+      return;
+    }
+    activate();
+  }
+
   return (
     <div
       role="button"
-      tabIndex={0}
+      tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
+      aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
       className={[
         styles.row,
         selected ? styles.selected : "",
         nested ? styles.nestedRow : "",
+        linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
+        linkModeActive && isLinkCrossWorkspace ? styles.linkDimmed : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={activate}
+      onClick={activateOrToggle}
       onKeyDown={(e) => {
         // Ignore keydowns that bubbled up from a nested action button —
         // those are handled by the button itself and shouldn't also
@@ -261,7 +321,7 @@ function SessionRow({
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          activate();
+          activateOrToggle();
         }
       }}
     >
@@ -284,65 +344,81 @@ function SessionRow({
         </div>
       )}
       {showSummary && <div className={styles.summary}>{session.summary}</div>}
-      <div className={styles.actionCluster} role="group" aria-label={`${name} actions`}>
-        {isPaused && onResume && (
+      {linkModeActive ? (
+        <div className={styles.linkModeIndicator}>
+          {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}
+          {!isLinkAnchor && !isLinkCrossWorkspace && (
+            <input
+              type="checkbox"
+              className={styles.linkCheckbox}
+              checked={isLinkSelected}
+              readOnly
+              tabIndex={-1}
+              aria-label={
+                isLinkSelected ? `Remove ${name} from link selection` : `Add ${name} to link selection`
+              }
+            />
+          )}
+          {isLinkCrossWorkspace && <span className={styles.linkDimmedTag}>different workspace</span>}
+        </div>
+      ) : (
+        <div className={styles.actionCluster} role="group" aria-label={`${name} actions`}>
+          {isPaused && onResume && (
+            <button
+              type="button"
+              className={styles.actionButton}
+              title="Resume"
+              aria-label={`Resume ${name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onResume(session.id);
+              }}
+            >
+              ▶
+            </button>
+          )}
+          {linkedSessionsEnabled && !nested && (
+            <button
+              type="button"
+              className={styles.actionButton}
+              title="Link"
+              aria-label={`Add ${name} to link selection`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onStartLinkMode();
+              }}
+            >
+              🔗
+            </button>
+          )}
+          {linkedSessionsEnabled && nested && onUnlinkRequest && (
+            <button
+              type="button"
+              className={styles.actionButton}
+              title="Unlink"
+              aria-label={`Unlink ${name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onUnlinkRequest();
+              }}
+            >
+              ✕
+            </button>
+          )}
           <button
             type="button"
-            className={styles.actionButton}
-            title="Resume"
-            aria-label={`Resume ${name}`}
+            className={[styles.actionButton, styles.actionButtonDanger].join(" ")}
+            title="Archive"
+            aria-label={`Archive ${name}`}
             onClick={(e) => {
               e.stopPropagation();
-              onResume(session.id);
+              onDeleteRequest(session.id);
             }}
           >
-            ▶
+            🗑
           </button>
-        )}
-        {linkedSessionsEnabled && !nested && (
-          <button
-            type="button"
-            className={styles.actionButton}
-            title="Link"
-            aria-pressed={linkChecked}
-            aria-label={
-              linkChecked ? `Remove ${name} from link selection` : `Add ${name} to link selection`
-            }
-            onClick={(e) => {
-              e.stopPropagation();
-              onToggleChecked(session.id);
-            }}
-          >
-            🔗
-          </button>
-        )}
-        {linkedSessionsEnabled && nested && onUnlinkRequest && (
-          <button
-            type="button"
-            className={styles.actionButton}
-            title="Unlink"
-            aria-label={`Unlink ${name}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              onUnlinkRequest();
-            }}
-          >
-            ✕
-          </button>
-        )}
-        <button
-          type="button"
-          className={[styles.actionButton, styles.actionButtonDanger].join(" ")}
-          title="Archive"
-          aria-label={`Archive ${name}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDeleteRequest(session.id);
-          }}
-        >
-          🗑
-        </button>
-      </div>
+        </div>
+      )}
     </div>
   );
 }
