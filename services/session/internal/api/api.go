@@ -39,6 +39,9 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /transcript", s.handleTranscript)
 	mux.HandleFunc("POST /skills/{name}/inject", s.handleInjectSkill)
 	mux.HandleFunc("GET /capabilities/{name}/diagnose", s.handleDiagnoseCapability)
+	mux.HandleFunc("POST /permission-hook", s.handlePermissionHook)
+	mux.HandleFunc("GET /permission-requests", s.handlePermissionRequests)
+	mux.HandleFunc("POST /permission-requests/{id}/resolve", s.handleResolvePermission)
 	return mux
 }
 
@@ -302,6 +305,58 @@ func (s *server) handleDiagnoseCapability(w http.ResponseWriter, r *http.Request
 		"reason":      reason,
 		"suggestions": suggestions,
 	})
+}
+
+// handlePermissionHook is the callback the claude PreToolUse hook's `curl`
+// command blocks on (providers/claudecode/permission.go builds the exact
+// command line). The request body is claude's own PreToolUse JSON, piped
+// through unmodified by the hook's stdin — only tool_name/tool_input are
+// read here, the rest (session_id, transcript_path, cwd, permission_mode)
+// isn't needed since this process already knows all of that about itself.
+// The response body IS the hook's required stdout verbatim (the shell
+// command prints curl's output straight through), so its shape is
+// hookSpecificOutput.permissionDecision exactly, not this API's usual
+// {"error":...}/{"status":...} envelope.
+func (s *server) handlePermissionHook(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ToolName  string          `json:"tool_name"`
+		ToolInput json.RawMessage `json:"tool_input"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	decision := s.runner.RequestPermission(body.ToolName, body.ToolInput)
+	resp := map[string]any{
+		"hookSpecificOutput": map[string]string{"permissionDecision": decision},
+	}
+	if decision == "deny" {
+		resp["systemMessage"] = "Permission request was denied (or expired awaiting a response) via the chat UI."
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// handlePermissionRequests answers every still-pending permission request
+// for this session — a chat client reconciles this against its live-stream
+// state on transcript refetch, so a still-open card survives a reload
+// (acceptance criterion 3).
+func (s *server) handlePermissionRequests(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.runner.PermissionRequests())
+}
+
+// handleResolvePermission answers a pending permission request from the chat
+// UI's Allow/Deny card.
+func (s *server) handleResolvePermission(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Decision string `json:"decision"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !s.runner.ResolvePermission(r.PathValue("id"), body.Decision) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no pending permission request with that id"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // writeRunnerError maps the runner's sentinel errors onto this API's

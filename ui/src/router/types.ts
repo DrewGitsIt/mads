@@ -295,6 +295,19 @@ export interface LinkRequest {
   cadence?: LinkCadence;
 }
 
+// mirrors providers/provider/event.go PermissionRequest — one parked
+// PreToolUse hook call awaiting an allow/deny decision (chat transport only,
+// TrustLimited/TrustReadOnly). status starts "pending" and moves to
+// "allowed"/"denied"/"expired"; GET /sessions/{id}/permission-requests
+// returns only still-pending ones (services/session's PermissionRequests),
+// which is what lets a still-open card survive a transcript refetch.
+export interface PermissionRequest {
+  id: string;
+  tool: string;
+  input?: unknown; // json.RawMessage
+  status: "pending" | "allowed" | "denied" | "expired";
+}
+
 // mirrors providers/provider/event.go Event (normalized data-plane stream)
 export type StreamEvent =
   | { kind: "text"; text: string }
@@ -302,7 +315,8 @@ export type StreamEvent =
   | { kind: "turn_end"; usage?: Usage; interrupted?: boolean }
   | { kind: "error"; text: string }
   | { kind: "pty_output"; text: string }
-  | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean };
+  | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean }
+  | { kind: "permission_request"; permission: PermissionRequest };
 
 // mirrors pkg/contracts/session.go Session (fields this tab reads)
 

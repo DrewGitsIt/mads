@@ -35,6 +35,14 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		return nil, fmt.Errorf("mcp config: %w", err)
 	}
 	args = append(args, mcpArgVals...)
+	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL)
+	if err != nil {
+		if mcpConfigPath != "" {
+			_ = os.Remove(mcpConfigPath)
+		}
+		return nil, fmt.Errorf("permission hook settings: %w", err)
+	}
+	args = append(args, permArgVals...)
 	args = append(args, p.cfg.ExtraArgs...)
 
 	cmd := exec.Command(p.cfg.Bin, args...)
@@ -52,16 +60,20 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		if mcpConfigPath != "" {
 			_ = os.Remove(mcpConfigPath)
 		}
+		if permSettingsPath != "" {
+			_ = os.Remove(permSettingsPath)
+		}
 		return nil, fmt.Errorf("start %s: %w", p.cfg.Bin, err)
 	}
 
 	s := &streamSession{
-		cmd:           cmd,
-		stdin:         stdin,
-		events:        make(chan provider.Event, 256),
-		ref:           opts.Resume,
-		mcpConfigPath: mcpConfigPath,
-		announced:     make(chan string, 1),
+		cmd:              cmd,
+		stdin:            stdin,
+		events:           make(chan provider.Event, 256),
+		ref:              opts.Resume,
+		mcpConfigPath:    mcpConfigPath,
+		permSettingsPath: permSettingsPath,
+		announced:        make(chan string, 1),
 	}
 	if opts.Resume != "" {
 		s.refFired = true
@@ -73,9 +85,10 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 
 // streamSession owns one claude process on the structured transport.
 type streamSession struct {
-	cmd           *exec.Cmd
-	events        chan provider.Event
-	mcpConfigPath string
+	cmd              *exec.Cmd
+	events           chan provider.Event
+	mcpConfigPath    string
+	permSettingsPath string
 	// announced delivers ref exactly once — on Start for a resumed session,
 	// or from handleLine the moment the wire's system/init line carries a
 	// session_id (claude-code announces this at connect, before any turn:
@@ -235,6 +248,9 @@ func (s *streamSession) Close() error {
 	closeWait(s.cmd, 3*time.Second)
 	if s.mcpConfigPath != "" {
 		_ = os.Remove(s.mcpConfigPath)
+	}
+	if s.permSettingsPath != "" {
+		_ = os.Remove(s.permSettingsPath)
 	}
 	return nil
 }

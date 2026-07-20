@@ -21,6 +21,7 @@ import type {
   Model,
   Note,
   NoteType,
+  PermissionRequest,
   PipelineRun,
   PreflightCheck,
   Profile,
@@ -87,6 +88,15 @@ export interface RouterClient {
   // all). Used to initialize the display-mode toggle on mount, never as a
   // trigger for a switch.
   getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }>;
+  // Interactive permission prompts (Allow/Deny cards, chat transport only).
+  // getPermissionRequests reconstructs any still-open card on transcript
+  // refetch/mount (a resolved one is already known from the live stream).
+  getPermissionRequests(sessionId: string): Promise<PermissionRequest[]>;
+  resolvePermissionRequest(
+    sessionId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+  ): Promise<void>;
   terminalWrite(sessionId: string, data: string): Promise<void>;
   terminalResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
@@ -449,6 +459,22 @@ export class FetchRouterClient implements RouterClient {
 
   async getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/transport`);
+  }
+
+  async getPermissionRequests(sessionId: string): Promise<PermissionRequest[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/permission-requests`);
+  }
+
+  async resolvePermissionRequest(
+    sessionId: string,
+    requestId: string,
+    decision: "allow" | "deny",
+  ): Promise<void> {
+    await routerPost(
+      this.baseUrl,
+      `/sessions/${sessionId}/permission-requests/${requestId}/resolve`,
+      { decision },
+    );
   }
 
   // Raw bytes, not JSON-wrapped — the child's POST /input reads the

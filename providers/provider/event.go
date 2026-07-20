@@ -46,6 +46,14 @@ const (
 	// permission-blocked tool call instead of silently stalling — see
 	// providers/claudecode's wireLine.events() and its README.
 	EventToolResult EventKind = "tool_result"
+	// EventPermissionRequest — the provider's PreToolUse hook parked a tool
+	// call awaiting an allow/deny decision (chat transport only — see
+	// providers/claudecode's permission.go and README "Trust enforcement").
+	// Permission carries the request; the Runner (not the provider adapter)
+	// constructs and broadcasts this event directly from its HTTP hook
+	// handler, since the decision loop lives in the session service, not the
+	// provider process.
+	EventPermissionRequest EventKind = "permission_request"
 )
 
 // Event is one entry in a session's normalized stream.
@@ -64,6 +72,21 @@ type Event struct {
 	// IsError marks EventToolResult as the tool call having failed
 	// (including a permission denial) — mirrors Message.IsError below.
 	IsError bool `json:"is_error,omitempty"`
+	// Permission for EventPermissionRequest.
+	Permission *PermissionRequest `json:"permission,omitempty"`
+}
+
+// PermissionRequest is one parked PreToolUse hook call awaiting a decision.
+// ID correlates the eventual resolve call (POST
+// /permission-requests/{id}/resolve) back to the parked hook subprocess.
+type PermissionRequest struct {
+	ID    string          `json:"id"`
+	Tool  string          `json:"tool"`
+	Input json.RawMessage `json:"input,omitempty"`
+	// Status starts "pending" and moves to "allowed", "denied", or "expired"
+	// — carried on the event so a late subscriber (transcript refetch) can
+	// reconstruct a resolved card's final state, not just the open one.
+	Status string `json:"status"`
 }
 
 // ToolUse is a normalized tool invocation.

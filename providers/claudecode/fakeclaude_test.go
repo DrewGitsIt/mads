@@ -37,6 +37,7 @@ type fcArgs struct {
 	permissionMode  string
 	mcpConfigPath   string
 	strictMCPConfig bool
+	settingsPath    string
 }
 
 func parseFCArgs(argv []string) fcArgs {
@@ -68,6 +69,9 @@ func parseFCArgs(argv []string) fcArgs {
 			a.mcpConfigPath = argv[i]
 		case "--strict-mcp-config":
 			a.strictMCPConfig = true
+		case "--settings":
+			i++
+			a.settingsPath = argv[i]
 		case "--verbose", "--dangerously-skip-permissions":
 		case "--append-system-prompt":
 			i++
@@ -94,6 +98,21 @@ func fcMCPEcho(a fcArgs) string {
 // bypass flag reached the launched process on both transports.
 func fcPermissionEcho(a fcArgs) string {
 	return fmt.Sprintf("permission_mode=%s", a.permissionMode)
+}
+
+// fcSettingsEcho reads back the --settings file's raw contents ("none" when
+// the flag was never passed), so tests can assert the permission hook's
+// settings JSON — command string, URL, timeout — reached the launched
+// process, and that TrustFull/no-URL cases never pass --settings at all.
+func fcSettingsEcho(a fcArgs) string {
+	if a.settingsPath == "" {
+		return "settings=none"
+	}
+	raw, err := os.ReadFile(a.settingsPath)
+	if err != nil {
+		return fmt.Sprintf("settings_err=%v", err)
+	}
+	return "settings=" + string(raw)
 }
 
 // fcToolDenied reports whether name is in the parsed --disallowedTools list.
@@ -285,6 +304,13 @@ func fcStream(a fcArgs) {
 		}
 		if prompt == "permission-echo" {
 			reply := fcPermissionEcho(a)
+			fcEmit(fcAssistantText(id, reply))
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+			continue
+		}
+		if prompt == "settings-echo" {
+			reply := fcSettingsEcho(a)
 			fcEmit(fcAssistantText(id, reply))
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)

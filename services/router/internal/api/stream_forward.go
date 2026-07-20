@@ -117,6 +117,33 @@ func (s *server) handleSessionResize(w http.ResponseWriter, r *http.Request) {
 	s.proxyTo(w, r, addr, "/resize")
 }
 
+// handleSessionPermissionRequests and handleSessionResolvePermission forward
+// the chat permission-card control plane to the running session child's own
+// GET /permission-requests and POST /permission-requests/{id}/resolve
+// (services/session/internal/api/api.go). A session with no tracked child
+// has no pending requests to report by construction (the hook that would
+// have created one only runs from a live provider process), so — unlike the
+// plain proxies above — an absent child answers an empty list rather than
+// 404ing; resolving against one is still an error, since there is nothing
+// live to answer.
+func (s *server) handleSessionPermissionRequests(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusOK, []any{})
+		return
+	}
+	s.proxyTo(w, r, addr, "/permission-requests")
+}
+
+func (s *server) handleSessionResolvePermission(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/permission-requests/"+r.PathValue("reqId")+"/resolve")
+}
+
 // proxyTo reverse-proxies r to addr, rewriting the path to childPath —
 // shared by the streaming /output forwarders above and the JSON /messages
 // and /interrupt forwarders (httputil.ReverseProxy handles both request
