@@ -56,10 +56,16 @@ One process, one session — no `:id` in any path.
   A conflict is a structured, success-shaped response for the UI's resolution flow — not a
   failure status; the UI branches on `conflicted`, not the HTTP status.
 - `GET /output` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
-  Ephemeral: no replay/cursor, just whatever the connected UI catches live. Durable history
-  (transcript, activity) is the Data Service's job, not this stream's. Renamed from
-  `/stream`: this channel now carries both chat events and terminal pty output (see
-  `/transport` below), so the name shouldn't imply chat-only.
+  Ephemeral for chat events: no replay/cursor, just whatever the connected UI catches live.
+  Durable history (transcript, activity) is the Data Service's job, not this stream's.
+  Renamed from `/stream`: this channel now carries both chat events and terminal pty output
+  (see `/transport` below), so the name shouldn't imply chat-only. One exception to
+  "ephemeral": terminal (PTY) output (`event: pty_output`) is buffered server-side in a
+  bounded 4 MiB ring (`runner/hub.go`, tmux-attach semantics) and replayed as a single
+  leading `pty_output` frame on every new attach, before any live events — this is what
+  lets a UI reattaching to a session mid-turn (or after missing PTY output entirely) restore
+  terminal scrollback instead of losing it. Chat events (`text`, `tool_use`, `turn_end`,
+  `error`) never go through this buffer and stay purely ephemeral.
 - `POST /transport` — switches this session between its `chat` and `terminal` transports.
   Body `{"mode": "chat" | "terminal"}`. Chat and Terminal are two transports over one
   provider conversation, not simultaneous mirrors: the old transport's provider process is

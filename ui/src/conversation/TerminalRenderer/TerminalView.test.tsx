@@ -80,4 +80,27 @@ describe("TerminalView (renderer contract)", () => {
     unmount();
     expect(bridge.kill).toHaveBeenCalledWith("pty-1");
   });
+
+  // Regression test: a mounted TerminalView must re-subscribe when its
+  // bridge prop's identity changes (e.g. ConversationTab reconnecting its
+  // SessionEventSource and rebuilding SessionTerminalBridge around it)
+  // instead of going on listening to the old, now-disconnected bridge
+  // forever — the root cause of the reported "frozen terminal" bug, which
+  // previously required a full remount (navigate away and back) to clear.
+  it("re-subscribes to a new bridge when the bridge prop's identity changes, without unmounting", async () => {
+    const stub1 = makeStubBridge();
+    const stub2 = makeStubBridge();
+    const { rerender } = render(<TerminalView bridge={stub1.bridge} />);
+    await waitFor(() => expect(stub1.bridge.spawn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(stub1.bridge.onData).toHaveBeenCalledTimes(1));
+
+    rerender(<TerminalView bridge={stub2.bridge} />);
+
+    await waitFor(() => expect(stub2.bridge.spawn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(stub2.bridge.onData).toHaveBeenCalledTimes(1));
+    // The old bridge's data listener must be gone — otherwise live bytes
+    // from the new bridge and stale reads from the old one could both fire.
+    expect(stub1.dataListeners.get("pty-1")?.size ?? 0).toBe(0);
+    expect(stub2.dataListeners.get("pty-1")?.size ?? 0).toBe(1);
+  });
 });

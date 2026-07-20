@@ -327,3 +327,119 @@ waitTurnEnd:
 		t.Fatalf("ref changed across switch: terminal=%q chat=%q, want equal", terminalResult.Ref, chatResult.Ref)
 	}
 }
+
+// TestTerminalOutputReplaysOnAttach is the acceptance test for reattach: a
+// terminal turn driven with nobody attached to GET /output must not be
+// lost (the bug report's "scrollback GONE") — the first attach, even a
+// first-ever one, gets a leading pty_output replay event carrying it before
+// any live bytes.
+func TestTerminalOutputReplaysOnAttach(t *testing.T) {
+	ctx := context.Background()
+	dataBase := datatest.Start(t)
+
+	bootstrap := dataclient.New(dataBase, "test-bootstrap")
+	sess := contracts.Session{Name: "test", Provider: "fake"}
+	if err := bootstrap.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	data := dataclient.New(dataBase, sess.ID)
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := runner.New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start runner: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	srv := httptest.NewServer(New(r))
+	t.Cleanup(srv.Close)
+
+	toTerminal, err := json.Marshal(map[string]string{"mode": "terminal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.Client().Post(srv.URL+"/transport", "application/json", bytes.NewReader(toTerminal))
+	if err != nil {
+		t.Fatalf("POST /transport (terminal): %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST /transport (terminal) status = %d, want 200", resp.StatusCode)
+	}
+
+	msgBody, err := json.Marshal(map[string]string{"text": "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgResp, err := srv.Client().Post(srv.URL+"/messages", "application/json", bytes.NewReader(msgBody))
+	if err != nil {
+		t.Fatalf("POST /messages: %v", err)
+	}
+	_ = msgResp.Body.Close()
+	if msgResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST /messages status = %d, want 202", msgResp.StatusCode)
+	}
+
+	// Wait for the turn to actually land: pumpPTY doesn't rebroadcast
+	// turn_end to the hub (see runner_test.go's waitForTranscriptLen), so
+	// the transcript is the transport-agnostic way to observe completion.
+	deadline := time.After(5 * time.Second)
+	for {
+		if len(r.Transcript(ctx)) >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for the pty turn to land in transcript")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	streamReq, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/output", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamReq.Header.Set("Accept", "text/event-stream")
+	streamResp, err := srv.Client().Do(streamReq)
+	if err != nil {
+		t.Fatalf("GET /output: %v", err)
+	}
+	t.Cleanup(func() { _ = streamResp.Body.Close() })
+
+	events := make(chan provider.Event, 64)
+	go func() {
+		defer close(events)
+		sc := bufio.NewScanner(streamResp.Body)
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			line := sc.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			var ev provider.Event
+			if json.Unmarshal([]byte(strings.TrimSpace(line[len("data:"):])), &ev) != nil {
+				continue
+			}
+			events <- ev
+		}
+	}()
+
+	select {
+	case first, ok := <-events:
+		if !ok {
+			t.Fatal("stream closed before any event")
+		}
+		if first.Kind != provider.EventPTYOutput {
+			t.Fatalf("first event kind = %q, want %q", first.Kind, provider.EventPTYOutput)
+		}
+		if !strings.Contains(first.Text, "you said hi") {
+			t.Fatalf("replay = %q, want it to contain %q", first.Text, "you said hi")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the replay event")
+	}
+}
