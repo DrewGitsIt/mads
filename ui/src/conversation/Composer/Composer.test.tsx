@@ -4,6 +4,59 @@ import { Composer } from "./Composer";
 import { FakeRouterClient } from "../../router/fixtures";
 import type { Agent, Model } from "../../router/types";
 
+// Fake Monaco that also drives the real onMount/onChange callbacks
+// ExpandedComposer wires up (addCommand for ⌘Enter send / Escape collapse,
+// onDidChangeCursorPosition for the round-trip cursor), so those keybindings
+// are exercised the same way the real editor's keybinding service would —
+// happy-dom can't mount real Monaco (no Worker/canvas), same precedent as
+// YamlSourceView.test.tsx/DiffViewer.test.tsx.
+const CTRL_CMD = 1 << 11;
+const KEY_ENTER = 3;
+const KEY_ESCAPE = 9;
+
+vi.mock("@monaco-editor/react", () => ({
+  Editor: (props: {
+    value: string;
+    language?: string;
+    onChange?: (value: string) => void;
+    onMount?: (editor: unknown, monaco: unknown) => void;
+  }) => {
+    const commands = new Map<number, () => void>();
+    const fakeEditor = {
+      addCommand: (keybinding: number, handler: () => void) => {
+        commands.set(keybinding, handler);
+      },
+      focus: () => {},
+      setPosition: () => {},
+      revealPositionInCenterIfOutsideViewport: () => {},
+      getModel: () => ({
+        getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }),
+        getOffsetAt: (pos: { column: number }) => pos.column - 1,
+        getValueLength: () => props.value.length,
+      }),
+      onDidChangeCursorPosition: () => ({ dispose: () => {} }),
+    };
+    const monaco = { KeyMod: { CtrlCmd: CTRL_CMD }, KeyCode: { Enter: KEY_ENTER, Escape: KEY_ESCAPE } };
+    props.onMount?.(fakeEditor, monaco);
+    return (
+      <textarea
+        data-testid="fake-monaco-editor"
+        data-language={props.language}
+        value={props.value}
+        onChange={(e) => props.onChange?.(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            commands.get(CTRL_CMD | KEY_ENTER)?.();
+          }
+          if (e.key === "Escape") {
+            commands.get(KEY_ESCAPE)?.();
+          }
+        }}
+      />
+    );
+  },
+}));
+
 // React mirrors a controlled textarea's value into a text-node child (an SSR
 // carryover), so plain screen.getByText("/agent") can false-positive-match
 // the textarea itself when the typed command equals the label under test.
@@ -60,16 +113,105 @@ describe("Composer", () => {
     expect(screen.getByText("unhealthy")).toBeTruthy();
   });
 
-  it("⌘E toggles the expanded composer height", () => {
+  it("⌘E toggles between the textarea and the Monaco editor", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
     const textarea = screen.getByPlaceholderText(/Message the agent/);
 
-    expect(textarea.className).not.toMatch(/expanded/);
+    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
     fireEvent.keyDown(textarea, { key: "e", metaKey: true });
-    expect(textarea.className).toMatch(/expanded/);
+    // Monaco is lazy-loaded behind Suspense (see ExpandedComposer) — even a
+    // mocked module resolves the dynamic import asynchronously, so the first
+    // expand in the file must await it rather than query synchronously.
+    const editor = await screen.findByTestId("fake-monaco-editor");
+    expect(editor.getAttribute("data-language")).toBe("markdown");
+    expect(screen.queryByPlaceholderText(/Message the agent/)).toBeNull();
+
+    fireEvent.keyDown(editor, { key: "e", metaKey: true });
+    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+    expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
+  });
+
+  it("the visible expand button toggles the same way as ⌘E, with a tooltip naming the hotkey", async () => {
+    const client = new FakeRouterClient();
+    render(<Composer routerClient={client} sessionId="session-active" />);
+
+    const expandButton = screen.getByRole("button", { name: "Expand editor" });
+    expect(expandButton.getAttribute("title")).toBe("Expand editor (⌘E)");
+    fireEvent.click(expandButton);
+
+    expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
+    const collapseButton = screen.getByRole("button", { name: "Collapse editor" });
+    expect(collapseButton.getAttribute("title")).toBe("Collapse editor (⌘E)");
+    fireEvent.click(collapseButton);
+
+    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+  });
+
+  it("round-trips typed text losslessly between collapsed and expanded", async () => {
+    const client = new FakeRouterClient();
+    render(<Composer routerClient={client} sessionId="session-active" />);
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: "line one\nline two\t🎉" } });
     fireEvent.keyDown(textarea, { key: "e", metaKey: true });
-    expect(textarea.className).not.toMatch(/expanded/);
+
+    const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
+    expect(editor.value).toBe("line one\nline two\t🎉");
+
+    fireEvent.change(editor, { target: { value: "line one\nline two\t🎉 edited" } });
+    fireEvent.keyDown(editor, { key: "e", metaKey: true });
+
+    expect(screen.getByPlaceholderText(/Message the agent/)).toHaveProperty(
+      "value",
+      "line one\nline two\t🎉 edited",
+    );
+  });
+
+  it("sends from the expanded editor via ⌘Enter", async () => {
+    const client = new FakeRouterClient();
+    const sendMessage = vi.spyOn(client, "sendMessage");
+
+    render(<Composer routerClient={client} sessionId="session-active" />);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
+    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+
+    const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
+    fireEvent.change(editor, { target: { value: "hello from monaco" } });
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith("session-active", {
+        text: "hello from monaco",
+        mentions: [],
+      }),
+    );
+  });
+
+  it("Escape in the expanded editor collapses back to the textarea", async () => {
+    const client = new FakeRouterClient();
+    render(<Composer routerClient={client} sessionId="session-active" />);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
+    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+
+    const editor = await screen.findByTestId("fake-monaco-editor");
+    fireEvent.keyDown(editor, { key: "Escape" });
+
+    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+    expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
+  });
+
+  it("does not resolve @ mentions or / commands while expanded", async () => {
+    const client = new FakeRouterClient();
+    render(<Composer routerClient={client} sessionId="session-active" />);
+    const textarea = screen.getByPlaceholderText(/Message the agent/);
+    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+
+    const editor = await screen.findByTestId("fake-monaco-editor");
+    fireEvent.change(editor, { target: { value: "check @deep" } });
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 
   it("sends the message via the Router client and clears the composer", async () => {

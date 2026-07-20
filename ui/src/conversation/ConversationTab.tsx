@@ -16,7 +16,8 @@ import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
-import { TerminalView } from "./TerminalRenderer/TerminalView";
+import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
+import { TerminalComposer, formatBracketedPaste } from "./TerminalRenderer/TerminalComposer";
 import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
 import { ProvisioningStrip } from "./ProvisioningStrip";
@@ -89,6 +90,8 @@ export function ConversationTab({
   const [retryToken, setRetryToken] = useState(0);
   const [transport, setTransport] = useState<TransportState>({ status: "idle", mode: "chat" });
   const [shellOpen, setShellOpen] = useState(false);
+  const [terminalComposerOpen, setTerminalComposerOpen] = useState(false);
+  const terminalViewRef = useRef<TerminalViewHandle>(null);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
@@ -378,6 +381,12 @@ export function ConversationTab({
   // Never shown mid-switch/terminal — terminal mode already has its own live
   // view via SessionTerminalBridge on the same stream.
   const liveTurn = activeMode === "chat" ? turn : { phase: "idle" as const };
+  // Never carry a stale open overlay across a switch back to chat and later
+  // back to terminal — a bare `!showHistory` gate on `open` below would hide
+  // it visually but leave the state true, popping it back open unprompted.
+  if (terminalComposerOpen && activeMode !== "terminal") {
+    setTerminalComposerOpen(false);
+  }
 
   return (
     <div className={styles.tab}>
@@ -513,7 +522,12 @@ export function ConversationTab({
               />
             </>
           ) : terminalBridge ? (
-            <TerminalView bridge={terminalBridge} className={styles.terminal} />
+            <TerminalView
+              ref={terminalViewRef}
+              bridge={terminalBridge}
+              className={styles.terminal}
+              onComposeOpen={() => setTerminalComposerOpen(true)}
+            />
           ) : (
             <div className={styles.ptyUnavailable}>Connecting…</div>
           )}
@@ -528,6 +542,21 @@ export function ConversationTab({
             </div>
           ))}
       </div>
+
+      {terminalBridge && (
+        <TerminalComposer
+          open={terminalComposerOpen}
+          onClose={() => {
+            setTerminalComposerOpen(false);
+            terminalViewRef.current?.focus();
+          }}
+          onSend={(text) => {
+            terminalBridge.write(sessionId, formatBracketedPaste(text));
+            setTerminalComposerOpen(false);
+            terminalViewRef.current?.focus();
+          }}
+        />
+      )}
 
       {sendError && (
         <Toast

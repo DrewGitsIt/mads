@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { PtyBridge, PtySpawnOptions } from "./ptyBridge";
@@ -9,6 +9,17 @@ export interface TerminalViewProps {
   bridge: PtyBridge;
   spawnOptions?: PtySpawnOptions;
   className?: string;
+  /**
+   * Fires on ⌘E/Ctrl+E — captured via xterm's attachCustomKeyEventHandler
+   * before xterm processes the keystroke, so no stray bytes reach the pty
+   * when the compose overlay opens (ConversationTab renders TerminalComposer).
+   */
+  onComposeOpen?: () => void;
+}
+
+export interface TerminalViewHandle {
+  /** Returns real DOM focus to xterm's own hidden input — used when the compose overlay closes. */
+  focus(): void;
 }
 
 /**
@@ -17,70 +28,99 @@ export interface TerminalViewProps {
  * ShellDock's docked general-purpose shell (bound to a separate pty) — each
  * caller supplies its own bridge/pty id (HANDOFF.md §4).
  */
-export function TerminalView({ bridge, spawnOptions, className }: TerminalViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
+  function TerminalView({ bridge, spawnOptions, className, onComposeOpen }, ref) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const termRef = useRef<Terminal | null>(null);
+    // Re-registering attachCustomKeyEventHandler on every onComposeOpen
+    // identity change would mean detaching/reattaching mid-session — the
+    // ref lets the mount-only effect below always call the latest callback.
+    const onComposeOpenRef = useRef(onComposeOpen);
+    onComposeOpenRef.current = onComposeOpen;
 
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus: () => termRef.current?.focus(),
+      }),
+      [],
+    );
 
-    const term = new Terminal({ convertEol: true });
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(container);
-    fitAddon.fit();
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
 
-    let ptyId: string | undefined;
-    let disposed = false;
-    let unsubData: (() => void) | undefined;
-    let unsubExit: (() => void) | undefined;
-
-    const dataDisposable = term.onData((data) => {
-      if (ptyId) bridge.write(ptyId, data);
-    });
-
-    const resizeObserver = new ResizeObserver(() => {
+      const term = new Terminal({ convertEol: true });
+      termRef.current = term;
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(container);
       fitAddon.fit();
-      if (ptyId) bridge.resize(ptyId, term.cols, term.rows);
-    });
-    resizeObserver.observe(container);
 
-    bridge
-      .spawn({ ...spawnOptions, cols: term.cols, rows: term.rows })
-      .then((id) => {
-        if (disposed) {
-          bridge.kill(id);
-          return;
+      // Must run before xterm's own key handling — returning false swallows
+      // the keystroke so no "e" (or the overlay's later Escape) ever reaches
+      // the pty while toggling the compose overlay.
+      term.attachCustomKeyEventHandler((e) => {
+        if (e.type === "keydown" && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
+          onComposeOpenRef.current?.();
+          return false;
         }
-        ptyId = id;
-        unsubData = bridge.onData(id, (data) => term.write(data));
-        unsubExit = bridge.onExit(id, () => {
-          term.write("\r\n[process exited]\r\n");
-        });
-      })
-      .catch((err: unknown) => {
-        if (!disposed) {
-          term.write(`\r\n[pty unavailable: ${String(err)}]\r\n`);
-        }
+        return true;
       });
 
-    return () => {
-      disposed = true;
-      resizeObserver.disconnect();
-      dataDisposable.dispose();
-      unsubData?.();
-      unsubExit?.();
-      if (ptyId) bridge.kill(ptyId);
-      term.dispose();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bridge/spawnOptions identity is intentionally the effect's whole lifecycle
-  }, []);
+      let ptyId: string | undefined;
+      let disposed = false;
+      let unsubData: (() => void) | undefined;
+      let unsubExit: (() => void) | undefined;
 
-  return (
-    <div
-      ref={containerRef}
-      data-testid="terminal-view"
-      className={[styles.terminal, className].filter(Boolean).join(" ")}
-    />
-  );
-}
+      const dataDisposable = term.onData((data) => {
+        if (ptyId) bridge.write(ptyId, data);
+      });
+
+      const resizeObserver = new ResizeObserver(() => {
+        fitAddon.fit();
+        if (ptyId) bridge.resize(ptyId, term.cols, term.rows);
+      });
+      resizeObserver.observe(container);
+
+      bridge
+        .spawn({ ...spawnOptions, cols: term.cols, rows: term.rows })
+        .then((id) => {
+          if (disposed) {
+            bridge.kill(id);
+            return;
+          }
+          ptyId = id;
+          unsubData = bridge.onData(id, (data) => term.write(data));
+          unsubExit = bridge.onExit(id, () => {
+            term.write("\r\n[process exited]\r\n");
+          });
+        })
+        .catch((err: unknown) => {
+          if (!disposed) {
+            term.write(`\r\n[pty unavailable: ${String(err)}]\r\n`);
+          }
+        });
+
+      return () => {
+        disposed = true;
+        resizeObserver.disconnect();
+        dataDisposable.dispose();
+        unsubData?.();
+        unsubExit?.();
+        if (ptyId) bridge.kill(ptyId);
+        termRef.current = null;
+        term.dispose();
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- bridge/spawnOptions identity is intentionally the effect's whole lifecycle
+    }, []);
+
+    return (
+      <div
+        ref={containerRef}
+        data-testid="terminal-view"
+        className={[styles.terminal, className].filter(Boolean).join(" ")}
+      />
+    );
+  },
+);

@@ -5,6 +5,7 @@ import type { Session } from "../../router/types";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
+import { ExpandedComposer } from "./ExpandedComposer";
 import styles from "./Composer.module.css";
 
 export interface ComposerProps {
@@ -41,14 +42,17 @@ export interface ComposerProps {
 }
 
 /**
- * Plain textarea, ⌘E expands in place (no modal, MADS-UX §3.3). @/ trigger
- * resolution is delegated to useMentionResolver. `@` mentions splice a
- * plain-text reference token into the value and stage it in
- * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
- * `/` commands are a hierarchical palette: a plain leaf (skill/task) inserts
- * text the same way but never stages a chip; an argument-taking command
- * ("agent"/"model") descends to a second level and its leaves dispatch
- * directly (executeCommand) instead of touching the message at all.
+ * Plain textarea, ⌘E expands in place into a Monaco editor (no modal,
+ * MADS-UX §3.3). @/ trigger resolution is delegated to useMentionResolver
+ * and only ever rendered against the collapsed textarea — the expanded
+ * Monaco editor is plain-text markdown compose only (HANDOFF.md "Edge Cases
+ * & TODOs for Future"). `@` mentions splice a plain-text reference token
+ * into the value and stage it in InjectedContentPreview — nothing is
+ * fetched/expanded until send (§2.4). `/` commands are a hierarchical
+ * palette: a plain leaf (skill/task) inserts text the same way but never
+ * stages a chip; an argument-taking command ("agent"/"model") descends to a
+ * second level and its leaves dispatch directly (executeCommand) instead of
+ * touching the message at all.
  */
 export function Composer({
   routerClient,
@@ -83,7 +87,7 @@ export function Composer({
     value,
     cursor,
   );
-  const menuOpen = Boolean(trigger) && !menuDismissed && candidates.length > 0;
+  const menuOpen = !expanded && Boolean(trigger) && !menuDismissed && candidates.length > 0;
   // A narrowing filter can shrink candidates out from under a higher
   // activeIndex (e.g. arrowed to #4, then typed a letter that leaves 2
   // matches) — reset on every list change so selection/aria-activedescendant
@@ -147,13 +151,12 @@ export function Composer({
     }
   }
 
+  // ⌘E/Ctrl+E is handled by the wrapping div's onKeyDownCapture below (it
+  // must fire before Monaco's own keybinding service sees the event while
+  // expanded — Monaco has no onKeyDown prop, only addCommand from inside
+  // onMount, so a single outer capture is what lets one toggle work from
+  // both collapsed and expanded focus).
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
-      e.preventDefault();
-      setExpanded((x) => !x);
-      return;
-    }
-
     if (trigger && !menuDismissed && e.key === "Escape") {
       e.preventDefault();
       if (trigger.type === "/") {
@@ -227,49 +230,114 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- auto-send is a one-time mount effect, guarded by autoSentRef against StrictMode's double-invoke
   }, []);
 
+  // Returns focus to the textarea, at the same offset Monaco's caret was at,
+  // the moment expanded flips back to false — never fires on initial mount
+  // (prevExpandedRef starts false) or while expanding.
+  const prevExpandedRef = useRef(false);
+  useEffect(() => {
+    if (prevExpandedRef.current && !expanded) {
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        textareaRef.current?.setSelectionRange(cursor, cursor);
+      });
+    }
+    prevExpandedRef.current = expanded;
+  }, [expanded, cursor]);
+
+  function handleComposerKeyDownCapture(e: KeyboardEvent<HTMLDivElement>) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
+      e.preventDefault();
+      e.stopPropagation();
+      setExpanded((x) => !x);
+    }
+  }
+
+  const expandTitle = expanded ? "Collapse editor (⌘E)" : "Expand editor (⌘E)";
+
   return (
-    <div className={styles.composer}>
+    <div className={styles.composer} onKeyDownCapture={handleComposerKeyDownCapture}>
       <InjectedContentPreview
         items={injected}
         onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
       />
-      <div className={styles.inputRow}>
-        {menuOpen && (
-          <MentionMenu
-            candidates={candidates}
-            activeIndex={activeIndex}
-            onSelect={selectCandidate}
+      {expanded ? (
+        <div className={styles.expandedRow}>
+          <ExpandedComposer
+            value={value}
+            onChange={setValue}
+            onSend={() => void handleSend()}
+            onCollapse={() => setExpanded(false)}
+            initialCursor={cursor}
+            onCursorChange={setCursor}
+            disabled={disabled}
           />
-        )}
-        <textarea
-          ref={textareaRef}
-          className={[styles.textarea, expanded ? styles.expanded : ""]
-            .filter(Boolean)
-            .join(" ")}
-          placeholder="Message the agent — @ to mention, / for commands"
-          value={value}
-          disabled={disabled}
-          aria-activedescendant={
-            // A resolved candidate list can commit before the activeIndex-reset
-            // effect below runs, momentarily leaving activeIndex past the end
-            // of a just-narrowed array — guard the read rather than crash mid-render.
-            menuOpen && candidates[activeIndex]
-              ? mentionOptionId(candidates[activeIndex].id)
-              : undefined
-          }
-          onChange={(e) => {
-            setValue(e.target.value);
-            setCursor(e.target.selectionStart ?? e.target.value.length);
-            setMenuDismissed(false);
-          }}
-          onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
-          onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
-          onKeyDown={handleKeyDown}
-        />
-        <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
-          Send
-        </Button>
-      </div>
+          <div className={styles.actions}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              title={expandTitle}
+              aria-label="Collapse editor"
+              aria-keyshortcuts="Meta+e"
+              onClick={() => setExpanded(false)}
+              disabled={disabled}
+            >
+              ⤡
+            </Button>
+            <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
+              Send
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className={styles.inputRow}>
+          {menuOpen && (
+            <MentionMenu
+              candidates={candidates}
+              activeIndex={activeIndex}
+              onSelect={selectCandidate}
+            />
+          )}
+          <textarea
+            ref={textareaRef}
+            className={styles.textarea}
+            placeholder="Message the agent — @ to mention, / for commands"
+            value={value}
+            disabled={disabled}
+            aria-activedescendant={
+              // A resolved candidate list can commit before the activeIndex-reset
+              // effect below runs, momentarily leaving activeIndex past the end
+              // of a just-narrowed array — guard the read rather than crash mid-render.
+              menuOpen && candidates[activeIndex]
+                ? mentionOptionId(candidates[activeIndex].id)
+                : undefined
+            }
+            onChange={(e) => {
+              setValue(e.target.value);
+              setCursor(e.target.selectionStart ?? e.target.value.length);
+              setMenuDismissed(false);
+            }}
+            onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
+            onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
+            onKeyDown={handleKeyDown}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            title={expandTitle}
+            aria-label="Expand editor"
+            aria-keyshortcuts="Meta+e"
+            onClick={() => setExpanded(true)}
+            disabled={disabled}
+          >
+            ⤢
+          </Button>
+          <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
+            Send
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

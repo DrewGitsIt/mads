@@ -11,6 +11,45 @@ import { FLAGS } from "../featureFlags";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import type { Link } from "../router/types";
 
+// Same fake-Monaco precedent as Composer.test.tsx/TerminalComposer.test.tsx —
+// drives the real onMount callback (addCommand for ⌘Enter send) so the
+// terminal-mode compose overlay's send path is exercised the same way the
+// real editor's keybinding service would.
+const CTRL_CMD = 1 << 11;
+const KEY_ENTER = 3;
+
+vi.mock("@monaco-editor/react", () => ({
+  Editor: (props: {
+    value: string;
+    language?: string;
+    onChange?: (value: string) => void;
+    onMount?: (editor: unknown, monaco: unknown) => void;
+  }) => {
+    const commands = new Map<number, () => void>();
+    const fakeEditor = {
+      addCommand: (keybinding: number, handler: () => void) => {
+        commands.set(keybinding, handler);
+      },
+      focus: () => {},
+    };
+    const monaco = { KeyMod: { CtrlCmd: CTRL_CMD }, KeyCode: { Enter: KEY_ENTER } };
+    props.onMount?.(fakeEditor, monaco);
+    return (
+      <textarea
+        data-testid="fake-monaco-editor"
+        data-language={props.language}
+        value={props.value}
+        onChange={(e) => props.onChange?.(e.target.value)}
+        onKeyDown={(e) => {
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+            commands.get(CTRL_CMD | KEY_ENTER)?.();
+          }
+        }}
+      />
+    );
+  },
+}));
+
 // jsdom has no matchMedia; xterm.js needs it to mount. happy-dom has one,
 // but this file needs jsdom for DOMPurify (see comment above).
 if (!window.matchMedia) {
@@ -214,6 +253,37 @@ describe("ConversationTab", () => {
       screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed"),
     ).toBe("true");
     expect(switchSpy).not.toHaveBeenCalled();
+  });
+
+  it("terminal mode: ⌘E opens the compose overlay, and Send delivers the exact multi-line text to the PTY via bracketed paste", async () => {
+    const client = new FakeRouterClient();
+    const terminalWrite = vi.spyOn(client, "terminalWrite");
+    await client.switchTransport("session-active", "terminal");
+
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+    );
+
+    const xtermInput = document.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    xtermInput.focus();
+    fireEvent.keyDown(xtermInput, { key: "e", metaKey: true });
+
+    const editor = await screen.findByTestId("fake-monaco-editor");
+    fireEvent.change(editor, { target: { value: "line one\nline two" } });
+    // No stray keystrokes should have reached the pty while the overlay was open.
+    expect(terminalWrite).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+
+    await waitFor(() =>
+      expect(terminalWrite).toHaveBeenCalledWith(
+        "session-active",
+        "\x1b[200~line one\nline two\x1b[201~",
+      ),
+    );
+    expect(screen.queryByTestId("terminal-composer")).toBeNull();
+    expect(document.activeElement).toBe(xtermInput);
   });
 
   it("opens a dormant session with no transport history in chat", async () => {
