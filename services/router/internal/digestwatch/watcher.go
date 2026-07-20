@@ -6,7 +6,8 @@
 //   - Watcher: session.turn_ended (appended by a watched session's own
 //     runner on every completed turn, docs/LINKED-SESSIONS-DESIGN.md
 //     decision 4) — subscribes globally and spawns a GenerateDigest job per
-//     envelope.
+//     envelope, alongside a GenerateSessionTitle job (session auto-naming)
+//     that no-ops once the session's name is no longer Derived.
 //   - RunWatcher: task.status_changed reaching done or blocked, for a
 //     session holding the implicit hand-raiser over its own pipeline run
 //     (decision 6) — subscribes globally and spawns a GenerateRunDigest job
@@ -89,6 +90,9 @@ func (w *Watcher) Run(ctx context.Context) {
 		}
 		if _, err := w.jobs.Spawn(ctx, job.DigestKind, env.SessionID, job.GenerateDigest(env.SessionID, payload.Delta)); err != nil {
 			log.Printf("digestwatch: spawn digest job for %s: %v", env.SessionID, err)
+		}
+		if _, err := w.jobs.Spawn(ctx, job.SessionTitleKind, env.SessionID, job.GenerateSessionTitle(env.SessionID, payload.Delta)); err != nil {
+			log.Printf("digestwatch: spawn session title job for %s: %v", env.SessionID, err)
 		}
 	}
 }

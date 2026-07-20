@@ -33,6 +33,11 @@ func validateSession(s *contracts.Session) *contracts.ValidationError {
 	if s.Isolation != "" && s.Isolation != contracts.IsolationWorktree && s.Isolation != contracts.IsolationCurrentDir {
 		v.Add("isolation", fmt.Sprintf("must be %q or %q", contracts.IsolationWorktree, contracts.IsolationCurrentDir))
 	}
+	if s.NameSource != "" && s.NameSource != contracts.SessionNameSourceDerived &&
+		s.NameSource != contracts.SessionNameSourceUser && s.NameSource != contracts.SessionNameSourceGenerated {
+		v.Add("name_source", fmt.Sprintf("must be %q, %q, or %q",
+			contracts.SessionNameSourceDerived, contracts.SessionNameSourceUser, contracts.SessionNameSourceGenerated))
+	}
 	if s.SynthesisMode != "" && !s.SynthesisMode.Valid() {
 		v.Add("synthesis_mode", fmt.Sprintf("unknown synthesis mode %q", s.SynthesisMode))
 	}
@@ -50,6 +55,9 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 	}
 	if sess.Isolation == "" {
 		sess.Isolation = contracts.IsolationWorktree
+	}
+	if sess.NameSource == "" {
+		sess.NameSource = contracts.SessionNameSourceDerived
 	}
 	if verr := validateSession(sess); verr != nil {
 		return verr
