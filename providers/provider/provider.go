@@ -78,6 +78,15 @@ type StartOptions struct {
 	// (providers/kirocli/README.md) — the descriptor is simply never
 	// materialized for its sessions.
 	MCPServers []MCPServerRef
+	// PermissionPromptURL, when non-empty, is the session service's own
+	// callback endpoint (e.g. "http://127.0.0.1:PORT/permission-hook") that a
+	// provider supporting BehaviorTrustLimited/BehaviorTrustReadOnly should
+	// wire a permission-decision hook to on the chat/ACP transport only —
+	// never the terminal/PTY transport, which has its own native prompt
+	// surface. Empty for TrustFull sessions (see trustArgs) and for any
+	// transport that isn't chat. claudecode materializes this as a
+	// `--settings` PreToolUse hook (see providers/claudecode/permission.go).
+	PermissionPromptURL string
 }
 
 // MCPServerRef describes one MCP server the provider's launch could point an

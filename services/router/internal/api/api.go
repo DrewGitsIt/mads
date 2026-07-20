@@ -98,6 +98,8 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/transport", s.handleGetSessionTransport)
 	mux.HandleFunc("POST /sessions/{id}/input", s.handleSessionInput)
 	mux.HandleFunc("POST /sessions/{id}/resize", s.handleSessionResize)
+	mux.HandleFunc("GET /sessions/{id}/permission-requests", s.handleSessionPermissionRequests)
+	mux.HandleFunc("POST /sessions/{id}/permission-requests/{reqId}/resolve", s.handleSessionResolvePermission)
 	mux.HandleFunc("POST /pipelines", s.handleStartPipeline)
 	mux.HandleFunc("POST /pipelines/{id}/cancel", s.handleCancelPipeline)
 	mux.HandleFunc("GET /events", s.handleEvents)

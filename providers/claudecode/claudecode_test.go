@@ -477,6 +477,68 @@ func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
 	}
 }
 
+// TestPermissionHookWiredOnChatTransportOnly proves permissionArgs' gating
+// reaches a real launched process: --settings only appears when trust needs
+// the hook (TrustLimited/TrustReadOnly) AND a PermissionPromptURL was
+// supplied — never for TrustFull, and never when the URL is empty (the
+// terminal-transport / not-yet-listening case). The stand-in's
+// "settings-echo" dialect reads back the file the adapter wrote, the same
+// proof-of-exact-bytes pattern as the MCP echo tests.
+func TestPermissionHookWiredOnChatTransportOnly(t *testing.T) {
+	const url = "http://127.0.0.1:9/permission-hook"
+	cases := []struct {
+		name     string
+		trust    provider.Trust
+		url      string
+		wantHook bool
+	}{
+		{"limited with url", provider.TrustLimited, url, true},
+		{"readonly with url", provider.TrustReadOnly, url, true},
+		{"full with url", provider.TrustFull, url, false},
+		{"limited without url", provider.TrustLimited, "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := testProvider(t)
+			sess, err := p.Start(context.Background(), provider.StartOptions{
+				Mode: provider.ModeACP, Trust: c.trust, PermissionPromptURL: c.url,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = sess.Close() }()
+			if err := sess.Send(context.Background(), "settings-echo"); err != nil {
+				t.Fatal(err)
+			}
+			var text string
+			deadline := time.After(10 * time.Second)
+			for done := false; !done; {
+				select {
+				case ev, ok := <-sess.Events():
+					if !ok {
+						t.Fatal("stream closed before turn end")
+					}
+					if ev.Kind == provider.EventText {
+						text += ev.Text
+					}
+					if ev.Kind == provider.EventTurnEnd {
+						done = true
+					}
+				case <-deadline:
+					t.Fatal("no turn end")
+				}
+			}
+			if c.wantHook {
+				if !strings.Contains(text, `"command":"curl`) || !strings.Contains(text, url) {
+					t.Errorf("expected --settings hook wired with url %q, got %q", url, text)
+				}
+			} else if !strings.Contains(text, "settings=none") {
+				t.Errorf("expected no --settings hook, got %q", text)
+			}
+		})
+	}
+}
+
 // orchestrateMCPRef is the exact descriptor shape
 // services/session/internal/runner/capability.go's setupOrchestrate
 // produces for the L2c leader capability (docs/LINKED-SESSIONS-DESIGN.md

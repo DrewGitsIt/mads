@@ -95,6 +95,28 @@ type Runner struct {
 	// calling Start, same pattern as Cwd/WorktreeRoot.
 	RouterURL string
 
+	// SelfURL is this session-service process's own bound HTTP address
+	// (e.g. "http://127.0.0.1:PORT"), set by main.go once the listener is
+	// bound and before calling Start (same pattern as Cwd/WorktreeRoot).
+	// Empty disables the permission-prompt hook entirely (e.g. in tests that
+	// never serve HTTP) — Start only sets opts.PermissionPromptURL when this
+	// is non-empty.
+	SelfURL string
+
+	// PermissionTimeout bounds how long an unanswered permission request sits
+	// pending before RequestPermission (permissions.go) resolves it to a
+	// deny on its own. Zero defaults to defaultPermissionTimeout.
+	PermissionTimeout time.Duration
+
+	// permMu guards permPending and permSeq (permissions.go) — the in-memory
+	// registry of pending/resolved permission requests for this session.
+	// Never persisted: a process restart loses in-flight requests
+	// (acceptable — the acceptance criteria only require surviving a
+	// transcript refetch, not a process bounce).
+	permMu      sync.Mutex
+	permPending map[string]*pendingPermission
+	permSeq     int
+
 	wt *worktree.Manager // built lazily the first time isolation is needed
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
@@ -232,6 +254,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		touched:          make(map[string]bool),
 		turnAttributions: make(map[int]contracts.Attribution),
 		shutdownCh:       make(chan struct{}),
+		permPending:      make(map[string]*pendingPermission),
 	}
 }
 
@@ -279,6 +302,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}
+	}
+	if r.SelfURL != "" {
+		opts.PermissionPromptURL = r.SelfURL + "/permission-hook"
 	}
 	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
