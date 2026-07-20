@@ -28,17 +28,6 @@
   letter-spacing: 0.04em;
 }
 
-.field textarea {
-  min-height: 72px;
-  resize: vertical;
-  font: inherit;
-  background: var(--bg2);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-sm);
-  padding: var(--space-2);
-  color: var(--text);
-}
-
 .field input,
 .field select {
   background: var(--bg2);
@@ -47,6 +36,54 @@
   padding: var(--space-2);
   color: var(--text);
   font: inherit;
+}
+
+.editableField {
+  position: relative;
+  min-height: 72px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  cursor: text;
+}
+
+.editableField:hover {
+  border-color: var(--line-soft);
+  background: var(--bg2);
+}
+
+.editIcon {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  opacity: 0;
+  color: var(--text2);
+  font-size: var(--fs-sm);
+}
+
+.editableField:hover .editIcon,
+.editableField:focus-visible .editIcon {
+  opacity: 1;
+}
+
+.placeholder {
+  font-size: var(--fs-sm);
+  color: var(--text3);
+  font-style: italic;
+}
+
+.editor {
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  font: inherit;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  overflow: hidden;
 }
 
 .preview {
