@@ -121,17 +121,25 @@ func (p *Provider) Matrix() provider.Matrix {
 	}
 }
 
-// disallowedToolsArgs maps a trust level to the --disallowedTools value that
-// removes the corresponding tools from claude's palette. TrustFull (and the
-// zero value) adds nothing — the CLI's own permission flow applies as today.
-func disallowedToolsArgs(trust provider.Trust) []string {
+// trustArgs maps a trust level to the CLI flag(s) that enforce it. Limited
+// and ReadOnly use --disallowedTools to remove tools from claude's palette
+// entirely, so the interactive ask-first prompt they'd otherwise trigger
+// never fires for a tool that's already gone. TrustFull (and the zero value)
+// used to add nothing, leaving claude's default ask-first permission mode in
+// effect — which stalls forever on a transport with nobody to answer the
+// prompt (chat/ACP has no such surface; the pipeline confirmed this in
+// terminal mode too). --permission-mode bypassPermissions fixes that; it's
+// deliberately not --dangerously-skip-permissions, which stays reserved for
+// the separate pipeline engine's own autonomous-agent invocation
+// (cmd/mads/run.go's -claude-args) — see README.
+func trustArgs(trust provider.Trust) []string {
 	switch trust {
 	case provider.TrustLimited:
 		return []string{"--disallowedTools", "Bash"}
 	case provider.TrustReadOnly:
 		return []string{"--disallowedTools", "Bash,Write,Edit,NotebookEdit"}
 	default:
-		return nil
+		return []string{"--permission-mode", "bypassPermissions"}
 	}
 }
 
