@@ -501,6 +501,14 @@ export class FakeSessionEventSource implements SessionEventSource {
     const data = { data: JSON.stringify(event) } as MessageEvent<string>;
     this.listeners.get(event.kind)?.forEach((listener) => listener(data));
   }
+
+  /** Test-only: simulate the browser's native EventSource reconnecting after
+   * a mid-stream drop — a plain (non-StreamEvent) "open" DOM event, distinct
+   * from `emit`'s provider-frame shape above. */
+  emitOpen(): void {
+    const ev = {} as MessageEvent<string>;
+    this.listeners.get("open")?.forEach((listener) => listener(ev));
+  }
 }
 
 // Files tab fixtures (W6.5) — three session ids a demo/test can pick between,
