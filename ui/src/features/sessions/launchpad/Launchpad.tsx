@@ -12,6 +12,7 @@ import { TrustPill } from "./pills/TrustPill";
 import { IsolationPill } from "./pills/IsolationPill";
 import type { StagedConfig } from "./pills/stagedConfig";
 import { SuggestionChips } from "./SuggestionChips";
+import type { Suggestion } from "./useSuggestions";
 import { AttachmentChips } from "./AttachmentChips";
 import { buildGoalText, toAttachedFile, type AttachedFile } from "./attachments";
 import styles from "./Launchpad.module.css";
@@ -30,9 +31,11 @@ export function deriveSessionName(text: string): string {
 export interface LaunchpadProps {
   createSession: (payload: Partial<Session>) => Promise<Session>;
   onSessionCreated: (session: Session, goalText: string) => void;
+  /** Handles "Resume"/"Pick up" chip clicks — navigates to (and resumes) the referenced session, it doesn't seed the composer. */
+  onSuggestionPick: (suggestion: Suggestion) => void;
 }
 
-export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
+export function Launchpad({ createSession, onSessionCreated, onSuggestionPick }: LaunchpadProps) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedConfig>({});
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
@@ -195,7 +198,7 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
             (f) => f.source === "workspace",
           ) && <p className={styles.inheritLine}>Inherits from {resolved.workspace} defaults</p>}
 
-        <SuggestionChips onPick={(suggestionText) => setText(suggestionText)} />
+        <SuggestionChips onPick={onSuggestionPick} />
 
         {error && (
           <Toast

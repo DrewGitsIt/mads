@@ -3,7 +3,11 @@ import { router } from "../../../router/client";
 
 export interface Suggestion {
   id: string;
-  text: string;
+  label: string;
+  sessionId: string;
+  kind: "resume" | "pickup";
+  /** Set for "pickup" suggestions — the ready task the session should be opened to. */
+  taskId?: string;
 }
 
 /**
@@ -37,12 +41,20 @@ export function useSuggestions(): Suggestion[] {
         const n = openCountBySession.get(s.id) ?? 0;
         next.push({
           id: `resume-${s.id}`,
-          text: `Resume: ${s.name} — ${n} open task${n === 1 ? "" : "s"}`,
+          kind: "resume",
+          sessionId: s.id,
+          label: `Resume: ${s.name} — ${n} open task${n === 1 ? "" : "s"}`,
         });
       }
       const readyTask = readyTasks[0];
       if (readyTask) {
-        next.push({ id: `pickup-${readyTask.id}`, text: `Pick up: ${readyTask.title} (${readyTask.id})` });
+        next.push({
+          id: `pickup-${readyTask.id}`,
+          kind: "pickup",
+          sessionId: readyTask.session_id,
+          taskId: readyTask.id,
+          label: `Pick up: ${readyTask.title} (${readyTask.id})`,
+        });
       }
       setSuggestions(next.slice(0, 3));
     }

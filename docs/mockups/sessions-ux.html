@@ -159,6 +159,32 @@
   .legend span { display:inline-flex; align-items:center; gap:6px; }
   .legend .d { width:8px; height:8px; border-radius:50%; }
   .legend b { color:var(--text2); font-weight:600; }
+
+  /* ============================================ #3 LINK FLOW CSS ==== */
+  .link-step { /* container for each of the 3 panels */ }
+
+  /* Step 1: Link mode selection */
+  .link-floating-bar { position: absolute; bottom: 0; left: 0; right: 0; padding: var(--space-3); background: var(--accent-soft); border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+
+  /* Step 2: Preset & holder chooser */
+  .link-preset { display: block; width: 100%; text-align: left; cursor: pointer; padding: var(--space-3); border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--bg2); transition: background .12s, border-color .12s; }
+  .link-preset:hover { background: var(--bg3); }
+  .link-preset[aria-selected="true"] { border-color: var(--accent); background: var(--accent-soft); }
+
+  .link-grant-chip { display: inline-block; background: var(--bg3); border: 1px solid var(--line); border-radius: 12px; padding: 2px 8px; font-size: var(--fs-chip); color: var(--text2); }
+
+  /* Step 3: Resulting rail with badges & nesting */
+  .link-holder-badge { display: inline-block; margin-left: auto; background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 4px; font-size: var(--fs-chip); font-weight: 700; }
+
+  .link-subject { margin-left: 24px; margin-top: 4px; position: relative; }
+  .link-subject::before { content: ""; position: absolute; left: -18px; top: -6px; width: 1px; height: 30px; background: var(--line-soft); }
+
+  .link-subject-badge { display: inline-block; background: var(--info-soft); color: var(--info-fg); padding: 2px 6px; border-radius: 3px; font-size: var(--fs-chip); font-weight: 600; }
+
+  .link-unlink-btn { opacity: 0; transition: opacity .12s; cursor: pointer; border: none; background: transparent; color: var(--bad-fg); font-size: 12px; padding: 4px 6px; border-radius: 3px; }
+  .link-subject:hover .link-unlink-btn { opacity: 1; }
+  .link-unlink-btn:hover { background: var(--bad-soft); }
+
 </style>
 </head>
 <body>
@@ -372,6 +398,164 @@
       </div>
 
       <p class="note" style="margin-top:var(--space-4)"><b>My lean:</b> <b>A</b> for the resting-state calm you asked for, borrowing B's "click resumes a paused session" rule (which is what lets us delete the Resume button outright) and keeping a right-click menu as the power path. C is the most discoverable but reintroduces per-card icon chrome — the very thing #2 is trying to shed. Whichever we pick, the left checkbox gutter is gone: linking becomes a header-level <i>mode</i> or a right-click action, so a single card never reserves space for it.</p>
+    </div>
+  </section>
+
+  <!-- ============================================================ #3 ==== -->
+  <section class="block">
+    <h2><span class="tag">#3</span> Link mode flow — Option C three-step experience
+      <span class="sub">create leader/monitor relationships between sessions</span>
+    </h2>
+    <div class="body">
+      <p class="note" style="margin-bottom:var(--space-4)"><b>How it works:</b> click the link icon (🔗) on a card → select other sessions in the same workspace → choose a preset (Monitor or Leader) and confirm who leads → subjects appear nested under their holder in the rail. Data model mirrors <code>railLinks.ts</code> (grants → roles) and <code>LinkChooserDialog.tsx</code> (preset chooser + holder picker).</p>
+
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--space-4);">
+
+        <!-- STEP 1 -->
+        <div class="link-step">
+          <div class="rowlabel">Step 1 · Link mode initiated</div>
+          <p class="note" style="margin-bottom:var(--space-3)">Click the 🔗 icon. The card becomes the anchor; same-workspace cards show checkboxes; cross-workspace cards dim with a tag. A floating bar tracks selection.</p>
+          <div class="railpanel" style="position:relative; min-height:340px">
+            <div class="grouphd">Active <span>· 3</span></div>
+
+            <!-- Anchor card -->
+            <div class="scard" style="border:2px solid var(--accent)">
+              <div class="top"><span class="dot on"></span><span class="nm">Fix deploy on Ubuntu runners</span></div>
+              <div style="margin-top:4px; font-size:var(--fs-chip); color:var(--accent); font-weight:600">Anchor</div>
+            </div>
+
+            <!-- Same-workspace selectable -->
+            <div class="scard">
+              <div style="display:flex; align-items:center; gap:var(--space-2)">
+                <input type="checkbox" style="accent-color:var(--accent)">
+                <span class="dot on"></span>
+                <span class="nm">Session rail readability pass</span>
+              </div>
+            </div>
+
+            <div class="scard">
+              <div style="display:flex; align-items:center; gap:var(--space-2)">
+                <input type="checkbox" style="accent-color:var(--accent)">
+                <span class="dot on"></span>
+                <span class="nm">Mergiraf land-queue driver</span>
+              </div>
+            </div>
+
+            <!-- Cross-workspace dimmed -->
+            <div class="scard" style="opacity:0.5">
+              <div style="display:flex; align-items:center; gap:var(--space-2); justify-content:space-between">
+                <div style="display:flex; align-items:center; gap:var(--space-2)">
+                  <span class="dot on"></span>
+                  <span class="nm">Another workspace's session</span>
+                </div>
+                <span style="font-size:var(--fs-chip); color:var(--text3); background:var(--bg3); padding:2px 6px; border-radius:3px">different workspace</span>
+              </div>
+            </div>
+
+            <!-- Floating bar -->
+            <div class="link-floating-bar">
+              <div style="color:var(--accent); font-weight:600">Selected: 2 sessions</div>
+              <button class="btn btn-primary">Next →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2 -->
+        <div class="link-step">
+          <div class="rowlabel">Step 2 · Choose mode & holder</div>
+          <p class="note" style="margin-bottom:var(--space-3)">Pick a preset. Then pick who holds that role — all others become subjects.</p>
+
+          <!-- Preset chooser -->
+          <div style="display:flex; flex-direction:column; gap:var(--space-2); margin-bottom:var(--space-4)">
+            <!-- Leader preset -->
+            <button class="link-preset" aria-selected="true">
+              <div style="font-weight:600; color:var(--text); margin-bottom:4px">Leader</div>
+              <div style="font-size:var(--fs-sm); color:var(--text2); margin-bottom:8px; line-height:1.4">Gets a tool to message and direct the other agents. Its reach is capped by each session's own trust level.</div>
+              <div style="display:flex; gap:4px">
+                <span class="link-grant-chip">read</span>
+                <span class="link-grant-chip">inject</span>
+                <span class="link-grant-chip">orchestrate</span>
+              </div>
+            </button>
+
+            <!-- Monitor preset -->
+            <button class="link-preset">
+              <div style="font-weight:600; color:var(--text); margin-bottom:4px">Monitor</div>
+              <div style="font-size:var(--fs-sm); color:var(--text2); margin-bottom:8px; line-height:1.4">Follows along: receives a digest after each watched agent's turn. Never speaks into them.</div>
+              <div style="display:flex; gap:4px">
+                <span class="link-grant-chip">read</span>
+              </div>
+            </button>
+          </div>
+
+          <!-- Holder picker -->
+          <div style="border-top:1px solid var(--line-soft); padding-top:var(--space-3)">
+            <div style="font-size:var(--fs-sm); font-weight:600; margin-bottom:var(--space-2); color:var(--text3); text-transform:uppercase; letter-spacing:.06em">Who leads?</div>
+            <label style="display:flex; align-items:flex-start; gap:var(--space-2); padding:var(--space-2); margin-bottom:4px; cursor:pointer; border-radius:var(--r-sm); border:1px solid transparent">
+              <input type="radio" name="holder" checked style="margin-top:3px; cursor:pointer; accent-color:var(--accent)">
+              <span style="min-width:0">
+                <b style="color:var(--text); display:block">Fix deploy on Ubuntu runners</b>
+                <span style="color:var(--text3); font-size:var(--fs-chip)">→ Session rail readability pass, Mergiraf land-queue driver</span>
+              </span>
+            </label>
+            <label style="display:flex; align-items:flex-start; gap:var(--space-2); padding:var(--space-2); cursor:pointer; border-radius:var(--r-sm); border:1px solid transparent">
+              <input type="radio" name="holder" style="margin-top:3px; cursor:pointer; accent-color:var(--accent)">
+              <span style="min-width:0">
+                <b style="color:var(--text); display:block">Session rail readability pass</b>
+                <span style="color:var(--text3); font-size:var(--fs-chip)">→ Fix deploy on Ubuntu runners, Mergiraf land-queue driver</span>
+              </span>
+            </label>
+          </div>
+
+          <!-- Constraint note -->
+          <div style="margin-top:var(--space-4); padding:var(--space-2); background:var(--bg2); border-radius:var(--r-sm); border-left:3px solid var(--line); font-size:var(--fs-sm); color:var(--text3); line-height:1.5">
+            <b style="color:var(--text2)">Constraints:</b> One leader per subject — a session already led by someone else is refused. Links never cross different worktrees of the same repo. Pipeline runs can be monitored, not led. (Hand-raiser isn't offered here: it's granted automatically to a session's own agent while its pipeline runs.)
+          </div>
+        </div>
+
+        <!-- STEP 3 -->
+        <div class="link-step">
+          <div class="rowlabel">Step 3 · Resulting rail</div>
+          <p class="note" style="margin-bottom:var(--space-3)">Holder shows badge; subjects nest below with badges. Hover a subject to unlink.</p>
+          <div class="railpanel">
+            <div class="grouphd">Active <span>· 1</span></div>
+
+            <!-- Holder card with badge -->
+            <div class="scard">
+              <div class="top">
+                <span class="dot on"></span>
+                <span class="nm">Fix deploy on Ubuntu runners</span>
+                <span class="link-holder-badge">LEADER · 2</span>
+              </div>
+            </div>
+
+            <!-- Nested subject 1 -->
+            <div class="scard link-subject">
+              <div style="display:flex; align-items:center; justify-content:space-between">
+                <div style="display:flex; align-items:center; gap:var(--space-2)">
+                  <span class="dot on"></span>
+                  <span class="nm">Session rail readability pass</span>
+                  <span class="link-subject-badge">LINKED</span>
+                </div>
+                <button class="link-unlink-btn" title="Unlink">✕</button>
+              </div>
+            </div>
+
+            <!-- Nested subject 2 -->
+            <div class="scard link-subject">
+              <div style="display:flex; align-items:center; justify-content:space-between">
+                <div style="display:flex; align-items:center; gap:var(--space-2)">
+                  <span class="dot on"></span>
+                  <span class="nm">Mergiraf land-queue driver</span>
+                  <span class="link-subject-badge">LINKED</span>
+                </div>
+                <button class="link-unlink-btn" title="Unlink">✕</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
     </div>
   </section>
 
