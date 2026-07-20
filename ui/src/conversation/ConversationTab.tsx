@@ -91,6 +91,7 @@ export function ConversationTab({
   const [shellOpen, setShellOpen] = useState(false);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
+  const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turn, setTurn] = useState<TurnState>({ phase: "idle" });
   // A mount against a dormant session opens /output before any child
@@ -164,6 +165,17 @@ export function ConversationTab({
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
   }, [routerClient, sessionId]);
+
+  // Shared by both the header's agent/model pills and the Composer's
+  // "/agent"/"/model" commands — there's no Router PATCH /sessions/:id yet,
+  // so this is a local-state commit exactly like the pills already did
+  // before the Composer had any use for it.
+  const handleUpdateSession = useCallback(
+    (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => {
+      setSession((s) => (s ? { ...s, ...patch } : s));
+    },
+    [],
+  );
 
   // Shares SessionWorkspace's session-scoped subscription (see
   // WORKSPACE_SESSION_EVENT_TYPES) rather than opening its own — GET
@@ -374,7 +386,7 @@ export function ConversationTab({
         shellOpen={shellOpen}
         onToggleShell={() => setShellOpen((x) => !x)}
         onRestartAgent={() => void routerClient.bounce(sessionId)}
-        onUpdateSession={(patch) => setSession((s) => (s ? { ...s, ...patch } : s))}
+        onUpdateSession={handleUpdateSession}
       />
 
       <div className={styles.body}>
@@ -466,6 +478,7 @@ export function ConversationTab({
                 routerClient={routerClient}
                 sessionId={sessionId}
                 agentId={session.agent}
+                provider={session.provider}
                 disabled={transport.status !== "idle" || waking}
                 initialValue={pendingFirstMessage}
                 autoSendInitial={Boolean(pendingFirstMessage)}
@@ -478,6 +491,9 @@ export function ConversationTab({
                   setSendError(msg);
                 }}
                 onAutoSendStart={onPendingFirstMessageHandled}
+                onUpdateSession={handleUpdateSession}
+                onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
+                onCommandError={(message) => setCommandToast({ tone: "bad", message })}
                 onSent={(text) => {
                   // A send against a dormant session wakes it (Router:
                   // handleSessionMessages) synchronously within the POST's
@@ -519,6 +535,15 @@ export function ConversationTab({
           title="Couldn't send your message"
           description={sendError}
           onDismiss={() => setSendError(undefined)}
+        />
+      )}
+
+      {commandToast && (
+        <Toast
+          tone={commandToast.tone}
+          title={commandToast.tone === "ok" ? commandToast.message : "Command failed"}
+          description={commandToast.tone === "bad" ? commandToast.message : undefined}
+          onDismiss={() => setCommandToast(undefined)}
         />
       )}
     </div>

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
+import type { Session } from "../../router/types";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
-import { MentionMenu } from "./MentionMenu";
+import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import styles from "./Composer.module.css";
 
@@ -10,6 +11,8 @@ export interface ComposerProps {
   routerClient: RouterClient;
   sessionId: string;
   agentId?: string;
+  /** The session's current provider — resolves the "/model" command's candidate list. */
+  provider?: string;
   onSent?: (text: string, mentions: string[]) => void;
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
@@ -29,18 +32,29 @@ export interface ComposerProps {
   onAutoSendStart?: () => void;
   /** Fires synchronously at the start of every send (manual or auto) — lets the caller show an in-flight indicator before the request resolves. */
   onSendStart?: () => void;
+  /** Same commit path ConversationHeader's agent/model pills use — a "/agent"/"/model" command dispatches through here rather than sending a chat message. */
+  onUpdateSession?: (patch: Partial<Pick<Session, "agent" | "model">>) => void | Promise<void>;
+  /** Fires once a "/agent"/"/model" command has been applied — surface as a toast, not a transcript message. */
+  onCommandExecuted?: (message: string) => void;
+  /** Fires when onUpdateSession throws for a "/agent"/"/model" command. */
+  onCommandError?: (message: string) => void;
 }
 
 /**
  * Plain textarea, ⌘E expands in place (no modal, MADS-UX §3.3). @/ trigger
- * resolution is delegated to useMentionResolver; selecting a candidate
- * splices a plain-text reference token into the value and stages it in
+ * resolution is delegated to useMentionResolver. `@` mentions splice a
+ * plain-text reference token into the value and stage it in
  * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
+ * `/` commands are a hierarchical palette: a plain leaf (skill/task) inserts
+ * text the same way but never stages a chip; an argument-taking command
+ * ("agent"/"model") descends to a second level and its leaves dispatch
+ * directly (executeCommand) instead of touching the message at all.
  */
 export function Composer({
   routerClient,
   sessionId,
   agentId,
+  provider,
   onSent,
   disabled,
   initialValue,
@@ -48,18 +62,42 @@ export function Composer({
   onSendError,
   onAutoSendStart,
   onSendStart,
+  onUpdateSession,
+  onCommandExecuted,
+  onCommandError,
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue ?? "");
   const [cursor, setCursor] = useState(0);
   const [expanded, setExpanded] = useState(false);
   const [injected, setInjected] = useState<MentionCandidate[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Set by Escape at the command menu's root level — cleared the moment the
+  // user edits the text again, so dismissing never "sticks" past a keystroke.
+  const [menuDismissed, setMenuDismissed] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const { trigger, candidates } = useMentionResolver(routerClient, agentId, value, cursor);
+  const { trigger, candidates } = useMentionResolver(
+    routerClient,
+    agentId,
+    provider,
+    value,
+    cursor,
+  );
+  const menuOpen = Boolean(trigger) && !menuDismissed && candidates.length > 0;
+  // A narrowing filter can shrink candidates out from under a higher
+  // activeIndex (e.g. arrowed to #4, then typed a letter that leaves 2
+  // matches) — reset on every list change so selection/aria-activedescendant
+  // never index past the end.
+  useEffect(() => {
+    setActiveIndex(0);
+  }, [candidates]);
 
   function selectCandidate(candidate: MentionCandidate) {
     if (!trigger) return;
+    if (candidate.kind === "command-action") {
+      void executeCommand(candidate, trigger.start);
+      return;
+    }
     const before = value.slice(0, trigger.start);
     const after = value.slice(cursor);
     const insertion = `${candidate.insertText} `;
@@ -67,14 +105,46 @@ export function Composer({
     const nextCursor = before.length + insertion.length;
     setValue(nextValue);
     setCursor(nextCursor);
-    setInjected((prev) =>
-      prev.some((p) => p.id === candidate.id) ? prev : [...prev, candidate],
-    );
+    // Only @-mentions/attachments stage into the chip strip — a command
+    // (skill or otherwise) is either plain text for the agent or, for
+    // command-action leaves above, dispatched directly with no chip at all.
+    if (candidate.kind === "mentionable") {
+      setInjected((prev) =>
+        prev.some((p) => p.id === candidate.id) ? prev : [...prev, candidate],
+      );
+    }
     setActiveIndex(0);
     requestAnimationFrame(() => {
       textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
       textareaRef.current?.focus();
     });
+  }
+
+  // Executes a level-2 leaf (rebind agent / switch model) against the
+  // session, wiping the whole "/agent foo" (or "/model foo") chunk out of
+  // the composer — never leaves residual command text or a chip behind.
+  async function executeCommand(candidate: MentionCandidate, triggerStart: number) {
+    const before = value.slice(0, triggerStart);
+    const after = value.slice(cursor);
+    const nextValue = `${before}${after}`;
+    const nextCursor = before.length;
+    setValue(nextValue);
+    setCursor(nextCursor);
+    setActiveIndex(0);
+    requestAnimationFrame(() => {
+      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+      textareaRef.current?.focus();
+    });
+    try {
+      await onUpdateSession?.(
+        candidate.group === "agent" ? { agent: candidate.id } : { model: candidate.id },
+      );
+      onCommandExecuted?.(
+        `${candidate.group === "agent" ? "Agent" : "Model"} set to ${candidate.label}`,
+      );
+    } catch (err) {
+      onCommandError?.(err instanceof Error ? err.message : String(err));
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -84,7 +154,29 @@ export function Composer({
       return;
     }
 
-    if (trigger && candidates.length > 0) {
+    if (trigger && !menuDismissed && e.key === "Escape") {
+      e.preventDefault();
+      if (trigger.type === "/") {
+        const spaceIdx = trigger.query.indexOf(" ");
+        if (spaceIdx !== -1) {
+          // Step back from level 2 to level 1 — drop the argument, keep the command.
+          const head = trigger.query.slice(0, spaceIdx);
+          const nextValue = `${value.slice(0, trigger.start)}/${head}${value.slice(cursor)}`;
+          const nextCursor = trigger.start + 1 + head.length;
+          setValue(nextValue);
+          setCursor(nextCursor);
+          requestAnimationFrame(() => {
+            textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
+            textareaRef.current?.focus();
+          });
+          return;
+        }
+      }
+      setMenuDismissed(true);
+      return;
+    }
+
+    if (menuOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
         setActiveIndex((i) => (i + 1) % candidates.length);
@@ -97,7 +189,8 @@ export function Composer({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        selectCandidate(candidates[activeIndex]);
+        const candidate = candidates[activeIndex];
+        if (candidate) selectCandidate(candidate);
         return;
       }
     }
@@ -141,7 +234,7 @@ export function Composer({
         onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
       />
       <div className={styles.inputRow}>
-        {trigger && (
+        {menuOpen && (
           <MentionMenu
             candidates={candidates}
             activeIndex={activeIndex}
@@ -156,9 +249,18 @@ export function Composer({
           placeholder="Message the agent — @ to mention, / for commands"
           value={value}
           disabled={disabled}
+          aria-activedescendant={
+            // A resolved candidate list can commit before the activeIndex-reset
+            // effect below runs, momentarily leaving activeIndex past the end
+            // of a just-narrowed array — guard the read rather than crash mid-render.
+            menuOpen && candidates[activeIndex]
+              ? mentionOptionId(candidates[activeIndex].id)
+              : undefined
+          }
           onChange={(e) => {
             setValue(e.target.value);
             setCursor(e.target.selectionStart ?? e.target.value.length);
+            setMenuDismissed(false);
           }}
           onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
           onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}

@@ -1,5 +1,6 @@
 import { Chip } from "../../components/Chip/Chip";
 import { FLAGS } from "../../featureFlags";
+import { foldToolResults } from "../../router/toolPairing";
 import type { Link, ToolUse, TranscriptMessage } from "../../router/types";
 import { Markdown } from "./markdown";
 import { ToolCard } from "./ToolCard";
@@ -35,11 +36,12 @@ export function ChatRenderer({
   working,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
+  const folded = foldToolResults(messages);
   return (
     <div className={styles.stream}>
-      {messages.map((message, i) => {
+      {folded.map((message, i) => {
         if (message.tool) {
-          return <ToolCard key={i} tool={message.tool} />;
+          return <ToolCard key={i} tool={message.tool} timestamp={message.timestamp} />;
         }
         // Injected messages carry role "user" at the transport level, but
         // must never render as the subject user's own turn (decision 2,

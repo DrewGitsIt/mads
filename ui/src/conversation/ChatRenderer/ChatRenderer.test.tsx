@@ -42,6 +42,45 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("Read")).toBeTruthy();
   });
 
+  it("folds a tool_result into its tool_use's card — one card per call, zero standalone result cards", () => {
+    const messages: TranscriptMessage[] = [
+      { role: "user", text: "read the image and run the tests" },
+      {
+        role: "tool",
+        tool: { id: "toolu_11", name: "Read", path: "docs/screenshot.png" },
+        timestamp: "2026-07-19T10:00:01Z",
+      },
+      {
+        role: "tool_result",
+        text: "permission denied: image reads require approval",
+        tool: { id: "toolu_11", name: "" },
+        is_error: true,
+        timestamp: "2026-07-19T10:00:02Z",
+      },
+      { role: "agent", text: "I can't read that image without approval." },
+      {
+        role: "tool",
+        tool: { id: "toolu_12", name: "Bash", input: { command: "go test ./..." } },
+        timestamp: "2026-07-19T10:00:04Z",
+      },
+      {
+        role: "tool_result",
+        text: "ok",
+        tool: { id: "toolu_12", name: "" },
+        timestamp: "2026-07-19T10:00:09Z",
+      },
+    ];
+    render(<ChatRenderer messages={messages} />);
+
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.queryByText("no input")).toBeNull();
+
+    const [readButton, bashButton] = screen.getAllByRole("button");
+    expect(readButton.textContent).toContain("error");
+    expect(bashButton.textContent).toContain("ok");
+    expect(bashButton.textContent).toContain("5.0s");
+  });
+
   it("with the flag off, ignores attribution entirely and renders the plain role bubble", () => {
     const messages: TranscriptMessage[] = [
       {

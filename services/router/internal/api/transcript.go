@@ -51,7 +51,7 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 func normalizeTurns(msgs []provider.Message) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
-		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp}
+		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
 		if m.Tool != nil {
 			tm.Tool = &contracts.ToolUse{ID: m.Tool.ID, Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
 		}

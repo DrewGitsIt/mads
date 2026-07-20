@@ -36,9 +36,9 @@ function stubFetchWithSessionDefaults(defaults: SessionDefaults) {
 }
 
 describe("deriveSessionName", () => {
-  it("uses the first line, truncated", () => {
+  it("uses the first line, in full, with no truncation", () => {
     expect(deriveSessionName("Fix the deploy script\nmore detail")).toBe("Fix the deploy script");
-    expect(deriveSessionName("x".repeat(80))).toBe(`${"x".repeat(60)}…`);
+    expect(deriveSessionName("x".repeat(80))).toBe("x".repeat(80));
   });
 });
 
@@ -77,12 +77,31 @@ describe("Launchpad", () => {
 
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "Fix the deploy script" }),
+        expect.objectContaining({ name: "Fix the deploy script", name_source: "derived" }),
       ),
     );
     await waitFor(() =>
       expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
     );
+  });
+
+  it("stores the full first line, uncut, for a long first message", async () => {
+    const longLine = "The deploy script fails on the new Ubuntu runners".repeat(3);
+    const session = makeSession({ id: "s43", name: longLine });
+    const createSession = vi.fn().mockResolvedValue(session);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), {
+      target: { value: longLine },
+    });
+    fireEvent.click(screen.getByText("Start session"));
+
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ name: longLine })),
+    );
+    const calledName = createSession.mock.calls[0][0].name as string;
+    expect(calledName).not.toContain("…");
+    expect(calledName).toBe(longLine);
   });
 
   it("submits on Enter without Shift, and inserts a newline on Shift+Enter", () => {

@@ -9,6 +9,14 @@
   z-index: 10;
 }
 
+.breadcrumb {
+  padding: var(--space-1) var(--space-2);
+  margin-bottom: var(--space-1);
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text3);
+  font: 600 var(--fs-sm) var(--mono);
+}
+
 .list {
   list-style: none;
   margin: 0;
