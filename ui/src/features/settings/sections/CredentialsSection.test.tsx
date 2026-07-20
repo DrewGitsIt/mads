@@ -134,6 +134,28 @@ describe("CredentialsSection", () => {
     expect(screen.getByText(/bound-profile/i)).toBeTruthy();
   });
 
+  it("names a profile with no credential_bindings set, since undefined means all credentials are active", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse(["OPENAI_API_KEY"]),
+        "DELETE /credentials": () => new Response(null, { status: 204 }),
+      }),
+    );
+    const untouchedProfile: Profile = {
+      ...fixtureProfile,
+      id: "prf_untouched",
+      name: "untouched-profile",
+      snapshot: {},
+    };
+
+    render(<CredentialsSection config={makeConfig()} profiles={[untouchedProfile]} />);
+    await waitFor(() => expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /delete/i }));
+    expect(screen.getByText(/untouched-profile/i)).toBeTruthy();
+  });
+
   it("lists every stored credential, dimming ones not bound in the draft", async () => {
     vi.stubGlobal(
       "fetch",

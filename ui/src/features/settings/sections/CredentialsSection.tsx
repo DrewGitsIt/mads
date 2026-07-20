@@ -16,7 +16,6 @@ export interface CredentialsSectionProps {
 function boundProfiles(name: string, profiles: Profile[]): Profile[] {
   return profiles.filter((p) => {
     const bindings = p.snapshot.credential_bindings as string[] | undefined;
-    if (bindings === undefined) return false;
     return isCredentialActive(name, bindings);
   });
 }
