@@ -23,6 +23,11 @@
   color: var(--text);
   cursor: pointer;
   text-align: left;
+  min-width: 0;
+  max-width: 40ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .name:hover {
