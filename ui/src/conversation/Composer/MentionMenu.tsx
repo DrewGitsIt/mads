@@ -9,18 +9,29 @@ export interface MentionMenuProps {
   onSelect: (candidate: MentionCandidate) => void;
 }
 
+/** Stable option id shared with the owning textarea's aria-activedescendant. */
+export function mentionOptionId(candidateId: string): string {
+  return `mention-opt-${candidateId}`;
+}
+
 /** @/ trigger popover — reuses the kit's Panel rather than a bespoke dropdown. */
 export function MentionMenu({ candidates, activeIndex, onSelect }: MentionMenuProps) {
   if (candidates.length === 0) return null;
 
+  // Level-2 candidates (agent/model) all share a `group` — breadcrumb reads
+  // "/agent ›" so the second level never looks like an unrelated flat list.
+  const group = candidates[0]?.group;
+
   return (
     <Panel className={styles.menu}>
       <PanelBody>
+        {group && <div className={styles.breadcrumb}>/{group} ›</div>}
         <ul className={styles.list} role="listbox">
           {candidates.map((candidate, i) => (
             <li key={candidate.id}>
               <button
                 type="button"
+                id={mentionOptionId(candidate.id)}
                 role="option"
                 aria-selected={i === activeIndex}
                 className={[styles.item, i === activeIndex ? styles.active : ""]
