@@ -88,6 +88,17 @@ Task: tsk_51907d604b7638b3.
   classification for Limited/ReadOnly, or anything on the one-shot/pipeline
   code path — none of those needed to change for this fix.
 
+## Post-handoff fixup
+
+- `make build` failed downstream: `ConversationTab.test.tsx`'s blocked-banner
+  test constructed a `tool_result` fixture as `tool: { id: "toolu_1" }`,
+  missing `ToolUse.name` (non-optional in `router/types.ts`, matching Go's
+  `ToolUse.Name` which lacks `omitempty` and is always serialized). Fixed by
+  setting `name: ""`, which matches the real wire shape emitted by
+  `wireLine.events()`'s `case "user":` (only `ID` is populated on a
+  `tool_result`'s `Tool`). Re-ran `make build && make test` clean: Go tests,
+  `npm run lint`, and all 202 files / 1097 tests pass.
+
 ## What the reviewer should scrutinize
 
 - The choice of `--permission-mode bypassPermissions` over
