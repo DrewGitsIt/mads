@@ -65,7 +65,11 @@ type TransportState =
 // fall out of the same code path with no separate case to maintain.
 type TurnState =
   | { phase: "idle" }
-  | { phase: "waiting"; tool?: ToolUse } // turn started, no text chunk yet this turn
+  // turn started, no text chunk yet this turn; `blocked` is set when the
+  // provider reports the pending tool stalled awaiting permission rather
+  // than completing (a headless transport has no surface to answer the
+  // prompt — see providers/claudecode's README, "Defense in depth")
+  | { phase: "waiting"; tool?: ToolUse; blocked?: string }
   | { phase: "streaming"; text: string }; // >=1 text chunk arrived this turn
 
 // Cadence for the mid-turn transcript refresh below — modest enough that a
@@ -328,6 +332,17 @@ export function ConversationTab({
       if (parsed.kind !== "tool_use") return;
       setTurn((t) => (t.phase === "streaming" ? t : { phase: "waiting", tool: parsed.tool }));
     };
+    const onToolResult = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "tool_result" || !parsed.is_error) return;
+      // Never a silent no-op: a failed/denied tool call surfaces here even
+      // if the process is otherwise stalled with no further wire activity.
+      setTurn((t) => ({
+        phase: "waiting",
+        tool: t.phase === "waiting" ? t.tool : undefined,
+        blocked: "blocked awaiting permission — switch to terminal or raise trust",
+      }));
+    };
     const onTurnEnd = () => {
       // Only the pre-first-chunk indicator clears immediately — a streamed
       // bubble stays frozen-visible until the persisted refetch replaces it,
@@ -349,11 +364,13 @@ export function ConversationTab({
     };
     eventSource.addEventListener("text", onText);
     eventSource.addEventListener("tool_use", onTool);
+    eventSource.addEventListener("tool_result", onToolResult);
     eventSource.addEventListener("turn_end", onTurnEnd);
     eventSource.addEventListener("error", onError);
     return () => {
       eventSource.removeEventListener("text", onText);
       eventSource.removeEventListener("tool_use", onTool);
+      eventSource.removeEventListener("tool_result", onToolResult);
       eventSource.removeEventListener("turn_end", onTurnEnd);
       eventSource.removeEventListener("error", onError);
     };
@@ -512,7 +529,11 @@ export function ConversationTab({
                   links={links}
                   viewedSessionId={sessionId}
                   streamingText={liveTurn.phase === "streaming" ? liveTurn.text : undefined}
-                  working={liveTurn.phase === "waiting" ? { tool: liveTurn.tool } : false}
+                  working={
+                    liveTurn.phase === "waiting"
+                      ? { tool: liveTurn.tool, blocked: liveTurn.blocked }
+                      : false
+                  }
                 />
               )}
               {transport.status !== "idle" && (

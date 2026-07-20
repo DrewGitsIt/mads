@@ -224,6 +224,16 @@ const (
 	// "trunk_head": the trunk state this land attempt gated and landed
 	// against.
 	MergeCompleted EventType = "merge.completed"
+	// LandRetried fires when a post-rebase gate failure is triaged as a flake
+	// (an isolation rerun of the failing portion went green) and the land
+	// attempt retries — bounded, never unbounded, per land (spec: flaky
+	// tests are the canonical merge-queue killer; bounded retry with
+	// recorded evidence is the standard countermeasure). Payload: {"branch":
+	// string, "fork_sha": string, "trunk_head": string, "stage": string,
+	// "attempt": int, "classification": "flake", "packages": []string
+	// (Go packages the isolation rerun targeted, omitted when the failure
+	// wasn't package-attributable), "isolation_runs": int}.
+	LandRetried EventType = "land.retried"
 
 	// UsageRecorded fires when a provider turn or pipeline stage one-shot completes with
 	// cost reporting available (spec §11's hookpoint: tokens in, tokens out, model, and the
@@ -274,7 +284,7 @@ var EventTypes = []EventType{
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
-	MergeAttempted, MergeConflicted, MergeCompleted,
+	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef,
 }

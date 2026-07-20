@@ -93,6 +93,37 @@ with their path in the note. A post-commit hook installed in the workspace
 repo reports every commit — task context read from per-worktree git config —
 to the Data Service (§5).
 
+**A post-rebase gate failure is triaged, not taken at face value.** Rebase
+conflicts (above) are the land queue's one deterministic failure mode; a gate
+("verify") failure this late is exactly as likely to be flake/load
+interference from the land queue's own serialization as a real regression —
+both the task's own gate at fork and trunk's gate before this attempt were
+already green. `triageGateFailure` (`triage.go`) reruns the failing portion
+in the same worktree, serially (the land queue already holds exclusivity —
+that's the isolation): when the gate output names specific Go packages (go
+test's `FAIL` lines), only those packages rerun under `-race -count=1`, up to
+3 times, stopping at the first green; otherwise the gate command itself
+reruns once. Isolation-green retries the whole land attempt (rebase + full
+gate) and emits `land.retried` with the classification and rerun counts,
+bounded at 2 retries per land so a stubborn flake still surfaces to a human
+rather than looping forever. Isolation-red blocks immediately — a
+deterministic failure never costs more than that one triage round, fail fast
+to a human — and the blocker note carries the evidence (failing packages,
+isolation rerun results, trunk head) appended after the existing suspect-set
+wording. Flaky tests are the canonical merge-queue killer; bounded retry with
+recorded evidence is the standard countermeasure, never unbounded retry.
+
+**Every block backs up the branch; every done cleans it up.** Whenever a task
+blocks and its `mads/<task>` branch exists, the engine force-updates
+`backup/<task>` to the branch head before recording the block, and names the
+backup branch in the note — salvage-safe by construction, since claiming a
+task (worktree creation) deliberately wipes any live worktree/branch left
+over from a previous attempt. When a task reaches done, its `backup/<task>`
+(if any) is deleted — stale-backup hygiene. The existing convention of
+checking `backup/tsk_<id>` before re-deriving a design from scratch now holds
+automatically for every block, not just the ones a shepherd happened to back
+up by hand.
+
 Conventions the engine defines (until the spec §6 grammar grows richer):
 - An **agent stage fails** when the provider errors or the reply's last line
   starts with `STAGE: fail` (gate agents are prompted to end with
@@ -107,6 +138,9 @@ Conventions the engine defines (until the spec §6 grammar grows richer):
   depth) still present on the task branch is removed and committed — the
   architect→executor handoff convention says the executor deletes it, but
   that's chronically forgotten; this is the backstop, not the primary path.
+- A blocked task's branch is always mirrored to **`backup/<task>`** before
+  the block is recorded, and cleaned up on done — see "Every block backs up
+  the branch" above.
 
 `when:` grammar (`pkg/template.Cond`, shared with the Data Service so editor
 validation == launch validation, M9): `contains(labels, "x")` /
@@ -249,3 +283,17 @@ never a mock of either contract.
   aggregates are asserted exactly, not just non-zero). The post is
   best-effort — a failure never fails the stage that already succeeded, only
   the cost metric is missing: TestUsageRecordFailureDoesNotBlockStage.
+- **A flaky gate lands with no human intervention** — a gate that fails once
+  then passes is isolated, classified `flake`, and the whole land attempt
+  retries (`land.retried` carries the classification and rerun counts):
+  TestGateFlakeAutoRetriesAndLands. A deterministic failure blocks after
+  exactly one triage round, with failing packages, isolation results, and
+  trunk head in the blocker note alongside the existing suspect-set wording,
+  and never emits `land.retried`: TestGateDeterministicFailureBlocksWithEvidence.
+  A gate that keeps looking flaky every time still blocks once the retry
+  bound is hit — exactly `maxLandRetries` `land.retried` events, never more:
+  TestGateFlakeRetryBoundedThenBlocks.
+- **Every block is salvage-safe by construction** — `backup/<task>` exists
+  and matches the worktree branch head the moment a task blocks (named in
+  the blocker note), and is deleted once the task reaches done:
+  TestBlockBacksUpWorktreeBranch, TestDoneDeletesStaleBackupBranch.

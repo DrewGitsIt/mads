@@ -704,6 +704,231 @@ stages:
 	}
 }
 
+// A gate failure that's really a flake (green the moment it's rerun in
+// isolation) never reaches a human: the land attempt retries itself and
+// lands, with a land.retried event carrying the classification as the only
+// trace it ever failed once.
+func TestGateFlakeAutoRetriesAndLands(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-flake
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: '[ -f gate.ran ] || { touch gate.ran; exit 1; }'
+    on_fail: { then: block }
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: flaky-gate-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "work.txt", Content: "work\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "flaky-gate-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if len(sum.Blocked) != 0 {
+		t.Fatalf("task blocked despite the flake being auto-retriable: %+v", h.task(t, seeded[0].ID).Notes)
+	}
+	if _, err := os.Stat(filepath.Join(h.cwd, "work.txt")); err != nil {
+		t.Errorf("real work missing from merged trunk: %v", err)
+	}
+
+	var retried *contracts.Envelope
+	for _, ev := range h.events(t, "land.retried") {
+		if ev.TaskID == seeded[0].ID {
+			retried = &ev
+		}
+	}
+	if retried == nil {
+		t.Fatalf("no land.retried event for %s", seeded[0].ID)
+	}
+	var payload struct {
+		Classification string `json:"classification"`
+		Attempt        int    `json:"attempt"`
+		IsolationRuns  int    `json:"isolation_runs"`
+	}
+	if err := json.Unmarshal(retried.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Classification != "flake" {
+		t.Errorf("classification: %q, want flake", payload.Classification)
+	}
+	if payload.Attempt != 1 {
+		t.Errorf("attempt: %d, want 1", payload.Attempt)
+	}
+	if payload.IsolationRuns == 0 {
+		t.Errorf("isolation_runs: %d, want > 0", payload.IsolationRuns)
+	}
+}
+
+// A gate failure that's real (still red on isolation rerun) blocks fast —
+// exactly one triage round, no land-attempt retry — with the block note
+// carrying the auto-triage evidence (failing packages, isolation rerun
+// results, trunk head) alongside the existing suspect-set wording.
+func TestGateDeterministicFailureBlocksWithEvidence(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-deterministic
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: exit 1
+    on_fail: { then: block }
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: deterministic-gate-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "work.txt", Content: "work\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "deterministic-gate-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Blocked) != 1 || sum.Blocked[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if n := len(h.events(t, "land.retried")); n != 0 {
+		t.Errorf("land.retried fired for a deterministic failure: %d", n)
+	}
+
+	blocked := h.task(t, seeded[0].ID)
+	var note *contracts.Note
+	for i := range blocked.Notes {
+		if blocked.Notes[i].Type == contracts.NoteBlocker && strings.Contains(blocked.Notes[i].Content, "verify") {
+			note = &blocked.Notes[i]
+		}
+	}
+	if note == nil {
+		t.Fatalf("blocked without a verify blocker note: %+v", blocked.Notes)
+	}
+	for _, want := range []string{
+		"gates passed at fork", "trunk unchanged since fork", // existing suspect-set wording
+		"gate auto-triage: classification=deterministic", "trunk_head=",
+		"failing packages: none identified",
+		"isolation reruns (1):", // exactly one — a deterministic failure never gets more
+	} {
+		if !strings.Contains(note.Content, want) {
+			t.Errorf("blocker note missing %q:\n%s", want, note.Content)
+		}
+	}
+}
+
+// The land-attempt retry bound holds even against a gate that keeps looking
+// flaky on every isolation rerun: after maxLandRetries retries the task
+// still blocks — bounded retry, never unbounded, per spec.
+func TestGateFlakeRetryBoundedThenBlocks(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-persistent-flake
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: 'c=$(cat count 2>/dev/null || echo 0); c=$((c+1)); echo $c > count; test $((c % 2)) -eq 0'
+    on_fail: { then: block }
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: persistent-flake-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "work.txt", Content: "work\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "persistent-flake-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Blocked) != 1 || sum.Blocked[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	var attempts []int
+	for _, ev := range h.events(t, "land.retried") {
+		if ev.TaskID != seeded[0].ID {
+			continue
+		}
+		var payload struct {
+			Attempt int `json:"attempt"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		attempts = append(attempts, payload.Attempt)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("land.retried attempts: %v, want exactly 2 (bounded)", attempts)
+	}
+}
+
+// A block, whenever the task's worktree branch exists, force-backs-up
+// mads/<id> to backup/<id> and names it in the note — the salvage net for
+// the claim path (worktrees.create) wiping the live worktree/branch the
+// moment a blocked task is requeued and claimed again.
+func TestBlockBacksUpWorktreeBranch(t *testing.T) {
+	h := newHarness(t)
+	const tpl = `name: gate-deterministic
+stages:
+  - name: executor
+    agent: executor
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: exit 1
+    on_fail: { then: block }
+`
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: backup-on-block-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "work.txt", Content: "work\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "backup-on-block-task"})
+	sum, _ := h.runIsolated(t, f, tpl, 1)
+
+	if len(sum.Blocked) != 1 || sum.Blocked[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+
+	branchHead := strings.TrimSpace(gitOut(t, h.cwd, "rev-parse", "mads/"+seeded[0].ID))
+	backupHead := strings.TrimSpace(gitOut(t, h.cwd, "rev-parse", "backup/"+seeded[0].ID))
+	if backupHead == "" || backupHead != branchHead {
+		t.Errorf("backup/%s = %q, want it to match mads/%s = %q", seeded[0].ID, backupHead, seeded[0].ID, branchHead)
+	}
+
+	blocked := h.task(t, seeded[0].ID)
+	var note *contracts.Note
+	for i := range blocked.Notes {
+		if blocked.Notes[i].Type == contracts.NoteBlocker {
+			note = &blocked.Notes[i]
+		}
+	}
+	if note == nil || !strings.Contains(note.Content, "backup/"+seeded[0].ID) {
+		t.Errorf("blocker note doesn't name the backup branch: %+v", blocked.Notes)
+	}
+}
+
+// A task that reaches done cleans up its own stale backup/<id>: once real
+// work has landed, a backup left over from an earlier block on this task is
+// no longer the salvage-of-record (shepherds were deleting these by hand).
+func TestDoneDeletesStaleBackupBranch(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: clean-done-task", Reply: "done",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "work.txt", Content: "work\n"}}},
+	)
+	seeded := h.seed(contracts.Task{Title: "clean-done-task"})
+	gitRun(t, h.cwd, "branch", "backup/"+seeded[0].ID, "HEAD")
+
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", "backup/"+seeded[0].ID)
+	cmd.Dir = h.cwd
+	if err := cmd.Run(); err == nil {
+		t.Errorf("backup/%s still exists after the task reached done", seeded[0].ID)
+	}
+}
+
 // The installed post-commit hook reports commits from a task worktree to the
 // Data Service with the task trailer, and the linkage chain resolves it
 // (spec §5). curl talks to the real datatest server.

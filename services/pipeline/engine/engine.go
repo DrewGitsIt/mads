@@ -587,6 +587,12 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	if !e.setStatus(ctx, &task, contracts.StatusDone) {
 		return contracts.StatusBlocked
 	}
+	if e.wt != nil {
+		// Stale-backup hygiene: any backup/<id> left from an earlier block on
+		// this task is no longer the salvage-of-record now that real work has
+		// landed.
+		e.wt.deleteBackupBranch(context.WithoutCancel(ctx), task.ID)
+	}
 	return contracts.StatusDone
 }
 
@@ -700,6 +706,19 @@ func (g *gateFailure) Unwrap() error { return g.err }
 // SHA and the trunk HEAD this attempt gated and landed against, plus (on
 // conflict) structured pairwise attribution — the acceptance criterion a
 // future merge_resolve stage and the Merge Queue UI consume.
+//
+// A gate failure is never taken at face value: it's the rebase-before-merge
+// conflict path (unchanged, above) that a genuinely unmergeable pair of
+// tasks hits, but a gate FAILURE this late — after both the task's own gate
+// at fork and trunk's gate before this attempt were green — is exactly as
+// likely to be flake/load interference from the land queue's own
+// serialization (a still-warming cache, a port collision, a slow disk) as a
+// real regression. triageGateFailure reruns the failing portion in isolation
+// before deciding which; see its doc comment. Isolation-green retries the
+// whole land attempt (rebase + full gate), bounded at maxLandRetries so a
+// stubborn flake still surfaces to a human rather than looping forever;
+// isolation-red fails fast — a deterministic failure costs exactly one
+// triage round, never an extra land-attempt retry.
 func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []template.Stage, run *taskRun, task contracts.Task) error {
 	forkSHA := e.wt.fork(task.ID)
 	mergeDriver := "git"
@@ -713,40 +732,57 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 
 	err := e.wt.commitStray(ctx, run.dir, task)
 	var trunkHead string
-	var rebased bool
-	if err == nil {
+	for attempt := 0; err == nil; attempt++ {
+		var rebased bool
 		rebased, trunkHead, err = e.wt.rebaseBeforeMerge(ctx, run.dir, task)
-	}
-	if err == nil && rebased {
-		if buildCmd, ok := buildStageCommand(stages); ok {
-			if _, berr := e.runCommand(ctx, buildCmd, run.dir); berr != nil {
-				err = fmt.Errorf("post-rebase sanity build failed: %w", berr)
-			}
-		}
-	}
-	if err == nil {
-		err = e.wt.sweepHandoff(ctx, run.dir, task)
-	}
-	if err == nil {
-		if gidx, ok := gateStage(stages); ok {
-			gname, gcmd := stages[gidx].Name, stages[gidx].Command
-			if !e.conds[gidx].Eval(task.Labels, false) {
-				e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
-					"stage": gname, "when": stages[gidx].When,
-				})
-			} else {
-				e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
-				if _, gerr := e.runCommand(ctx, gcmd, run.dir); gerr != nil {
-					gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
-					e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
-						"stage": gname, "reason": trim(gfErr.Error(), 2000),
-					})
-					err = &gateFailure{err: gfErr}
-				} else {
-					e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+		if err == nil && rebased {
+			if buildCmd, ok := buildStageCommand(stages); ok {
+				if _, berr := e.runCommand(ctx, buildCmd, run.dir); berr != nil {
+					err = fmt.Errorf("post-rebase sanity build failed: %w", berr)
 				}
 			}
 		}
+		if err == nil {
+			err = e.wt.sweepHandoff(ctx, run.dir, task)
+		}
+		if err != nil {
+			break
+		}
+
+		gidx, hasGate := gateStage(stages)
+		if !hasGate {
+			break // no verify stage configured: nothing to gate, proceed to merge
+		}
+		gname, gcmd := stages[gidx].Name, stages[gidx].Command
+		if !e.conds[gidx].Eval(task.Labels, false) {
+			e.event(ctx, contracts.StageSkipped, task.ID, map[string]any{
+				"stage": gname, "when": stages[gidx].When,
+			})
+			break
+		}
+		e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": gname})
+		gout, gerr := e.runCommand(ctx, gcmd, run.dir)
+		if gerr == nil {
+			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+			break
+		}
+
+		triage := e.triageGateFailure(ctx, run.dir, gcmd, gout)
+		if triage.classification == "flake" && attempt < maxLandRetries {
+			e.event(ctx, contracts.LandRetried, task.ID, map[string]any{
+				"branch": run.branch, "fork_sha": forkSHA, "trunk_head": trunkHead,
+				"stage": gname, "attempt": attempt + 1, "classification": triage.classification,
+				"packages": triage.packages, "isolation_runs": len(triage.runs),
+			})
+			continue // retry the whole land attempt: rebase + full gate
+		}
+
+		gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
+		gfErr = fmt.Errorf("%w%s", gfErr, triage.evidence(trunkHead))
+		e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+			"stage": gname, "reason": trim(gfErr.Error(), 2000),
+		})
+		err = &gateFailure{err: gfErr}
 	}
 	if err == nil {
 		err = e.wt.merge(ctx, st.Command, task, run.branch, trunkHead)
@@ -865,8 +901,17 @@ func (e *engine) setStatus(ctx context.Context, task *contracts.Task, status con
 
 // block parks the task loudly: status blocked plus a blocker note saying
 // which stage and why (feedback accumulates on the task, MADS-UX drill-in).
+// When the task's branch (mads/<id>) exists, it's force-backed-up to
+// backup/<id> before the block is recorded and the backup branch is named in
+// the note — salvage-safe by construction, since the claim path (create,
+// above) wipes the live worktree/branch the moment this task is requeued and
+// claimed again (the agent convention of checking backup/tsk_<id> before
+// re-deriving a design now holds for every block, not just a lucky find).
 func (e *engine) block(ctx context.Context, task *contracts.Task, stage, reason string) {
 	ctx = context.WithoutCancel(ctx)
+	if e.wt != nil && e.wt.backupBranch(ctx, task.ID) {
+		reason = fmt.Sprintf("%s\n\nBranch backed up to backup/%s before this block.", reason, task.ID)
+	}
 	e.note(ctx, task.ID, contracts.NoteBlocker, fmt.Sprintf("stage %s: %s", stage, reason))
 	e.setStatus(ctx, task, contracts.StatusBlocked)
 }
