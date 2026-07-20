@@ -42,7 +42,7 @@ export function SettingsSurface() {
   const sectionRefs = useRef<MutableSectionRefs>(
     Object.fromEntries(SECTION_IDS.map((id) => [id, { current: null }])) as MutableSectionRefs,
   ).current;
-  const activeId = useScrollSpy(containerRef, sectionRefs);
+  const activeId = useScrollSpy(containerRef, sectionRefs, !config.loading && !!config.draft);
 
   const scrolledToHash = useRef(false);
   useEffect(() => {

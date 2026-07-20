@@ -70,23 +70,94 @@ acceptance criteria were used as spec, as the architect handoff itself notes).
 
 ## What was not done
 
-- **No manual browser smoke test.** This environment has no browser tool,
-  and exercising the real flow requires a live Router (+ Data + vault)
-  backend that isn't available here — there's no mock/fixture Router server
-  checked into the repo to point the dev server at. I did not fabricate a
-  "verified in browser" claim. Verification instead relied on:
-  - `npx tsc --noEmit -p tsconfig.json` — clean.
-  - `npm run lint` — clean.
-  - `npx vitest run` — 205 test files / 1088 tests passing, including all
-    six acceptance-criteria scenarios (one-page render + deep link scroll,
-    scroll-spy incl. bottom-of-page, switch diff/restart-badge/toast+undo,
-    drift bar on field-edit and credential-toggle with all three actions,
-    credential dimming/never-echo/delete-warns-with-bound-profiles).
-  - **Reviewer should do a manual pass in a browser against a real backend
-    before merge**, particularly to check both themes visually (CSS was
-    written against existing tokens/patterns but not rendered).
 - **Did not touch `docs/mockups/`** — no mockup file exists, nothing to
   reconcile against it.
+
+## Update from a later executor pass: real-browser verification found and fixed a severe scroll-spy bug
+
+A prior pass of this stage (the "What was not done" section above, now
+superseded) claimed no browser tool was available and relied on
+tsc/lint/vitest alone. That was wrong — this repo ships its own Playwright
+e2e harness (`ui/e2e/`, `playwright.config.ts` + `globalSetup.ts` boot a
+real Router+Data-Service topology per run) and `@playwright/test`/browsers
+were already installed. Following the standing instruction to verify UI
+changes in a real browser before claiming completion, this pass:
+
+1. Ran `npm run build` (the Router serves `ui/dist`, not a live dev
+   server — a stale/missing `dist` shows a "UI not built" placeholder,
+   which is what a first e2e attempt hit).
+2. Ran the pre-existing `e2e/settings.spec.ts` against the rebuilt UI —
+   passed unmodified, confirming the tab→nav-button change didn't break the
+   appearance/preflight journey it covers.
+3. Drove the app directly in a real Chromium browser (via a temporary,
+   now-deleted `e2e/_tmp-verify.spec.ts`) through: bottom-of-page
+   scroll-spy, `#credentials` deep link, editing a field while a profile is
+   active (drift bar), the profile-switch diff dialog, and both light and
+   dark themes. Screenshots were inspected directly.
+
+**This surfaced a real, severe bug invisible to the unit-test suite:**
+`useScrollSpy` (`ui/src/features/settings/nav/useScrollSpy.ts`)'s effect
+depended only on `[containerRef, sectionRefs]` — both stable ref *objects*
+whose identity never changes. `SettingsSurface` renders a loading
+placeholder before the real page mounts, so on first render
+`containerRef.current` is `null` and the effect's guard clause returns
+early without attaching a scroll listener. Because ref-object identity
+doesn't change when `.current` is later assigned a real DOM node, the
+effect never reran — scroll-spy was permanently frozen on whatever section
+happened to be active during the very first (pre-mount) render, regardless
+of actual scroll position. This is exactly the class of bug the
+acceptance criteria's "regression test required for the bottom-of-page
+case" was meant to catch, but the existing `scrollSpy.test.ts` only unit-
+tests the pure `computeActiveSection`/`isAtBottom` functions — no test
+exercised the DOM-wiring hook itself.
+
+**Fix**: `useScrollSpy` now takes a third `ready: boolean` parameter,
+included in the effect's dependency array; `SettingsSurface` passes
+`!config.loading && !!config.draft` (mirroring the already-correct pattern
+used by the neighboring `scrolledToHash` effect, which already depended on
+real state rather than ref identity). Added
+`ui/src/features/settings/nav/useScrollSpy.test.ts`, a `renderHook`-based
+regression test that reproduces the exact mount-timing scenario (hook
+first rendered with `ready: false` and a null container, then rerendered
+with `ready: true` once the container/sections are attached with geometry
+placing the true scroll position at the bottom) and asserts the last
+section becomes active — the bottom-of-page case specifically.
+
+Also fixed two stale doc-comment references in
+`ui/src/features/settings/state/useConfig.ts` (`AppearancePanel` →
+`AppearanceSection`, `ProfilesPanel` → `ProfilesSection`, left over from
+the `panels/` → `sections/` rename).
+
+**Verification after the fix** (same real-browser flow as above, rebuilt):
+scroll-spy correctly highlights "Updates & About" at true page bottom
+(confirmed via real DOM `scrollTop`/`scrollHeight` diagnostics, not just
+the assertion), `#credentials` deep link scrolls and highlights correctly,
+editing Concurrency limit while "quiet-hours" is active shows the
+"Modified" drift bar with a RESTART badge, the switch dialog to
+"busy-hours" shows the correct field diff (`Concurrency limit 2 → 5`) with
+its own RESTART badge, and both light and dark themes render with correct
+contrast (screenshots inspected directly, not just asserted).
+
+**One environment gotcha worth flagging for future sessions**: this
+worktree has an unrelated, already-running `./bin/router` process bound to
+`localhost:8080` (started by an earlier turn in this same session). The
+app's `ROUTER_BASE` (`ui/src/router/client.ts`) falls back to
+`http://localhost:8080` when `VITE_ROUTER_URL` isn't set at build time —
+so a `npm run build` without that env var, when tested against Playwright's
+own ephemeral (randomly-ported) e2e topology, will silently talk to that
+*other*, unrelated router process instead of the one actually serving the
+test page, because the ambient process happens to occupy the hardcoded
+default port. Worse, that ambient router's static assets are apparently a
+Go-embedded snapshot from whenever its binary was last built, not a live
+read of `ui/dist` — so testing against it directly serves *stale* UI code
+regardless of subsequent `npm run build` runs, which cost real time to
+diagnose here. The reliable pattern (used for the fix verification above):
+build with `VITE_ROUTER_URL` set to the e2e harness's own `routerURL`
+fixture value inside a `test.beforeAll`, so the built bundle's fetches
+target the same ephemeral instance serving the page. This is a pre-existing
+application/environment quirk, not something introduced or fixed by this
+task — flagging it since it will bite the next person who tries to
+manually verify this UI in a browser in this environment.
 
 ## Points for reviewer scrutiny
 

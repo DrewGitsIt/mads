@@ -17,12 +17,12 @@ export interface UseConfig {
   setDraft: (next: Config) => void;
   /** Saves `overrideDraft` if given, else the current `draft` state — lets a
    * caller that just called setDraft() avoid a stale-closure read of the
-   * pre-update draft in the same event-handler tick (e.g. AppearancePanel's
+   * pre-update draft in the same event-handler tick (e.g. AppearanceSection's
    * apply-immediately picker). */
   save: (overrideDraft?: Config) => Promise<boolean>;
   /** Re-fetches GET /config and resets initial/saved/draft to the result —
    * used after a Profiles Activate call merges a new config server-side, so
-   * ProfilesPanel can share this instance instead of duplicating config
+   * ProfilesSection can share this instance instead of duplicating config
    * state (HANDOFF §4). */
   refetch: () => Promise<void>;
 }
