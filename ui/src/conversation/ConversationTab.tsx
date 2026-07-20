@@ -635,7 +635,7 @@ export function ConversationTab({
 
         {shellOpen &&
           (ptyBridge ? (
-            <ShellDock bridge={ptyBridge} />
+            <ShellDock bridge={ptyBridge} cwd={session.worktree_dir ?? session.workspace} />
           ) : (
             <div className={styles.ptyUnavailable}>
               Shell requires the Electron shell.

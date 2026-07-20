@@ -1,9 +1,11 @@
-import { Panel, PanelBody } from "../../../components/Panel/Panel";
+import { useState } from "react";
+import { Panel, PanelBody, PanelFooter } from "../../../components/Panel/Panel";
 import type { SessionActivity } from "../../../router/types";
 import { closeState, resumeState, deleteState } from "./sessionLifecycle";
 import styles from "./SessionActionsMenu.module.css";
 
 export interface SessionActionsMenuProps {
+  sessionId: string;
   activity: SessionActivity;
   onClose: () => void;
   onResume: () => void;
@@ -15,6 +17,7 @@ export interface SessionActionsMenuProps {
 
 /** Shared kebab/rail-row popover content: all three lifecycle actions always render, unavailable ones disabled with an inline reason. */
 export function SessionActionsMenu({
+  sessionId,
   activity,
   onClose,
   onResume,
@@ -25,6 +28,15 @@ export function SessionActionsMenu({
   const close = closeState(activity);
   const resume = resumeState(activity);
   const del = deleteState(activity);
+  const [copied, setCopied] = useState(false);
+
+  function copySessionId() {
+    void navigator.clipboard.writeText(sessionId).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
   return (
     <Panel className={className}>
       <PanelBody>
@@ -71,6 +83,15 @@ export function SessionActionsMenu({
           )}
         </ul>
       </PanelBody>
+      <PanelFooter>
+        <button
+          type="button"
+          className={styles.idRow}
+          onClick={copySessionId}
+        >
+          {copied ? "Copied" : sessionId}
+        </button>
+      </PanelFooter>
     </Panel>
   );
 }

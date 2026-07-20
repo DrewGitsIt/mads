@@ -170,6 +170,7 @@ export function SessionWorkspace({
           {menuOpen && session && (
             <SessionActionsMenu
               className={styles.menu}
+              sessionId={sessionId}
               activity={session.activity}
               onClose={closeSession}
               onResume={resumeSession}
