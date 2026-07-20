@@ -115,3 +115,53 @@ clean.
   behave correctly once the two backend fixes above land; I did not run the
   dev server / exercise this in a browser (backend-only task, no UI code
   touched).
+
+## Review-fix pass: cancel didn't actually release the lease
+
+Code review correctly flagged that `services/pipeline/main.go`'s
+`ctx.Done()` branch didn't wait for the `run()` goroutine before returning,
+so the process could exit mid-cleanup without releasing the task lease.
+Fixed by adding an inner `select` that waits on `run()`'s result channel
+(bounded by the existing `shutdownGrace`, with a log line if that bound is
+hit) before shutting down the HTTP server.
+
+**That fix alone was not sufficient** — while writing the regression test
+(`TestChildReleasesLeaseOnCancel`, spawns the real compiled binary and sends
+a real SIGTERM, then checks the lease is gone via the `"pipeline"` actor's
+own `Leases()` view), I found `run()` itself didn't return promptly on
+cancellation either, so the wait above was just timing out every time
+instead of catching anything. Root cause was one level deeper, in
+`engine.runCommand` (`services/pipeline/engine/engine.go`): `sh -c "<cmd>"`
+doesn't always exec-optimize into a single process — under this
+environment it forked a real child for a bare `sleep 30`. `exec.CommandContext`
+only kills the direct `sh` process on cancel, not that grandchild; since the
+grandchild inherited `CombinedOutput`'s stdout/stderr pipe, the pipe never
+saw EOF and `CombinedOutput()` blocked until the orphaned process finished
+on its own (up to the full command duration) — well past the point where
+`runTask`'s deferred lease-release could ever run. Fixed by running `sh` as
+its own process group leader (`Setpgid: true`) and overriding `cmd.Cancel`
+to `SIGKILL` the whole group (`-pid`) instead of just the one process, with
+`cmd.WaitDelay` as a backstop that force-closes the pipes if some process
+still won't die. `TestChildReleasesLeaseOnCancel` now passes in ~0.08s
+(previously hung for the full 10s `shutdownGrace` and then some).
+
+**Scrutinize:**
+- The same "grandchild survives, pipe never closes" failure mode is
+  possible in `engine.runAgent` → `provider.OneShot` (agent stages, not
+  command stages) if the underlying provider CLI (claude-code, kiro-cli)
+  ever forks and outlives its own direct child on cancel. I did not audit
+  or change the provider implementations — out of scope for the specific
+  reviewer-flagged bug, which was reproduced and fixed via a `command:`
+  stage. Worth a follow-up check if cancel-during-agent-stage is a
+  path this task's acceptance criteria are also meant to cover.
+- `runCommand`'s process-group kill (`syscall.Setpgid`/`syscall.Kill`) is
+  Linux/POSIX-only, same platform scope as the rest of this task's
+  Linux-only `workspacelock.go` — not a new restriction, but compounds the
+  existing non-Linux gap already flagged above.
+- The pre-existing `"pipeline"`-vs-per-run lease-holder-identity question
+  (both `cmd/mads/run.go` and `services/pipeline/main.go`'s `run()`
+  authenticate every dataclient call as the literal actor string
+  `"pipeline"`, not a per-run ID, in seeming tension with
+  `services/session/main.go`'s per-session actor pattern and the
+  Supervisor's `ReleaseAll(runID, ...)` backstop) came up again while
+  tracing this bug but is unrelated to it and was not touched.

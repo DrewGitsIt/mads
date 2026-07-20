@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -830,6 +831,20 @@ func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts
 func (e *engine) runCommand(ctx context.Context, command, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Dir = dir
+	// sh doesn't always exec-optimize a single simple command (e.g. under
+	// go test's environment it forks instead) — so on cancel, killing only
+	// cmd.Process can leave a grandchild alive holding the CombinedOutput
+	// pipe open, and Wait/CombinedOutput would block until that grandchild
+	// exits on its own instead of returning promptly. Run sh as its own
+	// process group leader and kill the whole group on cancel; WaitDelay is
+	// a backstop that force-closes the pipes if a stray process still
+	// refuses to die, so this always returns instead of hanging the task's
+	// lease release.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	cmd.WaitDelay = 5 * time.Second
 	raw, err := cmd.CombinedOutput()
 	out := string(raw)
 	if err != nil {

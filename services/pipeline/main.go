@@ -190,6 +190,22 @@ func main() {
 		}
 	case <-ctx.Done():
 		stop()
+		// run(ctx, ...) observes the same ctx and must return once it's
+		// canceled — wait for it here so pipelinerun.Run's cleanup (task
+		// lease release, session deactivation, land-lock release) actually
+		// executes before the process exits. Without this wait, main
+		// returning immediately after ctx.Done() would kill every other
+		// goroutine mid-cleanup: SpawnPipeline's own SIGTERM-then-grace
+		// window (services/router/internal/supervisor terminateGrace)
+		// still bounds how long this can take before SIGKILL lands.
+		select {
+		case err := <-runErr:
+			if err != nil {
+				log.Printf("pipeline: run: %v", err)
+			}
+		case <-time.After(shutdownGrace):
+			log.Printf("pipeline: run did not exit within %s of cancellation; shutting down anyway", shutdownGrace)
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
