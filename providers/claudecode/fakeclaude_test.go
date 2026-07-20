@@ -34,6 +34,7 @@ type fcArgs struct {
 	resume          string
 	model           string
 	disallowedTools []string
+	permissionMode  string
 	mcpConfigPath   string
 	strictMCPConfig bool
 }
@@ -59,6 +60,9 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--disallowedTools":
 			i++
 			a.disallowedTools = strings.Split(argv[i], ",")
+		case "--permission-mode":
+			i++
+			a.permissionMode = argv[i]
 		case "--mcp-config":
 			i++
 			a.mcpConfigPath = argv[i]
@@ -83,6 +87,13 @@ func parseFCArgs(argv []string) fcArgs {
 func fcMCPEcho(a fcArgs) string {
 	raw, err := os.ReadFile(a.mcpConfigPath)
 	return fmt.Sprintf("mcp_config_err=%v strict=%v mcp_config=%s", err, a.strictMCPConfig, string(raw))
+}
+
+// fcPermissionEcho reports the --permission-mode value the adapter passed
+// (empty when the flag was never sent), so tests can assert TrustFull's
+// bypass flag reached the launched process on both transports.
+func fcPermissionEcho(a fcArgs) string {
+	return fmt.Sprintf("permission_mode=%s", a.permissionMode)
 }
 
 // fcToolDenied reports whether name is in the parsed --disallowedTools list.
@@ -272,6 +283,13 @@ func fcStream(a fcArgs) {
 			result(reply, false)
 			continue
 		}
+		if prompt == "permission-echo" {
+			reply := fcPermissionEcho(a)
+			fcEmit(fcAssistantText(id, reply))
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+			continue
+		}
 		if prompt == "slow" {
 			interrupted := false
 			for i := 0; i < 400 && !interrupted; i++ {
@@ -359,6 +377,10 @@ func fcTerminal(a fcArgs) {
 		text := strings.TrimSpace(sc.Text())
 		if text == "mcp-echo" {
 			fmt.Printf("%s\r\n> ", fcMCPEcho(a))
+			continue
+		}
+		if text == "permission-echo" {
+			fmt.Printf("%s\r\n> ", fcPermissionEcho(a))
 			continue
 		}
 		reply, crash := fcReply(text, nil)

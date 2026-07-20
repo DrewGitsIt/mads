@@ -14,8 +14,8 @@ export interface ChatRendererProps {
   viewedSessionId?: string;
   /** In-progress assistant text for the turn currently streaming — appended after `messages`, replaced by the persisted transcript on turn_end. */
   streamingText?: string;
-  /** Pre-first-chunk "agent is working" state; carries the most recent tool_use so the indicator can name it. Ignored once streamingText is set. */
-  working?: { tool?: ToolUse } | false;
+  /** Pre-first-chunk "agent is working" state; carries the most recent tool_use so the indicator can name it. `blocked` overrides it with a system-toned banner when a tool call stalled awaiting permission. Ignored once streamingText is set. */
+  working?: { tool?: ToolUse; blocked?: string } | false;
 }
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
@@ -82,7 +82,7 @@ export function ChatRenderer({
           <Markdown className={styles.prose} text={streamingText} />
         </div>
       )}
-      {!streamingText && working && <WorkingIndicator tool={working.tool} />}
+      {!streamingText && working && <WorkingIndicator tool={working.tool} blocked={working.blocked} />}
     </div>
   );
 }

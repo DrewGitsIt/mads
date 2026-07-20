@@ -36,6 +36,16 @@ const (
 	// semantics) without leaking into chat-mode consumers, which only ever
 	// listen for EventText.
 	EventPTYOutput EventKind = "pty_output"
+	// EventToolResult — a tool call's outcome arrived on the wire out of
+	// band from the model's own text/tool_use stream (claude-code reports
+	// these, including permission denials, as a "user" role message that
+	// feeds the result back into the model's context). Tool.ID correlates
+	// back to the EventToolUse that started it; Text is the result body,
+	// IsError marks a failure. Surfacing this live (rather than only on the
+	// next transcript refetch) is what lets a headless session show a
+	// permission-blocked tool call instead of silently stalling — see
+	// providers/claudecode's wireLine.events() and its README.
+	EventToolResult EventKind = "tool_result"
 )
 
 // Event is one entry in a session's normalized stream.
@@ -51,6 +61,9 @@ type Event struct {
 	Interrupted bool `json:"interrupted,omitempty"`
 	// Ref for EventSessionRef: the provider-native session ref.
 	Ref string `json:"ref,omitempty"`
+	// IsError marks EventToolResult as the tool call having failed
+	// (including a permission denial) — mirrors Message.IsError below.
+	IsError bool `json:"is_error,omitempty"`
 }
 
 // ToolUse is a normalized tool invocation.

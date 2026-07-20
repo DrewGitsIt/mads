@@ -569,6 +569,35 @@ describe("ConversationTab", () => {
     expect(screen.queryByRole("status", { name: "Using Read…" })).toBeNull();
   });
 
+  it("renders a blocked banner instead of a silent stall when a tool_result reports is_error", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { name: "Bash" } });
+    });
+    expect(screen.getByRole("status", { name: "Using Bash…" })).toBeTruthy();
+
+    act(() => {
+      source.emit({
+        kind: "tool_result",
+        tool: { id: "toolu_1" },
+        text: "permission denied",
+        is_error: true,
+      });
+    });
+
+    expect(
+      screen.getByText("blocked awaiting permission — switch to terminal or raise trust"),
+    ).toBeTruthy();
+    // Never a silent no-op: the pre-turn_end working indicator must not
+    // still be showing the plain "Using Bash…" spinner once blocked.
+    expect(screen.queryByRole("status", { name: "Using Bash…" })).toBeNull();
+  });
+
   it("clears the streamed bubble and replaces it with the persisted transcript on turn_end", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getTranscript")

@@ -301,7 +301,8 @@ export type StreamEvent =
   | { kind: "tool_use"; tool: ToolUse }
   | { kind: "turn_end"; usage?: Usage; interrupted?: boolean }
   | { kind: "error"; text: string }
-  | { kind: "pty_output"; text: string };
+  | { kind: "pty_output"; text: string }
+  | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean };
 
 // mirrors pkg/contracts/session.go Session (fields this tab reads)
 
