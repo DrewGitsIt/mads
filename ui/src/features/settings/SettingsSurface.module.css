@@ -13,6 +13,31 @@
   padding: var(--space-5);
 }
 
+.section {
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--line-soft);
+  margin-bottom: var(--space-5);
+}
+
+.section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.heading {
+  font: 700 var(--fs-ui) var(--sans);
+  color: var(--text);
+  margin: 0 0 var(--space-4);
+}
+
+.toastHost {
+  position: fixed;
+  bottom: var(--space-5);
+  right: var(--space-5);
+  z-index: 300;
+}
+
 .loading {
   padding: var(--space-5);
   color: var(--text2);

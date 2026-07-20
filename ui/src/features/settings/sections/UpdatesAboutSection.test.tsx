@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { UpdatesAboutPanel } from "./UpdatesAboutPanel";
+import { UpdatesAboutSection } from "./UpdatesAboutSection";
 import { fixtureUpdateCheckResult, fixtureVersionInfo } from "../../../router/fixtures";
 
-describe("UpdatesAboutPanel", () => {
+describe("UpdatesAboutSection", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -25,7 +25,7 @@ describe("UpdatesAboutPanel", () => {
 
   it("renders version info and an enabled update-check button, without checking the feed", async () => {
     const fetchMock = stubFetch();
-    render(<UpdatesAboutPanel />);
+    render(<UpdatesAboutSection />);
 
     await waitFor(() => expect(screen.getByText(/version 0\.1\.0-dev/i)).toBeTruthy());
     expect((screen.getByRole("button", { name: /check for updates/i }) as HTMLButtonElement).disabled).toBe(
@@ -36,7 +36,7 @@ describe("UpdatesAboutPanel", () => {
 
   it("checks for updates when the button is clicked", async () => {
     stubFetch();
-    render(<UpdatesAboutPanel />);
+    render(<UpdatesAboutSection />);
     await waitFor(() => expect(screen.getByText(/version 0\.1\.0-dev/i)).toBeTruthy());
 
     fireEvent.click(screen.getByRole("button", { name: /check for updates/i }));
@@ -46,7 +46,7 @@ describe("UpdatesAboutPanel", () => {
 
   it("renders About copy", () => {
     stubFetch();
-    render(<UpdatesAboutPanel />);
+    render(<UpdatesAboutSection />);
     expect(screen.getByText(/orchestrates multi-agent/i)).toBeTruthy();
   });
 });

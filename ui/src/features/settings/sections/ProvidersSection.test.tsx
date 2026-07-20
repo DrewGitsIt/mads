@@ -1,9 +1,9 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProvidersPanel } from "./ProvidersPanel";
+import { ProvidersSection } from "./ProvidersSection";
 import { fixtureProviderBehaviors, fixtureProviders } from "../../../router/fixtures";
 
-describe("ProvidersPanel", () => {
+describe("ProvidersSection", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -20,7 +20,7 @@ describe("ProvidersPanel", () => {
       }),
     );
 
-    render(<ProvidersPanel />);
+    render(<ProvidersSection />);
 
     await waitFor(() => expect(screen.getByText("claude-code")).toBeTruthy());
     expect(screen.getByText("fake")).toBeTruthy();
