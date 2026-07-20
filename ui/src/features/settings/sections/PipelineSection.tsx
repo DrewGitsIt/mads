@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import type { UseConfig } from "../state/useConfig";
 import type { AgentSelectionMode, ModelTier, SynthesisMode } from "../../../router/types";
-import styles from "./PipelinePanel.module.css";
+import styles from "./PipelineSection.module.css";
 
 const SYNTHESIS_MODES: SynthesisMode[] = ["off", "light", "full"];
 const SYNTHESIS_COST_HINTS: Record<SynthesisMode, string> = {
@@ -19,12 +19,12 @@ const MODEL_TIER_COST_HINTS: Record<ModelTier, string> = {
   best: "Highest cost, best for complex synthesis.",
 };
 
-export interface PipelinePanelProps {
+export interface PipelineSectionProps {
   config: UseConfig;
 }
 
 /** Synthesis mode + static cost hints, agent selection mode, model tier, cost alert threshold, fast model (HANDOFF §3). */
-export function PipelinePanel({ config }: PipelinePanelProps) {
+export function PipelineSection({ config }: PipelineSectionProps) {
   const { draft, fieldErrors, setDraft, save } = config;
   const [saving, setSaving] = useState(false);
 

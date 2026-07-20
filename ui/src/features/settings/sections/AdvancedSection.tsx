@@ -1,9 +1,8 @@
 import { useState } from "react";
-import { RestartBadge } from "../RestartBadge";
 import { setFlags } from "../../../featureFlags";
 import type { UseConfig } from "../state/useConfig";
 import type { FeatureFlags } from "../../../router/types";
-import styles from "./AdvancedPanel.module.css";
+import styles from "./AdvancedSection.module.css";
 
 const TOGGLES: Array<{ key: keyof FeatureFlags; label: string; description: string }> = [
   {
@@ -23,13 +22,18 @@ const TOGGLES: Array<{ key: keyof FeatureFlags; label: string; description: stri
   },
 ];
 
-export interface AdvancedPanelProps {
+export interface AdvancedSectionProps {
   config: UseConfig;
 }
 
-/** Three feature flag toggles: multi-repo, linked-sessions, remote-registry (HANDOFF §9). */
-export function AdvancedPanel({ config }: AdvancedPanelProps) {
-  const { draft, dirtyRestartFields, setDraft, save } = config;
+/**
+ * Three feature flag toggles: multi-repo, linked-sessions, remote-registry
+ * (HANDOFF §9). feature_flags applies live — it's not in
+ * RESTART_REQUIRED_FIELDS (pkg/contracts/config.go's canonical set), so no
+ * restart badge here.
+ */
+export function AdvancedSection({ config }: AdvancedSectionProps) {
+  const { draft, setDraft, save } = config;
   const [saving, setSaving] = useState<keyof FeatureFlags | null>(null);
 
   if (!draft) return null;
@@ -50,8 +54,6 @@ export function AdvancedPanel({ config }: AdvancedPanelProps) {
     setSaving(null);
   };
 
-  const restartVisible = dirtyRestartFields.includes("feature_flags");
-
   return (
     <div className={styles.panel}>
       {TOGGLES.map((item) => (
@@ -68,7 +70,6 @@ export function AdvancedPanel({ config }: AdvancedPanelProps) {
           <div className={styles.description}>{item.description}</div>
         </div>
       ))}
-      <RestartBadge visible={restartVisible} />
     </div>
   );
 }

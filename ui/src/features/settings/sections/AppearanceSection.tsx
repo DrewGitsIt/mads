@@ -2,17 +2,17 @@ import { Chip } from "../../../components/Chip/Chip";
 import type { UseConfig } from "../state/useConfig";
 import { applyTheme } from "../theme/applyTheme";
 import type { PaletteName, ThemeMode } from "../../../router/types";
-import styles from "./AppearancePanel.module.css";
+import styles from "./AppearanceSection.module.css";
 
 const PALETTES: PaletteName[] = ["clay", "space", "glacier"];
 const THEMES: ThemeMode[] = ["dark", "light", "system"];
 
-export interface AppearancePanelProps {
+export interface AppearanceSectionProps {
   config: UseConfig;
 }
 
 /** Palette + dark/light/system picker — applies live on click, persists via PUT /config (HANDOFF §5). */
-export function AppearancePanel({ config }: AppearancePanelProps) {
+export function AppearanceSection({ config }: AppearanceSectionProps) {
   const { draft, saved, setDraft, save } = config;
   if (!draft || !saved) return null;
 

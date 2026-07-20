@@ -1,9 +1,9 @@
 import { Button } from "../../../components/Button/Button";
 import { useUpdateCheck } from "../state/useUpdateCheck";
-import styles from "./UpdatesAboutPanel.module.css";
+import styles from "./UpdatesAboutSection.module.css";
 
 /** Two-column version/notes + About copy. Update checking only fires when the user clicks the button — never on mount, never on a timer (§14.3, W7.5). */
-export function UpdatesAboutPanel() {
+export function UpdatesAboutSection() {
   const { currentVersion, result, checking, check } = useUpdateCheck();
 
   return (
