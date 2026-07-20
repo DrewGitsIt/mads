@@ -56,7 +56,7 @@ describe("Launchpad", () => {
   });
 
   it("disables Start session until the composer has text", () => {
-    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
     const button = screen.getByText("Start session").closest("button");
     expect(button?.disabled).toBe(true);
 
@@ -70,7 +70,7 @@ describe("Launchpad", () => {
     const session = makeSession({ id: "s42", name: "Fix the deploy script" });
     const createSession = vi.fn().mockResolvedValue(session);
     const onSessionCreated = vi.fn();
-    render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} onSuggestionPick={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
@@ -91,7 +91,7 @@ describe("Launchpad", () => {
     const longLine = "The deploy script fails on the new Ubuntu runners".repeat(3);
     const session = makeSession({ id: "s43", name: longLine });
     const createSession = vi.fn().mockResolvedValue(session);
-    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: longLine },
@@ -108,7 +108,7 @@ describe("Launchpad", () => {
 
   it("submits on Enter without Shift, and inserts a newline on Shift+Enter", () => {
     const createSession = vi.fn().mockResolvedValue(makeSession({}));
-    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
     const textarea = screen.getByLabelText("Describe your goal");
 
     fireEvent.change(textarea, { target: { value: "Fix the thing" } });
@@ -121,7 +121,7 @@ describe("Launchpad", () => {
 
   it("shows an error toast when session creation fails", async () => {
     const createSession = vi.fn().mockRejectedValue(new Error("boom"));
-    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
 
     fireEvent.change(screen.getByLabelText("Describe your goal"), {
       target: { value: "Fix the deploy script" },
@@ -131,7 +131,7 @@ describe("Launchpad", () => {
     await waitFor(() => expect(screen.getByText("boom")).toBeTruthy());
   });
 
-  it("fills the composer when a suggestion chip is picked, without creating a session", async () => {
+  it("reports a structured navigation target when a suggestion chip is picked, without touching the composer or creating a session", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation((input: URL) => {
@@ -165,13 +165,23 @@ describe("Launchpad", () => {
       }),
     );
     const createSession = vi.fn();
-    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+    const onSuggestionPick = vi.fn();
+    render(
+      <Launchpad
+        createSession={createSession}
+        onSessionCreated={vi.fn()}
+        onSuggestionPick={onSuggestionPick}
+      />,
+    );
 
     const chip = await screen.findByText(/Resume: Merge-back UX/);
     fireEvent.click(chip);
 
+    expect(onSuggestionPick).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "resume", sessionId: "s1" }),
+    );
     const textarea = screen.getByLabelText("Describe your goal") as HTMLTextAreaElement;
-    expect(textarea.value).toBe("Resume: Merge-back UX — 1 open task");
+    expect(textarea.value).toBe("");
     expect(createSession).not.toHaveBeenCalled();
   });
 
@@ -184,7 +194,7 @@ describe("Launchpad", () => {
       trust: { value: "limited", source: "config" },
       workspace: "mads",
     });
-    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText("Inherits from mads defaults")).toBeTruthy());
   });
@@ -200,7 +210,7 @@ describe("Launchpad", () => {
         return Promise.resolve(new Response("[]", { status: 200 }));
       }),
     );
-    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText(/Inherits from/)).toBeNull();
@@ -215,7 +225,7 @@ describe("Launchpad", () => {
       trust: { value: "limited", source: "config" },
       workspace: "mads",
     });
-    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
 
     await waitFor(() => expect(screen.getByText(/Sonnet 5|claude-sonnet-5/)).toBeTruthy());
     expect(screen.queryByText(/Inherits from/)).toBeNull();
@@ -228,7 +238,7 @@ describe("Launchpad", () => {
     }
 
     it("renders a removable chip for an attached file, with no raw path in the textarea", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
 
       expect(screen.getByText("notes.txt")).toBeTruthy();
@@ -238,7 +248,7 @@ describe("Launchpad", () => {
     });
 
     it("shows a thumbnail for an image file and a glyph for a non-image file", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
       attachFile(new File([new Uint8Array(10)], "photo.png", { type: "image/png" }));
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
 
@@ -249,7 +259,7 @@ describe("Launchpad", () => {
     });
 
     it("removing a chip drops the file", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} onSuggestionPick={vi.fn()} />);
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
       expect(screen.getByText("notes.txt")).toBeTruthy();
 
@@ -261,7 +271,7 @@ describe("Launchpad", () => {
       const session = makeSession({ id: "s99" });
       const createSession = vi.fn().mockResolvedValue(session);
       const onSessionCreated = vi.fn();
-      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} onSuggestionPick={vi.fn()} />);
 
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
@@ -283,7 +293,7 @@ describe("Launchpad", () => {
       const session = makeSession({ id: "s100" });
       const createSession = vi.fn().mockResolvedValue(session);
       const onSessionCreated = vi.fn();
-      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} onSuggestionPick={vi.fn()} />);
 
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
         target: { value: "Fix the deploy script" },
