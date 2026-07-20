@@ -2,10 +2,14 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
 // fixture is a two-migration set exercising the framework independently of
@@ -122,13 +126,62 @@ func TestProductionMigrations(t *testing.T) {
 	}
 }
 
+// TestMigrationConvertsExistingProfileSettingsToSnapshot exercises migration
+// 0016: an old-shaped profile row (the pre-profiles-v2 ProfileSettings
+// overlay, stored under "$.settings") must convert to the new sparse
+// snapshot shape ("$.snapshot") with the same fields, on upgrade.
+func TestMigrationConvertsExistingProfileSettingsToSnapshot(t *testing.T) {
+	db := openTestDB(t)
+	if err := Migrate(db, Migrations()); err != nil {
+		t.Fatal(err)
+	}
+	if err := Rollback(db, Migrations(), 15); err != nil {
+		t.Fatalf("rollback to pre-0016: %v", err)
+	}
+
+	oldData := `{"id":"prf_legacy","name":"legacy","description":"","settings":{"synthesis_mode":"off","concurrency_limit":2},"system":false,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
+	if _, err := db.Exec(
+		`INSERT INTO profiles (id, name, system, data, created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?)`,
+		"prf_legacy", "legacy", oldData, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(db, Migrations()); err != nil {
+		t.Fatalf("re-migrate to apply 0016: %v", err)
+	}
+
+	var migrated string
+	if err := db.QueryRow("SELECT data FROM profiles WHERE id = ?", "prf_legacy").Scan(&migrated); err != nil {
+		t.Fatal(err)
+	}
+	var p contracts.Profile
+	if err := json.Unmarshal([]byte(migrated), &p); err != nil {
+		t.Fatalf("migrated row does not unmarshal as a Profile: %v (data=%s)", err, migrated)
+	}
+	if len(p.Snapshot) != 2 {
+		t.Fatalf("migrated snapshot = %+v, want 2 fields", p.Snapshot)
+	}
+	var mode string
+	if err := json.Unmarshal(p.Snapshot["synthesis_mode"], &mode); err != nil || mode != "off" {
+		t.Fatalf("migrated snapshot.synthesis_mode = %v, want off (err=%v)", p.Snapshot["synthesis_mode"], err)
+	}
+	var limit int
+	if err := json.Unmarshal(p.Snapshot["concurrency_limit"], &limit); err != nil || limit != 2 {
+		t.Fatalf("migrated snapshot.concurrency_limit = %v, want 2 (err=%v)", p.Snapshot["concurrency_limit"], err)
+	}
+	if strings.Contains(migrated, `"settings"`) {
+		t.Fatalf("migrated row must not retain the old settings key: %s", migrated)
+	}
+}
+
 func TestMaxVersion(t *testing.T) {
 	got, err := MaxVersion(Migrations())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != 15 {
-		t.Fatalf("MaxVersion(production set) = %d, want 15 (update this literal when a migration is added)", got)
+	if got != 16 {
+		t.Fatalf("MaxVersion(production set) = %d, want 16 (update this literal when a migration is added)", got)
 	}
 
 	// fstest.MapFS can't represent an empty directory (it synthesizes

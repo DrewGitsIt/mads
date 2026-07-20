@@ -30,7 +30,7 @@ describe("useProfiles", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     await act(async () => {
-      await result.current.create({ name: "focus-mode", settings: {} });
+      await result.current.create({ name: "focus-mode", snapshot: {} });
     });
     expect(result.current.profiles).toEqual(fixtureProfiles);
   });

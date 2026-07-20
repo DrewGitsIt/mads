@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -14,7 +16,7 @@ func TestConfigRoutes(t *testing.T) {
 	if resp := doJSON(t, srv, "GET", "/config", nil, &cfg); resp.StatusCode != http.StatusOK {
 		t.Fatalf("get: status %d", resp.StatusCode)
 	}
-	if cfg != contracts.DefaultConfig() {
+	if !reflect.DeepEqual(cfg, contracts.DefaultConfig()) {
 		t.Fatalf("fresh config = %+v, want DefaultConfig()", cfg)
 	}
 
@@ -55,10 +57,14 @@ func TestConfigRoutesValidateAll(t *testing.T) {
 func TestProfileRoutesAndActivate(t *testing.T) {
 	srv, _ := newTestServer(t)
 
+	tierJSON, err := json.Marshal(contracts.ModelTierBest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var p contracts.Profile
 	resp := doJSON(t, srv, "POST", "/profiles", contracts.Profile{
 		Name:     "night-owl",
-		Settings: contracts.ProfileSettings{DefaultModelTier: contracts.ModelTierBest},
+		Snapshot: contracts.ProfileSnapshot{"default_model_tier": tierJSON},
 	}, &p)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status %d", resp.StatusCode)

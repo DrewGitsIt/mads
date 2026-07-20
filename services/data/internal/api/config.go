@@ -43,4 +43,16 @@ func profileRoutes(mux *http.ServeMux, log *store.Log) {
 		}
 		writeJSON(w, http.StatusOK, cfg)
 	})
+
+	// POST /profiles/capture returns a snapshot of the current Config for the
+	// caller to save as a new profile or fold into an update to an existing
+	// one (profiles-v2 "save current settings as profile" capture path).
+	mux.HandleFunc("POST /profiles/capture", func(w http.ResponseWriter, r *http.Request) {
+		snap, err := store.CaptureConfigSnapshot(r.Context(), log)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, snap)
+	})
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -18,7 +19,7 @@ func TestConfigSeededAndUpdatable(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := contracts.DefaultConfig()
-	if *c != want {
+	if !reflect.DeepEqual(*c, want) {
 		t.Fatalf("seeded config = %+v, want DefaultConfig() = %+v", *c, want)
 	}
 

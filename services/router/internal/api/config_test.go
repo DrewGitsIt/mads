@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -17,7 +18,7 @@ func TestConfigRoutesProxied(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := decodeJSON[contracts.Config](t, getResp)
-	if cfg != contracts.DefaultConfig() {
+	if !reflect.DeepEqual(cfg, contracts.DefaultConfig()) {
 		t.Fatalf("fresh config = %+v, want DefaultConfig()", cfg)
 	}
 
@@ -32,9 +33,13 @@ func TestConfigRoutesProxied(t *testing.T) {
 func TestProfileRoutesProxied(t *testing.T) {
 	srv := newTestServer(t)
 
+	limitJSON, err := json.Marshal(1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resp := postJSON(t, srv.URL+"/profiles", contracts.Profile{
 		Name:     "quiet-hours",
-		Settings: contracts.ProfileSettings{ConcurrencyLimit: 1},
+		Snapshot: contracts.ProfileSnapshot{"concurrency_limit": limitJSON},
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status %d", resp.StatusCode)
