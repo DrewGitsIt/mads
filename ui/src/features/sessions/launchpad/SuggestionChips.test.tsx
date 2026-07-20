@@ -29,7 +29,7 @@ function makeTask(overrides: Partial<Task>): Task {
 }
 
 describe("SuggestionChips", () => {
-  it("renders a chip from an attention session and a chip from a ready task, and reports clicks", async () => {
+  it("renders a chip from an attention session and a chip from a ready task, and reports clicks with structured navigation, not label text", async () => {
     const fetchMock = vi.fn().mockImplementation((input: URL) => {
       const url = input.toString();
       if (url.includes("/sessions")) {
@@ -45,7 +45,15 @@ describe("SuggestionChips", () => {
     await waitFor(() => expect(screen.getByText("From your open work")).toBeTruthy());
     const resumeChip = screen.getByText(/Resume: Worktree merge-back UX/);
     fireEvent.click(resumeChip);
-    expect(onPick).toHaveBeenCalledWith(expect.stringContaining("Resume: Worktree merge-back UX"));
+    expect(onPick).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "resume", sessionId: "s1" }),
+    );
+
+    const pickupChip = screen.getByText(/Pick up: Fix merge conflict UI/);
+    fireEvent.click(pickupChip);
+    expect(onPick).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "pickup", sessionId: "s1", taskId: "t1" }),
+    );
 
     vi.unstubAllGlobals();
   });
