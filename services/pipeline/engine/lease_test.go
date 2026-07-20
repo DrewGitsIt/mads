@@ -175,3 +175,52 @@ func TestLostLeaseAbandonsTask(t *testing.T) {
 		t.Errorf("thief's lease was disturbed: %v", err)
 	}
 }
+
+// A cancelled Run must release its leases promptly rather than leaving them
+// to expire on their own — this is what services/pipeline's SIGTERM ->
+// ctx-cancellation path (main.go's signal.NotifyContext) relies on for
+// "cancel releases leases". The rate-limit backoff pause is the one place
+// runTask's own code (not the provider) waits on a timer that also selects
+// on ctx.Done(), so a cancel here proves the propagation rather than just
+// waiting out a timeout.
+func TestCancelDuringRateLimitPauseReleasesLease(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: cancelme", Reply: "done", RateLimitTimes: 1})
+	seeded := h.seed(contracts.Task{Title: "cancelme"})
+	parsed, verr := template.Check([]byte(soloTemplate), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	const backoff = 10 * time.Second // long enough that only cancel, not the timer, can end the pause
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan *Summary, 1)
+	go func() {
+		sum, _ := Run(ctx, Config{
+			Data: h.data, Provider: f, SessionID: h.sess.ID,
+			Template: parsed, Cwd: h.cwd, Concurrency: 1,
+			StageTimeout: 30 * time.Second, LeaseTTL: time.Minute,
+			RateLimitBackoff: backoff,
+		})
+		done <- sum
+	}()
+
+	time.Sleep(200 * time.Millisecond) // past the rate-limited attempt, now mid-pause
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return promptly after ctx cancellation during the rate-limit pause")
+	}
+
+	leases, err := h.data.Leases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases after cancel = %+v, want none (cancel must release, not just abandon)", leases)
+	}
+	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusInProgress {
+		t.Errorf("cancelled task status = %s, want in_progress (cancel releases the lease, not the status)", got.Status)
+	}
+}

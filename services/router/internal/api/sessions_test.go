@@ -142,6 +142,43 @@ func TestCreateSessionWorkspaceDefaultsOverrideConfig(t *testing.T) {
 	}
 }
 
+// A session created with no explicit workspace pill selection, but a
+// Config.DefaultWorkspace configured, must persist that resolved workspace
+// onto the session itself — not just use it to derive the other defaults —
+// otherwise the record ends up with workspace=null despite one having
+// clearly been in play (the Launchpad-session workspace=null bug).
+func TestCreateSessionWithNoExplicitWorkspacePersistsConfigDefault(t *testing.T) {
+	srv := newTestServer(t)
+	setDefaultProvider(t, srv.URL, "fake")
+
+	wsResp := postJSON(t, srv.URL+"/workspaces", contracts.Workspace{Name: "default-ws"})
+	if wsResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create workspace status = %d, want 201", wsResp.StatusCode)
+	}
+	ws := decodeJSON[contracts.Workspace](t, wsResp)
+
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := decodeJSON[contracts.Config](t, getResp)
+	cfg.DefaultWorkspace = ws.ID
+	if putResp := putJSON(t, srv.URL+"/config", cfg); putResp.StatusCode != http.StatusOK {
+		t.Fatalf("set default workspace: status %d", putResp.StatusCode)
+	}
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "no-explicit-ws", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp)
+	if created.Session.Workspace != ws.ID {
+		t.Errorf("workspace = %q, want config default %q persisted onto the session", created.Session.Workspace, ws.ID)
+	}
+}
+
 // Terminate on a session orphaned by a prior Router restart (Activity says
 // active, nothing tracked — Supervisor state is in-memory only) must
 // reconcile Activity to inactive, unblocking Resume end-to-end: Resume's

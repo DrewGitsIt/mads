@@ -409,9 +409,27 @@ func TestBounceSession(t *testing.T) {
 }
 
 func TestStartCancelPipeline(t *testing.T) {
-	srv := newTestServer(t)
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
 
-	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": "ses_x", "template_id": "tpl_x"})
+	ws := &contracts.Workspace{Name: "ws1", Repos: []contracts.WorkspaceRepo{{Path: t.TempDir(), Primary: true}}}
+	if err := data.CreateWorkspace(context.Background(), ws); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &contracts.Template{Name: "nightly", Source: "name: nightly\nstages:\n  - name: verify\n    command: make test\n"}
+	if err := data.CreateTemplate(context.Background(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	sess := &contracts.Session{Name: "s1", Workspace: ws.ID, Provider: "fake"}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	task := &contracts.Task{SessionID: sess.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"}
+	if err := data.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": sess.ID, "template_id": tpl.ID})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("start status = %d, want 201", resp.StatusCode)
 	}
@@ -450,6 +468,86 @@ func TestStartPipelineValidation(t *testing.T) {
 	}](t, resp)
 	if len(verr.Errors) != 2 {
 		t.Fatalf("errors = %+v, want 2 (session_id, template_id)", verr.Errors)
+	}
+}
+
+// TestStartPipelineNoWorkspace covers "201 + silence must be impossible": a
+// session with no workspace gets a clear 4xx and no child is ever spawned
+// (the suite-wide testleakcheck in TestMain fails if one were left running).
+func TestStartPipelineNoWorkspace(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+
+	sess := &contracts.Session{Name: "s1"}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": sess.ID, "template_id": "tpl_x"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp)
+	if body["error"] == "" {
+		t.Fatalf("body = %+v, want a human-readable error", body)
+	}
+}
+
+// TestStartPipelineNoReadyTasks covers the same "clear 4xx, no orphan child"
+// requirement when the session has a workspace but nothing to run.
+func TestStartPipelineNoReadyTasks(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+
+	ws := &contracts.Workspace{Name: "ws1", Repos: []contracts.WorkspaceRepo{{Path: t.TempDir(), Primary: true}}}
+	if err := data.CreateWorkspace(context.Background(), ws); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &contracts.Template{Name: "nightly", Source: "name: nightly\nstages:\n  - name: verify\n    command: make test\n"}
+	if err := data.CreateTemplate(context.Background(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	sess := &contracts.Session{Name: "s1", Workspace: ws.ID}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": sess.ID, "template_id": tpl.ID})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp)
+	if body["error"] == "" {
+		t.Fatalf("body = %+v, want a human-readable error", body)
+	}
+}
+
+// TestStartPipelineInvalidTemplate covers the same requirement for an
+// unresolvable template_id.
+func TestStartPipelineInvalidTemplate(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+
+	ws := &contracts.Workspace{Name: "ws1", Repos: []contracts.WorkspaceRepo{{Path: t.TempDir(), Primary: true}}}
+	if err := data.CreateWorkspace(context.Background(), ws); err != nil {
+		t.Fatal(err)
+	}
+	sess := &contracts.Session{Name: "s1", Workspace: ws.ID}
+	if err := data.CreateSession(context.Background(), sess); err != nil {
+		t.Fatal(err)
+	}
+	task := &contracts.Task{SessionID: sess.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"}
+	if err := data.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": sess.ID, "template_id": "nonexistent"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp)
+	if body["error"] == "" {
+		t.Fatalf("body = %+v, want a human-readable error", body)
 	}
 }
 

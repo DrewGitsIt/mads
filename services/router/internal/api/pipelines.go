@@ -5,9 +5,15 @@ import (
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
+// handleStartPipeline validates everything the pipeline child would
+// otherwise fail on after already being spawned — no workspace, no primary
+// repo, an invalid template, or no ready work — so "201 + silence" can't
+// happen: a request that would leave an orphan child listening for no
+// reason gets a 4xx with a human-readable reason instead.
 func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionID  string `json:"session_id"`
@@ -28,8 +34,48 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	sess, err := s.data.Session(ctx, body.SessionID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if sess.Workspace == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no workspace — pick one before starting"})
+		return
+	}
+	ws, err := s.data.Workspace(ctx, sess.Workspace)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session workspace " + sess.Workspace + " not found: " + err.Error()})
+		return
+	}
+	if _, ok := ws.PrimaryRepo(); !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workspace " + ws.Name + " has no primary repo configured"})
+		return
+	}
+	if _, err := pipelinerun.LoadTemplate(ctx, s.data, body.TemplateID); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	tasks, err := s.data.Tasks(ctx, body.SessionID, contracts.StatusReady)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	ready := false
+	for _, t := range tasks {
+		if !t.Draft {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "session has no ready tasks"})
+		return
+	}
+
 	runID := supervisor.NewRunID()
-	addr, err := s.sup.SpawnPipeline(r.Context(), runID, body.SessionID)
+	addr, err := s.sup.SpawnPipeline(ctx, runID, body.SessionID, body.TemplateID)
 	if err != nil {
 		writeErrMsg(w, http.StatusBadGateway, "spawn pipeline: ", err)
 		return

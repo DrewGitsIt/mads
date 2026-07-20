@@ -29,7 +29,11 @@ type sessionDefaultSources struct {
 // effort on workspace lookup — a stale/missing Config.DefaultWorkspace or an
 // explicit sess.Workspace that no longer exists degrades to "no workspace
 // defaults available", not a failed create (Workspace is optional on Session
-// today; this must not become a new hard dependency).
+// today; this must not become a new hard dependency). A workspace resolved
+// from Config.DefaultWorkspace is also written back onto sess.Workspace —
+// otherwise a session created with no explicit pill selection inherits the
+// default's other fields but persists workspace=null itself, with nothing
+// on the record to say which workspace it was actually resolved against.
 func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Session) error {
 	_, err := s.resolveSessionDefaultsSourced(ctx, sess)
 	return err
@@ -56,6 +60,7 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 		case err == nil:
 			wsDefaults = ws.Defaults
 			src.Workspace = ws.Name
+			sess.Workspace = ws.ID
 		case errors.Is(err, dataclient.ErrNotFound):
 			// Stale DefaultWorkspace or a Workspace field that no longer
 			// resolves — degrade to "no workspace defaults", not a failure.

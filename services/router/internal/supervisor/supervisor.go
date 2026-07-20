@@ -145,10 +145,15 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 // identity is runID, not sessionID: a session's tasks might be worked by an
 // interactive Session process and later a Pipeline run at different times,
 // and a distinct holder per run means the Router doesn't have to reason
-// about a session and a pipeline run sharing one holder string.
-func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID string) (string, error) {
+// about a session and a pipeline run sharing one holder string. templateID
+// is passed through so the child can load and validate its own frozen copy
+// (same launch-check the CLI runs), rather than trusting a value already
+// re-resolved once by the caller.
+func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templateID string) (string, error) {
+	argv := append(append([]string{}, s.pipelineArgv...),
+		"-run-id", runID, "-session-id", sessionID, "-template", templateID)
 	env := s.credentialEnv(ctx)
-	p, err := child.Spawn(ctx, runID, s.pipelineArgv, env, func(_ *child.Process, expected bool, exitErr error) {
+	p, err := child.Spawn(ctx, runID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onPipelineExit(runID, sessionID, expected, exitErr)
 	})
 	if err != nil {
@@ -417,8 +422,12 @@ func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exit
 	if !stillLive {
 		go s.revokeImplicitHandRaiser(context.Background(), sessionID)
 	}
-	if expected {
-		return // Cancel already emits PipelineCancelled
+	if expected || exitErr == nil {
+		// Cancel already emits PipelineCancelled (expected); a clean exit
+		// (nil exitErr) means the child ran to completion and the engine
+		// itself already emitted PipelineCompleted — neither case is a
+		// failure to report here.
+		return
 	}
 	if err := s.data.Append(ctx, &contracts.Envelope{
 		Type: contracts.PipelineFailed, SessionID: sessionID,
