@@ -76,9 +76,9 @@ type Session struct {
 	// empty defaults to Derived on Create (see store.Sessions.Create).
 	NameSource SessionNameSource `json:"name_source,omitempty"`
 	Activity   SessionActivity   `json:"activity"`
-	Workspace string          `json:"workspace,omitempty"`
-	Provider  string          `json:"provider,omitempty"`
-	Model     string          `json:"model,omitempty"`
+	Workspace  string            `json:"workspace,omitempty"`
+	Provider   string            `json:"provider,omitempty"`
+	Model      string            `json:"model,omitempty"`
 	// Agent binds this session to a registry Agent (spec §9), the source of
 	// its declared capabilities (spec §12) for capability-runtime wiring.
 	// Empty means no agent binding — no capability wiring occurs.
