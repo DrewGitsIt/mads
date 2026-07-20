@@ -141,7 +141,7 @@ describe("AgentFeedView", () => {
       />,
     );
 
-    const rows = screen.getByTestId("feed-rows").children;
+    const rows = Array.from(screen.getByTestId("feed-rows").children) as HTMLElement[];
     // stage prompt, agent text, tool card, agent text — never merged into one blob
     expect(rows).toHaveLength(4);
     expect(rows[1].dataset.testid).toBe("feed-prose-row");
