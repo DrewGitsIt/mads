@@ -51,13 +51,31 @@ func (m SynthesisMode) Valid() bool {
 	return false
 }
 
+// SessionNameSource says whether Name still reflects its placeholder origin
+// or has been claimed by a human: Derived is the first-line-of-the-launch-
+// message placeholder (or any other auto-derived starting point) that the
+// session-title job is still free to replace; User marks a name the human
+// set via the header rename affordance; Generated marks the session-title
+// job's own output. Only Derived is ever overwritten by that job — User and
+// Generated both mean "leave this alone."
+type SessionNameSource string
+
+const (
+	SessionNameSourceDerived   SessionNameSource = "derived"
+	SessionNameSourceUser      SessionNameSource = "user"
+	SessionNameSourceGenerated SessionNameSource = "generated"
+)
+
 // Session is the workspace-of-record for one conversation-with-work (spec §1).
 // Provider and Model bind at first message (spec §11.5); Summary is the
 // compressed narrative regenerated on each deactivation (spec §16).
 type Session struct {
-	ID        string          `json:"id"`
-	Name      string          `json:"name"`
-	Activity  SessionActivity `json:"activity"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// NameSource governs whether the session-title job may replace Name;
+	// empty defaults to Derived on Create (see store.Sessions.Create).
+	NameSource SessionNameSource `json:"name_source,omitempty"`
+	Activity   SessionActivity   `json:"activity"`
 	Workspace string          `json:"workspace,omitempty"`
 	Provider  string          `json:"provider,omitempty"`
 	Model     string          `json:"model,omitempty"`
