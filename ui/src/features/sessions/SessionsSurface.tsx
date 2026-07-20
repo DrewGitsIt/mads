@@ -7,6 +7,7 @@ import { router } from "../../router/client";
 import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
+import type { Suggestion } from "./launchpad/useSuggestions";
 import { SessionRail } from "./rail/SessionRail";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionLinks } from "./state/useSessionLinks";
@@ -46,6 +47,18 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     setInitialTab(undefined);
     setProvisioningSessionId(session.id);
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
+  }
+
+  /** "Resume" opens the session as-is; "Pick up" opens it on the Tasks tab so the ready task is in view. Neither seeds composer text. */
+  function handleSuggestionPick(suggestion: Suggestion) {
+    setSelectedId(suggestion.sessionId);
+    setInitialTab(suggestion.kind === "pickup" ? "tasks" : undefined);
+    const target = sessions.find((s) => s.id === suggestion.sessionId);
+    if (target && target.activity !== "active") {
+      router.resumeSession(suggestion.sessionId).catch((err: unknown) => {
+        setActionError(err instanceof Error ? err.message : String(err));
+      });
+    }
   }
 
   return (
@@ -106,7 +119,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
           />
         ) : (
-          <Launchpad createSession={createSession} onSessionCreated={handleSessionCreated} />
+          <Launchpad
+            createSession={createSession}
+            onSessionCreated={handleSessionCreated}
+            onSuggestionPick={handleSuggestionPick}
+          />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
         {actionError && (

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { ToolCard } from "../../conversation/ChatRenderer/ToolCard";
 import type { Task, TranscriptMessage } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
-import { elapsedSeconds, formatClock, pendingTool, toolArgument, truncateMiddle } from "./feedFormat";
+import { buildFeedRows, elapsedSeconds, formatClock, type FeedRow as FeedRowData } from "./feedFormat";
 import styles from "./AgentFeedView.module.css";
 
 export interface AgentFeedViewProps {
@@ -24,7 +25,7 @@ const FOLLOW_THRESHOLD_PX = 24;
 export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
-  const pending = useMemo(() => pendingTool(turns), [turns]);
+  const rows = useMemo(() => buildFeedRows(turns), [turns]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -53,78 +54,35 @@ export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
         {started && <span className={styles.metaStarted}>started {formatClock(started)}</span>}
       </div>
       <div className={styles.rows} ref={containerRef} onScroll={handleScroll} data-testid="feed-rows">
-        {turns.map((turn, i) => (
-          <FeedRow key={i} turn={turn} pending={turn === pending} />
+        {rows.map((row, i) => (
+          <FeedRow key={i} row={row} />
         ))}
       </div>
     </div>
   );
 }
 
-function FeedRow({ turn, pending }: { turn: TranscriptMessage; pending: boolean }) {
-  const time = turn.timestamp ? formatClock(turn.timestamp) : undefined;
+function FeedRow({ row }: { row: FeedRowData }) {
+  const time = row.timestamp ? formatClock(row.timestamp) : undefined;
 
-  if (turn.role === "tool" || turn.role === "tool_result") {
-    return <ToolRow turn={turn} pending={pending} time={time} />;
-  }
-
-  return (
-    <div className={styles.prose} data-role={turn.role} data-testid="feed-prose-row">
-      {time && <span className={styles.time}>{time}</span>}
-      <span className={styles.speaker}>{turn.role === "user" ? "user" : "agent"}</span>
-      <span className={styles.text}>{turn.text}</span>
-    </div>
-  );
-}
-
-function ToolRow({
-  turn,
-  pending,
-  time,
-}: {
-  turn: TranscriptMessage;
-  pending: boolean;
-  time?: string;
-}) {
-  if (turn.role === "tool_result") {
+  if (row.kind === "tool") {
     return (
-      <div className={styles.toolResult} data-testid="feed-tool-result-row">
+      <div className={styles.toolRow} data-testid="feed-tool-row" data-pending={row.pending || undefined}>
         {time && <span className={styles.time}>{time}</span>}
-        <span className={styles.resultMark}>✓</span>
-        {turn.text && <Truncatable value={turn.text} />}
+        <div className={styles.toolCardWrap}>
+          <ToolCard tool={row.tool} timestamp={row.timestamp} />
+        </div>
+        {row.pending && <Liveness since={row.timestamp} />}
       </div>
     );
   }
 
-  const arg = turn.tool ? toolArgument(turn.tool) : "";
   return (
-    <div className={styles.tool} data-testid="feed-tool-row" data-pending={pending || undefined}>
+    <div className={styles.prose} data-role={row.role} data-testid="feed-prose-row">
       {time && <span className={styles.time}>{time}</span>}
-      <span className={styles.toolMark}>⏺</span>
-      <span className={styles.toolName}>{turn.tool?.name}</span>
-      {arg && <Truncatable value={arg} />}
-      {pending && <Liveness since={turn.timestamp} />}
+      <span className={styles.speaker}>{row.role}</span>
+      <span className={styles.text}>{row.text}</span>
     </div>
-  );
-}
-
-/** Middle-truncated by default; click toggles the full value, same idiom
- * as a long path in a diff view — no separate modal/tooltip machinery. */
-function Truncatable({ value, max = 72 }: { value: string; max?: number }) {
-  const [expanded, setExpanded] = useState(false);
-  if (value.length <= max) {
-    return <span className={styles.arg}>{value}</span>;
-  }
-  return (
-    <button
-      type="button"
-      className={styles.arg}
-      onClick={() => setExpanded((e) => !e)}
-      title={value}
-      data-testid="feed-truncatable"
-    >
-      {expanded ? value : truncateMiddle(value, max)}
-    </button>
   );
 }
 
