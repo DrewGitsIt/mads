@@ -31,6 +31,11 @@ const (
 	// once per invocation; providers with no such wire-level announcement
 	// never emit it.
 	EventSessionRef EventKind = "session_ref"
+	// EventPTYOutput — a raw chunk of terminal (PTY) output, distinct from
+	// EventText so it can be buffered and replayed on reattach (tmux-attach
+	// semantics) without leaking into chat-mode consumers, which only ever
+	// listen for EventText.
+	EventPTYOutput EventKind = "pty_output"
 )
 
 // Event is one entry in a session's normalized stream.

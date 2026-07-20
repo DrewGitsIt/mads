@@ -378,9 +378,11 @@ export class FetchRouterClient implements RouterClient {
 
   // The child's live data-plane event feed (services/session's
   // GET /output, proxied byte-transparently by the Router) — this is also
-  // the channel PTY-mode terminal output flows through post-switch, since
-  // the runner's pumpPTY relays terminal reads onto the same hub as
-  // EventText.
+  // the channel PTY-mode terminal output flows through post-switch, as its
+  // own "pty_output" event kind (distinct from chat's "text"). A fresh
+  // attach replays the session's bounded server-side PTY buffer as a
+  // leading pty_output frame before live bytes (services/session/README.md),
+  // so reattaching restores terminal scrollback.
   streamSession(sessionId: string): SessionEventSource {
     return new EventSource(`${this.baseUrl}/sessions/${sessionId}/output`);
   }

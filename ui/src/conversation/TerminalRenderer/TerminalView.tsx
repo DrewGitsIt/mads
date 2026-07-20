@@ -73,8 +73,14 @@ export function TerminalView({ bridge, spawnOptions, className }: TerminalViewPr
       if (ptyId) bridge.kill(ptyId);
       term.dispose();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- bridge/spawnOptions identity is intentionally the effect's whole lifecycle
-  }, []);
+    // A bridge identity change (e.g. ConversationTab reconnecting its
+    // SessionEventSource) must re-run this effect so onData subscribes to
+    // the *current* bridge — otherwise the terminal silently listens on a
+    // stale, disconnected bridge forever (only a full remount used to fix
+    // this). spawnOptions is still deliberately excluded: callers like
+    // ShellDock pass a fresh object literal every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- spawnOptions identity is intentionally excluded
+  }, [bridge]);
 
   return (
     <div

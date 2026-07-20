@@ -37,10 +37,10 @@ export class SessionTerminalBridge implements PtyBridge {
   onData(_ptyId: string, listener: (data: string) => void): () => void {
     const handler = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind === "text") listener(parsed.text);
+      if (parsed.kind === "pty_output") listener(parsed.text);
     };
-    this.eventSource.addEventListener("text", handler);
-    return () => this.eventSource.removeEventListener("text", handler);
+    this.eventSource.addEventListener("pty_output", handler);
+    return () => this.eventSource.removeEventListener("pty_output", handler);
   }
 
   onExit(): () => void {

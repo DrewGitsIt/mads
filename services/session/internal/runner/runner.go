@@ -909,6 +909,16 @@ func (r *Runner) Subscribe() (ch <-chan provider.Event, unsubscribe func()) {
 	return r.hub.subscribe()
 }
 
+// SubscribeTerminal is Subscribe plus a replay of the hub's bounded PTY
+// ring buffer, captured atomically with the subscription (see
+// hub.subscribeWithPTYReplay). GET /output uses this so a newly attached
+// terminal stream can restore prior scrollback instead of only seeing bytes
+// that flow after attach; chat-mode turns never write EventPTYOutput, so
+// replay is empty for a chat-only session.
+func (r *Runner) SubscribeTerminal() (replay []byte, ch <-chan provider.Event, unsubscribe func()) {
+	return r.hub.subscribeWithPTYReplay()
+}
+
 // Files returns every file this session has touched, as recorded with the
 // Data Service (spec §5).
 func (r *Runner) Files(ctx context.Context) ([]contracts.FileChange, error) {
@@ -1007,8 +1017,11 @@ func (r *Runner) pump(sess provider.Session) {
 }
 
 // pumpPTY is pump's PTY-mode counterpart: it relays raw terminal bytes as
-// EventText chunks on the same hub pump uses for ACP's structured events, so
-// GET /output serves both transports uniformly.
+// EventPTYOutput chunks on the same hub pump uses for ACP's structured
+// events, so GET /output serves both transports uniformly. EventPTYOutput
+// (not EventText) keeps these bytes out of chat-mode consumers, which only
+// listen for EventText, and is what the hub buffers for terminal replay on
+// reattach (see hub.writePTY).
 //
 // Interactive terminal input goes through TerminalWrite, never Send, so PTY
 // mode's own traffic never sets busy. But Send is still a valid call in PTY
@@ -1052,7 +1065,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 	for {
 		n, err := term.Read(buf)
 		if n > 0 {
-			r.hub.broadcast(provider.Event{Kind: provider.EventText, Text: string(buf[:n])})
+			r.hub.broadcast(provider.Event{Kind: provider.EventPTYOutput, Text: string(buf[:n])})
 		}
 		if err != nil {
 			break
