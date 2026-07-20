@@ -37,3 +37,18 @@
   font: 400 var(--fs-chip) var(--sans);
   color: var(--text3);
 }
+
+.idRow {
+  width: 100%;
+  text-align: left;
+  padding: 0;
+  background: none;
+  border: none;
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+  cursor: pointer;
+}
+
+.idRow:hover {
+  color: var(--text);
+}

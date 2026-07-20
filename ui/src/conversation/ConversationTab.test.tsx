@@ -359,6 +359,77 @@ describe("ConversationTab", () => {
     );
   });
 
+  it("spawns the shell dock in the session's worktree_dir when set", async () => {
+    const client = new FakeRouterClient();
+    const bridge = makeStubBridge();
+    render(
+      <ConversationTab
+        sessionId="session-files-clean"
+        routerClient={client}
+        ptyBridge={bridge}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByLabelText("More actions"));
+    fireEvent.click(screen.getByText("Shell"));
+
+    await waitFor(() =>
+      expect(bridge.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: "/home/drew/.mads/worktrees/ses_x/tsk_retry-backoff",
+        }),
+      ),
+    );
+  });
+
+  it("falls back to the session's workspace when there's no worktree_dir", async () => {
+    const client = new FakeRouterClient();
+    const bridge = makeStubBridge();
+    render(
+      <ConversationTab sessionId="session-active" routerClient={client} ptyBridge={bridge} />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByLabelText("More actions"));
+    fireEvent.click(screen.getByText("Shell"));
+
+    await waitFor(() =>
+      expect(bridge.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: "mads" })),
+    );
+  });
+
+  it("falls back to the old default when the session has neither worktree_dir nor workspace", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-no-workspace",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "No workspace session",
+      activity: "active",
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    const bridge = makeStubBridge();
+    render(
+      <ConversationTab
+        sessionId="session-no-workspace"
+        routerClient={client}
+        ptyBridge={bridge}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("More actions"));
+    fireEvent.click(screen.getByText("Shell"));
+
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalled());
+    expect(vi.mocked(bridge.spawn).mock.calls[0][0]?.cwd).toBeUndefined();
+  });
+
   it("shows an error card when getSession rejects, and Retry refetches", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getSession").mockRejectedValueOnce(new Error("boom"));

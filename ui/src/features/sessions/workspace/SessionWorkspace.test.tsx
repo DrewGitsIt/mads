@@ -181,6 +181,15 @@ describe("SessionWorkspace", () => {
     expect(spy).toHaveBeenCalledWith("session-inactive");
   });
 
+  it("shows the session id as a footer row in the Workspace actions kebab", async () => {
+    renderWorkspace({ sessionId: "session-active" });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+
+    expect(screen.getByText("session-active")).toBeTruthy();
+  });
+
   it("Delete opens a confirm dialog with cascade language and does not delete on cancel", async () => {
     const routerClient = new FakeRouterClient();
     const spy = vi.spyOn(routerClient, "deleteSession");
