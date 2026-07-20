@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../../components/Toast/Toast";
@@ -12,6 +12,8 @@ import { TrustPill } from "./pills/TrustPill";
 import { IsolationPill } from "./pills/IsolationPill";
 import type { StagedConfig } from "./pills/stagedConfig";
 import { SuggestionChips } from "./SuggestionChips";
+import { AttachmentChips } from "./AttachmentChips";
+import { buildGoalText, toAttachedFile, type AttachedFile } from "./attachments";
 import styles from "./Launchpad.module.css";
 
 /**
@@ -36,6 +38,8 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { providers } = useProviderMatrix();
 
   useEffect(() => {
@@ -68,10 +72,27 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
         isolation: staged.isolation,
       });
       setText("");
-      onSessionCreated(session, trimmed);
+      setAttachments([]);
+      onSessionCreated(session, buildGoalText(trimmed, attachments));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  function handleFilesSelected(e: ChangeEvent<HTMLInputElement>) {
+    const files = e.target.files;
+    if (files) {
+      setAttachments((prev) => [...prev, ...Array.from(files).map(toAttachedFile)]);
+    }
+    e.target.value = "";
+  }
+
+  function removeAttachment(id: string) {
+    setAttachments((prev) => {
+      const removed = prev.find((f) => f.id === id);
+      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
+      return prev.filter((f) => f.id !== id);
+    });
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -97,11 +118,33 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
           />
+          <AttachmentChips files={attachments} onRemove={removeAttachment} />
           <div className={styles.actions}>
-            <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
-            <Button variant="primary" disabled={text.trim() === ""} onClick={() => void submit()}>
-              Start session
-            </Button>
+            <div className={styles.attachGroup}>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                aria-label="Attach files"
+                className={styles.fileInput}
+                onChange={handleFilesSelected}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                Attach files
+              </Button>
+              <span className={styles.attachHint}>Files are shared with the agent automatically</span>
+            </div>
+            <div className={styles.sendGroup}>
+              <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
+              <Button variant="primary" disabled={text.trim() === ""} onClick={() => void submit()}>
+                Start session
+              </Button>
+            </div>
           </div>
         </div>
 

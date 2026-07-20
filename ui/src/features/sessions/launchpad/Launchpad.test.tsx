@@ -47,6 +47,8 @@ describe("Launchpad", () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     stubEmptyFetch();
+    URL.createObjectURL = vi.fn(() => "blob:mock-url");
+    URL.revokeObjectURL = vi.fn();
   });
 
   afterEach(() => {
@@ -217,5 +219,80 @@ describe("Launchpad", () => {
 
     await waitFor(() => expect(screen.getByText(/Sonnet 5|claude-sonnet-5/)).toBeTruthy());
     expect(screen.queryByText(/Inherits from/)).toBeNull();
+  });
+
+  describe("file attachments", () => {
+    function attachFile(file: File) {
+      const input = screen.getByLabelText("Attach files") as HTMLInputElement;
+      fireEvent.change(input, { target: { files: [file] } });
+    }
+
+    it("renders a removable chip for an attached file, with no raw path in the textarea", () => {
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+
+      expect(screen.getByText("notes.txt")).toBeTruthy();
+      const textarea = screen.getByLabelText("Describe your goal") as HTMLTextAreaElement;
+      expect(textarea.value).toBe("");
+      expect(textarea.value).not.toContain("notes.txt");
+    });
+
+    it("shows a thumbnail for an image file and a glyph for a non-image file", () => {
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      attachFile(new File([new Uint8Array(10)], "photo.png", { type: "image/png" }));
+      attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+
+      const image = screen.getByText("photo.png").closest("span")?.parentElement;
+      expect(image?.querySelector("img")).toBeTruthy();
+      const doc = screen.getByText("notes.txt").closest("span")?.parentElement;
+      expect(doc?.querySelector("img")).toBeNull();
+    });
+
+    it("removing a chip drops the file", () => {
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+      expect(screen.getByText("notes.txt")).toBeTruthy();
+
+      fireEvent.click(screen.getByLabelText("Remove notes.txt"));
+      expect(screen.queryByText("notes.txt")).toBeNull();
+    });
+
+    it("prepends an injected reference preamble the user did not type to the goal text sent on start", async () => {
+      const session = makeSession({ id: "s99" });
+      const createSession = vi.fn().mockResolvedValue(session);
+      const onSessionCreated = vi.fn();
+      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+
+      attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+      fireEvent.change(screen.getByLabelText("Describe your goal"), {
+        target: { value: "Fix the deploy script" },
+      });
+      fireEvent.click(screen.getByText("Start session"));
+
+      await waitFor(() => expect(onSessionCreated).toHaveBeenCalled());
+      const goalText = onSessionCreated.mock.calls[0][1] as string;
+      expect(goalText).toContain("See these files for reference: notes.txt");
+      expect(goalText).toContain("Fix the deploy script");
+      // The session's own name is still derived from what the user typed, not the preamble.
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Fix the deploy script" }),
+      );
+    });
+
+    it("does not inject a preamble when no files are attached", async () => {
+      const session = makeSession({ id: "s100" });
+      const createSession = vi.fn().mockResolvedValue(session);
+      const onSessionCreated = vi.fn();
+      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+
+      fireEvent.change(screen.getByLabelText("Describe your goal"), {
+        target: { value: "Fix the deploy script" },
+      });
+      fireEvent.click(screen.getByText("Start session"));
+
+      await waitFor(() =>
+        expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
+      );
+    });
   });
 });
