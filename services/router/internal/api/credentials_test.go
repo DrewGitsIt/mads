@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -131,6 +132,70 @@ func TestCredentialEnvCandidatesUsesAllowlistNotHeuristic(t *testing.T) {
 	}
 	if hasRandom {
 		t.Errorf("candidates must not include a non-allowlisted var via heuristic match: %v", candidates)
+	}
+}
+
+// TestCredentialBindingsNeverLeakValuesAndListStaysGlobal is the "filtered
+// injection" equivalent of TestCredentialValueNeverCrossesTheWireBack (spec
+// §13): with an active CredentialBindings restriction, a stored credential's
+// value must still never appear in any Router response body, and GET
+// /credentials (name listing) must stay unfiltered/global — bindings only
+// restrict spawn-time env injection, never vault CRUD/listing.
+func TestCredentialBindingsNeverLeakValuesAndListStaysGlobal(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	creds, err := credstore.Open(filepath.Join(t.TempDir(), "credentials.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sup.SetCreds(creds)
+	opts := testOptions(t, data, sup)
+	opts.Creds = creds
+	srv := httptest.NewServer(api.New(opts))
+	t.Cleanup(srv.Close)
+
+	boundSecret := "sk-live-bound-credential-value"
+	unboundSecret := "sk-live-unbound-credential-value"
+
+	setResp := postJSON(t, srv.URL+"/credentials", map[string]string{
+		"name": "BOUND_CRED", "value": boundSecret,
+	})
+	assertNoSecretInBody(t, setResp, boundSecret)
+
+	setResp2 := postJSON(t, srv.URL+"/credentials", map[string]string{
+		"name": "UNBOUND_CRED", "value": unboundSecret,
+	})
+	assertNoSecretInBody(t, setResp2, unboundSecret)
+
+	ctx := context.Background()
+	cfg, err := data.Config(ctx)
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.CredentialBindings = []string{"BOUND_CRED"}
+	if err := data.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	listResp, err := http.Get(srv.URL + "/credentials")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoSecretInBody(t, listResp, boundSecret)
+	names := decodeJSON[[]string](t, listResp)
+	hasBound, hasUnbound := false, false
+	for _, n := range names {
+		if n == "BOUND_CRED" {
+			hasBound = true
+		}
+		if n == "UNBOUND_CRED" {
+			hasUnbound = true
+		}
+	}
+	if !hasBound || !hasUnbound {
+		t.Fatalf("credential listing = %v, want both BOUND_CRED and UNBOUND_CRED (listing stays global, only spawn injection is filtered)", names)
 	}
 }
 

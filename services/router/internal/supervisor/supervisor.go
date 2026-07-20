@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/services/router/internal/child"
 	"github.com/drewkidwell/mads/services/router/internal/job"
@@ -35,7 +36,8 @@ type Supervisor struct {
 	data         *dataclient.Client // actor = "router"
 	sessionArgv  []string           // e.g. []string{"go", "run", "./services/session"}
 	pipelineArgv []string
-	jobs         *job.Runner // nil in tests that don't exercise summary generation
+	jobs         *job.Runner      // nil in tests that don't exercise summary generation
+	creds        *credstore.Store // nil disables credential injection entirely (SetCreds)
 
 	mu        sync.Mutex
 	sessions  map[string]*child.Process
@@ -60,12 +62,65 @@ func New(data *dataclient.Client, sessionArgv, pipelineArgv []string, jobs *job.
 	}
 }
 
+// SetCreds wires the credstore used to resolve credential values for
+// spawn-time env injection (profiles-v2 §13 enforcement) — a post-
+// construction setter, not a New(...) parameter, so it doesn't force a
+// signature change on every existing call site (mirrors jobs.SetResolver).
+// nil (the zero value, and New's default) disables injection: spawned
+// children get no credential env vars at all, matching every other nil-safe
+// optional dependency in this package.
+func (s *Supervisor) SetCreds(creds *credstore.Store) {
+	s.creds = creds
+}
+
+// credentialEnv resolves the env vars a newly spawned child should receive:
+// every stored credential whose name is in Config's live CredentialBindings
+// (profiles-v2 §13 enforcement half), or every stored credential if that set
+// is empty/absent (backward compatible with pre-profiles-v2 installs). Reads
+// the binding *names* from Config and resolves *values* locally from s.creds
+// — values never cross the Data Service boundary. Fails closed: any error
+// (no credstore wired, Config or Names unreadable) yields no env at all
+// rather than an unfiltered/permissive fallback, matching this package's
+// other best-effort call sites (e.g. grantImplicitHandRaiser) that skip
+// their feature on a Config-fetch error instead of defaulting open.
+func (s *Supervisor) credentialEnv(ctx context.Context) []string {
+	if s.creds == nil {
+		return nil
+	}
+	names, err := s.creds.Names()
+	if err != nil {
+		log.Printf("supervisor: credential injection: list stored credentials: %v", err)
+		return nil
+	}
+	cfg, err := s.data.Config(ctx)
+	if err != nil {
+		log.Printf("supervisor: credential injection: load config: %v", err)
+		return nil
+	}
+	if len(cfg.CredentialBindings) > 0 {
+		bound := make(map[string]bool, len(cfg.CredentialBindings))
+		for _, name := range cfg.CredentialBindings {
+			bound[name] = true
+		}
+		filtered := names[:0:0]
+		for _, name := range names {
+			if bound[name] {
+				filtered = append(filtered, name)
+			}
+		}
+		names = filtered
+	}
+	env, _ := s.creds.ResolveEnv(names)
+	return env
+}
+
 // SpawnSession starts a Session Service child for sessionID (the lease
 // holder identity IS the session ID — matches spec: "when a session or
 // pipeline stage claims a task").
 func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string, error) {
 	argv := append(append([]string{}, s.sessionArgv...), "-session-id", sessionID)
-	p, err := child.Spawn(ctx, sessionID, argv, func(_ *child.Process, expected bool, exitErr error) {
+	env := s.credentialEnv(ctx)
+	p, err := child.Spawn(ctx, sessionID, argv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onSessionExit(sessionID, expected, exitErr)
 	})
 	if err != nil {
@@ -92,7 +147,8 @@ func (s *Supervisor) SpawnSession(ctx context.Context, sessionID string) (string
 // and a distinct holder per run means the Router doesn't have to reason
 // about a session and a pipeline run sharing one holder string.
 func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID string) (string, error) {
-	p, err := child.Spawn(ctx, runID, s.pipelineArgv, func(_ *child.Process, expected bool, exitErr error) {
+	env := s.credentialEnv(ctx)
+	p, err := child.Spawn(ctx, runID, s.pipelineArgv, env, func(_ *child.Process, expected bool, exitErr error) {
 		s.onPipelineExit(runID, sessionID, expected, exitErr)
 	})
 	if err != nil {

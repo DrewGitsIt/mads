@@ -52,7 +52,7 @@ func TestSpawnDiscoversAddrAndTerminate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	p, err := Spawn(ctx, "test1", []string{testChildBin}, func(_ *Process, expected bool, err error) {
+	p, err := Spawn(ctx, "test1", []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
 		exitCh <- exitResult{expected, err}
 	})
 	if err != nil {
@@ -98,7 +98,7 @@ func TestExternalKillIsUnexpected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	p, err := Spawn(ctx, "test2", []string{testChildBin}, func(_ *Process, expected bool, err error) {
+	p, err := Spawn(ctx, "test2", []string{testChildBin}, nil, func(_ *Process, expected bool, err error) {
 		exitCh <- exitResult{expected, err}
 	})
 	if err != nil {
@@ -128,7 +128,7 @@ func TestExternalKillIsUnexpected(t *testing.T) {
 }
 
 func TestSpawnEmptyArgv(t *testing.T) {
-	if _, err := Spawn(context.Background(), "empty", nil, nil); err == nil {
+	if _, err := Spawn(context.Background(), "empty", nil, nil, nil); err == nil {
 		t.Fatal("Spawn with empty argv: want error, got nil")
 	}
 }
@@ -156,7 +156,7 @@ func TestTerminateKillsGrandchildProcessGroup(t *testing.T) {
 	defer cancel()
 
 	argv := []string{"sh", scriptPath, pidfilePath, testChildBin}
-	p, err := Spawn(ctx, "wrapper", argv, nil)
+	p, err := Spawn(ctx, "wrapper", argv, nil, nil)
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}

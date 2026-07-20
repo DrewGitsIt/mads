@@ -2,7 +2,9 @@ package supervisor_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/testleakcheck"
@@ -56,6 +59,41 @@ func newSupervisor(t *testing.T, data *dataclient.Client, jobs *job.Runner) *sup
 	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, jobs)
 	t.Cleanup(func() { sup.Shutdown(context.Background()) })
 	return sup
+}
+
+// newCredStore opens a credstore in a fresh temp dir seeded with name→value
+// for each entry in creds.
+func newCredStore(t *testing.T, creds map[string]string) *credstore.Store {
+	t.Helper()
+	store, err := credstore.Open(filepath.Join(t.TempDir(), "credentials.json"))
+	if err != nil {
+		t.Fatalf("credstore.Open: %v", err)
+	}
+	for name, value := range creds {
+		if err := store.Set(name, value); err != nil {
+			t.Fatalf("credstore.Set(%s): %v", name, err)
+		}
+	}
+	return store
+}
+
+// envPresent asks a testchild process, over its "-addr"-discovered HTTP
+// address, whether name is set in its own OS environment — the only way to
+// observe a separately-spawned process's env from a test.
+func envPresent(t *testing.T, addr, name string) bool {
+	t.Helper()
+	resp, err := http.Get(fmt.Sprintf("http://%s/env?name=%s", addr, name))
+	if err != nil {
+		t.Fatalf("GET /env?name=%s: %v", name, err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Present bool `json:"present"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode /env response: %v", err)
+	}
+	return body.Present
 }
 
 // eventually polls fn on a tight interval until it reports success or the
@@ -714,5 +752,111 @@ func TestSessionResumeAfterGracefulStopRestart(t *testing.T) {
 	}
 	if afterRestartTask.Status != beforeTask.Status || afterRestartTask.Title != beforeTask.Title {
 		t.Fatalf("task state lost/reset across stop/restart cycle: before %+v, after %+v", beforeTask, afterRestartTask)
+	}
+}
+
+// With no CredentialBindings set, a spawned session's environment contains
+// every stored credential (backward compatible with pre-profiles-v2
+// installs).
+func TestSpawnSessionInjectsAllCredentialsWhenNoBindings(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+	sup.SetCreds(newCredStore(t, map[string]string{"CRED_A": "secret-a", "CRED_B": "secret-b"}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	addr, err := sup.SpawnSession(ctx, "ses_all_creds")
+	if err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if !envPresent(t, addr, "CRED_A") {
+		t.Error("CRED_A not present in spawned env, want present (no bindings = all credentials)")
+	}
+	if !envPresent(t, addr, "CRED_B") {
+		t.Error("CRED_B not present in spawned env, want present (no bindings = all credentials)")
+	}
+}
+
+// With a binding set of {CRED_A}, a spawned session's environment contains
+// CRED_A but not CRED_B (profiles-v2 §13 enforcement).
+func TestSpawnSessionInjectsOnlyBoundCredentials(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+	sup.SetCreds(newCredStore(t, map[string]string{"CRED_A": "secret-a", "CRED_B": "secret-b"}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cfg, err := data.Config(ctx)
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.CredentialBindings = []string{"CRED_A"}
+	if err := data.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	addr, err := sup.SpawnSession(ctx, "ses_bound_creds")
+	if err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+	if !envPresent(t, addr, "CRED_A") {
+		t.Error("CRED_A not present in spawned env, want present (bound)")
+	}
+	if envPresent(t, addr, "CRED_B") {
+		t.Error("CRED_B present in spawned env, want absent (not bound)")
+	}
+}
+
+// Changing the binding set (profile switch) affects only the NEXT spawned
+// session; a session already spawned under the old binding set keeps
+// whatever it was given at spawn time — a process's env is fixed for its
+// lifetime; nothing re-injects credentials into a running child.
+func TestCredentialBindingChangeAffectsOnlyNextSpawn(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+	sup.SetCreds(newCredStore(t, map[string]string{"CRED_A": "secret-a", "CRED_B": "secret-b"}))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	// Spawned first, under no bindings: gets both credentials.
+	firstAddr, err := sup.SpawnSession(ctx, "ses_before_switch")
+	if err != nil {
+		t.Fatalf("SpawnSession (first): %v", err)
+	}
+	if !envPresent(t, firstAddr, "CRED_A") || !envPresent(t, firstAddr, "CRED_B") {
+		t.Fatal("first session missing a credential before any binding was set")
+	}
+
+	// Profile switch: restrict to {CRED_A}.
+	cfg, err := data.Config(ctx)
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.CredentialBindings = []string{"CRED_A"}
+	if err := data.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	// The already-running first session is untouched: still has both.
+	if !envPresent(t, firstAddr, "CRED_A") || !envPresent(t, firstAddr, "CRED_B") {
+		t.Error("already-running session's env changed after a binding-set switch, want untouched")
+	}
+
+	// The next spawned session only gets the newly bound credential.
+	secondAddr, err := sup.SpawnSession(ctx, "ses_after_switch")
+	if err != nil {
+		t.Fatalf("SpawnSession (second): %v", err)
+	}
+	if !envPresent(t, secondAddr, "CRED_A") {
+		t.Error("second session missing CRED_A, want present (bound)")
+	}
+	if envPresent(t, secondAddr, "CRED_B") {
+		t.Error("second session has CRED_B, want absent (not bound after switch)")
 	}
 }
