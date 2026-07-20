@@ -209,6 +209,9 @@
 }
 
 .linkBar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -216,6 +219,11 @@
   padding: var(--space-2) var(--space-3);
   background: var(--accent-soft);
   border-radius: var(--r-sm);
+}
+
+.linkBarCount {
+  color: var(--accent);
+  font: 600 var(--fs-sm) var(--sans);
 }
 
 .linkBarAction {
@@ -227,7 +235,12 @@
   padding: 0;
 }
 
-.linkBarClear {
+.linkBarAction:disabled {
+  color: var(--text3);
+  cursor: not-allowed;
+}
+
+.linkBarCancel {
   background: transparent;
   border: none;
   color: var(--text2);
@@ -235,4 +248,44 @@
   cursor: pointer;
   padding: 0;
   margin-left: auto;
+}
+
+.linkAnchor {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.linkDimmed {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.linkModeIndicator {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding-right: var(--space-3);
+}
+
+.linkAnchorBadge {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--accent);
+  letter-spacing: 0.04em;
+}
+
+.linkCheckbox {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.linkDimmedTag {
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  background: var(--bg3);
+  border-radius: var(--r-sm);
+  padding: 1px 7px;
 }

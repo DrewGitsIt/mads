@@ -254,24 +254,85 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByRole("button", { name: "Unlink payments refactor" })).toBeTruthy();
   });
 
-  it("shows a Link N sessions… bar once 2+ rows have their link action toggled on, and Clear resets it", () => {
+  it("clicking a card's link action enters link mode with it as the anchor and shows a floating bar", () => {
     FLAGS.linkedSessions = true;
     const b = makeSession({ id: "b", name: "gateway hardening" });
     render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
 
-    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
+    expect(screen.queryByText(/selected$/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Add gateway hardening to link selection" }));
-    expect(screen.getByText("Link 2 sessions…")).toBeTruthy();
 
-    // Toggling on flips the button's own label/pressed state.
+    expect(screen.getByText("1 selected")).toBeTruthy();
+    expect(screen.getByText("Anchor")).toBeTruthy();
+    // The anchor no longer exposes its own link-start button; the bar's
+    // "Choose mode" advance is disabled until a second session joins.
+    expect(screen.queryByRole("button", { name: "Add investigator to link selection" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Remove investigator from link selection" }),
-    ).toBeTruthy();
+      (screen.getByRole("button", { name: "Choose mode" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
 
-    fireEvent.click(screen.getByText("Clear"));
-    expect(screen.queryByText(/Link \d sessions…/)).toBeNull();
+  it("tapping a same-workspace card in link mode adds it to the selection; tapping again removes it", () => {
+    FLAGS.linkedSessions = true;
+    const b = makeSession({ id: "b", name: "gateway hardening" });
+    const onSelect = vi.fn();
+    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} onSelect={onSelect} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
+    fireEvent.click(screen.getByText("gateway hardening"));
+
+    expect(screen.getByText("2 selected")).toBeTruthy();
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Remove gateway hardening from link selection",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByRole("button", { name: "Choose mode" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    // Tapping a card to add it to the selection must not also navigate to it.
+    expect(onSelect).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("gateway hardening"));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+  });
+
+  it("dims cross-workspace cards during link mode so they cannot be added", () => {
+    FLAGS.linkedSessions = true;
+    const sameWorkspace = makeSession({ id: "b", name: "gateway hardening", workspace: "repo-a" });
+    const otherWorkspace = makeSession({ id: "c", name: "unrelated repo work", workspace: "repo-b" });
+    const anchor = makeSession({ id: "lead2", name: "investigator two", workspace: "repo-a" });
+    render(
+      <SessionRail sessions={[anchor, sameWorkspace, otherWorkspace]} openTaskCounts={{}} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add investigator two to link selection" }));
+
+    expect(screen.getByText("different workspace")).toBeTruthy();
+    expect(
+      screen.queryByRole("checkbox", { name: "Add unrelated repo work to link selection" }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByText("unrelated repo work"));
+    expect(screen.getByText("1 selected")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("gateway hardening"));
+    expect(screen.getByText("2 selected")).toBeTruthy();
+  });
+
+  it("Cancel exits link mode and restores the normal per-row link action", () => {
+    FLAGS.linkedSessions = true;
+    const b = makeSession({ id: "b", name: "gateway hardening" });
+    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
+    fireEvent.click(screen.getByText("gateway hardening"));
+    fireEvent.click(screen.getByText("Cancel"));
+
+    expect(screen.queryByText(/selected$/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Add investigator to link selection" })).toBeTruthy();
   });
 
   it("opens the chooser dialog and creates a link via the router client", async () => {
@@ -284,14 +345,16 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add gateway hardening to link selection" }));
-    fireEvent.click(screen.getByText("Link 2 sessions…"));
+    fireEvent.click(screen.getByText("gateway hardening"));
+    fireEvent.click(screen.getByRole("button", { name: "Choose mode" }));
 
     expect(screen.getByRole("dialog")).toBeTruthy();
     fireEvent.click(screen.getByText("Create 1 link"));
 
     await waitFor(() => expect(createLinkSpy).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Creating resets link mode entirely.
+    expect(screen.queryByText(/selected$/)).toBeNull();
   });
 
   it("offers Unlink only on the nested subject row, and confirming deletes the link via the router client", async () => {
