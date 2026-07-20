@@ -187,6 +187,30 @@ func TestTerminalResizeBeforeReadyReturns503(t *testing.T) {
 	}
 }
 
+func TestTransportStatusBeforeStartDefaultsChat(t *testing.T) {
+	r := runner.New("unstarted", nil, nil)
+	srv := httptest.NewServer(New(r))
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/transport")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /transport status = %d, want 200", resp.StatusCode)
+	}
+	var got struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Mode != "chat" {
+		t.Fatalf("mode = %q, want %q", got.Mode, "chat")
+	}
+}
+
 func TestSwitchTransportRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	dataBase := datatest.Start(t)
@@ -302,6 +326,21 @@ waitTurnEnd:
 	}
 	if terminalResult.Mode != "terminal" || terminalResult.Ref == "" {
 		t.Fatalf("terminal switch result = %+v, want mode=terminal and non-empty ref", terminalResult)
+	}
+
+	statusResp, err := srv.Client().Get(srv.URL + "/transport")
+	if err != nil {
+		t.Fatalf("GET /transport: %v", err)
+	}
+	var statusResult struct {
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(statusResp.Body).Decode(&statusResult); err != nil {
+		t.Fatal(err)
+	}
+	_ = statusResp.Body.Close()
+	if statusResult.Mode != "terminal" {
+		t.Fatalf("GET /transport after switching to terminal = %q, want %q", statusResult.Mode, "terminal")
 	}
 
 	toChat, err := json.Marshal(map[string]string{"mode": "chat"})

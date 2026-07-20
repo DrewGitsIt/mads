@@ -131,6 +131,13 @@ type Runner struct {
 	busy         bool   // a turn is in flight (Send called, no EventTurnEnd yet)
 	closing      bool   // Shutdown has started tearing this session down
 
+	// mode is the transport mode last successfully established — set
+	// alongside sess in Start and SwitchTransport, and read back by Mode().
+	// Kept as its own field rather than derived from sess.Mode() so a caller
+	// still gets a meaningful answer during the brief window mid-switch where
+	// sess is nil (old transport closed, new one not yet started).
+	mode provider.Mode
+
 	// pending holds injected messages that arrived while busy (decision 1,
 	// docs/LINKED-SESSIONS-DESIGN.md): inject never interrupts an in-flight
 	// turn, it queues behind it. onTurnEnd pops and delivers the head of
@@ -313,6 +320,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.providerName = sess.Provider
 	r.prov = p
 	r.baseOpts = opts
+	r.mode = opts.Mode
 	r.lastRef = provSess.Ref()
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
@@ -695,6 +703,7 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 
 	r.mu.Lock()
 	r.sess = newSess
+	r.mode = mode
 	r.lastRef = newSess.Ref()
 	r.mu.Unlock()
 
@@ -712,6 +721,16 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	}
 
 	return newSess.Ref(), nil
+}
+
+// Mode reports the transport mode currently in effect (or, mid-switch,
+// the mode a completed switch last established) — read by GET /transport
+// so the UI can initialize its display-mode toggle from the session's real
+// state on mount instead of assuming chat.
+func (r *Runner) Mode() provider.Mode {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.mode
 }
 
 // persistProviderRef updates r.lastRef and writes the ref to the Data

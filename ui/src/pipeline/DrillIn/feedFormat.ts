@@ -1,3 +1,4 @@
+import { foldToolResults } from "../../router/toolPairing";
 import type { ToolUse, TranscriptMessage } from "../../router/types";
 
 /** Middle-truncates value, keeping both ends visible — full value stays
@@ -32,16 +33,21 @@ export function elapsedSeconds(sinceIso: string, now = Date.now()): number {
 }
 
 /**
- * The feed's liveness signal (DESIGN point 4): walking backward from the
- * latest turn, a trailing "tool" with no "tool_result" after it is still
- * in flight. A pipeline stage runs one tool call at a time, so there's
- * never more than one pending turn to find.
+ * The feed's liveness signal (DESIGN point 4): the trailing "tool" with no
+ * tool_result paired to it (foldToolResults, the same ID-based pairing the
+ * chat transcript uses) is still in flight. A pipeline stage runs one tool
+ * call at a time, so there's never more than one pending turn to find.
+ * Returns the exact turn object from `turns` (foldToolResults preserves
+ * reference identity for unresolved tool_uses), so callers can compare a
+ * row's turn against this by `===`.
  */
 export function pendingTool(turns: TranscriptMessage[]): TranscriptMessage | undefined {
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const turn = turns[i];
-    if (turn.role === "tool_result") return undefined;
-    if (turn.role === "tool") return turn;
+  const folded = foldToolResults(turns);
+  for (let i = folded.length - 1; i >= 0; i--) {
+    const turn = folded[i];
+    if (turn.role === "tool") {
+      return turn.tool?.result ? undefined : turn;
+    }
   }
   return undefined;
 }

@@ -83,6 +83,22 @@ func (s *server) handleSessionTransport(w http.ResponseWriter, r *http.Request) 
 	s.proxyTo(w, r, addr, "/transport")
 }
 
+// handleGetSessionTransport reports the session's current live transport
+// mode, read straight from the running child (GET /transport,
+// services/session's Runner.Mode() — the only writer of that state, via
+// SwitchTransport). A session with no tracked child has no transport
+// history to report at all, so this answers "chat" — the UI's own
+// default — instead of 404ing; unlike every other proxy in this file, a
+// missing child is not an error here.
+func (s *server) handleGetSessionTransport(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]string{"mode": "chat"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/transport")
+}
+
 func (s *server) handleSessionInput(w http.ResponseWriter, r *http.Request) {
 	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
 	if !ok {

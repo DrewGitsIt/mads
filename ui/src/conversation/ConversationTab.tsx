@@ -67,6 +67,11 @@ type TurnState =
   | { phase: "waiting"; tool?: ToolUse } // turn started, no text chunk yet this turn
   | { phase: "streaming"; text: string }; // >=1 text chunk arrived this turn
 
+// Cadence for the mid-turn transcript refresh below — modest enough that a
+// live turn's tool cards/paragraphs settle in well under a second of visible
+// lag, without turning every turn into a request storm.
+const TURN_POLL_INTERVAL_MS = 1500;
+
 /**
  * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the header,
  * the chat/terminal display-mode switch, the inactive-session summary
@@ -119,6 +124,10 @@ export function ConversationTab({
     setSession(null);
     setMessages([]);
     setTurn({ phase: "idle" });
+    // Reset to the chat default up front — the mode lookup below is async,
+    // so a stale mode carried over from whatever session was mounted before
+    // this one must never leak into this session's initial render.
+    setTransport({ status: "idle", mode: "chat" });
     void routerClient
       .getSession(sessionId)
       .then((s) => {
@@ -135,6 +144,24 @@ export function ConversationTab({
       .catch(() => {
         if (!cancelled) setLoadError(true);
       });
+    // The session service's current transport mode IS the persistence
+    // mechanism for the toggle's last state — every switch is a real
+    // SwitchTransport, so there's nothing else to read the "last choice"
+    // from. A single read on mount, never a switch: a dormant session with
+    // no live child (and so no transport history) answers "chat", which is
+    // already this effect's default above, so a failed/degenerate lookup
+    // just leaves that default standing. The mode is validated rather than
+    // trusted blindly, so an unexpected response shape (e.g. a route that
+    // doesn't exist yet against a plain test fetch mock) degrades to that
+    // same default instead of forcing the tab into a broken non-chat state.
+    void routerClient
+      .getTransportMode(sessionId)
+      .then(({ mode }) => {
+        if (!cancelled && (mode === "chat" || mode === "terminal")) {
+          setTransport({ status: "idle", mode });
+        }
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -251,6 +278,12 @@ export function ConversationTab({
   const messagesRef = useRef<TranscriptMessage[]>(messages);
   messagesRef.current = messages;
 
+  // Latest turn phase, read from callbacks that fire outside the render
+  // that set it (EventSource "open", visibilitychange) — same ref-mirrors-
+  // state idiom as messagesRef above.
+  const turnPhaseRef = useRef(turn.phase);
+  turnPhaseRef.current = turn.phase;
+
   // GET /transcript has no push notification for turn completion (no domain
   // event fires per-turn, only on session start/shutdown), so the persisted
   // reply only becomes visible by re-fetching once the stream's turn_end
@@ -322,6 +355,74 @@ export function ConversationTab({
       eventSource.removeEventListener("error", onError);
     };
   }, [eventSource, refetchAfterTurn]);
+
+  // While a turn is live, periodically re-fetch the persisted transcript —
+  // the provider's transcript file is written continuously during a turn
+  // (same premise as the pipeline drill-in's turns feed, DrillInFeed.tsx),
+  // so completed paragraphs and tool cards surface well before turn_end
+  // instead of piling up as one streamed blob. The streamed bubble is reset
+  // on every refresh since its contents are now part of a persisted block —
+  // it just shrinks to whatever text has arrived since. Stops the instant
+  // the turn goes idle or this tab unmounts; never runs while idle.
+  useEffect(() => {
+    if (turn.phase === "idle") return;
+    let cancelled = false;
+    const id = window.setInterval(() => {
+      void routerClient.getTranscript(sessionId).then((fresh) => {
+        if (cancelled) return;
+        setMessages(fresh);
+        setTurn((t) => (t.phase === "streaming" ? { phase: "streaming", text: "" } : t));
+      });
+    }, TURN_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [turn.phase, routerClient, sessionId]);
+
+  // Native EventSource auto-reconnects after a mid-stream drop (unlike the
+  // dead-on-arrival case streamBroken handles above, which never retries on
+  // its own) — but whatever frames were missed during the outage are gone
+  // for good, so a live turn needs a deliberate refetch the moment the
+  // connection is restored, rather than waiting up to
+  // TURN_POLL_INTERVAL_MS for the next scheduled poll.
+  useEffect(() => {
+    if (!eventSource) return;
+    const onOpen = () => {
+      if (turnPhaseRef.current === "idle") return;
+      void routerClient.getTranscript(sessionId).then(setMessages);
+      refetchSession();
+    };
+    eventSource.addEventListener("open", onOpen);
+    return () => eventSource.removeEventListener("open", onOpen);
+  }, [eventSource, routerClient, sessionId, refetchSession]);
+
+  // Sticky "a turn was in flight since we last knew the tab was visible"
+  // flag. Backgrounded tabs throttle timers/connections, so a turn that
+  // starts and finishes entirely while hidden can leave turn_end unhandled —
+  // this catches that the moment the user looks back, rather than depending
+  // on refocus to be an accidental refetch trigger (the exact bug reported).
+  // Cleared once reconciled while visible; left set if the turn is still
+  // running so a later visibility toggle checks again.
+  const turnWasLiveRef = useRef(false);
+  useEffect(() => {
+    if (turn.phase !== "idle") {
+      turnWasLiveRef.current = true;
+    } else if (document.visibilityState === "visible") {
+      turnWasLiveRef.current = false;
+    }
+  }, [turn.phase]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible" || !turnWasLiveRef.current) return;
+      turnWasLiveRef.current = turnPhaseRef.current !== "idle";
+      void routerClient.getTranscript(sessionId).then(setMessages);
+      refetchSession();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [routerClient, sessionId, refetchSession]);
 
   if (loadError) {
     return (

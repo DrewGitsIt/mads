@@ -29,6 +29,9 @@ type TranscriptMessage struct {
 	// Timestamp is when the provider recorded this entry, when its wire
 	// format carries one. Zero value when unknown.
 	Timestamp time.Time `json:"timestamp,omitempty"`
+	// IsError marks a Role "tool_result" entry as the tool call having
+	// failed. Meaningless on other roles.
+	IsError bool `json:"is_error,omitempty"`
 }
 
 // Attribution identifies the linked session a message was injected from

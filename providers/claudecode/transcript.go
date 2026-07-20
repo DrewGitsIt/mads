@@ -94,6 +94,7 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 						Text:      toolResultText(b.Content),
 						Tool:      &provider.ToolUse{ID: b.ToolUseID},
 						Timestamp: ts,
+						IsError:   b.IsError,
 					})
 				}
 			}

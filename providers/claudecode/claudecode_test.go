@@ -164,6 +164,53 @@ func TestTranscriptNormalizationGolden(t *testing.T) {
 	golden.Assert(t, "transcript.golden.json", append(got, '\n'))
 }
 
+// Regression for the "no input" tool-result card bug: a denied image read
+// (is_error tool_result) followed by a successful bash call must each carry
+// their tool_use's ID and the wire's is_error flag through to the
+// normalized Message, so the frontend can pair and render them correctly.
+func TestTranscriptNormalizationDenialGolden(t *testing.T) {
+	f, err := os.Open("testdata/transcript_denial.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	msgs, err := normalizeTranscript(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.MarshalIndent(msgs, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "transcript_denial.golden.json", append(got, '\n'))
+
+	var readResult, bashResult *provider.Message
+	for i := range msgs {
+		m := &msgs[i]
+		if m.Role != "tool_result" || m.Tool == nil {
+			continue
+		}
+		switch m.Tool.ID {
+		case "toolu_11":
+			readResult = m
+		case "toolu_12":
+			bashResult = m
+		}
+	}
+	if readResult == nil {
+		t.Fatal("no tool_result correlated to toolu_11 (the denied Read)")
+	}
+	if !readResult.IsError {
+		t.Error("denied image read: IsError should be true")
+	}
+	if bashResult == nil {
+		t.Fatal("no tool_result correlated to toolu_12 (the Bash call)")
+	}
+	if bashResult.IsError {
+		t.Error("successful bash call: IsError should be false")
+	}
+}
+
 // Tool uses stream through as normalized events with the touched path
 // extracted — the §5 tool_use attribution signal.
 func TestStreamToolUseNormalization(t *testing.T) {
