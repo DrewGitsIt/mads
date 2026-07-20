@@ -819,6 +819,48 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(getSession).toHaveBeenCalledTimes(1));
   });
 
+  // Permission cards (chat-transport Allow/Deny for TrustLimited/ReadOnly
+  // sessions — services/session/internal/runner/permissions.go). Two
+  // sources feed the same card state: the live "permission_request" stream
+  // event, and GET /permission-requests on mount (so a still-open card
+  // survives a transcript refetch instead of being lost — acceptance
+  // criterion 3).
+  it("renders an Allow/Deny card from a live permission_request stream event, and resolving it calls resolvePermissionRequest", async () => {
+    const client = new FakeRouterClient();
+    const resolveSpy = vi.spyOn(client, "resolvePermissionRequest");
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "session-active-perm-1", tool: "Bash", input: { command: "rm -rf /tmp/x" }, status: "pending" },
+      });
+    });
+
+    expect(screen.getByText("Bash")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(resolveSpy).toHaveBeenCalledWith("session-active", "session-active-perm-1", "allow");
+  });
+
+  it("reconstructs a still-pending permission card from GET /permission-requests on mount, surviving a transcript refetch", async () => {
+    const client = new FakeRouterClient();
+    client.seedPermissionRequest("session-active", {
+      id: "session-active-perm-1",
+      tool: "Write",
+      input: { file_path: "docs/notes.md" },
+      status: "pending",
+    });
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText("Write")).toBeTruthy());
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+  });
+
   // Live-turn transcript polling (structure-as-it-streams, survive stream
   // drops) — the provider's transcript file is written continuously during
   // a turn, same premise the pipeline drill-in's turns feed already relies

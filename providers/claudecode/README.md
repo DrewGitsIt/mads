@@ -20,8 +20,8 @@ history.
 | PTY | **Native** | claude-code's own interactive terminal UI runs directly on a pseudo-terminal. |
 | Branching | **Unsupported** | No flag or API forks a session into alternatives. |
 | CwdReroot | **Unsupported** | No flag or API moves a live session to a different working directory. |
-| TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available. |
-| TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool. |
+| TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available, and asking before those runs through the permission-prompt hook below on the chat transport. |
+| TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool; whatever narrow set remains still asks via the hook below on chat. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 | RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
 
@@ -84,9 +84,9 @@ claude.
 
 | Trust | Flag(s) | Effect |
 |---|---|---|
-| `TrustLimited` | `--disallowedTools Bash` | Command execution is genuinely absent from the model's tool palette, not merely intercepted at approval time. `Write`/`Edit` stay available. |
-| `TrustReadOnly` | `--disallowedTools Bash,Write,Edit,NotebookEdit` | Command execution and every file-mutating tool are absent. |
-| `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never enters its default ask-first flow at all. |
+| `TrustLimited` | `--disallowedTools Bash` (+ `--settings` hook on chat, see below) | Command execution is genuinely absent from the model's tool palette, not merely intercepted at approval time. `Write`/`Edit` stay available and still ask — answerable via the chat transport's permission card. |
+| `TrustReadOnly` | `--disallowedTools Bash,Write,Edit,NotebookEdit` (+ `--settings` hook on chat, see below) | Command execution and every file-mutating tool are absent. Whatever narrow set of tools remains still asks, answerable the same way. |
+| `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never enters its default ask-first flow at all — no hook is wired, since there is never a prompt to answer. |
 
 `--disallowedTools`'s effect is confirmed against `claude --help` in this
 environment: `--disallowedTools, --disallowed-tools <tools...>` takes "a
@@ -146,6 +146,48 @@ The frontend renders an `EventToolResult` with `is_error: true` as a
 system-toned banner on the pending tool card ("blocked awaiting permission —
 switch to terminal or raise trust") rather than leaving the working
 indicator spinning silently — see `ui/src/conversation/ChatRenderer/`.
+
+### Answering the prompt itself: the permission hook (chat transport only)
+
+`TrustLimited`/`TrustReadOnly` leave whichever tools survive `--disallowedTools`
+subject to claude's default ask-before-every-call behavior. On the terminal
+transport (`startPTY`) that prompt is claude's own native TUI — a human is
+sitting there, so nothing further is needed. On the chat/structured transport
+(`startStream`) there is no such surface at all, which is exactly what the
+"Defense in depth" section above exists to make visible rather than silent.
+
+This adapter closes that gap with a **PreToolUse command hook**, not an MCP
+tool — `claude` has no MCP-based permission-delegation flag (`--help` has
+never listed one; see `services/session/HANDOFF.md` for the verification
+trail of two earlier attempts that assumed one existed). `--settings
+<file>` does exist and is documented to load hook configuration at session
+start, in the "direct" (non-plugin) shape:
+
+```json
+{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "...", "timeout": 660}]}]}
+```
+
+`permission.go`'s `permissionArgs` builds this file — mirroring `mcp.go`'s
+`writeMCPConfig`/`--mcp-config` temp-file pattern — only when
+`needsPermissionHook(opts.Trust)` is true (`TrustLimited`/`TrustReadOnly`)
+**and** `opts.PermissionPromptURL` is set. `startStream` is the only call
+site; `startPTY` never sees this option, so terminal-mode behavior is
+unchanged. The Runner (`services/session/internal/runner`) is what sets
+`opts.PermissionPromptURL`, and only for the chat transport — see its own
+docs for the request/response contract, the in-memory pending-request
+registry, and the ~10-minute deny-on-timeout bound. The hook command itself
+is a single `curl -d @-` invocation (no Go subcommand, no script file —
+`pkg/githook`'s bare-shell-script precedent) that pipes its stdin straight
+through as the POST body and prints the response straight back to stdout;
+the session service's handler pre-formats the exact
+`{"hookSpecificOutput": ...}` JSON claude expects, so the shell command
+never itself parses or builds JSON. A `curl` failure (connection refused,
+its own `--max-time` expiry) falls back to an inline deny rather than
+leaving claude to interpret empty/malformed stdout — three layered
+timeouts (the hook's own `"timeout"`, curl's `--max-time`, and the session
+service's own bound) each shorter than the one before it, so the
+server-side bound always wins the race and the agent process never hangs
+indefinitely on an unanswered prompt.
 
 ## MCP servers
 

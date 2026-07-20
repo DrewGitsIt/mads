@@ -10,12 +10,19 @@ import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
   WORKSPACE_SESSION_EVENT_TYPES,
 } from "../router/sessionEventTypes";
-import type { Session, StreamEvent, ToolUse, TranscriptMessage } from "../router/types";
+import type {
+  PermissionRequest,
+  Session,
+  StreamEvent,
+  ToolUse,
+  TranscriptMessage,
+} from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
+import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
 import { TerminalComposer, formatBracketedPaste } from "./TerminalRenderer/TerminalComposer";
 import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
@@ -106,6 +113,18 @@ export function ConversationTab({
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turn, setTurn] = useState<TurnState>({ phase: "idle" });
+  // Interactive permission prompts (chat transport, TrustLimited/
+  // TrustReadOnly — see providers/claudecode/README.md "Trust enforcement").
+  // Keyed by request id so a live "permission_request" stream event
+  // (upserted below) and the mount-time GET /permission-requests
+  // reconstruction (below) never duplicate the same card, whichever arrives
+  // first.
+  const [permissionRequests, setPermissionRequests] = useState<
+    Map<string, PermissionRequest>
+  >(new Map());
+  const upsertPermissionRequest = useCallback((req: PermissionRequest) => {
+    setPermissionRequests((m) => new Map(m).set(req.id, req));
+  }, []);
   // A mount against a dormant session opens /output before any child
   // exists; the Router 404s and the browser's EventSource, per spec, never
   // auto-reconnects a connection whose *initial* handshake failed (only a
@@ -131,6 +150,7 @@ export function ConversationTab({
     setSession(null);
     setMessages([]);
     setTurn({ phase: "idle" });
+    setPermissionRequests(new Map());
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
@@ -161,6 +181,18 @@ export function ConversationTab({
     // trusted blindly, so an unexpected response shape (e.g. a route that
     // doesn't exist yet against a plain test fetch mock) degrades to that
     // same default instead of forcing the tab into a broken non-chat state.
+    // Reconstructs any still-open card (acceptance: chat rendering of
+    // permission events survives a transcript refetch/remount, not just a
+    // live stream still being connected) — a resolved request's terminal
+    // event is already carried by the live stream, so nothing further is
+    // needed for those once this mount is done.
+    void routerClient
+      .getPermissionRequests(sessionId)
+      .then((reqs) => {
+        if (cancelled) return;
+        setPermissionRequests(new Map(reqs.map((r) => [r.id, r])));
+      })
+      .catch(() => {});
     void routerClient
       .getTransportMode(sessionId)
       .then(({ mode }) => {
@@ -343,6 +375,11 @@ export function ConversationTab({
         blocked: "blocked awaiting permission — switch to terminal or raise trust",
       }));
     };
+    const onPermissionRequest = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "permission_request") return;
+      upsertPermissionRequest(parsed.permission);
+    };
     const onTurnEnd = () => {
       // Only the pre-first-chunk indicator clears immediately — a streamed
       // bubble stays frozen-visible until the persisted refetch replaces it,
@@ -365,16 +402,18 @@ export function ConversationTab({
     eventSource.addEventListener("text", onText);
     eventSource.addEventListener("tool_use", onTool);
     eventSource.addEventListener("tool_result", onToolResult);
+    eventSource.addEventListener("permission_request", onPermissionRequest);
     eventSource.addEventListener("turn_end", onTurnEnd);
     eventSource.addEventListener("error", onError);
     return () => {
       eventSource.removeEventListener("text", onText);
       eventSource.removeEventListener("tool_use", onTool);
       eventSource.removeEventListener("tool_result", onToolResult);
+      eventSource.removeEventListener("permission_request", onPermissionRequest);
       eventSource.removeEventListener("turn_end", onTurnEnd);
       eventSource.removeEventListener("error", onError);
     };
-  }, [eventSource, refetchAfterTurn]);
+  }, [eventSource, refetchAfterTurn, upsertPermissionRequest]);
 
   // While a turn is live, periodically re-fetch the persisted transcript —
   // the provider's transcript file is written continuously during a turn
@@ -483,6 +522,11 @@ export function ConversationTab({
   if (terminalComposerOpen && activeMode !== "terminal") {
     setTerminalComposerOpen(false);
   }
+  // The hook that would create one of these only ever runs on the chat
+  // transport (providers/claudecode/README.md) — a switch to terminal tears
+  // the chat process (and any in-flight hook subprocess) down with it, so
+  // there is nothing meaningful left to show mid-turn on that transport.
+  const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
 
   return (
     <div className={styles.tab}>
@@ -536,6 +580,15 @@ export function ConversationTab({
                   }
                 />
               )}
+              {livePermissionRequests.map((req) => (
+                <PermissionCard
+                  key={req.id}
+                  request={req}
+                  onResolve={(id, decision) =>
+                    routerClient.resolvePermissionRequest(sessionId, id, decision)
+                  }
+                />
+              ))}
               {transport.status !== "idle" && (
                 <div className={styles.transportBanner}>
                   {transport.status === "switching" ? (

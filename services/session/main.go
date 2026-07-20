@@ -111,15 +111,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	if err := r.Start(ctx); err != nil {
-		log.Fatalf("session: start: %v", err)
-	}
-
+	// Bound before r.Start: the chat-transport permission-prompt hook
+	// (providers/claudecode/permission.go) needs this process's own address
+	// to call back to, and that has to be known before the provider process
+	// is spawned — a --settings hook config can't be injected after launch.
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("session: listen %s: %v", *addr, err)
 	}
 	log.Printf("session: listening on %s", ln.Addr())
+	r.SelfURL = "http://" + ln.Addr().String()
+
+	if err := r.Start(ctx); err != nil {
+		log.Fatalf("session: start: %v", err)
+	}
 
 	srv := &http.Server{Handler: api.New(r)}
 	serveErr := make(chan error, 1)

@@ -23,6 +23,7 @@ import type {
   Model,
   Note,
   NoteType,
+  PermissionRequest,
   PipelineRun,
   PreflightCheck,
   Profile,
@@ -775,6 +776,29 @@ export class FakeRouterClient implements RouterClient {
 
   async getTransportMode(sessionId: string): Promise<{ mode: "chat" | "terminal" }> {
     return { mode: this.transportModes.get(sessionId) ?? "chat" };
+  }
+
+  /** Per-session pending permission requests — mutated by resolvePermissionRequest and seedPermissionRequest below, mirroring the real Runner's in-memory registry (services/session/internal/runner/permissions.go). */
+  private readonly permissionRequests = new Map<string, PermissionRequest[]>();
+
+  async getPermissionRequests(sessionId: string): Promise<PermissionRequest[]> {
+    return this.permissionRequests.get(sessionId) ?? [];
+  }
+
+  async resolvePermissionRequest(sessionId: string, requestId: string): Promise<void> {
+    const list = this.permissionRequests.get(sessionId);
+    if (!list) return;
+    this.permissionRequests.set(
+      sessionId,
+      list.filter((p) => p.id !== requestId),
+    );
+  }
+
+  /** Test hook: seeds a pending request as if the hub had broadcast one, so a component test can assert the card renders without a real hook round trip. */
+  seedPermissionRequest(sessionId: string, req: PermissionRequest): void {
+    const list = this.permissionRequests.get(sessionId) ?? [];
+    list.push(req);
+    this.permissionRequests.set(sessionId, list);
   }
 
   async terminalWrite(): Promise<void> {}
