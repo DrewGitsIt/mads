@@ -29,7 +29,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	if opts.Resume != "" {
 		args = append(args, "--resume", opts.Resume)
 	}
-	args = append(args, disallowedToolsArgs(opts.Trust)...)
+	args = append(args, trustArgs(opts.Trust)...)
 	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
 	if err != nil {
 		return nil, fmt.Errorf("mcp config: %w", err)

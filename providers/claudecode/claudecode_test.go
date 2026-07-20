@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -211,6 +212,60 @@ func TestTranscriptNormalizationDenialGolden(t *testing.T) {
 	}
 }
 
+// Live-wire counterpart to TestTranscriptNormalizationDenialGolden: the same
+// real captured denial fixture, but parsed as wireLine.events() sees it
+// during a live session — proving a permission-denied tool_result surfaces
+// as EventToolResult on the live stream too, rather than being silently
+// dropped until the next transcript refetch (or never, if the process is
+// truly hung awaiting an unanswerable prompt). Concrete fix for "chat mode
+// ... never prompted ... only visible after switching to terminal".
+func TestWireEventsSurfacesToolResultDenial(t *testing.T) {
+	f, err := os.Open("testdata/transcript_denial.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var toolResults []provider.Event
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var l wireLine
+		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range l.events(false) {
+			if ev.Kind == provider.EventToolResult {
+				toolResults = append(toolResults, ev)
+			}
+		}
+	}
+	if err := sc.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(toolResults) != 2 {
+		t.Fatalf("got %d tool_result events, want 2: %+v", len(toolResults), toolResults)
+	}
+	denied := toolResults[0]
+	if denied.Tool == nil || denied.Tool.ID != "toolu_11" {
+		t.Errorf("first tool_result: %+v, want toolu_11", denied)
+	}
+	if !denied.IsError {
+		t.Error("denied image read: IsError should be true, was silently dropped")
+	}
+	if denied.Text != "permission denied: image reads require approval" {
+		t.Errorf("denied text: %q", denied.Text)
+	}
+
+	ok2 := toolResults[1]
+	if ok2.Tool == nil || ok2.Tool.ID != "toolu_12" {
+		t.Errorf("second tool_result: %+v, want toolu_12", ok2)
+	}
+	if ok2.IsError {
+		t.Error("successful bash call: IsError should be false")
+	}
+}
+
 // Tool uses stream through as normalized events with the touched path
 // extracted — the §5 tool_use attribution signal.
 func TestStreamToolUseNormalization(t *testing.T) {
@@ -339,6 +394,86 @@ func TestTrustDisallowsTools(t *testing.T) {
 			}
 		}
 		_ = sess.Close()
+	}
+}
+
+// TestTrustFullBypassesPermissionsStream proves TrustFull (and the zero
+// value) reach the launched process as --permission-mode bypassPermissions
+// on the structured transport — the fix for the bug where a TrustFull chat
+// session silently stalled awaiting an interactive permission prompt nobody
+// could answer. The stand-in's "permission-echo" dialect reads back the
+// parsed flag, the same proof-of-exact-args pattern as the MCP echo tests.
+func TestTrustFullBypassesPermissionsStream(t *testing.T) {
+	for _, trust := range []provider.Trust{provider.TrustFull, ""} {
+		p := testProvider(t)
+		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: trust})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Send(context.Background(), "permission-echo"); err != nil {
+			t.Fatal(err)
+		}
+		var text string
+		deadline := time.After(10 * time.Second)
+		for done := false; !done; {
+			select {
+			case ev, ok := <-sess.Events():
+				if !ok {
+					t.Fatal("stream closed before turn end")
+				}
+				if ev.Kind == provider.EventText {
+					text += ev.Text
+				}
+				if ev.Kind == provider.EventTurnEnd {
+					done = true
+				}
+			case <-deadline:
+				t.Fatal("no turn end")
+			}
+		}
+		if !strings.Contains(text, "permission_mode=bypassPermissions") {
+			t.Errorf("trust %q: permission mode not observed: %q", trust, text)
+		}
+		_ = sess.Close()
+	}
+}
+
+// TestTrustFullBypassesPermissionsPTY is the terminal-transport counterpart
+// — Drew expects Auto to mean no prompts in terminal mode too.
+func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
+	p := testProvider(t)
+	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModePTY, Trust: provider.TrustFull})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	pty, ok := sess.(provider.PTYSession)
+	if !ok {
+		t.Fatal("session doesn't implement PTYSession")
+	}
+	if err := sess.Send(context.Background(), "permission-echo"); err != nil {
+		t.Fatal(err)
+	}
+	out := make(chan string, 1)
+	go func() {
+		var acc strings.Builder
+		buf := make([]byte, 8192)
+		for {
+			n, err := pty.Terminal().Read(buf)
+			acc.Write(buf[:n])
+			if strings.Contains(acc.String(), "permission_mode=") || err != nil {
+				out <- acc.String()
+				return
+			}
+		}
+	}()
+	select {
+	case text := <-out:
+		if !strings.Contains(text, "permission_mode=bypassPermissions") {
+			t.Errorf("permission mode not observed: %q", text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("permission-echo marker not seen in terminal output")
 	}
 }
 

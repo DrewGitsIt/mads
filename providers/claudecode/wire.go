@@ -164,6 +164,27 @@ func (l *wireLine) events(interrupted bool) []provider.Event {
 			}
 		}
 		return []provider.Event{ev}
+	case "user":
+		// claude-code feeds a tool's outcome back into the model's context
+		// as a "user" role message — the same shape normalizeTranscript
+		// reads from disk — including permission denials, which otherwise
+		// produce no event at all on a headless transport with nobody to
+		// answer the CLI's own prompt. Surfacing it live, rather than
+		// waiting for the next transcript refetch, is what lets a blocked
+		// tool call render instead of silently stalling.
+		var evs []provider.Event
+		for _, b := range l.Message.blocks() {
+			if b.Type != "tool_result" {
+				continue
+			}
+			evs = append(evs, provider.Event{
+				Kind:    provider.EventToolResult,
+				Tool:    &provider.ToolUse{ID: b.ToolUseID},
+				Text:    toolResultText(b.Content),
+				IsError: b.IsError,
+			})
+		}
+		return evs
 	default:
 		// init, thinking_tokens, rate_limit_event, control_response, ...:
 		// bookkeeping, not conversation.

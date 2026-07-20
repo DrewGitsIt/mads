@@ -76,22 +76,76 @@ mechanism existed (resume-less until reattached with an explicit ref).
 
 ## Trust enforcement, transport by transport
 
-`--disallowedTools` is a single CLI-wide flag, not headless-only — both
-`startStream()` (structured transport) and `startPTY()` (terminal transport)
-append the identical mapping via the shared `disallowedToolsArgs()` helper.
-Unlike kirocli, there is no PTY-vs-ACP asymmetry here: whichever transport a
-session uses, the disallowed tools are genuinely absent from what the model
-can call, not merely intercepted at approval time.
+Both `startStream()` (structured transport) and `startPTY()` (terminal
+transport) append the identical mapping for a given `StartOptions.Trust` via
+the shared `trustArgs()` helper. Unlike kirocli, there is no PTY-vs-ACP
+asymmetry here: whichever transport a session uses, the same flags reach
+claude.
 
-`TrustFull` (and the zero value) appends nothing — today's unrestricted
-behavior is unchanged.
+| Trust | Flag(s) | Effect |
+|---|---|---|
+| `TrustLimited` | `--disallowedTools Bash` | Command execution is genuinely absent from the model's tool palette, not merely intercepted at approval time. `Write`/`Edit` stay available. |
+| `TrustReadOnly` | `--disallowedTools Bash,Write,Edit,NotebookEdit` | Command execution and every file-mutating tool are absent. |
+| `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never enters its default ask-first flow at all. |
 
-**Caveat:** this row is asserted from `claude --help`'s documented flag
-description in this environment, not from a scripted-vs-live divergence test
-— there is no automated check that a disallowed tool is truly unreachable
-rather than merely unlisted. If a future `MADS_CLAUDE_SMOKE=1` run surfaces
-daylight between "flag passed" and "tool actually unavailable," downgrade
-both trust rows to `Emulated` and cite the finding here.
+`--disallowedTools`'s effect is confirmed against `claude --help` in this
+environment: `--disallowedTools, --disallowed-tools <tools...>` takes "a
+comma or space-separated list of tool names to deny".
+
+**Why `TrustFull` needed a flag at all:** claude's *default* permission mode
+asks before every tool call, on both transports. That's fine when a human is
+sitting at the terminal to answer, but chat mode (the structured transport)
+has no surface to answer a permission prompt at all — the request just sits
+there. Before this fix, `TrustFull` (meant to be "no restrictions, no
+prompts") passed no permission-related flag, so a full-trust chat session
+silently stalled on the CLI's own interactive prompt instead of running the
+tool. `--permission-mode bypassPermissions` makes claude skip that flow
+entirely, which is what "Auto" trust is supposed to mean on both transports.
+
+**Why `--permission-mode bypassPermissions` and not
+`--dangerously-skip-permissions`:** both flags skip the same prompt, but
+`--dangerously-skip-permissions` is reserved for the separate pipeline
+engine's own autonomous-agent invocation (`cmd/mads/run.go`'s
+`-claude-args`, see "Pipeline vs. interactive registries" below) and is left
+untouched by this change. `--permission-mode bypassPermissions` is the
+CLI's documented interactive-session equivalent (claude 2.1.x); using a
+distinct flag for the interactive path keeps the two invocation sites
+independently greppable and avoids conflating "an autonomous pipeline stage
+configured its own agent" with "a human set the trust pill to Auto."
+
+**Caveat:** the exact-flag claims above are asserted from `claude --help`'s
+documented flag descriptions in this environment, not from a
+scripted-vs-live divergence test — there is no automated check that a
+disallowed tool is truly unreachable rather than merely unlisted, or that
+`bypassPermissions` truly suppresses every prompt shape claude can produce.
+If a future `MADS_CLAUDE_SMOKE=1` run surfaces daylight between "flag
+passed" and actual behavior, downgrade the affected row to `Emulated` and
+cite the finding here.
+
+### Defense in depth: a blocked tool call must never be silent
+
+Even with the flag above, a permission-shaped stall is still possible (a
+custom permission hook, an unrecognized prompt shape, a future CLI change)
+— so the live event stream never silently drops a tool's outcome.
+`wireLine.events()` (`wire.go`) now handles the `"user"`-type wire line the
+same way `normalizeTranscript` (`transcript.go`) already handled it for the
+on-disk/polled path: each `tool_result` block becomes a
+`provider.EventToolResult`, carrying the correlating `Tool.ID`, the result
+text, and `IsError`. Previously this line type fell into `events()`'s
+`default:` case and was dropped entirely on the live stream — a permission
+denial (or any other tool failure) was invisible until the next transcript
+poll caught up, or never, if the process was genuinely hung awaiting an
+unanswerable prompt. The fixture at `testdata/transcript_denial.jsonl` is a
+real captured session with exactly this shape (a denied `Read`, `is_error:
+true`, followed by a successful `Bash` call); `TestWireEventsSurfacesToolResultDenial`
+pins `events()`'s live parsing of it, alongside
+`TestTranscriptNormalizationDenialGolden`'s existing coverage of the
+on-disk path.
+
+The frontend renders an `EventToolResult` with `is_error: true` as a
+system-toned banner on the pending tool card ("blocked awaiting permission —
+switch to terminal or raise trust") rather than leaving the working
+indicator spinning silently — see `ui/src/conversation/ChatRenderer/`.
 
 ## MCP servers
 
