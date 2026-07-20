@@ -1,6 +1,7 @@
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { render, waitFor } from "@testing-library/react";
-import { TerminalView } from "./TerminalView";
+import { render, fireEvent, waitFor } from "@testing-library/react";
+import { TerminalView, type TerminalViewHandle } from "./TerminalView";
 import type { PtyBridge } from "./ptyBridge";
 
 /** In-memory PtyBridge stub — no Electron, no IPC, no node-pty. */
@@ -79,6 +80,50 @@ describe("TerminalView (renderer contract)", () => {
 
     unmount();
     expect(bridge.kill).toHaveBeenCalledWith("pty-1");
+  });
+
+  it("captures ⌘E before xterm processes it — opens compose, writes nothing to the pty", async () => {
+    const { bridge } = makeStubBridge();
+    const onComposeOpen = vi.fn();
+    const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "e", code: "KeyE", metaKey: true });
+
+    expect(onComposeOpen).toHaveBeenCalledTimes(1);
+    expect(bridge.write).not.toHaveBeenCalled();
+  });
+
+  it("lets other keys reach the pty as usual — only ⌘E/Ctrl+E is captured", async () => {
+    const { bridge } = makeStubBridge();
+    const onComposeOpen = vi.fn();
+    const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    textarea.value = "a";
+    textarea.dispatchEvent(
+      new InputEvent("input", { bubbles: true, data: "a", inputType: "insertText" }),
+    );
+
+    await waitFor(() => expect(bridge.write).toHaveBeenCalledWith("pty-1", "a"));
+    expect(onComposeOpen).not.toHaveBeenCalled();
+  });
+
+  it("exposes an imperative focus() that returns focus to xterm's hidden input", async () => {
+    const { bridge } = makeStubBridge();
+    const ref = createRef<TerminalViewHandle>();
+    const { container } = render(<TerminalView bridge={bridge} ref={ref} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.blur();
+    ref.current?.focus();
+
+    expect(document.activeElement).toBe(textarea);
   });
 
   // Regression test: a mounted TerminalView must re-subscribe when its
