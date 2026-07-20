@@ -55,6 +55,17 @@
   background: var(--bg2);
 }
 
+/* Quieter than the user treatment — the engine's own injected stage prompt,
+ * not a person, so it reads as neither user nor agent (DESIGN gap 1). */
+.prose[data-role="system"] {
+  background: var(--bg1);
+}
+
+.prose[data-role="system"] .speaker,
+.prose[data-role="system"] .text {
+  color: var(--text3);
+}
+
 .speaker {
   flex: none;
   color: var(--text3);
@@ -67,55 +78,21 @@
   color: var(--text);
 }
 
-.tool {
+.toolRow {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-2);
-  color: var(--text2);
 }
 
-.tool[data-pending] {
-  background: var(--warn-soft);
-  border-radius: var(--r-sm);
+.toolRow[data-pending] .toolCardWrap {
+  outline: 1px solid var(--warn-soft);
+  border-radius: var(--r);
 }
 
-.toolMark {
-  flex: none;
-  color: var(--accent);
-}
-
-.toolName {
-  flex: none;
-  font: 650 var(--fs-sm) var(--mono);
-  color: var(--text);
-}
-
-.toolResult {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: 0 var(--space-2) 0 calc(var(--space-2) + 1.5em);
-  color: var(--text3);
-  font: var(--fs-chip) var(--mono);
-}
-
-.resultMark {
-  flex: none;
-  color: var(--ok-fg);
-}
-
-.arg {
+.toolCardWrap {
+  flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background: none;
-  border: none;
-  padding: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
+  font: var(--fs-body) var(--sans);
 }
 
 .liveness {
