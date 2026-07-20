@@ -505,8 +505,18 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		if e.wt != nil && isMergeStage(st) {
 			// Exactly one land attempt (rebase -> gate -> merge) at a
 			// time, stable FIFO order (spec: "Not Rocket Science Rule").
+			// The in-process landQueue only serializes within this engine;
+			// acquireWorkspaceLock extends that across processes, so a CLI
+			// `mads run` and a Router-spawned pipeline child on the same
+			// workspace never interleave a land attempt either.
 			release := e.wt.land.acquire()
-			err = e.landAttempt(ctx, st, stages, &run, task)
+			wsRelease, wsErr := acquireWorkspaceLock(ctx, e.wt)
+			if wsErr != nil {
+				err = wsErr
+			} else {
+				err = e.landAttempt(ctx, st, stages, &run, task)
+				wsRelease()
+			}
 			release()
 			output = ""
 			if err != nil {

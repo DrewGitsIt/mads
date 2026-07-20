@@ -108,7 +108,7 @@ func main() {
 	// (below), so -router-url must be sourced from *addr, the configured
 	// flag value, not the post-bind address.
 	sessionArgv := append(strings.Fields(*sessionCmd), "-router-url", "http://"+*addr)
-	pipelineArgv := strings.Fields(*pipelineCmd)
+	pipelineArgv := append(strings.Fields(*pipelineCmd), "-data-url", *dataURL)
 
 	data := dataclient.New(*dataURL, "router")
 

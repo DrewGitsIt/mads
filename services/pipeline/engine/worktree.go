@@ -80,9 +80,20 @@ func (w *worktrees) git(ctx context.Context, dir string, args ...string) (string
 
 // ensureSetup enables per-worktree config and installs the post-commit hook,
 // and — when a mergiraf binary was detected — registers it as the git merge
-// driver for the shared repo, once per run.
+// driver for the shared repo, once per run. Both writes land in the shared
+// primary repo's .git/config (via `git config`, which takes its own
+// config.lock with no retry), so a second engine process racing this same
+// one-time setup against the same workspace can otherwise fail outright
+// instead of just waiting its turn — hence the same cross-process
+// workspace lock the land queue uses, not just this process's sync.Once.
 func (w *worktrees) ensureSetup(ctx context.Context) error {
 	w.setup.Do(func() {
+		release, err := acquireWorkspaceLock(ctx, w)
+		if err != nil {
+			w.setupEr = err
+			return
+		}
+		defer release()
 		if w.setupEr = githook.EnsureInstalled(ctx, w.primary); w.setupEr != nil {
 			return
 		}

@@ -152,3 +152,15 @@ type Workspace struct {
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
 }
+
+// PrimaryRepo returns the filesystem path of the workspace's primary repo —
+// the one that anchors worktree isolation (spec §17) — and whether one is
+// declared at all.
+func (w Workspace) PrimaryRepo() (string, bool) {
+	for _, r := range w.Repos {
+		if r.Primary {
+			return r.Path, true
+		}
+	}
+	return "", false
+}
