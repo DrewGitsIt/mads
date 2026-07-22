@@ -1,0 +1,136 @@
+# Command & mention framework (/ # @) — implementation graph.
+# Design + visual: docs/mockups/command-framework.html
+# Seed:  bin/mads seed -session ses_88cc3077de745194 -file docs/command-framework-tasks.yaml
+tasks:
+  - title: "Command framework: write the design doc"
+    description: >
+      Turn docs/mockups/command-framework.html into a written design doc
+      (docs/COMMAND-FRAMEWORK.md or a REBUILD-SPEC section). Capture the
+      three-namespace contract (/ = provider-native commands rendered as
+      cards, # = agent capabilities/shareable skills registry, @ =
+      mentionables/reference content), the per-provider command manifest
+      shape, execution modes, the v1 widget kit, and the collision +
+      non-transcript rules. Frame the manifest as mads-authored per-provider
+      adapters, not runtime harness discovery.
+    acceptance_criteria: |
+      1. Doc defines all three triggers, their backing source, and shareability.
+      2. Manifest entry fields documented: name, description, widget, source, exec, owner, lifecycle.
+      3. Execution modes (mads-handled | passthrough | terminal-only) and the collision + transcript rules are specified.
+      4. Explicitly supersedes MADS-UX.md's "provider-native slashes are terminal-only" stance.
+    labels: [command-framework, design]
+
+  - title: "Command framework: split trigger namespaces (skills to #, / for commands)"
+    description: >
+      Repoint composer triggers so / and # are distinct backing sources kept
+      separate in code. # resolves the capability registry (skills, GET
+      /capabilities, agent-bound, health-badged). / resolves the command
+      registry only. @ unchanged. Update useMentionResolver.ts (detectTrigger
+      to accept #; route #->capabilities, /->commands), MentionMenu, Composer,
+      and tests.
+    acceptance_criteria: |
+      1. Typing # opens the capability (skills) menu; / no longer lists skills.
+      2. / lists only commands; @ mentionables unchanged.
+      3. useMentionResolver + MentionMenu tests updated and green.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Command framework: write the design doc"
+
+  - title: "Command framework: mads command-descriptor registry + resolver refactor"
+    description: >
+      Replace the hardcoded command handling (STATIC_COMMANDS, GROUP_COMMANDS,
+      the per-command if (head === agent/model) branches in
+      useMentionResolver, and Composer.executeCommand's bespoke dispatch) with
+      a data-driven command-descriptor table { name, description, widget,
+      argSource, execute }. Fold /task, /model, /agent into descriptors so a
+      new mads-owned command is one entry, not edits across two files.
+    acceptance_criteria: |
+      1. task/model/agent are defined as descriptors, not hardcoded branches.
+      2. Adding a mads command requires only a new descriptor entry.
+      3. Resolver + composer command tests green.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Command framework: write the design doc"
+
+  - title: "Command framework: define Provider.Commands() manifest contract"
+    description: >
+      Add a per-provider command manifest to the provider layer
+      (providers/provider) as a mads-authored adapter table (not runtime
+      discovery). Each entry: name, description, widget
+      (select-menu|info-panel|form|confirm|null), source, exec
+      (mads-handled|passthrough|terminal-only), owner (mads|provider),
+      lifecycle (transient|pinned). Surface it to the UI scoped to the
+      session's current provider so / autocomplete lists only what the active
+      provider declares. Implement the collision rule: owner:mads shadows a
+      provider entry of the same name.
+    acceptance_criteria: |
+      1. provider.Commands() (or equivalent) returns a typed manifest with all documented fields.
+      2. A router endpoint surfaces the active provider's commands to the UI.
+      3. owner:mads entries shadow same-named provider entries.
+    labels: [command-framework, provider]
+    depends_on:
+      - "Command framework: mads command-descriptor registry + resolver refactor"
+
+  - title: "Command framework: build the command-surface widget kit"
+    description: >
+      Generic composable building blocks a manifest entry renders into, shown
+      as a card directly above the composer. v1 archetypes: select-menu,
+      info-panel (read-only), form, confirm. Model card lifecycle: transient
+      (dismiss on complete) vs pinned (stays until dismissed). Cards are UI
+      chrome only, never written to the transcript. Kit takes a descriptor +
+      data + completion callback.
+    acceptance_criteria: |
+      1. All four archetypes render as cards above the composer per the mockup.
+      2. Transient vs pinned lifecycle is supported.
+      3. A command card is never persisted to the transcript.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Command framework: define Provider.Commands() manifest contract"
+
+  - title: "Command framework: wire the four reference commands through the kit"
+    description: >
+      Prove the framework end-to-end with the mockup's reference set: /agent +
+      /model -> select-menu (mads-handled, transient); /context -> info-panel
+      (mads-handled, pinned) reusing the token usage mads already tracks for
+      the header meter; /clear -> confirm (passthrough, transient). These
+      replace the current special-cased prototypes.
+    acceptance_criteria: |
+      1. Each of the four commands renders its archetype and completes its effect.
+      2. /context reuses existing usage data (no new harness round-trip).
+      3. The old special-cased /agent, /model code paths are removed.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Command framework: build the command-surface widget kit"
+
+  - title: "Command framework: author claude-code command adapter + classify execution"
+    description: >
+      Enumerate claude-code's slash commands and author its manifest adapter,
+      classifying each as mads-handled | passthrough | terminal-only.
+      Implement the passthrough path (send the literal /command into the
+      stream-json transport and capture output). Document which commands are
+      actually invocable over the chat transport vs terminal-only.
+    acceptance_criteria: |
+      1. claude-code adapter declares its commands with correct exec classification.
+      2. Passthrough commands round-trip into the harness and their output is handled.
+      3. terminal-only commands are marked and surfaced as "switch to terminal".
+    labels: [command-framework, provider]
+    depends_on:
+      - "Command framework: define Provider.Commands() manifest contract"
+      - "Command framework: build the command-surface widget kit"
+
+  - title: "Command framework: fix provider-native command output (the /context flash)"
+    description: >
+      Resolve the render-then-vanish bug where an unrecognized /command (e.g.
+      /context) is sent as literal text, streams into the live bubble, then is
+      dropped when normalizeTranscript rejects its shape on the turn_end
+      refetch. Ensure (a) unknown/unsupported slashes give a clear "not a
+      command on this provider" affordance instead of silently sending literal
+      text, and (b) passthrough output is rendered deliberately, never
+      flashed-then-normalized-away.
+    acceptance_criteria: |
+      1. An unsupported slash no longer silently sends literal text and flashes.
+      2. Passthrough command output is rendered in its card or handled deliberately.
+      3. No transcript-normalization discards live-rendered command output.
+    labels: [command-framework, bugfix]
+    depends_on:
+      - "Command framework: wire the four reference commands through the kit"
+      - "Command framework: author claude-code command adapter + classify execution"

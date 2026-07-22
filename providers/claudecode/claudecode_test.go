@@ -233,7 +233,7 @@ func TestWireEventsSurfacesToolResultDenial(t *testing.T) {
 		if err := json.Unmarshal(sc.Bytes(), &l); err != nil {
 			t.Fatal(err)
 		}
-		for _, ev := range l.events(false) {
+		for _, ev := range l.events(false, false) {
 			if ev.Kind == provider.EventToolResult {
 				toolResults = append(toolResults, ev)
 			}

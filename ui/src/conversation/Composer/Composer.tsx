@@ -6,6 +6,7 @@ import { useMentionResolver, type MentionCandidate } from "./useMentionResolver"
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
+import { getDraft, setDraft } from "./composerDrafts";
 import styles from "./Composer.module.css";
 
 export interface ComposerProps {
@@ -17,6 +18,12 @@ export interface ComposerProps {
   onSent?: (text: string, mentions: string[]) => void;
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
+  /**
+   * A turn is in flight. The composer stays usable, but a send is held in a
+   * local queue and flushed automatically once `busy` clears (the turn ends),
+   * rather than interleaving with the agent's response.
+   */
+  busy?: boolean;
   /** Seeds the textarea on first mount only — later changes to this prop are ignored. */
   initialValue?: string;
   /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
@@ -61,6 +68,7 @@ export function Composer({
   provider,
   onSent,
   disabled,
+  busy,
   initialValue,
   autoSendInitial,
   onSendError,
@@ -70,8 +78,17 @@ export function Composer({
   onCommandExecuted,
   onCommandError,
 }: ComposerProps) {
-  const [value, setValue] = useState(initialValue ?? "");
+  // Seed from a saved draft (survives navigating away and back) unless the
+  // caller handed us an initialValue to auto-send.
+  const [value, setValue] = useState(initialValue ?? getDraft(sessionId));
   const [cursor, setCursor] = useState(0);
+
+  // Mirror the current text into the per-session draft store on every change,
+  // so it's there when this Composer remounts for the same session. Clears
+  // itself when the value goes empty (e.g. after a send).
+  useEffect(() => {
+    setDraft(sessionId, value);
+  }, [sessionId, value]);
   const [expanded, setExpanded] = useState(false);
   const [injected, setInjected] = useState<MentionCandidate[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
@@ -204,21 +221,56 @@ export function Composer({
     }
   }
 
-  async function handleSend() {
-    const text = value.trim();
-    if (!text) return;
+  // Messages composed while a turn is in flight — flushed in order once `busy`
+  // clears (see the effect below), so a send never interleaves with the
+  // agent's response.
+  const [queued, setQueued] = useState<{ text: string; mentions: string[] }[]>([]);
+  const flushingRef = useRef(false);
+
+  async function sendNow(text: string, mentions: string[]): Promise<boolean> {
     onSendStart?.();
-    const mentions = injected.map((i) => i.id);
     try {
       await routerClient.sendMessage(sessionId, { text, mentions });
       onSent?.(text, mentions);
+      return true;
+    } catch (err) {
+      onSendError?.(err instanceof Error ? err.message : String(err));
+      return false;
+    }
+  }
+
+  async function handleSend() {
+    const text = value.trim();
+    if (!text) return;
+    const mentions = injected.map((i) => i.id);
+    if (busy) {
+      // Queue behind the in-flight turn; the input clears now so it reads as
+      // "handed off", and the flush effect sends it when the turn ends.
+      setQueued((q) => [...q, { text, mentions }]);
       setValue("");
       setCursor(0);
       setInjected([]);
-    } catch (err) {
-      onSendError?.(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (await sendNow(text, mentions)) {
+      setValue("");
+      setCursor(0);
+      setInjected([]);
     }
   }
+
+  // Flush one queued message whenever the turn is idle. Sending it starts a new
+  // turn (busy → true again), so items drain one per turn, in order.
+  useEffect(() => {
+    if (busy || disabled || queued.length === 0 || flushingRef.current) return;
+    flushingRef.current = true;
+    const [head, ...rest] = queued;
+    setQueued(rest);
+    void sendNow(head.text, head.mentions).finally(() => {
+      flushingRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendNow is stable enough for this drain; deps intentionally limited to the drain triggers
+  }, [busy, disabled, queued]);
 
   const autoSentRef = useRef(false);
   useEffect(() => {
@@ -260,6 +312,24 @@ export function Composer({
         items={injected}
         onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
       />
+      {queued.length > 0 && (
+        <div className={styles.queued}>
+          {queued.map((q, i) => (
+            <div key={i} className={styles.queuedItem}>
+              <span className={styles.queuedBadge}>Queued</span>
+              <span className={styles.queuedText}>{q.text}</span>
+              <button
+                type="button"
+                className={styles.queuedRemove}
+                aria-label="Remove queued message"
+                onClick={() => setQueued((cur) => cur.filter((_, j) => j !== i))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {expanded ? (
         <div className={styles.expandedRow}>
           <ExpandedComposer

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Chip } from "../components/Chip/Chip";
@@ -6,6 +6,7 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
+import { contextWindowForModel } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
   WORKSPACE_SESSION_EVENT_TYPES,
@@ -16,6 +17,7 @@ import type {
   StreamEvent,
   ToolUse,
   TranscriptMessage,
+  Usage,
 } from "../router/types";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
@@ -113,6 +115,10 @@ export function ConversationTab({
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turn, setTurn] = useState<TurnState>({ phase: "idle" });
+  // Last completed turn's usage, for the header context meter. Populated from
+  // the stream's turn_end frame (the only place usage is reported); undefined
+  // until this session view sees a turn finish.
+  const [lastUsage, setLastUsage] = useState<Usage>();
   // Interactive permission prompts (chat transport, TrustLimited/
   // TrustReadOnly — see providers/claudecode/README.md "Trust enforcement").
   // Keyed by request id so a live "permission_request" stream event
@@ -380,7 +386,19 @@ export function ConversationTab({
       if (parsed.kind !== "permission_request") return;
       upsertPermissionRequest(parsed.permission);
     };
-    const onTurnEnd = () => {
+    const onTurnEnd = (ev: MessageEvent<string>) => {
+      // turn_end carries this turn's usage — the only place it's reported, so
+      // it feeds the header context meter.
+      if (typeof ev.data === "string") {
+        try {
+          const parsed = JSON.parse(ev.data) as StreamEvent;
+          if (parsed.kind === "turn_end" && parsed.usage) {
+            setLastUsage(parsed.usage);
+          }
+        } catch {
+          // non-JSON turn_end frame — leave the meter on its last value
+        }
+      }
       // Only the pre-first-chunk indicator clears immediately — a streamed
       // bubble stays frozen-visible until the persisted refetch replaces it,
       // so there's never a flash back to empty.
@@ -483,6 +501,48 @@ export function ConversationTab({
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [routerClient, sessionId, refetchSession]);
 
+  // Conversation scroll: auto-follow the tail as the agent streams, but yield
+  // control the instant the user scrolls up — re-engaging only once they're
+  // back at the bottom. stickToBottom is a ref (not state) so updating it from
+  // the scroll handler never itself triggers a render.
+  const streamRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
+
+  const handleStreamScroll = useCallback(() => {
+    const el = streamRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    stickToBottom.current = distanceFromBottom < 48;
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = streamRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [messages, turn]);
+
+  // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
+  // [data-user-msg] elements ChatRenderer stamps on each user bubble.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey) || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+      const el = streamRef.current;
+      if (!el) return;
+      const anchors = Array.from(el.querySelectorAll<HTMLElement>("[data-user-msg]"));
+      if (anchors.length === 0) return;
+      e.preventDefault();
+      const containerTop = el.getBoundingClientRect().top;
+      const offsets = anchors.map((a) => a.getBoundingClientRect().top - containerTop + el.scrollTop);
+      const cur = el.scrollTop;
+      const target =
+        e.key === "ArrowUp"
+          ? ([...offsets].reverse().find((o) => o < cur - 4) ?? 0)
+          : (offsets.find((o) => o > cur + 4) ?? el.scrollHeight);
+      el.scrollTo({ top: target, behavior: "smooth" });
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -532,14 +592,20 @@ export function ConversationTab({
     <div className={styles.tab}>
       <ConversationHeader
         session={session}
-        shellOpen={shellOpen}
-        onToggleShell={() => setShellOpen((x) => !x)}
-        onRestartAgent={() => void routerClient.bounce(sessionId)}
+        usedTokens={
+          lastUsage
+            ? lastUsage.input_tokens +
+              lastUsage.output_tokens +
+              (lastUsage.cache_read_input_tokens ?? 0) +
+              (lastUsage.cache_creation_input_tokens ?? 0)
+            : undefined
+        }
+        contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
         onUpdateSession={handleUpdateSession}
       />
 
       <div className={styles.body}>
-        <div className={styles.stream}>
+        <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll}>
           <div className={styles.modeSwitch}>
             <Chip
               tone="neutral"
@@ -642,6 +708,7 @@ export function ConversationTab({
                 agentId={session.agent}
                 provider={session.provider}
                 disabled={transport.status !== "idle" || waking}
+                busy={liveTurn.phase !== "idle"}
                 initialValue={pendingFirstMessage}
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {

@@ -103,3 +103,60 @@
   font: var(--fs-sm) var(--sans);
   cursor: pointer;
 }
+
+/* stacked diff for Write/Edit/MultiEdit tool cards */
+.diffStat {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 6px;
+  font: 600 var(--fs-sm) var(--mono);
+}
+.diffStatAdd {
+  color: var(--ok-fg);
+}
+.diffStatDel {
+  color: var(--bad-fg);
+}
+
+.diff {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+
+.diffHunk + .diffHunk {
+  border-top: 1px dashed var(--line-soft);
+}
+
+.diffAdd,
+.diffDel {
+  display: flex;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  font: var(--fs-sm)/1.55 var(--mono);
+}
+.diffAdd {
+  background: var(--ok-soft);
+}
+.diffDel {
+  background: var(--bad-soft);
+}
+
+.diffGutter {
+  flex: none;
+  width: 1ch;
+  user-select: none;
+  text-align: center;
+}
+.diffAdd .diffGutter {
+  color: var(--ok-fg);
+}
+.diffDel .diffGutter {
+  color: var(--bad-fg);
+}
+
+.diffText {
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}

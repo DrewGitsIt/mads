@@ -103,7 +103,7 @@ describe("SessionsSurface", () => {
       expect(row?.className.includes("selected")).toBe(true);
     });
 
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getAllByText("Bravo").length).toBeGreaterThan(1);
   });
 
@@ -116,25 +116,9 @@ describe("SessionsSurface", () => {
 
     fireEvent.click(rail().getByText("Alpha"));
 
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getByText("Chat")).toBeTruthy();
     expect(screen.getByText("Terminal")).toBeTruthy();
-  });
-
-  it("returns to the Launchpad via the back control", async () => {
-    const sessions = [makeSession({ id: "s1", name: "Alpha" })];
-    stubSessionsAndConversationFetch(sessions);
-
-    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
-    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
-
-    fireEvent.click(rail().getByText("Alpha"));
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
-
-    screen.getByLabelText("Back to Launchpad").click();
-
-    await waitFor(() => expect(screen.getByText("What can I help you with?")).toBeTruthy());
-    expect(screen.queryByLabelText("Back to Launchpad")).toBeNull();
   });
 
   it("returns to the Launchpad by re-clicking the selected row", async () => {
@@ -145,7 +129,7 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     fireEvent.click(rail().getByText("Alpha"));
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(rail().getByText("Alpha"));
 
@@ -210,7 +194,7 @@ describe("SessionsSurface", () => {
     });
     fireEvent.click(screen.getByText("Start session"));
 
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
 
     // The rail itself only updates via the session.created SSE event (as in the
@@ -222,7 +206,7 @@ describe("SessionsSurface", () => {
       JSON.stringify({ seq: 1, type: "session.created", actor: "user", session_id: "s99" }),
     );
     await waitFor(() => expect(rail().getByText("Fix the deploy script")).toBeTruthy());
-    expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy();
+    expect(screen.getByLabelText("Workspace actions")).toBeTruthy();
   });
 
   it("a fully-loaded session workspace holds at most 2 EventSource connections", async () => {
@@ -233,7 +217,7 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
     fireEvent.click(rail().getByText("Alpha"));
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByRole("tab", { name: "Tasks" }));
 
@@ -284,7 +268,7 @@ describe("SessionsSurface", () => {
     const chip = await screen.findByText(/Resume: Merge-back UX/);
     fireEvent.click(chip);
 
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.queryByText("What can I help you with?")).toBeNull();
     await waitFor(() => expect(resumeCalls.length).toBe(1));
   });
@@ -336,7 +320,7 @@ describe("SessionsSurface", () => {
 
     fireEvent.click(rail().getByText("Alpha"));
 
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getByText("Chat")).toBeTruthy();
   });
 });

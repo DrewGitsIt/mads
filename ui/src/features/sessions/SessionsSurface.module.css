@@ -17,5 +17,13 @@
 .main {
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  /* Own the height and clip: the workspace bar + conversation header must stay
+     pinned while only the message stream scrolls. If .main scrolls instead,
+     an expanded (Ctrl+E) composer growing inside the stream pushes the whole
+     workspace up and the header leaves the viewport. The surface it holds
+     (SessionWorkspace or Launchpad) fills this box and scrolls internally. */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }

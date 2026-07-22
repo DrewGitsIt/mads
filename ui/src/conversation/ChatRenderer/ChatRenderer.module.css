@@ -15,13 +15,13 @@
 
 .prose {
   max-width: var(--measure-prose);
-  font: var(--fs-body) var(--sans);
+  font: var(--fs-chat) var(--sans);
   color: var(--text);
-  line-height: 1.55;
+  line-height: 1.6;
 }
 
 .prose :global(pre) {
-  font: var(--fs-sm) var(--mono);
+  font: var(--fs-chat-code) var(--mono);
   background: var(--bg2);
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm);
@@ -31,7 +31,7 @@
 }
 
 .prose :global(code) {
-  font: var(--fs-sm) var(--mono);
+  font: var(--fs-chat-code) var(--mono);
   background: var(--bg2);
   border-radius: 3px;
   padding: 1px 4px;

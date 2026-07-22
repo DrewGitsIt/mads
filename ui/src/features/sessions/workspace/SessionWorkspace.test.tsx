@@ -49,6 +49,29 @@ describe("SessionWorkspace", () => {
     expect(screen.queryByRole("tabpanel", { name: "Pipeline" })).toBeNull();
   });
 
+  it("renames the session from the header via renameSession", async () => {
+    const routerClient = new FakeRouterClient();
+    const rename = vi.spyOn(routerClient, "renameSession");
+    render(
+      <SessionWorkspace
+        sessionId={SESSION_ID}
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+        openTaskCount={0}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const nameButton = await screen.findByTitle("Rename session");
+    fireEvent.click(nameButton);
+    const input = screen.getByLabelText("Session name") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Renamed via header" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(rename).toHaveBeenCalledWith(SESSION_ID, "Renamed via header");
+    await waitFor(() => expect(screen.getByTitle("Rename session").textContent).toBe("Renamed via header"));
+  });
+
   it("preserves a visited tab's state (Tasks' Graph view) across a tab flip", async () => {
     renderWorkspace();
     await waitFor(() => expect(screen.getByRole("tab", { name: "Conversation" })).toBeTruthy());
@@ -114,13 +137,40 @@ describe("SessionWorkspace", () => {
     );
   });
 
-  it("fires onClose when the back control is clicked", async () => {
-    const onClose = vi.fn();
-    renderWorkspace({ onClose });
-    await waitFor(() => expect(screen.getByLabelText("Back to Launchpad")).toBeTruthy());
+  it("folds Shell and Restart Agent into the single workspace kebab; Restart bounces the agent", async () => {
+    const routerClient = new FakeRouterClient();
+    const bounce = vi.spyOn(routerClient, "bounce");
+    render(
+      <SessionWorkspace
+        sessionId={SESSION_ID}
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+        openTaskCount={0}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
-    fireEvent.click(screen.getByLabelText("Back to Launchpad"));
-    expect(onClose).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    expect(screen.getByRole("button", { name: "Shell" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
+    expect(bounce).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it("Shell menu item toggles the shell dock via the cross-tree signal", async () => {
+    const onToggle = vi.fn();
+    window.addEventListener("mads:toggle-shell", onToggle);
+    try {
+      renderWorkspace();
+      await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+      fireEvent.click(screen.getByLabelText("Workspace actions"));
+      fireEvent.click(screen.getByRole("button", { name: "Shell" }));
+      expect(onToggle).toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("mads:toggle-shell", onToggle);
+    }
   });
 
   it("kebab always shows all three actions; while active, Resume and Delete are disabled with reasons", async () => {

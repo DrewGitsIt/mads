@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Card } from "../../components/Card/Card";
 import { Chip } from "../../components/Chip/Chip";
 import type { ToolUse } from "../../router/types";
@@ -15,6 +15,52 @@ export interface ToolCardProps {
 // than dumped in full — huge tool output (a big Bash/Grep result) would
 // otherwise make the card unusable to scroll past.
 const RESULT_CAP = 2000;
+
+// Diff hunks longer than this are truncated behind a "Show more" toggle so a
+// whole-file Write doesn't blow up the stream.
+const DIFF_LINE_CAP = 200;
+
+interface DiffHunk {
+  removed: string[];
+  added: string[];
+}
+
+/**
+ * A file-mutating tool (Write/Edit/MultiEdit/NotebookEdit) carries its change
+ * as before/after text in the tool input — turn that into diff hunks so the
+ * card can render a color-coded stacked diff instead of raw JSON. Returns null
+ * for every other tool (rendered as JSON input as before).
+ */
+function diffHunks(tool: ToolUse): DiffHunk[] | null {
+  if (!tool.input || typeof tool.input !== "object") return null;
+  const o = tool.input as Record<string, unknown>;
+  const lines = (v: unknown) => (typeof v === "string" ? v.split("\n") : []);
+
+  switch (tool.name) {
+    case "Write":
+      return typeof o.content === "string" ? [{ removed: [], added: lines(o.content) }] : null;
+    case "NotebookEdit":
+      return typeof o.new_source === "string" ? [{ removed: [], added: lines(o.new_source) }] : null;
+    case "Edit":
+      if (typeof o.old_string !== "string" && typeof o.new_string !== "string") return null;
+      return [{ removed: lines(o.old_string), added: lines(o.new_string) }];
+    case "MultiEdit":
+      if (!Array.isArray(o.edits)) return null;
+      return (o.edits as Array<Record<string, unknown>>).map((e) => ({
+        removed: lines(e.old_string),
+        added: lines(e.new_string),
+      }));
+    default:
+      return null;
+  }
+}
+
+function diffStat(hunks: DiffHunk[]): { adds: number; dels: number } {
+  return hunks.reduce(
+    (acc, h) => ({ adds: acc.adds + h.added.length, dels: acc.dels + h.removed.length }),
+    { adds: 0, dels: 0 },
+  );
+}
 
 function summarize(tool: ToolUse): string {
   if (tool.path) return tool.path;
@@ -37,8 +83,11 @@ function formatDuration(startIso?: string, endIso?: string): string | undefined 
 export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [resultExpanded, setResultExpanded] = useState(false);
+  const [diffExpanded, setDiffExpanded] = useState(false);
   const result = tool.result;
   const duration = formatDuration(timestamp, result?.timestamp);
+  const hunks = diffHunks(tool);
+  const stat = hunks ? diffStat(hunks) : undefined;
 
   return (
     <Card className={styles.card}>
@@ -50,6 +99,12 @@ export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardP
       >
         <Chip tone="info">{tool.name}</Chip>
         <span className={styles.summary}>{summarize(tool)}</span>
+        {stat && (stat.adds > 0 || stat.dels > 0) && (
+          <span className={styles.diffStat}>
+            {stat.adds > 0 && <span className={styles.diffStatAdd}>+{stat.adds}</span>}
+            {stat.dels > 0 && <span className={styles.diffStatDel}>−{stat.dels}</span>}
+          </span>
+        )}
         {result && (
           <span className={styles.status}>
             <Chip tone={result.is_error ? "bad" : "ok"}>{result.is_error ? "error" : "ok"}</Chip>
@@ -63,10 +118,12 @@ export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardP
       {expanded && (
         <div className={styles.body}>
           {tool.path && <div className={styles.path}>{tool.path}</div>}
-          {tool.input !== undefined && (
-            <pre className={styles.input}>
-              {JSON.stringify(tool.input, null, 2)}
-            </pre>
+          {hunks ? (
+            <DiffView hunks={hunks} expanded={diffExpanded} onToggle={() => setDiffExpanded((e) => !e)} />
+          ) : (
+            tool.input !== undefined && (
+              <pre className={styles.input}>{JSON.stringify(tool.input, null, 2)}</pre>
+            )
           )}
           {result && (
             <div className={styles.result} data-error={result.is_error || undefined}>
@@ -90,5 +147,55 @@ export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardP
         </div>
       )}
     </Card>
+  );
+}
+
+/** Color-coded stacked diff: removed lines then added lines, per hunk. */
+function DiffView({
+  hunks,
+  expanded,
+  onToggle,
+}: {
+  hunks: DiffHunk[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const total = hunks.reduce((n, h) => n + h.removed.length + h.added.length, 0);
+  let budget = expanded ? Infinity : DIFF_LINE_CAP;
+
+  return (
+    <div className={styles.diff}>
+      {hunks.map((h, hi) => {
+        const rows: ReactNode[] = [];
+        for (const [i, l] of h.removed.entries()) {
+          if (budget-- <= 0) break;
+          rows.push(
+            <div key={`d${i}`} className={styles.diffDel}>
+              <span className={styles.diffGutter}>−</span>
+              <span className={styles.diffText}>{l || " "}</span>
+            </div>,
+          );
+        }
+        for (const [i, l] of h.added.entries()) {
+          if (budget-- <= 0) break;
+          rows.push(
+            <div key={`a${i}`} className={styles.diffAdd}>
+              <span className={styles.diffGutter}>+</span>
+              <span className={styles.diffText}>{l || " "}</span>
+            </div>,
+          );
+        }
+        return (
+          <div key={hi} className={styles.diffHunk}>
+            {rows}
+          </div>
+        );
+      })}
+      {total > DIFF_LINE_CAP && (
+        <button type="button" className={styles.resultExpand} onClick={onToggle}>
+          {expanded ? "Show less" : `Show all ${total} lines`}
+        </button>
+      )}
+    </div>
   );
 }

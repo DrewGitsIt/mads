@@ -102,7 +102,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     expect(screen.getByText(/Add retry backoff to the ingest worker, please/)).toBeTruthy();
   });
@@ -119,7 +119,7 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     fireEvent.click(screen.getByText("Terminal"));
 
@@ -140,7 +140,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     fireEvent.click(screen.getByText("Terminal"));
 
@@ -205,7 +205,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     fireEvent.click(screen.getByText("Terminal"));
 
@@ -228,7 +228,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     fireEvent.click(screen.getByText("Terminal"));
 
@@ -293,7 +293,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     expect(document.querySelector('[data-testid="terminal-view"]')).toBeNull();
     expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe(
@@ -308,7 +308,7 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     fireEvent.click(screen.getByText("Terminal"));
     await waitFor(() =>
@@ -339,7 +339,7 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
   });
 
-  it("toggles the Shell dock from the header kebab menu", async () => {
+  it("toggles the Shell dock via the cross-tree toggle signal", async () => {
     const client = new FakeRouterClient();
     const bridge = makeStubBridge();
     render(
@@ -347,12 +347,13 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     expect(document.querySelector('[data-testid="resize-handle"]')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText("More actions"));
-    fireEvent.click(screen.getByText("Shell"));
+    act(() => {
+      window.dispatchEvent(new Event("mads:toggle-shell"));
+    });
 
     await waitFor(() =>
       expect(document.querySelector('[data-testid="resize-handle"]')).toBeTruthy(),
@@ -371,10 +372,11 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
-    fireEvent.click(screen.getByLabelText("More actions"));
-    fireEvent.click(screen.getByText("Shell"));
+    act(() => {
+      window.dispatchEvent(new Event("mads:toggle-shell"));
+    });
 
     await waitFor(() =>
       expect(bridge.spawn).toHaveBeenCalledWith(
@@ -393,10 +395,11 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
-    fireEvent.click(screen.getByLabelText("More actions"));
-    fireEvent.click(screen.getByText("Shell"));
+    act(() => {
+      window.dispatchEvent(new Event("mads:toggle-shell"));
+    });
 
     await waitFor(() =>
       expect(bridge.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: "mads" })),
@@ -423,8 +426,9 @@ describe("ConversationTab", () => {
     );
 
     await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
-    fireEvent.click(screen.getByLabelText("More actions"));
-    fireEvent.click(screen.getByText("Shell"));
+    act(() => {
+      window.dispatchEvent(new Event("mads:toggle-shell"));
+    });
 
     await waitFor(() => expect(bridge.spawn).toHaveBeenCalled());
     expect(vi.mocked(bridge.spawn).mock.calls[0][0]?.cwd).toBeUndefined();
@@ -439,7 +443,7 @@ describe("ConversationTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
   });
 
@@ -458,7 +462,7 @@ describe("ConversationTab", () => {
     expect(screen.getByText(/loading session/i)).toBeTruthy();
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
   });
 
@@ -622,6 +626,29 @@ describe("ConversationTab", () => {
     expect(screen.getByText("a reply after a long gap")).toBeTruthy();
   });
 
+  it("counts cached tokens in the context meter, not just the uncached delta", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({
+        kind: "turn_end",
+        usage: {
+          input_tokens: 2_000,
+          output_tokens: 3_000,
+          cache_read_input_tokens: 90_000,
+          cache_creation_input_tokens: 5_000,
+        },
+      });
+    });
+
+    // 2k+3k+90k+5k = 100k / 200k = 50% — input+output alone would read ~3%.
+    await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
+  });
+
   it("names the tool in the working indicator, then clears it once text starts streaming", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
@@ -768,7 +795,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     getSession.mockClear();
 
@@ -798,7 +825,7 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
-      expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
     );
     getSession.mockClear();
 
@@ -963,7 +990,7 @@ describe("ConversationTab", () => {
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() =>
-        expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy(),
+        expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
       );
       const callsAtIdle = getTranscript.mock.calls.length;
 
