@@ -18,12 +18,21 @@ type Metrics struct {
 	log   *Log
 	tasks *Tasks
 	caps  *Registry[contracts.Capability]
+	// now is the clock, swappable in tests.
+	now func() time.Time
 }
 
 // NewMetrics wires the metrics views to their underlying stores.
 func NewMetrics(log *Log, tasks *Tasks, caps *Registry[contracts.Capability]) *Metrics {
-	return &Metrics{log: log, tasks: tasks, caps: caps}
+	return &Metrics{log: log, tasks: tasks, caps: caps, now: func() time.Time { return time.Now().UTC() }}
 }
+
+// runStaleAfter is how long an open pipeline run may go without any event
+// (of any type) before it's reclassified "interrupted" instead of left
+// "running" forever. Set well above the engine's default LeaseTTL (10min,
+// services/pipeline/engine/engine.go) — a live engine heartbeats faster than
+// that, so silence past this margin means the process is gone, not just slow.
+const runStaleAfter = 30 * time.Minute
 
 type usagePayload struct {
 	Model        string  `json:"model"`
@@ -344,6 +353,17 @@ func (m *Metrics) pipelineRunsForSession(ctx context.Context, sessionID string) 
 			closeOpen()
 		}
 	}
+	if open != nil {
+		lastSeq, lastAt, err := m.lastActivity(ctx, sessionID, open.run.RunSeq-1)
+		if err != nil {
+			return nil, err
+		}
+		if lastSeq != 0 && m.now().Sub(lastAt) > runStaleAfter {
+			open.run.Outcome = "interrupted"
+			open.run.EndedAt = lastAt
+			open.endSeq = lastSeq
+		}
+	}
 	closeOpen()
 
 	out := make([]contracts.PipelineRun, len(runs))
@@ -398,6 +418,22 @@ func (m *Metrics) fillRunUsageAndAgents(ctx context.Context, run *contracts.Pipe
 		run.Agents = agents
 	}
 	return nil
+}
+
+// lastActivity returns the seq/timestamp of the last event of any type for
+// sessionID after sinceSeq (exclusive) — the liveness signal used to decide
+// whether a still-open pipeline run has gone silent (runStaleAfter). Returns
+// seq 0 when there's no such event.
+func (m *Metrics) lastActivity(ctx context.Context, sessionID string, sinceSeq int64) (int64, time.Time, error) {
+	envs, err := m.log.Query(ctx, Filter{SessionID: sessionID, Since: sinceSeq})
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("metrics: pipeline runs: last activity: %w", err)
+	}
+	if len(envs) == 0 {
+		return 0, time.Time{}, nil
+	}
+	last := envs[len(envs)-1]
+	return last.Seq, last.Timestamp, nil
 }
 
 // distinctSessions returns every distinct, non-empty session ID that ever

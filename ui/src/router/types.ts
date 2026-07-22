@@ -521,7 +521,13 @@ export interface CapabilityUsage {
 
 // mirrors pkg/contracts/metrics.go PipelineRun — one reconstructed pipeline
 // run. `outcome` matches the Go comment's closed set.
-export type PipelineRunOutcome = "completed" | "incomplete" | "cancelled" | "failed" | "running";
+export type PipelineRunOutcome =
+  | "completed"
+  | "incomplete"
+  | "cancelled"
+  | "failed"
+  | "running"
+  | "interrupted";
 
 export interface PipelineRun {
   session_id: string;

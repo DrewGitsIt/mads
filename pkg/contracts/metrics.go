@@ -68,12 +68,15 @@ type CapabilityUsage struct {
 // event and its matching terminal event (pipeline.completed / .cancelled / .failed)
 // within one session (spec §8 Pipeline Run History). There is no dedicated run-ID
 // field on the envelope; RunSeq (the started event's seq) is the stable identity.
+// A run with no terminal event and no activity of any kind for a long time (its
+// engine died without emitting one) is reported as "interrupted" rather than left
+// "running" forever — see runStaleAfter in services/data/internal/store/metrics.go.
 type PipelineRun struct {
 	SessionID    string    `json:"session_id"`
 	RunSeq       int64     `json:"run_seq"`
 	StartedAt    time.Time `json:"started_at"`
 	EndedAt      time.Time `json:"ended_at,omitempty"` // zero if still running (no terminal event yet)
-	Outcome      string    `json:"outcome"`            // "completed" | "incomplete" | "cancelled" | "failed" | "running"
+	Outcome      string    `json:"outcome"`            // "completed" | "incomplete" | "cancelled" | "failed" | "running" | "interrupted"
 	TasksDone    int       `json:"tasks_done"`
 	TasksBlocked int       `json:"tasks_blocked"`
 	TasksSkipped int       `json:"tasks_skipped"`
