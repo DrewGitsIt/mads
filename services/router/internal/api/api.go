@@ -23,17 +23,18 @@ import (
 )
 
 type server struct {
-	data         *dataclient.Client
-	sup          *supervisor.Supervisor
-	jobs         *job.Runner
-	providers    *provider.Registry
-	creds        *credstore.Store
-	preflight    preflight.Checker
-	vaultRefs    *vault.RefStore
-	vaultSources []vault.Source
-	registry     *registryclient.Client
-	version      string
-	runsDir      string
+	data                 *dataclient.Client
+	sup                  *supervisor.Supervisor
+	jobs                 *job.Runner
+	providers            *provider.Registry
+	creds                *credstore.Store
+	preflight            preflight.Checker
+	vaultRefs            *vault.RefStore
+	vaultSources         []vault.Source
+	registry             *registryclient.Client
+	version              string
+	runsDir              string
+	fastModelFlagBaseURL string
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -62,6 +63,11 @@ type Options struct {
 	Version       string
 	Registry      *registryclient.Client
 	RunsDir       string
+	// FastModelFlagBaseURL mirrors main.go's -fastmodel-base-url flag value —
+	// GET /fast-model/status needs it for the same unset-mode fallback
+	// fastModelDynamicConfig applies, so a pre-mode-selector flag-only
+	// endpoint reports as "endpoint", not "provider".
+	FastModelFlagBaseURL string
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
@@ -81,7 +87,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -173,6 +179,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
 	mux.HandleFunc("GET /config", s.handleGetConfig)
 	mux.HandleFunc("PUT /config", s.handleUpdateConfig)
+	mux.HandleFunc("GET /fast-model/status", s.handleFastModelStatus)
 	mux.HandleFunc("GET /profiles", s.handleListProfiles)
 	mux.HandleFunc("POST /profiles", s.handleCreateProfile)
 	mux.HandleFunc("PUT /profiles/{id}", s.handleUpdateProfile)

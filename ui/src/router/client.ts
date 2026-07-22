@@ -11,6 +11,7 @@ import type {
   CostMetrics,
   DiagnoseResult,
   Envelope,
+  FastModelStatus,
   FileChange,
   FileDiff,
   GenerateAgentBody,
@@ -143,6 +144,7 @@ export interface RouterClient {
   // --- Config ---
   getConfig(): Promise<Config>;
   updateConfig(config: Config): Promise<Config>;
+  getFastModelStatus(): Promise<FastModelStatus>;
 
   // --- Profiles ---
   listProfiles(): Promise<Profile[]>;
@@ -634,6 +636,10 @@ export class FetchRouterClient implements RouterClient {
 
   async updateConfig(config: Config): Promise<Config> {
     return routerPut(this.baseUrl, "/config", config);
+  }
+
+  async getFastModelStatus(): Promise<FastModelStatus> {
+    return routerGet(this.baseUrl, "/fast-model/status");
   }
 
   // --- Profiles ---

@@ -23,11 +23,15 @@ function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });
 }
 
-function stubCredentials(names: string[]) {
+function stubCredentials(
+  names: string[],
+  fastModelStatus: unknown = { mode: "provider", provider_name: "claude-code", provider_completer: true },
+) {
   vi.stubGlobal(
     "fetch",
     vi.fn().mockImplementation((input: URL | string) => {
       const url = input.toString();
+      if (url.includes("/fast-model/status")) return Promise.resolve(jsonResponse(fastModelStatus));
       if (url.includes("/credentials/env-candidates")) return Promise.resolve(jsonResponse([]));
       if (url.includes("/credentials")) return Promise.resolve(jsonResponse(names));
       throw new Error(`unhandled fetch: ${url}`);
@@ -66,9 +70,10 @@ describe("PipelineSection", () => {
     expect(screen.getAllByText("invalid")).toHaveLength(2);
   });
 
-  it("shows the Fast Model group dormant when no endpoint is configured", () => {
+  it("shows the Fast Model group dormant in endpoint mode when no endpoint is configured", () => {
     stubCredentials([]);
-    render(<PipelineSection config={makeConfig()} />);
+    const config = makeConfig({ draft: { ...fixtureConfig, fast_model_mode: "endpoint" } });
+    render(<PipelineSection config={config} />);
     expect(screen.getByText(/dormant/i)).toBeTruthy();
   });
 
@@ -83,7 +88,7 @@ describe("PipelineSection", () => {
 
   it("editing the endpoint updates the draft", () => {
     stubCredentials([]);
-    const config = makeConfig();
+    const config = makeConfig({ draft: { ...fixtureConfig, fast_model_mode: "endpoint" } });
     render(<PipelineSection config={config} />);
     fireEvent.change(screen.getByLabelText(/endpoint/i), {
       target: { value: "https://api.example.com/v1" },
@@ -93,9 +98,43 @@ describe("PipelineSection", () => {
     );
   });
 
+  it("defaults to provider mode and reports active when the provider supports Completer", async () => {
+    stubCredentials([], { mode: "provider", provider_name: "claude-code", provider_completer: true });
+    render(<PipelineSection config={makeConfig()} />);
+    expect((screen.getByLabelText(/backend/i) as HTMLSelectElement).value).toBe("provider");
+    await waitFor(() => expect(screen.getByText(/running via claude-code/i)).toBeTruthy());
+  });
+
+  it("shows the exact no-Completer status line in provider mode", async () => {
+    stubCredentials([], { mode: "provider", provider_name: "kiro-cli", provider_completer: false });
+    render(<PipelineSection config={makeConfig()} />);
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "Your provider doesn't support background completions — configure an endpoint or switch provider.",
+        ),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("hides endpoint/model/credential fields outside endpoint mode", () => {
+    stubCredentials([]);
+    render(<PipelineSection config={makeConfig()} />);
+    expect(screen.queryByLabelText(/^endpoint$/i)).toBeNull();
+  });
+
+  it("switching the backend selector to Off updates the draft", () => {
+    stubCredentials([]);
+    const config = makeConfig();
+    render(<PipelineSection config={config} />);
+    fireEvent.change(screen.getByLabelText(/backend/i), { target: { value: "off" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ fast_model_mode: "off" }));
+  });
+
   it("lists stored credentials in the Fast Model credential picker", async () => {
     stubCredentials(["OPENAI_API_KEY"]);
-    render(<PipelineSection config={makeConfig()} />);
+    const config = makeConfig({ draft: { ...fixtureConfig, fast_model_mode: "endpoint" } });
+    render(<PipelineSection config={config} />);
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "OPENAI_API_KEY" })).toBeTruthy(),
     );

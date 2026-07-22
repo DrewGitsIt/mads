@@ -13,6 +13,7 @@ import type {
   CostMetrics,
   DiagnoseResult,
   Envelope,
+  FastModelStatus,
   FileChange,
   FileDiff,
   GenerateAgentBody,
@@ -1010,6 +1011,10 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: updateConfig");
   }
 
+  async getFastModelStatus(): Promise<FastModelStatus> {
+    return fixtureFastModelStatus;
+  }
+
   // --- Profiles ---
   async listProfiles(): Promise<Profile[]> {
     return fixtureProfiles;
@@ -1330,6 +1335,12 @@ export const fixtureConfig: Config = {
   log_retention_days: 30,
   feature_flags: { multi_repo: false, linked_sessions: false, remote_registry: false },
   onboarding_complete: true,
+};
+
+export const fixtureFastModelStatus: FastModelStatus = {
+  mode: "provider",
+  provider_name: "claude-code",
+  provider_completer: true,
 };
 
 export const fixtureSessionDefaults: SessionDefaults = {

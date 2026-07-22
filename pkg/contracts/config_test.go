@@ -125,3 +125,53 @@ func TestValidateConfigFastModelBaseURL(t *testing.T) {
 		t.Fatal("relative/non-absolute URL should be invalid")
 	}
 }
+
+func TestValidateConfigFastModelMode(t *testing.T) {
+	base := DefaultConfig()
+
+	base.FastModelMode = ""
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("empty fast_model_mode should be valid (pre-selector install): %+v", verr.Errors)
+	}
+
+	base.FastModelMode = FastModelModeProvider
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("mode %q should be valid: %+v", base.FastModelMode, verr.Errors)
+	}
+
+	base.FastModelMode = "bogus"
+	if verr := ValidateConfig(&base); verr.Empty() {
+		t.Fatal("unrecognized fast_model_mode should be invalid")
+	}
+}
+
+// FastModelEffectiveMode must flip the zero-config default from dormant to
+// working (spec): an unconfigured fresh install resolves to provider mode,
+// not off.
+func TestFastModelEffectiveModeDefaults(t *testing.T) {
+	c := DefaultConfig()
+	if got := c.FastModelEffectiveMode(); got != FastModelModeProvider {
+		t.Errorf("fresh install effective mode = %q, want %q", got, FastModelModeProvider)
+	}
+}
+
+// A pre-mode-selector install that already configured an endpoint must keep
+// working exactly as before — its unset FastModelMode resolves to endpoint,
+// not the new provider default.
+func TestFastModelEffectiveModePreservesExistingEndpoint(t *testing.T) {
+	c := DefaultConfig()
+	c.FastModelBaseURL = "https://api.example.com/v1"
+	if got := c.FastModelEffectiveMode(); got != FastModelModeEndpoint {
+		t.Errorf("effective mode = %q, want %q", got, FastModelModeEndpoint)
+	}
+}
+
+// An explicit FastModelMode always wins, regardless of FastModelBaseURL.
+func TestFastModelEffectiveModeExplicitWins(t *testing.T) {
+	c := DefaultConfig()
+	c.FastModelBaseURL = "https://api.example.com/v1"
+	c.FastModelMode = FastModelModeOff
+	if got := c.FastModelEffectiveMode(); got != FastModelModeOff {
+		t.Errorf("effective mode = %q, want %q", got, FastModelModeOff)
+	}
+}

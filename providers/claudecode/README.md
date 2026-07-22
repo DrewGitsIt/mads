@@ -241,6 +241,55 @@ agents and is untouched by trust enforcement — `OneShot` has no `Trust`
 field and pipeline one-shots never call `Start`. Trust only ever reaches
 `startStream`/`startPTY`, which only the interactive registry drives.
 
+## Complete: hermetic one-shot completion (Fast Model)
+
+`Complete` (`complete.go`) implements `provider.Completer`, the optional
+capability backing Fast Model's zero-config "use my provider" resolution
+(`providers/fastmodel`) — stateless, no session left behind, no tools, no
+conversation. Unlike `OneShot`, which is session/tool-shaped and runs in
+`req.Cwd`, `Complete` runs in a fresh scratch directory with every flag
+below verified against the installed `claude` CLI first (see
+`testdata/complete_flags.md` — two prior tasks in this repo died on
+fabricated flags):
+
+- a throwaway `os.MkdirTemp` cwd, never the workspace — kills CLAUDE.md/
+  AGENTS.md discovery and project settings, and any transcript this leaves
+  behind lands under a throwaway project slug;
+- `--safe-mode`, disabling CLAUDE.md, hooks, MCP, skills, plugins, and
+  custom agents while leaving auth, model selection, built-in tools, and
+  permissions working normally (`--bare` was rejected — it forces
+  `ANTHROPIC_API_KEY`-only auth, silently breaking OAuth/keychain users);
+- `--setting-sources ""` plus a per-call `--settings` file with no hooks/
+  preferences, so `~/.claude/settings.json` never loads;
+- `--strict-mcp-config --mcp-config '{"mcpServers":{}}'`, so no MCP server
+  (including an ambient project `.mcp.json`) attaches;
+- `--tools ""` (every tool denied);
+- an explicit `--model`, defaulting to `DefaultCompleteModel`
+  (`claude-haiku-4-5-20251001`) but overridable per call.
+
+JSON validation and the single bounded repair-retry are deliberately absent
+here — they live in the `fastmodel` layer only, never per-provider, so
+every backend (this one, the OpenAI-compatible endpoint backend) is held to
+the same retry contract.
+
+Hermeticity is asserted, not assumed: `TestRealClaudeCompleteHermeticity`
+(`complete_test.go`, opt-in, `MADS_CLAUDE_SMOKE=1`) plants a `CLAUDE.md`, a
+`SessionStart` hook, and a decoy `.mcp.json` in the surrounding directory,
+then asserts none of it is observable in the reply and that
+`usage.input_tokens` falls within the documented overhead budget
+(`testdata/complete_flags.md`: ~154-165 tokens above the constructed
+prompt+system length) — if a future CLI update starts injecting ambient
+context, this test fails loudly rather than silently degrading.
+
+**Latency:** a `Complete` call pays claude-code's own process-spawn cost
+(roughly 1-2s), on top of whatever the model itself takes. That's
+acceptable because every Fast Model job (`providers/fastmodel`) is
+debounced or one-off background work — task synthesis, summaries, retro
+steps, NL agent generation — never a request blocking on a human's typed
+input. Interactive consumers that need lower latency should configure the
+OpenAI-compatible endpoint backend (`fastmodel.DynamicConfig.BaseURL`)
+instead of relying on the zero-config provider default.
+
 ## Testing without claude installed
 
 `fakeclaude_test.go` re-execs the test binary as a scripted stream-json

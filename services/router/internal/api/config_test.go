@@ -86,6 +86,123 @@ func TestPreflightStubbed(t *testing.T) {
 	}
 }
 
+// TestFastModelStatusDefaultsToProviderModeWithFakeCompleter covers the
+// zero-config path: no FastModelMode set, no endpoint configured, and
+// DefaultProvider pointed at the fake provider (which implements
+// provider.Completer, task #1) — the status the "unconfigured mads... now
+// has a WORKING Fast Model" acceptance criterion depends on the UI being
+// able to observe.
+func TestFastModelStatusDefaultsToProviderModeWithFakeCompleter(t *testing.T) {
+	srv := newTestServer(t)
+	setDefaultProvider(t, srv.URL, "fake")
+
+	resp, err := http.Get(srv.URL + "/fast-model/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := decodeJSON[struct {
+		Mode              string `json:"mode"`
+		ProviderName      string `json:"provider_name"`
+		ProviderCompleter bool   `json:"provider_completer"`
+	}](t, resp)
+	if status.Mode != "provider" {
+		t.Errorf("mode = %q, want provider", status.Mode)
+	}
+	if status.ProviderName != "fake" {
+		t.Errorf("provider_name = %q, want fake", status.ProviderName)
+	}
+	if !status.ProviderCompleter {
+		t.Error("provider_completer = false, want true (fake implements Completer)")
+	}
+}
+
+// TestFastModelStatusProviderModeDefaultsToClaudeCode covers the truly
+// unconfigured install: no DefaultProvider set either, so status must report
+// the claude-code default name — even though this test registry (testProviders)
+// doesn't register claude-code, so ProviderCompleter correctly reports false
+// rather than erroring.
+func TestFastModelStatusProviderModeDefaultsToClaudeCode(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp, err := http.Get(srv.URL + "/fast-model/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := decodeJSON[struct {
+		Mode              string `json:"mode"`
+		ProviderName      string `json:"provider_name"`
+		ProviderCompleter bool   `json:"provider_completer"`
+	}](t, resp)
+	if status.Mode != "provider" {
+		t.Errorf("mode = %q, want provider", status.Mode)
+	}
+	if status.ProviderName != "claude-code" {
+		t.Errorf("provider_name = %q, want claude-code", status.ProviderName)
+	}
+	if status.ProviderCompleter {
+		t.Error("provider_completer = true, want false (claude-code unregistered in this test registry)")
+	}
+}
+
+// TestFastModelStatusOffMode covers the explicit off case: no provider
+// resolution happens at all.
+func TestFastModelStatusOffMode(t *testing.T) {
+	srv := newTestServer(t)
+
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := decodeJSON[contracts.Config](t, getResp)
+	cfg.FastModelMode = contracts.FastModelModeOff
+	putJSON(t, srv.URL+"/config", cfg)
+
+	resp, err := http.Get(srv.URL + "/fast-model/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := decodeJSON[struct {
+		Mode         string `json:"mode"`
+		ProviderName string `json:"provider_name"`
+	}](t, resp)
+	if status.Mode != "off" {
+		t.Errorf("mode = %q, want off", status.Mode)
+	}
+	if status.ProviderName != "" {
+		t.Errorf("provider_name = %q, want empty in off mode", status.ProviderName)
+	}
+}
+
+// TestFastModelStatusEndpointMode covers explicit endpoint mode: no provider
+// resolution happens, regardless of DefaultProvider.
+func TestFastModelStatusEndpointMode(t *testing.T) {
+	srv := newTestServer(t)
+
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := decodeJSON[contracts.Config](t, getResp)
+	cfg.FastModelMode = contracts.FastModelModeEndpoint
+	cfg.FastModelBaseURL = "https://api.example.com/v1"
+	putJSON(t, srv.URL+"/config", cfg)
+
+	resp, err := http.Get(srv.URL + "/fast-model/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := decodeJSON[struct {
+		Mode         string `json:"mode"`
+		ProviderName string `json:"provider_name"`
+	}](t, resp)
+	if status.Mode != "endpoint" {
+		t.Errorf("mode = %q, want endpoint", status.Mode)
+	}
+	if status.ProviderName != "" {
+		t.Errorf("provider_name = %q, want empty in endpoint mode", status.ProviderName)
+	}
+}
+
 // setDefaultProvider sets Config.DefaultProvider against a running server,
 // so session-create tests that omit "provider" resolve to it instead of
 // hitting the unknown-provider pre-check.

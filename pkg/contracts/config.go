@@ -155,6 +155,10 @@ type Config struct {
 	FastModelBaseURL   string `json:"fast_model_base_url,omitempty"`
 	FastModelAPIKeyEnv string `json:"fast_model_api_key_env,omitempty"`
 
+	// FastModelMode selects the backend tier (see FastModelMode). Empty is a
+	// pre-mode-selector install — see FastModelEffectiveMode.
+	FastModelMode FastModelMode `json:"fast_model_mode,omitempty"`
+
 	// Appearance (§3.7 General + §3.9 Theme & Palette panels).
 	DisplayMode   string    `json:"display_mode"`
 	Keybindings   string    `json:"keybindings"`
@@ -285,6 +289,25 @@ func ValidateConfig(c *Config) *ValidationError {
 			v.Add("fast_model_base_url", "must be an absolute http(s) URL")
 		}
 	}
+	if c.FastModelMode != "" && !c.FastModelMode.Valid() {
+		v.Add("fast_model_mode", "must be one of: provider, endpoint, off")
+	}
 
 	return v
+}
+
+// FastModelEffectiveMode resolves the mode actually in effect, honoring
+// installs from before the three-way mode selector existed: an unset
+// FastModelMode defaults to endpoint if FastModelBaseURL was already
+// configured (preserving that install's working setup), else provider (the
+// new zero-config default — spec: "flips the default from dormant to
+// working").
+func (c *Config) FastModelEffectiveMode() FastModelMode {
+	if c.FastModelMode != "" {
+		return c.FastModelMode
+	}
+	if c.FastModelBaseURL != "" {
+		return FastModelModeEndpoint
+	}
+	return FastModelModeProvider
 }

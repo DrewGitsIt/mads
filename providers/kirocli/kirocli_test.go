@@ -156,6 +156,15 @@ func TestRegistersCleanly(t *testing.T) {
 	}
 }
 
+// TestNoCompleter proves kiro-cli does not implement provider.Completer:
+// Fast Model's "use my provider" resolution must go dormant for this
+// provider rather than silently falling back to something non-hermetic.
+func TestNoCompleter(t *testing.T) {
+	if _, ok := any(New(Config{})).(provider.Completer); ok {
+		t.Fatal("kirocli.Provider implements provider.Completer, want false (dormant path expected)")
+	}
+}
+
 // TestRealKiroSmoke exercises the real binary. Opt-in: kiro-cli is not
 // installed on this machine, so this both spends real tokens elsewhere and
 // cannot be exercised here — it must skip cleanly rather than fail.
