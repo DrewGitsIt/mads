@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import type { IpcMain, WebContents } from "electron";
 
 /**
@@ -54,7 +55,10 @@ export interface PtySpawnOptions {
 
 function defaultShell(): string {
   if (process.platform === "win32") return "powershell.exe";
-  return process.env.SHELL || "/bin/bash";
+  // Prefer $SHELL (set when the app is launched from a terminal), but fall back
+  // to the user's login shell from the passwd db — a GUI launch leaves $SHELL
+  // unset, and hardcoding bash there ignores the user's real default (zsh, fish…).
+  return process.env.SHELL || os.userInfo().shell || "/bin/bash";
 }
 
 /**

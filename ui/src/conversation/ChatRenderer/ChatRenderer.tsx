@@ -7,14 +7,24 @@ import { ToolCard } from "./ToolCard";
 import { WorkingIndicator } from "./WorkingIndicator";
 import styles from "./ChatRenderer.module.css";
 
+/**
+ * One item of an in-flight turn, built live from the stream: a run of streamed
+ * text, or a tool card (its result attached as tool_result frames arrive).
+ * Text tokens accumulate into the trailing text item so prose streams smoothly,
+ * with no mid-turn transcript reconciliation to make it rubber-band.
+ */
+export type StreamItem =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; tool: ToolUse };
+
 export interface ChatRendererProps {
   messages: TranscriptMessage[];
   /** Linked sessions (flag-gated): links touching the viewed session, used to resolve an attributed message as an inject chip vs. a digest card (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
   links?: Link[];
   viewedSessionId?: string;
-  /** In-progress assistant text for the turn currently streaming — appended after `messages`, replaced by the persisted transcript on turn_end. */
-  streamingText?: string;
-  /** Pre-first-chunk "agent is working" state; carries the most recent tool_use so the indicator can name it. `blocked` overrides it with a system-toned banner when a tool call stalled awaiting permission. Ignored once streamingText is set. */
+  /** The in-flight turn's ordered items (text runs + tool cards), rendered after `messages` and replaced by the persisted transcript on turn_end. */
+  liveItems?: StreamItem[];
+  /** Trailing "agent is working" affordance — shown while a turn is live but the tail isn't itself visibly streaming (no output yet, or a tool call awaiting its result). `blocked` overrides it with a system-toned banner. */
   working?: { tool?: ToolUse; blocked?: string } | false;
 }
 
@@ -32,7 +42,7 @@ export function ChatRenderer({
   messages,
   links = [],
   viewedSessionId,
-  streamingText,
+  liveItems = [],
   working,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
@@ -82,12 +92,16 @@ export function ChatRenderer({
           </div>
         );
       })}
-      {streamingText !== undefined && (
-        <div className={styles.agent}>
-          <Markdown className={styles.prose} text={streamingText} />
-        </div>
+      {liveItems.map((item, i) =>
+        item.kind === "text" ? (
+          <div key={`live-${i}`} className={styles.agent}>
+            <Markdown className={styles.prose} text={item.text} />
+          </div>
+        ) : (
+          <ToolCard key={`live-${i}`} tool={item.tool} />
+        ),
       )}
-      {!streamingText && working && <WorkingIndicator tool={working.tool} blocked={working.blocked} />}
+      {working && <WorkingIndicator tool={working.tool} blocked={working.blocked} />}
     </div>
   );
 }

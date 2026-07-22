@@ -90,6 +90,11 @@ type Session struct {
 	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
 	// Empty means the session works directly in its configured directory.
 	WorktreeDir string `json:"worktree_dir,omitempty"`
+	// Cwd is the absolute directory the agent actually runs in — the worktree
+	// for worktree isolation, otherwise the session's configured directory.
+	// Set by the Session runner at start so clients (e.g. the docked shell) can
+	// open in the same context as the agent instead of guessing.
+	Cwd string `json:"cwd,omitempty"`
 	// WorktreeBranch is the branch backing WorktreeDir. Non-empty means the
 	// session has isolated work not yet merged back — the UI's signal to flag
 	// the session, active or inactive, as needing merge-back.

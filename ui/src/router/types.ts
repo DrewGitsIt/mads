@@ -20,6 +20,8 @@ export interface Session {
   trust?: SessionTrust;
   worktree_dir?: string;
   worktree_branch?: string;
+  /** Absolute directory the agent runs in — the docked shell opens here so it shares the agent's context. */
+  cwd?: string;
   summary?: string;
   active_task_id?: string;
   tags?: string[];
