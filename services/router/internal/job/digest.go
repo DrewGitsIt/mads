@@ -68,6 +68,9 @@ func GenerateDigest(sessionID, delta string) Func {
 			System: digestSystemPrompt, Prompt: delta,
 		})
 		if err != nil {
+			if fastmodel.IsSkippable(err) {
+				return nil // no Fast Model backend configured: skip, not a failure
+			}
 			return fmt.Errorf("digest: compress: %w", err)
 		}
 

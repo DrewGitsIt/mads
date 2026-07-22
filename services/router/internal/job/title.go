@@ -56,7 +56,7 @@ func GenerateSessionTitle(sessionID, delta string) Func {
 
 		var d sessionTitleDraft
 		if _, err := deps.FastModel.Do(ctx, fastmodel.Job{System: sessionTitleSystem, Prompt: delta}, &d); err != nil {
-			if errors.Is(err, fastmodel.ErrUnusableOutput) {
+			if fastmodel.IsSkippable(err) {
 				return nil
 			}
 			return fmt.Errorf("session title: generate: %w", err)

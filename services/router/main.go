@@ -96,7 +96,7 @@ func main() {
 	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")
-	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint (empty uses providers/fake as a placeholder)")
+	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint, used when Settings' Config doesn't set one (empty and unset in Config: Fast Model jobs skip silently)")
 	fastmodelAPIKeyEnv := flag.String("fastmodel-api-key-env", "", "env var holding the Fast Model API key")
 	fastmodelModel := flag.String("fastmodel-model", "", "Fast Model model name")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials (env MADS_HOME)")
@@ -128,13 +128,25 @@ func main() {
 		log.Fatalf("router: register fake provider: %v", err)
 	}
 
-	var backend provider.Provider = fake.New()
-	if *fastmodelBaseURL == "" {
-		log.Printf("router: no -fastmodel-base-url set, using providers/fake as a placeholder Fast Model backend")
+	// resolveFastModel runs on every Fast Model call (job.go's Deps.FastModel
+	// is one long-lived Runner, shared across all job spawns): Settings'
+	// Config fields win when set, else the -fastmodel-* flags, else nothing
+	// — an empty BaseURL from both means fastmodel.ErrBackendUnconfigured,
+	// which every job kind treats as a silent skip. Reading Config live
+	// means a Settings change takes effect on the very next job spawn, no
+	// router restart required.
+	resolveFastModel := func(ctx context.Context) (fastmodel.DynamicConfig, error) {
+		cfg, err := data.Config(ctx)
+		if err != nil {
+			return fastmodel.DynamicConfig{}, err
+		}
+		baseURL, apiKeyEnv, model := cfg.FastModelBaseURL, cfg.FastModelAPIKeyEnv, cfg.FastModel
+		if baseURL == "" {
+			baseURL, apiKeyEnv, model = *fastmodelBaseURL, *fastmodelAPIKeyEnv, *fastmodelModel
+		}
+		return fastmodel.DynamicConfig{Model: model, BaseURL: baseURL, APIKeyEnv: apiKeyEnv}, nil
 	}
-	fm := fastmodel.New(backend, fastmodel.Config{
-		Model: *fastmodelModel, BaseURL: *fastmodelBaseURL, APIKeyEnv: *fastmodelAPIKeyEnv,
-	})
+	fm := fastmodel.NewDynamic(resolveFastModel)
 	reg := registryclient.New(*registryURL)
 	jobs := job.New(data, fm, reg)
 	sup := supervisor.New(data, sessionArgv, pipelineArgv, jobs)

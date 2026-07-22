@@ -56,6 +56,8 @@ export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   default_model_tier: "pipeline",
   cost_alert_cents: "pipeline",
   fast_model: "pipeline",
+  fast_model_base_url: "pipeline",
+  fast_model_api_key_env: "pipeline",
 
   theme: "appearance",
   palette: "appearance",
@@ -78,6 +80,8 @@ export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
   default_model_tier: "Default model tier",
   cost_alert_cents: "Cost alert (cents)",
   fast_model: "Fast model",
+  fast_model_base_url: "Fast Model endpoint",
+  fast_model_api_key_env: "Fast Model credential",
 
   theme: "Theme",
   palette: "Palette",

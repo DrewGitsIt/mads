@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -275,12 +276,23 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 		t.Fatalf("UpdateConfig: %v", err)
 	}
 
+	// A Fast Model backend must actually be configured for this test:
+	// GenerateDigest now skips delivery entirely (fastmodel.
+	// ErrBackendUnconfigured) when nothing selects an endpoint, so without
+	// this fixture the /injections assertion below would never see a
+	// delivery.
+	fastModel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, `{"model":"boot-fast","choices":[{"message":{"content":"did stuff"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer fastModel.Close()
+
 	router := spawnListening(t, "router", []string{
 		bootRouterBin, "-addr", "127.0.0.1:0",
 		"-data-url", dataURL,
 		"-session-cmd", bootTestchildBin,
 		"-pipeline-cmd", bootTestchildBin,
 		"-mads-home", homeDir,
+		"-fastmodel-base-url", fastModel.URL,
 	}, env)
 	defer router.terminate(t, 5*time.Second)
 	routerURL := "http://" + router.addr
