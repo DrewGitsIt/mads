@@ -1,23 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
+import type { OpenTaskBreakdown } from "../rail/railGroups";
+import type { TaskStatus } from "../../../router/types";
 
-const OPEN_STATUSES = new Set(["ready", "in_progress", "blocked", "needs_review"]);
+/** needs_review folds into `ready` — same simplification as GraphView's graphStatus.ts. */
+const STATUS_BUCKET: Partial<Record<TaskStatus, keyof OpenTaskBreakdown>> = {
+  in_progress: "running",
+  ready: "ready",
+  needs_review: "ready",
+  blocked: "blocked",
+};
 
 const TASK_EVENT_TYPES = ["task.created", "task.status_changed", "task.updated", "task.discarded"];
 
-/** Fetches every task, then keeps per-session open-task counts live via the task.* SSE domain. */
-export function useOpenTaskCounts(): Record<string, number> {
-  const [counts, setCounts] = useState<Record<string, number>>({});
+/** Fetches every task, then keeps per-session open-task breakdowns live via the task.* SSE domain. */
+export function useOpenTaskCounts(): Record<string, OpenTaskBreakdown> {
+  const [counts, setCounts] = useState<Record<string, OpenTaskBreakdown>>({});
   const mounted = useRef(true);
 
   const refetch = useCallback(async () => {
     const tasks = await router.listAllTasks();
     if (!mounted.current) return;
-    const next: Record<string, number> = {};
+    const next: Record<string, OpenTaskBreakdown> = {};
     for (const task of tasks) {
-      if (!OPEN_STATUSES.has(task.status)) continue;
-      next[task.session_id] = (next[task.session_id] ?? 0) + 1;
+      const bucket = STATUS_BUCKET[task.status];
+      if (!bucket) continue;
+      const entry = next[task.session_id] ?? { running: 0, ready: 0, blocked: 0 };
+      entry[bucket] += 1;
+      next[task.session_id] = entry;
     }
     setCounts(next);
   }, []);

@@ -241,6 +241,23 @@ func fcAssistantText(id, text string) map[string]any {
 	}
 }
 
+// fcEmitText mirrors claude --include-partial-messages on the interactive
+// transport: a token-level stream_event delta (what the live UI renders) then
+// the whole-message assistant line (what the transcript keeps). The one-shot
+// fake path stays whole-block only, matching its non-partial invocation.
+func fcEmitText(id, text string) {
+	fcEmit(map[string]any{
+		"type":       "stream_event",
+		"session_id": id,
+		"event": map[string]any{
+			"type":  "content_block_delta",
+			"index": 0,
+			"delta": map[string]any{"type": "text_delta", "text": text},
+		},
+	})
+	fcEmit(fcAssistantText(id, text))
+}
+
 // fcStream mimics the persistent stream-json session: init line, then one
 // turn per user message, closed by a result line. A control_request
 // interrupt lands mid-"slow"-turn.
@@ -297,21 +314,21 @@ func fcStream(a fcArgs) {
 
 		if prompt == "mcp-echo" {
 			reply := fcMCPEcho(a)
-			fcEmit(fcAssistantText(id, reply))
+			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)
 			continue
 		}
 		if prompt == "permission-echo" {
 			reply := fcPermissionEcho(a)
-			fcEmit(fcAssistantText(id, reply))
+			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)
 			continue
 		}
 		if prompt == "settings-echo" {
 			reply := fcSettingsEcho(a)
-			fcEmit(fcAssistantText(id, reply))
+			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)
 			continue
@@ -319,7 +336,7 @@ func fcStream(a fcArgs) {
 		if prompt == "slow" {
 			interrupted := false
 			for i := 0; i < 400 && !interrupted; i++ {
-				fcEmit(fcAssistantText(id, fmt.Sprintf("tick %d ", i)))
+				fcEmitText(id, fmt.Sprintf("tick %d ", i))
 				select {
 				case l, ok := <-lines:
 					if ok && l.Type == "control_request" {
@@ -338,7 +355,7 @@ func fcStream(a fcArgs) {
 			}
 			if fcToolDenied(name, a.disallowedTools) {
 				reply := fmt.Sprintf("cannot use %s: disallowed by --disallowedTools", name)
-				fcEmit(fcAssistantText(id, reply))
+				fcEmitText(id, reply)
 				fcAppendTranscript(transcript, "assistant", reply, "")
 				result(reply, false)
 				continue
@@ -353,7 +370,7 @@ func fcStream(a fcArgs) {
 				},
 			})
 			reply := "used " + name
-			fcEmit(fcAssistantText(id, reply))
+			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)
 			continue
@@ -374,10 +391,10 @@ func fcStream(a fcArgs) {
 		}
 		reply, crash := fcReply(prompt, history[:len(history)-1])
 		if crash {
-			fcEmit(fcAssistantText(id, "uh o")) // dies mid-turn, no result line
+			fcEmitText(id, "uh o") // dies mid-turn, no result line
 			os.Exit(1)
 		}
-		fcEmit(fcAssistantText(id, reply))
+		fcEmitText(id, reply)
 		fcAppendTranscript(transcript, "assistant", reply, "")
 		result(reply, false)
 	}

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
-import type { Session } from "../../router/types";
+import { Popover } from "../../components/Popover/Popover";
+import type { Model, Session } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
 import { ContextMeter } from "./ContextMeter";
@@ -12,47 +13,25 @@ export interface ConversationHeaderProps {
   session: Session;
   usedTokens?: number;
   contextWindow?: number;
-  shellOpen: boolean;
-  onToggleShell: () => void;
-  onRestartAgent: () => void;
   onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => void;
 }
 
 type PillField = "agent" | "model";
 
 /**
- * Consolidated header per the task brief's narrowed scope — name/status/
- * pills/context meter/kebab only. Resume/Pause/Merge/Link/fork/delete from
- * the fuller MADS-UX §3.3 header are other tabs' work items (HANDOFF.md
- * §4). No "trust" pill: `PATCH /sessions/:id` accepts it but Session has no
- * such field on the frontend contract yet (mirrors pkg/contracts/session.go
- * exactly, see ui/src/router/types.ts) — same data-gap treatment as
- * ContextMeter's context-window size.
+ * Conversation-tab meta strip: context meter + agent/model pills + workspace/
+ * branch subline. The session name, activity chip, and lifecycle/tools kebab
+ * live once in the SessionWorkspace bar above — this strip carries only what's
+ * specific to the conversation, so nothing here duplicates the bar.
  */
 export function ConversationHeader({
   session,
   usedTokens,
   contextWindow,
-  shellOpen,
-  onToggleShell,
-  onRestartAgent,
   onUpdateSession,
 }: ConversationHeaderProps) {
-  const [editingName, setEditingName] = useState(false);
-  const [name, setName] = useState(session.name);
   const [openPill, setOpenPill] = useState<PillField | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const modelsByProvider = useProviderModels();
-
-  function commitName() {
-    setEditingName(false);
-    const trimmed = name.trim();
-    if (trimmed && trimmed !== session.name) {
-      onUpdateSession?.({ name: trimmed });
-    } else {
-      setName(session.name);
-    }
-  }
 
   function commitPill(field: PillField, value: string) {
     setOpenPill(null);
@@ -65,36 +44,6 @@ export function ConversationHeader({
   return (
     <div className={styles.header}>
       <div className={styles.row}>
-        {editingName ? (
-          <input
-            className={styles.nameInput}
-            value={name}
-            autoFocus
-            onChange={(e) => setName(e.target.value)}
-            onBlur={commitName}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commitName();
-              if (e.key === "Escape") {
-                setName(session.name);
-                setEditingName(false);
-              }
-            }}
-          />
-        ) : (
-          <button
-            type="button"
-            className={styles.name}
-            onClick={() => setEditingName(true)}
-          >
-            {session.name}
-          </button>
-        )}
-        <Chip tone={session.activity === "active" ? "ok" : "neutral"}>
-          {session.activity}
-        </Chip>
-
-        <div className={styles.spacer} />
-
         <ContextMeter usedTokens={usedTokens} contextWindow={contextWindow} />
 
         {session.agent && (
@@ -107,60 +56,19 @@ export function ConversationHeader({
           />
         )}
         {session.model && (
-          <PillPopover
-            value={session.model}
-            label={modelDisplayName(session.model, modelsByProvider[session.provider ?? ""] ?? [])}
+          <ModelPickerPill
+            provider={session.provider}
+            model={session.model}
+            models={modelsByProvider[session.provider ?? ""] ?? []}
             open={openPill === "model"}
             onOpen={() => setOpenPill("model")}
-            onCommit={(v) => commitPill("model", v)}
             onClose={() => setOpenPill(null)}
+            onSelect={(id) => {
+              setOpenPill(null);
+              if (id !== session.model) onUpdateSession?.({ model: id });
+            }}
           />
         )}
-
-        <div className={styles.kebabWrap}>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label="More actions"
-            onClick={() => setMenuOpen((x) => !x)}
-          >
-            ⋮
-          </Button>
-          {menuOpen && (
-            <Panel className={styles.menu}>
-              <PanelBody>
-                <ul className={styles.menuList}>
-                  <li>
-                    <button
-                      type="button"
-                      className={styles.menuItem}
-                      title="Toggle Shell (Ctrl+`)"
-                      aria-keyshortcuts="Control+`"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onToggleShell();
-                      }}
-                    >
-                      {shellOpen ? "Hide Shell" : "Shell"}
-                    </button>
-                  </li>
-                  <li>
-                    <button
-                      type="button"
-                      className={styles.menuItem}
-                      onClick={() => {
-                        setMenuOpen(false);
-                        onRestartAgent();
-                      }}
-                    >
-                      Restart Agent
-                    </button>
-                  </li>
-                </ul>
-              </PanelBody>
-            </Panel>
-          )}
-        </div>
       </div>
 
       {(session.workspace || session.worktree_branch) && (
@@ -223,5 +131,65 @@ function PillPopover({ value: rawValue, label, open, onOpen, onCommit, onClose }
         </Panel>
       )}
     </div>
+  );
+}
+
+interface ModelPickerPillProps {
+  provider?: string;
+  model: string;
+  models: Model[];
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect: (id: string) => void;
+}
+
+/**
+ * Switch models mid-conversation from a dropdown of the session provider's own
+ * models — not a free-text field. With no discovered models (provider Models()
+ * empty/failed) it degrades to a static chip rather than an empty menu.
+ */
+function ModelPickerPill({ provider, model, models, open, onOpen, onClose, onSelect }: ModelPickerPillProps) {
+  const label = modelDisplayName(model, models) ?? model;
+
+  if (models.length === 0) {
+    return <Chip tone="info">{label}</Chip>;
+  }
+
+  return (
+    <Popover
+      open={open}
+      onClose={onClose}
+      anchor={
+        <button
+          type="button"
+          className={styles.modelTrigger}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => (open ? onClose() : onOpen())}
+        >
+          {label}
+          <span className={styles.caret} aria-hidden="true">▾</span>
+        </button>
+      }
+    >
+      <div className={styles.modelMenu} role="listbox">
+        {provider && <div className={styles.modelGroup}>{provider}</div>}
+        {models.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="option"
+            aria-selected={m.id === model}
+            className={[styles.modelOption, m.id === model ? styles.modelOptionSelected : ""]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => onSelect(m.id)}
+          >
+            {m.name}
+          </button>
+        ))}
+      </div>
+    </Popover>
   );
 }

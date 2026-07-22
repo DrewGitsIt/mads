@@ -38,6 +38,12 @@
   color: var(--text3);
 }
 
+.divider {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line-soft);
+}
+
 .idRow {
   width: 100%;
   text-align: left;

@@ -818,6 +818,14 @@ export class FakeRouterClient implements RouterClient {
     return { addr: "localhost:0" };
   }
 
+  async renameSession(id: string, name: string): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`fixture session not found: ${id}`);
+    session.name = name;
+    session.name_source = "user";
+    return session;
+  }
+
   async deleteSession(id: string): Promise<void> {
     if (!this.sessions.has(id)) throw new Error(`fixture session not found: ${id}`);
     this.sessions.delete(id);

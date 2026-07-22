@@ -159,12 +159,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("session: listen %s: %v", *addr, err)
 	}
-	log.Printf("session: listening on %s", ln.Addr())
 	r.SelfURL = "http://" + ln.Addr().String()
 
 	if err := r.Start(ctx); err != nil {
 		log.Fatalf("session: start: %v", err)
 	}
+
+	// "listening on <addr>" is the Supervisor's readiness signal (see
+	// services/router/internal/child). Emit it only after r.Start succeeds:
+	// the listener is bound above because the provider's permission-prompt
+	// hook needs SelfURL before launch, but a child whose runner failed to
+	// start (e.g. an unresolvable provider) must read as never-ready rather
+	// than announce a port it will abandon a moment later.
+	log.Printf("session: listening on %s", ln.Addr())
 
 	srv := &http.Server{Handler: api.New(r)}
 	serveErr := make(chan error, 1)

@@ -9,6 +9,7 @@ import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import type { Suggestion } from "./launchpad/useSuggestions";
 import { SessionRail } from "./rail/SessionRail";
+import { EMPTY_OPEN_TASK_BREAKDOWN, totalOpenTasks } from "./rail/railGroups";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
@@ -29,7 +30,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const links = useSessionLinks(sessions.map((s) => s.id));
   const [selectedId, setSelectedId] = useState<string>();
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
-  const [actionError, setActionError] = useState<string>();
+  const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
     useState<{ sessionId: string; text: string }>();
@@ -41,6 +42,19 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       setInitialTab(jumpToTab);
     }
   }, [jumpToSessionId, jumpToTab]);
+
+  /**
+   * A session action (resume/delete) can fail for a session that isn't the
+   * one on screen — it's triggered from the rail, not the open workspace. Name
+   * the session in the toast so its error can't read as the current session's.
+   */
+  function reportActionError(verb: string, sessionId: string, err: unknown) {
+    const name = sessions.find((s) => s.id === sessionId)?.name || "Untitled session";
+    setActionError({
+      title: `Couldn't ${verb} “${name}”`,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   function handleSessionCreated(session: Session, goalText: string) {
     setSelectedId(session.id);
@@ -56,7 +70,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     const target = sessions.find((s) => s.id === suggestion.sessionId);
     if (target && target.activity !== "active") {
       router.resumeSession(suggestion.sessionId).catch((err: unknown) => {
-        setActionError(err instanceof Error ? err.message : String(err));
+        reportActionError("resume", suggestion.sessionId, err);
       });
     }
   }
@@ -82,12 +96,12 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             }}
             onResume={(id) => {
               router.resumeSession(id).catch((err: unknown) => {
-                setActionError(err instanceof Error ? err.message : String(err));
+                reportActionError("resume", id, err);
               });
             }}
             onDelete={(id) => {
               router.deleteSession(id).catch((err: unknown) => {
-                setActionError(err instanceof Error ? err.message : String(err));
+                reportActionError("delete", id, err);
               });
             }}
           />
@@ -101,7 +115,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             routerClient={router}
             pipelineClient={pipelineClient}
             ptyBridge={ptyBridge}
-            openTaskCount={openTaskCounts[selectedId] ?? 0}
+            openTaskCount={totalOpenTasks(openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN)}
             initialTab={initialTab}
             onClose={() => setSelectedId(undefined)}
             provisioning={selectedId === provisioningSessionId}
@@ -122,7 +136,12 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
         {actionError && (
-          <Toast tone="bad" title="Session action failed" description={actionError} />
+          <Toast
+            tone="bad"
+            title={actionError.title}
+            description={actionError.message}
+            onDismiss={() => setActionError(undefined)}
+          />
         )}
       </main>
     </div>

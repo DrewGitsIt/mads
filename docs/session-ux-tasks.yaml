@@ -1,0 +1,122 @@
+# Session-management UX pass — seed with:
+#   SES=$(bin/mads new-session -name "Session UX")
+#   bin/mads seed -session $SES -file docs/session-ux-tasks.yaml
+#
+# Source of these items: launchpad + rail review (screenshot 2026-07-19).
+# Reference mockup: docs/mockups/sessions-ux.html (launchpad #1/#5 + rail
+# options; Option C chosen). Link model: ui/src/features/sessions/rail/
+# LinkChooserDialog.tsx + railLinks.ts; docs/LINKED-SESSIONS-DESIGN.md.
+tasks:
+  - title: "Launchpad: open up, vertically center, and enlarge the hero (#1)"
+    description: >
+      The new-session launchpad is cramped and reads small. Rework
+      Launchpad.tsx / Launchpad.module.css so the hero column is vertically
+      centered in the surface instead of top-anchored (drop the top
+      padding-block; justify-content:center against min-height:100%). Bump the
+      greeting from --fs-body to a dedicated hero size (~24px) with a real lede
+      line, and step padding/gaps up from --space-2/3 to --space-4/5. Give the
+      pill row more breathing room. Matches the "Proposed" state in
+      docs/mockups/sessions-ux.html (#1 · #5 section).
+    acceptance_criteria: >
+      Hero column is centered vertically in the session surface; greeting is
+      ~24px with a distinct lede; composer box and pills use the roomier
+      spacing scale. Existing Launchpad tests still pass; no regression to
+      submit / keyboard-shortcut behavior.
+    labels: [ui, sessions, launchpad]
+
+  - title: "Launchpad: attach files as removable preview chips with auto boilerplate (#5)"
+    description: >
+      Today attaching a file pastes its raw path into the textarea and the user
+      must hand-write "please reference this file". Replace that with a proper
+      attachment UI on the launchpad: an "Attach files" button plus a chip
+      strip above the composer footer. Image files get a thumbnail; other files
+      show a type glyph + name + size; each chip has an X to remove. Reuse the
+      existing Composer pattern (conversation/Composer/InjectedContentPreview.tsx)
+      rather than inventing a new one. On submit, mads prepends a boilerplate
+      preamble ("See these files for reference: ...") so the user never writes
+      it — mirroring the Composer's resolve-at-send-time model. Show the
+      "Files are shared with the agent automatically" affordance line.
+    acceptance_criteria: >
+      Attaching files renders removable chips (thumbnail for images, glyph for
+      others) — no raw path enters the textarea. Removing a chip drops the file.
+      On start, the goal text sent to the session includes the attached files
+      with an injected reference preamble the user did not type.
+    labels: [ui, sessions, launchpad]
+
+  - title: "Deepen sessions-ux mockup with the Option C link-mode flow"
+    description: >
+      Extend docs/mockups/sessions-ux.html with a Link UX section for the chosen
+      Option C (slide-in actions). Three steps: (1) Link mode entered from a
+      card's slide-in link icon — that card becomes the anchor, other
+      same-workspace cards get a tap-to-add checkbox, cross-workspace cards dim
+      with a "different workspace" tag, and a floating bar summarizes selection
+      and advances to mode selection. (2) Mode + holder dialog mirroring
+      LinkChooserDialog: Monitor (read) vs Leader (read/inject/orchestrate)
+      preset cards with grant chips, then a "Who leads?/Who monitors?" radio
+      picker with fan-out arrows; every non-holder becomes a subject; constraint
+      note (one leader per subject, no cross-workspace, pipelines monitored not
+      led). (3) Resulting rail: holder card with LEADER·N / MONITOR·N badge,
+      nested subject rows with a connector line and LINKED/WATCHED badges, and a
+      hover unlink X on each subject. Clay/dark tokens, matches existing file
+      style. CSS + HTML for this were already drafted in-conversation.
+    acceptance_criteria: >
+      sessions-ux.html renders the three link-mode steps consistent with the
+      real link model (grants/presets/badges from railLinks.ts and
+      LinkChooserDialog.tsx). Opens standalone in a browser.
+    labels: [design, mockup, sessions, linked-sessions]
+
+  - title: "Rail: adopt Option C card interaction — slide-in actions, drop checkbox/kebab/Resume (#2)"
+    description: >
+      Harmonize SessionRail.tsx card interaction to Option C. The card itself is
+      the only primary surface: clicking opens a live session and RESUMES +
+      opens a paused one (so the standalone Resume button/affordance is deleted).
+      Remove the always-present kebab (⋯) and the leading checkbox gutter (the
+      blank left space). On hover, slide a small trailing action cluster in from
+      the right — resume (paused only), link, archive — email-list style, over a
+      gradient so it reads cleanly. Destructive archive keeps its confirm dialog.
+      Preserve status dot, open-task count, summary, and nested-subject rendering.
+    acceptance_criteria: >
+      No card shows a checkbox gutter, persistent kebab, or standalone Resume
+      button. Clicking a paused card resumes+opens it. Hover reveals resume/
+      link/archive actions; archive still confirms. Rail tests updated; keyboard
+      selection and a11y labels preserved.
+    labels: [ui, sessions, rail]
+    depends_on:
+      - "Deepen sessions-ux mockup with the Option C link-mode flow"
+
+  - title: "Rail: link-mode entry + selection flow feeding LinkChooserDialog (#2 link UX)"
+    description: >
+      Wire Option C's per-card link action into a link-building mode that
+      replaces the old always-on multi-select checkboxes. Clicking a card's link
+      action sets it as the anchor and enters link mode: same-workspace cards
+      become tap-to-add, cross-workspace cards are disabled/dimmed (links never
+      cross worktrees/workspaces), and a floating bar shows the selection count
+      with a "Choose mode" advance and a cancel. Advancing opens the existing
+      LinkChooserDialog (Monitor/Leader + holder picker) unchanged. Gate behind
+      FLAGS.linkedSessions as today. Confirm whether that flag is even enabled in
+      the current build — if off, the checkbox gutter should not render at all.
+    acceptance_criteria: >
+      With linkedSessions on: clicking link on a card enters link mode with an
+      anchor, same-workspace add targets, dimmed cross-workspace cards, and a
+      floating bar; advancing opens LinkChooserDialog and creating links yields
+      the LEADER/MONITOR holder + nested subjects rail. With the flag off, no
+      link chrome or checkbox gutter renders. Tests cover both flag states.
+    labels: [ui, sessions, rail, linked-sessions]
+    depends_on:
+      - "Rail: adopt Option C card interaction — slide-in actions, drop checkbox/kebab/Resume (#2)"
+
+  - title: "Make \"From your open work\" chips navigational, not text templates (#3)"
+    description: >
+      Today useSuggestions/SuggestionChips build "Resume: <session> — N open
+      tasks" and "Pick up: <title>" chips, but Launchpad wires onPick to
+      setText(), so clicking just dumps the human-readable label into the
+      new-session goal box (looks like an already-attached task being copied).
+      Intent (MADS-UX §3.2) is a quick-launch shelf. Make the chips act:
+      "Resume" should open/resume that existing session; "Pick up" should start
+      a session bound to that ready task — not seed a fresh prompt with label
+      text. NEEDS DECISION on exact target UX before build.
+    acceptance_criteria: >
+      "Resume" chip navigates to / resumes the referenced session. "Pick up"
+      chip starts a session associated with the referenced task. Neither injects
+      the descriptive label as literal composer text. Suggestion tests updated.
+    labels: [ui, sessions, launchpad, needs-decision]

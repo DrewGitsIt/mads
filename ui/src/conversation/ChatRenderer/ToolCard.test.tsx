@@ -15,12 +15,30 @@ describe("ToolCard", () => {
     expect(screen.queryByText(/old_string/)).toBeNull();
   });
 
-  it("expands to show input JSON and path on click", () => {
+  it("expands to a color-coded diff (old removed, new added) plus path on click", () => {
     render(<ToolCard tool={tool} />);
     fireEvent.click(screen.getByRole("button"));
     expect(screen.getByRole("button").getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText(/old_string/)).toBeTruthy();
+    // Edit renders old_string as a removed line and new_string as an added line
+    // rather than dumping raw JSON.
+    expect(screen.queryByText(/old_string/)).toBeNull();
+    expect(screen.getByText("foo")).toBeTruthy();
+    expect(screen.getByText("bar")).toBeTruthy();
     expect(screen.getAllByText(tool.path).length).toBeGreaterThan(0);
+  });
+
+  it("shows an add/subtract stat in the collapsed row for a file-mutating tool", () => {
+    render(<ToolCard tool={tool} />);
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(screen.getByText("−1")).toBeTruthy();
+  });
+
+  it("renders a Write as an all-adds diff", () => {
+    render(<ToolCard tool={{ name: "Write", path: "a.txt", input: { content: "one\ntwo" } }} />);
+    expect(screen.getByText("+2")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText("one")).toBeTruthy();
+    expect(screen.getByText("two")).toBeTruthy();
   });
 
   it("collapses again on a second click", () => {

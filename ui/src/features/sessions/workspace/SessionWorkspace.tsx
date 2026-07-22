@@ -13,6 +13,7 @@ import {
 import type { Session } from "../../../router/types";
 import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
+import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
@@ -61,6 +62,8 @@ export function SessionWorkspace({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [running, setRunning] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState("");
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -117,16 +120,52 @@ export function SessionWorkspace({
     setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function commitName() {
+    setEditingName(false);
+    const trimmed = draftName.trim();
+    if (!session || !trimmed || trimmed === session.name) return;
+    setSession({ ...session, name: trimmed }); // optimistic
+    routerClient
+      .renameSession(sessionId, trimmed)
+      .then(setSession)
+      .catch((err: unknown) => {
+        setActionError(err instanceof Error ? err.message : String(err));
+        refetchSession(); // revert to server truth on failure
+      });
+  }
+
   return (
     <div className={styles.workspace}>
       <div className={styles.bar}>
-        <Button variant="ghost" size="sm" aria-label="Back to Launchpad" onClick={onClose}>
-          ✕
-        </Button>
         <span className={styles.name}>
-          <span className={styles.nameText}>
-            {session ? session.name || "Untitled session" : "Loading…"}
-          </span>
+          {editingName && session ? (
+            <input
+              className={styles.nameInput}
+              value={draftName}
+              autoFocus
+              aria-label="Session name"
+              onChange={(e) => setDraftName(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitName();
+                if (e.key === "Escape") setEditingName(false);
+              }}
+            />
+          ) : (
+            <button
+              type="button"
+              className={styles.nameButton}
+              title="Rename session"
+              disabled={!session}
+              onClick={() => {
+                if (!session) return;
+                setDraftName(session.name || "");
+                setEditingName(true);
+              }}
+            >
+              {session ? session.name || "Untitled session" : "Loading…"}
+            </button>
+          )}
           {session && (
             <Chip tone={session.activity === "active" ? "ok" : "neutral"}>{session.activity}</Chip>
           )}
@@ -172,6 +211,17 @@ export function SessionWorkspace({
               className={styles.menu}
               sessionId={sessionId}
               activity={session.activity}
+              onToggleShell={() => {
+                setMenuOpen(false);
+                // Shell lives in the (possibly hidden) Conversation tab — surface
+                // it first, then toggle the dock via the cross-tree signal.
+                selectTab("conversation");
+                requestShellToggle();
+              }}
+              onRestartAgent={() => {
+                setMenuOpen(false);
+                void routerClient.bounce(sessionId);
+              }}
               onClose={closeSession}
               onResume={resumeSession}
               onDeleteRequest={() => {

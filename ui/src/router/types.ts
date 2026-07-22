@@ -236,6 +236,11 @@ export interface ToolResult {
 export interface Usage {
   input_tokens: number;
   output_tokens: number;
+  // Prompt-cache halves of context, billed separately from input_tokens.
+  // On a cached turn the bulk of the real context is cache_read — omitting
+  // these makes input_tokens look like just the newest (uncached) message.
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
   model?: string;
 }
 

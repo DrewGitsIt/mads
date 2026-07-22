@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dotState, groupSessions } from "./railGroups";
+import { dotState, groupSessions, totalOpenTasks } from "./railGroups";
+import type { OpenTaskBreakdown } from "./railGroups";
 import type { Session } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
@@ -13,21 +14,40 @@ function makeSession(overrides: Partial<Session>): Session {
   };
 }
 
+function makeBreakdown(overrides: Partial<OpenTaskBreakdown>): OpenTaskBreakdown {
+  return { running: 0, ready: 0, blocked: 0, ...overrides };
+}
+
 describe("dotState", () => {
-  it("is always 'on' for an active session, regardless of open task count", () => {
+  it("is always 'on' for an active session, regardless of open task breakdown", () => {
     const session = makeSession({ activity: "active" });
-    expect(dotState(session, 0)).toBe("on");
-    expect(dotState(session, 5)).toBe("on");
+    expect(dotState(session, makeBreakdown({}))).toBe("on");
+    expect(dotState(session, makeBreakdown({ blocked: 5 }))).toBe("on");
   });
 
-  it("is 'attn' for an inactive session with open tasks", () => {
+  it("is 'attn' for an inactive session with blocked work", () => {
     const session = makeSession({ activity: "inactive" });
-    expect(dotState(session, 3)).toBe("attn");
+    expect(dotState(session, makeBreakdown({ blocked: 1 }))).toBe("attn");
   });
 
-  it("is 'off' for an inactive session with no open tasks", () => {
+  it("is 'off' — the softer existing treatment — for an inactive session with only running/ready work", () => {
     const session = makeSession({ activity: "inactive" });
-    expect(dotState(session, 0)).toBe("off");
+    expect(dotState(session, makeBreakdown({ running: 2, ready: 3 }))).toBe("off");
+  });
+
+  it("is 'off' for an inactive session with no open work", () => {
+    const session = makeSession({ activity: "inactive" });
+    expect(dotState(session, makeBreakdown({}))).toBe("off");
+  });
+});
+
+describe("totalOpenTasks", () => {
+  it("sums every bucket", () => {
+    expect(totalOpenTasks(makeBreakdown({ running: 2, ready: 1, blocked: 3 }))).toBe(6);
+  });
+
+  it("is 0 for an all-zero breakdown", () => {
+    expect(totalOpenTasks(makeBreakdown({}))).toBe(0);
   });
 });
 
