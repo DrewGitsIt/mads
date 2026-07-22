@@ -113,3 +113,65 @@
   padding: 2px 6px;
   width: 160px;
 }
+
+/* model dropdown trigger — reads as a chip but with a caret so it's clearly a
+   picker, not a label */
+.modelTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--info);
+  background: var(--info-soft);
+  color: var(--info-fg);
+  font: 500 var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.modelTrigger:hover {
+  background: var(--bg3);
+}
+
+.caret {
+  font-size: 9px;
+  opacity: 0.8;
+}
+
+.modelMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 180px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.modelGroup {
+  padding: 4px var(--space-2) 2px;
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--text3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.modelOption {
+  text-align: left;
+  padding: var(--space-2);
+  border-radius: var(--r-sm);
+  background: none;
+  border: none;
+  color: var(--text);
+  font: var(--fs-body) var(--sans);
+  cursor: pointer;
+}
+
+.modelOption:hover {
+  background: var(--bg3);
+}
+
+.modelOptionSelected {
+  color: var(--accent);
+  font-weight: 600;
+}

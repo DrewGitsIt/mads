@@ -72,7 +72,12 @@ export function ChatRenderer({
           );
         }
         return (
-          <div key={i} className={styles[message.role] ?? styles.agent}>
+          <div
+            key={i}
+            className={styles[message.role] ?? styles.agent}
+            // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
+            data-user-msg={message.role === "user" ? "" : undefined}
+          >
             <Markdown className={styles.prose} text={message.text ?? ""} />
           </div>
         );

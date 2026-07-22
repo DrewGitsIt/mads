@@ -19,7 +19,10 @@ import (
 // process. User messages go in as JSON lines; each turn's response streams
 // back and closes with a result line.
 func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (provider.Session, error) {
-	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"}
+	// --include-partial-messages surfaces token-level content_block_delta lines
+	// so the UI streams text as it arrives instead of one whole message block
+	// per turn (see wire.go's events/streamDeltaEvents).
+	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages"}
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
@@ -155,7 +158,7 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	s.mu.Unlock()
 
-	for _, ev := range l.events(interrupted) {
+	for _, ev := range l.events(interrupted, true) {
 		if ev.Usage != nil && ev.Usage.Model == "" {
 			ev.Usage.Model = model // learned from the init line
 		}

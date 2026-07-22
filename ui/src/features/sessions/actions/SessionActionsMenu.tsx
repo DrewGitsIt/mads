@@ -12,6 +12,14 @@ export interface SessionActionsMenuProps {
   onDeleteRequest: () => void;
   /** Linked sessions (flag-gated): only passed for a row that is an actual link subject. */
   onUnlinkRequest?: () => void;
+  /**
+   * Conversation-tab tools folded into this one menu so the workspace has a
+   * single kebab (not one here + one in the ConversationHeader). Passed only
+   * by SessionWorkspace; the rail never sends them, so its cards stay
+   * lifecycle-only.
+   */
+  onToggleShell?: () => void;
+  onRestartAgent?: () => void;
   className?: string;
 }
 
@@ -23,6 +31,8 @@ export function SessionActionsMenu({
   onResume,
   onDeleteRequest,
   onUnlinkRequest,
+  onToggleShell,
+  onRestartAgent,
   className,
 }: SessionActionsMenuProps) {
   const close = closeState(activity);
@@ -41,6 +51,25 @@ export function SessionActionsMenu({
     <Panel className={className}>
       <PanelBody>
         <ul className={styles.menuList}>
+          {(onToggleShell || onRestartAgent) && (
+            <>
+              {onToggleShell && (
+                <li>
+                  <button type="button" className={styles.menuItem} onClick={onToggleShell}>
+                    Shell
+                  </button>
+                </li>
+              )}
+              {onRestartAgent && (
+                <li>
+                  <button type="button" className={styles.menuItem} onClick={onRestartAgent}>
+                    Restart Agent
+                  </button>
+                </li>
+              )}
+              <li aria-hidden="true" className={styles.divider} />
+            </>
+          )}
           <li>
             <button
               type="button"

@@ -101,6 +101,7 @@ export interface RouterClient {
   terminalResize(sessionId: string, cols: number, rows: number): Promise<void>;
   closeSession(sessionId: string): Promise<void>;
   resumeSession(sessionId: string): Promise<{ addr: string }>;
+  renameSession(id: string, name: string): Promise<Session>;
   deleteSession(id: string): Promise<void>;
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
@@ -497,6 +498,10 @@ export class FetchRouterClient implements RouterClient {
 
   async resumeSession(sessionId: string): Promise<{ addr: string }> {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/resume`);
+  }
+
+  async renameSession(id: string, name: string): Promise<Session> {
+    return routerPost(this.baseUrl, `/sessions/${id}/rename`, { name });
   }
 
   async deleteSession(id: string): Promise<void> {

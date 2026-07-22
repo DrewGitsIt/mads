@@ -24,6 +24,11 @@ type wireLine struct {
 
 	// init-line fields
 	Model string `json:"model"`
+
+	// stream_event-line field: the raw Anthropic streaming event, present only
+	// when claude runs with --include-partial-messages (interactive transport).
+	// Carries token-level content_block_delta text.
+	Event json.RawMessage `json:"event"`
 }
 
 // model names the model where the line says: init lines carry it directly,
@@ -128,15 +133,21 @@ func toolPath(input json.RawMessage) string {
 }
 
 // events normalizes one stream line. interrupted marks the turn end when an
-// interrupt was requested since the turn began.
-func (l *wireLine) events(interrupted bool) []provider.Event {
+// interrupt was requested since the turn began. partial is set on the
+// interactive transport (--include-partial-messages), where token-level text
+// arrives first via "stream_event" content_block_delta lines — the
+// whole-message "assistant" text block that follows is then a duplicate of
+// what already streamed, so it is dropped and only its tool_use blocks emit.
+func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 	switch l.Type {
+	case "stream_event":
+		return l.streamDeltaEvents()
 	case "assistant":
 		var evs []provider.Event
 		for _, b := range l.Message.blocks() {
 			switch b.Type {
 			case "text":
-				if b.Text != "" {
+				if !partial && b.Text != "" {
 					evs = append(evs, provider.Event{Kind: provider.EventText, Text: b.Text})
 				}
 			case "tool_use":
@@ -190,4 +201,29 @@ func (l *wireLine) events(interrupted bool) []provider.Event {
 		// bookkeeping, not conversation.
 		return nil
 	}
+}
+
+// streamDeltaEvents pulls token-level text out of a "stream_event" line's
+// inner Anthropic event. Only content_block_delta/text_delta contributes —
+// message/content-block start/stop framing, thinking deltas, and tool-input
+// (input_json_delta) deltas are bookkeeping the whole-message "assistant"
+// line already carries.
+func (l *wireLine) streamDeltaEvents() []provider.Event {
+	if len(l.Event) == 0 {
+		return nil
+	}
+	var e struct {
+		Type  string `json:"type"`
+		Delta struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"delta"`
+	}
+	if err := json.Unmarshal(l.Event, &e); err != nil {
+		return nil
+	}
+	if e.Type == "content_block_delta" && e.Delta.Type == "text_delta" && e.Delta.Text != "" {
+		return []provider.Event{{Kind: provider.EventText, Text: e.Delta.Text}}
+	}
+	return nil
 }

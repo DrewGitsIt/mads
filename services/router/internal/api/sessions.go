@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
@@ -49,6 +50,36 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "addr": addr})
 }
 
+// handleRenameSession sets a user-chosen name. NameSource=User marks it as
+// human-claimed so the auto-title job leaves it alone (see internal/job/title.go),
+// and the data store's Update emits session.renamed for live shells.
+func (s *server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeErrMsg(w, http.StatusBadRequest, "rename session: ", errors.New("name must not be empty"))
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess.Name = name
+	sess.NameSource = contracts.SessionNameSourceUser
+	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
 func (s *server) handleTerminateSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.sup.TerminateSession(r.Context(), id); err != nil {
@@ -71,6 +102,14 @@ func (s *server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, tracked := s.sup.SessionAddr(id); tracked {
 		writeErrMsg(w, http.StatusConflict, "resume session: ", errors.New("session already has a running child"))
+		return
+	}
+	// Resolve the provider up front, exactly as create does — otherwise a
+	// session persisted without one (e.g. an old record predating provider
+	// defaulting) spawns a child that crashes at startup with an opaque
+	// "exited before ready", surfacing as a 502 instead of a clear cause.
+	if _, err := s.providers.Get(sess.Provider); err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "resume session: ", err)
 		return
 	}
 	addr, err := s.sup.SpawnSession(r.Context(), id)

@@ -17,16 +17,19 @@
 .textarea {
   flex: 1;
   resize: none;
-  min-height: 40px;
-  height: 40px;
-  max-height: 40px;
+  /* Grow with content instead of locking to a single 40px line. field-sizing
+     lets the textarea size to its text (Chromium/Electron ≥123); the min/max
+     bound it between one line and ~9 lines, after which it scrolls. Older
+     engines ignore field-sizing and fall back to min-height (one line). */
+  field-sizing: content;
+  min-height: 44px;
+  max-height: 220px;
   padding: var(--space-2) var(--space-3);
   background: var(--bg2);
   border: 1px solid var(--line-soft);
   border-radius: var(--r);
   color: var(--text);
-  font: var(--fs-body) var(--sans);
-  transition: height 0.15s;
+  font: var(--fs-chat)/1.5 var(--sans);
 }
 
 .textarea:focus {
@@ -79,4 +82,56 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+/* queued-while-responding messages */
+.queued {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.queuedItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-2);
+  background: var(--bg2);
+  border: 1px dashed var(--line);
+  border-radius: var(--r-sm);
+}
+
+.queuedBadge {
+  flex: none;
+  font: 600 var(--fs-chip) var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--warn-fg);
+}
+
+.queuedText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text2);
+  font: var(--fs-sm) var(--sans);
+}
+
+.queuedRemove {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.queuedRemove:hover {
+  background: var(--bad-soft);
+  color: var(--bad-fg);
 }

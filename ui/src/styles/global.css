@@ -7,6 +7,15 @@
 html,
 body {
   height: 100%;
+  /* Desktop shell: the document itself never scrolls — only inner panes do
+     (the session rail and the conversation stream). Without this, a nested
+     pane that briefly overflows can surface a second, document-level
+     scrollbar alongside the pane's own. */
+  overflow: hidden;
+}
+
+#root {
+  height: 100%;
 }
 
 body {

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { Composer } from "./Composer";
+import { clearAllDrafts } from "./composerDrafts";
 import { FakeRouterClient } from "../../router/fixtures";
 import type { Agent, Model } from "../../router/types";
 
@@ -70,6 +71,8 @@ function fixtureAgent(id: string): Agent {
 }
 
 describe("Composer", () => {
+  beforeEach(clearAllDrafts);
+
   it("resolves @ mentionables against the faked Router response set and shows a menu", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
@@ -230,6 +233,78 @@ describe("Composer", () => {
       }),
     );
     expect(textarea.value).toBe("");
+  });
+
+  it("queues a message sent while busy, then flushes it once the turn ends", async () => {
+    const client = new FakeRouterClient();
+    const sendMessage = vi.spyOn(client, "sendMessage");
+
+    const { rerender } = render(
+      <Composer routerClient={client} sessionId="session-active" busy />,
+    );
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "next question" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    // While busy: nothing sent, input cleared, and a queued chip appears.
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(textarea.value).toBe("");
+    expect(screen.getByText("Queued")).toBeTruthy();
+    expect(screen.getByText("next question")).toBeTruthy();
+
+    // Turn ends → busy clears → the queued message flushes in order.
+    rerender(<Composer routerClient={client} sessionId="session-active" busy={false} />);
+    await waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith("session-active", {
+        text: "next question",
+        mentions: [],
+      }),
+    );
+  });
+
+  it("lets the user cancel a queued message before it flushes", async () => {
+    const client = new FakeRouterClient();
+    const sendMessage = vi.spyOn(client, "sendMessage");
+
+    const { rerender } = render(
+      <Composer routerClient={client} sessionId="session-active" busy />,
+    );
+    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "oops" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    fireEvent.click(screen.getByLabelText("Remove queued message"));
+    expect(screen.queryByText("Queued")).toBeNull();
+
+    rerender(<Composer routerClient={client} sessionId="session-active" busy={false} />);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("restores a per-session draft after the composer remounts", () => {
+    const client = new FakeRouterClient();
+    const { unmount } = render(<Composer routerClient={client} sessionId="session-active" />);
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
+      target: { value: "half-written thought" },
+    });
+    unmount();
+
+    render(<Composer routerClient={client} sessionId="session-active" />);
+    expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe(
+      "half-written thought",
+    );
+  });
+
+  it("keeps drafts separate per session", () => {
+    const client = new FakeRouterClient();
+    const { unmount } = render(<Composer routerClient={client} sessionId="session-active" />);
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
+      target: { value: "for session A" },
+    });
+    unmount();
+
+    render(<Composer routerClient={client} sessionId="session-other" />);
+    expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe("");
   });
 
   it("auto-sends initialValue on mount and clears the textarea once it succeeds", async () => {
