@@ -24,7 +24,7 @@ describe("useAttentionBadge", () => {
     (window as { mads?: unknown }).mads = { badge: { setCount } };
     const sessions = [makeSession({ id: "s1" })];
 
-    renderHook(() => useAttentionBadge(sessions, { s1: 1 }));
+    renderHook(() => useAttentionBadge(sessions, { s1: { running: 0, ready: 0, blocked: 1 } }));
 
     expect(setCount).toHaveBeenCalledWith(1);
   });
@@ -36,16 +36,18 @@ describe("useAttentionBadge", () => {
 
     const { rerender } = renderHook(
       ({ openTaskCounts }) => useAttentionBadge(sessions, openTaskCounts),
-      { initialProps: { openTaskCounts: { s1: 0 } } },
+      { initialProps: { openTaskCounts: { s1: { running: 0, ready: 0, blocked: 0 } } } },
     );
     expect(setCount).toHaveBeenLastCalledWith(0);
 
-    rerender({ openTaskCounts: { s1: 1 } });
+    rerender({ openTaskCounts: { s1: { running: 0, ready: 0, blocked: 1 } } });
     expect(setCount).toHaveBeenLastCalledWith(1);
   });
 
   it("does not throw when no Electron badge bridge is present", () => {
     const sessions = [makeSession({ id: "s1" })];
-    expect(() => renderHook(() => useAttentionBadge(sessions, { s1: 1 }))).not.toThrow();
+    expect(() =>
+      renderHook(() => useAttentionBadge(sessions, { s1: { running: 0, ready: 0, blocked: 1 } })),
+    ).not.toThrow();
   });
 });
