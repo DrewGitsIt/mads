@@ -138,8 +138,21 @@ func (s *Proposals) List(ctx context.Context, sessionID string) ([]contracts.Pro
 }
 
 // Approve applies a proposed change through the Tasks store (actor
-// "synthesizer") and marks the proposal approved. Non-proposed proposals
-// (already approved or dismissed) are rejected rather than re-applied.
+// "synthesizer") and marks the proposal approved, all inside one
+// transaction: the task/note write, the status flip, and the
+// synthesis.proposal_approved event either all land or none do. That
+// matters most for the common case — the proposal's target is the active
+// (in_progress) task, spec §4, which typically still carries the executing
+// engine's write lease for the task's whole run (services/pipeline/engine's
+// heartbeat) — so the task/note write's lease check (checkAndRenew, reached
+// via updateInTx/addNoteInTx below) can legitimately reject with
+// *LeaseHeldError. Doing that check inside this same transaction means a
+// rejection rolls back cleanly with no partial write and no status flip:
+// the proposal stays "proposed" for the caller to retry once the lease
+// frees up, rather than a two-transaction version silently leaving the
+// applied write and the "proposed" status out of sync on a crash between
+// them. Non-proposed proposals (already approved or dismissed) are
+// rejected rather than re-applied.
 func (s *Proposals) Approve(ctx context.Context, id string) (*contracts.Proposal, error) {
 	p, err := s.Get(ctx, id)
 	if err != nil {
@@ -151,53 +164,56 @@ func (s *Proposals) Approve(ctx context.Context, id string) (*contracts.Proposal
 		return nil, verr
 	}
 
-	switch p.Type {
-	case contracts.ProposalCreateTask:
-		t := &contracts.Task{
-			SessionID:          p.SessionID,
-			Title:              p.Task.Title,
-			Description:        p.Task.Description,
-			AcceptanceCriteria: p.Task.AcceptanceCriteria,
-			Scope:              p.Task.Scope,
-			Source:             synthesizerActor,
+	err = s.log.WithTx(ctx, func(tx *Tx) error {
+		switch p.Type {
+		case contracts.ProposalCreateTask:
+			t := &contracts.Task{
+				SessionID:          p.SessionID,
+				Title:              p.Task.Title,
+				Description:        p.Task.Description,
+				AcceptanceCriteria: p.Task.AcceptanceCriteria,
+				Scope:              p.Task.Scope,
+				Source:             synthesizerActor,
+			}
+			if verr := Validate(t); verr != nil {
+				return verr
+			}
+			if err := s.tasks.createInTx(tx, t, synthesizerActor); err != nil {
+				return err
+			}
+			p.AppliedTaskID = t.ID
+		case contracts.ProposalAddNote:
+			n := &contracts.Note{
+				Type:    p.Note.Type,
+				Content: p.Note.Content,
+				Source:  synthesizerActor,
+			}
+			if err := s.tasks.addNoteInTx(tx, p.TaskID, n, synthesizerActor); err != nil {
+				return err
+			}
+		case contracts.ProposalUpdateTask:
+			t, err := s.tasks.getInTx(tx, p.TaskID)
+			if err != nil {
+				return err
+			}
+			if p.Update.Title != "" {
+				t.Title = p.Update.Title
+			}
+			if p.Update.Description != "" {
+				t.Description = p.Update.Description
+			}
+			if p.Update.AcceptanceCriteria != "" {
+				t.AcceptanceCriteria = p.Update.AcceptanceCriteria
+			}
+			if p.Update.Scope != "" {
+				t.Scope = p.Update.Scope
+			}
+			if err := s.tasks.updateInTx(tx, t, synthesizerActor); err != nil {
+				return err
+			}
 		}
-		if err := s.tasks.Create(ctx, t, synthesizerActor); err != nil {
-			return nil, err
-		}
-		p.AppliedTaskID = t.ID
-	case contracts.ProposalAddNote:
-		n := &contracts.Note{
-			Type:    p.Note.Type,
-			Content: p.Note.Content,
-			Source:  synthesizerActor,
-		}
-		if err := s.tasks.AddNote(ctx, p.TaskID, n, synthesizerActor); err != nil {
-			return nil, err
-		}
-	case contracts.ProposalUpdateTask:
-		t, err := s.tasks.Get(ctx, p.TaskID)
-		if err != nil {
-			return nil, err
-		}
-		if p.Update.Title != "" {
-			t.Title = p.Update.Title
-		}
-		if p.Update.Description != "" {
-			t.Description = p.Update.Description
-		}
-		if p.Update.AcceptanceCriteria != "" {
-			t.AcceptanceCriteria = p.Update.AcceptanceCriteria
-		}
-		if p.Update.Scope != "" {
-			t.Scope = p.Update.Scope
-		}
-		if err := s.tasks.Update(ctx, t, synthesizerActor); err != nil {
-			return nil, err
-		}
-	}
 
-	p.Status = contracts.ProposalApproved
-	if err := s.log.WithTx(ctx, func(tx *Tx) error {
+		p.Status = contracts.ProposalApproved
 		p.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, p); err != nil {
 			return err
@@ -207,7 +223,8 @@ func (s *Proposals) Approve(ctx context.Context, id string) (*contracts.Proposal
 			Type: contracts.SynthesisProposalApproved, SessionID: p.SessionID,
 			Actor: synthesizerActor, Payload: payload,
 		})
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, err
 	}
 	return p, nil
