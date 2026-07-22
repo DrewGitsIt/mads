@@ -71,6 +71,35 @@ func (m ThemeMode) Valid() bool {
 	return false
 }
 
+// EnvMode controls how much of the process environment a spawned agent CLI
+// sees (env_mode, distinct from trust — trust governs what an agent can DO,
+// env_mode governs what it can SEE). inherit is the pre-existing behavior:
+// the agent gets the full environment of whatever spawned it. isolated
+// restricts it to a curated base allowlist plus the profile's bound mads
+// credentials plus its EnvPassthrough names — see pkg/agentenv, the single
+// shared construction helper both spawn sites use.
+type EnvMode string
+
+const (
+	// EnvModeInherit is also the zero value, so an unset EnvMode behaves
+	// exactly like today's env handling with no migration needed.
+	EnvModeInherit  EnvMode = "inherit"
+	EnvModeIsolated EnvMode = "isolated"
+)
+
+// EnvModes is the full registry, for validation and enumeration.
+var EnvModes = []EnvMode{EnvModeInherit, EnvModeIsolated}
+
+// Valid reports whether m is a registered env mode.
+func (m EnvMode) Valid() bool {
+	for _, v := range EnvModes {
+		if m == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Palettes is the full registry of design-system palettes (data-palette
 // values the tokens stylesheet defines), for validation and enumeration.
 var Palettes = []string{"clay", "space", "glacier"}
@@ -144,6 +173,15 @@ type Config struct {
 	// the Data Service). Empty/absent means "all stored credentials active"
 	// (backward compatible with pre-profiles-v2 installs).
 	CredentialBindings []string `json:"credential_bindings,omitempty"`
+
+	// EnvMode controls what a spawned agent's process environment looks
+	// like (see EnvMode doc). Empty behaves as EnvModeInherit.
+	EnvMode EnvMode `json:"env_mode,omitempty"`
+
+	// EnvPassthrough is the list of global env var NAMES explicitly allowed
+	// through to a spawned agent in isolated mode, on top of the base
+	// allowlist and bound credentials. Ignored in inherit mode.
+	EnvPassthrough []string `json:"env_passthrough,omitempty"`
 }
 
 // RestartRequiredFields lists Config JSON field names whose change only
@@ -202,6 +240,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.DefaultTrust != "" && c.DefaultTrust != TrustFull && c.DefaultTrust != TrustLimited && c.DefaultTrust != TrustReadOnly {
 		v.Add("default_trust", "must be one of: full, limited, read_only")
+	}
+	if c.EnvMode != "" && !c.EnvMode.Valid() {
+		v.Add("env_mode", "must be one of: inherit, isolated")
 	}
 	if !c.Theme.Valid() {
 		v.Add("theme", "must be one of: dark, light, system")

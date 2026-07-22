@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -33,8 +34,16 @@ type Config struct {
 	// here (agent permissions, spec §13, are configured per session by the
 	// Session Service).
 	ExtraArgs []string
-	// Env is appended to the inherited environment for every invocation.
+	// Env carries mads-injected KEY=VALUE pairs — resolved bound mads
+	// credentials plus any other config-time values — added on top of the
+	// base environment (see EnvMode) for every invocation.
 	Env []string
+	// EnvMode controls how much of the process environment the spawned
+	// claude binary sees (pkg/agentenv). Empty behaves as inherit.
+	EnvMode agentenv.Mode
+	// EnvPassthrough is the list of parent env var NAMES let through in
+	// EnvMode isolated, on top of the base allowlist. Ignored otherwise.
+	EnvPassthrough []string
 	// TranscriptDir is where claude-code keeps project transcripts
 	// (default ~/.claude/projects).
 	TranscriptDir string
@@ -321,10 +330,11 @@ func firstLine(s string) string {
 	return s
 }
 
-// env builds the child environment: inherited + config + per-session.
+// env builds the child environment: base (inherited or isolated per
+// EnvMode) + config + per-session, via the shared agentenv helper so both
+// modes' semantics are defined in exactly one place.
 func (p *Provider) env(extra []string) []string {
-	env := append(os.Environ(), p.cfg.Env...)
-	return append(env, extra...)
+	return agentenv.Build(p.cfg.EnvMode, os.Environ(), p.cfg.Env, p.cfg.EnvPassthrough, extra)
 }
 
 // closeWait shuts a process down gently: signal by closing its stdin, give
