@@ -783,6 +783,26 @@ func (g *gateFailure) Unwrap() error { return g.err }
 // stubborn flake still surfaces to a human rather than looping forever;
 // isolation-red fails fast — a deterministic failure costs exactly one
 // triage round, never an extra land-attempt retry.
+//
+// A gate failure whose output is lint-shaped (see classifyLintFailure) never
+// goes through that flake triage at all — a lint tool sees the same source
+// every rerun, so "maybe it's a flake" is never the right question. Instead:
+// a failure entirely within the whitelisted formatter-class linters
+// (gofmt/gofumpt/goimports) gets exactly one mechanical autofix attempt
+// (runLintAutofix) — the emergent class two individually-clean branches can
+// combine into (stale imports, formatting drift after a semantic merge) that
+// no single task's own gate at fork could have caught. A lint failure always
+// breaks out of the retry loop below (landing or blocking, never looping),
+// so the one-attempt bound holds by construction: there is no second pass
+// through this branch to guard against. A change is committed as its own
+// "land: mechanical lint fixes" commit and the gate reruns once more;
+// a failure naming anything outside the whitelist (errcheck, staticcheck,
+// unused, ...) never gets an autofix attempt — "unused after merge" can mean
+// the merge dropped a caller, and that's information for a human, not noise.
+// Either way a lint failure that isn't resolved by the one autofix attempt
+// blocks immediately (spec: trunk went lint-red silently once because the
+// land gate ran build+test but not lint — see 672a6bc and the ladder this
+// documents in services/pipeline/README.md).
 func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []template.Stage, run *taskRun, task contracts.Task) error {
 	forkSHA := e.wt.fork(task.ID)
 	mergeDriver := "git"
@@ -828,6 +848,44 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 		gout, gerr := e.runCommand(ctx, gcmd, run.dir)
 		if gerr == nil {
 			e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+			break
+		}
+
+		// Lint failures are deterministic and never flake-retried (a rerun of
+		// the same command sees the same source): a mechanical, whitelisted
+		// fixer pass gets exactly one shot at a fixable-class failure before
+		// falling to block; a non-fixable-class failure (errcheck,
+		// staticcheck, unused — "unused after merge" can mean the merge
+		// dropped a caller, that's information for a human, not noise) never
+		// gets an autofix attempt at all. Only when the output isn't
+		// lint-shaped at all does the existing flake-triage path run,
+		// unchanged.
+		if fixable, isLint, linters := classifyLintFailure(gout); isLint {
+			if fixable {
+				if res := e.runLintAutofix(ctx, run.dir); res.changed {
+					if cerr := e.wt.commitLintAutofix(ctx, run.dir, task, res); cerr != nil {
+						err = cerr
+						break
+					}
+					e.event(ctx, contracts.LandAutofixed, task.ID, map[string]any{
+						"branch": run.branch, "fork_sha": forkSHA, "trunk_head": trunkHead,
+						"stage": gname, "fixers": res.fixers, "diff_summary": res.summary,
+					})
+					_, gerr = e.runCommand(ctx, gcmd, run.dir)
+				}
+			}
+			if gerr == nil {
+				e.event(ctx, contracts.StageCompleted, task.ID, map[string]any{"stage": gname})
+				break
+			}
+			gfErr := e.wt.gateFailureErr(ctx, forkSHA, trunkHead, fmt.Errorf("%s: %w", gname, gerr))
+			evidence := fmt.Sprintf("\n\ngate auto-triage: classification=lint, linters=%s (deterministic, never flake-retried)\n",
+				strings.Join(linters, ", "))
+			gfErr = fmt.Errorf("%w%s", gfErr, evidence)
+			e.event(ctx, contracts.StageFailed, task.ID, map[string]any{
+				"stage": gname, "reason": trim(gfErr.Error(), 2000),
+			})
+			err = &gateFailure{err: gfErr}
 			break
 		}
 

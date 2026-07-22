@@ -22,6 +22,7 @@ function outcomeTone(outcome: PipelineRunOutcome): ChipTone {
       return "bad";
     case "incomplete":
     case "cancelled":
+    case "interrupted":
       return "warn";
     case "running":
       return "info";

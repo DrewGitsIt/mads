@@ -16,7 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/capability"
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/vault"
@@ -47,6 +49,25 @@ func defaultMadsHome() string {
 	return filepath.Join(home, ".mads")
 }
 
+// resolveAgentEnv turns this process's env_mode config into what the
+// claudecode/kirocli provider Configs need to hand agentenv.Build at every
+// agent spawn: the mode itself, the passthrough name list, and — isolated
+// mode only — this process's own bound-credential values. Those values are
+// extracted from parentEnv (this process's already-populated os.Environ(),
+// populated there by the Router's spec §13 credential injection at spawn
+// time) rather than re-resolved from a vault at this layer, so credential
+// values still never cross a service boundary on their own. In inherit
+// mode credEnv is left nil: parentEnv already carries the bound
+// credentials, and adding them again would diverge from today's
+// byte-identical inherit behavior.
+func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mode, passthrough, credEnv []string) {
+	mode = agentenv.Mode(cfg.EnvMode)
+	if mode != agentenv.ModeIsolated {
+		return mode, nil, nil
+	}
+	return mode, cfg.EnvPassthrough, agentenv.Select(parentEnv, cfg.CredentialBindings)
+}
+
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
@@ -62,11 +83,31 @@ func main() {
 		log.Fatal("session: -session-id is required")
 	}
 
+	data := dataclient.New(*dataURL, *sessionID)
+
+	// Best-effort like the credstore/vault-refs opens below: an unreachable
+	// Data Service here degrades to env_mode's zero value (inherit), not a
+	// fatal error, since that's the same behavior spawned agents had before
+	// env_mode existed.
+	cfg, err := data.Config(context.Background())
+	if err != nil {
+		log.Printf("session: load config: %v (env_mode defaults to inherit)", err)
+	}
+	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
+
 	registry := provider.NewRegistry()
-	if err := registry.Register(claudecode.New(claudecode.Config{})); err != nil {
+	if err := registry.Register(claudecode.New(claudecode.Config{
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
 		log.Fatalf("session: register claudecode provider: %v", err)
 	}
-	if err := registry.Register(kirocli.New(kirocli.Config{})); err != nil {
+	if err := registry.Register(kirocli.New(kirocli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
 		log.Fatalf("session: register kiro-cli provider: %v", err)
 	}
 	if err := registry.Register(fake.New()); err != nil {
@@ -78,7 +119,6 @@ func main() {
 		log.Fatalf("session: fast model provider %q: %v", *fastModelProvider, err)
 	}
 
-	data := dataclient.New(*dataURL, *sessionID)
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
 	r.WorktreeRoot = *worktreeRoot

@@ -523,7 +523,13 @@ export interface CapabilityUsage {
 
 // mirrors pkg/contracts/metrics.go PipelineRun — one reconstructed pipeline
 // run. `outcome` matches the Go comment's closed set.
-export type PipelineRunOutcome = "completed" | "incomplete" | "cancelled" | "failed" | "running";
+export type PipelineRunOutcome =
+  | "completed"
+  | "incomplete"
+  | "cancelled"
+  | "failed"
+  | "running"
+  | "interrupted";
 
 export interface PipelineRun {
   session_id: string;
@@ -624,7 +630,16 @@ export interface Config {
   // (profiles-v2). credential_bindings holds NAMES only — never values.
   active_profile_id?: string;
   credential_bindings?: string[];
+
+  // env_mode/env_passthrough mirror pkg/contracts/config.go's EnvMode —
+  // trust governs what a spawned agent can DO, env_mode governs what it can
+  // SEE. env_passthrough holds parent env var NAMES only, consulted only
+  // when env_mode is "isolated".
+  env_mode?: EnvMode;
+  env_passthrough?: string[];
 }
+
+export type EnvMode = "inherit" | "isolated";
 
 // mirrors pkg/contracts/profile.go ProfileSnapshot — a sparse, per-field
 // capture of Config, keyed by Config's own JSON field names. Present only

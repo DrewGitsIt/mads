@@ -186,6 +186,58 @@ describe("usePipelineRun", () => {
     );
   });
 
+  it("picks the newest running run when an older one never terminated (stale run doesn't shadow a live one)", async () => {
+    const client = newClient();
+    client.runs = [
+      {
+        session_id: recordedSessionId,
+        run_seq: 50,
+        started_at: "2026-07-19T23:07:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+      {
+        session_id: recordedSessionId,
+        run_seq: 100,
+        started_at: "2026-07-21T09:37:00Z",
+        outcome: "running",
+        tasks_done: 0,
+        tasks_blocked: 0,
+        tasks_skipped: 0,
+        cost_usd: 0,
+      },
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-21T09:37:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+      {
+        seq: 101,
+        timestamp: "2026-07-21T09:37:01Z",
+        type: "stage.started",
+        session_id: recordedSessionId,
+        task_id: recordedTaskIds.coreLib,
+        actor: "pipeline",
+        payload: { stage: "architect" },
+      },
+    ];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+    expect(result.current.phase).toBe("running");
+    expect(result.current.runStartSeq).toBe(100);
+    expect(result.current.columns).toEqual(["architect"]);
+    expect(result.current.taskRunState[recordedTaskIds.coreLib]?.currentStage).toBe("architect");
+  });
+
   it("with no in-flight run, resuming resolves promptly and phase stays idle until a live pipeline.started arrives (regression guard)", async () => {
     const client = newClient();
     client.runs = [];

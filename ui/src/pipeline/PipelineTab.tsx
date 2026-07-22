@@ -78,6 +78,18 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
   const headerOutcome = liveStarted ? live.outcome : selectedRun?.outcome;
   const headerStartedAt = liveStarted ? live.runStartedAt : selectedRun?.started_at;
   const headerEndedAt = liveStarted ? live.runEndedAt : selectedRun?.ended_at;
+  // A historical/interrupted run's chip counts must describe that run, not
+  // live.tasks (the session's current, unscoped task list) — otherwise a
+  // stale run's header shows the session's lifetime totals (HANDOFF.md).
+  const headerRunCounts =
+    !liveStarted && selectedRun
+      ? {
+          total: selectedRun.tasks_done + selectedRun.tasks_blocked + selectedRun.tasks_skipped,
+          inProgress: 0,
+          done: selectedRun.tasks_done,
+          blocked: selectedRun.tasks_blocked + selectedRun.tasks_skipped,
+        }
+      : undefined;
 
   const columns = liveStarted ? live.columns : history.columns;
   const taskRunState = liveStarted ? live.taskRunState : history.taskRunState;
@@ -119,6 +131,7 @@ export function PipelineTab({ sessionId, pipelineClient }: PipelineTabProps) {
         runStartedAt={headerStartedAt}
         runEndedAt={headerEndedAt}
         tasks={live.tasks}
+        runCounts={headerRunCounts}
       />
       {showPicker && (
         <RunPicker

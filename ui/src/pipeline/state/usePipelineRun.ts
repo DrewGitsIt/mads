@@ -330,7 +330,13 @@ export function usePipelineRun(sessionId: string, client: PipelineClient): UsePi
     [refetchTasks],
   );
 
-  const pickRun = useCallback((runs: PipelineRun[]) => runs.find((r) => r.outcome === "running"), []);
+  // listRuns returns runs oldest-first; a stuck/stale "running" record from
+  // an earlier, never-terminated run must not shadow a genuinely newer one.
+  const pickRun = useCallback(
+    (runs: PipelineRun[]) =>
+      runs.filter((r) => r.outcome === "running").sort((a, b) => b.run_seq - a.run_seq)[0],
+    [],
+  );
 
   const { state: runState, resuming } = useResumingRunFold(sessionId, client, pickRun, onEnvelope);
 

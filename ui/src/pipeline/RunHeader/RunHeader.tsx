@@ -7,6 +7,14 @@ import type { RunPhase } from "../state/usePipelineRun";
 import styles from "./RunHeader.module.css";
 
 const NOT_SUPPORTED = "not supported by the current pipeline engine";
+const RUN_IN_PROGRESS = "a pipeline run is already in progress for this session";
+
+export interface RunCounts {
+  total: number;
+  inProgress: number;
+  done: number;
+  blocked: number;
+}
 
 export interface RunHeaderProps {
   sessionId: string;
@@ -18,6 +26,12 @@ export interface RunHeaderProps {
   runStartedAt?: string;
   runEndedAt?: string;
   tasks: Task[];
+  /**
+   * Overrides the tasks-derived chip counts with the displayed run's own
+   * totals — needed when viewing a historical/interrupted run, whose task
+   * counts must describe that run, not the session's current task list.
+   */
+  runCounts?: RunCounts;
   /** Fired once Start's `client.startPipeline` call resolves — the only place a run_id becomes known. */
   onRunStarted?: (runId: string) => void;
 }
@@ -38,6 +52,7 @@ function outcomeTone(outcome?: string): ChipTone {
     case "failed":
       return "bad";
     case "incomplete":
+    case "interrupted":
       return "warn";
     default:
       return "neutral";
@@ -74,6 +89,7 @@ export function RunHeader({
   runStartedAt,
   runEndedAt,
   tasks,
+  runCounts,
   onRunStarted,
 }: RunHeaderProps) {
   const [runId, setRunId] = useState<string | undefined>();
@@ -115,7 +131,13 @@ export function RunHeader({
     }
   }
 
-  const counts = countByStatus(tasks);
+  const statusCounts = countByStatus(tasks);
+  const counts: RunCounts = runCounts ?? {
+    total: tasks.length,
+    inProgress: statusCounts.inProgress,
+    done: statusCounts.done,
+    blocked: statusCounts.blocked,
+  };
   const elapsedMs = runStartedAt
     ? (phase === "running" ? Date.now() : runEndedAt ? new Date(runEndedAt).getTime() : Date.now()) -
       new Date(runStartedAt).getTime()
@@ -133,7 +155,7 @@ export function RunHeader({
         <div className={styles.spacer} />
 
         <div className={styles.counts}>
-          <Chip tone="neutral">{tasks.length} tasks</Chip>
+          <Chip tone="neutral">{counts.total} tasks</Chip>
           <Chip tone="info">{counts.inProgress} in progress</Chip>
           <Chip tone="ok">{counts.done} done</Chip>
           <Chip tone="bad">{counts.blocked} blocked</Chip>
@@ -144,6 +166,7 @@ export function RunHeader({
             variant="primary"
             size="sm"
             disabled={phase === "running" || starting}
+            title={phase === "running" ? RUN_IN_PROGRESS : undefined}
             onClick={() => void handleStart()}
           >
             Start

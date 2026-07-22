@@ -19,6 +19,53 @@ describe("RunHeader", () => {
     expect(isDisabled(screen.getByRole("button", { name: "Cancel" }))).toBe(true);
   });
 
+  it("Start is disabled with an explanatory tooltip while a run is genuinely in progress", () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    render(
+      <RunHeader sessionId={recordedSessionId} client={client} phase="running" tasks={recordedTasks} />,
+    );
+
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(isDisabled(start)).toBe(true);
+    expect(start.title).toBe("a pipeline run is already in progress for this session");
+  });
+
+  it("Start has no tooltip and is enabled once finished, even with a stale/interrupted run on record", () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    render(
+      <RunHeader
+        sessionId={recordedSessionId}
+        client={client}
+        phase="finished"
+        outcome="interrupted"
+        tasks={recordedTasks}
+      />,
+    );
+
+    const start = screen.getByRole("button", { name: "Start" });
+    expect(isDisabled(start)).toBe(false);
+    expect(start.title).toBe("");
+  });
+
+  it("uses runCounts instead of the tasks-derived counts when provided", () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    render(
+      <RunHeader
+        sessionId={recordedSessionId}
+        client={client}
+        phase="finished"
+        outcome="interrupted"
+        tasks={recordedTasks}
+        runCounts={{ total: 84, inProgress: 0, done: 80, blocked: 4 }}
+      />,
+    );
+
+    expect(screen.getByText("84 tasks")).toBeTruthy();
+    expect(screen.getByText("80 done")).toBeTruthy();
+    expect(screen.getByText("4 blocked")).toBeTruthy();
+    expect(screen.getByText("0 in progress")).toBeTruthy();
+  });
+
   it("Pause and Resume are always disabled with the unsupported-engine tooltip", () => {
     const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
     render(

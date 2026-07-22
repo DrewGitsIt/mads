@@ -30,6 +30,53 @@ func TestSnapshotConfigExcludesInstallState(t *testing.T) {
 	}
 }
 
+// TestSnapshotConfigCapturesEnvMode guards env_mode/env_passthrough as
+// profile-snapshot-eligible fields (profiles-v2 semantics): a saved profile
+// must be able to restore a spawned agent's environment isolation, not just
+// its trust level.
+func TestSnapshotConfigCapturesEnvMode(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.EnvMode = EnvModeIsolated
+	cfg.EnvPassthrough = []string{"AWS_PROFILE"}
+
+	snap, err := SnapshotConfig(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap["env_mode"]; !ok {
+		t.Fatal("env_mode should be captured like any other setting")
+	}
+	if _, ok := snap["env_passthrough"]; !ok {
+		t.Fatal("env_passthrough should be captured like any other setting")
+	}
+
+	other := DefaultConfig()
+	restored, err := ApplySnapshot(&other, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.EnvMode != EnvModeIsolated {
+		t.Fatalf("EnvMode = %q, want isolated", restored.EnvMode)
+	}
+	if !reflect.DeepEqual(restored.EnvPassthrough, []string{"AWS_PROFILE"}) {
+		t.Fatalf("EnvPassthrough = %v, want [AWS_PROFILE]", restored.EnvPassthrough)
+	}
+
+	drift, err := ProfileDrift(&other, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, f := range drift {
+		if f == "env_mode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected env_mode to be reported as drifted, got %v", drift)
+	}
+}
+
 func TestApplySnapshotLeavesFieldsAbsentFromSnapshotUntouched(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.FastModel = "haiku"

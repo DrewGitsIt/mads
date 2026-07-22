@@ -3,6 +3,11 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
+  /* Without this, a wide pane (e.g. the pipeline board) inflates this flex
+     child's content-based min-width past the viewport, and .main's
+     overflow:hidden clips it before the pane's own overflow-x:auto ever
+     gets a chance to produce a scrollbar. */
+  min-width: 0;
 }
 
 .bar {

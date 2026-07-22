@@ -234,6 +234,20 @@ const (
 	// (Go packages the isolation rerun targeted, omitted when the failure
 	// wasn't package-attributable), "isolation_runs": int}.
 	LandRetried EventType = "land.retried"
+	// LandAutofixed fires when a post-rebase gate failure is classified as a
+	// mechanical, whitelisted-fixer-class lint failure (gofmt/gofumpt/
+	// goimports — never errcheck/staticcheck/unused, which stay human-only)
+	// and the land queue's mechanical autofix pass changes the tree: the
+	// fixers ran, their result was committed as its own "land: mechanical
+	// lint fixes" commit, and the full gate is about to rerun. Bounded to one
+	// autofix attempt per land attempt (spec: "trunk went lint-red silently"
+	// — the land gate must run make check, and a lint-only failure emergent
+	// from combining two individually-clean branches gets one mechanical
+	// pass before falling back to a human block). Payload: {"branch": string,
+	// "fork_sha": string, "trunk_head": string, "stage": string, "fixers":
+	// []string (whitelisted fixer binaries that ran), "diff_summary":
+	// string (git diff --stat of the autofix commit)}.
+	LandAutofixed EventType = "land.autofixed"
 
 	// UsageRecorded fires when a provider turn or pipeline stage one-shot completes with
 	// cost reporting available (spec §11's hookpoint: tokens in, tokens out, model, and the
@@ -284,7 +298,7 @@ var EventTypes = []EventType{
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
-	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried,
+	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried, LandAutofixed,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef,
 }

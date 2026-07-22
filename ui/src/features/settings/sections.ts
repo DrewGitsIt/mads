@@ -63,6 +63,9 @@ export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   palette: "appearance",
 
   feature_flags: "advanced",
+
+  env_mode: "credentials",
+  env_passthrough: "credentials",
 };
 
 export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
@@ -87,4 +90,7 @@ export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
   palette: "Palette",
 
   feature_flags: "Feature flags",
+
+  env_mode: "Environment mode",
+  env_passthrough: "Environment passthrough",
 };
