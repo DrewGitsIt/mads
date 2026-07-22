@@ -41,7 +41,7 @@ func newHarness(t *testing.T) *harness {
 	}
 
 	if err := os.WriteFile(filepath.Join(h.cwd, "Makefile"),
-		[]byte("build:\n\t@true\ntest:\n\t@true\n"), 0o644); err != nil {
+		[]byte("build:\n\t@true\ntest:\n\t@true\ncheck:\n\t@true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{

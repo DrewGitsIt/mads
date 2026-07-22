@@ -175,13 +175,42 @@ func TestMigrationConvertsExistingProfileSettingsToSnapshot(t *testing.T) {
 	}
 }
 
+// TestMigrationDefaultTemplateUsesMakeCheck exercises migration 0017: the
+// seeded default template's build/verify stages must invoke make check
+// (lint+test), not bare make test, or an in-diff lint error rides the gate
+// straight through to land (672a6bc).
+func TestMigrationDefaultTemplateUsesMakeCheck(t *testing.T) {
+	db := openTestDB(t)
+	if err := Migrate(db, Migrations()); err != nil {
+		t.Fatal(err)
+	}
+
+	var source string
+	if err := db.QueryRow("SELECT data FROM templates WHERE id = ?", "tpl_system_default").Scan(&source); err != nil {
+		t.Fatal(err)
+	}
+	var tpl contracts.Template
+	if err := json.Unmarshal([]byte(source), &tpl); err != nil {
+		t.Fatalf("migrated row does not unmarshal as a Template: %v (data=%s)", err, source)
+	}
+	if strings.Contains(tpl.Source, "make build && make test") {
+		t.Errorf("build stage still runs make build && make test, want make check: %s", tpl.Source)
+	}
+	if !strings.Contains(tpl.Source, "make build && make check") {
+		t.Errorf("build stage does not run make check: %s", tpl.Source)
+	}
+	if !strings.Contains(tpl.Source, "command: make check\n") {
+		t.Errorf("verify stage does not run make check: %s", tpl.Source)
+	}
+}
+
 func TestMaxVersion(t *testing.T) {
 	got, err := MaxVersion(Migrations())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != 16 {
-		t.Fatalf("MaxVersion(production set) = %d, want 16 (update this literal when a migration is added)", got)
+	if got != 17 {
+		t.Fatalf("MaxVersion(production set) = %d, want 17 (update this literal when a migration is added)", got)
 	}
 
 	// fstest.MapFS can't represent an empty directory (it synthesizes
