@@ -1,8 +1,16 @@
 import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { useCredentials } from "../state/useCredentials";
+import { useFastModelStatus } from "../state/useFastModelStatus";
 import type { UseConfig } from "../state/useConfig";
-import type { AgentSelectionMode, ModelTier, SynthesisMode } from "../../../router/types";
+import type {
+  AgentSelectionMode,
+  Config,
+  FastModelMode,
+  FastModelStatus,
+  ModelTier,
+  SynthesisMode,
+} from "../../../router/types";
 import styles from "./PipelineSection.module.css";
 
 const SYNTHESIS_MODES: SynthesisMode[] = ["off", "light", "full"];
@@ -20,6 +28,46 @@ const MODEL_TIER_COST_HINTS: Record<ModelTier, string> = {
   best: "Highest cost, best for complex synthesis.",
 };
 
+const FAST_MODEL_MODES: { value: FastModelMode; label: string }[] = [
+  { value: "provider", label: "Use my provider (default)" },
+  { value: "endpoint", label: "API endpoint" },
+  { value: "off", label: "Off" },
+];
+
+// effectiveFastModelMode mirrors pkg/contracts/config.go's
+// Config.FastModelEffectiveMode: an unset fast_model_mode (pre-mode-selector
+// install) resolves to endpoint if an endpoint was already configured, else
+// the new zero-config provider default.
+function effectiveFastModelMode(draft: Config): FastModelMode {
+  if (draft.fast_model_mode) return draft.fast_model_mode;
+  return draft.fast_model_base_url ? "endpoint" : "provider";
+}
+
+// fastModelStatusText is the Settings status line copy for each mode (spec
+// §11/§13): "provider" mode depends on the live GET /fast-model/status
+// signal since Config alone can't say whether the resolved default provider
+// implements Completer.
+function fastModelStatusText(
+  mode: FastModelMode,
+  draft: Config,
+  status: FastModelStatus | null,
+  statusLoading: boolean,
+): string {
+  if (mode === "off") {
+    return "Fast Model is off — auto-summaries, auto-titles, linked-session digests, retros, and NL agent generation will skip silently.";
+  }
+  if (mode === "endpoint") {
+    return draft.fast_model_base_url
+      ? "Fast Model is active."
+      : "Fast Model is dormant — auto-summaries, auto-titles, linked-session digests, retros, and NL agent generation will skip silently until an endpoint is configured.";
+  }
+  if (statusLoading || !status) return "Checking Fast Model status…";
+  if (status.provider_completer) {
+    return `Fast Model is active — running via ${status.provider_name}.`;
+  }
+  return "Your provider doesn't support background completions — configure an endpoint or switch provider.";
+}
+
 export interface PipelineSectionProps {
   config: UseConfig;
 }
@@ -29,8 +77,11 @@ export function PipelineSection({ config }: PipelineSectionProps) {
   const { draft, fieldErrors, setDraft, save } = config;
   const [saving, setSaving] = useState(false);
   const credentials = useCredentials();
+  const fastModelStatus = useFastModelStatus();
 
   if (!draft) return null;
+
+  const fastModelMode = effectiveFastModelMode(draft);
 
   const handleSave = async () => {
     setSaving(true);
@@ -122,58 +173,78 @@ export function PipelineSection({ config }: PipelineSectionProps) {
       <section className={styles.fastModel}>
         <h3 className={styles.heading}>Fast Model</h3>
         <div className={styles.row}>
-          <label className={styles.label} htmlFor="fast-model-base-url">
-            Endpoint
-          </label>
-          <input
-            id="fast-model-base-url"
-            type="text"
-            className={styles.input}
-            placeholder="https://api.example.com/v1"
-            value={draft.fast_model_base_url ?? ""}
-            onChange={(e) => setDraft({ ...draft, fast_model_base_url: e.target.value })}
-          />
-          {fieldErrors.fast_model_base_url && (
-            <div className={styles.error}>{fieldErrors.fast_model_base_url}</div>
-          )}
-        </div>
-
-        <div className={styles.row}>
-          <label className={styles.label} htmlFor="fast-model">
-            Model
-          </label>
-          <input
-            id="fast-model"
-            type="text"
-            className={styles.input}
-            value={draft.fast_model ?? ""}
-            onChange={(e) => setDraft({ ...draft, fast_model: e.target.value })}
-          />
-        </div>
-
-        <div className={styles.row}>
-          <label className={styles.label} htmlFor="fast-model-api-key-env">
-            Credential
+          <label className={styles.label} htmlFor="fast-model-mode">
+            Backend
           </label>
           <select
-            id="fast-model-api-key-env"
+            id="fast-model-mode"
             className={styles.input}
-            value={draft.fast_model_api_key_env ?? ""}
-            onChange={(e) => setDraft({ ...draft, fast_model_api_key_env: e.target.value })}
+            value={fastModelMode}
+            onChange={(e) => setDraft({ ...draft, fast_model_mode: e.target.value as FastModelMode })}
           >
-            <option value="">None</option>
-            {credentials.names.map((n) => (
-              <option key={n} value={n}>
-                {n}
+            {FAST_MODEL_MODES.map(({ value, label }) => (
+              <option key={value} value={value}>
+                {label}
               </option>
             ))}
           </select>
         </div>
 
+        {fastModelMode === "endpoint" && (
+          <>
+            <div className={styles.row}>
+              <label className={styles.label} htmlFor="fast-model-base-url">
+                Endpoint
+              </label>
+              <input
+                id="fast-model-base-url"
+                type="text"
+                className={styles.input}
+                placeholder="https://api.example.com/v1"
+                value={draft.fast_model_base_url ?? ""}
+                onChange={(e) => setDraft({ ...draft, fast_model_base_url: e.target.value })}
+              />
+              {fieldErrors.fast_model_base_url && (
+                <div className={styles.error}>{fieldErrors.fast_model_base_url}</div>
+              )}
+            </div>
+
+            <div className={styles.row}>
+              <label className={styles.label} htmlFor="fast-model">
+                Model
+              </label>
+              <input
+                id="fast-model"
+                type="text"
+                className={styles.input}
+                value={draft.fast_model ?? ""}
+                onChange={(e) => setDraft({ ...draft, fast_model: e.target.value })}
+              />
+            </div>
+
+            <div className={styles.row}>
+              <label className={styles.label} htmlFor="fast-model-api-key-env">
+                Credential
+              </label>
+              <select
+                id="fast-model-api-key-env"
+                className={styles.input}
+                value={draft.fast_model_api_key_env ?? ""}
+                onChange={(e) => setDraft({ ...draft, fast_model_api_key_env: e.target.value })}
+              >
+                <option value="">None</option>
+                {credentials.names.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
+
         <div className={styles.hint}>
-          {draft.fast_model_base_url
-            ? "Fast Model is active."
-            : "Fast Model is dormant — auto-summaries, auto-titles, linked-session digests, retros, and NL agent generation will skip silently until an endpoint is configured."}
+          {fastModelStatusText(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading)}
         </div>
       </section>
 

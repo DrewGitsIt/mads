@@ -273,6 +273,30 @@ func (f *Fake) OneShot(_ context.Context, req provider.OneShotRequest) (*provide
 	return &provider.OneShotResult{Text: text, Ref: ref, Usage: applyUsageOverride(u, plan.usage)}, nil
 }
 
+// Complete implements provider.Completer: the same scripted dialect as
+// OneShot (Scenario rules, built-in echo/slow/crash/etc.), but stateless —
+// no ref, no transcript recording, matching the hermetic "no session left
+// behind" contract Complete promises.
+func (f *Fake) Complete(_ context.Context, req provider.CompleteRequest) (provider.CompleteResult, error) {
+	plan := f.plan(req.Prompt, nil)
+	switch {
+	case plan.rateLimit:
+		return provider.CompleteResult{}, &provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}
+	case plan.crash:
+		return provider.CompleteResult{}, fmt.Errorf("fake agent process exited unexpectedly (scripted crash)")
+	}
+	var b strings.Builder
+	for _, chunk := range plan.chunks {
+		b.WriteString(chunk)
+	}
+	text := b.String()
+	u := usage(req.Prompt, text)
+	if req.Model != "" {
+		u.Model = req.Model
+	}
+	return provider.CompleteResult{Text: text, Usage: applyUsageOverride(u, plan.usage)}, nil
+}
+
 // newOneShotRef mints a fresh session ref for an announcing one-shot,
 // distinct from Start's "fake-N" interactive refs (a one-shot never attaches
 // via Start, so there's no liveRefs bookkeeping to share).

@@ -232,3 +232,37 @@ type SessionLocator interface {
 type RefSetter interface {
 	SetRef(ref string)
 }
+
+// CompleteRequest is a single hermetic, stateless completion — the Fast
+// Model's default-provider transport. No session, no tools, no conversation
+// history.
+type CompleteRequest struct {
+	System string
+	Prompt string
+	// MaxOutputTokens bounds the reply length. Zero means the provider's own
+	// default; a provider without a native enforcement mechanism may treat
+	// this as best-effort/unenforced.
+	MaxOutputTokens int
+	// JSONSchemaHint is descriptive text (a JSON Schema or plain description)
+	// guiding the reply's shape. Providers must never validate against it —
+	// JSON validation and the single bounded repair-retry live in the
+	// fastmodel layer only, never per-provider.
+	JSONSchemaHint string
+	Model          string
+}
+
+// CompleteResult is one hermetic completion's raw output.
+type CompleteResult struct {
+	Text  string
+	Usage Usage
+}
+
+// Completer is the optional hermetic one-shot completion capability backing
+// Fast Model's "use my provider" resolution: stateless, no session left
+// behind, no tools, no conversation. A provider MAY implement it in addition
+// to the required OneShot (which stays session/tool-shaped and is not
+// hermetic by contract). Not part of the Behavior matrix — like RefSetter
+// and SessionLocator, callers detect it with a type assertion.
+type Completer interface {
+	Complete(ctx context.Context, req CompleteRequest) (CompleteResult, error)
+}

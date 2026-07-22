@@ -285,6 +285,38 @@ func TestOneShotNoRefWithoutAnnounceOptIn(t *testing.T) {
 	}
 }
 
+// TestFakeComplete proves Fake implements provider.Completer using the same
+// scripted dialect as OneShot, but leaves no ref or transcript behind —
+// Complete's hermetic "no session left behind" contract.
+func TestFakeComplete(t *testing.T) {
+	f := fake.New()
+	completer, ok := interface{}(f).(provider.Completer)
+	if !ok {
+		t.Fatal("fake.Fake does not implement provider.Completer")
+	}
+	res, err := completer.Complete(context.Background(), provider.CompleteRequest{Prompt: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Text != "you said hi" {
+		t.Errorf("Complete text = %q, want %q", res.Text, "you said hi")
+	}
+}
+
+// TestFakeCompleteScriptedRateLimitAndCrash proves Complete surfaces the same
+// scripted rate-limit/crash outcomes OneShot does.
+func TestFakeCompleteScriptedRateLimitAndCrash(t *testing.T) {
+	f := fake.New()
+	_, err := f.Complete(context.Background(), provider.CompleteRequest{Prompt: "ratelimit"})
+	var rle *provider.RateLimitError
+	if !errors.As(err, &rle) || rle.RetryAfter != time.Second {
+		t.Fatalf("want RateLimitError with RetryAfter=1s, got %v", err)
+	}
+	if _, err := f.Complete(context.Background(), provider.CompleteRequest{Prompt: "crash"}); err == nil {
+		t.Error("scripted Complete crash returned no error")
+	}
+}
+
 // TestOneShotTranscriptDirBridgesSeparateInstances proves WithTranscriptDir
 // closes the real gap: in production, the process that runs OneShot (`mads
 // run`) and the process that later reads Transcript(ref) (the Router,

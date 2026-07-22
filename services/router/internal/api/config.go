@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -13,6 +14,45 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cfg)
+}
+
+// fastModelStatusResponse is the Settings Fast Model panel's live status: the
+// effective mode (mirroring services/router/main.go's fastModelDynamicConfig
+// resolution) and, in provider mode, whether the resolved provider actually
+// supports background completions — the signal the UI needs to show the
+// "your provider doesn't support background completions" status line.
+type fastModelStatusResponse struct {
+	Mode              contracts.FastModelMode `json:"mode"`
+	ProviderName      string                  `json:"provider_name,omitempty"`
+	ProviderCompleter bool                    `json:"provider_completer"`
+}
+
+func (s *server) handleFastModelStatus(w http.ResponseWriter, r *http.Request) {
+	cfg, err := s.data.Config(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	mode := cfg.FastModelMode
+	if mode == "" {
+		if cfg.FastModelBaseURL != "" || s.fastModelFlagBaseURL != "" {
+			mode = contracts.FastModelModeEndpoint
+		} else {
+			mode = contracts.FastModelModeProvider
+		}
+	}
+	resp := fastModelStatusResponse{Mode: mode}
+	if mode == contracts.FastModelModeProvider {
+		providerName := cfg.DefaultProvider
+		if providerName == "" {
+			providerName = "claude-code"
+		}
+		resp.ProviderName = providerName
+		if p, err := s.providers.Get(providerName); err == nil {
+			_, resp.ProviderCompleter = p.(provider.Completer)
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {

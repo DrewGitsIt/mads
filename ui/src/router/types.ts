@@ -591,6 +591,10 @@ export type AgentSelectionMode = "light" | "full";
 export type ModelTier = "cheapest" | "balanced" | "best";
 export type ThemeMode = "dark" | "light" | "system";
 export type PaletteName = "clay" | "space" | "glacier";
+// FastModelMode mirrors pkg/contracts/session.go: provider uses the default
+// provider's hermetic Completer capability (zero-config), endpoint uses the
+// explicit fast_model_base_url, off disables Fast Model features entirely.
+export type FastModelMode = "provider" | "endpoint" | "off";
 
 export interface FeatureFlags {
   multi_repo: boolean;
@@ -611,6 +615,7 @@ export interface Config {
   fast_model?: string;
   fast_model_base_url?: string;
   fast_model_api_key_env?: string;
+  fast_model_mode?: FastModelMode;
 
   display_mode: string;
   keybindings: string;
@@ -640,6 +645,17 @@ export interface Config {
 }
 
 export type EnvMode = "inherit" | "isolated";
+
+// FastModelStatus mirrors services/router/internal/api/config.go's
+// fastModelStatusResponse: the live effective mode plus, in provider mode,
+// whether the resolved default provider actually supports background
+// completions (provider.Completer) — the signal the Settings panel needs to
+// show the "your provider doesn't support background completions" line.
+export interface FastModelStatus {
+  mode: FastModelMode;
+  provider_name?: string;
+  provider_completer: boolean;
+}
 
 // mirrors pkg/contracts/profile.go ProfileSnapshot — a sparse, per-field
 // capture of Config, keyed by Config's own JSON field names. Present only

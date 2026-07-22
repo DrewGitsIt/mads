@@ -27,17 +27,23 @@ func TestMain(m *testing.M) {
 
 // fcArgs is a loose parse of the claude flags the adapter uses.
 type fcArgs struct {
-	print           bool
-	prompt          string
-	outputFormat    string
-	inputFormat     string
-	resume          string
-	model           string
-	disallowedTools []string
-	permissionMode  string
-	mcpConfigPath   string
-	strictMCPConfig bool
-	settingsPath    string
+	print             bool
+	prompt            string
+	outputFormat      string
+	inputFormat       string
+	resume            string
+	model             string
+	disallowedTools   []string
+	permissionMode    string
+	mcpConfigPath     string
+	strictMCPConfig   bool
+	settingsPath      string
+	systemPrompt      string
+	safeMode          bool
+	settingSources    string
+	settingSourcesSet bool
+	tools             string
+	toolsSet          bool
 }
 
 func parseFCArgs(argv []string) fcArgs {
@@ -72,6 +78,19 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--settings":
 			i++
 			a.settingsPath = argv[i]
+		case "--system-prompt":
+			i++
+			a.systemPrompt = argv[i]
+		case "--safe-mode":
+			a.safeMode = true
+		case "--setting-sources":
+			i++
+			a.settingSources = argv[i]
+			a.settingSourcesSet = true
+		case "--tools":
+			i++
+			a.tools = argv[i]
+			a.toolsSet = true
 		case "--verbose", "--dangerously-skip-permissions":
 		case "--append-system-prompt":
 			i++
@@ -164,11 +183,17 @@ func fcOneShot(a fcArgs) {
 		fmt.Fprintln(os.Stderr, "Rate limit reached. Try again at 5pm.")
 		os.Exit(1)
 	}
-	if _, crash := fcReply(a.prompt, nil); crash {
-		fmt.Fprintln(os.Stderr, "boom")
-		os.Exit(1)
+	var reply string
+	if a.prompt == "complete-echo" {
+		reply = fcCompleteEcho(a)
+	} else {
+		var crash bool
+		reply, crash = fcReply(a.prompt, nil)
+		if crash {
+			fmt.Fprintln(os.Stderr, "boom")
+			os.Exit(1)
+		}
 	}
-	reply, _ := fcReply(a.prompt, nil)
 	out := map[string]any{
 		"type": "result", "subtype": "success", "is_error": false,
 		"result": reply, "session_id": "fc-oneshot",
@@ -176,6 +201,25 @@ func fcOneShot(a fcArgs) {
 		"modelUsage": map[string]any{"fake-sonnet": map[string]any{}},
 	}
 	_ = json.NewEncoder(os.Stdout).Encode(out)
+}
+
+// fcCompleteEcho reports every flag Complete (complete.go) is supposed to
+// pass, so a unit test can assert the adapter actually built and forwarded
+// them — a stand-in for the arg-building coverage the real hermeticity
+// smoke test (complete_test.go, MADS_CLAUDE_SMOKE=1) can't give in CI.
+func fcCompleteEcho(a fcArgs) string {
+	settingsRaw := "none"
+	if a.settingsPath != "" {
+		if raw, err := os.ReadFile(a.settingsPath); err == nil {
+			settingsRaw = string(raw)
+		} else {
+			settingsRaw = "err:" + err.Error()
+		}
+	}
+	return fmt.Sprintf(
+		"system=%s model=%s safe_mode=%v setting_sources=%q setting_sources_set=%v tools=%q tools_set=%v strict_mcp=%v mcp_config=%s settings=%s",
+		a.systemPrompt, a.model, a.safeMode, a.settingSources, a.settingSourcesSet, a.tools, a.toolsSet, a.strictMCPConfig, a.mcpConfigPath, settingsRaw,
+	)
 }
 
 // fcOneShotStream mimics `-p --output-format stream-json --verbose`: the

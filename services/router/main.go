@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/preflight"
@@ -75,20 +76,66 @@ func defaultChildCmd(name, goRunFallback string) string {
 	return goRunFallback
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string) http.Handler {
+// fastModelDynamicConfig implements the Fast Model resolution order (spec
+// §11/§13): explicit endpoint mode wins (Config fields, else the
+// -fastmodel-* flags) -> provider mode resolves the user's default provider
+// from the registry and relies on dynamicBackend to go dormant if it
+// doesn't implement provider.Completer -> off mode leaves it unconfigured.
+//
+// Mode resolution can't just call cfg.FastModelEffectiveMode(): that helper
+// only knows about Config, but a pre-mode-selector install may have
+// configured its endpoint entirely via the -fastmodel-* flags
+// (Config.FastModelBaseURL empty) — that install's unset FastModelMode must
+// still resolve to endpoint, not provider, or Fast Model silently stops
+// working on upgrade.
+func fastModelDynamicConfig(cfg contracts.Config, flagBaseURL, flagAPIKeyEnv, flagModel string, providers *provider.Registry) fastmodel.DynamicConfig {
+	mode := cfg.FastModelMode
+	if mode == "" {
+		if cfg.FastModelBaseURL != "" || flagBaseURL != "" {
+			mode = contracts.FastModelModeEndpoint
+		} else {
+			mode = contracts.FastModelModeProvider
+		}
+	}
+	switch mode {
+	case contracts.FastModelModeOff:
+		return fastmodel.DynamicConfig{}
+	case contracts.FastModelModeEndpoint:
+		baseURL, apiKeyEnv, model := cfg.FastModelBaseURL, cfg.FastModelAPIKeyEnv, cfg.FastModel
+		if baseURL == "" {
+			baseURL, apiKeyEnv, model = flagBaseURL, flagAPIKeyEnv, flagModel
+		}
+		return fastmodel.DynamicConfig{Model: model, BaseURL: baseURL, APIKeyEnv: apiKeyEnv}
+	default: // FastModelModeProvider
+		providerName := cfg.DefaultProvider
+		if providerName == "" {
+			providerName = "claude-code"
+		}
+		p, err := providers.Get(providerName)
+		if err != nil {
+			// Unknown/unregistered provider: dormant, same as a
+			// Completer-less one — never a hard failure here.
+			return fastmodel.DynamicConfig{Model: cfg.FastModel}
+		}
+		return fastmodel.DynamicConfig{Model: cfg.FastModel, Provider: p}
+	}
+}
+
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string) http.Handler {
 	return api.New(api.Options{
-		Data:          data,
-		Sup:           sup,
-		Jobs:          jobs,
-		Providers:     providers,
-		Creds:         creds,
-		Preflight:     pf,
-		VaultRefs:     vaultRefs,
-		VaultSources:  vaultSources,
-		StaticHandler: staticHandler,
-		Version:       version,
-		Registry:      registry,
-		RunsDir:       runsDir,
+		Data:                 data,
+		Sup:                  sup,
+		Jobs:                 jobs,
+		Providers:            providers,
+		Creds:                creds,
+		Preflight:            pf,
+		VaultRefs:            vaultRefs,
+		VaultSources:         vaultSources,
+		StaticHandler:        staticHandler,
+		Version:              version,
+		Registry:             registry,
+		RunsDir:              runsDir,
+		FastModelFlagBaseURL: fastModelFlagBaseURL,
 	})
 }
 
@@ -130,22 +177,16 @@ func main() {
 	}
 
 	// resolveFastModel runs on every Fast Model call (job.go's Deps.FastModel
-	// is one long-lived Runner, shared across all job spawns): Settings'
-	// Config fields win when set, else the -fastmodel-* flags, else nothing
-	// — an empty BaseURL from both means fastmodel.ErrBackendUnconfigured,
-	// which every job kind treats as a silent skip. Reading Config live
-	// means a Settings change takes effect on the very next job spawn, no
-	// router restart required.
+	// is one long-lived Runner, shared across all job spawns). Reading
+	// Config live means a Settings change takes effect on the very next job
+	// spawn, no router restart required. The actual resolution-order logic
+	// lives in fastModelDynamicConfig, kept pure and separately testable.
 	resolveFastModel := func(ctx context.Context) (fastmodel.DynamicConfig, error) {
 		cfg, err := data.Config(ctx)
 		if err != nil {
 			return fastmodel.DynamicConfig{}, err
 		}
-		baseURL, apiKeyEnv, model := cfg.FastModelBaseURL, cfg.FastModelAPIKeyEnv, cfg.FastModel
-		if baseURL == "" {
-			baseURL, apiKeyEnv, model = *fastmodelBaseURL, *fastmodelAPIKeyEnv, *fastmodelModel
-		}
-		return fastmodel.DynamicConfig{Model: model, BaseURL: baseURL, APIKeyEnv: apiKeyEnv}, nil
+		return fastModelDynamicConfig(cfg, *fastmodelBaseURL, *fastmodelAPIKeyEnv, *fastmodelModel, providers), nil
 	}
 	fm := fastmodel.NewDynamic(resolveFastModel)
 	reg := registryclient.New(*registryURL)
@@ -192,7 +233,7 @@ func main() {
 	}
 	defer func() { _ = os.Remove(pidPath) }()
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"))}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

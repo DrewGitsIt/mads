@@ -51,6 +51,32 @@ func (m SynthesisMode) Valid() bool {
 	return false
 }
 
+// FastModelMode selects where Fast Model completions run (spec §11/§13):
+// provider uses the user's default provider's hermetic Completer capability
+// (zero-config, dormant if that provider doesn't implement one); endpoint
+// uses the explicit OpenAI-compatible FastModelBaseURL; off disables Fast
+// Model features entirely.
+type FastModelMode string
+
+const (
+	FastModelModeProvider FastModelMode = "provider"
+	FastModelModeEndpoint FastModelMode = "endpoint"
+	FastModelModeOff      FastModelMode = "off"
+)
+
+// FastModelModes is the full registry, for validation and enumeration.
+var FastModelModes = []FastModelMode{FastModelModeProvider, FastModelModeEndpoint, FastModelModeOff}
+
+// Valid reports whether m is a registered Fast Model mode.
+func (m FastModelMode) Valid() bool {
+	for _, v := range FastModelModes {
+		if m == v {
+			return true
+		}
+	}
+	return false
+}
+
 // SessionNameSource says whether Name still reflects its placeholder origin
 // or has been claimed by a human: Derived is the first-line-of-the-launch-
 // message placeholder (or any other auto-derived starting point) that the

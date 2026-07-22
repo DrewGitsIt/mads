@@ -8,6 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // With a resolve func returning a real endpoint, NewDynamic's Runner behaves
@@ -76,6 +79,73 @@ func TestDynamicUnconfiguredResolvesOnce(t *testing.T) {
 	}
 	if resolves != 1 {
 		t.Errorf("resolves = %d, want 1 (no retry on a transport-level skip)", resolves)
+	}
+}
+
+// noCompleterProvider stands in for kirocli: a provider.Provider that does
+// not implement provider.Completer.
+type noCompleterProvider struct{}
+
+func (noCompleterProvider) Name() string            { return "no-completer" }
+func (noCompleterProvider) Matrix() provider.Matrix { return provider.Matrix{} }
+func (noCompleterProvider) Start(context.Context, provider.StartOptions) (provider.Session, error) {
+	return nil, errors.New("not implemented")
+}
+func (noCompleterProvider) OneShot(context.Context, provider.OneShotRequest) (*provider.OneShotResult, error) {
+	return nil, errors.New("not implemented")
+}
+
+// With no explicit endpoint, a Provider implementing provider.Completer
+// (e.g. claude-code, or fake standing in for it here) becomes the backend —
+// resolution order's second tier: endpoint > provider > off.
+func TestDynamicFallsBackToProviderCompleter(t *testing.T) {
+	f := fake.New()
+	r := NewDynamic(func(context.Context) (DynamicConfig, error) {
+		return DynamicConfig{Provider: f}, nil
+	})
+	text, _, err := r.DoText(context.Background(), Job{Prompt: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "you said hi" {
+		t.Errorf("text = %q, want %q", text, "you said hi")
+	}
+}
+
+// An explicit endpoint always wins over a Completer-capable Provider — no
+// ambiguity when both are present in DynamicConfig.
+func TestDynamicEndpointWinsOverProvider(t *testing.T) {
+	var endpointCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		endpointCalls++
+		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"from endpoint"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer srv.Close()
+
+	r := NewDynamic(func(context.Context) (DynamicConfig, error) {
+		return DynamicConfig{BaseURL: srv.URL, Provider: fake.New()}, nil
+	})
+	text, _, err := r.DoText(context.Background(), Job{Prompt: "echo hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "from endpoint" {
+		t.Errorf("text = %q, want %q (endpoint must win over provider)", text, "from endpoint")
+	}
+	if endpointCalls != 1 {
+		t.Errorf("endpointCalls = %d, want 1", endpointCalls)
+	}
+}
+
+// No explicit endpoint and a Provider that doesn't implement Completer (e.g.
+// kirocli) must go dormant — no silent cross-provider fallback.
+func TestDynamicNoEndpointNoCompleterIsUnconfigured(t *testing.T) {
+	r := NewDynamic(func(context.Context) (DynamicConfig, error) {
+		return DynamicConfig{Provider: noCompleterProvider{}}, nil
+	})
+	_, _, err := r.DoText(context.Background(), Job{Prompt: "x"})
+	if !errors.Is(err, ErrBackendUnconfigured) {
+		t.Fatalf("err = %v, want ErrBackendUnconfigured", err)
 	}
 }
 

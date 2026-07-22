@@ -42,6 +42,7 @@ var routeManifest = []struct {
 	{"POST", "/sessions", "POST /sessions"},
 	{"GET", "/config", "GET /config"},
 	{"PUT", "/config", "PUT /config"},
+	{"GET", "/fast-model/status", "GET /fast-model/status"},
 	{"GET", "/profiles", "GET /profiles"},
 	{"POST", "/profiles", "POST /profiles"},
 	{"PUT", "/profiles/abc", "PUT /profiles/{id}"},
