@@ -277,6 +277,18 @@ const (
 	// {"stage": string, "attempt": int, "ref": string}. Providers with no
 	// wire-level ref announcement never emit this.
 	StageAttemptRef EventType = "stage.attempt_ref"
+
+	// SynthesisProposalCreated fires when the background task synthesizer
+	// (spec §4) persists a create_task/add_note/update_task proposal for
+	// review. Payload: {"proposal_id": string, "type": string}.
+	SynthesisProposalCreated EventType = "synthesis.proposal_created"
+	// SynthesisProposalApproved fires once an approved proposal's change has
+	// been applied through the existing task APIs (actor "synthesizer").
+	// Payload: {"proposal_id": string}.
+	SynthesisProposalApproved EventType = "synthesis.proposal_approved"
+	// SynthesisProposalDismissed fires when a proposal is dismissed without
+	// applying any change. Payload: {"proposal_id": string}.
+	SynthesisProposalDismissed EventType = "synthesis.proposal_dismissed"
 )
 
 // EventTypes is the full registry, for validation and enumeration.
@@ -301,6 +313,7 @@ var EventTypes = []EventType{
 	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried, LandAutofixed,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef,
+	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,
 }
 
 var eventTypeSet = func() map[EventType]struct{} {

@@ -134,6 +134,12 @@ type Config struct {
 	DefaultModelTier   ModelTier          `json:"default_model_tier"`
 	CostAlertCents     int                `json:"cost_alert_cents,omitempty"`
 
+	// SynthesisAutoApprove applies every synthesis proposal immediately on
+	// creation, skipping manual review (spec §4's "power-user preference").
+	// Zero value (false) is the correct default: a fresh install reviews
+	// proposals before they become real tasks/notes.
+	SynthesisAutoApprove bool `json:"synthesis_auto_approve"`
+
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`

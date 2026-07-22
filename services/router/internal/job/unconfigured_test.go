@@ -144,6 +144,28 @@ func TestAllJobKindsSkipSilentlyWithoutFastModelBackend(t *testing.T) {
 		}
 	})
 
+	t.Run("synthesis", func(t *testing.T) {
+		base := datatest.Start(t)
+		data := dataclient.New(base, "router")
+		sess := mustCreateSession(t, data, contracts.Session{Name: "unconfigured synthesis"})
+
+		runner := job.New(data, unconfiguredFastModel(), registryclient.New(""))
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if _, err := runner.Spawn(ctx, job.SynthesisKind, sess.ID,
+			job.SynthesizeSession(sess.ID, []string{"user: add a rate limiter\ntool: edit login.go\n"})); err != nil {
+			t.Fatalf("Spawn: %v", err)
+		}
+		assertNoJobFailed(t, base, sess.ID)
+		proposals, err := data.Proposals(context.Background(), sess.ID)
+		if err != nil {
+			t.Fatalf("Proposals: %v", err)
+		}
+		if len(proposals) != 0 {
+			t.Fatalf("proposals = %+v, want none (no Fast Model backend to synthesize with)", proposals)
+		}
+	})
+
 	t.Run("retro", func(t *testing.T) {
 		base := datatest.Start(t)
 		data := dataclient.New(base, "router")
