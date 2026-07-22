@@ -51,16 +51,83 @@ describe("SessionRail", () => {
     expect(screen.queryByText("Recent")).toBeNull();
   });
 
-  it("shows an amber attention dot for a recent session with open tasks", () => {
+  it("shows an amber attention dot for a recent session with blocked work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "needs work" })]}
-        openTaskCounts={{ r1: 2 }}
+        openTaskCounts={{ r1: { running: 0, ready: 0, blocked: 1 } }}
       />,
     );
     const row = screen.getByText("needs work").closest('[role="button"]')!;
     expect(row.querySelector('[class*="dot-attn"]')).toBeTruthy();
-    expect(screen.getByText("2 open")).toBeTruthy();
+    expect(screen.getByText("1 blocked")).toBeTruthy();
+  });
+
+  it("does not show an attention dot for a recent session that only has running/ready work", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", activity: "inactive", name: "steady work" })]}
+        openTaskCounts={{ r1: { running: 1, ready: 1, blocked: 0 } }}
+      />,
+    );
+    const row = screen.getByText("steady work").closest('[role="button"]')!;
+    expect(row.querySelector('[class*="dot-off"]')).toBeTruthy();
+    expect(row.querySelector('[class*="dot-attn"]')).toBeNull();
+  });
+
+  it("renders only non-zero buckets, in running / ready / blocked order", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", activity: "inactive", name: "mixed work" })]}
+        openTaskCounts={{ r1: { running: 2, ready: 2, blocked: 1 } }}
+      />,
+    );
+    const row = screen.getByText("mixed work").closest('[role="button"]') as HTMLElement;
+    const buckets = within(row).getAllByText(/running|ready|blocked/);
+    expect(buckets.map((b) => b.textContent)).toEqual(["2 running", "2 ready", "1 blocked"]);
+  });
+
+  it("renders a single bucket alone when only one status is present", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", activity: "inactive", name: "only ready" })]}
+        openTaskCounts={{ r1: { running: 0, ready: 3, blocked: 0 } }}
+      />,
+    );
+    expect(screen.getByText("3 ready")).toBeTruthy();
+    expect(screen.queryByText(/running|blocked/)).toBeNull();
+  });
+
+  it("shows no work-breakdown line at all when every bucket is zero", () => {
+    render(
+      <SessionRail
+        sessions={[makeSession({ id: "r1", activity: "inactive", name: "idle" })]}
+        openTaskCounts={{ r1: { running: 0, ready: 0, blocked: 0 } }}
+      />,
+    );
+    expect(screen.queryByText(/running|ready|blocked/)).toBeNull();
+    expect(screen.queryByText(/open$/)).toBeNull();
+  });
+
+  it("updates a card's bucket line in place on a status change, without remounting the row", () => {
+    const session = makeSession({ id: "r1", activity: "inactive", name: "needs work" });
+    const { rerender } = render(
+      <SessionRail sessions={[session]} openTaskCounts={{ r1: { running: 0, ready: 1, blocked: 0 } }} />,
+    );
+    const rowBefore = screen.getByText("needs work").closest('[role="button"]');
+    expect(screen.getByText("1 ready")).toBeTruthy();
+
+    // Simulates the engine claiming the task: a task.status_changed event
+    // flips it ready -> in_progress upstream in useOpenTaskCounts, which
+    // re-renders SessionRail with new breakdown props.
+    rerender(
+      <SessionRail sessions={[session]} openTaskCounts={{ r1: { running: 1, ready: 0, blocked: 0 } }} />,
+    );
+
+    const rowAfter = screen.getByText("needs work").closest('[role="button"]');
+    expect(rowAfter).toBe(rowBefore);
+    expect(screen.getByText("1 running")).toBeTruthy();
+    expect(screen.queryByText("1 ready")).toBeNull();
   });
 
   it("fires onSelect with the session id when a row is clicked", () => {

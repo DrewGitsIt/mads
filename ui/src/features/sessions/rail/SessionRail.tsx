@@ -2,7 +2,8 @@ import { useState } from "react";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkChooserDialog } from "./LinkChooserDialog";
-import { dotState, groupSessions } from "./railGroups";
+import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, groupSessions, totalOpenTasks } from "./railGroups";
+import type { OpenTaskBreakdown } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
 import { FLAGS } from "../../../featureFlags";
 import { router, type RouterClient } from "../../../router/client";
@@ -11,7 +12,7 @@ import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
   sessions: Session[];
-  openTaskCounts: Record<string, number>;
+  openTaskCounts: Record<string, OpenTaskBreakdown>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -184,7 +185,7 @@ function RailRowGroup({
   onToggleLinkSelection,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
-  openTaskCounts: Record<string, number>;
+  openTaskCounts: Record<string, OpenTaskBreakdown>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -202,7 +203,7 @@ function RailRowGroup({
     <>
       <SessionRow
         session={row.session}
-        openTaskCount={openTaskCounts[row.session.id] ?? 0}
+        openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
@@ -221,7 +222,7 @@ function RailRowGroup({
           <SessionRow
             key={sub.session.id}
             session={sub.session}
-            openTaskCount={openTaskCounts[sub.session.id] ?? 0}
+            openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
@@ -246,7 +247,7 @@ function RailRowGroup({
 
 function SessionRow({
   session,
-  openTaskCount,
+  openTaskBreakdown,
   selected,
   onSelect,
   onResume,
@@ -263,7 +264,7 @@ function SessionRow({
   onToggleLinkSelection,
 }: {
   session: Session;
-  openTaskCount: number;
+  openTaskBreakdown: OpenTaskBreakdown;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -279,9 +280,10 @@ function SessionRow({
   onStartLinkMode: () => void;
   onToggleLinkSelection: () => void;
 }) {
-  const dot = dotState(session, openTaskCount);
+  const dot = dotState(session, openTaskBreakdown);
   const name = session.name || "Untitled session";
   const isPaused = session.activity !== "active";
+  const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge));
   const showSummary = isPaused && Boolean(session.summary);
 
@@ -331,7 +333,19 @@ function SessionRow({
       </div>
       {hasMeta && (
         <div className={styles.rowMeta}>
-          {openTaskCount > 0 && <span className={styles.openCount}>{openTaskCount} open</span>}
+          {openTaskCount > 0 && (
+            <span className={styles.workBreakdown}>
+              {openTaskBreakdown.running > 0 && (
+                <span className={styles.bucketRunning}>{openTaskBreakdown.running} running</span>
+              )}
+              {openTaskBreakdown.ready > 0 && (
+                <span className={styles.bucketReady}>{openTaskBreakdown.ready} ready</span>
+              )}
+              {openTaskBreakdown.blocked > 0 && (
+                <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
+              )}
+            </span>
+          )}
           {linkedSessionsEnabled && linkBadge && (
             <span
               className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]

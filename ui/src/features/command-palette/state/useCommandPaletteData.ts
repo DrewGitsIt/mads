@@ -1,12 +1,13 @@
 import { useOpenTaskCounts } from "../../sessions/state/useOpenTaskCounts";
 import { useSessionsList } from "../../sessions/state/useSessionsList";
 import { useAllTasks } from "./useAllTasks";
+import type { OpenTaskBreakdown } from "../../sessions/rail/railGroups";
 import type { Session, Task } from "../../../router/types";
 
 export interface CommandPaletteData {
   sessions: Session[];
   tasks: Task[];
-  openTaskCounts: Record<string, number>;
+  openTaskCounts: Record<string, OpenTaskBreakdown>;
 }
 
 /**
