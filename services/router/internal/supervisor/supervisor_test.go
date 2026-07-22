@@ -86,7 +86,7 @@ func envPresent(t *testing.T, addr, name string) bool {
 	if err != nil {
 		t.Fatalf("GET /env?name=%s: %v", name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var body struct {
 		Present bool `json:"present"`
 	}

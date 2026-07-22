@@ -427,10 +427,7 @@ func TestTerminalOutputReplaysOnAttach(t *testing.T) {
 	// turn_end to the hub (see runner_test.go's waitForTranscriptLen), so
 	// the transcript is the transport-agnostic way to observe completion.
 	deadline := time.After(5 * time.Second)
-	for {
-		if len(r.Transcript(ctx)) >= 2 {
-			break
-		}
+	for len(r.Transcript(ctx)) < 2 {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for the pty turn to land in transcript")
