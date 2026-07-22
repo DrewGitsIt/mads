@@ -69,10 +69,11 @@ func TestLeaseHeartbeatOutlivesSilentStage(t *testing.T) {
 
 // A machine suspend stalls every heartbeat past the TTL at once; on wake the
 // reaper has released the lease and blocked the task. The engine, still
-// alive and mid-stage, must take the lease back AND put the status back —
-// simulated here by doing exactly what the reaper does (release + block) out
-// from under a running stage.
-func TestSuspendWakeRestoresTask(t *testing.T) {
+// alive and mid-stage, no longer owns the task — it must abort the stage and
+// leave the status alone (the reaper's write stands), not silently resume
+// driving it. Simulated here by doing exactly what the reaper does (release
+// + block) out from under a running stage.
+func TestSuspendWakeAbortsTask(t *testing.T) {
 	h := newHarness(t)
 	f := mustScenario(t, fake.Rule{Match: "Task: napper", Reply: "done", DelayMs: 1500})
 	seeded := h.seed(contracts.Task{Title: "napper"})
@@ -90,11 +91,63 @@ func TestSuspendWakeRestoresTask(t *testing.T) {
 	}
 
 	sum := <-done
-	if len(sum.Done) != 1 {
-		t.Fatalf("summary after simulated suspend: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	if len(sum.Done) != 0 {
+		t.Fatalf("engine completed a task it no longer owned after simulated suspend: %+v", sum)
 	}
-	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusDone {
-		t.Errorf("task status = %s, want done", got.Status)
+	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusBlocked {
+		t.Errorf("task status = %s, want blocked (the reaper's write must stand, not be overwritten)", got.Status)
+	}
+}
+
+// The wall-clock gap detector must catch a suspend-induced lease loss even
+// when no renewal was ever attempted and rejected — the proactive check
+// compares wall-clock time since the last successful renewal against the
+// TTL, so a machine that slept through several TTLs aborts on the very next
+// heartbeat tick instead of trusting a paused monotonic timer.
+func TestWallClockGapTriggersAbortWithoutRejectedRenewal(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t, fake.Rule{Match: "Task: sleeper", Reply: "done", DelayMs: 2000})
+	seeded := h.seed(contracts.Task{Title: "sleeper"})
+	parsed, verr := template.Check([]byte(soloTemplate), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	const ttl = 200 * time.Millisecond
+	clock := newFakeClock(time.Now())
+	done := make(chan *Summary, 1)
+	go func() {
+		sum, err := Run(context.Background(), Config{
+			Data: h.data, Provider: f, SessionID: h.sess.ID,
+			Template: parsed, Cwd: h.cwd, Concurrency: 1,
+			StageTimeout: 30 * time.Second, LeaseTTL: ttl,
+			Clock: clock,
+		})
+		if err != nil {
+			t.Error(err)
+		}
+		done <- sum
+	}()
+
+	// Give the first renewal a chance to succeed for real, then jump the
+	// fake clock far past the TTL without touching the lease at all: no
+	// renewal is ever rejected, but the wall-clock gap alone must trigger
+	// the abort path on the next heartbeat tick.
+	time.Sleep(100 * time.Millisecond)
+	clock.Advance(10 * ttl)
+
+	sum := <-done
+	if len(sum.Done) != 0 {
+		t.Fatalf("engine completed a task after a wall-clock gap past the TTL: %+v", sum)
+	}
+	leases, err := h.data.Leases(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 0 {
+		t.Fatalf("leases after wall-clock gap abort = %+v, want none", leases)
+	}
+	if got := h.task(t, seeded[0].ID); got.Status != contracts.StatusInProgress {
+		t.Errorf("task status = %s, want in_progress (abort must not write status)", got.Status)
 	}
 }
 
