@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
@@ -61,19 +62,51 @@ func defaultMadsHome() string {
 // does, except claude-code/kiro-cli get the autonomous-execution ExtraArgs
 // cmd/mads/run.go's own -claude-args/-kiro-args flags default to: pipeline
 // agent stages always run unattended, unlike services/session's interactive
-// registry.
-func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
+// registry. mode/passthrough/credEnv come from resolveAgentEnv and govern
+// what OS environment the spawned claude/kiro-cli binaries see (env_mode,
+// distinct from the --dangerously-skip-permissions/--trust-all-tools trust
+// bypass above — trust governs what an agent can DO, env_mode governs what
+// it can SEE).
+func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string) (*provider.Registry, error) {
 	reg := provider.NewRegistry()
-	if err := reg.Register(claudecode.New(claudecode.Config{ExtraArgs: []string{"--dangerously-skip-permissions"}})); err != nil {
+	if err := reg.Register(claudecode.New(claudecode.Config{
+		ExtraArgs:      []string{"--dangerously-skip-permissions"},
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
 		return nil, fmt.Errorf("register claudecode provider: %w", err)
 	}
-	if err := reg.Register(kirocli.New(kirocli.Config{ExtraArgs: []string{"--trust-all-tools"}})); err != nil {
+	if err := reg.Register(kirocli.New(kirocli.Config{
+		ExtraArgs:      []string{"--trust-all-tools"},
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
 		return nil, fmt.Errorf("register kiro-cli provider: %w", err)
 	}
 	if err := reg.Register(fake.New(fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts")))); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)
 	}
 	return reg, nil
+}
+
+// resolveAgentEnv turns this process's env_mode config into what
+// buildProviderRegistry needs to hand agentenv.Build at every agent spawn:
+// the mode itself, the passthrough name list, and — isolated mode only —
+// this process's own bound-credential values. Those values are extracted
+// from parentEnv (this process's already-populated os.Environ(), populated
+// there by the Router's spec §13 credential injection at spawn time) rather
+// than re-resolved from a vault at this layer, so credential values still
+// never cross a service boundary on their own. In inherit mode credEnv is
+// left nil: parentEnv already carries the bound credentials, and adding
+// them again would diverge from today's byte-identical inherit behavior.
+func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mode, passthrough, credEnv []string) {
+	mode = agentenv.Mode(cfg.EnvMode)
+	if mode != agentenv.ModeIsolated {
+		return mode, nil, nil
+	}
+	return mode, cfg.EnvPassthrough, agentenv.Select(parentEnv, cfg.CredentialBindings)
 }
 
 // run resolves the session's workspace, template, provider, and concurrency,
@@ -115,7 +148,8 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 	if providerName == "" {
 		providerName = "claude-code"
 	}
-	providers, err := buildProviderRegistry(madsHome)
+	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
+	providers, err := buildProviderRegistry(madsHome, mode, passthrough, credEnv)
 	if err != nil {
 		return err
 	}

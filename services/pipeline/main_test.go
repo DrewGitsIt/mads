@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/agentenv"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/services/data/datatest"
@@ -37,6 +39,42 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+func TestResolveAgentEnv_InheritOmitsCredEnvToStayByteIdentical(t *testing.T) {
+	parent := []string{"PATH=/bin", "MADS_CRED_A=secret-value"}
+	cfg := contracts.Config{CredentialBindings: []string{"MADS_CRED_A"}}
+
+	mode, passthrough, credEnv := resolveAgentEnv(cfg, parent)
+
+	if mode == agentenv.ModeIsolated {
+		t.Fatalf("mode = %v, want inherit (zero value)", mode)
+	}
+	if passthrough != nil || credEnv != nil {
+		t.Fatalf("inherit mode should resolve no passthrough/credEnv (parentEnv already has it): passthrough=%v credEnv=%v", passthrough, credEnv)
+	}
+}
+
+func TestResolveAgentEnv_IsolatedSelectsBoundCredentialsFromParentEnv(t *testing.T) {
+	parent := []string{"PATH=/bin", "MADS_CRED_A=secret-value", "OTHER=x"}
+	cfg := contracts.Config{
+		EnvMode:            contracts.EnvModeIsolated,
+		EnvPassthrough:     []string{"AWS_PROFILE"},
+		CredentialBindings: []string{"MADS_CRED_A"},
+	}
+
+	mode, passthrough, credEnv := resolveAgentEnv(cfg, parent)
+
+	if mode != agentenv.ModeIsolated {
+		t.Fatalf("mode = %v, want isolated", mode)
+	}
+	if !reflect.DeepEqual(passthrough, cfg.EnvPassthrough) {
+		t.Fatalf("passthrough = %v, want %v", passthrough, cfg.EnvPassthrough)
+	}
+	want := []string{"MADS_CRED_A=secret-value"}
+	if !reflect.DeepEqual(credEnv, want) {
+		t.Fatalf("credEnv = %v, want %v", credEnv, want)
+	}
 }
 
 func TestHealth(t *testing.T) {
