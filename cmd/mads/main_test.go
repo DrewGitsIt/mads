@@ -64,10 +64,10 @@ func TestRunEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Workspace: a git repo whose Makefile satisfies build/test stages.
+	// Workspace: a git repo whose Makefile satisfies build/check stages.
 	ws := t.TempDir()
 	if err := os.WriteFile(filepath.Join(ws, "Makefile"),
-		[]byte("build:\n\t@true\ntest:\n\t@true\n"), 0o644); err != nil {
+		[]byte("build:\n\t@true\ntest:\n\t@true\ncheck:\n\t@true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
