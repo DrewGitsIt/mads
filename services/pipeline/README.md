@@ -113,6 +113,41 @@ isolation rerun results, trunk head) appended after the existing suspect-set
 wording. Flaky tests are the canonical merge-queue killer; bounded retry with
 recorded evidence is the standard countermeasure, never unbounded retry.
 
+**Lint-red never lands, and a whitelisted-mechanical fix beats a block.**
+Trunk went lint-red silently once (fixed at 672a6bc) because the land gate ran
+build+test but not lint while task acceptance criteria required a green `make
+check` — lint-red work landed and poisoned every later task that checked the
+full bar. The fix is a three-rung ladder. Rung 1, prevention: the executor/
+verify stage gate (any ordinary pre-land stage, e.g. a template's own `check`
+stage) runs `make check`, not just build+test, so an in-diff lint error fails
+that stage and blocks the task through the plain stage-failure path — same as
+any other stage failure, before the task ever reaches the land queue.
+Rung 2: the land gate itself runs `make check`, so the one class rung 1 can't
+catch — two individually-clean branches combining lint-red post-rebase (stale
+imports, formatting drift after a semantic merge) — is still caught here.
+`classifyLintFailure` (`lintautofix.go`) recognizes golangci-lint-shaped issue
+lines in the gate's output and is deterministic, never routed through
+`triageGateFailure`'s flake isolation — a lint failure doesn't get more honest
+on a rerun. If every distinct linter named is in the mechanical-autofix
+whitelist (`gofmt`, `gofumpt`, `goimports` — purely syntactic, semantics-
+preserving reformatting; never `errcheck`/`staticcheck`/`unused`/etc, since
+"unused after merge" can mean the merge dropped a caller, which is
+information for a human, not noise), `runLintAutofix` runs each available
+whitelisted fixer, best-effort, against the merged tree. If the tree actually
+changed, it's committed as its own clearly-labeled commit ("land: mechanical
+lint fixes", distinct from the task's own work), a `land.autofixed` event
+carries the fixer list and diff summary, and the full gate reruns exactly
+once — bounded by an `autofixUsed` flag scoped to the whole land attempt, so a
+fixer that doesn't converge falls through to a block rather than looping.
+Rung 3: still red — whether non-whitelisted linters were named at all, or the
+autofix didn't converge — blocks immediately with the lint evidence appended
+to the blocker note, the same deterministic-failure treatment as any other
+gate failure `triageGateFailure` classifies as non-flaky.
+TestLintAutofixLandsAfterGofmtCombination,
+TestLintAutofixSkippedForNonWhitelistedLinter,
+TestLintAutofixBoundedFallsThroughToBlock,
+TestPreLandStageCatchesLintBeforeLandQueue.
+
 **Every block backs up the branch; every done cleans it up.** Whenever a task
 blocks and its `mads/<task>` branch exists, the engine force-updates
 `backup/<task>` to the branch head before recording the block, and names the
@@ -316,3 +351,18 @@ never a mock of either contract.
   and matches the worktree branch head the moment a task blocks (named in
   the blocker note), and is deleted once the task reaches done:
   TestBlockBacksUpWorktreeBranch, TestDoneDeletesStaleBackupBranch.
+- **A gofmt-class post-rebase combination fix-lands itself** — two
+  individually-clean branches that combine into a gofmt-dirty tree get a
+  mechanical autofix commit, a `land.autofixed` event with the fixer list and
+  diff summary, and a green rerun of the full gate, all before the task lands
+  with both commits present: TestLintAutofixLandsAfterGofmtCombination. An
+  errcheck-class (or any non-whitelisted-linter) gate failure never gets an
+  autofix attempt at all and blocks immediately with the lint evidence, never
+  flake-retried: TestLintAutofixSkippedForNonWhitelistedLinter. The autofix
+  is bounded to exactly one attempt per land attempt — a gate that keeps
+  reporting a whitelisted-linter failure after the one rerun falls through to
+  a block rather than looping, proven by an exact gate-invocation count:
+  TestLintAutofixBoundedFallsThroughToBlock. A lint-shaped failure in an
+  ordinary pre-land stage fails that stage and blocks before the task ever
+  reaches the land queue — the autofix machinery is scoped to the land gate
+  alone and never engages there: TestPreLandStageCatchesLintBeforeLandQueue.
