@@ -61,6 +61,7 @@ func New(db *sql.DB) http.Handler {
 	sessionRoutes(mux, l)
 	linkRoutes(mux, l)
 	retroRoutes(mux, l)
+	proposalRoutes(mux, l, tasks)
 	configRoutes(mux, l)
 	profileRoutes(mux, l)
 	mux.HandleFunc("GET /metrics/cost", s.handleMetricsCost)

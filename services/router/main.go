@@ -35,6 +35,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+	"github.com/drewkidwell/mads/services/router/internal/synthwatch"
 )
 
 // shutdownGrace bounds how long the HTTP server and tracked children get to
@@ -209,6 +210,9 @@ func main() {
 
 	runWatcher := digestwatch.NewRunWatcher(data, jobs)
 	go runWatcher.Run(ctx)
+
+	synthWatcher := synthwatch.NewWatcher(data, jobs, resolveFastModel)
+	go synthWatcher.Run(ctx)
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()

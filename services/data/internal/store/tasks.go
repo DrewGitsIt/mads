@@ -144,53 +144,62 @@ func (s *Tasks) Update(ctx context.Context, t *contracts.Task, actor string) err
 		return verr
 	}
 	return s.log.WithTx(ctx, func(tx *Tx) error {
-		var oldStatus string
-		err := tx.QueryRow("SELECT status FROM tasks WHERE id = ?", t.ID).Scan(&oldStatus)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("tasks: %s: %w", t.ID, ErrNotFound)
-		}
-		if err != nil {
-			return err
-		}
-		now := time.Now().UTC()
-		if err := checkAndRenew(tx, t.ID, actor, now); err != nil {
-			return err
-		}
-		t.UpdatedAt = now
-		labels, err := json.Marshal(orEmpty(t.Labels))
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(
-			`UPDATE tasks SET session_id=?, status=?, retry_count=?, updated_at=?,
-			        title=?, description=?, acceptance_criteria=?, scope=?, draft=?, source=?, labels=?
-			 WHERE id=?`,
-			t.SessionID, string(t.Status), t.RetryCount, now.Format(time.RFC3339Nano),
-			t.Title, t.Description, t.AcceptanceCriteria, t.Scope,
-			boolToInt(t.Draft), t.Source, string(labels), t.ID,
-		); err != nil {
-			return fmt.Errorf("tasks: update %s: %w", t.ID, err)
-		}
-		if _, err := tx.Exec("DELETE FROM task_deps WHERE task_id = ?", t.ID); err != nil {
-			return err
-		}
-		if err := writeDeps(tx, t.ID, t.SessionID, t.Dependencies); err != nil {
-			return err
-		}
-		if err := tx.Append(&contracts.Envelope{
-			Type: contracts.TaskUpdated, SessionID: t.SessionID, TaskID: t.ID, Actor: actor,
-		}); err != nil {
-			return err
-		}
-		if oldStatus != string(t.Status) {
-			payload, _ := json.Marshal(map[string]string{"from": oldStatus, "to": string(t.Status)})
-			return tx.Append(&contracts.Envelope{
-				Type: contracts.TaskStatusChanged, SessionID: t.SessionID, TaskID: t.ID,
-				Actor: actor, Payload: payload,
-			})
-		}
-		return nil
+		return s.updateInTx(tx, t, actor)
 	})
+}
+
+// updateInTx runs Update's logic inside a transaction the caller already
+// owns — the write-lease check (checkAndRenew) and the row/event writes all
+// land or roll back together, whether that transaction belongs to Update
+// itself or, e.g., a Proposals.Approve applying an update_task proposal
+// alongside its own status flip.
+func (s *Tasks) updateInTx(tx *Tx, t *contracts.Task, actor string) error {
+	var oldStatus string
+	err := tx.QueryRow("SELECT status FROM tasks WHERE id = ?", t.ID).Scan(&oldStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("tasks: %s: %w", t.ID, ErrNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if err := checkAndRenew(tx, t.ID, actor, now); err != nil {
+		return err
+	}
+	t.UpdatedAt = now
+	labels, err := json.Marshal(orEmpty(t.Labels))
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(
+		`UPDATE tasks SET session_id=?, status=?, retry_count=?, updated_at=?,
+		        title=?, description=?, acceptance_criteria=?, scope=?, draft=?, source=?, labels=?
+		 WHERE id=?`,
+		t.SessionID, string(t.Status), t.RetryCount, now.Format(time.RFC3339Nano),
+		t.Title, t.Description, t.AcceptanceCriteria, t.Scope,
+		boolToInt(t.Draft), t.Source, string(labels), t.ID,
+	); err != nil {
+		return fmt.Errorf("tasks: update %s: %w", t.ID, err)
+	}
+	if _, err := tx.Exec("DELETE FROM task_deps WHERE task_id = ?", t.ID); err != nil {
+		return err
+	}
+	if err := writeDeps(tx, t.ID, t.SessionID, t.Dependencies); err != nil {
+		return err
+	}
+	if err := tx.Append(&contracts.Envelope{
+		Type: contracts.TaskUpdated, SessionID: t.SessionID, TaskID: t.ID, Actor: actor,
+	}); err != nil {
+		return err
+	}
+	if oldStatus != string(t.Status) {
+		payload, _ := json.Marshal(map[string]string{"from": oldStatus, "to": string(t.Status)})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.TaskStatusChanged, SessionID: t.SessionID, TaskID: t.ID,
+			Actor: actor, Payload: payload,
+		})
+	}
+	return nil
 }
 
 // Confirm turns a draft into a real task (spec §4), emitting task.confirmed.
@@ -258,6 +267,26 @@ func (s *Tasks) AddHandoff(ctx context.Context, taskID string, h *contracts.Hand
 
 // AddNote attaches a typed note (spec §4), emitting note.created.
 func (s *Tasks) AddNote(ctx context.Context, taskID string, n *contracts.Note, actor string) error {
+	if verr := validateNote(n); verr != nil {
+		return verr
+	}
+	return s.subRecord(ctx, taskID, actor, contracts.NoteCreated, func(tx *Tx) error {
+		return insertNote(tx, taskID, n)
+	})
+}
+
+// addNoteInTx is AddNote's logic run inside a transaction the caller already
+// owns — see updateInTx's doc comment for why this exists.
+func (s *Tasks) addNoteInTx(tx *Tx, taskID string, n *contracts.Note, actor string) error {
+	if verr := validateNote(n); verr != nil {
+		return verr
+	}
+	return s.subRecordInTx(tx, taskID, actor, contracts.NoteCreated, func(tx *Tx) error {
+		return insertNote(tx, taskID, n)
+	})
+}
+
+func validateNote(n *contracts.Note) *contracts.ValidationError {
 	var verr contracts.ValidationError
 	if n.Content == "" {
 		verr.Add("content", "required")
@@ -265,12 +294,10 @@ func (s *Tasks) AddNote(ctx context.Context, taskID string, n *contracts.Note, a
 	if n.Type == "" {
 		verr.Add("type", "required")
 	}
-	if !verr.Empty() {
-		return &verr
+	if verr.Empty() {
+		return nil
 	}
-	return s.subRecord(ctx, taskID, actor, contracts.NoteCreated, func(tx *Tx) error {
-		return insertNote(tx, taskID, n)
-	})
+	return &verr
 }
 
 // ConfirmNote promotes a draft note to confirmed (spec §4), emitting
@@ -323,26 +350,32 @@ func (s *Tasks) noteTransition(ctx context.Context, taskID string, noteID int64,
 
 func (s *Tasks) subRecord(ctx context.Context, taskID, actor string, event contracts.EventType, apply func(*Tx) error) error {
 	return s.log.WithTx(ctx, func(tx *Tx) error {
-		var sessionID string
-		err := tx.QueryRow("SELECT session_id FROM tasks WHERE id = ?", taskID).Scan(&sessionID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("tasks: %s: %w", taskID, ErrNotFound)
-		}
-		if err != nil {
-			return err
-		}
-		if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
-			return err
-		}
-		if err := apply(tx); err != nil {
-			return err
-		}
-		if _, err := tx.Exec("UPDATE tasks SET updated_at = ? WHERE id = ?",
-			time.Now().UTC().Format(time.RFC3339Nano), taskID); err != nil {
-			return err
-		}
-		return tx.Append(&contracts.Envelope{Type: event, SessionID: sessionID, TaskID: taskID, Actor: actor})
+		return s.subRecordInTx(tx, taskID, actor, event, apply)
 	})
+}
+
+// subRecordInTx is subRecord's logic run inside a transaction the caller
+// already owns — see updateInTx's doc comment for why this exists.
+func (s *Tasks) subRecordInTx(tx *Tx, taskID, actor string, event contracts.EventType, apply func(*Tx) error) error {
+	var sessionID string
+	err := tx.QueryRow("SELECT session_id FROM tasks WHERE id = ?", taskID).Scan(&sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("tasks: %s: %w", taskID, ErrNotFound)
+	}
+	if err != nil {
+		return err
+	}
+	if err := checkAndRenew(tx, taskID, actor, time.Now().UTC()); err != nil {
+		return err
+	}
+	if err := apply(tx); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("UPDATE tasks SET updated_at = ? WHERE id = ?",
+		time.Now().UTC().Format(time.RFC3339Nano), taskID); err != nil {
+		return err
+	}
+	return tx.Append(&contracts.Envelope{Type: event, SessionID: sessionID, TaskID: taskID, Actor: actor})
 }
 
 // Query selects tasks. Zero values mean "no constraint".
@@ -422,6 +455,97 @@ func (s *Tasks) Get(ctx context.Context, id string) (*contracts.Task, error) {
 		return nil, err
 	}
 	return t, nil
+}
+
+// getInTx is Get's logic run inside a transaction the caller already owns —
+// see updateInTx's doc comment for why this exists. It reads through tx
+// rather than s.log.db: the store's pool holds a single connection (see
+// List/Get's comment above), so a second query against s.log.db while this
+// transaction is open would deadlock, not just risk a stale read.
+func (s *Tasks) getInTx(tx *Tx, id string) (*contracts.Task, error) {
+	rows, err := tx.tx.Query(
+		`SELECT id, session_id, status, retry_count, created_at, updated_at,
+		        title, description, acceptance_criteria, scope, draft, source, labels
+		 FROM tasks WHERE id = ?`, id)
+	if err != nil {
+		return nil, fmt.Errorf("tasks: get %s: %w", id, err)
+	}
+	var t *contracts.Task
+	if rows.Next() {
+		t, err = scanTask(rows)
+	}
+	if err := errors.Join(err, rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, fmt.Errorf("tasks: %s: %w", id, ErrNotFound)
+	}
+	if err := s.hydrateInTx(tx, t); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// hydrateInTx is hydrate's logic run against tx instead of s.log.db — see
+// getInTx's doc comment.
+func (s *Tasks) hydrateInTx(tx *Tx, t *contracts.Task) error {
+	deps, err := tx.tx.Query("SELECT depends_on FROM task_deps WHERE task_id = ? ORDER BY depends_on", t.ID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = deps.Close() }()
+	for deps.Next() {
+		var d string
+		if err := deps.Scan(&d); err != nil {
+			return err
+		}
+		t.Dependencies = append(t.Dependencies, d)
+	}
+	if err := deps.Err(); err != nil {
+		return err
+	}
+
+	hs, err := tx.tx.Query("SELECT from_agent, content, timestamp FROM task_handoffs WHERE task_id = ? ORDER BY id", t.ID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = hs.Close() }()
+	for hs.Next() {
+		var (
+			h  contracts.Handoff
+			ts string
+		)
+		if err := hs.Scan(&h.From, &h.Content, &ts); err != nil {
+			return err
+		}
+		if h.Timestamp, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return err
+		}
+		t.Handoffs = append(t.Handoffs, h)
+	}
+	if err := hs.Err(); err != nil {
+		return err
+	}
+
+	ns, err := tx.tx.Query("SELECT id, type, content, source, status, timestamp FROM task_notes WHERE task_id = ? ORDER BY id", t.ID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ns.Close() }()
+	for ns.Next() {
+		var (
+			n  contracts.Note
+			ts string
+		)
+		if err := ns.Scan(&n.ID, &n.Type, &n.Content, &n.Source, &n.Status, &ts); err != nil {
+			return err
+		}
+		if n.Timestamp, err = time.Parse(time.RFC3339Nano, ts); err != nil {
+			return err
+		}
+		t.Notes = append(t.Notes, n)
+	}
+	return ns.Err()
 }
 
 // Cycles finds dependency cycles among a session's tasks (spec §3.6). Cycles

@@ -369,6 +369,43 @@ func (c *Client) SetRetroFollowUpSession(ctx context.Context, retroID, sessionID
 	return c.do(ctx, http.MethodPost, "/retros/"+url.PathEscape(retroID)+"/follow-up", map[string]any{"session_id": sessionID}, nil)
 }
 
+// --- Synthesis proposals (spec §4) ---
+
+// CreateProposal stores a synthesis proposal and returns it with its
+// assigned ID and timestamps.
+func (c *Client) CreateProposal(ctx context.Context, p *contracts.Proposal) error {
+	return c.do(ctx, http.MethodPost, "/proposals", p, p)
+}
+
+// Proposal returns one proposal.
+func (c *Client) Proposal(ctx context.Context, id string) (contracts.Proposal, error) {
+	var p contracts.Proposal
+	err := c.do(ctx, http.MethodGet, "/proposals/"+url.PathEscape(id), nil, &p)
+	return p, err
+}
+
+// Proposals lists a session's proposals, oldest first.
+func (c *Client) Proposals(ctx context.Context, sessionID string) ([]contracts.Proposal, error) {
+	var out []contracts.Proposal
+	err := c.do(ctx, http.MethodGet, "/proposals?session_id="+url.QueryEscape(sessionID), nil, &out)
+	return out, err
+}
+
+// ApproveProposal applies a proposed change through the task APIs (actor
+// "synthesizer") and returns the approved proposal.
+func (c *Client) ApproveProposal(ctx context.Context, id string) (contracts.Proposal, error) {
+	var p contracts.Proposal
+	err := c.do(ctx, http.MethodPost, "/proposals/"+url.PathEscape(id)+"/approve", map[string]any{}, &p)
+	return p, err
+}
+
+// DismissProposal marks a proposal dismissed without applying any change.
+func (c *Client) DismissProposal(ctx context.Context, id string) (contracts.Proposal, error) {
+	var p contracts.Proposal
+	err := c.do(ctx, http.MethodPost, "/proposals/"+url.PathEscape(id)+"/dismiss", map[string]any{}, &p)
+	return p, err
+}
+
 // --- Registries (spec §9, §12, §17) ---
 
 func (c *Client) Agent(ctx context.Context, idOrName string) (contracts.Agent, error) {
