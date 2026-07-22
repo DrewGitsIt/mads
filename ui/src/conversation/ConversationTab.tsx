@@ -23,7 +23,9 @@ import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
-import { ChatRenderer, type StreamItem } from "./ChatRenderer/ChatRenderer";
+import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
+import { useStreamPacer } from "./streaming/useStreamPacer";
+import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpeed";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
 import { TerminalComposer, formatBracketedPaste } from "./TerminalRenderer/TerminalComposer";
@@ -72,26 +74,13 @@ type TransportState =
 // transition applies whether this client's own send started the turn or a
 // linked-session inject/mid-turn mount is the first thing observed, so both
 // fall out of the same code path with no separate case to maintain.
-type TurnState =
-  | { phase: "idle" }
-  // A turn is live. `items` is built directly from the stream — text tokens
-  // accumulate into the trailing text item, tool_use pushes a card, tool_result
-  // attaches to it. This is the SOLE source of truth for the in-flight turn,
-  // reconciled with the persisted transcript exactly once, on turn_end — there
-  // is no mid-turn transcript poll to make streamed text rubber-band. `blocked`
-  // is set when the provider reports a pending tool stalled awaiting permission
-  // (headless transport, no surface to answer — see providers/claudecode's
-  // README, "Defense in depth").
-  | { phase: "live"; items: StreamItem[]; blocked?: string };
-
-/** Append a text token to the live turn, extending the trailing text run (or starting one after a tool). */
-function appendText(items: StreamItem[], text: string): StreamItem[] {
-  const last = items[items.length - 1];
-  if (last && last.kind === "text") {
-    return [...items.slice(0, -1), { kind: "text", text: last.text + text }];
-  }
-  return [...items, { kind: "text", text }];
-}
+// The in-flight turn is built directly from the stream (text tokens, tool_use,
+// tool_result) and is the SOLE source of truth for it, reconciled with the
+// persisted transcript exactly once, on turn_end — no mid-turn transcript poll
+// to make streamed text rubber-band. The ordered items live in a stream pacer
+// (useStreamPacer) so the reveal rate can be decoupled from token arrival;
+// ConversationTab keeps only the turn's phase + a `blocked` reason here.
+type TurnPhase = "idle" | "live";
 
 /**
  * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the header,
@@ -121,7 +110,18 @@ export function ConversationTab({
   const [sendError, setSendError] = useState<string>();
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
-  const [turn, setTurn] = useState<TurnState>({ phase: "idle" });
+  const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
+  const [turnBlocked, setTurnBlocked] = useState<string>();
+  // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
+  // the ordered items; enqueue/finish/reset are stable across renders.
+  const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed()));
+  const {
+    enqueueText: pacerEnqueueText,
+    enqueueTool: pacerEnqueueTool,
+    applyToolResult: pacerApplyToolResult,
+    finish: pacerFinish,
+    reset: pacerReset,
+  } = pacer;
   // Last completed turn's usage, for the header context meter. Populated from
   // the stream's turn_end frame (the only place usage is reported); undefined
   // until this session view sees a turn finish.
@@ -162,7 +162,9 @@ export function ConversationTab({
     setLoadError(false);
     setSession(null);
     setMessages([]);
-    setTurn({ phase: "idle" });
+    setTurnPhase("idle");
+    setTurnBlocked(undefined);
+    pacerReset();
     setPermissionRequests(new Map());
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
@@ -217,7 +219,7 @@ export function ConversationTab({
     return () => {
       cancelled = true;
     };
-  }, [routerClient, sessionId, retryToken]);
+  }, [routerClient, sessionId, retryToken, pacerReset]);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -333,8 +335,8 @@ export function ConversationTab({
   // Latest turn phase, read from callbacks that fire outside the render
   // that set it (EventSource "open", visibilitychange) — same ref-mirrors-
   // state idiom as messagesRef above.
-  const turnPhaseRef = useRef(turn.phase);
-  turnPhaseRef.current = turn.phase;
+  const turnPhaseRef = useRef(turnPhase);
+  turnPhaseRef.current = turnPhase;
 
   // GET /transcript has no push notification for turn completion (no domain
   // event fires per-turn, only on session start/shutdown), so the persisted
@@ -367,19 +369,14 @@ export function ConversationTab({
     const onText = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "text") return;
-      setTurn((t) => ({
-        phase: "live",
-        items: appendText(t.phase === "live" ? t.items : [], parsed.text),
-        blocked: t.phase === "live" ? t.blocked : undefined,
-      }));
+      setTurnPhase("live");
+      pacerEnqueueText(parsed.text);
     };
     const onTool = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_use") return;
-      setTurn((t) => ({
-        phase: "live",
-        items: [...(t.phase === "live" ? t.items : []), { kind: "tool", tool: parsed.tool }],
-      }));
+      setTurnPhase("live");
+      pacerEnqueueTool(parsed.tool);
     };
     const onToolResult = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -388,24 +385,10 @@ export function ConversationTab({
       // shows its outcome as it arrives — never a silent no-op, and an error
       // (e.g. a permission denial) also raises the blocked banner even if the
       // process then stalls with no further wire activity.
-      setTurn((t) => {
-        if (t.phase !== "live") return t;
-        const items = t.items.map((it) =>
-          it.kind === "tool" && it.tool.id && it.tool.id === parsed.tool?.id
-            ? {
-                kind: "tool" as const,
-                tool: { ...it.tool, result: { text: parsed.text, is_error: parsed.is_error } },
-              }
-            : it,
-        );
-        return {
-          phase: "live",
-          items,
-          blocked: parsed.is_error
-            ? "blocked awaiting permission — switch to terminal or raise trust"
-            : t.blocked,
-        };
-      });
+      pacerApplyToolResult(parsed.tool?.id, { text: parsed.text, is_error: parsed.is_error });
+      if (parsed.is_error) {
+        setTurnBlocked("blocked awaiting permission — switch to terminal or raise trust");
+      }
     };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -425,9 +408,16 @@ export function ConversationTab({
           // non-JSON turn_end frame — leave the meter on its last value
         }
       }
-      // Keep the live turn frozen-visible until the persisted refetch replaces
-      // it (one reconcile per turn), so there's never a flash back to empty.
-      void refetchAfterTurn().finally(() => setTurn({ phase: "idle" }));
+      // Drain whatever the pacer still has buffered (so a paced turn finishes
+      // typing smoothly), then reconcile once with the persisted transcript and
+      // go idle — frozen-visible throughout, so there's never a flash to empty.
+      pacerFinish(() => {
+        void refetchAfterTurn().finally(() => {
+          setTurnPhase("idle");
+          setTurnBlocked(undefined);
+          pacerReset();
+        });
+      });
     };
     const onError = (ev: MessageEvent<string>) => {
       // A native transport-level failure (e.g. the initial GET /output 404
@@ -438,7 +428,9 @@ export function ConversationTab({
         return;
       }
       const parsed = JSON.parse(ev.data) as StreamEvent;
-      setTurn({ phase: "idle" });
+      setTurnPhase("idle");
+      setTurnBlocked(undefined);
+      pacerReset();
       setSendError(parsed.kind === "error" ? parsed.text : "The agent hit an error.");
     };
     eventSource.addEventListener("text", onText);
@@ -455,7 +447,16 @@ export function ConversationTab({
       eventSource.removeEventListener("turn_end", onTurnEnd);
       eventSource.removeEventListener("error", onError);
     };
-  }, [eventSource, refetchAfterTurn, upsertPermissionRequest]);
+  }, [
+    eventSource,
+    refetchAfterTurn,
+    upsertPermissionRequest,
+    pacerEnqueueText,
+    pacerEnqueueTool,
+    pacerApplyToolResult,
+    pacerFinish,
+    pacerReset,
+  ]);
 
   // Native EventSource auto-reconnects after a mid-stream drop (unlike the
   // dead-on-arrival case streamBroken handles above, which never retries on
@@ -483,12 +484,12 @@ export function ConversationTab({
   // running so a later visibility toggle checks again.
   const turnWasLiveRef = useRef(false);
   useEffect(() => {
-    if (turn.phase !== "idle") {
+    if (turnPhase !== "idle") {
       turnWasLiveRef.current = true;
     } else if (document.visibilityState === "visible") {
       turnWasLiveRef.current = false;
     }
-  }, [turn.phase]);
+  }, [turnPhase]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -518,7 +519,7 @@ export function ConversationTab({
   useLayoutEffect(() => {
     const el = streamRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [messages, turn]);
+  }, [messages, pacer.items, turnPhase]);
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
@@ -574,22 +575,22 @@ export function ConversationTab({
         : transport.attemptedMode;
   const showHistory = transport.status !== "idle" || transport.mode === "chat";
   // Never shown mid-switch/terminal — terminal mode already has its own live
-  // view via SessionTerminalBridge on the same stream.
-  const liveTurn = activeMode === "chat" ? turn : { phase: "idle" as const };
-  const liveItems = liveTurn.phase === "live" ? liveTurn.items : [];
+  // view via SessionTerminalBridge on the same stream. The paced items are the
+  // live turn's content.
+  const inChatTurn = activeMode === "chat" && turnPhase === "live";
+  const liveItems = inChatTurn ? pacer.items : [];
   const lastLiveItem = liveItems[liveItems.length - 1];
   // Trailing "working" affordance — only when the tail isn't itself visibly
   // streaming: pre-first-output, a tool awaiting its result, or a stall.
-  const working: { tool?: ToolUse; blocked?: string } | false =
-    liveTurn.phase !== "live"
-      ? false
-      : liveTurn.blocked
-        ? { blocked: liveTurn.blocked }
-        : liveItems.length === 0
-          ? {}
-          : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
-            ? { tool: lastLiveItem.tool }
-            : false;
+  const working: { tool?: ToolUse; blocked?: string } | false = !inChatTurn
+    ? false
+    : turnBlocked
+      ? { blocked: turnBlocked }
+      : liveItems.length === 0
+        ? {}
+        : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
+          ? { tool: lastLiveItem.tool }
+          : false;
   // Never carry a stale open overlay across a switch back to chat and later
   // back to terminal — a bare `!showHistory` gate on `open` below would hide
   // it visually but leave the state true, popping it back open unprompted.
@@ -645,7 +646,7 @@ export function ConversationTab({
                 </div>
               )}
               <SessionSummaryCard session={session} />
-              {messages.length === 0 && liveTurn.phase === "idle" ? (
+              {messages.length === 0 && !inChatTurn ? (
                 <div className={styles.emptyTranscript}>No conversation yet</div>
               ) : (
                 <ChatRenderer
@@ -718,12 +719,12 @@ export function ConversationTab({
                 agentId={session.agent}
                 provider={session.provider}
                 disabled={transport.status !== "idle" || waking}
-                busy={liveTurn.phase !== "idle"}
+                busy={inChatTurn}
                 initialValue={pendingFirstMessage}
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {
                   if (session.activity !== "active") setWaking(true);
-                  setTurn((t) => (t.phase === "idle" ? { phase: "live", items: [] } : t));
+                  setTurnPhase((p) => (p === "idle" ? "live" : p));
                 }}
                 onSendError={(msg) => {
                   setWaking(false);
