@@ -316,6 +316,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	// after this point still leaves a resumable ref recorded.
 	sess.ProviderRef = provSess.Ref()
 	sess.Activity = contracts.SessionActive
+	sess.Cwd = cwd // the resolved working dir the agent runs in — surfaced for the docked shell
 	r.recordMu.Lock()
 	if err := r.data.UpdateSession(ctx, &sess); err != nil {
 		r.recordMu.Unlock()

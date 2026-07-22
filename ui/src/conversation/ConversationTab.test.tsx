@@ -387,26 +387,37 @@ describe("ConversationTab", () => {
     );
   });
 
-  it("falls back to the session's workspace when there's no worktree_dir", async () => {
+  it("spawns the shell dock in the session's resolved cwd — the agent's context, not the workspace name", async () => {
     const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-cwd",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "cwd session",
+      activity: "active",
+      workspace: "mads",
+      cwd: "/home/drew/repo/mads",
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
     const bridge = makeStubBridge();
     render(
-      <ConversationTab sessionId="session-active" routerClient={client} ptyBridge={bridge} />,
+      <ConversationTab sessionId="session-cwd" routerClient={client} ptyBridge={bridge} />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
     act(() => {
       window.dispatchEvent(new Event("mads:toggle-shell"));
     });
 
+    // The agent's real cwd — never the workspace *name* ("mads") as if it were a path.
     await waitFor(() =>
-      expect(bridge.spawn).toHaveBeenCalledWith(expect.objectContaining({ cwd: "mads" })),
+      expect(bridge.spawn).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: "/home/drew/repo/mads" }),
+      ),
     );
   });
 
-  it("falls back to the old default when the session has neither worktree_dir nor workspace", async () => {
+  it("spawns with no cwd (host picks the default) when the session exposes neither cwd nor worktree_dir", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getSession").mockResolvedValueOnce({
       id: "session-no-workspace",
@@ -894,93 +905,79 @@ describe("ConversationTab", () => {
   // on, so periodically re-fetching it mid-turn is what kills the
   // concatenated-blob bug: completed paragraphs/tool cards show up without
   // waiting for turn_end.
-  describe("live-turn transcript polling", () => {
-    it("polls the persisted transcript during a live turn, surfacing separate paragraphs and tool cards before turn_end", async () => {
+  describe("live-turn streaming", () => {
+    it("surfaces separate paragraphs and tool cards live before turn_end, with no mid-turn transcript poll", async () => {
       const client = new FakeRouterClient();
       const getTranscript = vi
         .spyOn(client, "getTranscript")
-        .mockResolvedValueOnce([{ role: "user", text: "investigate the bug" }])
-        .mockResolvedValueOnce([
-          { role: "user", text: "investigate the bug" },
-          { role: "agent", text: "first, let me check the logs" },
-          { role: "tool", tool: { id: "toolu_1", name: "Read", path: "a.go" } },
-        ])
-        .mockResolvedValueOnce([
-          { role: "user", text: "investigate the bug" },
-          { role: "agent", text: "first, let me check the logs" },
-          { role: "tool", tool: { id: "toolu_1", name: "Read", path: "a.go" } },
-          { role: "agent", text: "found it — a missing nil check" },
-        ]);
+        .mockResolvedValue([{ role: "user", text: "investigate the bug" }]);
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("investigate the bug")).toBeTruthy());
       const source = client.sessionEventSources.at(-1)!;
-      // Fake timers must be in place before the turn starts — the poll
-      // effect's setInterval is scheduled at that point, and swapping to
-      // fake timers afterward wouldn't retroactively convert it.
-      vi.useFakeTimers();
+      const callsAfterLoad = getTranscript.mock.calls.length;
+
+      // Built entirely from the live stream: text, then a tool, then more text.
       act(() => {
-        source.emit({ kind: "tool_use", tool: { name: "Read" } });
+        source.emit({ kind: "text", text: "first, let me check the logs" });
+        source.emit({ kind: "tool_use", tool: { id: "toolu_1", name: "Read", path: "a.go" } });
+        source.emit({ kind: "text", text: "found it — a missing nil check" });
       });
 
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1500);
-      });
-      // Structure has appeared BEFORE turn_end — no concatenated blob: the
-      // tool card renders, and the first agent paragraph is its own block.
+      // Structure appears BEFORE turn_end — two distinct paragraphs split by a
+      // tool card, straight off the stream.
       expect(screen.getByText("first, let me check the logs")).toBeTruthy();
-      expect(screen.getByText("Read")).toBeTruthy();
-      expect(document.querySelectorAll('[class*="prose"]').length).toBeGreaterThanOrEqual(2);
-
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1500);
-      });
       expect(screen.getByText("found it — a missing nil check")).toBeTruthy();
+      expect(screen.getByText("Read")).toBeTruthy();
       expect(document.querySelectorAll('[class*="prose"]').length).toBeGreaterThanOrEqual(3);
-      expect(getTranscript.mock.calls.length).toBe(3);
+      // The rubber-band source is gone: no transcript is polled mid-turn.
+      expect(getTranscript.mock.calls.length).toBe(callsAfterLoad);
     });
 
-    it("converges to the full structured turn via polling even if the event stream goes dead mid-turn, and refetches immediately on reconnect", async () => {
+    it("appends text tokens smoothly into one paragraph without resetting", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "getTranscript").mockResolvedValue([{ role: "user", text: "hi" }]);
+      render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+      await waitFor(() => expect(screen.getByText("hi")).toBeTruthy());
+      const source = client.sessionEventSources.at(-1)!;
+
+      // Token-by-token deltas accumulate into a single growing run — never
+      // cleared between chunks.
+      act(() => source.emit({ kind: "text", text: "Hel" }));
+      act(() => source.emit({ kind: "text", text: "lo, wor" }));
+      act(() => source.emit({ kind: "text", text: "ld" }));
+
+      expect(screen.getByText("Hello, world")).toBeTruthy();
+    });
+
+    it("recovers dropped frames by refetching the transcript on reconnect", async () => {
       const client = new FakeRouterClient();
       const getTranscript = vi
         .spyOn(client, "getTranscript")
         .mockResolvedValueOnce([{ role: "user", text: "ping" }])
-        .mockResolvedValueOnce([
+        .mockResolvedValue([
           { role: "user", text: "ping" },
-          { role: "agent", text: "still working on it" },
-        ])
-        .mockResolvedValueOnce([
-          { role: "user", text: "ping" },
-          { role: "agent", text: "still working on it" },
           { role: "agent", text: "done — here is the fix" },
         ]);
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
       await waitFor(() => expect(screen.getByText("ping")).toBeTruthy());
       const source = client.sessionEventSources.at(-1)!;
-      // Fake timers must be in place before the turn starts — see the
-      // comment on the previous test.
-      vi.useFakeTimers();
-      act(() => {
-        source.emit({ kind: "tool_use", tool: { name: "Read" } });
-      });
 
-      // The stream is now dead — no more text/tool_use/turn_end frames ever
-      // arrive on it, standing in for a throttled/dropped EventSource.
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(1500);
-      });
-      expect(screen.getByText("still working on it")).toBeTruthy();
-      expect(getTranscript.mock.calls.length).toBe(2);
+      // A turn is live (text streamed), then the stream drops — later frames
+      // are lost, standing in for a throttled/dropped EventSource.
+      act(() => source.emit({ kind: "text", text: "partial before the drop" }));
+      expect(screen.getByText("partial before the drop")).toBeTruthy();
+      const callsBefore = getTranscript.mock.calls.length;
 
-      // Reconnect: the browser's own EventSource fires "open" once the
-      // connection is restored — that must trigger an immediate refetch,
-      // not wait for the next scheduled poll.
+      // Reconnect: the browser's EventSource fires "open"; a live turn triggers
+      // an immediate transcript refetch to recover what the drop missed.
       await act(async () => {
         source.emitOpen();
         await Promise.resolve();
       });
-      expect(getTranscript.mock.calls.length).toBe(3);
+      expect(getTranscript.mock.calls.length).toBe(callsBefore + 1);
       expect(screen.getByText("done — here is the fix")).toBeTruthy();
     });
 

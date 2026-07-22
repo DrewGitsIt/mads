@@ -23,7 +23,7 @@ import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
-import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
+import { ChatRenderer, type StreamItem } from "./ChatRenderer/ChatRenderer";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
 import { TerminalComposer, formatBracketedPaste } from "./TerminalRenderer/TerminalComposer";
@@ -74,17 +74,24 @@ type TransportState =
 // fall out of the same code path with no separate case to maintain.
 type TurnState =
   | { phase: "idle" }
-  // turn started, no text chunk yet this turn; `blocked` is set when the
-  // provider reports the pending tool stalled awaiting permission rather
-  // than completing (a headless transport has no surface to answer the
-  // prompt — see providers/claudecode's README, "Defense in depth")
-  | { phase: "waiting"; tool?: ToolUse; blocked?: string }
-  | { phase: "streaming"; text: string }; // >=1 text chunk arrived this turn
+  // A turn is live. `items` is built directly from the stream — text tokens
+  // accumulate into the trailing text item, tool_use pushes a card, tool_result
+  // attaches to it. This is the SOLE source of truth for the in-flight turn,
+  // reconciled with the persisted transcript exactly once, on turn_end — there
+  // is no mid-turn transcript poll to make streamed text rubber-band. `blocked`
+  // is set when the provider reports a pending tool stalled awaiting permission
+  // (headless transport, no surface to answer — see providers/claudecode's
+  // README, "Defense in depth").
+  | { phase: "live"; items: StreamItem[]; blocked?: string };
 
-// Cadence for the mid-turn transcript refresh below — modest enough that a
-// live turn's tool cards/paragraphs settle in well under a second of visible
-// lag, without turning every turn into a request storm.
-const TURN_POLL_INTERVAL_MS = 1500;
+/** Append a text token to the live turn, extending the trailing text run (or starting one after a tool). */
+function appendText(items: StreamItem[], text: string): StreamItem[] {
+  const last = items[items.length - 1];
+  if (last && last.kind === "text") {
+    return [...items.slice(0, -1), { kind: "text", text: last.text + text }];
+  }
+  return [...items, { kind: "text", text }];
+}
 
 /**
  * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the header,
@@ -361,25 +368,44 @@ export function ConversationTab({
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "text") return;
       setTurn((t) => ({
-        phase: "streaming",
-        text: (t.phase === "streaming" ? t.text : "") + parsed.text,
+        phase: "live",
+        items: appendText(t.phase === "live" ? t.items : [], parsed.text),
+        blocked: t.phase === "live" ? t.blocked : undefined,
       }));
     };
     const onTool = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_use") return;
-      setTurn((t) => (t.phase === "streaming" ? t : { phase: "waiting", tool: parsed.tool }));
+      setTurn((t) => ({
+        phase: "live",
+        items: [...(t.phase === "live" ? t.items : []), { kind: "tool", tool: parsed.tool }],
+      }));
     };
     const onToolResult = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
-      if (parsed.kind !== "tool_result" || !parsed.is_error) return;
-      // Never a silent no-op: a failed/denied tool call surfaces here even
-      // if the process is otherwise stalled with no further wire activity.
-      setTurn((t) => ({
-        phase: "waiting",
-        tool: t.phase === "waiting" ? t.tool : undefined,
-        blocked: "blocked awaiting permission — switch to terminal or raise trust",
-      }));
+      if (parsed.kind !== "tool_result") return;
+      // Attach the result to its live tool card (matched by id) so the card
+      // shows its outcome as it arrives — never a silent no-op, and an error
+      // (e.g. a permission denial) also raises the blocked banner even if the
+      // process then stalls with no further wire activity.
+      setTurn((t) => {
+        if (t.phase !== "live") return t;
+        const items = t.items.map((it) =>
+          it.kind === "tool" && it.tool.id && it.tool.id === parsed.tool?.id
+            ? {
+                kind: "tool" as const,
+                tool: { ...it.tool, result: { text: parsed.text, is_error: parsed.is_error } },
+              }
+            : it,
+        );
+        return {
+          phase: "live",
+          items,
+          blocked: parsed.is_error
+            ? "blocked awaiting permission — switch to terminal or raise trust"
+            : t.blocked,
+        };
+      });
     };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -399,10 +425,8 @@ export function ConversationTab({
           // non-JSON turn_end frame — leave the meter on its last value
         }
       }
-      // Only the pre-first-chunk indicator clears immediately — a streamed
-      // bubble stays frozen-visible until the persisted refetch replaces it,
-      // so there's never a flash back to empty.
-      setTurn((t) => (t.phase === "streaming" ? t : { phase: "idle" }));
+      // Keep the live turn frozen-visible until the persisted refetch replaces
+      // it (one reconcile per turn), so there's never a flash back to empty.
       void refetchAfterTurn().finally(() => setTurn({ phase: "idle" }));
     };
     const onError = (ev: MessageEvent<string>) => {
@@ -433,36 +457,12 @@ export function ConversationTab({
     };
   }, [eventSource, refetchAfterTurn, upsertPermissionRequest]);
 
-  // While a turn is live, periodically re-fetch the persisted transcript —
-  // the provider's transcript file is written continuously during a turn
-  // (same premise as the pipeline drill-in's turns feed, DrillInFeed.tsx),
-  // so completed paragraphs and tool cards surface well before turn_end
-  // instead of piling up as one streamed blob. The streamed bubble is reset
-  // on every refresh since its contents are now part of a persisted block —
-  // it just shrinks to whatever text has arrived since. Stops the instant
-  // the turn goes idle or this tab unmounts; never runs while idle.
-  useEffect(() => {
-    if (turn.phase === "idle") return;
-    let cancelled = false;
-    const id = window.setInterval(() => {
-      void routerClient.getTranscript(sessionId).then((fresh) => {
-        if (cancelled) return;
-        setMessages(fresh);
-        setTurn((t) => (t.phase === "streaming" ? { phase: "streaming", text: "" } : t));
-      });
-    }, TURN_POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [turn.phase, routerClient, sessionId]);
-
   // Native EventSource auto-reconnects after a mid-stream drop (unlike the
   // dead-on-arrival case streamBroken handles above, which never retries on
   // its own) — but whatever frames were missed during the outage are gone
-  // for good, so a live turn needs a deliberate refetch the moment the
-  // connection is restored, rather than waiting up to
-  // TURN_POLL_INTERVAL_MS for the next scheduled poll.
+  // for good, so a live turn needs a deliberate transcript refetch the moment
+  // the connection is restored to recover what the stream dropped (turn_end
+  // then reconciles the live items away).
   useEffect(() => {
     if (!eventSource) return;
     const onOpen = () => {
@@ -576,6 +576,20 @@ export function ConversationTab({
   // Never shown mid-switch/terminal — terminal mode already has its own live
   // view via SessionTerminalBridge on the same stream.
   const liveTurn = activeMode === "chat" ? turn : { phase: "idle" as const };
+  const liveItems = liveTurn.phase === "live" ? liveTurn.items : [];
+  const lastLiveItem = liveItems[liveItems.length - 1];
+  // Trailing "working" affordance — only when the tail isn't itself visibly
+  // streaming: pre-first-output, a tool awaiting its result, or a stall.
+  const working: { tool?: ToolUse; blocked?: string } | false =
+    liveTurn.phase !== "live"
+      ? false
+      : liveTurn.blocked
+        ? { blocked: liveTurn.blocked }
+        : liveItems.length === 0
+          ? {}
+          : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
+            ? { tool: lastLiveItem.tool }
+            : false;
   // Never carry a stale open overlay across a switch back to chat and later
   // back to terminal — a bare `!showHistory` gate on `open` below would hide
   // it visually but leave the state true, popping it back open unprompted.
@@ -638,12 +652,8 @@ export function ConversationTab({
                   messages={messages}
                   links={links}
                   viewedSessionId={sessionId}
-                  streamingText={liveTurn.phase === "streaming" ? liveTurn.text : undefined}
-                  working={
-                    liveTurn.phase === "waiting"
-                      ? { tool: liveTurn.tool, blocked: liveTurn.blocked }
-                      : false
-                  }
+                  liveItems={liveItems}
+                  working={working}
                 />
               )}
               {livePermissionRequests.map((req) => (
@@ -713,7 +723,7 @@ export function ConversationTab({
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {
                   if (session.activity !== "active") setWaking(true);
-                  setTurn((t) => (t.phase === "idle" ? { phase: "waiting" } : t));
+                  setTurn((t) => (t.phase === "idle" ? { phase: "live", items: [] } : t));
                 }}
                 onSendError={(msg) => {
                   setWaking(false);
@@ -755,7 +765,7 @@ export function ConversationTab({
 
         {shellOpen &&
           (ptyBridge ? (
-            <ShellDock bridge={ptyBridge} cwd={session.worktree_dir ?? session.workspace} />
+            <ShellDock bridge={ptyBridge} cwd={session.cwd ?? session.worktree_dir} />
           ) : (
             <div className={styles.ptyUnavailable}>
               Shell requires the Electron shell.

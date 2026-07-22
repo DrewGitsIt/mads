@@ -256,12 +256,12 @@ func fastModelFixture(t *testing.T) *httptest.Server {
 }
 
 // setupWorkspace mirrors services/pipeline/engine/engine_test.go's
-// newHarness fixture: a Makefile whose build/test targets trivially pass,
+// newHarness fixture: a Makefile whose build/check targets trivially pass,
 // and a git repo configured so the default template's bare `git merge
 // --no-ff` merge stage succeeds without an explicit remote.
 func setupWorkspace(t *testing.T, dir string) {
 	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("build:\n\t@true\ntest:\n\t@true\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("build:\n\t@true\ntest:\n\t@true\ncheck:\n\t@true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	for _, args := range [][]string{
