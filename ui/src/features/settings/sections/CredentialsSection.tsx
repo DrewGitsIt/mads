@@ -1,12 +1,27 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Chip } from "../../../components/Chip/Chip";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import { useCredentials } from "../state/useCredentials";
 import type { UseConfig } from "../state/useConfig";
-import type { Profile } from "../../../router/types";
+import type { EnvMode, Profile } from "../../../router/types";
 import { isCredentialActive } from "../profileDiff";
 import styles from "./CredentialsSection.module.css";
+
+const ENV_MODES: EnvMode[] = ["inherit", "isolated"];
+
+/** Plain-language summary of what env_mode + counts mean for a spawned agent. */
+function envSummary(mode: EnvMode, credentialCount: number, passthrough: string[]): string {
+  const plural = credentialCount === 1 ? "" : "s";
+  if (mode === "isolated") {
+    let summary = `Isolated: base environment + ${credentialCount} credential${plural}`;
+    if (passthrough.length > 0) {
+      summary += ` + ${passthrough.length} passthrough (${passthrough.join(", ")})`;
+    }
+    return summary;
+  }
+  return `Inherited environment + ${credentialCount} mads credential${plural}`;
+}
 
 export interface CredentialsSectionProps {
   config: UseConfig;
@@ -36,6 +51,7 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
   const [selectedCandidates, setSelectedCandidates] = useState<string[]>([]);
   const [showEnvImport, setShowEnvImport] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [passthroughInput, setPassthroughInput] = useState("");
 
   const draft = config.draft;
 
@@ -81,6 +97,37 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
 
   const boundTo = pendingDelete ? boundProfiles(pendingDelete, profiles) : [];
 
+  const envMode: EnvMode = draft?.env_mode ?? "inherit";
+  const envPassthrough = draft?.env_passthrough ?? [];
+  const activeCredentialCount = credentials.names.filter((n) =>
+    isCredentialActive(n, draft?.credential_bindings),
+  ).length;
+
+  const chooseEnvMode = (mode: EnvMode) => {
+    if (!draft) return;
+    config.setDraft({ ...draft, env_mode: mode });
+  };
+
+  const addPassthrough = () => {
+    if (!draft) return;
+    const trimmed = passthroughInput.trim();
+    if (!trimmed || envPassthrough.includes(trimmed)) return;
+    config.setDraft({ ...draft, env_passthrough: [...envPassthrough, trimmed] });
+    setPassthroughInput("");
+  };
+
+  const removePassthrough = (varName: string) => {
+    if (!draft) return;
+    config.setDraft({ ...draft, env_passthrough: envPassthrough.filter((n) => n !== varName) });
+  };
+
+  const handlePassthroughKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addPassthrough();
+    }
+  };
+
   return (
     <div className={styles.panel}>
       <section>
@@ -106,6 +153,65 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
           })}
           {credentials.names.length === 0 && <li className={styles.empty}>No credentials stored.</li>}
         </ul>
+      </section>
+
+      <section>
+        <h3 className={styles.heading}>Environment</h3>
+        <div className={styles.options} role="group" aria-label="Environment mode">
+          {ENV_MODES.map((m) => (
+            <Chip
+              key={m}
+              tone={envMode === m ? "info" : "neutral"}
+              pressed={envMode === m}
+              onClick={() => chooseEnvMode(m)}
+            >
+              {m}
+            </Chip>
+          ))}
+        </div>
+        <p className={styles.summary}>{envSummary(envMode, activeCredentialCount, envPassthrough)}</p>
+        {envMode === "isolated" && (
+          <div className={styles.passthrough}>
+            <label className={styles.label} htmlFor="env-passthrough-input">
+              Passthrough env vars
+            </label>
+            <div className={styles.passthroughChips}>
+              {envPassthrough.map((n) => (
+                <Chip key={n} tone="neutral" className={styles.chip}>
+                  {n}
+                  <button
+                    type="button"
+                    className={styles.remove}
+                    aria-label={`Remove ${n}`}
+                    onClick={() => removePassthrough(n)}
+                  >
+                    ✕
+                  </button>
+                </Chip>
+              ))}
+              {envPassthrough.length === 0 && <span className={styles.empty}>No passthrough vars.</span>}
+            </div>
+            <div className={styles.passthroughAdd}>
+              <input
+                id="env-passthrough-input"
+                className={styles.input}
+                value={passthroughInput}
+                onChange={(e) => setPassthroughInput(e.target.value)}
+                onKeyDown={handlePassthroughKeyDown}
+                placeholder="AWS_PROFILE"
+              />
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={addPassthrough}
+                disabled={!passthroughInput.trim()}
+                aria-label="Add passthrough variable"
+              >
+                Add
+              </Button>
+            </div>
+          </div>
+        )}
       </section>
 
       <form className={styles.addForm} onSubmit={handleAdd}>

@@ -63,3 +63,16 @@ and PTY-only), and every lie class is caught (`TestMismatchesAreCaught`).
   path as starting, because that is how real harnesses work.
 - Rate limits surface as `*provider.RateLimitError` (inform-and-wait, §11.9);
   unsupported behaviors as `provider.ErrUnsupported`.
+- Trust vs env_mode: two independent axes governing a spawned agent, not one.
+  `StartOptions.Trust` (`provider.Trust`, MADS-UX §3.2) governs what an agent
+  can **DO** — which tools it may use, gated per session. `Config.EnvMode`
+  (`pkg/agentenv`) governs what an agent can **SEE** — the OS-level
+  environment variables visible to the spawned process. A full-trust agent
+  in isolated env_mode can use any tool but still can't read a shell secret
+  that isn't a bound mads credential or an explicit `env_passthrough` name;
+  conversely, an inherit-mode agent sees the whole parent environment
+  regardless of trust. Every claudecode/kirocli spawn path (`Start`,
+  `OneShot`, PTY) builds its environment through the shared
+  `agentenv.Build` helper — see that package's doc comment for the isolated
+  base allowlist and passthrough semantics — so inherit/isolated behavior is
+  defined exactly once and can't drift between spawn sites.

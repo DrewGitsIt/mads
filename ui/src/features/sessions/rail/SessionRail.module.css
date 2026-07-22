@@ -101,10 +101,31 @@
   line-height: 1.35;
 }
 
-.openCount {
+.workBreakdown {
   flex: none;
-  color: var(--warn-fg);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
   font: 500 var(--fs-chip) var(--sans);
+}
+
+.workBreakdown > span:not(:last-child)::after {
+  content: "\00b7";
+  margin-left: var(--space-1);
+  color: var(--text3);
+}
+
+.bucketRunning {
+  color: var(--ok-fg);
+}
+
+.bucketReady {
+  color: var(--text3);
+}
+
+.bucketBlocked {
+  color: var(--warn-fg);
+  font-weight: 600;
 }
 
 .actionCluster {

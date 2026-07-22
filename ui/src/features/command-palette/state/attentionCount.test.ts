@@ -19,18 +19,28 @@ describe("attentionCount", () => {
     expect(attentionCount(sessions, {})).toBe(0);
   });
 
-  it("counts inactive sessions with open tasks as needing attention", () => {
+  it("counts inactive sessions with blocked work as needing attention", () => {
     const sessions = [
       makeSession({ id: "s1", activity: "inactive" }),
       makeSession({ id: "s2", activity: "inactive" }),
       makeSession({ id: "s3", activity: "active" }),
     ];
-    expect(attentionCount(sessions, { s1: 2, s2: 0 })).toBe(1);
+    expect(
+      attentionCount(sessions, {
+        s1: { running: 0, ready: 0, blocked: 2 },
+        s2: { running: 0, ready: 0, blocked: 0 },
+      }),
+    ).toBe(1);
   });
 
-  it("never counts an active session, regardless of open task count", () => {
+  it("does not count an inactive session with only running/ready work as needing attention", () => {
+    const sessions = [makeSession({ id: "s1", activity: "inactive" })];
+    expect(attentionCount(sessions, { s1: { running: 3, ready: 2, blocked: 0 } })).toBe(0);
+  });
+
+  it("never counts an active session, regardless of blocked count", () => {
     const sessions = [makeSession({ id: "s1", activity: "active" })];
-    expect(attentionCount(sessions, { s1: 5 })).toBe(0);
+    expect(attentionCount(sessions, { s1: { running: 0, ready: 0, blocked: 5 } })).toBe(0);
   });
 
   it("treats a missing entry in openTaskCounts as zero", () => {

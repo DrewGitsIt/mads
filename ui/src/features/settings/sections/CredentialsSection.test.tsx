@@ -194,4 +194,104 @@ describe("CredentialsSection", () => {
       expect.objectContaining({ credential_bindings: ["OPENAI_API_KEY", "GITHUB_TOKEN"] }),
     );
   });
+
+  it("defaults to inherit mode with an accurate credential-count summary, and hides passthrough chips", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse(["OPENAI_API_KEY"]),
+      }),
+    );
+    const config = makeConfig({ draft: { ...fixtureConfig, credential_bindings: undefined } });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    await waitFor(() => expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy());
+
+    expect(screen.getByText(/inherited environment \+ 1 mads credential/i)).toBeTruthy();
+    expect(screen.queryByLabelText(/passthrough env vars/i)).toBeNull();
+  });
+
+  it("switching to isolated mode edits draft.env_mode and reveals the passthrough editor", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse(["OPENAI_API_KEY", "GITHUB_TOKEN"]),
+      }),
+    );
+    const config = makeConfig({
+      draft: { ...fixtureConfig, credential_bindings: ["OPENAI_API_KEY"], env_mode: "isolated", env_passthrough: ["AWS_PROFILE"] },
+    });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    await waitFor(() => expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy());
+
+    expect(
+      screen.getByText(/isolated: base environment \+ 1 credential \+ 1 passthrough \(AWS_PROFILE\)/i),
+    ).toBeTruthy();
+    expect(screen.getByText("AWS_PROFILE")).toBeTruthy();
+  });
+
+  it("clicking the isolated chip edits draft.env_mode", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse([]),
+      }),
+    );
+    const config = makeConfig({ draft: { ...fixtureConfig, credential_bindings: undefined } });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    await waitFor(() => expect(screen.getByText(/no credentials stored/i)).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "isolated" }));
+
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ env_mode: "isolated" }));
+  });
+
+  it("adds a passthrough name to draft.env_passthrough and clears the input", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse([]),
+      }),
+    );
+    const config = makeConfig({
+      draft: { ...fixtureConfig, credential_bindings: undefined, env_mode: "isolated", env_passthrough: [] },
+    });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    await waitFor(() => expect(screen.getByLabelText(/passthrough env vars/i)).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText(/passthrough env vars/i), { target: { value: "AWS_PROFILE" } });
+    fireEvent.click(screen.getByRole("button", { name: /add passthrough/i }));
+
+    expect(config.setDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ env_passthrough: ["AWS_PROFILE"] }),
+    );
+    expect((screen.getByLabelText(/passthrough env vars/i) as HTMLInputElement).value).toBe("");
+  });
+
+  it("removes a passthrough name via its chip's remove button", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse([]),
+      }),
+    );
+    const config = makeConfig({
+      draft: {
+        ...fixtureConfig,
+        credential_bindings: undefined,
+        env_mode: "isolated",
+        env_passthrough: ["AWS_PROFILE"],
+      },
+    });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    await waitFor(() => expect(screen.getByText("AWS_PROFILE")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: /remove aws_profile/i }));
+
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ env_passthrough: [] }));
+  });
 });
