@@ -75,6 +75,10 @@ type Config struct {
 	// blocked with a note naming the limit, in case the provider never
 	// recovers. Default 12 (~1h of pauses at the default backoff).
 	RateLimitMaxRetries int
+	// Clock supplies wall-clock time for lease-gap detection and stage
+	// timeouts (spec: suspend survival). nil defaults to the real clock;
+	// tests inject a fake to simulate a suspend gap without sleeping.
+	Clock Clock
 
 	// DisableSleepInhibit turns off the OS sleep/idle inhibitor normally
 	// held for the run's duration (logind + ScreenSaver where available —
@@ -143,6 +147,9 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	if cfg.RateLimitMaxRetries <= 0 {
 		cfg.RateLimitMaxRetries = 12
 	}
+	if cfg.Clock == nil {
+		cfg.Clock = realClock{}
+	}
 
 	lock := inhibit.Handle(inhibit.HandleFunc(func() {}))
 	if !cfg.DisableSleepInhibit {
@@ -174,7 +181,7 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		return nil, fmt.Errorf("dependency cycles block launch (spec §3.6): %v", cycles)
 	}
 
-	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}}
+	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}, clock: cfg.Clock}
 	if own, ok := procid.Current(procid.Default); ok {
 		e.identity = own
 	}
@@ -248,6 +255,7 @@ type engine struct {
 	conds    []*template.Cond
 	wt       *worktrees              // nil unless Isolated
 	identity contracts.LeaseIdentity // this engine's own process identity (reap-on-launch); zero value if unavailable
+	clock    Clock                   // wall-clock source; never nil after Run's defaulting
 
 	mu     sync.Mutex
 	loops  map[string]int // task|stage → loop-backs taken
@@ -410,39 +418,77 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	}
 	// Writes renew the lease meter, but an agent stage can be silent for
 	// longer than any TTL (dogfooding lost a lease to the reaper inside a
-	// ten-minute one-shot). Heartbeat at a third of the TTL; a renewal
-	// refused as a conflict means the lease is gone and the task is no
-	// longer ours — cancel its work and stop writing.
+	// ten-minute one-shot). Heartbeat at a third of the TTL, but never
+	// trust the ticker's own firing to mean "on schedule": a suspended
+	// machine pauses CLOCK_MONOTONIC (what the ticker runs on) for its
+	// entire downtime, so every tick compares wall-clock time (e.clock,
+	// CLOCK_REALTIME) against the last successful renewal first — a gap
+	// past the TTL means the lease is gone even before attempting a
+	// renewal. Lease loss of any kind — a proactive wall-clock gap, a
+	// renewal rejected outright, or a renewal that succeeded by silently
+	// re-taking a lease the reaper already freed while the task's own
+	// status moved out from under the engine — aborts the task's in-flight
+	// stage the same way: kill it, snapshot the worktree, release, and
+	// stop writing; the task is not this engine's to finish anymore.
 	ctx, cancelTask := context.WithCancel(ctx)
 	defer cancelTask()
 	var lost, terminal atomic.Bool
-	taskID := task.ID // the goroutine must not touch task: UpdateTask rewrites it
+	taskID, taskTitle := task.ID, task.Title // the goroutine must not touch task: UpdateTask rewrites it
+	var dirMu sync.Mutex
+	var snapshotDir string
+	setSnapshotDir := func(dir string) {
+		dirMu.Lock()
+		snapshotDir = dir
+		dirMu.Unlock()
+	}
+	getSnapshotDir := func() string {
+		dirMu.Lock()
+		defer dirMu.Unlock()
+		return snapshotDir
+	}
+	// aborted closes once the abort path's snapshot/backup/release work has
+	// fully finished — the main goroutine below waits on it at every
+	// lost.Load() exit so runTask (and Run, and its caller's summary) never
+	// returns while that work is still in flight.
+	aborted := make(chan struct{})
 	go func() {
+		abort := func() {
+			lost.Store(true)
+			cancelTask()
+			e.abortLeaseLoss(context.WithoutCancel(ctx), taskID, taskTitle, getSnapshotDir())
+			_ = e.cfg.Data.Release(context.WithoutCancel(ctx), taskID)
+			close(aborted)
+		}
 		tick := time.NewTicker(ttl / 3)
 		defer tick.Stop()
+		lastRenewal := e.clock.Now()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick.C:
+				if e.clock.Now().Sub(lastRenewal) > ttl {
+					abort()
+					return
+				}
 				err := e.cfg.Data.ClaimWithIdentity(ctx, taskID, ttl, e.identity)
 				if errors.Is(err, dataclient.ErrConflict) || errors.Is(err, dataclient.ErrNotFound) {
-					lost.Store(true)
-					cancelTask()
+					abort()
 					return
 				}
 				if err != nil {
 					continue // transient; the meter has slack for a retry
 				}
-				// A machine suspend stalls every heartbeat past the TTL:
-				// on wake the reaper has blocked the task, and the claim
-				// above silently re-took the freed lease. The engine is
-				// alive and still owns the work — put the status back.
-				// terminal guards the engine's own block/done writes.
+				lastRenewal = e.clock.Now()
+				// terminal guards the engine's own legitimate block/done
+				// writes: only a status that moved to something other than
+				// in_progress WITHOUT the engine doing it (the reaper, on a
+				// suspend gap) means the lease this renewal just re-took is
+				// not actually ours to keep working under.
 				if cur, err := e.cfg.Data.Task(ctx, taskID); err == nil &&
-					cur.Status == contracts.StatusBlocked && !terminal.Load() {
-					cur.Status = contracts.StatusInProgress
-					_ = e.cfg.Data.UpdateTask(ctx, &cur)
+					cur.Status != contracts.StatusInProgress && !terminal.Load() {
+					abort()
+					return
 				}
 			}
 		}
@@ -468,6 +514,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			return contracts.StatusBlocked
 		}
 		run.dir, run.worktree, run.branch = dir, dir, branch
+		setSnapshotDir(dir)
 	}
 	// A blocked task keeps its worktree for inspection; say where it is.
 	blockReason := func(reason string) string {
@@ -484,6 +531,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		st := stages[i]
 		if ctx.Err() != nil {
 			if lost.Load() {
+				<-aborted
 				return task.Status // lease gone; the task is not ours to write
 			}
 			terminal.Store(true)
@@ -519,6 +567,9 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 				wsRelease()
 			}
 			release()
+			if run.merged {
+				setSnapshotDir("") // work already landed on the primary; nothing left to snapshot
+			}
 			output = ""
 			if err != nil {
 				output = err.Error()
@@ -531,6 +582,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			}
 		}
 		if lost.Load() {
+			<-aborted
 			return task.Status // lease gone mid-stage; whoever holds it now owns the outcome
 		}
 		if err == nil {
@@ -589,6 +641,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	}
 
 	if lost.Load() {
+		<-aborted
 		return task.Status
 	}
 	if e.wt != nil && run.merged {
@@ -817,11 +870,42 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 	return nil
 }
 
+// stageTimeoutPoll is how often the wall-clock timeout watchdog checks
+// elapsed time against the stage timeout. This interval itself doesn't need
+// to be suspend-aware — the watchdog's own lateness firing doesn't matter,
+// it only needs to eventually notice a timeout has passed once real time
+// resumes — only the elapsed comparison it makes needs the wall clock.
+const stageTimeoutPoll = 200 * time.Millisecond
+
 // runStage executes one stage in dir; a nil error is a pass. output carries
 // the failure detail for feedback notes.
 func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (output string, err error) {
 	sctx, cancel := context.WithTimeout(ctx, e.cfg.StageTimeout)
 	defer cancel()
+	// context.WithTimeout runs on CLOCK_MONOTONIC, which pauses for a
+	// suspended machine's entire downtime: a stage 5 minutes into a
+	// 10-minute budget before a 13-hour suspend would otherwise wake with
+	// its deadline still 5 minutes away, handing the agent 13 extra hours
+	// it never should have had. Race a wall-clock watchdog alongside it —
+	// whichever notices the timeout first cancels sctx; the watchdog exits
+	// on its own once sctx is done either way, so a stage that finishes
+	// normally never waits on stageTimeoutPoll.
+	start := e.clock.Now()
+	watchdog := time.NewTicker(stageTimeoutPoll)
+	go func() {
+		defer watchdog.Stop()
+		for {
+			select {
+			case <-sctx.Done():
+				return
+			case <-watchdog.C:
+				if e.clock.Now().Sub(start) >= e.cfg.StageTimeout {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 	if st.Command != "" {
 		return e.runCommand(sctx, st.Command, dir)
 	}
@@ -939,6 +1023,31 @@ func (e *engine) block(ctx context.Context, task *contracts.Task, stage, reason 
 	}
 	e.note(ctx, task.ID, contracts.NoteBlocker, fmt.Sprintf("stage %s: %s", stage, reason))
 	e.setStatus(ctx, task, contracts.StatusBlocked)
+}
+
+// abortLeaseLoss is the lease-loss counterpart to block: the engine no
+// longer owns this task — the lease was lost outright, or a renewal
+// succeeded by silently re-taking a lease the reaper already freed while
+// the task's status moved out from under the engine (spec: suspend gap) —
+// so unlike block, it must never write task status; the reaper or the user
+// who re-readied the task owns the outcome now. It still snapshots
+// whatever the in-flight stage left dirty, exactly like block's
+// backup-on-block, so lease loss never silently drops uncommitted work:
+// commit any stray worktree changes, then force-update backup/<id> from
+// mads/<id>. dir is empty for non-isolated runs or once the task's branch
+// has already merged into the primary, in which case there is nothing left
+// to snapshot. Best-effort throughout — a snapshot that fails just means a
+// worse salvage story, never a stuck abort.
+func (e *engine) abortLeaseLoss(ctx context.Context, taskID, taskTitle, dir string) {
+	if e.wt == nil {
+		return
+	}
+	if dir != "" {
+		if err := e.wt.commitStray(ctx, dir, contracts.Task{ID: taskID, Title: taskTitle}); err != nil {
+			log.Printf("engine: lease lost, snapshot task %s: %v", taskID, err)
+		}
+	}
+	e.wt.backupBranch(ctx, taskID)
 }
 
 func (e *engine) note(ctx context.Context, taskID string, kind contracts.NoteType, content string) {
