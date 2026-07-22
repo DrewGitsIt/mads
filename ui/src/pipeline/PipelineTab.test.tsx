@@ -162,6 +162,68 @@ describe("PipelineTab", () => {
     await waitFor(() => expect(screen.getByText("executor")).toBeTruthy());
   });
 
+  it("shows the newer running run, not an older stuck one, with counts derived from its own board state", async () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    const coreLib = recordedTaskIds.coreLib;
+    client.runs = [
+      makeRun({ run_seq: 50, outcome: "running", started_at: "2026-07-19T23:07:00Z", tasks_done: 0, tasks_blocked: 0 }),
+      makeRun({ run_seq: 100, outcome: "running", started_at: "2026-07-21T09:37:00Z", tasks_done: 0, tasks_blocked: 0 }),
+    ];
+    client.runEvents = [
+      {
+        seq: 100,
+        timestamp: "2026-07-21T09:37:00Z",
+        type: "pipeline.started",
+        session_id: recordedSessionId,
+        actor: "pipeline",
+        payload: { template: "default-implementation" },
+      },
+      {
+        seq: 101,
+        timestamp: "2026-07-21T09:37:01Z",
+        type: "stage.started",
+        session_id: recordedSessionId,
+        task_id: coreLib,
+        actor: "pipeline",
+        payload: { stage: "architect" },
+      },
+    ];
+    render(<PipelineTab sessionId={recordedSessionId} pipelineClient={client} />);
+
+    // The board reflects the newer run (100)'s seeded prefix, not run 50's
+    // (which has none — a fold from run 50 would leave the board empty).
+    await waitFor(() => expect(screen.getByText("architect")).toBeTruthy());
+    // Header counts come from live.tasks while a run is genuinely running,
+    // not the session's stale run-50 record.
+    expect(screen.getByText(`${recordedTasks.length} tasks`)).toBeTruthy();
+  });
+
+  it("renders an event-silent expired run as interrupted, not running, and enables Start", async () => {
+    const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
+    client.runs = [
+      makeRun({
+        run_seq: 50,
+        outcome: "interrupted",
+        started_at: "2026-07-19T23:07:00Z",
+        ended_at: "2026-07-19T23:07:00Z",
+        tasks_done: 80,
+        tasks_blocked: 4,
+        tasks_skipped: 0,
+      }),
+    ];
+    render(<PipelineTab sessionId={recordedSessionId} pipelineClient={client} />);
+
+    await waitFor(() => expect(screen.getByText("interrupted")).toBeTruthy());
+    expect(screen.queryByText("running")).toBeNull();
+    // Counts describe the interrupted run, not the session's live task list.
+    expect(screen.getByText("84 tasks")).toBeTruthy();
+    expect(screen.getByText("80 done")).toBeTruthy();
+
+    const start = screen.getByRole("button", { name: "Start" }) as HTMLButtonElement;
+    expect(start.disabled).toBe(false);
+    expect(start.title).toBe("");
+  });
+
   it("resumes an in-flight run's board/picker/drill-in on mount, then keeps folding live events", async () => {
     const client = new FakePipelineClient(recordedTasks.map((t) => ({ ...t })));
     const coreLib = recordedTaskIds.coreLib;
