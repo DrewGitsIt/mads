@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
+import { useCredentials } from "../state/useCredentials";
 import type { UseConfig } from "../state/useConfig";
 import type { AgentSelectionMode, ModelTier, SynthesisMode } from "../../../router/types";
 import styles from "./PipelineSection.module.css";
@@ -27,6 +28,7 @@ export interface PipelineSectionProps {
 export function PipelineSection({ config }: PipelineSectionProps) {
   const { draft, fieldErrors, setDraft, save } = config;
   const [saving, setSaving] = useState(false);
+  const credentials = useCredentials();
 
   if (!draft) return null;
 
@@ -117,18 +119,63 @@ export function PipelineSection({ config }: PipelineSectionProps) {
         {fieldErrors.cost_alert_cents && <div className={styles.error}>{fieldErrors.cost_alert_cents}</div>}
       </div>
 
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="fast-model">
-          Fast model
-        </label>
-        <input
-          id="fast-model"
-          type="text"
-          className={styles.input}
-          value={draft.fast_model ?? ""}
-          onChange={(e) => setDraft({ ...draft, fast_model: e.target.value })}
-        />
-      </div>
+      <section className={styles.fastModel}>
+        <h3 className={styles.heading}>Fast Model</h3>
+        <div className={styles.row}>
+          <label className={styles.label} htmlFor="fast-model-base-url">
+            Endpoint
+          </label>
+          <input
+            id="fast-model-base-url"
+            type="text"
+            className={styles.input}
+            placeholder="https://api.example.com/v1"
+            value={draft.fast_model_base_url ?? ""}
+            onChange={(e) => setDraft({ ...draft, fast_model_base_url: e.target.value })}
+          />
+          {fieldErrors.fast_model_base_url && (
+            <div className={styles.error}>{fieldErrors.fast_model_base_url}</div>
+          )}
+        </div>
+
+        <div className={styles.row}>
+          <label className={styles.label} htmlFor="fast-model">
+            Model
+          </label>
+          <input
+            id="fast-model"
+            type="text"
+            className={styles.input}
+            value={draft.fast_model ?? ""}
+            onChange={(e) => setDraft({ ...draft, fast_model: e.target.value })}
+          />
+        </div>
+
+        <div className={styles.row}>
+          <label className={styles.label} htmlFor="fast-model-api-key-env">
+            Credential
+          </label>
+          <select
+            id="fast-model-api-key-env"
+            className={styles.input}
+            value={draft.fast_model_api_key_env ?? ""}
+            onChange={(e) => setDraft({ ...draft, fast_model_api_key_env: e.target.value })}
+          >
+            <option value="">None</option>
+            {credentials.names.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className={styles.hint}>
+          {draft.fast_model_base_url
+            ? "Fast Model is active."
+            : "Fast Model is dormant — auto-summaries, auto-titles, linked-session digests, retros, and NL agent generation will skip silently until an endpoint is configured."}
+        </div>
+      </section>
 
       <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
         Save

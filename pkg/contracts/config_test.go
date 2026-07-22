@@ -106,3 +106,22 @@ func TestConfigCredentialFieldsCarryNamesNotValues(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateConfigFastModelBaseURL(t *testing.T) {
+	base := DefaultConfig()
+
+	base.FastModelBaseURL = ""
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("empty fast_model_base_url should be valid (no endpoint configured): %+v", verr.Errors)
+	}
+
+	base.FastModelBaseURL = "https://api.example.com/v1"
+	if verr := ValidateConfig(&base); !verr.Empty() {
+		t.Fatalf("absolute https URL should be valid: %+v", verr.Errors)
+	}
+
+	base.FastModelBaseURL = "not-a-url"
+	if verr := ValidateConfig(&base); verr.Empty() {
+		t.Fatal("relative/non-absolute URL should be invalid")
+	}
+}

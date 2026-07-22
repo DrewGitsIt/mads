@@ -141,6 +141,14 @@ type Config struct {
 	DefaultTemplate  string       `json:"default_template,omitempty"`
 	FastModel        string       `json:"fast_model,omitempty"`
 
+	// FastModelBaseURL/FastModelAPIKeyEnv configure the Settings-driven Fast
+	// Model backend (spec §11/§13): an OpenAI-compatible endpoint the Router
+	// resolves per job spawn, falling back to the -fastmodel-* flags and then
+	// to unset (jobs skip silently). FastModelAPIKeyEnv is the credential
+	// NAME only — never a value — same pattern as CredentialBindings below.
+	FastModelBaseURL   string `json:"fast_model_base_url,omitempty"`
+	FastModelAPIKeyEnv string `json:"fast_model_api_key_env,omitempty"`
+
 	// Appearance (§3.7 General + §3.9 Theme & Palette panels).
 	DisplayMode   string    `json:"display_mode"`
 	Keybindings   string    `json:"keybindings"`
@@ -263,6 +271,12 @@ func ValidateConfig(c *Config) *ValidationError {
 		u, err := url.Parse(c.UpdateFeedURL)
 		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
 			v.Add("update_feed_url", "must be an absolute http(s) URL")
+		}
+	}
+	if c.FastModelBaseURL != "" {
+		u, err := url.Parse(c.FastModelBaseURL)
+		if err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+			v.Add("fast_model_base_url", "must be an absolute http(s) URL")
 		}
 	}
 

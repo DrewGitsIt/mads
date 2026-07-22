@@ -128,6 +128,58 @@ func TestGenerateRunDigestBlockedIncludesBlockerNote(t *testing.T) {
 	}
 }
 
+// A session with no links row at all — the common case, most sessions are
+// never linked — must be treated as "no links" (LinksForSession's documented
+// empty-result behavior for an unknown/linkless session), not a job.failed.
+// Regression coverage for a reported "load links: not found" job.failed
+// spam: LinksForSession already returns an empty slice with a nil error for
+// this case (services/data/internal/store/links.go's ForSession), so this
+// pins that behavior through the real job path rather than fixing anything.
+func TestGenerateRunDigestNoopForLinklessSession(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "linkless session"})
+	task := contracts.Task{SessionID: sess.ID, Title: "seed task", Source: "test", Status: contracts.StatusInProgress}
+	if err := data.CreateTask(context.Background(), &task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	task.Status = contracts.StatusDone
+	if err := data.UpdateTask(context.Background(), &task); err != nil {
+		t.Fatalf("UpdateTask: %v", err)
+	}
+
+	backend := &countingBackend{reply: "should never be produced"}
+	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
+
+	runner := job.New(data, fm, registryclient.New(""))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := runner.Spawn(ctx, job.RunDigestKind, sess.ID,
+		job.GenerateRunDigest(sess.ID, task.ID, string(contracts.StatusDone))); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+
+	verify := dataclient.New(base, "test-verify")
+	eventually(t, 5*time.Second, func() bool {
+		evs, err := verify.Events(ctx, 0, sess.ID, []string{"job.completed"})
+		return err == nil && len(evs) > 0
+	})
+
+	failedEvs, err := verify.Events(ctx, 0, sess.ID, []string{"job.failed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(failedEvs) != 0 {
+		t.Fatalf("job.failed events for a linkless session: %v, want none", failedEvs)
+	}
+	if backend.count() != 0 {
+		t.Fatalf("fast model called %d times, want 0 (no links at all)", backend.count())
+	}
+}
+
 // A session with an ordinary (non-implicit) read link over itself — which
 // can't happen via the user-facing route today, but the store guards it
 // regardless — must not receive run digests: only Implicit links qualify.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/retro"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 )
 
 const RetroKind = "retro"
@@ -64,6 +65,14 @@ func GenerateRetro(retroID string, req RetroRequest) Func {
 		if err != nil {
 			if ctx.Err() != nil {
 				return emitCancelled()
+			}
+			if fastmodel.IsSkippable(err) {
+				// No Fast Model backend configured (or a live one never
+				// produced usable output): retro.failed still tells the
+				// requester nothing was generated, but the job itself
+				// completes — no job.failed noise for an absent backend.
+				emit(ctx, contracts.RetroFailed, map[string]any{"retro_id": retroID, "error": "no Fast Model backend available"})
+				return nil
 			}
 			emit(ctx, contracts.RetroFailed, map[string]any{"retro_id": retroID, "error": err.Error()})
 			return fmt.Errorf("retro generation: %w", err)

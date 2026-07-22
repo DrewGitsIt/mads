@@ -81,7 +81,7 @@ func (g *Generator) Generate(ctx context.Context, sessionID string) (string, err
 
 	var d draft
 	if _, err := g.FastModel.Do(ctx, fastmodel.Job{System: generationSystem, Prompt: buildPrompt(tasks)}, &d); err != nil {
-		if errors.Is(err, fastmodel.ErrUnusableOutput) {
+		if fastmodel.IsSkippable(err) {
 			return "", nil
 		}
 		return "", fmt.Errorf("sessionsummary: generate: %w", err)

@@ -83,6 +83,9 @@ func GenerateRunDigest(sessionID, taskID, toStatus string) Func {
 			System: runDigestSystemPrompt, Prompt: prompt,
 		})
 		if err != nil {
+			if fastmodel.IsSkippable(err) {
+				return nil // no Fast Model backend configured: skip, not a failure
+			}
 			return fmt.Errorf("run digest: compress: %w", err)
 		}
 

@@ -28,6 +28,23 @@ import (
 // rather than a hard failure.
 var ErrUnusableOutput = errors.New("fastmodel: no usable structured output")
 
+// ErrBackendUnconfigured is the transport-level error a dynamically-resolved
+// backend (NewDynamic) returns when nothing selects an endpoint — no
+// Config base_url, no -fastmodel-* flag fallback. Distinct from
+// ErrUnusableOutput (a live backend's output was never usable): callers that
+// should treat a genuinely bad generation as a real failure (e.g. agent
+// generation, which delivers a user-facing draft) but an absent backend as
+// "nothing to do" check for this specifically, via IsSkippable or directly.
+var ErrBackendUnconfigured = errors.New("fastmodel: no backend configured")
+
+// IsSkippable reports whether err is the shape of Fast Model failure a
+// best-effort caller (session summaries/titles, digests, retros) should
+// treat as "nothing to report" rather than propagate — either no backend is
+// configured, or a configured one never produced usable output.
+func IsSkippable(err error) bool {
+	return errors.Is(err, ErrUnusableOutput) || errors.Is(err, ErrBackendUnconfigured)
+}
+
 // Job is one transient invocation.
 type Job struct {
 	System string

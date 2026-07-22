@@ -158,10 +158,55 @@ func TestProfileDriftIgnoresFieldsAbsentFromSnapshot(t *testing.T) {
 	}
 }
 
+// Fast Model config is snapshot-eligible (profiles-v2) and, per spec §13's
+// credential names-only pattern, FastModelAPIKeyEnv only ever carries the
+// env var NAME — Config has no field capable of holding a credential value,
+// so a snapshot capturing it captures nothing more sensitive than that name.
+func TestSnapshotConfigCapturesFastModelFieldsByNameOnly(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.FastModelBaseURL = "https://api.example.com/v1"
+	cfg.FastModelAPIKeyEnv = "OPENAI_API_KEY"
+	cfg.FastModel = "gpt-4o-mini"
+
+	snap, err := SnapshotConfig(&cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"fast_model_base_url", "fast_model_api_key_env", "fast_model"} {
+		if _, ok := snap[field]; !ok {
+			t.Fatalf("%s should be captured like any other setting", field)
+		}
+	}
+	var gotEnvName string
+	if err := json.Unmarshal(snap["fast_model_api_key_env"], &gotEnvName); err != nil {
+		t.Fatal(err)
+	}
+	if gotEnvName != "OPENAI_API_KEY" {
+		t.Fatalf("fast_model_api_key_env snapshot = %q, want the env var name unchanged", gotEnvName)
+	}
+
+	restored := DefaultConfig()
+	applied, err := ApplySnapshot(&restored, snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.FastModelAPIKeyEnv != "OPENAI_API_KEY" || applied.FastModelBaseURL != "https://api.example.com/v1" {
+		t.Fatalf("ApplySnapshot round-trip: %+v", applied)
+	}
+}
+
 func TestRestartRequiredFields(t *testing.T) {
 	for _, f := range []string{"concurrency_limit", "log_retention_days", "synthesis_debounce_ms"} {
 		if !RestartRequiredFields[f] {
 			t.Errorf("%s should be listed as restart-required", f)
+		}
+	}
+	// Fast Model fields resolve per job spawn (the Router re-reads Config on
+	// every Fast Model call), so a Settings change applies live — neither
+	// belongs in RestartRequiredFields.
+	for _, f := range []string{"fast_model_base_url", "fast_model_api_key_env", "fast_model"} {
+		if RestartRequiredFields[f] {
+			t.Errorf("%s applies live and should not be listed as restart-required", f)
 		}
 	}
 }

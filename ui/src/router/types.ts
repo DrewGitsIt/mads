@@ -609,6 +609,8 @@ export interface Config {
   default_trust: SessionTrust;
   default_template?: string;
   fast_model?: string;
+  fast_model_base_url?: string;
+  fast_model_api_key_env?: string;
 
   display_mode: string;
   keybindings: string;

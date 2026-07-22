@@ -11,6 +11,17 @@
   max-width: 320px;
 }
 
+.fastModel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.heading {
+  font: 600 var(--fs-body) var(--sans);
+  color: var(--text);
+}
+
 .label {
   font: 500 var(--fs-sm) var(--sans);
   color: var(--text2);
