@@ -398,6 +398,47 @@ export interface Note {
   timestamp: string;
 }
 
+// mirrors pkg/contracts/proposal.go ProposalType/ProposalStatus/Proposal —
+// synthesizer-authored suggestions awaiting review, rendered as cards in the
+// Context Rail (spec §4).
+export type ProposalType = "create_task" | "add_note" | "update_task";
+export type ProposalStatus = "proposed" | "approved" | "dismissed";
+
+export interface ProposedTask {
+  title: string;
+  description?: string;
+  acceptance_criteria?: string;
+  scope?: string;
+}
+
+export interface ProposedNote {
+  type: NoteType;
+  content: string;
+}
+
+// Non-empty fields replace the target task's on approval; empty fields leave it unchanged.
+export interface ProposedTaskUpdate {
+  title?: string;
+  description?: string;
+  acceptance_criteria?: string;
+  scope?: string;
+}
+
+export interface Proposal {
+  id: string;
+  session_id: string;
+  type: ProposalType;
+  status: ProposalStatus;
+  task_id?: string;
+  task?: ProposedTask;
+  note?: ProposedNote;
+  update?: ProposedTaskUpdate;
+  applied_task_id?: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // mirrors pkg/contracts/session.go FileChange (Context Rail Changes tab)
 // mirrors pkg/contracts/session.go FileChange. `change` is a plain string on
 // the Go struct (comment-documented as added|modified|deleted); narrowed to
@@ -604,6 +645,10 @@ export interface FeatureFlags {
 
 export interface Config {
   synthesis_mode: SynthesisMode;
+  // SynthesisAutoApprove applies every synthesis proposal immediately on
+  // creation instead of leaving it pending for review (power-user
+  // preference, spec §4). Applies live — not in RestartRequiredFields.
+  synthesis_auto_approve: boolean;
   agent_selection_mode: AgentSelectionMode;
   default_model_tier: ModelTier;
   cost_alert_cents?: number;

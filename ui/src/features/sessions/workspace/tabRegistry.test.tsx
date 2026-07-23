@@ -40,6 +40,24 @@ describe("WORKSPACE_TABS", () => {
     expect(screen.getByText("Terminal")).toBeTruthy();
   });
 
+  it("ConversationTabView also mounts the Context Rail, identical regardless of chat/terminal mode", async () => {
+    const routerClient = new FakeRouterClient();
+    const def = WORKSPACE_TABS.find((t) => t.id === "conversation")!;
+    render(
+      <def.component
+        sessionId={SESSION_ID}
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+      />,
+    );
+    // Rail chrome (tab switcher) renders regardless of display mode.
+    await waitFor(() => expect(screen.getByText("Changes")).toBeTruthy());
+    // A fixture synthesis proposal card renders inside the rail.
+    await waitFor(() =>
+      expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy(),
+    );
+  });
+
   it("TasksTabView renders the real TasksTab", async () => {
     const routerClient = new FakeRouterClient();
     const def = WORKSPACE_TABS.find((t) => t.id === "tasks")!;

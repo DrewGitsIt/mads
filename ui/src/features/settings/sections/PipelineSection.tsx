@@ -112,6 +112,20 @@ export function PipelineSection({ config }: PipelineSectionProps) {
       </div>
 
       <div className={styles.row}>
+        <label className={styles.toggleLabel}>
+          <input
+            type="checkbox"
+            checked={draft.synthesis_auto_approve}
+            onChange={(e) => setDraft({ ...draft, synthesis_auto_approve: e.target.checked })}
+          />
+          Auto-approve synthesis
+        </label>
+        <div className={styles.hint}>
+          Apply synthesized proposals immediately instead of leaving them pending for review.
+        </div>
+      </div>
+
+      <div className={styles.row}>
         <label className={styles.label} htmlFor="agent-selection-mode">
           Agent selection mode
         </label>

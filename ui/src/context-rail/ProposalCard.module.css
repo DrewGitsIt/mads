@@ -1,0 +1,65 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  animation: proposal-pulse 700ms ease-in-out 2;
+}
+
+@keyframes proposal-pulse {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+  50% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    animation: none;
+  }
+}
+
+.applied {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  opacity: 0.8;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.title {
+  font-size: var(--fs-body);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.description {
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  margin: 0;
+}
+
+.notice {
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  margin: 0;
+  font-style: italic;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.error {
+  color: var(--bad-fg);
+  font-size: var(--fs-sm);
+  margin: 0;
+}
