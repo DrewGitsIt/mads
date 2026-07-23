@@ -114,7 +114,7 @@ export function ConversationTab({
   const [turnBlocked, setTurnBlocked] = useState<string>();
   // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
   // the ordered items; enqueue/finish/reset are stable across renders.
-  const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed()));
+  const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed(routerClient)));
   const {
     enqueueText: pacerEnqueueText,
     enqueueTool: pacerEnqueueTool,

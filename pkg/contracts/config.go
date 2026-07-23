@@ -71,6 +71,31 @@ func (m ThemeMode) Valid() bool {
 	return false
 }
 
+// StreamSpeed caps how fast the conversation renders streamed text, decoupled
+// from the model's raw delivery rate (a "typewriter" smoothing). "off" renders
+// as tokens arrive; slow/medium/fast target ~10/20/30 tok/s.
+type StreamSpeed string
+
+const (
+	StreamSpeedOff    StreamSpeed = "off"
+	StreamSpeedSlow   StreamSpeed = "slow"
+	StreamSpeedMedium StreamSpeed = "medium"
+	StreamSpeedFast   StreamSpeed = "fast"
+)
+
+// StreamSpeeds is the full registry, for validation and enumeration.
+var StreamSpeeds = []StreamSpeed{StreamSpeedOff, StreamSpeedSlow, StreamSpeedMedium, StreamSpeedFast}
+
+// Valid reports whether s is a registered stream speed.
+func (s StreamSpeed) Valid() bool {
+	for _, v := range StreamSpeeds {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // EnvMode controls how much of the process environment a spawned agent CLI
 // sees (env_mode, distinct from trust — trust governs what an agent can DO,
 // env_mode governs what it can SEE). inherit is the pre-existing behavior:
@@ -160,11 +185,12 @@ type Config struct {
 	FastModelMode FastModelMode `json:"fast_model_mode,omitempty"`
 
 	// Appearance (§3.7 General + §3.9 Theme & Palette panels).
-	DisplayMode   string    `json:"display_mode"`
-	Keybindings   string    `json:"keybindings"`
-	Theme         ThemeMode `json:"theme"`
-	Palette       string    `json:"palette"`
-	EditorCommand string    `json:"editor_command,omitempty"`
+	DisplayMode   string      `json:"display_mode"`
+	Keybindings   string      `json:"keybindings"`
+	Theme         ThemeMode   `json:"theme"`
+	Palette       string      `json:"palette"`
+	StreamSpeed   StreamSpeed `json:"stream_speed"`
+	EditorCommand string      `json:"editor_command,omitempty"`
 
 	// Operational limits (§3.7 General panel, restart-required).
 	ConcurrencyLimit    int          `json:"concurrency_limit"`
@@ -228,6 +254,7 @@ func DefaultConfig() Config {
 		Keybindings: "default",
 		Theme:       ThemeDark,
 		Palette:     "clay",
+		StreamSpeed: StreamSpeedOff,
 
 		ConcurrencyLimit:    3,
 		SynthesisDebounceMS: 2000,
@@ -264,6 +291,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if !c.Theme.Valid() {
 		v.Add("theme", "must be one of: dark, light, system")
+	}
+	if c.StreamSpeed != "" && !c.StreamSpeed.Valid() {
+		v.Add("stream_speed", "must be one of: off, slow, medium, fast")
 	}
 	if c.Palette != "" && !ValidPalette(c.Palette) {
 		v.Add("palette", "must be one of: clay, space, glacier")

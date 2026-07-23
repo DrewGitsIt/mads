@@ -7,7 +7,6 @@ import type { Model, Session } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
 import { ContextMeter } from "./ContextMeter";
-import { StreamSpeedControl } from "../streaming/StreamSpeedControl";
 import styles from "./ConversationHeader.module.css";
 
 export interface ConversationHeaderProps {
@@ -46,7 +45,6 @@ export function ConversationHeader({
     <div className={styles.header}>
       <div className={styles.row}>
         <ContextMeter usedTokens={usedTokens} contextWindow={contextWindow} />
-        <StreamSpeedControl />
 
         {session.agent && (
           <PillPopover
