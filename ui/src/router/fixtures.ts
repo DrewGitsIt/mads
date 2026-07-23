@@ -1330,6 +1330,7 @@ export const fixtureConfig: Config = {
   keybindings: "default",
   theme: "dark",
   palette: "clay",
+  stream_speed: "off",
   concurrency_limit: 3,
   synthesis_debounce_ms: 2000,
   log_retention_days: 30,

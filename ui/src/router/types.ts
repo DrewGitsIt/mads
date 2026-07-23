@@ -590,6 +590,8 @@ export type SynthesisMode = "off" | "light" | "full";
 export type AgentSelectionMode = "light" | "full";
 export type ModelTier = "cheapest" | "balanced" | "best";
 export type ThemeMode = "dark" | "light" | "system";
+// mirrors contracts.StreamSpeed — caps the conversation's render rate.
+export type StreamSpeed = "off" | "slow" | "medium" | "fast";
 export type PaletteName = "clay" | "space" | "glacier";
 // FastModelMode mirrors pkg/contracts/session.go: provider uses the default
 // provider's hermetic Completer capability (zero-config), endpoint uses the
@@ -621,6 +623,7 @@ export interface Config {
   keybindings: string;
   theme: ThemeMode;
   palette: PaletteName;
+  stream_speed: StreamSpeed;
   editor_command?: string;
 
   concurrency_limit: number;

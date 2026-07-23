@@ -1,17 +1,14 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
+import type { RouterClient } from "../../router/client";
+import { subscribeToEvents } from "../../router/events";
+import type { StreamSpeed } from "../../router/types";
 
 /**
  * How fast the conversation renders streamed text, decoupled from the model's
- * delivery rate. "off" is passthrough (render as it arrives — today's default);
- * the others cap the reveal rate for a steady typewriter feel.
- *
- * Stored client-side (this is a pure render preference). It's intentionally a
- * localStorage setting for now — promoting it to a synced mads config field is
- * a follow-up once a Settings surface exists.
+ * delivery rate. "off" is passthrough (render as it arrives); the others cap
+ * the reveal rate for a steady typewriter feel. The value lives in mads config
+ * (Settings → Appearance), same as theme/palette.
  */
-export type StreamSpeed = "off" | "slow" | "medium" | "fast";
-
-export const STREAM_SPEEDS: StreamSpeed[] = ["off", "slow", "medium", "fast"];
 
 // tokens/s targets → characters/s (~4 chars/token); null = passthrough.
 const CHARS_PER_SEC: Record<StreamSpeed, number | null> = {
@@ -25,49 +22,27 @@ export function streamSpeedToCharsPerSec(speed: StreamSpeed): number | null {
   return CHARS_PER_SEC[speed];
 }
 
-const KEY = "mads:stream-speed";
-
-function read(): StreamSpeed {
-  try {
-    const v = localStorage.getItem(KEY);
-    if (v && (STREAM_SPEEDS as string[]).includes(v)) return v as StreamSpeed;
-  } catch {
-    // no localStorage (SSR/tests) — fall through to the default
-  }
-  return "off";
-}
-
-// Module-level store so every mounted consumer stays in sync when the setting
-// changes (and across tabs via the storage event), without a provider.
-const listeners = new Set<() => void>();
-let current: StreamSpeed = read();
-
-export function setStreamSpeed(speed: StreamSpeed): void {
-  current = speed;
-  try {
-    localStorage.setItem(KEY, speed);
-  } catch {
-    // ignore — the in-memory value still drives this session
-  }
-  listeners.forEach((l) => l());
-}
-
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
-    if (e.key === KEY) {
-      current = read();
-      listeners.forEach((l) => l());
-    }
-  });
-}
-
-export function useStreamSpeed(): StreamSpeed {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => current,
-    () => "off",
-  );
+/**
+ * Reads the render-pacing speed from config, live — refetches on config.updated
+ * so changing it in Settings takes effect in an open conversation immediately.
+ */
+export function useStreamSpeed(client: RouterClient): StreamSpeed {
+  const [speed, setSpeed] = useState<StreamSpeed>("off");
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      client
+        .getConfig()
+        .then((c) => {
+          if (!cancelled) setSpeed(c.stream_speed ?? "off");
+        })
+        .catch(() => {});
+    void load();
+    const unsubscribe = subscribeToEvents({ types: ["config.updated"] }, () => void load());
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [client]);
+  return speed;
 }
