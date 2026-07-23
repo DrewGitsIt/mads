@@ -112,6 +112,9 @@ var routeManifest = []struct {
 	{"DELETE", "/sessions/abc", "DELETE /sessions/{id}"},
 	{"GET", "/sessions/abc/permission-requests", "GET /sessions/{id}/permission-requests"},
 	{"POST", "/sessions/abc/permission-requests/def/resolve", "POST /sessions/{id}/permission-requests/{reqId}/resolve"},
+	{"GET", "/proposals", "GET /proposals"},
+	{"POST", "/proposals/abc/approve", "POST /proposals/{id}/approve"},
+	{"POST", "/proposals/abc/dismiss", "POST /proposals/{id}/dismiss"},
 }
 
 // knownGapRoutes are RouterClient (ui/src/router/client.ts) call sites that

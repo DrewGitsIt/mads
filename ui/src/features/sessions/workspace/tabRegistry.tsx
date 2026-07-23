@@ -1,11 +1,14 @@
 import type { ComponentType } from "react";
 import { ConversationTab } from "../../../conversation/ConversationTab";
 import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
+import { ContextRail } from "../../../context-rail/ContextRail";
 import { FilesTab } from "../../../files/FilesTab";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import { PipelineTab } from "../../../pipeline/PipelineTab";
 import type { RouterClient } from "../../../router/client";
 import { TasksTab } from "../../../tasks/TasksTab";
+import { useTaskStore } from "../../../tasks/useTaskStore";
+import styles from "./ConversationTabView.module.css";
 
 export type WorkspaceTabId = "conversation" | "tasks" | "files" | "pipeline";
 
@@ -27,6 +30,12 @@ export interface WorkspaceTabDef {
   component: ComponentType<WorkspaceTabContext>;
 }
 
+// Context Rail is mounted here, as a sibling to ConversationTab's chat/
+// terminal content, so it stays constant across the internal display-mode
+// toggle (spec: "identical in chat and terminal") rather than living inside
+// ConversationTab itself. Owns its own useTaskStore instance — same
+// duplicate-fetch tradeoff TasksDemo.tsx documents, acceptable until a
+// container-level store is worth lifting.
 function ConversationTabView({
   sessionId,
   routerClient,
@@ -36,16 +45,27 @@ function ConversationTabView({
   pendingFirstMessage,
   onPendingFirstMessageHandled,
 }: WorkspaceTabContext) {
+  const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   return (
-    <ConversationTab
-      sessionId={sessionId}
-      routerClient={routerClient}
-      ptyBridge={ptyBridge}
-      provisioning={provisioning}
-      onProvisioningDone={onProvisioningDone}
-      pendingFirstMessage={pendingFirstMessage}
-      onPendingFirstMessageHandled={onPendingFirstMessageHandled}
-    />
+    <div className={styles.row}>
+      <div className={styles.main}>
+        <ConversationTab
+          sessionId={sessionId}
+          routerClient={routerClient}
+          ptyBridge={ptyBridge}
+          provisioning={provisioning}
+          onProvisioningDone={onProvisioningDone}
+          pendingFirstMessage={pendingFirstMessage}
+          onPendingFirstMessageHandled={onPendingFirstMessageHandled}
+        />
+      </div>
+      <ContextRail
+        sessionId={sessionId}
+        routerClient={routerClient}
+        tasks={tasks}
+        tasksById={tasksById}
+      />
+    </div>
   );
 }
 

@@ -26,6 +26,7 @@ import type {
   PipelineRun,
   PreflightCheck,
   Profile,
+  Proposal,
   Provider,
   ProviderInfo,
   RegistryEntry,
@@ -120,6 +121,11 @@ export interface RouterClient {
   confirmNote(taskId: string, noteId: number): Promise<void>;
   discardNote(taskId: string, noteId: number): Promise<void>;
   getSessionChanges(sessionId: string): Promise<FileChange[]>;
+
+  // --- Synthesis proposals (spec §4) ---
+  listProposals(sessionId: string): Promise<Proposal[]>;
+  approveProposal(id: string): Promise<Proposal>;
+  dismissProposal(id: string): Promise<Proposal>;
 
   // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
   // for which of these are real Router routes today vs.
@@ -572,6 +578,19 @@ export class FetchRouterClient implements RouterClient {
 
   async getSessionChanges(sessionId: string): Promise<FileChange[]> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/files`);
+  }
+
+  // --- Synthesis proposals (spec §4) ---
+  async listProposals(sessionId: string): Promise<Proposal[]> {
+    return routerGet(this.baseUrl, "/proposals", { session_id: sessionId });
+  }
+
+  async approveProposal(id: string): Promise<Proposal> {
+    return routerPost(this.baseUrl, `/proposals/${id}/approve`);
+  }
+
+  async dismissProposal(id: string): Promise<Proposal> {
+    return routerPost(this.baseUrl, `/proposals/${id}/dismiss`);
   }
 
   // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3

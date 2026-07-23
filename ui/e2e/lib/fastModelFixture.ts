@@ -16,11 +16,32 @@ const DPA_CONTENT = JSON.stringify({
 export const DIGEST_FIXTURE_TEXT =
   "Fixture digest: the agent completed the requested change and updated the tests accordingly.";
 
+// Sentinel task title asserted on by synthesis-proposals.spec.ts's proposal-card check.
+export const SYNTHESIS_FIXTURE_TASK_TITLE = "Fixture-proposed follow-up: add a regression test";
+
+const SYNTHESIS_CONTENT = JSON.stringify({
+  create_tasks: [
+    {
+      title: SYNTHESIS_FIXTURE_TASK_TITLE,
+      description: "Scripted by the e2e Fast Model fixture.",
+    },
+  ],
+});
+
 function bodyFor(requestText: string): string {
-  // digest.go's digestSystemPrompt is the only Fast Model consumer whose
-  // system prompt mentions "digest" — every other job (retros) wants the
-  // DPA-shaped JSON this fixture originally returned.
-  const content = requestText.includes("digest") ? DIGEST_FIXTURE_TEXT : DPA_CONTENT;
+  // synthesis_prompt.go's synthesisSystemPrompt is the only Fast Model
+  // consumer whose system prompt mentions "background task synthesizer";
+  // digest.go's digestSystemPrompt is the only one mentioning "digest" —
+  // every other job (retros) wants the DPA-shaped JSON this fixture
+  // originally returned.
+  let content: string;
+  if (requestText.includes("background task synthesizer")) {
+    content = SYNTHESIS_CONTENT;
+  } else if (requestText.includes("digest")) {
+    content = DIGEST_FIXTURE_TEXT;
+  } else {
+    content = DPA_CONTENT;
+  }
   return JSON.stringify({
     model: "e2esmoke-fixture",
     choices: [{ message: { content } }],

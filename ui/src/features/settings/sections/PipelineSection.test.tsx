@@ -58,6 +58,16 @@ describe("PipelineSection", () => {
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ synthesis_mode: "full" }));
   });
 
+  it("toggling auto-approve synthesis updates the draft", () => {
+    stubCredentials([]);
+    const config = makeConfig();
+    render(<PipelineSection config={config} />);
+    fireEvent.click(screen.getByLabelText(/auto-approve synthesis/i));
+    expect(config.setDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ synthesis_auto_approve: true }),
+    );
+  });
+
   it("renders every field error from one submit", () => {
     stubCredentials([]);
     const config = makeConfig({

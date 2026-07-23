@@ -5,6 +5,8 @@ import { Chip } from "../components/Chip/Chip";
 import { Button } from "../components/Button/Button";
 import { RailTaskList } from "./RailTaskList";
 import { RailChangesList } from "./RailChangesList";
+import { RailProposalList } from "./RailProposalList";
+import { useProposalStore } from "./useProposalStore";
 import styles from "./ContextRail.module.css";
 
 export interface ContextRailProps {
@@ -45,6 +47,7 @@ export function ContextRail({
   const [tab, setTab] = useState<RailTab>("tasks");
   const [collapsed, setCollapsed] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | undefined>(undefined);
+  const proposals = useProposalStore(routerClient, sessionId);
 
   if (collapsed) {
     return (
@@ -89,6 +92,8 @@ export function ContextRail({
           ▸
         </Button>
       </div>
+
+      <RailProposalList proposals={proposals} tasksById={tasksById} routerClient={routerClient} />
 
       {tab === "tasks" && (
         <>

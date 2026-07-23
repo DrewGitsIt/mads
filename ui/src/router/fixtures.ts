@@ -28,6 +28,7 @@ import type {
   PipelineRun,
   PreflightCheck,
   Profile,
+  Proposal,
   Provider,
   ProviderInfo,
   RegistryEntry,
@@ -454,6 +455,46 @@ export const fixtureTasks: Task[] = [
   },
 ];
 
+// Synthesis proposal cards (Context Rail) — one of each ProposalType, all
+// "proposed" (spec §4's default pending-review state).
+export const fixtureProposals: Proposal[] = [
+  {
+    id: "prop_new_task",
+    session_id: "session-active",
+    type: "create_task",
+    status: "proposed",
+    task: {
+      title: "Add a metrics counter for retry exhaustion",
+      description: "The ingest worker gives up silently after max retries — nothing pages on it.",
+    },
+    source: "synthesizer",
+    created_at: "2026-07-14T12:00:00Z",
+    updated_at: "2026-07-14T12:00:00Z",
+  },
+  {
+    id: "prop_note",
+    session_id: "session-active",
+    type: "add_note",
+    status: "proposed",
+    task_id: "tsk_in_progress",
+    note: { type: "risk", content: "The retry race repro relies on a pinned test clock — flaky under -race." },
+    source: "synthesizer",
+    created_at: "2026-07-14T12:01:00Z",
+    updated_at: "2026-07-14T12:01:00Z",
+  },
+  {
+    id: "prop_update",
+    session_id: "session-active",
+    type: "update_task",
+    status: "proposed",
+    task_id: "tsk_ready",
+    update: { acceptance_criteria: "Backoff caps at 30s; jitter is +/-20%; covered by a race-detector test." },
+    source: "synthesizer",
+    created_at: "2026-07-14T12:02:00Z",
+    updated_at: "2026-07-14T12:02:00Z",
+  },
+];
+
 // Tasks tab / Context Rail change rows (W6.4) — folded into the record below.
 const taskTabFileChanges: FileChange[] = [
   {
@@ -706,6 +747,7 @@ export class FakeRouterClient implements RouterClient {
   private sessions: Map<string, Session>;
   private tasks: Map<string, Task>;
   private links: Map<string, Link>;
+  private proposals: Map<string, Proposal>;
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
   private nextLinkSeq = 1000;
@@ -731,12 +773,14 @@ export class FakeRouterClient implements RouterClient {
     },
     private readonly sessionDefaults: SessionDefaults = fixtureSessionDefaults,
     links: Link[] = fixtureLinks,
+    proposals: Proposal[] = fixtureProposals,
   ) {
     this.sessions = new Map(
       Object.entries(sessions).map(([id, s]) => [id, structuredClone(s)]),
     );
     this.tasks = new Map(tasks.map((t) => [t.id, structuredClone(t)]));
     this.links = new Map(links.map((l) => [l.id, structuredClone(l)]));
+    this.proposals = new Map(proposals.map((p) => [p.id, structuredClone(p)]));
   }
 
   async getSession(id: string): Promise<Session> {
@@ -958,6 +1002,56 @@ export class FakeRouterClient implements RouterClient {
     return (this.fileChanges[sessionId] ?? []).filter(
       (c) => c.session_id === sessionId,
     );
+  }
+
+  // --- Synthesis proposals (spec §4) ---
+  async listProposals(sessionId: string): Promise<Proposal[]> {
+    return [...this.proposals.values()]
+      .filter((p) => p.session_id === sessionId)
+      .map((p) => structuredClone(p));
+  }
+
+  async approveProposal(id: string): Promise<Proposal> {
+    const p = this.proposals.get(id);
+    if (!p) throw new Error(`fixture proposal not found: ${id}`);
+    const now = new Date().toISOString();
+    if (p.type === "create_task" && p.task) {
+      const created = await this.createTask({
+        session_id: p.session_id,
+        title: p.task.title,
+        description: p.task.description,
+        acceptance_criteria: p.task.acceptance_criteria,
+        scope: p.task.scope,
+        source: "synthesizer",
+      });
+      p.applied_task_id = created.id;
+    } else if (p.type === "add_note" && p.note && p.task_id) {
+      await this.addNote(p.task_id, p.note);
+    } else if (p.type === "update_task" && p.update && p.task_id) {
+      const t = this.tasks.get(p.task_id);
+      if (t) {
+        Object.assign(t, {
+          ...(p.update.title && { title: p.update.title }),
+          ...(p.update.description && { description: p.update.description }),
+          ...(p.update.acceptance_criteria && {
+            acceptance_criteria: p.update.acceptance_criteria,
+          }),
+          ...(p.update.scope && { scope: p.update.scope }),
+          updated_at: now,
+        });
+      }
+    }
+    p.status = "approved";
+    p.updated_at = now;
+    return structuredClone(p);
+  }
+
+  async dismissProposal(id: string): Promise<Proposal> {
+    const p = this.proposals.get(id);
+    if (!p) throw new Error(`fixture proposal not found: ${id}`);
+    p.status = "dismissed";
+    p.updated_at = new Date().toISOString();
+    return structuredClone(p);
   }
 
   async getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]> {
@@ -1323,6 +1417,7 @@ export class FakeRouterClient implements RouterClient {
 // Settings & first-run (W6.10) fixtures.
 export const fixtureConfig: Config = {
   synthesis_mode: "light",
+  synthesis_auto_approve: false,
   agent_selection_mode: "full",
   default_model_tier: "balanced",
   default_trust: "limited",
