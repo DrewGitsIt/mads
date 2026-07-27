@@ -106,6 +106,7 @@ type Capability struct {
 	Config            CapabilityConfig `json:"config"`
 	CredentialEnvVars []string         `json:"credential_env_vars,omitempty"`
 	Health            CapabilityHealth `json:"health,omitempty"`
+	System            bool             `json:"system,omitempty"` // ships with mads; editable but not deletable (spec §12)
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 }

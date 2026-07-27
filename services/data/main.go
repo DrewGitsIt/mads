@@ -49,6 +49,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("data: %v", err)
 	}
+	if err := store.SeedShippedCapabilities(context.Background(), store.NewCapabilities(store.NewLog(db))); err != nil {
+		log.Fatalf("data: seed shipped capabilities: %v", err)
+	}
 
 	// The meter reader (spec §15): collect expired leases so tasks whose
 	// holder died silently land blocked-with-event instead of stuck.

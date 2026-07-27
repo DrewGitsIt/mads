@@ -88,8 +88,14 @@ func TestCapabilityCRUDAndDiagnoseOverRouter(t *testing.T) {
 		t.Fatal(err)
 	}
 	list := decodeJSON[[]contracts.Capability](t, resp)
-	if len(list) != 1 {
-		t.Fatalf("list: len = %d, want 1", len(list))
+	found := false
+	for _, c := range list {
+		if c.ID == created.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("list: %+v does not contain created capability %q", list, created.ID)
 	}
 
 	resp, err = http.Get(srv.URL + "/capabilities/" + created.ID)

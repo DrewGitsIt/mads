@@ -350,6 +350,46 @@ func TestSetupCapabilitiesHealthChangedFiresOnTransition(t *testing.T) {
 	}
 }
 
+// TestSetupCapabilitiesForShippedSystemAgentsSucceeds proves the shipped
+// playwright-ui-testing skill (assets/skills/, seeded into the capability
+// registry by store.SeedShippedCapabilities — see datatest.Start) is
+// actually reachable from a real session for the two system agents that
+// declare it: no failing capability lookup, and the skill genuinely
+// installs and reports healthy, not just "not found and silently skipped"
+// (which would look identical from setupCapabilities' nil return alone).
+func TestSetupCapabilitiesForShippedSystemAgentsSucceeds(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+
+	credPath := filepath.Join(t.TempDir(), "credentials.json")
+	cs, err := credstore.Open(credPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, agentName := range []string{"executor", "verifier"} {
+		sess := newCapabilityTestSession(t, base, agentName)
+		r := newTestRunner(sess.ID, dataclient.New(base, sess.ID), cs, t.TempDir())
+		cwd := t.TempDir()
+
+		r.setupCapabilities(ctx, sess, cwd)
+
+		c, err := data.Capability(ctx, "playwright-ui-testing")
+		if err != nil {
+			t.Fatalf("%s: playwright-ui-testing capability lookup failed: %v", agentName, err)
+		}
+		if !c.Health.Healthy {
+			t.Errorf("%s: playwright-ui-testing reported unhealthy: %+v", agentName, c.Health)
+		}
+
+		link := filepath.Join(cwd, ".claude", "skills", "playwright-ui-testing")
+		if _, err := os.Stat(filepath.Join(link, "SKILL.md")); err != nil {
+			t.Errorf("%s: skill did not install into session cwd: %v", agentName, err)
+		}
+	}
+}
+
 // newCapabilityTestSessionInWorkspace is like newCapabilityTestSession but
 // also sets Workspace, for the cross-workspace isolation test.
 func newCapabilityTestSessionInWorkspace(t *testing.T, base, agentName, workspace string) contracts.Session {
