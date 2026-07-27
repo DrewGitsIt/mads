@@ -79,3 +79,16 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+.agentIntents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-soft);
+}
+
+.intentNote {
+  padding: var(--space-1) var(--space-2);
+}
