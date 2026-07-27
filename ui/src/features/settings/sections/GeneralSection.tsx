@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
+import { useProviderMatrix } from "../state/useProviderMatrix";
 import type { UseConfig } from "../state/useConfig";
 import styles from "./GeneralSection.module.css";
 
@@ -9,10 +10,25 @@ export interface GeneralSectionProps {
   config: UseConfig;
 }
 
+// Enum-valued config fields. The Go contract types these as plain strings with
+// no Valid() (pkg/contracts/config.go), so the option sets live here — the UI
+// is the source of truth for the choices, and DEFAULT_CONFIG's values must be
+// members. Density affects list/card spacing; keybindings selects the editor
+// keymap. An option list including the current value (see selectWith) keeps an
+// unrecognized persisted value visible instead of silently rewriting it.
+const DISPLAY_MODES = ["comfortable", "compact"];
+const KEYBINDINGS = ["default", "vim", "emacs"];
+
+/** Option list that always contains `current`, even if it's not a known choice. */
+function selectWith(known: string[], current: string): string[] {
+  return current && !known.includes(current) ? [current, ...known] : known;
+}
+
 /** Data dir (§0 non-goal — see HANDOFF; not a Config wire field), concurrency limit, log retention, synthesis debounce, editor command, display mode, keybindings, plus the "run preflight" affordance shared with the wizard's PreflightStep. */
 export function GeneralSection({ config }: GeneralSectionProps) {
   const { draft, fieldErrors, dirtyRestartFields, setDraft, save } = config;
   const preflight = usePreflight();
+  const { providers } = useProviderMatrix();
   const [saving, setSaving] = useState(false);
 
   if (!draft) return null;
@@ -88,25 +104,35 @@ export function GeneralSection({ config }: GeneralSectionProps) {
         <label className={styles.label} htmlFor="display-mode">
           Display mode
         </label>
-        <input
+        <select
           id="display-mode"
-          type="text"
           className={styles.input}
           value={draft.display_mode}
           onChange={(e) => setDraft({ ...draft, display_mode: e.target.value })}
-        />
+        >
+          {selectWith(DISPLAY_MODES, draft.display_mode).map((m) => (
+            <option key={m} value={m}>
+              {m}
+            </option>
+          ))}
+        </select>
       </div>
       <div className={styles.row}>
         <label className={styles.label} htmlFor="keybindings">
           Keybindings
         </label>
-        <input
+        <select
           id="keybindings"
-          type="text"
           className={styles.input}
           value={draft.keybindings}
           onChange={(e) => setDraft({ ...draft, keybindings: e.target.value })}
-        />
+        >
+          {selectWith(KEYBINDINGS, draft.keybindings).map((k) => (
+            <option key={k} value={k}>
+              {k}
+            </option>
+          ))}
+        </select>
       </div>
       <div className={styles.row}>
         <label className={styles.label} htmlFor="default-workspace">
@@ -124,13 +150,24 @@ export function GeneralSection({ config }: GeneralSectionProps) {
         <label className={styles.label} htmlFor="default-provider">
           Default provider
         </label>
-        <input
+        <select
           id="default-provider"
-          type="text"
           className={styles.input}
           value={draft.default_provider ?? ""}
           onChange={(e) => setDraft({ ...draft, default_provider: e.target.value })}
-        />
+        >
+          <option value="">— none —</option>
+          {selectWith(
+            providers.map((p) => p.name),
+            draft.default_provider ?? "",
+          )
+            .filter(Boolean)
+            .map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+        </select>
       </div>
       <div className={styles.actions}>
         <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>

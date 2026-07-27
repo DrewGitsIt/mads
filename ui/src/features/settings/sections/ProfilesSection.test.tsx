@@ -51,7 +51,7 @@ describe("ProfilesSection", () => {
     expect(within(otherCard).queryByText("Active")).toBeNull();
   });
 
-  it("renders no edit/delete controls, only a switch action for inactive profiles", () => {
+  it("renders Rename and Delete for an inactive, non-system profile", () => {
     render(
       <ProfilesSection
         config={makeConfig({ saved: { ...fixtureConfig, active_profile_id: undefined } })}
@@ -61,9 +61,63 @@ describe("ProfilesSection", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /^edit$/i })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^delete$/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /rename/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^delete$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /switch to this profile/i })).toBeTruthy();
+  });
+
+  it("hides Rename/Delete on a system (built-in) profile", () => {
+    render(
+      <ProfilesSection
+        config={makeConfig({ saved: { ...fixtureConfig, active_profile_id: undefined } })}
+        profiles={makeProfiles({ profiles: [{ ...fixtureProfile, system: true }] })}
+        credentialNames={[]}
+        onSwitched={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /rename/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^delete$/i })).toBeNull();
+    expect(screen.getByText("Built-in")).toBeTruthy();
+  });
+
+  it("Rename → edit name → Save calls profiles.update with the new name", async () => {
+    const update = vi.fn().mockResolvedValue(fixtureProfile);
+    render(
+      <ProfilesSection
+        config={makeConfig({ saved: { ...fixtureConfig, active_profile_id: undefined } })}
+        profiles={makeProfiles({ update })}
+        credentialNames={[]}
+        onSwitched={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+    fireEvent.change(screen.getByLabelText("Profile name"), { target: { value: "renamed" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(expect.objectContaining({ id: "prf_focus", name: "renamed" })),
+    );
+  });
+
+  it("Delete → confirm calls profiles.remove", async () => {
+    const remove = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ProfilesSection
+        config={makeConfig({ saved: { ...fixtureConfig, active_profile_id: undefined } })}
+        profiles={makeProfiles({ remove })}
+        credentialNames={[]}
+        onSwitched={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    // Confirm appears with its own Delete button below the card action's.
+    const deletes = screen.getAllByRole("button", { name: /^delete$/i });
+    fireEvent.click(deletes[deletes.length - 1]);
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("prf_focus"));
   });
 
   it("clicking Switch opens the ProfileSwitchDialog", () => {

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GeneralSection } from "./GeneralSection";
 import { fixtureConfig, fixturePreflightChecks } from "../../../router/fixtures";
 import type { UseConfig } from "../state/useConfig";
@@ -19,36 +19,50 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   };
 }
 
+// GeneralSection now fetches the provider list (for the default-provider
+// dropdown) alongside preflight. A single shared Response can't back multiple
+// fetches — its body is consumed once — so route by URL and return a fresh
+// Response per call. Providers includes claude-code so the dropdown has a real
+// non-empty option to select.
+function stubFetch() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/providers/behaviors")) {
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }
+      if (url.includes("/providers")) {
+        return Promise.resolve(
+          new Response(JSON.stringify([{ name: "claude-code", matrix: {} }]), { status: 200 }),
+        );
+      }
+      return Promise.resolve(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 }));
+    }),
+  );
+}
+
 describe("GeneralSection", () => {
+  beforeEach(() => {
+    stubFetch();
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("shows the restart-required badge when a restart field is dirty", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig({ dirtyRestartFields: ["concurrency_limit"] });
     render(<GeneralSection config={config} />);
     expect(screen.getByText(/restart required/i)).toBeTruthy();
   });
 
   it("does not show the restart badge when only a live field is dirty", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig({ dirtyRestartFields: [] });
     render(<GeneralSection config={config} />);
     expect(screen.queryByText(/restart required/i)).toBeNull();
   });
 
   it("renders every field error from one submit, not just the first", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig({
       fieldErrors: {
         concurrency_limit: "must be at least 1",
@@ -60,10 +74,6 @@ describe("GeneralSection", () => {
   });
 
   it("edits call setDraft with the new value", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig();
     render(<GeneralSection config={config} />);
     fireEvent.change(screen.getByLabelText(/concurrency limit/i), { target: { value: "5" } });
@@ -71,33 +81,43 @@ describe("GeneralSection", () => {
   });
 
   it("renders default_workspace/default_provider empty when unset", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     render(<GeneralSection config={makeConfig()} />);
     expect((screen.getByLabelText(/default workspace/i) as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText(/default provider/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/default provider/i) as HTMLSelectElement).value).toBe("");
   });
 
-  it("edits to default_workspace/default_provider call setDraft with the new value", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
+  it("editing default_workspace calls setDraft with the new value", () => {
     const config = makeConfig();
     render(<GeneralSection config={config} />);
     fireEvent.change(screen.getByLabelText(/default workspace/i), { target: { value: "ws-1" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_workspace: "ws-1" }));
+  });
+
+  it("selecting a default provider from the dropdown calls setDraft", async () => {
+    const config = makeConfig();
+    render(<GeneralSection config={config} />);
+    // The option only exists once the provider list resolves.
+    await waitFor(() => expect(screen.getByRole("option", { name: "claude-code" })).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/default provider/i), { target: { value: "claude-code" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "claude-code" }));
   });
 
+  it("display mode and keybindings are dropdowns, not free text", () => {
+    render(<GeneralSection config={makeConfig()} />);
+    expect((screen.getByLabelText(/display mode/i) as HTMLElement).tagName).toBe("SELECT");
+    expect((screen.getByLabelText(/keybindings/i) as HTMLElement).tagName).toBe("SELECT");
+    fireEvent.change(screen.getByLabelText(/display mode/i), { target: { value: "compact" } });
+    // setDraft is mocked so the value is whatever the fixture had; assert the call shape.
+  });
+
+  it("selecting a display mode calls setDraft with the new value", () => {
+    const config = makeConfig();
+    render(<GeneralSection config={config} />);
+    fireEvent.change(screen.getByLabelText(/display mode/i), { target: { value: "compact" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ display_mode: "compact" }));
+  });
+
   it("clicking Save PUTs the updated default_workspace/default_provider", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig({
       draft: { ...fixtureConfig, default_workspace: "ws-1", default_provider: "claude-code" },
     });
@@ -107,10 +127,6 @@ describe("GeneralSection", () => {
   });
 
   it("renders synthesis_debounce_ms and edits call setDraft with the new value", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     const config = makeConfig();
     render(<GeneralSection config={config} />);
     expect((screen.getByLabelText(/synthesis debounce/i) as HTMLInputElement).value).toBe(
@@ -121,19 +137,11 @@ describe("GeneralSection", () => {
   });
 
   it("renders preflight checks from usePreflight", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     render(<GeneralSection config={makeConfig()} />);
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
   });
 
   it("renders a failing check's fix_hint", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
-    );
     render(<GeneralSection config={makeConfig()} />);
     await waitFor(() => expect(screen.getByText("provider:claude-code")).toBeTruthy());
     expect(screen.getByText("install Claude Code and ensure `claude` is on PATH")).toBeTruthy();

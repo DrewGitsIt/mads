@@ -262,6 +262,22 @@ describe("Composer", () => {
     );
   });
 
+  it("shows a Stop button while busy and calls onStop when clicked", () => {
+    const client = new FakeRouterClient();
+    const onStop = vi.fn();
+
+    const { rerender } = render(
+      <Composer routerClient={client} sessionId="session-active" onStop={onStop} />,
+    );
+    // Idle: no Stop button.
+    expect(screen.queryByRole("button", { name: /stop generating/i })).toBeNull();
+
+    rerender(<Composer routerClient={client} sessionId="session-active" busy onStop={onStop} />);
+    const stop = screen.getByRole("button", { name: /stop generating/i });
+    fireEvent.click(stop);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the user cancel a queued message before it flushes", async () => {
     const client = new FakeRouterClient();
     const sendMessage = vi.spyOn(client, "sendMessage");

@@ -360,6 +360,28 @@ export function ConversationTab({
     }
   }, [routerClient, sessionId]);
 
+  // The chat-mode "Stop" button — the ⌘/Ctrl-C of the terminal. Interrupts the
+  // in-flight turn, then finalizes locally exactly as onTurnEnd does rather
+  // than waiting on the child's turn_end frame (the /output stream is
+  // known-unreliable for the current turn — see refetchAfterTurn), so the stop
+  // reads as immediate. The child still sends its own turn_end; that just
+  // reconciles onto an already-idle turn.
+  const handleInterrupt = useCallback(async () => {
+    try {
+      await routerClient.interrupt(sessionId);
+    } catch (err) {
+      setSendError(err instanceof Error ? err.message : "Failed to stop the agent.");
+      return;
+    }
+    pacerFinish(() => {
+      void refetchAfterTurn().finally(() => {
+        setTurnPhase("idle");
+        setTurnBlocked(undefined);
+        pacerReset();
+      });
+    });
+  }, [routerClient, sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
+
   // Consumes the same live output stream SessionTerminalBridge rides for
   // terminal mode (set up above) — chat mode folds its text/tool_use/
   // turn_end/error frames into the turn-state machine instead of opening a
@@ -720,6 +742,7 @@ export function ConversationTab({
                 provider={session.provider}
                 disabled={transport.status !== "idle" || waking}
                 busy={inChatTurn}
+                onStop={() => void handleInterrupt()}
                 initialValue={pendingFirstMessage}
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {

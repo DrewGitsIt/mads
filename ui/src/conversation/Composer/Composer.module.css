@@ -84,6 +84,18 @@
   gap: var(--space-2);
 }
 
+/* Stop-generating button — reads as an interrupt, distinct from Send. */
+.stop {
+  color: var(--bad-fg);
+  border-color: var(--bad);
+  background: var(--bad-soft);
+}
+
+.stop:hover {
+  background: var(--bad);
+  color: #fff;
+}
+
 /* queued-while-responding messages */
 .queued {
   display: flex;

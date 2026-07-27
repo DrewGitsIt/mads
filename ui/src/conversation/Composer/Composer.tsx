@@ -24,6 +24,11 @@ export interface ComposerProps {
    * rather than interleaving with the agent's response.
    */
   busy?: boolean;
+  /**
+   * Interrupts the in-flight turn (chat mode's ⌘/Ctrl-C). When set and `busy`,
+   * a Stop button appears alongside Send; Send keeps queueing as before.
+   */
+  onStop?: () => void;
   /** Seeds the textarea on first mount only — later changes to this prop are ignored. */
   initialValue?: string;
   /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
@@ -69,6 +74,7 @@ export function Composer({
   onSent,
   disabled,
   busy,
+  onStop,
   initialValue,
   autoSendInitial,
   onSendError,
@@ -354,6 +360,18 @@ export function Composer({
             >
               ⤡
             </Button>
+            {busy && onStop && (
+              <Button
+                type="button"
+                variant="secondary"
+                className={styles.stop}
+                title="Stop generating"
+                aria-label="Stop generating"
+                onClick={onStop}
+              >
+                ■ Stop
+              </Button>
+            )}
             <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
               Send
             </Button>
@@ -403,6 +421,18 @@ export function Composer({
           >
             ⤢
           </Button>
+          {busy && onStop && (
+            <Button
+              type="button"
+              variant="secondary"
+              className={styles.stop}
+              title="Stop generating"
+              aria-label="Stop generating"
+              onClick={onStop}
+            >
+              ■ Stop
+            </Button>
+          )}
           <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
             Send
           </Button>
