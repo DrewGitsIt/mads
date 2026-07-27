@@ -78,6 +78,39 @@ func (c LinkCadence) Valid() bool {
 	return false
 }
 
+// OrchestrateStatus reports whether a link's orchestrate grant has actually
+// materialized as live MCP tools on the granting session's running provider
+// process. Server-computed only — never client-settable via LinkRequest.
+type OrchestrateStatus string
+
+const (
+	// OrchestratePending: the orchestrate grant is held, but the tools won't
+	// appear until the granting session's provider process next restarts
+	// (e.g. a provider that can't take mid-session MCP changes, or a live
+	// refresh that hasn't completed yet).
+	OrchestratePending OrchestrateStatus = "pending_restart"
+	// OrchestrateActive: the orchestrate grant is held and live on the
+	// granting session's running provider process right now.
+	OrchestrateActive OrchestrateStatus = "active"
+	// OrchestrateUnsupported: the granting session's provider declares MCP
+	// servers unsupported outright — a terminal state; restarting never
+	// helps.
+	OrchestrateUnsupported OrchestrateStatus = "unsupported"
+)
+
+// OrchestrateStatuses is the full registry, for validation and enumeration.
+var OrchestrateStatuses = []OrchestrateStatus{OrchestratePending, OrchestrateActive, OrchestrateUnsupported}
+
+// Valid reports whether s is a registered orchestrate status.
+func (s OrchestrateStatus) Valid() bool {
+	for _, v := range OrchestrateStatuses {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
 // Link is a directed grant set from GrantingSessionID to SubjectSessionID
 // (docs/LINKED-SESSIONS-DESIGN.md). Leader→subject orientation only; no
 // peer/bidirectional links. Session deletion never cascades to links — a
@@ -93,9 +126,13 @@ type Link struct {
 	// self-referential hand-raiser grant on a session's own pipeline run.
 	// Auto-removed when the condition that created it ends; never
 	// user-editable.
-	Implicit  bool      `json:"implicit,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Implicit bool `json:"implicit,omitempty"`
+	// OrchestrateStatus reports whether the orchestrate grant (if any) has
+	// materialized as live tools yet. Empty when the link carries no
+	// orchestrate grant. Server-computed; see OrchestrateStatus.
+	OrchestrateStatus OrchestrateStatus `json:"orchestrate_status,omitempty"`
+	CreatedAt         time.Time         `json:"created_at"`
+	UpdatedAt         time.Time         `json:"updated_at"`
 }
 
 // HasGrant reports whether l carries g.

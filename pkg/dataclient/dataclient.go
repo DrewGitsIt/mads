@@ -656,6 +656,19 @@ func (c *Client) DeleteLink(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/links/"+url.PathEscape(id), nil, nil)
 }
 
+// SetLinkOrchestrateStatus records whether a link's orchestrate grant has
+// materialized as live tools yet. Called by the granting session's own
+// runner (services/session/internal/runner) after Start-time materialization
+// or a RefreshOrchestrate cycle — never by the UI.
+func (c *Client) SetLinkOrchestrateStatus(ctx context.Context, id string, status contracts.OrchestrateStatus) (contracts.Link, error) {
+	var out contracts.Link
+	body := struct {
+		Status contracts.OrchestrateStatus `json:"status"`
+	}{Status: status}
+	err := c.do(ctx, http.MethodPut, "/links/"+url.PathEscape(id)+"/orchestrate-status", body, &out)
+	return out, err
+}
+
 // LinksForSession lists links where sessionID is on either side (granting
 // or subject).
 func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {

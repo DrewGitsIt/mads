@@ -74,6 +74,26 @@ describe("computeRailLinks", () => {
     expect(holders.size).toBe(0);
     expect(nestedSubjectIds.size).toBe(0);
   });
+
+  it("carries a leader link's orchestrate_status through to its subject row", () => {
+    const { holders } = computeRailLinks([
+      makeLink({
+        id: "l1",
+        granting_session_id: "lead",
+        subject_session_id: "a",
+        grants: ["read", "inject", "orchestrate"],
+        orchestrate_status: "pending_restart",
+      }),
+    ]);
+    expect(holders.get("lead")?.subjects).toEqual([{ sessionId: "a", badge: "LINKED", linkId: "l1", orchestrateStatus: "pending_restart" }]);
+  });
+
+  it("leaves orchestrateStatus undefined on a monitor (WATCHED) row", () => {
+    const { holders } = computeRailLinks([
+      makeLink({ id: "l1", granting_session_id: "mon", subject_session_id: "a", grants: ["read"] }),
+    ]);
+    expect(holders.get("mon")?.subjects[0].orchestrateStatus).toBeUndefined();
+  });
 });
 
 describe("buildRailRows", () => {

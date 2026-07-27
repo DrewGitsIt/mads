@@ -146,6 +146,224 @@ func TestLinkRoutesProxiedWhenFlagOn(t *testing.T) {
 	}
 }
 
+// waitForTranscriptLenRouter polls GET /sessions/{id}/transcript until it
+// reaches n messages — used to confirm a real session's provider-native ref
+// has been announced (the fake provider announces once the first turn
+// begins, mirroring RefAnnounceOnConnect's default timing) before a test
+// depends on that ref being resumable.
+func waitForTranscriptLenRouter(t *testing.T, baseURL, sessionID string, n int) []contracts.TranscriptMessage {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(baseURL + "/sessions/" + sessionID + "/transcript")
+		if err != nil {
+			t.Fatal(err)
+		}
+		msgs := decodeJSON[[]contracts.TranscriptMessage](t, resp)
+		if len(msgs) >= n {
+			return msgs
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("transcript len = %d, want >= %d", len(msgs), n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// waitOrchestrateStatusRouter polls GET /links/{id} until OrchestrateStatus
+// matches want or the deadline expires — the router's notify is
+// fire-and-forget (services/router/internal/api/links.go
+// notifyOrchestrateRefresh), so its effect on the link record is
+// necessarily asynchronous from this test's point of view.
+func waitOrchestrateStatusRouter(t *testing.T, baseURL, linkID string, want contracts.OrchestrateStatus) contracts.Link {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(baseURL + "/links/" + linkID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		link := decodeJSON[contracts.Link](t, resp)
+		if link.OrchestrateStatus == want {
+			return link
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("link %s OrchestrateStatus = %q, want %q", linkID, link.OrchestrateStatus, want)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// TestLinkCreateNotifiesRunningLeaderMaterializesOrchestrate is the
+// acceptance test's live-materialization half at the Router layer: creating
+// a Leader-preset link onto an already-running session (a real Session
+// Service child, not testchild) must reach the child's own
+// POST /orchestrate/refresh (notifyOrchestrateRefresh) and flip the link's
+// OrchestrateStatus from pending_restart to active — without a restart.
+func TestLinkCreateNotifiesRunningLeaderMaterializesOrchestrate(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	// Drive one turn so the leader's provider-native ref is announced
+	// (swapTransport's resumable-ref precondition, see
+	// TestRefreshOrchestrateMaterializesLive) before the link exists.
+	mresp := postJSON(t, srv.URL+"/sessions/"+leader.ID+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+	waitForTranscriptLenRouter(t, srv.URL, leader.ID, 2)
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+	if link.OrchestrateStatus != contracts.OrchestratePending {
+		t.Fatalf("OrchestrateStatus on create = %q, want %q", link.OrchestrateStatus, contracts.OrchestratePending)
+	}
+
+	waitOrchestrateStatusRouter(t, srv.URL, link.ID, contracts.OrchestrateActive)
+}
+
+// TestLinkUpdateNotifiesOnGrantAddition proves handleUpdateLink's notify
+// condition fires for a grant newly added by an edit (not just at create
+// time): a Monitor-preset link upgraded to Leader must also materialize
+// live, exercising the "old.HasGrant || link.HasGrant" branch's newly-added
+// half.
+func TestLinkUpdateNotifiesOnGrantAddition(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	mresp := postJSON(t, srv.URL+"/sessions/"+leader.ID+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+	waitForTranscriptLenRouter(t, srv.URL, leader.ID, 2)
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+	if link.OrchestrateStatus != "" {
+		t.Fatalf("OrchestrateStatus on monitor create = %q, want empty", link.OrchestrateStatus)
+	}
+
+	updateResp := putJSON(t, srv.URL+"/links/"+link.ID, contracts.LinkRequest{
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	})
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("update: status %d", updateResp.StatusCode)
+	}
+	updated := decodeJSON[contracts.Link](t, updateResp)
+	if updated.OrchestrateStatus != contracts.OrchestratePending {
+		t.Fatalf("OrchestrateStatus right after update = %q, want %q", updated.OrchestrateStatus, contracts.OrchestratePending)
+	}
+
+	waitOrchestrateStatusRouter(t, srv.URL, link.ID, contracts.OrchestrateActive)
+}
+
+// TestLinkUpdateMonitorOnlyEditNeverNotifies proves a monitor-only edit
+// (orchestrate absent both before and after) never triggers a refresh
+// attempt — the link's OrchestrateStatus must stay empty throughout, not
+// just immediately after the update.
+func TestLinkUpdateMonitorOnlyEditNeverNotifies(t *testing.T) {
+	srv := newTestServer(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+
+	updateResp := putJSON(t, srv.URL+"/links/"+link.ID, contracts.LinkRequest{
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceManualOnly,
+	})
+	if updateResp.StatusCode != http.StatusOK {
+		t.Fatalf("update: status %d", updateResp.StatusCode)
+	}
+	updated := decodeJSON[contracts.Link](t, updateResp)
+	if updated.OrchestrateStatus != "" {
+		t.Fatalf("OrchestrateStatus after monitor-only edit = %q, want empty", updated.OrchestrateStatus)
+	}
+}
+
+// TestLinkDeleteThenRecreateOrchestrateStillMaterializes is the teardown
+// regression check: deleting a materialized Leader link must leave the
+// granting session's runner able to cleanly materialize a fresh one
+// afterward — proof the teardown cycle (RefreshOrchestrate's swapTransport
+// back to no MCP servers, capability.go) doesn't leave the process wedged.
+func TestLinkDeleteThenRecreateOrchestrateStillMaterializes(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subjectA := mkSessionRouter(t, srv.URL, "subject-a")
+	subjectB := mkSessionRouter(t, srv.URL, "subject-b")
+
+	mresp := postJSON(t, srv.URL+"/sessions/"+leader.ID+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+	waitForTranscriptLenRouter(t, srv.URL, leader.ID, 2)
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subjectA.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+	waitOrchestrateStatusRouter(t, srv.URL, link.ID, contracts.OrchestrateActive)
+
+	delReq, err := http.NewRequest("DELETE", srv.URL+"/links/"+link.ID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delResp, err := http.DefaultClient.Do(delReq) //nolint:noctx // test helper, url is local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("delete: status %d", delResp.StatusCode)
+	}
+
+	createResp2 := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subjectB.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp2.StatusCode != http.StatusCreated {
+		t.Fatalf("recreate: status %d", createResp2.StatusCode)
+	}
+	link2 := decodeJSON[contracts.Link](t, createResp2)
+	waitOrchestrateStatusRouter(t, srv.URL, link2.ID, contracts.OrchestrateActive)
+}
+
 // TestLinkInjectRefusedWithoutGrant proves a link that doesn't carry the
 // inject grant (a Monitor preset, {read} only) can't be used to inject.
 func TestLinkInjectRefusedWithoutGrant(t *testing.T) {

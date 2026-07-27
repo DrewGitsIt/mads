@@ -500,6 +500,196 @@ func TestRemoveImplicitHandRaiserNoOpWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestLinkCreateSetsOrchestratePending(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.OrchestrateStatus != contracts.OrchestratePending {
+		t.Errorf("OrchestrateStatus = %q, want %q", link.OrchestrateStatus, contracts.OrchestratePending)
+	}
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestratePending {
+		t.Errorf("stored OrchestrateStatus = %q, want %q", got.OrchestrateStatus, contracts.OrchestratePending)
+	}
+}
+
+func TestLinkCreateWithoutOrchestrateGrantLeavesStatusEmpty(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.OrchestrateStatus != "" {
+		t.Errorf("OrchestrateStatus = %q, want empty (no orchestrate grant)", link.OrchestrateStatus)
+	}
+}
+
+func TestLinkUpdatePreservesOrchestrateStatusAcrossGrantPreservingUpdate(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system"); err != nil {
+		t.Fatal(err)
+	}
+
+	link.Cadence = contracts.CadenceManualOnly
+	if err := links.Update(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.OrchestrateStatus != contracts.OrchestrateActive {
+		t.Errorf("OrchestrateStatus after grant-preserving update = %q, want %q", link.OrchestrateStatus, contracts.OrchestrateActive)
+	}
+}
+
+func TestLinkUpdateResetsOrchestrateStatusWhenGrantNewlyAdded(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	link.Grants = []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate}
+	if err := links.Update(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.OrchestrateStatus != contracts.OrchestratePending {
+		t.Errorf("OrchestrateStatus after adding the grant = %q, want %q", link.OrchestrateStatus, contracts.OrchestratePending)
+	}
+}
+
+func TestLinkUpdateClearsOrchestrateStatusWhenGrantRemoved(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system"); err != nil {
+		t.Fatal(err)
+	}
+
+	link.Grants = []contracts.Grant{contracts.GrantRead}
+	if err := links.Update(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if link.OrchestrateStatus != "" {
+		t.Errorf("OrchestrateStatus after removing the grant = %q, want empty", link.OrchestrateStatus)
+	}
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OrchestrateStatus != "" {
+		t.Errorf("stored OrchestrateStatus after removal = %q, want empty", got.OrchestrateStatus)
+	}
+}
+
+func TestSetOrchestrateStatusRejectsLinkWithoutGrant(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system")
+	var v *contracts.ValidationError
+	if !errors.As(err, &v) {
+		t.Fatalf("SetOrchestrateStatus on grant-less link: err = %v, want *ValidationError", err)
+	}
+}
+
+func TestSetOrchestrateStatusRejectsUnknownValue(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateStatus("bogus"), "system")
+	var v *contracts.ValidationError
+	if !errors.As(err, &v) {
+		t.Fatalf("SetOrchestrateStatus(bogus): err = %v, want *ValidationError", err)
+	}
+}
+
+func TestSetOrchestrateStatusNoopWhenUnchanged(t *testing.T) {
+	links, sessions, l := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+	// Already pending_restart from Create — setting the same value again
+	// must not emit a redundant link.updated envelope.
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestratePending, "system"); err != nil {
+		t.Fatal(err)
+	}
+	types := eventTypes(t, l, Filter{SessionID: subject.ID, Types: []string{"link.*"}})
+	want := []contracts.EventType{contracts.LinkCreated}
+	if len(types) != len(want) {
+		t.Fatalf("events %v, want %v", types, want)
+	}
+}
+
 func TestLinkSubjectCanHaveManyMonitors(t *testing.T) {
 	links, sessions, _ := newLinkStore(t)
 	ctx := context.Background()

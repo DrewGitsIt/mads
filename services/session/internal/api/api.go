@@ -39,6 +39,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("GET /transcript", s.handleTranscript)
 	mux.HandleFunc("POST /skills/{name}/inject", s.handleInjectSkill)
 	mux.HandleFunc("GET /capabilities/{name}/diagnose", s.handleDiagnoseCapability)
+	mux.HandleFunc("POST /orchestrate/refresh", s.handleOrchestrateRefresh)
 	mux.HandleFunc("POST /permission-hook", s.handlePermissionHook)
 	mux.HandleFunc("GET /permission-requests", s.handlePermissionRequests)
 	mux.HandleFunc("POST /permission-requests/{id}/resolve", s.handleResolvePermission)
@@ -248,6 +249,22 @@ func (s *server) handleTerminalResize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleOrchestrateRefresh re-evaluates this session's held orchestrate
+// grants against its currently running provider process (docs/
+// LINKED-SESSIONS-DESIGN.md: dynamic orchestrate materialization) — the
+// Router calls this fire-and-forget after a link create/update/delete
+// notifies this session mid-conversation (services/router/internal/api/
+// links.go, notifyOrchestrateRefresh). Answers 202 regardless of whether the
+// refresh actually cycled anything: the link record's own OrchestrateStatus,
+// not this response, is the durable signal the rail UI reads.
+func (s *server) handleOrchestrateRefresh(w http.ResponseWriter, r *http.Request) {
+	if err := s.runner.RefreshOrchestrate(r.Context()); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 // handleFiles lists every file this session has touched (spec §5), read

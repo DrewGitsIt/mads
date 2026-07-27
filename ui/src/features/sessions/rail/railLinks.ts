@@ -1,4 +1,4 @@
-import type { Link, Session } from "../../../router/types";
+import type { Link, OrchestrateStatus, Session } from "../../../router/types";
 
 export type SubjectBadge = "LINKED" | "WATCHED";
 
@@ -21,6 +21,8 @@ export interface RailSubjectRow {
   badge: SubjectBadge;
   /** The underlying link's id — Unlink (design decision D6) deletes this via the L1 route. */
   linkId: string;
+  /** Only set for LINKED (leader) rows — the orchestrate grant's materialization state (pkg/contracts/link.go OrchestrateStatus). */
+  orchestrateStatus?: OrchestrateStatus;
 }
 
 export interface RailHolderInfo {
@@ -58,9 +60,9 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
   const nestedSubjectIds = new Set<string>();
 
   for (const [granterId, granterLinks] of byGranter) {
-    const leaderLinkBySubjectId = new Map<string, string>();
+    const leaderLinkBySubjectId = new Map<string, Link>();
     for (const l of granterLinks) {
-      if (linkRole(l) === "leader") leaderLinkBySubjectId.set(l.subject_session_id, l.id);
+      if (linkRole(l) === "leader") leaderLinkBySubjectId.set(l.subject_session_id, l);
     }
     const monitorLinkBySubjectId = new Map<string, string>();
     for (const l of granterLinks) {
@@ -79,10 +81,11 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
           : "MONITOR";
 
     const subjects: RailSubjectRow[] = [
-      ...[...leaderLinkBySubjectId].map(([sessionId, linkId]) => ({
+      ...[...leaderLinkBySubjectId].map(([sessionId, link]) => ({
         sessionId,
-        linkId,
+        linkId: link.id,
         badge: "LINKED" as const,
+        orchestrateStatus: link.orchestrate_status,
       })),
       ...[...monitorLinkBySubjectId].map(([sessionId, linkId]) => ({
         sessionId,
@@ -101,7 +104,7 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
 export interface RailRow {
   session: Session;
   badge?: string;
-  subjects: { session: Session; badge: SubjectBadge; linkId: string }[];
+  subjects: { session: Session; badge: SubjectBadge; linkId: string; orchestrateStatus?: OrchestrateStatus }[];
 }
 
 /**
@@ -123,7 +126,7 @@ export function buildRailRows(
       const subjects = (holder?.subjects ?? []).flatMap((sub) => {
         const subSession = allSessionsById.get(sub.sessionId);
         return subSession
-          ? [{ session: subSession, badge: sub.badge, linkId: sub.linkId }]
+          ? [{ session: subSession, badge: sub.badge, linkId: sub.linkId, orchestrateStatus: sub.orchestrateStatus }]
           : [];
       });
       return { session, badge: holder?.badge, subjects };

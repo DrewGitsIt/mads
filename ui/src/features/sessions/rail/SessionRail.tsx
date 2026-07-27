@@ -8,7 +8,7 @@ import { buildRailRows, computeRailLinks } from "./railLinks";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import { router, type RouterClient } from "../../../router/client";
-import type { Link, Session } from "../../../router/types";
+import type { Link, OrchestrateStatus, Session } from "../../../router/types";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -238,6 +238,7 @@ function RailRowGroup({
             onClose={onClose}
             onDeleteRequest={onDeleteRequest}
             linkBadge={sub.badge}
+            orchestrateStatus={sub.orchestrateStatus}
             nested
             onUnlinkRequest={() =>
               onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
@@ -255,6 +256,18 @@ function RailRowGroup({
   );
 }
 
+/** Active renders nothing extra beyond the existing LINKED badge — only the non-terminal/degraded states need a pill. */
+function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined {
+  switch (status) {
+    case "pending_restart":
+      return "TOOLS ON RESTART";
+    case "unsupported":
+      return "NO TOOLS";
+    default:
+      return undefined;
+  }
+}
+
 function SessionRow({
   session,
   openTaskBreakdown,
@@ -264,6 +277,7 @@ function SessionRow({
   onClose,
   onDeleteRequest,
   linkBadge,
+  orchestrateStatus,
   nested,
   onUnlinkRequest,
   linkedSessionsEnabled,
@@ -282,6 +296,8 @@ function SessionRow({
   onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
+  /** Only ever set on a LINKED (leader) subject row — the orchestrate grant's materialization state. */
+  orchestrateStatus?: OrchestrateStatus;
   nested?: boolean;
   onUnlinkRequest?: () => void;
   linkedSessionsEnabled: boolean;
@@ -296,7 +312,8 @@ function SessionRow({
   const name = session.name || "Untitled session";
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
-  const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge));
+  const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
+  const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
   const showSummary = isPaused && Boolean(session.summary);
 
   // Clicking a card opens it read-only — no eager resume. A paused session
@@ -368,6 +385,16 @@ function SessionRow({
                 .join(" ")}
             >
               {linkBadge}
+            </span>
+          )}
+          {linkedSessionsEnabled && orchestrateLabel && (
+            <span
+              className={[
+                styles.orchestrateBadge,
+                orchestrateStatus === "unsupported" ? styles.orchestrateBadgeUnsupported : styles.orchestrateBadgePending,
+              ].join(" ")}
+            >
+              {orchestrateLabel}
             </span>
           )}
         </div>

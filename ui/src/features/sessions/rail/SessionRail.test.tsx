@@ -350,6 +350,28 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByRole("button", { name: "Unlink payments refactor" })).toBeTruthy();
   });
 
+  it("shows a pending-restart pill on a leader link whose orchestrate grant hasn't materialized yet", () => {
+    FLAGS.linkedSessions = true;
+    const pendingLink = makeLink({ ...link, orchestrate_status: "pending_restart" });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[pendingLink]} />);
+    expect(screen.getByText("TOOLS ON RESTART")).toBeTruthy();
+  });
+
+  it("shows a no-tools pill on a leader link whose provider can't support orchestrate at all", () => {
+    FLAGS.linkedSessions = true;
+    const unsupportedLink = makeLink({ ...link, orchestrate_status: "unsupported" });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[unsupportedLink]} />);
+    expect(screen.getByText("NO TOOLS")).toBeTruthy();
+  });
+
+  it("renders no extra pill once the orchestrate grant is active", () => {
+    FLAGS.linkedSessions = true;
+    const activeLink = makeLink({ ...link, orchestrate_status: "active" });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[activeLink]} />);
+    expect(screen.queryByText("TOOLS ON RESTART")).toBeNull();
+    expect(screen.queryByText("NO TOOLS")).toBeNull();
+  });
+
   it("clicking a card's link action enters link mode with it as the anchor and shows a floating bar", () => {
     FLAGS.linkedSessions = true;
     const b = makeSession({ id: "b", name: "gateway hardening" });
