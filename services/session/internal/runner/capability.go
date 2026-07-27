@@ -116,13 +116,17 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 	r.reportHealth(ctx, c.Name, healthy, reason)
 }
 
-// setupOrchestrate materializes the leader capability (docs/
+// setupOrchestrate materializes the leader/monitor capability (docs/
 // LINKED-SESSIONS-DESIGN.md decisions 1-3): a synthetic, session-scoped MCP
-// server exposing list_links/get_summary/send_message, spawned only when
-// this session actually holds at least one orchestrate grant. Unlike
-// setupCapabilities' declared capabilities, this one is never stored via
-// r.data.Capability — it's system-generated per session, not user-registry
-// content, so it's built here and handed straight to EnsureStarted.
+// server exposing list_links/get_summary/get_turns/set_attention, plus
+// send_message for orchestrate-grant holders, spawned whenever this session
+// holds at least one orchestrate OR read grant. A read-grant-only session
+// (e.g. a monitor) gets the read-only slice — never send_message, which
+// stays orchestrate-only — signaled to the spawned subprocess via
+// MADS_ORCHESTRATE_READONLY. Unlike setupCapabilities' declared
+// capabilities, this one is never stored via r.data.Capability — it's
+// system-generated per session, not user-registry content, so it's built
+// here and handed straight to EnsureStarted.
 // Re-checked at Start and, for providers that support live MCP changes,
 // again by RefreshOrchestrate whenever a link mutation notifies this
 // session mid-conversation — see RefreshOrchestrate below, which reuses
@@ -146,13 +150,19 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 		return nil
 	}
 	hasOrchestrateGrant := false
+	hasReadGrant := false
 	for _, l := range links {
-		if l.GrantingSessionID == r.sessionID && l.HasGrant(contracts.GrantOrchestrate) {
+		if l.GrantingSessionID != r.sessionID {
+			continue
+		}
+		if l.HasGrant(contracts.GrantOrchestrate) {
 			hasOrchestrateGrant = true
-			break
+		}
+		if l.HasGrant(contracts.GrantRead) {
+			hasReadGrant = true
 		}
 	}
-	if !hasOrchestrateGrant {
+	if !hasOrchestrateGrant && !hasReadGrant {
 		return nil
 	}
 
@@ -162,6 +172,9 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 		Config: contracts.CapabilityConfig{Command: "mads internal orchestrate-mcp"},
 	}
 	env := []string{"MADS_ROUTER_URL=" + r.RouterURL, "MADS_SESSION_ID=" + r.sessionID}
+	if !hasOrchestrateGrant {
+		env = append(env, "MADS_ORCHESTRATE_READONLY=1")
+	}
 	if _, err := r.MCPRegistry.EnsureStarted(ctx, c, env); err != nil {
 		log.Printf("runner: start orchestrate capability: %v", err)
 		return nil

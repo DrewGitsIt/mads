@@ -58,7 +58,7 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 	}
 	out := []orchestrateSubject{}
 	for _, l := range links {
-		if l.GrantingSessionID != leaderID || !l.HasGrant(contracts.GrantOrchestrate) {
+		if l.GrantingSessionID != leaderID || (!l.HasGrant(contracts.GrantOrchestrate) && !l.HasGrant(contracts.GrantRead)) {
 			continue
 		}
 		name := l.SubjectSessionID
@@ -83,16 +83,19 @@ func (s *server) handleOrchestrateSubjects(w http.ResponseWriter, r *http.Reques
 }
 
 // findOrchestrateLink locates the (at most one) link from leaderID to
-// subjectID that carries the orchestrate grant. No dedicated single-pair
-// lookup exists on the Data Service (L1), so this filters LinksForSession
-// the same way handleOrchestrateSubjects does.
+// subjectID that carries the orchestrate or read grant — get_summary/
+// get_turns are pull tools available to both leaders and monitors (item 1,
+// "pull tools for read grants"); only send_message stays orchestrate-only.
+// No dedicated single-pair lookup exists on the Data Service (L1), so this
+// filters LinksForSession the same way handleOrchestrateSubjects does.
 func (s *server) findOrchestrateLink(ctx context.Context, leaderID, subjectID string) (*contracts.Link, error) {
 	links, err := s.data.LinksForSession(ctx, leaderID)
 	if err != nil {
 		return nil, err
 	}
 	for _, l := range links {
-		if l.GrantingSessionID == leaderID && l.SubjectSessionID == subjectID && l.HasGrant(contracts.GrantOrchestrate) {
+		if l.GrantingSessionID == leaderID && l.SubjectSessionID == subjectID &&
+			(l.HasGrant(contracts.GrantOrchestrate) || l.HasGrant(contracts.GrantRead)) {
 			link := l
 			return &link, nil
 		}
@@ -260,6 +263,45 @@ func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Reques
 		"to_turn":   toTurn,
 		"entries":   entries,
 	})
+}
+
+// handleOrchestrateSetAttention answers {id}'s (the caller's own session,
+// trustworthy the same way leaderID is in handleOrchestrateSummary/
+// handleOrchestrateGetTurns) set_attention tool call: flips one of its own
+// held links' Cadence at runtime (item 2, "agent-selectable attention") —
+// this is what turns manual_only into a real "catch up when requested" mode
+// rather than a one-way, unrecoverable dead end. Scoped strictly to links
+// {id} itself holds the granting side of; a link_id for a link {id} doesn't
+// hold is rejected, never silently resolved to someone else's link.
+func (s *server) handleOrchestrateSetAttention(w http.ResponseWriter, r *http.Request) {
+	callerID := r.PathValue("id")
+	var body struct {
+		LinkID  string                `json:"link_id"`
+		Cadence contracts.LinkCadence `json:"cadence"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	link, err := s.data.Link(r.Context(), body.LinkID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if link.GrantingSessionID != callerID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "session does not hold that link"})
+		return
+	}
+	updated, err := s.data.UpdateLink(r.Context(), link.ID, contracts.LinkRequest{
+		GrantingSessionID: link.GrantingSessionID,
+		SubjectSessionID:  link.SubjectSessionID,
+		Grants:            link.Grants,
+		Cadence:           body.Cadence,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 // fetchChildJSON GETs path from a running child and decodes its JSON body

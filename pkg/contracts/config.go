@@ -195,6 +195,7 @@ type Config struct {
 	// Operational limits (§3.7 General panel, restart-required).
 	ConcurrencyLimit    int          `json:"concurrency_limit"`
 	SynthesisDebounceMS int          `json:"synthesis_debounce_ms"`
+	DigestDebounceMS    int          `json:"digest_debounce_ms"`
 	LogRetentionDays    int          `json:"log_retention_days"`
 	FeatureFlags        FeatureFlags `json:"feature_flags"`
 
@@ -258,6 +259,7 @@ func DefaultConfig() Config {
 
 		ConcurrencyLimit:    3,
 		SynthesisDebounceMS: 2000,
+		DigestDebounceMS:    2000,
 		LogRetentionDays:    30,
 		FeatureFlags:        FeatureFlags{},
 
@@ -303,6 +305,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.SynthesisDebounceMS < 0 {
 		v.Add("synthesis_debounce_ms", "must not be negative")
+	}
+	if c.DigestDebounceMS < 0 {
+		v.Add("digest_debounce_ms", "must not be negative")
 	}
 	if c.LogRetentionDays < 1 {
 		v.Add("log_retention_days", "must be at least 1")

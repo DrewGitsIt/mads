@@ -5,9 +5,15 @@
 //
 //   - Watcher: session.turn_ended (appended by a watched session's own
 //     runner on every completed turn, docs/LINKED-SESSIONS-DESIGN.md
-//     decision 4) — subscribes globally and spawns a GenerateDigest job per
-//     envelope, alongside a GenerateSessionTitle job (session auto-naming)
-//     that no-ops once the session's name is no longer Derived.
+//     decision 4) — subscribes globally, debounces a burst of one subject's
+//     turns by Config.DigestDebounceMS (mirroring synthwatch's
+//     sessionBuffer precedent) and collapses it into a single GenerateDigest
+//     job/delivery, alongside a GenerateSessionTitle job (session
+//     auto-naming, undebounced) per envelope that no-ops once the session's
+//     name is no longer Derived. A turn whose transcript entries are solely
+//     digest-attributed injections is excluded from the digest burst
+//     entirely — a monitor's own forced turn re-entering digestwatch must
+//     never spawn another digest, or monitor chains could self-amplify.
 //   - RunWatcher: task.status_changed reaching done or blocked, for a
 //     session holding the implicit hand-raiser over its own pipeline run
 //     (decision 6) — subscribes globally and spawns a GenerateRunDigest job
@@ -18,6 +24,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -58,21 +65,34 @@ func subscribeRetry(ctx context.Context, name string, initialBackoff, maxBackoff
 	}
 }
 
-// Watcher subscribes to session.turn_ended envelopes and spawns a digest job
-// for each.
+// digestSessionBuffer accumulates one subject session's turn deltas across a
+// debounce burst, and holds the pending timer that collapses the burst into
+// one GenerateDigest job — mirroring synthwatch.sessionBuffer exactly.
+type digestSessionBuffer struct {
+	mu    sync.Mutex
+	turns []string
+	timer *time.Timer
+}
+
+// Watcher subscribes to session.turn_ended envelopes, debounces per subject
+// session by Config.DigestDebounceMS, and spawns one collapsed digest job
+// per burst.
 type Watcher struct {
 	data *dataclient.Client
 	jobs *job.Runner
+
+	mu      sync.Mutex
+	buffers map[string]*digestSessionBuffer
 }
 
 func NewWatcher(data *dataclient.Client, jobs *job.Runner) *Watcher {
-	return &Watcher{data: data, jobs: jobs}
+	return &Watcher{data: data, jobs: jobs, buffers: make(map[string]*digestSessionBuffer)}
 }
 
 // Run blocks, subscribing to session.turn_ended envelopes across every
-// session and spawning a digest job for each. Retries the subscribe with
-// backoff on failure; returns only once ctx is done. Callers run it on its
-// own goroutine for the life of the process.
+// session and spawning a digest job for each debounced burst. Retries the
+// subscribe with backoff on failure; returns only once ctx is done. Callers
+// run it on its own goroutine for the life of the process.
 func (w *Watcher) Run(ctx context.Context) {
 	ch := subscribeRetry(ctx, "session.turn_ended", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
 		return w.data.Stream(ctx, 0, "", []string{string(contracts.TurnEnded)})
@@ -82,18 +102,62 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 	for env := range ch {
 		var payload struct {
-			Delta string `json:"delta"`
+			Delta      string `json:"delta"`
+			DigestOnly bool   `json:"digest_only"`
 		}
 		if err := json.Unmarshal(env.Payload, &payload); err != nil {
 			log.Printf("digestwatch: decode turn_ended payload for %s: %v", env.SessionID, err)
 			continue
 		}
-		if _, err := w.jobs.Spawn(ctx, job.DigestKind, env.SessionID, job.GenerateDigest(env.SessionID, payload.Delta)); err != nil {
-			log.Printf("digestwatch: spawn digest job for %s: %v", env.SessionID, err)
+		if !payload.DigestOnly {
+			w.bufferDigest(ctx, env.SessionID, payload.Delta)
 		}
 		if _, err := w.jobs.Spawn(ctx, job.SessionTitleKind, env.SessionID, job.GenerateSessionTitle(env.SessionID, payload.Delta)); err != nil {
 			log.Printf("digestwatch: spawn session title job for %s: %v", env.SessionID, err)
 		}
+	}
+}
+
+// bufferDigest appends delta to sessionID's debounce buffer, (re)arming the
+// timer that collapses the burst into a single GenerateDigest job — the
+// same pattern as synthwatch.Watcher.handle.
+func (w *Watcher) bufferDigest(ctx context.Context, sessionID, delta string) {
+	cfg, err := w.data.Config(ctx)
+	if err != nil {
+		log.Printf("digestwatch: load config: %v", err)
+		return
+	}
+
+	w.mu.Lock()
+	buf, ok := w.buffers[sessionID]
+	if !ok {
+		buf = &digestSessionBuffer{}
+		w.buffers[sessionID] = buf
+	}
+	w.mu.Unlock()
+
+	buf.mu.Lock()
+	buf.turns = append(buf.turns, delta)
+	if buf.timer != nil {
+		buf.timer.Stop()
+	}
+	buf.timer = time.AfterFunc(time.Duration(cfg.DigestDebounceMS)*time.Millisecond, func() {
+		w.fireDigest(sessionID, buf)
+	})
+	buf.mu.Unlock()
+}
+
+func (w *Watcher) fireDigest(sessionID string, buf *digestSessionBuffer) {
+	buf.mu.Lock()
+	turns := buf.turns
+	buf.turns = nil
+	buf.mu.Unlock()
+
+	if len(turns) == 0 {
+		return
+	}
+	if _, err := w.jobs.Spawn(context.Background(), job.DigestKind, sessionID, job.GenerateDigest(sessionID, turns)); err != nil {
+		log.Printf("digestwatch: spawn digest job for %s: %v", sessionID, err)
 	}
 }
 

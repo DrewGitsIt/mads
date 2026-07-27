@@ -44,10 +44,12 @@ func TestOrchestrateRoutes404WhenFlagOff(t *testing.T) {
 	}
 }
 
-// TestOrchestrateSubjectsListShape proves list_links only surfaces links
-// where the leader is the granting session and the link carries the
-// orchestrate grant — a Monitor-preset link (read only), and a link where
-// the leader is the subject rather than the grantor, are both excluded.
+// TestOrchestrateSubjectsListShape proves list_links surfaces links where
+// the leader is the granting session and the link carries the orchestrate
+// OR read grant (item 1, "pull tools for read grants") — a Monitor-preset
+// link (read only) now appears alongside a Leader-preset link, while a link
+// where the leader is the subject rather than the grantor is still
+// excluded.
 func TestOrchestrateSubjectsListShape(t *testing.T) {
 	srv := newTestServer(t)
 	setLinkedSessionsFlag(t, srv.URL, true)
@@ -67,7 +69,7 @@ func TestOrchestrateSubjectsListShape(t *testing.T) {
 	}
 	link := decodeJSON[contracts.Link](t, createResp)
 
-	// Monitor preset (read only): should not appear in the orchestrate list.
+	// Monitor preset (read only): now appears too (item 1).
 	monResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
 		GrantingSessionID: leader.ID,
 		SubjectSessionID:  other.ID,
@@ -76,6 +78,7 @@ func TestOrchestrateSubjectsListShape(t *testing.T) {
 	if monResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create monitor link: status %d", monResp.StatusCode)
 	}
+	monLink := decodeJSON[contracts.Link](t, monResp)
 
 	// Leader as subject rather than grantor: should not appear either.
 	reverseResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
@@ -102,15 +105,26 @@ func TestOrchestrateSubjectsListShape(t *testing.T) {
 		Activity         string   `json:"activity"`
 	}
 	list := decodeJSON[[]orchestrateSubject](t, listResp)
-	if len(list) != 1 {
-		t.Fatalf("list = %+v, want 1 entry", list)
+	if len(list) != 2 {
+		t.Fatalf("list = %+v, want 2 entries", list)
 	}
-	got := list[0]
-	if got.LinkID != link.ID || got.SubjectSessionID != subject.ID || got.SubjectName != "subject" {
-		t.Fatalf("list[0] = %+v, want link %q subject %q %q", got, link.ID, subject.ID, "subject")
+	byLinkID := map[string]orchestrateSubject{}
+	for _, s := range list {
+		byLinkID[s.LinkID] = s
+	}
+	got, ok := byLinkID[link.ID]
+	if !ok || got.SubjectSessionID != subject.ID || got.SubjectName != "subject" {
+		t.Fatalf("list missing leader link, got %+v, want link %q subject %q %q", list, link.ID, subject.ID, "subject")
 	}
 	if len(got.Grants) != 3 {
 		t.Fatalf("grants = %v, want 3 entries", got.Grants)
+	}
+	gotMon, ok := byLinkID[monLink.ID]
+	if !ok || gotMon.SubjectSessionID != other.ID || gotMon.SubjectName != "other" {
+		t.Fatalf("list missing monitor link, got %+v, want link %q subject %q %q", list, monLink.ID, other.ID, "other")
+	}
+	if len(gotMon.Grants) != 1 || gotMon.Grants[0] != string(contracts.GrantRead) {
+		t.Fatalf("monitor grants = %v, want [read]", gotMon.Grants)
 	}
 }
 
@@ -455,6 +469,95 @@ func TestOrchestrateGetTurnsNoOrchestrateLinkForbidden(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("get_turns without link: status %d, want 403", resp.StatusCode)
+	}
+}
+
+// TestOrchestrateSetAttentionFlipsCadence proves set_attention lets a
+// monitor session flip its own link's cadence at runtime (item 2,
+// "agent-selectable attention") — manual_only becomes a real, reachable mode
+// instead of a one-way dead end.
+func TestOrchestrateSetAttentionFlipsCadence(t *testing.T) {
+	srv := newTestServer(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	monitor := mkSessionRouter(t, srv.URL, "monitor")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: monitor.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create monitor link: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+	if link.Cadence != contracts.CadencePerTurn {
+		t.Fatalf("initial cadence = %q, want per_turn", link.Cadence)
+	}
+
+	attnResp := postJSON(t, srv.URL+"/sessions/"+monitor.ID+"/orchestrate/attention", map[string]string{
+		"link_id": link.ID,
+		"cadence": string(contracts.CadenceManualOnly),
+	})
+	if attnResp.StatusCode != http.StatusOK {
+		t.Fatalf("set_attention: status %d", attnResp.StatusCode)
+	}
+	updated := decodeJSON[contracts.Link](t, attnResp)
+	if updated.Cadence != contracts.CadenceManualOnly {
+		t.Fatalf("cadence after set_attention = %q, want manual_only", updated.Cadence)
+	}
+	if len(updated.Grants) != 1 || updated.Grants[0] != contracts.GrantRead {
+		t.Fatalf("grants after set_attention = %v, want [read] unchanged", updated.Grants)
+	}
+
+	getResp, err := http.Get(srv.URL + "/links/" + link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[contracts.Link](t, getResp)
+	if got.Cadence != contracts.CadenceManualOnly {
+		t.Fatalf("stored cadence = %q, want manual_only", got.Cadence)
+	}
+}
+
+// TestOrchestrateSetAttentionRejectsNonOwnedLink proves set_attention is
+// scoped strictly to links the calling session holds the granting side of —
+// a session naming a link it doesn't hold is rejected, never silently
+// resolved to someone else's link.
+func TestOrchestrateSetAttentionRejectsNonOwnedLink(t *testing.T) {
+	srv := newTestServer(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	monitor := mkSessionRouter(t, srv.URL, "monitor")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+	other := mkSessionRouter(t, srv.URL, "other")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: monitor.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create monitor link: status %d", createResp.StatusCode)
+	}
+	link := decodeJSON[contracts.Link](t, createResp)
+
+	attnResp := postJSON(t, srv.URL+"/sessions/"+other.ID+"/orchestrate/attention", map[string]string{
+		"link_id": link.ID,
+		"cadence": string(contracts.CadenceManualOnly),
+	})
+	if attnResp.StatusCode != http.StatusForbidden {
+		t.Fatalf("set_attention from non-owning session: status %d, want 403", attnResp.StatusCode)
+	}
+
+	getResp, err := http.Get(srv.URL + "/links/" + link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[contracts.Link](t, getResp)
+	if got.Cadence != contracts.CadencePerTurn {
+		t.Fatalf("cadence changed despite rejection: %q, want per_turn", got.Cadence)
 	}
 }
 

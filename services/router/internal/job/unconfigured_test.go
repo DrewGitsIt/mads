@@ -102,7 +102,7 @@ func TestAllJobKindsSkipSilentlyWithoutFastModelBackend(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID,
-			job.GenerateDigest(watched.ID, "user: hi\nassistant: did stuff\n")); err != nil {
+			job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: did stuff\n"})); err != nil {
 			t.Fatalf("Spawn: %v", err)
 		}
 		assertNoJobFailed(t, base, watched.ID)

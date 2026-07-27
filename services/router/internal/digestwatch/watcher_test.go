@@ -87,6 +87,36 @@ func (b stubBackend) Complete(ctx context.Context, system, prompt, model string)
 	return b.reply, provider.Usage{}, nil
 }
 
+func setDigestDebounce(t *testing.T, data *dataclient.Client, ms int) {
+	t.Helper()
+	cfg, err := data.Config(context.Background())
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.DigestDebounceMS = ms
+	if err := data.UpdateConfig(context.Background(), &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+}
+
+func digestJobQueuedCount(t *testing.T, data *dataclient.Client, sessionID string) int {
+	t.Helper()
+	evs, err := data.Events(context.Background(), 0, sessionID, []string{"job.queued"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	n := 0
+	for _, ev := range evs {
+		var payload struct {
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(ev.Payload, &payload); err == nil && payload.Kind == job.DigestKind {
+			n++
+		}
+	}
+	return n
+}
+
 // The watcher reacts to a session.turn_ended envelope by spawning a digest
 // job that reaches the reading link's monitor — proving the full seam from
 // event append to delivery, independent of a real session runner emitting
@@ -135,6 +165,113 @@ func TestWatcherSpawnsDigestJobForTurnEnded(t *testing.T) {
 	eventually(t, 5*time.Second, func() bool {
 		return monitorServer.count() == 1
 	})
+}
+
+// A burst of a subject's turn_ended envelopes landing inside the debounce
+// window collapses into exactly one GenerateDigest job/delivery, mirroring
+// synthwatch's own debounce guarantee.
+func TestWatcherDebouncesTurnEndedBurstIntoOneDigest(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	setDigestDebounce(t, data, 150)
+
+	cfg, err := data.Config(context.Background())
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.FeatureFlags.LinkedSessions = true
+	if err := data.UpdateConfig(context.Background(), &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	watched := mustCreateSession(t, data, contracts.Session{Name: "watched session"})
+	monitor := mustCreateSession(t, data, contracts.Session{Name: "monitor session"})
+	if _, err := data.CreateLink(context.Background(), contracts.LinkRequest{
+		GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
+		Grants: []contracts.Grant{contracts.GrantRead},
+	}); err != nil {
+		t.Fatalf("CreateLink: %v", err)
+	}
+
+	monitorServer := newCaptureServer(t)
+	fm := fastmodel.NewWithBackend(stubBackend{reply: "digest text"}, fastmodel.Config{})
+	jobs := job.New(data, fm, registryclient.New(""))
+	jobs.SetResolver(stubResolver{monitor.ID: monitorServer.addr()})
+
+	watcher := digestwatch.NewWatcher(data, jobs)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go watcher.Run(ctx)
+
+	for i := 0; i < 5; i++ {
+		if err := data.Append(ctx, &contracts.Envelope{
+			Type:      contracts.TurnEnded,
+			SessionID: watched.ID,
+			Payload:   json.RawMessage(`{"delta":"user: hi\nassistant: did stuff\n"}`),
+		}); err != nil {
+			t.Fatalf("Append: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	eventually(t, 5*time.Second, func() bool {
+		return digestJobQueuedCount(t, data, watched.ID) == 1
+	})
+	eventually(t, 5*time.Second, func() bool {
+		return monitorServer.count() == 1
+	})
+
+	// Give the debounce window a further beat to (incorrectly) fire a second
+	// job/delivery before asserting the counts stay at exactly one.
+	time.Sleep(300 * time.Millisecond)
+	if got := digestJobQueuedCount(t, data, watched.ID); got != 1 {
+		t.Fatalf("digest job.queued count = %d, want exactly 1", got)
+	}
+	if got := monitorServer.count(); got != 1 {
+		t.Fatalf("monitor delivery count = %d, want exactly 1", got)
+	}
+}
+
+// A turn_ended envelope whose entries were solely digest-attributed
+// injections (payload digest_only: true) must never spawn another digest
+// job — the loop-hazard guard that keeps a monitor's own forced turn from
+// re-triggering digestwatch and self-amplifying a monitor chain.
+func TestWatcherSkipsDigestOnlyTurn(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	setDigestDebounce(t, data, 50)
+
+	cfg, err := data.Config(context.Background())
+	if err != nil {
+		t.Fatalf("Config: %v", err)
+	}
+	cfg.FeatureFlags.LinkedSessions = true
+	if err := data.UpdateConfig(context.Background(), &cfg); err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	watched := mustCreateSession(t, data, contracts.Session{Name: "monitor session, forced turn"})
+
+	fm := fastmodel.NewWithBackend(stubBackend{reply: "should not be called"}, fastmodel.Config{})
+	jobs := job.New(data, fm, registryclient.New(""))
+
+	watcher := digestwatch.NewWatcher(data, jobs)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go watcher.Run(ctx)
+
+	if err := data.Append(ctx, &contracts.Envelope{
+		Type:      contracts.TurnEnded,
+		SessionID: watched.ID,
+		Payload:   json.RawMessage(`{"delta":"user: [digest from subject] did stuff\n","digest_only":true}`),
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	time.Sleep(300 * time.Millisecond)
+	if got := digestJobQueuedCount(t, data, watched.ID); got != 0 {
+		t.Fatalf("digest job.queued count = %d, want 0 for a digest_only turn", got)
+	}
 }
 
 // The run watcher reacts to a task.status_changed envelope landing on done
