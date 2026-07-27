@@ -6,16 +6,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/turndigest"
 )
 
 // orchestrateTranscriptTailLen bounds get_summary's live-transcript fallback
 // (no Session.Summary yet) to a short, recent slice — this endpoint answers
 // a leader agent's tool call, not a UI pane, so it stays terse by default.
 const orchestrateTranscriptTailLen = 20
+
+// orchestrateLiveTurnLimit bounds how many of a subject's most recent
+// session.turn_ended envelopes get_summary's live-compression path
+// considers — enough real material for a useful digest without querying a
+// long-running subject's entire turn history on every leader tool call.
+const orchestrateLiveTurnLimit = 20
+
+// orchestrateSummaryBudgetTokens is get_summary's live-compression budget:
+// terse enough for a leader's tool-call turn, generous enough that a
+// long-transcript fixture still yields readable prose citing a turn range.
+const orchestrateSummaryBudgetTokens = 1000
 
 // maxOrchestrateWaitMS caps send_message's optional bounded wait so a
 // leader's tool call can never hold the Router's handler goroutine open
@@ -88,10 +101,15 @@ func (s *server) findOrchestrateLink(ctx context.Context, leaderID, subjectID st
 }
 
 // handleOrchestrateSummary answers {id}'s (the leader) get_summary tool call
-// for the subject named by the "for" query param: the subject's durable
-// Session.Summary when one exists, else a short live-transcript tail — the
-// one place this endpoint invents behavior beyond what already exists
-// (docs/LINKED-SESSIONS-DESIGN.md decomposition item 5).
+// for the subject named by the "for" query param. A live subject (one with
+// session.turn_ended envelopes) gets a compressed digest of its most recent
+// turns via pkg/turndigest, with the subject's durable Session.Summary
+// prepended as a "prologue" field when present — the durable summary alone
+// is stale for a subject that's still running, which is the leader's main
+// case (docs/LINKED-SESSIONS-DESIGN.md decomposition item 5). A subject with
+// no turn_ended envelopes falls back to the durable summary, or a short raw
+// transcript tail if it has none either — unchanged from before this digest
+// path existed.
 func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request) {
 	leaderID := r.PathValue("id")
 	subjectID := r.URL.Query().Get("for")
@@ -109,13 +127,138 @@ func (s *server) handleOrchestrateSummary(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	if subject.Summary != "" {
-		writeJSON(w, http.StatusOK, map[string]string{"source": "summary", "text": subject.Summary})
+
+	envs := s.orchestrateTurnEnvelopes(r.Context(), subjectID)
+	if len(envs) == 0 {
+		writeJSON(w, http.StatusOK, s.orchestrateSummaryFallback(r.Context(), subject))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{
+	if len(envs) > orchestrateLiveTurnLimit {
+		envs = envs[len(envs)-orchestrateLiveTurnLimit:]
+	}
+	turns := make([]turndigest.Turn, len(envs))
+	for i, env := range envs {
+		turns[i] = orchestrateTurnFromEnvelope(env)
+	}
+
+	res, err := turndigest.New(s.jobs.FastModel()).Digest(r.Context(), turndigest.Request{
+		Turns:        turns,
+		Audience:     turndigest.LeaderCatchup,
+		BudgetTokens: orchestrateSummaryBudgetTokens,
+		Subject:      subjectID,
+	})
+	if err != nil || res.Text == "" {
+		// Best-effort: a hard digest failure, or every envelope decoding to
+		// nothing, degrades to the same fallback as the no-envelopes case.
+		writeJSON(w, http.StatusOK, s.orchestrateSummaryFallback(r.Context(), subject))
+		return
+	}
+
+	resp := map[string]any{
+		"source":    "compressed_recent",
+		"text":      res.Text,
+		"from_turn": res.FromTurn,
+		"to_turn":   res.ToTurn,
+	}
+	if subject.Summary != "" {
+		resp["prologue"] = subject.Summary
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// orchestrateSummaryFallback is get_summary's pre-digest behavior, unchanged:
+// the subject's durable Session.Summary when set, else a short raw
+// transcript tail.
+func (s *server) orchestrateSummaryFallback(ctx context.Context, subject contracts.Session) map[string]string {
+	if subject.Summary != "" {
+		return map[string]string{"source": "summary", "text": subject.Summary}
+	}
+	return map[string]string{
 		"source": "transcript_tail",
-		"text":   s.orchestrateTranscriptTail(r.Context(), subject),
+		"text":   s.orchestrateTranscriptTail(ctx, subject),
+	}
+}
+
+// orchestrateTurnEnvelopes returns subjectID's session.turn_ended envelopes,
+// oldest first. Best-effort: a query error is treated as "no live turn data"
+// rather than surfaced, matching every other best-effort path in this file.
+func (s *server) orchestrateTurnEnvelopes(ctx context.Context, subjectID string) []contracts.Envelope {
+	envs, err := s.data.Events(ctx, 0, subjectID, []string{string(contracts.TurnEnded)})
+	if err != nil {
+		return nil
+	}
+	return envs
+}
+
+// orchestrateTurnFromEnvelope decodes a session.turn_ended envelope's
+// {"delta": "..."} payload into a turndigest.Turn, using the envelope's Seq
+// (the Data Service's global, gapless, monotonically increasing log
+// position, pkg/contracts/event.go) as the turn's anchor number — the one
+// stable identifier a turn_ended envelope carries, and exactly what
+// get_turns's from_turn/to_turn need to recover the same range a digest
+// cites. turndigest.Parse recovers the structured Entry list (kind + text,
+// tool calls reduced to name+path) from the delta's rendered line format,
+// the same normalized shape GenerateDigest already builds from the same
+// payload for its own compression (services/router/internal/job/digest.go)
+// — a digest-of-already-normalized-data, not a re-summarization from
+// scratch. A payload that fails to decode yields an empty turn (skipped by
+// Digest, since it contributes no entries).
+func orchestrateTurnFromEnvelope(env contracts.Envelope) turndigest.Turn {
+	var payload struct {
+		Delta string `json:"delta"`
+	}
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return turndigest.Turn{Number: int(env.Seq)}
+	}
+	return turndigest.Turn{Number: int(env.Seq), Entries: turndigest.Parse(payload.Delta)}
+}
+
+// orchestrateTurnEntry is one turndigest.Entry tagged with the turn number
+// (envelope Seq) it came from — get_turns's response shape, so a leader can
+// see turn boundaries within the range it's drilling into.
+type orchestrateTurnEntry struct {
+	Turn int    `json:"turn"`
+	Kind string `json:"kind"`
+	Text string `json:"text,omitempty"`
+	Tool string `json:"tool,omitempty"`
+	Path string `json:"path,omitempty"`
+}
+
+// handleOrchestrateGetTurns answers {id}'s (the leader) get_turns tool call:
+// the normalized (turndigest.Parse'd, not model-compressed) entries for the
+// subject's session.turn_ended envelopes whose turn number (Seq) falls in
+// [from_turn, to_turn] — recoverable loss instead of minimal loss, letting a
+// leader drill down into the anchor range a get_summary digest cited. Gated
+// by the same orchestrate-link check as get_summary.
+func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Request) {
+	leaderID := r.PathValue("id")
+	subjectID := r.URL.Query().Get("for")
+	link, err := s.findOrchestrateLink(r.Context(), leaderID, subjectID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if link == nil {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "no orchestrate link to that subject"})
+		return
+	}
+	fromTurn, _ := strconv.Atoi(r.URL.Query().Get("from_turn"))
+	toTurn, _ := strconv.Atoi(r.URL.Query().Get("to_turn"))
+
+	entries := []orchestrateTurnEntry{}
+	for _, env := range s.orchestrateTurnEnvelopes(r.Context(), subjectID) {
+		turn := orchestrateTurnFromEnvelope(env)
+		if turn.Number < fromTurn || turn.Number > toTurn {
+			continue
+		}
+		for _, e := range turn.Entries {
+			entries = append(entries, orchestrateTurnEntry{Turn: turn.Number, Kind: e.Kind, Text: e.Text, Tool: e.Tool, Path: e.Path})
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"from_turn": fromTurn,
+		"to_turn":   toTurn,
+		"entries":   entries,
 	})
 }
 

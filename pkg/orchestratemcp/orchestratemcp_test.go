@@ -60,15 +60,15 @@ func TestInitializeAndToolsList(t *testing.T) {
 		t.Fatalf("tools/list result = %+v", resps[1].Result)
 	}
 	tools, ok := listResult["tools"].([]any)
-	if !ok || len(tools) != 3 {
-		t.Fatalf("tools = %+v, want 3 entries", listResult["tools"])
+	if !ok || len(tools) != 4 {
+		t.Fatalf("tools = %+v, want 4 entries", listResult["tools"])
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		m := tool.(map[string]any)
 		names[m["name"].(string)] = true
 	}
-	for _, want := range []string{"list_links", "get_summary", "send_message"} {
+	for _, want := range []string{"list_links", "get_summary", "get_turns", "send_message"} {
 		if !names[want] {
 			t.Errorf("tools/list missing %q, got %v", want, names)
 		}
@@ -127,6 +127,31 @@ func TestToolsCallGetSummary(t *testing.T) {
 	result := resps[0].Result.(map[string]any)
 	content := result["content"].([]any)[0].(map[string]any)
 	if content["text"] != `{"source":"summary","text":"did the thing"}` {
+		t.Fatalf("content text = %q", content["text"])
+	}
+}
+
+func TestToolsCallGetTurns(t *testing.T) {
+	var gotPath string
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"from_turn":1,"to_turn":2,"entries":[]}`))
+	}))
+	defer router.Close()
+
+	resps := runLines(t, router, "leader-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_turns","arguments":{"subject_session_id":"ses_subject","from_turn":1,"to_turn":2}}}`,
+	)
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	if gotPath != "/sessions/leader-1/orchestrate/turns?for=ses_subject&from_turn=1&to_turn=2" {
+		t.Fatalf("router saw path %q", gotPath)
+	}
+	result := resps[0].Result.(map[string]any)
+	content := result["content"].([]any)[0].(map[string]any)
+	if content["text"] != `{"from_turn":1,"to_turn":2,"entries":[]}` {
 		t.Fatalf("content text = %q", content["text"])
 	}
 }

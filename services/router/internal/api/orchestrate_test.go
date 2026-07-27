@@ -3,7 +3,9 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,6 +221,240 @@ func TestOrchestrateSummaryNoOrchestrateLinkForbidden(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("summary without link: status %d, want 403", resp.StatusCode)
+	}
+}
+
+// appendTurnEnded appends a session.turn_ended envelope carrying delta for
+// sessionID — the same shape Runner.pushTurnEnded persists — and returns it
+// with its assigned Seq, the turn number get_summary/get_turns anchor on.
+func appendTurnEnded(t *testing.T, c *dataclient.Client, sessionID, delta string) contracts.Envelope {
+	t.Helper()
+	raw, err := json.Marshal(map[string]string{"delta": delta})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	env := contracts.Envelope{
+		Type:      contracts.TurnEnded,
+		SessionID: sessionID,
+		Actor:     "test",
+		Payload:   raw,
+	}
+	if err := c.Append(context.Background(), &env); err != nil {
+		t.Fatalf("append session.turn_ended: %v", err)
+	}
+	return env
+}
+
+// TestOrchestrateSummaryCompressesLiveTurns proves get_summary on a subject
+// with session.turn_ended envelopes returns compressed prose citing the turn
+// range, with the durable Summary carried alongside as a "prologue" rather
+// than short-circuiting the whole response (the staleness this rework
+// fixes: a durable summary alone can't reflect turns that landed after it
+// was written).
+func TestOrchestrateSummaryCompressesLiveTurns(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	direct := dataclient.New(base, "test-bootstrap")
+	subject.Summary = "did the thing (stale)"
+	if err := direct.UpdateSession(context.Background(), &subject); err != nil {
+		t.Fatalf("set summary: %v", err)
+	}
+	first := appendTurnEnded(t, direct, subject.ID, "user: fix the bug\nassistant: on it\n")
+	last := appendTurnEnded(t, direct, subject.ID, "assistant: fixed and tested\n")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/summary?for=" + subject.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("summary: status %d", resp.StatusCode)
+	}
+	got := decodeJSON[map[string]any](t, resp)
+	if got["source"] != "compressed_recent" {
+		t.Fatalf("summary = %+v, want source: compressed_recent", got)
+	}
+	if got["text"] == "" || got["text"] == nil {
+		t.Fatalf("summary = %+v, want non-empty text", got)
+	}
+	if got["prologue"] != "did the thing (stale)" {
+		t.Fatalf("summary = %+v, want prologue %q", got, "did the thing (stale)")
+	}
+	if int(got["from_turn"].(float64)) != int(first.Seq) || int(got["to_turn"].(float64)) != int(last.Seq) {
+		t.Fatalf("summary = %+v, want from_turn %d to_turn %d", got, first.Seq, last.Seq)
+	}
+}
+
+// TestOrchestrateSummaryLongTranscriptHonorsBudget proves a long-transcript
+// fixture (many turn_ended envelopes) still yields output the digest
+// budget bounds, rather than growing unbounded with turn count.
+func TestOrchestrateSummaryLongTranscriptHonorsBudget(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	direct := dataclient.New(base, "test-bootstrap")
+	for range 100 {
+		appendTurnEnded(t, direct, subject.ID,
+			"user: keep going\nassistant: "+strings.Repeat("did more work ", 40)+"\n")
+	}
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/summary?for=" + subject.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("summary: status %d", resp.StatusCode)
+	}
+	got := decodeJSON[map[string]any](t, resp)
+	if got["source"] != "compressed_recent" {
+		t.Fatalf("summary = %+v, want source: compressed_recent", got)
+	}
+	// ~4 bytes/token heuristic (pkg/turndigest): a generous multiple of the
+	// endpoint's budget proves the output didn't just grow with turn count.
+	const budgetTokens = 1000
+	if text := got["text"].(string); len(text) > budgetTokens*4*2 {
+		t.Fatalf("text length %d, want <= %d (budget honored)", len(text), budgetTokens*4*2)
+	}
+}
+
+// TestOrchestrateSummaryNoEnvelopesUnchanged proves a subject with no
+// session.turn_ended envelopes still gets exactly today's behavior: the
+// durable summary alone, or the raw transcript tail — no compression
+// attempted at all.
+func TestOrchestrateSummaryNoEnvelopesUnchanged(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	direct := dataclient.New(base, "test-bootstrap")
+	subject.Summary = "did the thing"
+	if err := direct.UpdateSession(context.Background(), &subject); err != nil {
+		t.Fatalf("set summary: %v", err)
+	}
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/summary?for=" + subject.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("summary: status %d", resp.StatusCode)
+	}
+	got := decodeJSON[map[string]string](t, resp)
+	if got["source"] != "summary" || got["text"] != "did the thing" {
+		t.Fatalf("summary = %+v, want {source: summary, text: %q}", got, "did the thing")
+	}
+}
+
+// TestOrchestrateGetTurnsReturnsCitedRange proves get_turns recovers the
+// normalized entries for the exact turn range a get_summary digest would
+// cite.
+func TestOrchestrateGetTurnsReturnsCitedRange(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	direct := dataclient.New(base, "test-bootstrap")
+	before := appendTurnEnded(t, direct, subject.ID, "user: earlier turn\n")
+	first := appendTurnEnded(t, direct, subject.ID, "user: fix the bug\nassistant: on it\n")
+	last := appendTurnEnded(t, direct, subject.ID, "tool: Bash\nassistant: fixed\n")
+
+	createResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if createResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status %d", createResp.StatusCode)
+	}
+
+	url := fmt.Sprintf("%s/sessions/%s/orchestrate/turns?for=%s&from_turn=%d&to_turn=%d",
+		srv.URL, leader.ID, subject.ID, first.Seq, last.Seq)
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get_turns: status %d", resp.StatusCode)
+	}
+	type turnsResp struct {
+		FromTurn int `json:"from_turn"`
+		ToTurn   int `json:"to_turn"`
+		Entries  []struct {
+			Turn int    `json:"turn"`
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+			Tool string `json:"tool"`
+		} `json:"entries"`
+	}
+	got := decodeJSON[turnsResp](t, resp)
+	if got.FromTurn != int(first.Seq) || got.ToTurn != int(last.Seq) {
+		t.Fatalf("range = %d..%d, want %d..%d", got.FromTurn, got.ToTurn, first.Seq, last.Seq)
+	}
+	for _, e := range got.Entries {
+		if e.Turn == int(before.Seq) {
+			t.Fatalf("entries = %+v, want no entry from the turn before the cited range", got.Entries)
+		}
+	}
+	if len(got.Entries) != 4 {
+		t.Fatalf("entries = %+v, want 4 (2 from each cited turn)", got.Entries)
+	}
+	if got.Entries[0].Kind != "user" || got.Entries[0].Text != "fix the bug" {
+		t.Fatalf("entries[0] = %+v, want {kind: user, text: fix the bug}", got.Entries[0])
+	}
+}
+
+// TestOrchestrateGetTurnsNoOrchestrateLinkForbidden proves get_turns is
+// gated by the same orchestrate-link check as get_summary.
+func TestOrchestrateGetTurnsNoOrchestrateLinkForbidden(t *testing.T) {
+	srv := newTestServer(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/orchestrate/turns?for=" + subject.ID + "&from_turn=1&to_turn=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("get_turns without link: status %d, want 403", resp.StatusCode)
 	}
 }
 
