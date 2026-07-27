@@ -15,9 +15,16 @@ import (
 // response for every request that carried an id, in order.
 func runLines(t *testing.T, router *httptest.Server, sessionID string, reqLines ...string) []rpcResponse {
 	t.Helper()
+	return runLinesMode(t, router, sessionID, false, reqLines...)
+}
+
+// runLinesMode is runLines with an explicit readOnly mode, for exercising
+// the read-grant-only tool slice (item 1).
+func runLinesMode(t *testing.T, router *httptest.Server, sessionID string, readOnly bool, reqLines ...string) []rpcResponse {
+	t.Helper()
 	in := strings.NewReader(strings.Join(reqLines, "\n") + "\n")
 	var out bytes.Buffer
-	srv := New(router.URL, sessionID, in, &out)
+	srv := New(router.URL, sessionID, readOnly, in, &out)
 	if err := srv.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -60,18 +67,103 @@ func TestInitializeAndToolsList(t *testing.T) {
 		t.Fatalf("tools/list result = %+v", resps[1].Result)
 	}
 	tools, ok := listResult["tools"].([]any)
-	if !ok || len(tools) != 4 {
-		t.Fatalf("tools = %+v, want 4 entries", listResult["tools"])
+	if !ok || len(tools) != 5 {
+		t.Fatalf("tools = %+v, want 5 entries", listResult["tools"])
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
 		m := tool.(map[string]any)
 		names[m["name"].(string)] = true
 	}
-	for _, want := range []string{"list_links", "get_summary", "get_turns", "send_message"} {
+	for _, want := range []string{"list_links", "get_summary", "get_turns", "send_message", "set_attention"} {
 		if !names[want] {
 			t.Errorf("tools/list missing %q, got %v", want, names)
 		}
+	}
+}
+
+// TestReadOnlyToolsListExcludesSendMessage proves a read-grant-only session
+// (MADS_ORCHESTRATE_READONLY, plumbed through as New's readOnly bool) never
+// advertises send_message — the pull tools it does get, list_links/
+// get_summary/get_turns/set_attention, all remain (item 1: "pull tools for
+// read grants").
+func TestReadOnlyToolsListExcludesSendMessage(t *testing.T) {
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request to router: %s %s", r.Method, r.URL.Path)
+	}))
+	defer router.Close()
+
+	resps := runLinesMode(t, router, "monitor-1", true,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+	)
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	listResult := resps[0].Result.(map[string]any)
+	tools := listResult["tools"].([]any)
+	names := map[string]bool{}
+	for _, tool := range tools {
+		names[tool.(map[string]any)["name"].(string)] = true
+	}
+	if names["send_message"] {
+		t.Fatalf("tools/list in read-only mode advertised send_message: %v", names)
+	}
+	for _, want := range []string{"list_links", "get_summary", "get_turns", "set_attention"} {
+		if !names[want] {
+			t.Errorf("read-only tools/list missing %q, got %v", want, names)
+		}
+	}
+}
+
+// TestReadOnlySendMessageRejected proves a read-only Server refuses a
+// send_message tools/call outright — never forwarding it to the Router —
+// even if a read-grant-only session's agent tries to call it anyway.
+func TestReadOnlySendMessageRejected(t *testing.T) {
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request to router: %s %s", r.Method, r.URL.Path)
+	}))
+	defer router.Close()
+
+	resps := runLinesMode(t, router, "monitor-1", true,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message","arguments":{"link_id":"lnk_1","text":"hello"}}}`,
+	)
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	if resps[0].Error == nil {
+		t.Fatalf("resp = %+v, want an error rejecting send_message", resps[0])
+	}
+}
+
+// TestToolsCallSetAttention proves set_attention forwards to the Router's
+// per-session attention route with the caller's own session ID and the
+// link_id/cadence tool arguments (item 2).
+func TestToolsCallSetAttention(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"lnk_1","cadence":"manual_only"}`))
+	}))
+	defer router.Close()
+
+	resps := runLines(t, router, "monitor-1",
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"set_attention","arguments":{"link_id":"lnk_1","cadence":"manual_only"}}}`,
+	)
+	if len(resps) != 1 {
+		t.Fatalf("got %d responses, want 1", len(resps))
+	}
+	if gotPath != "/sessions/monitor-1/orchestrate/attention" {
+		t.Fatalf("router saw path %q", gotPath)
+	}
+	if gotBody["link_id"] != "lnk_1" || gotBody["cadence"] != "manual_only" {
+		t.Fatalf("router saw body %+v", gotBody)
+	}
+	result := resps[0].Result.(map[string]any)
+	if result["isError"] != false {
+		t.Fatalf("isError = %v, want false", result["isError"])
 	}
 }
 

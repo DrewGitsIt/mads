@@ -16,14 +16,17 @@ import (
 
 const DigestKind = "digest"
 
-// GenerateDigest is the job body for a watched session's turn completing
+// GenerateDigest is the job body for a watched session's turn(s) completing
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4, the `read` grant's push half):
-// compress delta via the Fast Model and fan it out to every `read`+`per_turn`
-// link's granting (monitor) session. Best-effort throughout — a session that
-// no longer exists, a feature flag that's off, or one monitor's delivery
-// failing never fails the job; the watched session must be completely
-// unaffected by its observers.
-func GenerateDigest(sessionID, delta string) Func {
+// compress deltas via the Fast Model and fan them out to every
+// `read`+`per_turn` link's granting (monitor) session. deltas holds one
+// rendered turn per entry — digestwatch.Watcher debounces a burst of a
+// subject's turns and passes them all through here as one combined digest,
+// mirroring synthwatch/job.SynthesizeSession's turns []string shape.
+// Best-effort throughout — a session that no longer exists, a feature flag
+// that's off, or one monitor's delivery failing never fails the job; the
+// watched session must be completely unaffected by its observers.
+func GenerateDigest(sessionID string, deltas []string) Func {
 	return func(ctx context.Context, deps Deps) error {
 		sess, err := deps.Data.Session(ctx, sessionID)
 		if errors.Is(err, dataclient.ErrNotFound) {
@@ -60,8 +63,12 @@ func GenerateDigest(sessionID, delta string) Func {
 			return nil // no live per_turn readers; skip the fast-model call entirely
 		}
 
+		turns := make([]turndigest.Turn, len(deltas))
+		for i, delta := range deltas {
+			turns[i] = turndigest.Turn{Entries: turndigest.Parse(delta)}
+		}
 		res, err := turndigest.New(deps.FastModel).Digest(ctx, turndigest.Request{
-			Turns:    []turndigest.Turn{{Entries: turndigest.Parse(delta)}},
+			Turns:    turns,
 			Audience: turndigest.MonitorPush,
 			// BudgetTokens deliberately 0: monitors always get a compressed
 			// digest, and a skippable backend degrades to empty ⇒ no push
@@ -81,7 +88,7 @@ func GenerateDigest(sessionID, delta string) Func {
 				continue // monitor not running: best-effort skip, not a failure
 			}
 			if err := deliverDigest(ctx, addr, text, contracts.Attribution{
-				LinkID: l.ID, SourceName: sess.Name,
+				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
 			}); err != nil {
 				log.Printf("digest: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 				continue // one monitor's failure must not affect the others

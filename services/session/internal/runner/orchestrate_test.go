@@ -165,6 +165,75 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 	}
 }
 
+// TestSetupOrchestrateWithReadGrantOnlyIsReadOnly proves a session holding
+// only the read grant (a monitor) still gets the orchestrate MCP server
+// materialized (item 1, "pull tools for read grants"), but signaled into
+// read-only mode via MADS_ORCHESTRATE_READONLY — pkg/orchestratemcp's own
+// tests (TestReadOnlyToolsListExcludesSendMessage,
+// TestReadOnlySendMessageRejected) prove that env var actually excludes/
+// rejects send_message; this proves the Runner wires it for the right grant
+// shape and not for an orchestrate holder (TestSetupOrchestrateWithGrant's
+// 2-entry Env has no such marker).
+func TestSetupOrchestrateWithReadGrantOnlyIsReadOnly(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	monitor := newSession(t, base)
+	subject := newSession(t, base)
+	monitorData := dataclient.New(base, monitor.ID)
+	if _, err := monitorData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: monitor.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	}); err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(monitor.ID, monitorData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:9999"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+monitor.ID) })
+
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+
+	refs := providerMCPServers(t, monitorData, fp, monitor.ID)
+	if len(refs) != 1 {
+		t.Fatalf("MCPServers = %+v, want 1 entry", refs)
+	}
+	got := refs[0]
+	wantEnv := map[string]bool{
+		"MADS_ROUTER_URL=http://localhost:9999": true,
+		"MADS_SESSION_ID=" + monitor.ID:         true,
+		"MADS_ORCHESTRATE_READONLY=1":           true,
+	}
+	if len(got.Env) != 3 {
+		t.Fatalf("Env = %v, want 3 entries %v", got.Env, wantEnv)
+	}
+	for _, e := range got.Env {
+		if !wantEnv[e] {
+			t.Errorf("Env has unexpected entry %q", e)
+		}
+	}
+}
+
 func testMCPRegistry(t *testing.T) *capability.Registry {
 	t.Helper()
 	return capability.NewRegistry(t.TempDir())
@@ -490,12 +559,94 @@ func TestRefreshOrchestrateUnsupportedProviderDegradesLinkStatus(t *testing.T) {
 	}
 }
 
-// TestRefreshOrchestrateTeardownOnGrantRemoval covers the task's "wire
-// teardown symmetrically for link removal" requirement: dropping the
-// orchestrate grant from an already-materialized leader link cycles the
-// live MCP set back down to empty and stops the local orchestrate-mcp
-// capability process, without needing a restart.
-func TestRefreshOrchestrateTeardownOnGrantRemoval(t *testing.T) {
+// TestRefreshOrchestrateDowngradesToReadOnlyOnGrantRemoval covers a leader
+// link downgraded to a monitor link (orchestrate grant dropped, read grant
+// kept): since item 1 ("pull tools for read grants") now materializes the
+// orchestrate MCP server for a read grant too, this no longer tears the
+// server down — it cycles it into read-only mode (MADS_ORCHESTRATE_READONLY)
+// live, without needing a restart.
+func TestRefreshOrchestrateDowngradesToReadOnlyOnGrantRemoval(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	// Grant held at boot: materialized immediately (TestSetupOrchestrateWithGrant).
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+	if refs := providerMCPServers(t, leaderData, fp, leader.ID); len(refs) != 1 {
+		t.Fatalf("MCPServers before downgrade = %+v, want 1 entry", refs)
+	}
+
+	if _, err := leaderData.UpdateLink(ctx, link.ID, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	}); err != nil {
+		t.Fatalf("update link: %v", err)
+	}
+
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+
+	refs := providerMCPServers(t, leaderData, fp, leader.ID)
+	if len(refs) != 1 {
+		t.Fatalf("MCPServers after downgrade = %+v, want 1 entry (still materialized, now read-only)", refs)
+	}
+	foundReadOnly := false
+	for _, e := range refs[0].Env {
+		if e == "MADS_ORCHESTRATE_READONLY=1" {
+			foundReadOnly = true
+		}
+	}
+	if !foundReadOnly {
+		t.Fatalf("Env = %v, want MADS_ORCHESTRATE_READONLY=1 after downgrade to monitor", refs[0].Env)
+	}
+	if !r.MCPRegistry.Running("orchestrate-" + leader.ID) {
+		t.Fatal("orchestrate-mcp capability process not running after downgrade to read-only")
+	}
+}
+
+// TestRefreshOrchestrateTeardownOnLinkDeletion covers the task's "wire
+// teardown symmetrically for link removal" requirement: deleting the only
+// link (dropping every grant, not just downgrading) cycles the live MCP set
+// back down to empty and stops the local orchestrate-mcp capability
+// process, without needing a restart.
+func TestRefreshOrchestrateTeardownOnLinkDeletion(t *testing.T) {
 	putMadsOnPath(t)
 	ctx := context.Background()
 	base := datatest.Start(t)
@@ -541,12 +692,8 @@ func TestRefreshOrchestrateTeardownOnGrantRemoval(t *testing.T) {
 		t.Fatalf("MCPServers before removal = %+v, want 1 entry", refs)
 	}
 
-	if _, err := leaderData.UpdateLink(ctx, link.ID, contracts.LinkRequest{
-		GrantingSessionID: leader.ID,
-		SubjectSessionID:  subject.ID,
-		Preset:            contracts.PresetMonitor,
-	}); err != nil {
-		t.Fatalf("update link: %v", err)
+	if err := leaderData.DeleteLink(ctx, link.ID); err != nil {
+		t.Fatalf("delete link: %v", err)
 	}
 
 	if err := r.RefreshOrchestrate(ctx); err != nil {
@@ -555,7 +702,7 @@ func TestRefreshOrchestrateTeardownOnGrantRemoval(t *testing.T) {
 
 	assertNoOrchestrateMCPServer(t, leaderData, fp, leader.ID)
 	if r.MCPRegistry.Running("orchestrate-" + leader.ID) {
-		t.Fatal("orchestrate-mcp capability process still running after grant removal")
+		t.Fatal("orchestrate-mcp capability process still running after link deletion")
 	}
 }
 

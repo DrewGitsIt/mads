@@ -81,6 +81,14 @@ func alive(pid int) bool {
 	return proc.Signal(syscall.Signal(0)) == nil
 }
 
+// blockingReader is a Read that never returns, giving a spawned capability
+// process an stdin that never reaches EOF on its own — see EnsureStarted.
+type blockingReader struct{}
+
+func (blockingReader) Read([]byte) (int, error) {
+	select {}
+}
+
 // EnsureStarted starts capability cap's server if no live process is
 // recorded for it. env carries exactly cap's own resolved credential env
 // vars (spec §13.3) — callers resolve from credstore themselves; this
@@ -124,6 +132,13 @@ func (r *Registry) EnsureStarted(ctx context.Context, cap contracts.Capability, 
 	//nolint:gosec // cap.Config.Command is operator/registry-configured, not raw user input
 	cmd := exec.Command(fields[0], fields[1:]...)
 	cmd.Env = append(os.Environ(), env...)
+	// A nil Stdin resolves to os.DevNull, an immediate EOF — fatal for a
+	// long-lived capability that reads stdin in a loop (e.g. orchestrate-mcp's
+	// stdio JSON-RPC server, docs/LINKED-SESSIONS-DESIGN.md decisions 1-3),
+	// which would otherwise exit right after spawning. blockingReader never
+	// yields EOF, matching "stays running until the user explicitly stops
+	// them" for every Command-based capability, not just stdio ones.
+	cmd.Stdin = blockingReader{}
 	// No Pdeathsig: the server must outlive this OS process (spec §12.5,
 	// "stays running until the user explicitly stops them").
 	if err := cmd.Start(); err != nil {

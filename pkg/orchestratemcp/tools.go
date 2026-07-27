@@ -1,7 +1,10 @@
 package orchestratemcp
 
-// toolDefs is the tools/list response body — exactly the three tools this
-// server implements, each mapping 1:1 onto one Router orchestrate route.
+// toolDefs is the full tools/list response body for a session holding the
+// orchestrate grant — every tool this server implements, each mapping 1:1
+// onto one Router orchestrate route. A session holding only the read grant
+// gets readOnlyToolDefs() instead: everything except send_message, which
+// stays orchestrate-only (item 1, "pull tools for read grants").
 var toolDefs = []map[string]any{
 	{
 		"name":        "list_links",
@@ -52,4 +55,30 @@ var toolDefs = []map[string]any{
 			"additionalProperties": false,
 		},
 	},
+	{
+		"name":        "set_attention",
+		"description": "Flip your own attention level on a link you hold: per_turn to keep receiving pushed digests as the subject's turns complete, or manual_only to stop the push and catch up on demand via get_summary/get_turns instead.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"link_id": map[string]any{"type": "string"},
+				"cadence": map[string]any{"type": "string", "enum": []string{"per_turn", "manual_only"}},
+			},
+			"required":             []string{"link_id", "cadence"},
+			"additionalProperties": false,
+		},
+	},
+}
+
+// readOnlyToolDefs is toolDefs minus send_message — the slice spawned for a
+// session that holds only the read grant (item 1).
+func readOnlyToolDefs() []map[string]any {
+	out := make([]map[string]any, 0, len(toolDefs))
+	for _, t := range toolDefs {
+		if t["name"] == "send_message" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }

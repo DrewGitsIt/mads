@@ -39,25 +39,29 @@ type rpcError struct {
 }
 
 // Server is one MCP-over-stdio session: it reads JSON-RPC requests from in,
-// dispatches to the three orchestrate tools via client, and writes responses
-// to out. One Server per spawned process (pkg/capability.Registry starts
+// dispatches to the orchestrate tools via client, and writes responses to
+// out. One Server per spawned process (pkg/capability.Registry starts
 // exactly one long-lived process per session, matching setupMCP's existing
 // lifecycle).
 type Server struct {
-	client *client
-	in     *bufio.Reader
-	out    io.Writer
+	client   *client
+	readOnly bool
+	in       *bufio.Reader
+	out      io.Writer
 }
 
-// New builds a Server. routerURL and sessionID are the leader's own Router
+// New builds a Server. routerURL and sessionID are the caller's own Router
 // base URL and session ID (env MADS_ROUTER_URL / MADS_SESSION_ID, set by the
-// Runner at spawn time) — every tool call is scoped to this one leader
-// session.
-func New(routerURL, sessionID string, in io.Reader, out io.Writer) *Server {
+// Runner at spawn time) — every tool call is scoped to this one session.
+// readOnly (env MADS_ORCHESTRATE_READONLY) excludes send_message from
+// tools/list and rejects it if called anyway — set for a session that holds
+// only the read grant, not the orchestrate grant (item 1).
+func New(routerURL, sessionID string, readOnly bool, in io.Reader, out io.Writer) *Server {
 	return &Server{
-		client: newClient(routerURL, sessionID),
-		in:     bufio.NewReader(in),
-		out:    out,
+		client:   newClient(routerURL, sessionID),
+		readOnly: readOnly,
+		in:       bufio.NewReader(in),
+		out:      out,
 	}
 }
 
@@ -114,7 +118,11 @@ func (s *Server) handle(ctx context.Context, req rpcRequest) *rpcResponse {
 			"serverInfo":      map[string]any{"name": "mads-orchestrate", "version": "0.1.0"},
 		}}
 	case "tools/list":
-		return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": toolDefs}}
+		tools := toolDefs
+		if s.readOnly {
+			tools = readOnlyToolDefs()
+		}
+		return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{"tools": tools}}
 	case "tools/call":
 		return s.handleToolCall(ctx, req)
 	default:
@@ -156,6 +164,9 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 		}
 		status, body, err = s.client.getTurns(ctx, args.SubjectSessionID, args.FromTurn, args.ToTurn)
 	case "send_message":
+		if s.readOnly {
+			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "unknown tool: send_message"}}
+		}
 		var args struct {
 			LinkID string `json:"link_id"`
 			Text   string `json:"text"`
@@ -165,6 +176,15 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
 		}
 		status, body, err = s.client.sendMessage(ctx, args.LinkID, args.Text, args.WaitMS)
+	case "set_attention":
+		var args struct {
+			LinkID  string `json:"link_id"`
+			Cadence string `json:"cadence"`
+		}
+		if unmarshalErr := json.Unmarshal(params.Arguments, &args); unmarshalErr != nil {
+			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
+		}
+		status, body, err = s.client.setAttention(ctx, args.LinkID, args.Cadence)
 	default:
 		return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "unknown tool: " + params.Name}}
 	}

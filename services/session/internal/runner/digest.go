@@ -20,12 +20,27 @@ import (
 type digestAccumulator struct {
 	mu  sync.Mutex
 	buf []turndigest.Entry
+
+	// sawUser/allUserDigestAttributed track whether every recordUser call
+	// this turn was a job.GenerateDigest push (Attribution.DigestAttributed)
+	// rather than a real user/leader message — renderAndReset reports this
+	// as digestOnly so digestwatch can skip re-triggering on a monitor's own
+	// forced turn (self-amplification guard).
+	sawUser                 bool
+	allUserDigestAttributed bool
 }
 
-func (d *digestAccumulator) recordUser(text string) {
+func (d *digestAccumulator) recordUser(text string, digestAttributed bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.buf = append(d.buf, turndigest.Entry{Kind: turndigest.KindUser, Text: text})
+	if !d.sawUser {
+		d.allUserDigestAttributed = true
+	}
+	d.sawUser = true
+	if !digestAttributed {
+		d.allUserDigestAttributed = false
+	}
 }
 
 func (d *digestAccumulator) recordEvent(ev provider.Event) {
@@ -47,13 +62,18 @@ func (d *digestAccumulator) recordEvent(ev provider.Event) {
 // (the Fast Model prompt shape, same bytes as the old inline rendering) and
 // resets it for the next turn. Empty when nothing accumulated (e.g. a turn
 // with no assistant text or tool use) — the caller skips the push entirely.
-func (d *digestAccumulator) renderAndReset() string {
+// digestOnly reports whether every recordUser call this turn was a
+// job.GenerateDigest push, with no real user/leader message mixed in.
+func (d *digestAccumulator) renderAndReset() (out string, digestOnly bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if len(d.buf) == 0 {
-		return ""
+		return "", false
 	}
-	out := turndigest.Render(d.buf)
+	out = turndigest.Render(d.buf)
+	digestOnly = d.sawUser && d.allUserDigestAttributed
 	d.buf = nil
-	return out
+	d.sawUser = false
+	d.allUserDigestAttributed = false
+	return out, digestOnly
 }

@@ -710,6 +710,90 @@ firstDrained:
 	}
 }
 
+// TestInjectCoalescesQueuedDigestInjections proves drainNextLocked: a
+// backlog of same-link digest-attributed injections queued while busy
+// drains as a single forced turn (one combined Send call), while a queued
+// injection that isn't digest-attributed (a real leader message, in this
+// case from a different link) still delivers its own individual turn
+// afterward, in order.
+func TestInjectCoalescesQueuedDigestInjections(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	digestAttr := contracts.Attribution{LinkID: "lnk_monitor", SourceName: "monitor", DigestAttributed: true}
+	if err := r.Inject(ctx, "echo one", digestAttr); err != nil {
+		t.Fatalf("inject digest 1: %v", err)
+	}
+	if err := r.Inject(ctx, "echo two", digestAttr); err != nil {
+		t.Fatalf("inject digest 2: %v", err)
+	}
+	if err := r.Inject(ctx, "echo three", digestAttr); err != nil {
+		t.Fatalf("inject digest 3: %v", err)
+	}
+
+	nonDigestAttr := contracts.Attribution{LinkID: "lnk_leader", SourceName: "leader"}
+	if err := r.Inject(ctx, "echo four", nonDigestAttr); err != nil {
+		t.Fatalf("inject non-digest: %v", err)
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+
+	// Drain the interrupted "slow" turn's own turn_end.
+	deadline := time.After(5 * time.Second)
+firstDrained:
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before first turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				break firstDrained
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for interrupted turn_end")
+		}
+	}
+
+	// The three queued digest injections coalesce into a single forced
+	// turn: one combined Send, so the reply contains all three verbatim
+	// texts joined, not three separate "you said" replies.
+	got := drainText(t, ch)
+	want := "you said one\n\necho two\n\necho three"
+	if got != want {
+		t.Fatalf("coalesced digest turn reply = %q, want %q", got, want)
+	}
+
+	// The queued non-digest injection still delivers its own turn
+	// afterward, undisturbed by the coalescing above.
+	got = drainText(t, ch)
+	if got != "you said four" {
+		t.Fatalf("non-digest queued turn reply = %q, want %q", got, "you said four")
+	}
+}
+
 // TestInjectAttributionReachesTranscript proves decision 2
 // (docs/LINKED-SESSIONS-DESIGN.md): an injected message's Attribution
 // survives into the Transcript, and ordinary user turns carry none.

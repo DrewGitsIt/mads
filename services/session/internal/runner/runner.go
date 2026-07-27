@@ -556,7 +556,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	}
 
 	r.synthEngine.OnUserSend(text)
-	r.digest.recordUser(text)
+	r.digest.recordUser(text, false)
 
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
@@ -591,7 +591,7 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
-	r.digest.recordUser(text)
+	r.digest.recordUser(text, attribution.DigestAttributed)
 	r.recordInjectionAudit(ctx, attribution, text)
 
 	if err := sess.Send(ctx, text); err != nil {
@@ -628,7 +628,12 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // onTurnEnd clears the in-flight flag and, if any injections queued while
 // busy, delivers the next one — all under one continuous lock hold, so a
 // concurrent Send or Inject can't steal the slot ahead of a message that
-// was already queued (FIFO ordering, decision 1).
+// was already queued (FIFO ordering, decision 1). A run of queued digest
+// pushes (job.GenerateDigest, decision 4) from the same link at the front
+// of the queue is coalesced into a single forced turn instead of one per
+// queued digest — see drainNextLocked. Any other queued injection (a real
+// user/leader message, or a digest from a different link) stops the
+// coalescing there and keeps its own individual, in-order turn.
 //
 // It also drains the digest accumulator and pushes the turn's delta
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4) before clearing busy, so a
@@ -640,19 +645,18 @@ func (r *Runner) onTurnEnd() {
 	r.mu.Lock()
 	r.busy = false
 	if len(r.pending) > 0 {
-		next := r.pending[0]
-		r.pending = r.pending[1:]
-		r.deliverLocked(&next.attribution)
+		text, attribution := r.drainNextLocked()
+		r.deliverLocked(&attribution)
 		sess := r.sess
 		r.mu.Unlock()
 		if sess == nil {
 			return
 		}
 
-		r.synthEngine.OnUserSend(next.text)
-		r.digest.recordUser(next.text)
+		r.synthEngine.OnUserSend(text)
+		r.digest.recordUser(text, attribution.DigestAttributed)
 
-		if err := sess.Send(context.Background(), next.text); err != nil {
+		if err := sess.Send(context.Background(), text); err != nil {
 			log.Printf("runner: deliver queued injection: %v", err)
 			r.mu.Lock()
 			r.busy = false
@@ -678,22 +682,55 @@ func (r *Runner) onTurnEnd() {
 	}
 }
 
+// drainNextLocked pops the next queued injection(s) to deliver as one
+// forced turn. If the head of r.pending is a digest push
+// (Attribution.DigestAttributed), every contiguous queued digest push from
+// the same link is coalesced into a single combined injection — a burst of
+// per_turn digests that piled up while busy becomes one forced turn, not
+// one per queued digest. Any other queued injection (a real user/leader
+// message, or a digest from a different link) stops the coalescing and is
+// left at the front of the queue for its own turn, so non-digest ordering
+// is untouched. Must be called with r.mu held; mutates r.pending in place.
+func (r *Runner) drainNextLocked() (text string, attribution contracts.Attribution) {
+	head := r.pending[0]
+	if !head.attribution.DigestAttributed {
+		r.pending = r.pending[1:]
+		return head.text, head.attribution
+	}
+
+	texts := []string{head.text}
+	i := 1
+	for i < len(r.pending) {
+		item := r.pending[i]
+		if !item.attribution.DigestAttributed || item.attribution.LinkID != head.attribution.LinkID {
+			break
+		}
+		texts = append(texts, item.text)
+		i++
+	}
+	r.pending = r.pending[i:]
+	return strings.Join(texts, "\n\n"), head.attribution
+}
+
 // pushTurnEnded renders and resets the digest accumulator, appending a
 // TurnEnded envelope carrying the raw delta if the turn produced any
 // activity. The Router's digest watcher does the actual compression and
 // per-link fan-out (job.GenerateDigest) — this is just the trigger.
+// digest_only marks a turn whose entries were solely digest-attributed
+// injections (a monitor's own forced turn): digestwatch skips spawning
+// another digest for it, so monitor chains can't self-amplify.
 // Best-effort: a failure here logs and is skipped, never surfaced to the
 // caller, so a digest problem can never perturb the watched session's own
 // turn (docs/LINKED-SESSIONS-DESIGN.md decision 4).
 func (r *Runner) pushTurnEnded() {
-	delta := r.digest.renderAndReset()
+	delta, digestOnly := r.digest.renderAndReset()
 	if delta == "" {
 		return
 	}
 	env := contracts.Envelope{
 		Type:      contracts.TurnEnded,
 		SessionID: r.sessionID,
-		Payload:   mustJSON(map[string]string{"delta": delta}),
+		Payload:   mustJSON(map[string]any{"delta": delta, "digest_only": digestOnly}),
 	}
 	if err := r.data.Append(context.Background(), &env); err != nil {
 		log.Printf("runner: append session.turn_ended: %v", err)

@@ -59,6 +59,12 @@ type Usage struct {
 type Attribution struct {
 	LinkID     string `json:"link_id"`
 	SourceName string `json:"source_name"`
+	// DigestAttributed marks an injection as a job.GenerateDigest push
+	// (docs/LINKED-SESSIONS-DESIGN.md decision 4), as opposed to a real
+	// user/leader message. A turn whose injected entries are solely
+	// digest-attributed is excluded from re-triggering digestwatch, so a
+	// monitor's own forced turn can't self-amplify a monitor chain.
+	DigestAttributed bool `json:"digest_attributed,omitempty"`
 }
 
 // InjectRequest is the body of POST /inject (session-service) and

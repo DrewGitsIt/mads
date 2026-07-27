@@ -24,18 +24,19 @@ func cmdInternal(args []string) error {
 	}
 }
 
-// cmdOrchestrateMCP runs the leader capability's MCP-over-stdio server
-// (docs/LINKED-SESSIONS-DESIGN.md decisions 1-3). Hidden subcommand: never
-// invoked by a user directly, only as the Config.Command a session's own
-// synthetic orchestrate capability spawns (services/session/internal/runner/capability.go
+// cmdOrchestrateMCP runs the leader/monitor capability's MCP-over-stdio
+// server (docs/LINKED-SESSIONS-DESIGN.md decisions 1-3). Hidden subcommand:
+// never invoked by a user directly, only as the Config.Command a session's
+// own synthetic orchestrate capability spawns (services/session/internal/runner/capability.go
 // setupOrchestrate), which sets MADS_ROUTER_URL and MADS_SESSION_ID in its
-// environment.
+// environment, plus MADS_ORCHESTRATE_READONLY for a read-grant-only session.
 func cmdOrchestrateMCP(stdin io.Reader, stdout io.Writer) error {
 	routerURL := os.Getenv("MADS_ROUTER_URL")
 	sessionID := os.Getenv("MADS_SESSION_ID")
 	if routerURL == "" || sessionID == "" {
 		return fmt.Errorf("internal orchestrate-mcp: MADS_ROUTER_URL and MADS_SESSION_ID are required")
 	}
-	srv := orchestratemcp.New(routerURL, sessionID, stdin, stdout)
+	readOnly := os.Getenv("MADS_ORCHESTRATE_READONLY") != ""
+	srv := orchestratemcp.New(routerURL, sessionID, readOnly, stdin, stdout)
 	return srv.Run(context.Background())
 }
