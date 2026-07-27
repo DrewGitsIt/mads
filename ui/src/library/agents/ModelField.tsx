@@ -1,3 +1,4 @@
+import { Select, type SelectOption } from "../../components";
 import { useProviderModels } from "../../router/useProviderModels";
 import styles from "./ModelField.module.css";
 
@@ -10,23 +11,16 @@ export interface ModelFieldProps {
 export function ModelField({ value, onChange }: ModelFieldProps) {
   const modelsByProvider = useProviderModels();
 
+  const options: SelectOption[] = Object.entries(modelsByProvider).flatMap(([provider, models]) =>
+    models.map((m) => ({ value: m.id, label: m.name, groupLabel: provider })),
+  );
+
   return (
     <div className={styles.field}>
       <label className={styles.label} htmlFor="model-select">
         Preferred model
       </label>
-      <select id="model-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
-        <option value="">No preference</option>
-        {Object.entries(modelsByProvider).map(([provider, models]) => (
-          <optgroup key={provider} label={provider}>
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
+      <Select id="model-select" value={value ?? ""} onChange={onChange} options={options} placeholder="No preference" />
     </div>
   );
 }

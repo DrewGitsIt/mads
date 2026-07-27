@@ -22,8 +22,10 @@ describe("ModelField", () => {
     const onChange = vi.fn();
     render(<ModelField onChange={onChange} />);
 
+    const trigger = screen.getByLabelText("Preferred model");
+    fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByText("Opus")).toBeTruthy());
-    fireEvent.change(screen.getByLabelText("Preferred model"), { target: { value: "opus" } });
+    fireEvent.click(screen.getByText("Opus"));
     expect(onChange).toHaveBeenCalledWith("opus");
   });
 });
