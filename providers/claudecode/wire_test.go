@@ -59,3 +59,51 @@ func TestAssistantTextSkippedWhenPartial(t *testing.T) {
 		t.Fatalf("whole: want text+tool_use, got %+v", whole)
 	}
 }
+
+// A "system"/"status" line with status "compacting" is the start of a native
+// compaction pass (claude-code 2.1.220, empirically verified — see wire.go's
+// systemEvents doc comment).
+func TestSystemEventsCompactionStart(t *testing.T) {
+	l := parseWireLine(t, `{"type":"system","subtype":"status","status":"compacting"}`)
+	evs := l.events(false, false)
+	if len(evs) != 1 || evs[0].Kind != provider.EventCompact || evs[0].Compact == nil || evs[0].Compact.Phase != "start" {
+		t.Fatalf("want one EventCompact phase=start, got %+v", evs)
+	}
+}
+
+// The completion line carries compact_result instead of status, "success" on
+// a clean pass.
+func TestSystemEventsCompactionSuccess(t *testing.T) {
+	l := parseWireLine(t, `{"type":"system","subtype":"status","compact_result":"success"}`)
+	evs := l.events(false, false)
+	if len(evs) != 1 || evs[0].Kind != provider.EventCompact {
+		t.Fatalf("want one EventCompact, got %+v", evs)
+	}
+	c := evs[0].Compact
+	if c == nil || c.Phase != "done" || !c.Success || c.Error != "" {
+		t.Fatalf("want done/success with no error, got %+v", c)
+	}
+}
+
+// A failed pass carries compact_result "failed" and a human-readable
+// compact_error (e.g. too little to compact).
+func TestSystemEventsCompactionFailed(t *testing.T) {
+	l := parseWireLine(t, `{"type":"system","subtype":"status","compact_result":"failed","compact_error":"Not enough messages to compact."}`)
+	evs := l.events(false, false)
+	if len(evs) != 1 || evs[0].Kind != provider.EventCompact {
+		t.Fatalf("want one EventCompact, got %+v", evs)
+	}
+	c := evs[0].Compact
+	if c == nil || c.Phase != "done" || c.Success || c.Error != "Not enough messages to compact." {
+		t.Fatalf("want done/failed with error, got %+v", c)
+	}
+}
+
+// The "init" subtype (session start/reconnect, and the line claude-code
+// re-emits right after a compaction completes) is bookkeeping — no event.
+func TestSystemEventsInitIgnored(t *testing.T) {
+	l := parseWireLine(t, `{"type":"system","subtype":"init","session_id":"s1","model":"claude-x"}`)
+	if evs := l.events(false, false); len(evs) != 0 {
+		t.Fatalf("want no events for init line, got %+v", evs)
+	}
+}

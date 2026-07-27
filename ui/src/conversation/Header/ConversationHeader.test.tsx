@@ -101,7 +101,7 @@ describe("ConversationHeader", () => {
     render(
       <ConversationHeader
         session={fixtureSessions["session-active"]}
-        usedTokens={50000}
+        usage={{ input_tokens: 50000, output_tokens: 0 }}
         contextWindow={200000}
       />,
     );

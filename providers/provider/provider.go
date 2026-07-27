@@ -266,3 +266,25 @@ type CompleteResult struct {
 type Completer interface {
 	Complete(ctx context.Context, req CompleteRequest) (CompleteResult, error)
 }
+
+// Compactor is the optional capability for a session that can be asked to
+// run its harness's native context-compaction pass proactively, out of band
+// from a normal turn — the Runner's resume-above-threshold trigger
+// (services/session/internal/runner/compact.go), so resuming a big
+// transcript in headless mode doesn't silently burn usage limits the way an
+// uncompacted resume would (interactive claude-code offers a "resume from
+// summary" prompt headless -p mode has no equivalent of). Not part of the
+// Behavior matrix — like Completer and RefSetter, callers detect it with a
+// type assertion, since only claude-code's stream-json transport is verified
+// to honor a plain "/compact" user-turn Send (providers/claudecode's
+// streamSession.Compact); a provider with no native equivalent simply
+// doesn't implement this interface, and the trigger no-ops for it — no
+// error, no status shown, resume proceeds exactly as before this capability
+// existed.
+type Compactor interface {
+	// Compact asks the session to run its native compaction pass. Progress
+	// and completion are reported on the session's normal Events() channel
+	// (EventCompact) — this call's error is only about failing to even
+	// submit the request (e.g. a closed stdin), not the compaction outcome.
+	Compact(ctx context.Context) error
+}

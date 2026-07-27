@@ -3,7 +3,7 @@ import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import { Popover } from "../../components/Popover/Popover";
-import type { Model, Session } from "../../router/types";
+import type { Model, Session, Usage } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
 import { ContextMeter } from "./ContextMeter";
@@ -11,7 +11,7 @@ import styles from "./ConversationHeader.module.css";
 
 export interface ConversationHeaderProps {
   session: Session;
-  usedTokens?: number;
+  usage?: Usage;
   contextWindow?: number;
   /** Active display modality. When set, the Chat/Terminal switch renders here. */
   mode?: "chat" | "terminal";
@@ -29,7 +29,7 @@ type PillField = "agent" | "model";
  */
 export function ConversationHeader({
   session,
-  usedTokens,
+  usage,
   contextWindow,
   mode,
   onModeChange,
@@ -49,7 +49,7 @@ export function ConversationHeader({
   return (
     <div className={styles.header}>
       <div className={styles.row}>
-        <ContextMeter usedTokens={usedTokens} contextWindow={contextWindow} />
+        <ContextMeter usage={usage} contextWindow={contextWindow} />
 
         {session.agent && (
           <PillPopover

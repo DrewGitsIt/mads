@@ -64,6 +64,7 @@ export function SessionWorkspace({
   const [running, setRunning] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
+  const [focusFilePath, setFocusFilePath] = useState<string>();
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -118,6 +119,13 @@ export function SessionWorkspace({
   function selectTab(id: WorkspaceTabId) {
     setActiveTab(id);
     setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  }
+
+  // A touched-file click in the Conversation tab's rail routes here: surface
+  // the Files tab (mounting it if unvisited) and hand it the file to diff.
+  function openFileDiff(path: string) {
+    setFocusFilePath(path);
+    selectTab("files");
   }
 
   function commitName() {
@@ -260,6 +268,8 @@ export function SessionWorkspace({
             onProvisioningDone={onProvisioningDone}
             pendingFirstMessage={pendingFirstMessage}
             onPendingFirstMessageHandled={onPendingFirstMessageHandled}
+            onOpenFile={openFileDiff}
+            focusFilePath={focusFilePath}
           />
         </div>
       ))}

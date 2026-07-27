@@ -71,6 +71,11 @@ type Fake struct {
 	// lives only in this process's memory, which is all any in-process
 	// caller (most tests) needs.
 	transcriptDir string
+	// compactCalls records every session ref Compact was called for, in
+	// order — the test-visible side of provider.Compactor (Runner's
+	// resume-above-threshold trigger, services/session/internal/runner/
+	// compact.go).
+	compactCalls []string
 }
 
 // Option configures a Fake at construction. The zero value of every Option
@@ -98,6 +103,13 @@ func (f *Fake) StartCalls() []provider.StartOptions {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]provider.StartOptions{}, f.starts...)
+}
+
+// CompactCalls returns every session ref Compact was called for, in order.
+func (f *Fake) CompactCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string{}, f.compactCalls...)
 }
 
 // New returns a fake running only the built-in dialect.
@@ -627,6 +639,21 @@ func (s *fakeSession) SetRef(string) {
 	case s.refCh <- s.ref:
 	default:
 	}
+}
+
+// Compact implements provider.Compactor: records the call (CompactCalls) and
+// emits the same start/done EventCompact pair the real claude-code wire
+// produces (wire.go's systemEvents), so a caller (Runner.maybeRequestCompact)
+// sees consistent behavior scripted against either provider.
+func (s *fakeSession) Compact(context.Context) error {
+	s.f.mu.Lock()
+	s.f.compactCalls = append(s.f.compactCalls, s.ref)
+	s.f.mu.Unlock()
+	if !s.emit(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}}) {
+		return nil
+	}
+	s.emit(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "done", Success: true}})
+	return nil
 }
 
 func (s *fakeSession) Interrupt(context.Context) error {

@@ -144,9 +144,16 @@ type Session struct {
 	// set once, right after the provider session starts, and passed back as
 	// StartOptions.Resume to reattach after a bounce. Also the transcript
 	// pointer: TranscriptReader.Transcript(ctx, ref) reads by this same value.
-	ProviderRef string    `json:"provider_ref,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ProviderRef string `json:"provider_ref,omitempty"`
+	// LastUsage is the most recent turn's token accounting (provider.Usage,
+	// mirrored as Usage above), persisted by the Runner on every turn end —
+	// the context meter's data source at wake time, before this process has
+	// seen any turn_end of its own, and the resume-compaction trigger's input
+	// (services/session/internal/runner/compact.go). Nil until the session's
+	// first turn ends.
+	LastUsage *Usage    `json:"last_usage,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MergeResult is the response to a session's merge-back request. A

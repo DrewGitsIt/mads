@@ -5,14 +5,27 @@
   /* safe center keeps the top reachable when the hero is taller than the
      viewport — the parent (.main) now clips, so the launchpad owns its scroll. */
   justify-content: safe center;
-  gap: var(--space-5);
   min-height: 100%;
   overflow-y: auto;
   text-align: center;
 }
 
+/* ContentColumn renders a bare div with no vertical rhythm of its own, so the
+   hero owns the spacing between its sections here. */
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .title {
-  font: 600 24px var(--sans);
+  font: 600 26px var(--sans);
   color: var(--text);
   margin: 0;
 }
@@ -41,7 +54,14 @@
   border: none;
   outline: none;
   color: var(--text);
-  font: 500 var(--fs-body) var(--sans);
+  /* the composer is a primary reading surface — one comfortable size, a step
+     up from dense chrome, so the goal reads without squinting. */
+  font: 500 var(--fs-chat) var(--sans);
+  line-height: 1.5;
+}
+
+.input::placeholder {
+  color: var(--text3);
 }
 
 .actions {
@@ -49,28 +69,32 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
+  /* a hairline sets the toolbar apart from the composer above it */
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--line-soft);
 }
 
 .attachGroup {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .sendGroup {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .fileInput {
   display: none;
 }
 
+/* one hint size everywhere in the box — legible, not chip-tiny */
 .hint,
 .attachHint {
   color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
+  font: 500 var(--fs-sm) var(--sans);
 }
 
 .pills {
@@ -83,6 +107,7 @@
 
 .inheritLine {
   color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
-  margin: 0;
+  font: 500 var(--fs-sm) var(--sans);
+  /* hug the pills it annotates rather than float in the hero's section gap */
+  margin: calc(var(--space-4) * -1) 0 0;
 }
