@@ -123,6 +123,42 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 	})
 }
 
+// SetActivity flips a session's Activity field within a single transaction,
+// unlike a Get-then-Update round trip: that pair carries a snapshot of the
+// rest of the record across two separate network calls, so no matter how
+// late the client re-reads before writing, a concurrent writer of the same
+// session (e.g. a live interactive child persisting its own ProviderRef,
+// services/session/internal/runner.go's recordMu) can still land its write
+// in the gap and get overwritten. Reading and writing together here, inside
+// one transaction, closes that window instead of narrowing it. No-op if
+// already at the target value.
+func (s *Sessions) SetActivity(ctx context.Context, id string, activity contracts.SessionActivity, actor string) error {
+	if activity != contracts.SessionActive && activity != contracts.SessionInactive {
+		var v contracts.ValidationError
+		v.Add("activity", fmt.Sprintf("must be %q or %q", contracts.SessionActive, contracts.SessionInactive))
+		return &v
+	}
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if sess.Activity == activity {
+			return nil
+		}
+		old := sess.Activity
+		sess.Activity = activity
+		sess.UpdatedAt = time.Now().UTC()
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]string{"from": string(old), "to": string(activity)})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionActivityChanged, SessionID: id, Actor: actor, Payload: payload,
+		})
+	})
+}
+
 // Delete hard-deletes a session and all its orchestration artifacts (spec §1):
 // tasks (with their deps/handoffs/notes/leases via cascade), file changes,
 // commits. Provider transcripts live in the provider's storage and survive.

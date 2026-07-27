@@ -230,34 +230,71 @@ func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID str
 // means leave it alone and log, since flipping it would fight a genuinely
 // running pipeline. Best-effort — logs and continues past per-session
 // errors rather than aborting the sweep or failing Router startup.
+//
+// It also heals the opposite case: any session this Supervisor currently
+// tracks a live child for, but whose record is stuck at inactive (e.g. a
+// lost-update race between two writers of the same session record) — see
+// reconcileActiveSession. Nothing else ever re-asserts Activity=active once
+// a tracked child is running, so without this a session could be stuck
+// inactive, dead-ending its lifecycle controls, for as long as that child
+// stays up.
 func (s *Supervisor) ReconcileOrphanedSessions(ctx context.Context) {
 	sessions, err := s.data.Sessions(ctx, string(contracts.SessionActive))
 	if err != nil {
 		log.Printf("supervisor: boot sweep: list active sessions: %v", err)
-		return
+	} else {
+		for _, sess := range sessions {
+			s.mu.Lock()
+			_, tracked := s.sessions[sess.ID]
+			s.mu.Unlock()
+			if tracked {
+				continue // a real child is live for this session; nothing to do
+			}
+			live, err := s.data.SessionActiveLease(ctx, sess.ID)
+			if err != nil {
+				log.Printf("supervisor: boot sweep: check active lease for %s: %v", sess.ID, err)
+				continue // can't prove it's safe to flip; leave active rather than risk killing a live run
+			}
+			if live {
+				log.Printf("supervisor: boot sweep: session %s has a live task lease (external engine); leaving active", sess.ID)
+				continue
+			}
+			if err := s.reconcileInactiveSession(ctx, sess.ID); err != nil {
+				log.Printf("supervisor: boot sweep: reconcile %s: %v", sess.ID, err)
+				continue
+			}
+			log.Printf("supervisor: boot sweep: reconciled orphaned-active session %s to inactive", sess.ID)
+		}
 	}
-	for _, sess := range sessions {
-		s.mu.Lock()
-		_, tracked := s.sessions[sess.ID]
-		s.mu.Unlock()
-		if tracked {
-			continue // a real child is live for this session; nothing to do
-		}
-		live, err := s.data.SessionActiveLease(ctx, sess.ID)
-		if err != nil {
-			log.Printf("supervisor: boot sweep: check active lease for %s: %v", sess.ID, err)
-			continue // can't prove it's safe to flip; leave active rather than risk killing a live run
-		}
-		if live {
-			log.Printf("supervisor: boot sweep: session %s has a live task lease (external engine); leaving active", sess.ID)
-			continue
-		}
-		if err := s.reconcileInactiveSession(ctx, sess.ID); err != nil {
-			log.Printf("supervisor: boot sweep: reconcile %s: %v", sess.ID, err)
-			continue
-		}
-		log.Printf("supervisor: boot sweep: reconciled orphaned-active session %s to inactive", sess.ID)
+
+	s.mu.Lock()
+	tracked := make([]string, 0, len(s.sessions))
+	for id := range s.sessions {
+		tracked = append(tracked, id)
 	}
+	s.mu.Unlock()
+	for _, id := range tracked {
+		if err := s.reconcileActiveSession(ctx, id); err != nil {
+			log.Printf("supervisor: boot sweep: heal stale-inactive session %s: %v", id, err)
+		}
+	}
+}
+
+// reconcileActiveSession is reconcileInactiveSession's mirror: sessionID is
+// known to have a live tracked child, so a record stuck at inactive gets
+// healed back to active. dataclient.UpdateSession emits
+// session.activity_changed on change, same as reconcileInactiveSession.
+// No-op if the record is already active or doesn't exist.
+func (s *Supervisor) reconcileActiveSession(ctx context.Context, sessionID string) error {
+	sess, err := s.data.Session(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Activity == contracts.SessionActive {
+		return nil
+	}
+	sess.Activity = contracts.SessionActive
+	return s.data.UpdateSession(ctx, &sess)
 }
 
 // TerminatePipeline stops runID's child. See TerminateSession.
@@ -418,9 +455,27 @@ func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exit
 	// expected-exit early return, not after.
 	s.mu.Lock()
 	stillLive := s.hasPipelineForSessionLocked(sessionID)
+	_, hasChild := s.sessions[sessionID]
 	s.mu.Unlock()
 	if !stillLive {
 		go s.revokeImplicitHandRaiser(context.Background(), sessionID)
+	}
+	// pkg/pipelinerun's own deactivate-on-exit bookkeeping is skipped for
+	// every run spawned through this Supervisor (Options.ManagedExternally,
+	// set unconditionally by services/pipeline/main.go) precisely because
+	// only the Supervisor knows whether sessionID's interactive child is
+	// still live — so this is where that decision actually gets made, for
+	// every exit path alike. A live child owns Activity now (and this also
+	// heals a record stuck at inactive from some earlier lost-update race,
+	// same as the boot sweep does for every tracked session); no live child
+	// means this run must deactivate in pipelinerun's place, exactly as its
+	// own defer would have.
+	if hasChild {
+		if err := s.reconcileActiveSession(ctx, sessionID); err != nil {
+			log.Printf("supervisor: reconcile active session %s after pipeline exit: %v", sessionID, err)
+		}
+	} else if err := s.reconcileInactiveSession(ctx, sessionID); err != nil {
+		log.Printf("supervisor: deactivate session %s after pipeline exit: %v", sessionID, err)
 	}
 	if expected || exitErr == nil {
 		// Cancel already emits PipelineCancelled (expected); a clean exit

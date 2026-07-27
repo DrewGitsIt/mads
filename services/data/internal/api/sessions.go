@@ -57,6 +57,20 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, sess)
 	})
 
+	mux.HandleFunc("PUT /sessions/{id}/activity", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Activity contracts.SessionActivity `json:"activity"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := s.SetActivity(r.Context(), r.PathValue("id"), body.Activity, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Delete(r.Context(), r.PathValue("id"), actor(r)); err != nil {
 			writeStoreError(w, err)

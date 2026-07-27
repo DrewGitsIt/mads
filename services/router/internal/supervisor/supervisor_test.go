@@ -283,6 +283,157 @@ func TestPipelineCancelDoesNotEmitFailedEvent(t *testing.T) {
 	}
 }
 
+// A Router-spawned pipeline run ending must never flip a session's Activity
+// while its interactive child is still tracked: pkg/pipelinerun's own
+// deactivate-on-exit defer is skipped for every run spawned through this
+// Supervisor (Options.ManagedExternally), so onPipelineExit is what has to
+// enforce this instead.
+func TestPipelineExitLeavesSessionActiveWhenChildLive(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "live child pipeline exit"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	runID := "run_live_child"
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+	if err := sup.TerminatePipeline(ctx, runID); err != nil {
+		t.Fatalf("TerminatePipeline: %v", err)
+	}
+
+	got, err := data.Session(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if got.Activity != contracts.SessionActive {
+		t.Fatalf("Activity after pipeline exit with live interactive child = %q, want active", got.Activity)
+	}
+}
+
+// A session record stuck at inactive despite a live tracked child (e.g. left
+// over from some lost-update race) must get healed back to active as soon as
+// a pipeline run for that session exits — the "wherever cheap on-demand
+// checks fit" half of the inverse reconciliation (the boot-sweep half is
+// TestBootSweepHealsStaleInactiveTrackedSession below). Must also emit
+// session.activity_changed so the UI recovers.
+func TestPipelineExitHealsStaleInactiveSessionWithLiveChild(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "stale inactive with live child"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	if _, err := sup.SpawnSession(ctx, sessionID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	// Simulate the record having gone stuck at inactive despite the child
+	// above being genuinely live (e.g. a lost-update race elsewhere).
+	stale, err := data.Session(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	stale.Activity = contracts.SessionInactive
+	if err := data.UpdateSession(ctx, &stale); err != nil {
+		t.Fatalf("UpdateSession: %v", err)
+	}
+
+	runID := "run_heal_active"
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
+		t.Fatalf("SpawnPipeline: %v", err)
+	}
+	if err := sup.TerminatePipeline(ctx, runID); err != nil {
+		t.Fatalf("TerminatePipeline: %v", err)
+	}
+
+	got, err := data.Session(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if got.Activity != contracts.SessionActive {
+		t.Fatalf("Activity after pipeline exit healed a stale-inactive session with a live child = %q, want active", got.Activity)
+	}
+
+	// Two transitions so far: our own active->inactive setup write above,
+	// then the heal's inactive->active — the second is the one this test is
+	// actually about.
+	events, err := data.Events(ctx, 0, sessionID, []string{"session.activity_changed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("session.activity_changed events = %d, want 2 (stale-setup + heal)", len(events))
+	}
+}
+
+// The boot sweep's inverse direction: a session this Supervisor tracks a
+// live child for, but whose record is stuck at inactive, must get healed
+// back to active — mirroring TestBootSweepReconcilesOrphanedActiveSession's
+// forward-direction coverage.
+func TestBootSweepHealsStaleInactiveTrackedSession(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := newSupervisor(t, data, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	sess := contracts.Session{Name: "boot sweep stale inactive"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := sup.SpawnSession(ctx, sess.ID); err != nil {
+		t.Fatalf("SpawnSession: %v", err)
+	}
+
+	stale, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	stale.Activity = contracts.SessionInactive
+	if err := data.UpdateSession(ctx, &stale); err != nil {
+		t.Fatalf("UpdateSession: %v", err)
+	}
+
+	sup.ReconcileOrphanedSessions(ctx)
+
+	got, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Session: %v", err)
+	}
+	if got.Activity != contracts.SessionActive {
+		t.Fatalf("Activity after boot sweep on a tracked-but-stale-inactive session = %q, want active", got.Activity)
+	}
+
+	// Two transitions: our own active->inactive setup write above, then the
+	// sweep's inactive->active heal.
+	events, err := data.Events(ctx, 0, sess.ID, []string{"session.activity_changed"})
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("session.activity_changed events = %d, want 2 (stale-setup + heal)", len(events))
+	}
+}
+
 func enableLinkedSessions(t *testing.T, data *dataclient.Client) {
 	t.Helper()
 	cfg, err := data.Config(context.Background())
