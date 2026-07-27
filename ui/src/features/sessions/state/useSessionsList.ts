@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { SESSION_EVENT_TYPES } from "../../../router/sessionEventTypes";
-import type { Session } from "../../../router/types";
+import type { CreateSessionPayload, Session } from "../../../router/types";
 
 export interface UseSessionsList {
   sessions: Session[];
   loading: boolean;
   error: string | null;
-  createSession: (payload: Partial<Session>) => Promise<Session>;
+  createSession: (payload: CreateSessionPayload) => Promise<Session>;
 }
 
 /**
@@ -57,7 +57,7 @@ export function useSessionsList(): UseSessionsList {
     };
   }, [refetch]);
 
-  const createSession = useCallback(async (payload: Partial<Session>) => {
+  const createSession = useCallback(async (payload: CreateSessionPayload) => {
     const result = await router.createSession(payload);
     return result.session;
   }, []);

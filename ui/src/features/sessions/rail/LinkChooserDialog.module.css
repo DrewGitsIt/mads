@@ -93,6 +93,26 @@
   background: var(--bg1);
 }
 
+.subjectPicker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.subjectRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--fs-sm) var(--sans);
+  color: var(--text);
+  cursor: pointer;
+}
+
 .holderPicker {
   display: flex;
   flex-direction: column;
@@ -118,6 +138,15 @@
   font: var(--fs-sm) var(--sans);
   color: var(--text);
   cursor: pointer;
+}
+
+.holderRow:has(input:disabled) {
+  color: var(--text3);
+  cursor: default;
+}
+
+.phantomRow b {
+  color: var(--accent);
 }
 
 .fanOut {

@@ -1,16 +1,30 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { RouterValidationError, type RouterClient } from "../../../router/client";
-import { PRESET_GRANTS, type LinkPreset, type Session } from "../../../router/types";
+import {
+  NEW_SESSION_PLACEHOLDER,
+  PRESET_GRANTS,
+  type LinkPreset,
+  type LinkRequest,
+  type Session,
+} from "../../../router/types";
 import styles from "./LinkChooserDialog.module.css";
 
 export interface LinkChooserDialogProps {
-  /** The rail's checked session ids (2+) — becomes leader/subjects once a holder is chosen. */
+  /** The rail's checked session ids (2+) — becomes leader/subjects once a holder is chosen. Staged mode passes []. */
   sessionIds: string[];
   sessions: Session[];
   routerClient: RouterClient;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated?: () => void;
+  /** Launchpad staged mode: phantom "$new" holder, confirm returns requests instead of POSTing. */
+  stagedHolder?: {
+    label: string; // "This session (not started yet)"
+    onStage: (requests: LinkRequest[]) => void;
+  };
+  /** Staged mode only: seeds when reopening to edit an existing staged selection. */
+  initialSubjectIds?: string[];
+  initialPreset?: "monitor" | "leader";
 }
 
 // Only Monitor and Leader are user-selectable (docs/linked-sessions-mockup.html,
@@ -41,9 +55,15 @@ export function LinkChooserDialog({
   routerClient,
   onClose,
   onCreated,
+  stagedHolder,
+  initialSubjectIds,
+  initialPreset,
 }: LinkChooserDialogProps) {
-  const [preset, setPreset] = useState<UserPreset>("leader");
-  const [holderId, setHolderId] = useState<string>(sessionIds[0] ?? "");
+  const [preset, setPreset] = useState<UserPreset>(initialPreset ?? "leader");
+  const [holderId, setHolderId] = useState<string>(
+    stagedHolder ? NEW_SESSION_PLACEHOLDER : (sessionIds[0] ?? ""),
+  );
+  const [checkedIds, setCheckedIds] = useState<string[]>(initialSubjectIds ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<{ field: string; message: string }[]>([]);
   const [generalError, setGeneralError] = useState<string>();
@@ -56,10 +76,34 @@ export function LinkChooserDialog({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const subjectIds = sessionIds.filter((id) => id !== holderId);
+  const subjectIds = stagedHolder ? checkedIds : sessionIds.filter((id) => id !== holderId);
   const roleLabel = preset === "leader" ? "Who leads?" : "Who monitors?";
 
+  // Holder radio is fixed to the phantom row in staged v1 — the other rows keep
+  // their radios (disabled, not removed) so new-session-as-subject is a later
+  // un-disabling of this same list, not a redesign.
+  const holderRows: { id: string; label: string; disabled: boolean }[] = stagedHolder
+    ? [
+        { id: NEW_SESSION_PLACEHOLDER, label: stagedHolder.label, disabled: false },
+        ...checkedIds.map((id) => ({ id, label: sessionName(sessions, id), disabled: true })),
+      ]
+    : sessionIds.map((id) => ({ id, label: sessionName(sessions, id), disabled: false }));
+
+  function toggleChecked(id: string) {
+    setCheckedIds((prev) => (prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]));
+  }
+
   async function handleCreate() {
+    if (stagedHolder) {
+      stagedHolder.onStage(
+        checkedIds.map((id) => ({
+          granting_session_id: NEW_SESSION_PLACEHOLDER,
+          subject_session_id: id,
+          preset,
+        })),
+      );
+      return;
+    }
     setSubmitting(true);
     setFieldErrors([]);
     setGeneralError(undefined);
@@ -71,7 +115,7 @@ export function LinkChooserDialog({
           preset,
         });
       }
-      onCreated();
+      onCreated?.();
     } catch (e) {
       if (e instanceof RouterValidationError) {
         setFieldErrors(e.errors);
@@ -96,8 +140,9 @@ export function LinkChooserDialog({
           Link sessions
         </div>
         <div className={styles.sub}>
-          Pick a mode, then pick which session holds it — every other selected session becomes its
-          subject.
+          {stagedHolder
+            ? "Pick a mode and the sessions to link — the links are created when the new session starts."
+            : "Pick a mode, then pick which session holds it — every other selected session becomes its subject."}
         </div>
         <div className={styles.presets}>
           {(Object.keys(PRESET_COPY) as UserPreset[]).map((p) => (
@@ -120,22 +165,48 @@ export function LinkChooserDialog({
             </button>
           ))}
         </div>
+        {stagedHolder && (
+          <div className={styles.subjectPicker}>
+            <div className={styles.roleLabel}>Link to which sessions?</div>
+            {sessions.map((s) => (
+              <label key={s.id} className={styles.subjectRow}>
+                <input
+                  type="checkbox"
+                  checked={checkedIds.includes(s.id)}
+                  onChange={() => toggleChecked(s.id)}
+                />
+                {s.name || "Untitled session"}
+              </label>
+            ))}
+          </div>
+        )}
         <div className={styles.holderPicker}>
           <div className={styles.roleLabel}>{roleLabel}</div>
-          {sessionIds.map((id) => {
-            const others = sessionIds.filter((otherId) => otherId !== id);
+          {holderRows.map((row) => {
+            const others = holderRows.filter((other) => other.id !== row.id);
             return (
-              <label key={id} className={styles.holderRow}>
+              <label
+                key={row.id}
+                className={[
+                  styles.holderRow,
+                  row.id === NEW_SESSION_PLACEHOLDER ? styles.phantomRow : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
                 <input
                   type="radio"
                   name="holder"
-                  checked={holderId === id}
-                  onChange={() => setHolderId(id)}
+                  checked={holderId === row.id}
+                  disabled={row.disabled}
+                  onChange={() => setHolderId(row.id)}
                 />
-                <b>{sessionName(sessions, id)}</b>
-                <span className={styles.fanOut}>
-                  ⟶ {others.map((otherId) => sessionName(sessions, otherId)).join(", ")}
-                </span>
+                <b>{row.label}</b>
+                {others.length > 0 && (
+                  <span className={styles.fanOut}>
+                    ⟶ {others.map((other) => other.label).join(", ")}
+                  </span>
+                )}
               </label>
             );
           })}
@@ -160,8 +231,14 @@ export function LinkChooserDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleCreate} disabled={submitting}>
-            Create {subjectIds.length} link{subjectIds.length === 1 ? "" : "s"}
+          <Button
+            variant="primary"
+            onClick={() => void handleCreate()}
+            disabled={stagedHolder ? checkedIds.length === 0 : submitting}
+          >
+            {stagedHolder
+              ? `Stage ${checkedIds.length} link${checkedIds.length === 1 ? "" : "s"}`
+              : `Create ${subjectIds.length} link${subjectIds.length === 1 ? "" : "s"}`}
           </Button>
         </div>
       </div>

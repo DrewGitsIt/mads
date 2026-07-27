@@ -9,6 +9,7 @@ import type {
   Commit,
   Config,
   CostMetrics,
+  CreateSessionPayload,
   DiagnoseResult,
   Envelope,
   FastModelStatus,
@@ -145,7 +146,9 @@ export interface RouterClient {
 
   // --- Sessions (session-agnostic) ---
   listSessions(): Promise<Session[]>;
-  createSession(payload: Partial<Session>): Promise<{ session: Session; addr: string }>;
+  createSession(
+    payload: CreateSessionPayload,
+  ): Promise<{ session: Session; addr: string; links?: Link[] }>;
 
   // --- Config ---
   getConfig(): Promise<Config>;
@@ -643,8 +646,8 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async createSession(
-    payload: Partial<Session>,
-  ): Promise<{ session: Session; addr: string }> {
+    payload: CreateSessionPayload,
+  ): Promise<{ session: Session; addr: string; links?: Link[] }> {
     return routerPost(this.baseUrl, "/sessions", payload);
   }
 
