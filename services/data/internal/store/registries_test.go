@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -28,6 +29,42 @@ func TestSystemAgentsSeeded(t *testing.T) {
 		}
 		if !a.System || a.Prompt == "" {
 			t.Errorf("system agent %q malformed: system=%v prompt empty=%v", name, a.System, a.Prompt == "")
+		}
+	}
+}
+
+// TestSystemAgentsNoPhantomCapabilities is the cleanup migration's done-when
+// (0005 seeded skill names with no capability registry record, spamming
+// "runner: load capability X: not found" at every system-agent session
+// start): after migration, every capability a system agent declares must
+// resolve against the live capabilities table — zero failing lookups.
+func TestSystemAgentsNoPhantomCapabilities(t *testing.T) {
+	l := openMigratedDB(t)
+	agents := NewAgents(l)
+	caps := NewCapabilities(l)
+	ctx := context.Background()
+
+	known := map[string]bool{}
+	list, err := caps.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range list {
+		known[c.Name] = true
+	}
+
+	agentList, err := agents.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range agentList {
+		if !a.System {
+			continue
+		}
+		for _, name := range append(append([]string{}, a.Capabilities.Skills...), a.Capabilities.MCPServers...) {
+			if !known[name] {
+				t.Errorf("system agent %q references capability %q, absent from the registry", a.Name, name)
+			}
 		}
 	}
 }
@@ -100,6 +137,63 @@ func TestAgentCRUDAndEvents(t *testing.T) {
 	types := eventTypes(t, l, Filter{Types: []string{"agent.*"}})
 	if len(types) != 3 { // created, updated, deleted for docs-writer
 		t.Errorf("want created+updated+deleted events, got %v", types)
+	}
+}
+
+func TestAgentCapabilityRefsValidated(t *testing.T) {
+	l := openMigratedDB(t)
+	agents := NewAgents(l)
+	caps := NewCapabilities(l)
+	ctx := context.Background()
+
+	// Unknown skill and MCP refs together: rejected, naming both.
+	bad := contracts.Agent{
+		Name: "bad-agent", Prompt: "p",
+		Capabilities: contracts.AgentCapabilities{Skills: []string{"ghost-skill"}, MCPServers: []string{"ghost-mcp"}},
+	}
+	var verr *contracts.ValidationError
+	err := agents.Create(ctx, &bad, "user")
+	if !errors.As(err, &verr) {
+		t.Fatalf("unknown capability refs: want ValidationError, got %v", err)
+	}
+	if !strings.Contains(verr.Error(), "ghost-skill") || !strings.Contains(verr.Error(), "ghost-mcp") {
+		t.Errorf("error doesn't name both offending refs: %v", verr)
+	}
+
+	// Tools are provider tool names, never registry entries — never rejected.
+	toolsOnly := contracts.Agent{
+		Name: "tools-only-agent", Prompt: "p",
+		Capabilities: contracts.AgentCapabilities{Tools: []string{"shell", "read"}},
+	}
+	if err := agents.Create(ctx, &toolsOnly, "user"); err != nil {
+		t.Fatalf("tools-only capabilities rejected: %v", err)
+	}
+
+	// Register the capabilities, then both create and update succeed.
+	if err := caps.Create(ctx, &contracts.Capability{
+		Name: "real-skill", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/real"},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := caps.Create(ctx, &contracts.Capability{
+		Name: "real-mcp", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	good := contracts.Agent{
+		Name: "good-agent", Prompt: "p",
+		Capabilities: contracts.AgentCapabilities{Skills: []string{"real-skill"}, MCPServers: []string{"real-mcp"}},
+	}
+	if err := agents.Create(ctx, &good, "user"); err != nil {
+		t.Fatalf("known capability refs rejected: %v", err)
+	}
+
+	// Update path: flipping a known agent to reference an unknown skill is
+	// caught the same way manual edits shouldn't reintroduce fiction.
+	good.Capabilities.Skills = []string{"ghost-skill"}
+	if err := agents.Update(ctx, &good, "user"); !errors.As(err, &verr) {
+		t.Fatalf("update with unknown ref: want ValidationError, got %v", err)
 	}
 }
 

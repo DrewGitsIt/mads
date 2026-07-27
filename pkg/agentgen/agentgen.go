@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/agentselect"
@@ -32,7 +33,11 @@ const similarityThreshold = 0.6
 const generationSystem = `You are the mads agent-builder assistant. Given a description of a task ` +
 	`or a natural-language request, draft a complete agent definition for the mads platform: a ` +
 	`persona prompt, a short description, the smallest sufficient set of capabilities, and matching ` +
-	`permissions. Reply with ONLY a JSON object of this exact shape, no prose, no code fences:
+	`permissions. capabilities.tools may name any general-purpose provider tool freely (e.g. shell, ` +
+	`read, write). capabilities.skills and capabilities.mcp_servers MUST each be chosen only from the ` +
+	`"Available skills" / "Available MCP servers" lists given in the request below — never invent a ` +
+	`name that isn't listed; leave the list empty if nothing available fits. Reply with ONLY a JSON ` +
+	`object of this exact shape, no prose, no code fences:
 
 {
   "name": "kebab-case-identifier",
@@ -61,6 +66,11 @@ func New(data *dataclient.Client, fm *fastmodel.Runner) *Generator {
 type Result struct {
 	Draft   contracts.Agent      `json:"draft"`
 	Similar *agentselect.Similar `json:"similar,omitempty"`
+	// Dropped names any skill or MCP server the model emitted that isn't in
+	// the capability registry — silently dropped from Draft.Capabilities
+	// rather than persisted as fiction, but never silently: named here and
+	// logged.
+	Dropped []string `json:"dropped,omitempty"`
 }
 
 // generatedAgent is the Fast Model's structured reply shape for both
@@ -96,32 +106,42 @@ func (g *generatedAgent) Validate() error {
 // fallback path (spec §9.5): auto-select finds no match, so a fresh agent is
 // drafted for this specific task.
 func (g *Generator) GenerateFromTask(ctx context.Context, req agentselect.Request) (Result, error) {
-	draft, err := g.generate(ctx, taskPrompt(req), agentselect.Classify(req))
+	draft, dropped, err := g.generate(ctx, taskPrompt(req), agentselect.Classify(req))
 	if err != nil {
 		return Result{}, err
 	}
-	return g.withSimilar(ctx, draft)
+	return g.withSimilar(ctx, draft, dropped)
 }
 
 // GenerateFromDescription builds a draft from a free-text NL description —
 // the Library editor's "describe what you want" path (spec §9.6).
 func (g *Generator) GenerateFromDescription(ctx context.Context, description string) (Result, error) {
 	fallback := agentselect.Classify(agentselect.Request{Description: description})
-	draft, err := g.generate(ctx, descriptionPrompt(description), fallback)
+	draft, dropped, err := g.generate(ctx, descriptionPrompt(description), fallback)
 	if err != nil {
 		return Result{}, err
 	}
-	return g.withSimilar(ctx, draft)
+	return g.withSimilar(ctx, draft, dropped)
 }
 
 // generate runs the shared Fast Model call and maps its reply onto a
 // contracts.Agent. fallbackQuadrant is used when the model's reply doesn't
 // name a registered quadrant, so the draft is immediately usable by
-// auto-select's quadrant filter.
-func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadrant contracts.Quadrant) (contracts.Agent, error) {
+// auto-select's quadrant filter. Every skill/MCP server name the model emits
+// is checked against the live capability registry first: known names are
+// grounded into the generation prompt, and any name the model invents anyway
+// is dropped before the draft is built — agentgen may only ever persist
+// capabilities that exist (owner decision), never silently.
+func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadrant contracts.Quadrant) (contracts.Agent, []string, error) {
+	knownSkills, knownMCP, err := g.availableCapabilities(ctx)
+	if err != nil {
+		return contracts.Agent{}, nil, err
+	}
+
 	var out generatedAgent
-	if _, err := g.FastModel.Do(ctx, fastmodel.Job{System: generationSystem, Prompt: prompt}, &out); err != nil {
-		return contracts.Agent{}, fmt.Errorf("agentgen: generate: %w", err)
+	fullPrompt := prompt + registrySection(knownSkills, knownMCP)
+	if _, err := g.FastModel.Do(ctx, fastmodel.Job{System: generationSystem, Prompt: fullPrompt}, &out); err != nil {
+		return contracts.Agent{}, nil, fmt.Errorf("agentgen: generate: %w", err)
 	}
 
 	quadrant := contracts.Quadrant(out.Quadrant)
@@ -129,26 +149,94 @@ func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadran
 		quadrant = fallbackQuadrant
 	}
 
+	skills, droppedSkills := knownOnly(out.Capabilities.Skills, knownSkills)
+	mcpServers, droppedMCP := knownOnly(out.Capabilities.MCPServers, knownMCP)
+	dropped := append(droppedSkills, droppedMCP...)
+	if len(dropped) > 0 {
+		log.Printf("agentgen: dropped capability reference(s) absent from the registry: %s", strings.Join(dropped, ", "))
+	}
+
 	return contracts.Agent{
-		Name:         out.Name,
-		Description:  out.Description,
-		Prompt:       out.Prompt,
-		Quadrant:     quadrant,
-		Tags:         out.Tags,
-		Capabilities: out.Capabilities,
-		Permissions:  out.Permissions,
-		System:       false, // a generated draft is never a system agent
-	}, nil
+		Name:        out.Name,
+		Description: out.Description,
+		Prompt:      out.Prompt,
+		Quadrant:    quadrant,
+		Tags:        out.Tags,
+		Capabilities: contracts.AgentCapabilities{
+			Tools:      out.Capabilities.Tools, // provider tool names, not registry entries — never validated
+			MCPServers: mcpServers,
+			Skills:     skills,
+		},
+		Permissions: out.Permissions,
+		System:      false, // a generated draft is never a system agent
+	}, dropped, nil
+}
+
+// availableCapabilities fetches the live capability registry and splits it
+// into skill and MCP server names, for grounding the generation prompt.
+func (g *Generator) availableCapabilities(ctx context.Context) (skills, mcpServers []string, err error) {
+	caps, err := g.Data.Capabilities(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("agentgen: list capabilities: %w", err)
+	}
+	for _, c := range caps {
+		switch c.Type {
+		case contracts.CapabilitySkill:
+			skills = append(skills, c.Name)
+		case contracts.CapabilityMCP:
+			mcpServers = append(mcpServers, c.Name)
+		}
+	}
+	return skills, mcpServers, nil
+}
+
+// registrySection lists the registry-grounded names the model must choose
+// capabilities.skills/mcp_servers from, or says plainly that none exist.
+func registrySection(skills, mcpServers []string) string {
+	var b strings.Builder
+	b.WriteString("\n\nAvailable skills: ")
+	b.WriteString(namesOrNone(skills))
+	b.WriteString("\nAvailable MCP servers: ")
+	b.WriteString(namesOrNone(mcpServers))
+	return b.String()
+}
+
+func namesOrNone(names []string) string {
+	if len(names) == 0 {
+		return "none available"
+	}
+	return strings.Join(names, ", ")
+}
+
+// knownOnly splits names into those present in known and those that aren't —
+// the latter never reach the persisted draft.
+func knownOnly(names, known []string) (kept, dropped []string) {
+	knownSet := make(map[string]struct{}, len(known))
+	for _, k := range known {
+		knownSet[k] = struct{}{}
+	}
+	for _, n := range names {
+		if _, ok := knownSet[n]; ok {
+			kept = append(kept, n)
+		} else {
+			dropped = append(dropped, n)
+		}
+	}
+	return kept, dropped
 }
 
 // withSimilar scores draft against the live registry and attaches a warning
 // when it lands at or above similarityThreshold.
-func (g *Generator) withSimilar(ctx context.Context, draft contracts.Agent) (Result, error) {
+func (g *Generator) withSimilar(ctx context.Context, draft contracts.Agent, dropped []string) (Result, error) {
 	existing, err := g.Data.Agents(ctx)
 	if err != nil {
 		return Result{}, fmt.Errorf("agentgen: list agents: %w", err)
 	}
-	return Result{Draft: draft, Similar: agentselect.FindSimilar(draft, existing, similarityThreshold)}, nil
+	return Result{
+		Draft:   draft,
+		Similar: agentselect.FindSimilar(draft, existing, similarityThreshold),
+		Dropped: dropped,
+	}, nil
 }
 
 // taskPrompt embeds the caller's title/description verbatim so tests (and,
