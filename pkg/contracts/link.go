@@ -108,6 +108,12 @@ func (l Link) HasGrant(g Grant) bool {
 	return false
 }
 
+// NewSessionPlaceholder marks the to-be-created session's slot in a staged
+// LinkRequest on POST /sessions (either endpoint). Never persisted — the
+// Router substitutes the real ID before the link reaches the Data Service.
+// The `$` prefix cannot collide with real `ses_*` IDs.
+const NewSessionPlaceholder = "$new"
+
 // LinkRequest is POST /links and PUT /links/{id}'s body: either an explicit
 // grant set, or a preset the server resolves server-side. Never persisted
 // as-is — Link.Grants is the only stored shape.
