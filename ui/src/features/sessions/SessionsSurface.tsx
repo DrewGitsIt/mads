@@ -132,6 +132,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             createSession={createSession}
             onSessionCreated={handleSessionCreated}
             onSuggestionPick={handleSuggestionPick}
+            sessions={sessions}
           />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}

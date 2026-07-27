@@ -1,9 +1,18 @@
 import { useEffect, useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
+import { Popover } from "../../../components/Popover/Popover";
 import { Toast } from "../../../components/Toast/Toast";
+import { FLAGS } from "../../../featureFlags";
 import { router } from "../../../router/client";
-import type { Session, SessionDefaults, Workspace } from "../../../router/types";
+import type {
+  CreateSessionPayload,
+  LinkRequest,
+  Session,
+  SessionDefaults,
+  Workspace,
+} from "../../../router/types";
+import { LinkChooserDialog } from "../rail/LinkChooserDialog";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
 import { WorkspacePill } from "./pills/WorkspacePill";
 import { AgentPill } from "./pills/AgentPill";
@@ -14,6 +23,7 @@ import type { StagedConfig } from "./pills/stagedConfig";
 import { SuggestionChips } from "./SuggestionChips";
 import type { Suggestion } from "./useSuggestions";
 import { AttachmentChips } from "./AttachmentChips";
+import { StagedLinkChips } from "./StagedLinkChips";
 import { buildGoalText, toAttachedFile, type AttachedFile } from "./attachments";
 import styles from "./Launchpad.module.css";
 
@@ -29,19 +39,29 @@ export function deriveSessionName(text: string): string {
 }
 
 export interface LaunchpadProps {
-  createSession: (payload: Partial<Session>) => Promise<Session>;
+  createSession: (payload: CreateSessionPayload) => Promise<Session>;
   onSessionCreated: (session: Session, goalText: string) => void;
   /** Handles "Resume"/"Pick up" chip clicks — navigates to (and resumes) the referenced session, it doesn't seed the composer. */
   onSuggestionPick: (suggestion: Suggestion) => void;
+  /** Pickable pool for "Link to session(s)…" (flag-gated) — optional so render sites without the rail's list still compile. */
+  sessions?: Session[];
 }
 
-export function Launchpad({ createSession, onSessionCreated, onSuggestionPick }: LaunchpadProps) {
+export function Launchpad({
+  createSession,
+  onSessionCreated,
+  onSuggestionPick,
+  sessions = [],
+}: LaunchpadProps) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedConfig>({});
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+  const [stagedLinks, setStagedLinks] = useState<LinkRequest[]>([]);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { providers } = useProviderMatrix();
 
@@ -73,9 +93,13 @@ export function Launchpad({ createSession, onSessionCreated, onSuggestionPick }:
         model: staged.model,
         trust: staged.trust,
         isolation: staged.isolation,
+        ...(stagedLinks.length > 0 ? { links: stagedLinks } : {}),
       });
       setText("");
       setAttachments([]);
+      // On failure the chips stay: the server rolled back the whole create,
+      // so the staged links are still what the user wants to retry with.
+      setStagedLinks([]);
       onSessionCreated(session, buildGoalText(trimmed, attachments));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -144,11 +168,70 @@ export function Launchpad({ createSession, onSessionCreated, onSuggestionPick }:
             </div>
             <div className={styles.sendGroup}>
               <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
-              <Button variant="primary" disabled={text.trim() === ""} onClick={() => void submit()}>
-                Start session
-              </Button>
+              {FLAGS.linkedSessions ? (
+                <div className={styles.splitButton}>
+                  <Button
+                    variant="primary"
+                    className={styles.splitMain}
+                    disabled={text.trim() === ""}
+                    onClick={() => void submit()}
+                  >
+                    {stagedLinks.length > 0 ? "Start & link" : "Start session"}
+                  </Button>
+                  <Popover
+                    open={menuOpen}
+                    onClose={() => setMenuOpen(false)}
+                    className={styles.startMenu}
+                    anchor={
+                      <Button
+                        variant="primary"
+                        className={styles.splitArrow}
+                        aria-label="More start options"
+                        aria-haspopup="menu"
+                        aria-expanded={menuOpen}
+                        onClick={() => setMenuOpen((open) => !open)}
+                      >
+                        ▾
+                      </Button>
+                    }
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={styles.menuItem}
+                      disabled={sessions.length === 0}
+                      onClick={() => {
+                        // Close the menu before opening the dialog — both
+                        // listen for document-level Escape; don't stack them.
+                        setMenuOpen(false);
+                        setLinkDialogOpen(true);
+                      }}
+                    >
+                      Link to session(s)…
+                      {sessions.length === 0 && (
+                        <span className={styles.menuHint}>No other sessions to link yet</span>
+                      )}
+                    </button>
+                  </Popover>
+                </div>
+              ) : (
+                <Button
+                  variant="primary"
+                  disabled={text.trim() === ""}
+                  onClick={() => void submit()}
+                >
+                  Start session
+                </Button>
+              )}
             </div>
           </div>
+          <StagedLinkChips
+            links={stagedLinks}
+            sessions={sessions}
+            onRemove={(subjectId) =>
+              setStagedLinks((prev) => prev.filter((l) => l.subject_session_id !== subjectId))
+            }
+          />
         </div>
 
         <div className={styles.pills}>
@@ -199,6 +282,28 @@ export function Launchpad({ createSession, onSessionCreated, onSuggestionPick }:
           ) && <p className={styles.inheritLine}>Inherits from {resolved.workspace} defaults</p>}
 
         <SuggestionChips onPick={onSuggestionPick} />
+
+        {FLAGS.linkedSessions && linkDialogOpen && (
+          <LinkChooserDialog
+            sessionIds={[]}
+            sessions={sessions}
+            routerClient={router}
+            stagedHolder={{
+              label: "This session (not started yet)",
+              onStage: (requests) => {
+                setStagedLinks(requests);
+                setLinkDialogOpen(false);
+              },
+            }}
+            initialSubjectIds={stagedLinks.map((l) => l.subject_session_id)}
+            initialPreset={
+              stagedLinks[0]?.preset === "monitor" || stagedLinks[0]?.preset === "leader"
+                ? stagedLinks[0].preset
+                : undefined
+            }
+            onClose={() => setLinkDialogOpen(false)}
+          />
+        )}
 
         {error && (
           <Toast

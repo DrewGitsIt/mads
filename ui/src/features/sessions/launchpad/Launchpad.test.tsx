@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, deriveSessionName } from "./Launchpad";
+import { FLAGS } from "../../../featureFlags";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { Session, SessionDefaults } from "../../../router/types";
 
@@ -302,6 +303,136 @@ describe("Launchpad", () => {
 
       await waitFor(() =>
         expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
+      );
+    });
+  });
+
+  describe("linked sessions (flag-gated)", () => {
+    // FLAGS is module-global — reset it or a leak fails unrelated tests.
+    afterEach(() => {
+      FLAGS.linkedSessions = false;
+    });
+
+    const pool = [
+      makeSession({ id: "s1", name: "payments refactor" }),
+      makeSession({ id: "s2", name: "gateway hardening" }),
+    ];
+
+    function stageLinkTo(name: string) {
+      fireEvent.click(screen.getByLabelText("More start options"));
+      fireEvent.click(screen.getByText("Link to session(s)…"));
+      fireEvent.click(screen.getByRole("checkbox", { name }));
+      fireEvent.click(screen.getByText("Stage 1 link"));
+    }
+
+    it("flag off: renders the plain Start button with no arrow", () => {
+      render(
+        <Launchpad
+          createSession={vi.fn()}
+          onSessionCreated={vi.fn()}
+          onSuggestionPick={vi.fn()}
+          sessions={pool}
+        />,
+      );
+      expect(screen.queryByLabelText("More start options")).toBeNull();
+      expect(screen.getByText("Start session")).toBeTruthy();
+    });
+
+    it("stages links via the split button's dialog, rendering a chip and relabeling to Start & link", () => {
+      FLAGS.linkedSessions = true;
+      render(
+        <Launchpad
+          createSession={vi.fn()}
+          onSessionCreated={vi.fn()}
+          onSuggestionPick={vi.fn()}
+          sessions={pool}
+        />,
+      );
+      stageLinkTo("payments refactor");
+
+      expect(screen.getByText("Leader of payments refactor")).toBeTruthy();
+      expect(screen.getByText("Start & link")).toBeTruthy();
+      expect(screen.queryByText("Start session")).toBeNull();
+    });
+
+    it("threads staged links into the create payload and clears the chips on success", async () => {
+      FLAGS.linkedSessions = true;
+      const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s9" }));
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={vi.fn()}
+          onSuggestionPick={vi.fn()}
+          sessions={pool}
+        />,
+      );
+      stageLinkTo("payments refactor");
+      fireEvent.change(screen.getByLabelText("Describe your goal"), {
+        target: { value: "Coordinate the refactor" },
+      });
+      fireEvent.click(screen.getByText("Start & link"));
+
+      await waitFor(() =>
+        expect(createSession).toHaveBeenCalledWith(
+          expect.objectContaining({
+            links: [
+              { granting_session_id: "$new", subject_session_id: "s1", preset: "leader" },
+            ],
+          }),
+        ),
+      );
+      await waitFor(() => expect(screen.queryByText("Leader of payments refactor")).toBeNull());
+      expect(screen.getByText("Start session")).toBeTruthy();
+    });
+
+    it("removing every staged chip reverts the button and drops links from the payload", async () => {
+      FLAGS.linkedSessions = true;
+      const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s9" }));
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={vi.fn()}
+          onSuggestionPick={vi.fn()}
+          sessions={pool}
+        />,
+      );
+      stageLinkTo("payments refactor");
+      fireEvent.click(screen.getByLabelText("Remove link to payments refactor"));
+
+      expect(screen.getByText("Start session")).toBeTruthy();
+      fireEvent.change(screen.getByLabelText("Describe your goal"), {
+        target: { value: "Coordinate the refactor" },
+      });
+      fireEvent.click(screen.getByText("Start session"));
+
+      await waitFor(() => expect(createSession).toHaveBeenCalled());
+      expect(createSession.mock.calls[0][0].links).toBeUndefined();
+    });
+
+    it("Enter-to-submit includes the staged links (keyboard path shares submit)", async () => {
+      FLAGS.linkedSessions = true;
+      const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s9" }));
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={vi.fn()}
+          onSuggestionPick={vi.fn()}
+          sessions={pool}
+        />,
+      );
+      stageLinkTo("gateway hardening");
+      const textarea = screen.getByLabelText("Describe your goal");
+      fireEvent.change(textarea, { target: { value: "Coordinate the refactor" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() =>
+        expect(createSession).toHaveBeenCalledWith(
+          expect.objectContaining({
+            links: [
+              { granting_session_id: "$new", subject_session_id: "s2", preset: "leader" },
+            ],
+          }),
+        ),
       );
     });
   });

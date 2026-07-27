@@ -185,3 +185,44 @@ Add a staged mode to the existing dialog (do not fork it):
 - ui-smoke e2e has ~11 pre-existing baseline failures unrelated to this diff —
   compare against baseline before treating a red run as caused by this change.
 - Delete this file before merge (pipeline convention).
+
+---
+
+## Executor handoff (implementation stage)
+
+Implemented exactly per the plan above. All eight touch points landed:
+types.ts (`NEW_SESSION_PLACEHOLDER`, `CreateSessionPayload`), client.ts
+(createSession payload/return widened), useSessionsList.ts,
+LinkChooserDialog.tsx staged mode, Launchpad.tsx split button + staged
+chips + dialog, SessionsSurface.tsx passes `sessions`, docs
+LINKED-SESSIONS-DESIGN.md two-path link-creation UX, CSS in
+Launchpad.module.css / LinkChooserDialog.module.css. New files:
+StagedLinkChips.tsx + StagedLinkChips.module.css (modeled on
+AttachmentChips).
+
+Verified: `tsc --noEmit` clean, `eslint` clean, full vitest suite 216
+files / 1268 tests green (includes 5 new Launchpad flag tests and 4 new
+dialog staged-mode tests; all pre-existing Launchpad submit/keyboard and
+rail-mode dialog tests untouched and passing).
+
+Deviations / judgment calls for the reviewer:
+
+- `initialPreset` in Launchpad is narrowed from `stagedLinks[0]?.preset`
+  (typed `LinkPreset`, which includes system-only `hand_raiser`) to the
+  dialog's `"monitor" | "leader"` with an explicit check — the UI never
+  stages `hand_raiser`, but the types required the guard.
+- The staged-mode dialog subtitle differs from rail mode ("Pick a mode and
+  the sessions to link — the links are created when the new session
+  starts.") — the rail copy references "every other selected session",
+  which is wrong when subjects are picked inside the dialog.
+- Holder rows keep the single `.map` over a `holderRows` array (phantom
+  first, checked subjects with `disabled` radios) — un-disabling later is
+  the whole unlock, as specified.
+- Menu closes before the dialog opens (both listen for document-level
+  Escape); the menu item is disabled with a hint when `sessions` is empty.
+- Not done (by design): no client-side `createLink` fallback, no
+  pre-validation of staged subjects, no special handling for
+  flag-toggled-off-after-staging (server 400 surfaces via existing Toast).
+- Not run: ui-smoke e2e (has ~11 pre-existing baseline failures; nothing
+  here touches its covered flows beyond the flag-off Launchpad, which unit
+  tests pin to today's exact markup).

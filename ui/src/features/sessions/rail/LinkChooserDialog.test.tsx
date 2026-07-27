@@ -138,4 +138,78 @@ describe("LinkChooserDialog", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
+
+  describe("staged mode (Launchpad link-at-create)", () => {
+    function renderStaged(onStage = vi.fn(), client = new FakeRouterClient()) {
+      render(
+        <LinkChooserDialog
+          sessionIds={[]}
+          sessions={sessions}
+          routerClient={client}
+          onClose={vi.fn()}
+          stagedHolder={{ label: "This session (not started yet)", onStage }}
+        />,
+      );
+      return onStage;
+    }
+
+    it("preselects the phantom holder row and disables the radios of checked sessions", () => {
+      renderStaged();
+      const phantom = screen.getByRole("radio", { name: /This session \(not started yet\)/ });
+      expect((phantom as HTMLInputElement).checked).toBe(true);
+      expect((phantom as HTMLInputElement).disabled).toBe(false);
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "investigator" }));
+      const radios = screen.getAllByRole("radio") as HTMLInputElement[];
+      expect(radios).toHaveLength(2);
+      expect(radios[1].disabled).toBe(true);
+      expect(radios[0].checked).toBe(true);
+    });
+
+    it("disables the stage button until a subject is checked", () => {
+      renderStaged();
+      const button = screen.getByText("Stage 0 links").closest("button");
+      expect(button?.disabled).toBe(true);
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "investigator" }));
+      expect(screen.getByText("Stage 1 link").closest("button")?.disabled).toBe(false);
+    });
+
+    it("confirm calls onStage with placeholder requests and never createLink", () => {
+      const client = new FakeRouterClient();
+      const createLinkSpy = vi.spyOn(client, "createLink");
+      const onStage = renderStaged(vi.fn(), client);
+
+      fireEvent.click(screen.getByRole("checkbox", { name: "investigator" }));
+      fireEvent.click(screen.getByRole("checkbox", { name: "payments refactor" }));
+      fireEvent.click(screen.getByText("Monitor"));
+      fireEvent.click(screen.getByText("Stage 2 links"));
+
+      expect(onStage).toHaveBeenCalledWith([
+        { granting_session_id: "$new", subject_session_id: "a", preset: "monitor" },
+        { granting_session_id: "$new", subject_session_id: "b", preset: "monitor" },
+      ]);
+      expect(createLinkSpy).not.toHaveBeenCalled();
+    });
+
+    it("seeds subjects and preset from initialSubjectIds/initialPreset when reopening", () => {
+      render(
+        <LinkChooserDialog
+          sessionIds={[]}
+          sessions={sessions}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          stagedHolder={{ label: "This session (not started yet)", onStage: vi.fn() }}
+          initialSubjectIds={["b"]}
+          initialPreset="monitor"
+        />,
+      );
+      const checkbox = screen.getByRole("checkbox", { name: "payments refactor" });
+      expect((checkbox as HTMLInputElement).checked).toBe(true);
+      expect(screen.getByText("Monitor").closest("button")?.getAttribute("aria-selected")).toBe(
+        "true",
+      );
+      expect(screen.getByText("Stage 1 link")).toBeTruthy();
+    });
+  });
 });
