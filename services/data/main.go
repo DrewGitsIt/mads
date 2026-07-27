@@ -39,7 +39,7 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := store.Migrate(db, store.Migrations()); err != nil {
+	if err := store.Bootstrap(context.Background(), db); err != nil {
 		log.Fatalf("data: %v", err)
 	}
 	if err := checkSchemaCompatible(db, store.Migrations()); err != nil {
@@ -48,9 +48,6 @@ func main() {
 	version, err := store.Version(db)
 	if err != nil {
 		log.Fatalf("data: %v", err)
-	}
-	if err := store.SeedShippedCapabilities(context.Background(), store.NewCapabilities(store.NewLog(db))); err != nil {
-		log.Fatalf("data: seed shipped capabilities: %v", err)
 	}
 
 	// The meter reader (spec §15): collect expired leases so tasks whose

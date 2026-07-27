@@ -43,6 +43,9 @@ func TestSystemAgentsNoPhantomCapabilities(t *testing.T) {
 	agents := NewAgents(l)
 	caps := NewCapabilities(l)
 	ctx := context.Background()
+	if err := SeedShippedCapabilities(ctx, caps); err != nil {
+		t.Fatal(err)
+	}
 
 	known := map[string]bool{}
 	list, err := caps.List(ctx)
@@ -73,6 +76,14 @@ func TestSystemAgentsEditableNotDeletable(t *testing.T) {
 	l := openMigratedDB(t)
 	agents := NewAgents(l)
 	ctx := context.Background()
+	// Migration 0020 attaches playwright-ui-testing to the executor's
+	// declared skills; the Update below re-validates that reference against
+	// the live capabilities table (checkAgentCapabilityRefs), so the shipped
+	// capability must be seeded first — the same sequencing SeedShippedCapabilities'
+	// doc comment describes for real startups (store.Bootstrap).
+	if err := SeedShippedCapabilities(ctx, NewCapabilities(l)); err != nil {
+		t.Fatal(err)
+	}
 
 	exec, err := agents.GetByName(ctx, "executor")
 	if err != nil {

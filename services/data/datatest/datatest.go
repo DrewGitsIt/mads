@@ -23,10 +23,7 @@ func Start(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := store.Migrate(db, store.Migrations()); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SeedShippedCapabilities(context.Background(), store.NewCapabilities(store.NewLog(db))); err != nil {
+	if err := store.Bootstrap(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(api.New(db))

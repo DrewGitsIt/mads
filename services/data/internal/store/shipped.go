@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -9,6 +10,32 @@ import (
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
+
+// Bootstrap applies the production migration set and seeds the shipped
+// capability registry as one inseparable step. They're inseparable because
+// migration 0020_playwright_skill attaches a "playwright-ui-testing" skill
+// ref to the executor and verifier system agents; a store that has migrated
+// but not yet seeded holds those agents referencing a capability absent
+// from the capabilities table, which checkAgentCapabilityRefs (registries.go)
+// would reject on the very next edit. Every real caller that opens a store
+// for actual use — an API consumer's path, not a unit test exercising
+// lower-level store mechanics in isolation — should call Bootstrap instead
+// of Migrate directly, so that window is never observable: today that's
+// services/data/main.go and services/data/datatest (every downstream
+// service's test harness goes through the latter). Store-package unit tests
+// that don't touch agent/capability records at all keep using the bare
+// Migrate-only openMigratedDB helper (log_test.go) — seeding a capability
+// there would append a capability.created event that several of those tests
+// (e.g. TestOutboxAtomicity's exact event-count assertions) don't expect;
+// tests that do exercise the capability-ref invariant call
+// SeedShippedCapabilities directly after openMigratedDB (registries_test.go,
+// shipped_test.go).
+func Bootstrap(ctx context.Context, db *sql.DB) error {
+	if err := Migrate(db, Migrations()); err != nil {
+		return err
+	}
+	return SeedShippedCapabilities(ctx, NewCapabilities(NewLog(db)))
+}
 
 // SeedShippedCapabilities registers every capability.ShippedCapabilities
 // entry that isn't already present in caps, computing a real health check so

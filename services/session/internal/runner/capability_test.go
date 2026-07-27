@@ -373,7 +373,11 @@ func TestSetupCapabilitiesForShippedSystemAgentsSucceeds(t *testing.T) {
 		r := newTestRunner(sess.ID, dataclient.New(base, sess.ID), cs, t.TempDir())
 		cwd := t.TempDir()
 
-		r.setupCapabilities(ctx, sess, cwd)
+		agent, err := data.Agent(ctx, agentName)
+		if err != nil {
+			t.Fatalf("%s: lookup agent: %v", agentName, err)
+		}
+		r.setupCapabilities(ctx, cwd, agent, true)
 
 		c, err := data.Capability(ctx, "playwright-ui-testing")
 		if err != nil {
