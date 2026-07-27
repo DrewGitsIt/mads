@@ -20,6 +20,8 @@ export interface SessionActionsMenuProps {
    */
   onToggleShell?: () => void;
   onRestartAgent?: () => void;
+  /** True while a bounce triggered from onRestartAgent is in flight — disables the item so a slow bounce can't be double-fired. */
+  restartingAgent?: boolean;
   className?: string;
 }
 
@@ -33,9 +35,10 @@ export function SessionActionsMenu({
   onUnlinkRequest,
   onToggleShell,
   onRestartAgent,
+  restartingAgent,
   className,
 }: SessionActionsMenuProps) {
-  const close = closeState(activity);
+  const close = closeState();
   const resume = resumeState(activity);
   const del = deleteState(activity);
   const [copied, setCopied] = useState(false);
@@ -62,8 +65,13 @@ export function SessionActionsMenu({
               )}
               {onRestartAgent && (
                 <li>
-                  <button type="button" className={styles.menuItem} onClick={onRestartAgent}>
-                    Restart Agent
+                  <button
+                    type="button"
+                    className={styles.menuItem}
+                    disabled={restartingAgent}
+                    onClick={onRestartAgent}
+                  >
+                    {restartingAgent ? "Restarting Agent…" : "Restart Agent"}
                   </button>
                 </li>
               )}

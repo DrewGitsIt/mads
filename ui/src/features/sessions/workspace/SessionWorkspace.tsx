@@ -14,6 +14,7 @@ import type { Session } from "../../../router/types";
 import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
+import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
@@ -62,6 +63,7 @@ export function SessionWorkspace({
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [running, setRunning] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
@@ -104,6 +106,28 @@ export function SessionWorkspace({
     routerClient.resumeSession(sessionId).catch((err: unknown) => {
       setActionError(err instanceof Error ? err.message : String(err));
     });
+  }
+
+  // BounceSession (supervisor.go) returns early with no respawn if
+  // terminate fails (e.g. the child is busy past terminateGrace) — a
+  // swallowed failure here leaves a dead agent with zero indication. On
+  // success, force a stream reattach rather than relying on the cached
+  // session.activity value: the record can still read "inactive" the
+  // instant after a bounce, and a permanently silent transcript reads
+  // identically to "nothing happened".
+  function restartAgent() {
+    setMenuOpen(false);
+    setRestarting(true);
+    routerClient
+      .bounce(sessionId)
+      .then(() => {
+        refetchSession();
+        requestStreamReattach(sessionId);
+      })
+      .catch((err: unknown) => {
+        setActionError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => setRestarting(false));
   }
 
   async function confirmDelete() {
@@ -226,10 +250,8 @@ export function SessionWorkspace({
                 selectTab("conversation");
                 requestShellToggle();
               }}
-              onRestartAgent={() => {
-                setMenuOpen(false);
-                void routerClient.bounce(sessionId);
-              }}
+              onRestartAgent={restartAgent}
+              restartingAgent={restarting}
               onClose={closeSession}
               onResume={resumeSession}
               onDeleteRequest={() => {
