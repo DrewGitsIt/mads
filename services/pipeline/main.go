@@ -172,6 +172,11 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		Template: tpl, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
 		Model: sess.Model, Isolated: isolated, WorktreeRoot: worktreeRoot,
 		DataURL: dataURL, MadsHome: madsHome,
+		// This binary is only ever spawned by the Router (see package doc
+		// above) — its Supervisor owns deactivating sessionID on exit
+		// (onPipelineExit), since only it knows whether sessionID's
+		// interactive child is still live.
+		ManagedExternally: true,
 	})
 	return err
 }

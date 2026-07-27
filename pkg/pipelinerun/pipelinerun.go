@@ -34,6 +34,20 @@ type Options struct {
 	WorktreeRoot string
 	DataURL      string
 	MadsHome     string
+
+	// ManagedExternally is true when the caller has its own way of deciding
+	// whether SessionID should go back to inactive once this run ends, and
+	// Run's own deactivate-on-exit bookkeeping (below) must be skipped
+	// entirely. Set only by services/pipeline/main.go, the Router-spawned
+	// pipeline child: its Supervisor tracks whether the session's
+	// interactive child is still live (services/router/internal/supervisor's
+	// onPipelineExit) — something this package structurally cannot know, it
+	// has no Supervisor access — so unconditionally deactivating here would
+	// clobber a session a live agent is still working in. cmd/mads/run.go
+	// (the CLI) leaves this false: a CLI run has no such owner, so Run's own
+	// defer remains the only thing that ever deactivates it, exactly as
+	// before (deliberate: commit 81ba055).
+	ManagedExternally bool
 }
 
 // LoadTemplate fetches a template by registry name/ID and runs the same
@@ -55,37 +69,33 @@ func LoadTemplate(ctx context.Context, data *dataclient.Client, name string) (*t
 }
 
 // Run activates the session for the run's duration, deactivating it again
-// once the engine returns (a session is otherwise derived-inactive between
-// runs, spec §1) — the pipeline child's equivalent of the Router flipping an
+// once the engine returns unless opts.ManagedExternally says the caller owns
+// that instead (a session is otherwise derived-inactive between runs, spec
+// §1) — the pipeline child's equivalent of the Router flipping an
 // interactive session's Activity back on child exit (supervisor.go's
 // onSessionExit), since a pipeline run has no such child of its own to
 // piggyback on — then hands off to engine.Run.
 func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
-	sess, err := opts.Data.Session(ctx, opts.SessionID)
-	if err != nil {
-		return nil, fmt.Errorf("session %s: %w", opts.SessionID, err)
+	if err := activateSession(ctx, opts.Data, opts.SessionID); err != nil {
+		return nil, err
 	}
-	if sess.Activity != contracts.SessionActive {
-		sess.Activity = contracts.SessionActive
-		if err := opts.Data.UpdateSession(ctx, &sess); err != nil {
-			return nil, fmt.Errorf("activate session %s: %w", opts.SessionID, err)
-		}
+	if !opts.ManagedExternally {
+		defer func() {
+			// Best-effort and detached from ctx: a cancelled run must still get
+			// its session deactivated.
+			deactivateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			cur, derr := opts.Data.Session(deactivateCtx, opts.SessionID)
+			if derr != nil {
+				log.Printf("pipelinerun: could not deactivate session %s: %v", opts.SessionID, derr)
+				return
+			}
+			cur.Activity = contracts.SessionInactive
+			if derr := opts.Data.UpdateSession(deactivateCtx, &cur); derr != nil {
+				log.Printf("pipelinerun: could not deactivate session %s: %v", opts.SessionID, derr)
+			}
+		}()
 	}
-	defer func() {
-		// Best-effort and detached from ctx: a cancelled run must still get
-		// its session deactivated.
-		deactivateCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		cur, derr := opts.Data.Session(deactivateCtx, opts.SessionID)
-		if derr != nil {
-			log.Printf("pipelinerun: could not deactivate session %s: %v", opts.SessionID, derr)
-			return
-		}
-		cur.Activity = contracts.SessionInactive
-		if derr := opts.Data.UpdateSession(deactivateCtx, &cur); derr != nil {
-			log.Printf("pipelinerun: could not deactivate session %s: %v", opts.SessionID, derr)
-		}
-	}()
 
 	return engine.Run(ctx, engine.Config{
 		Data:         opts.Data,
@@ -101,4 +111,21 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 		DataURL:      opts.DataURL,
 		MadsHome:     opts.MadsHome,
 	})
+}
+
+// activateSession flips sessionID to active via the Data Service's atomic
+// activity-only endpoint (dataclient.SetSessionActivity) rather than a
+// Session-then-UpdateSession round trip: a live interactive child for the
+// same session can be writing this exact record concurrently under its own
+// lock (services/session/internal/runner.go's recordMu, e.g. persisting
+// ProviderRef at its own startup) — a client-side read-modify-write pair
+// carries a stale snapshot of the rest of the record across two separate
+// network calls no matter how late the read happens, so only an
+// atomically-scoped store-side operation closes that window rather than
+// just narrowing it.
+func activateSession(ctx context.Context, data *dataclient.Client, sessionID string) error {
+	if err := data.SetSessionActivity(ctx, sessionID, contracts.SessionActive); err != nil {
+		return fmt.Errorf("activate session %s: %w", sessionID, err)
+	}
+	return nil
 }
