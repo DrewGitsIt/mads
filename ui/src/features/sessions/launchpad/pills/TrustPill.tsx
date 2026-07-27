@@ -1,11 +1,14 @@
 import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
 import type {
+  AgentPermissions,
+  IntentMatrix,
   ProviderBehavior,
   ProviderSupport,
   ResolvedSessionField,
   SessionTrust,
 } from "../../../../router/types";
+import { agentIntentNotes } from "../../../../permissions/intents";
 import { trustLevels } from "./trustLevels";
 import pillStyles from "./pills.module.css";
 
@@ -14,14 +17,26 @@ export interface TrustPillProps {
   resolved?: ResolvedSessionField;
   /** The selected provider's capability matrix — see trustLevels.ts. */
   matrix?: Record<ProviderBehavior, ProviderSupport>;
+  /** The selected agent's declared permissions, if any (Library agent record). */
+  agentPermissions?: AgentPermissions;
+  /** The selected provider's per-intent enforcement declaration — see providers/provider/intent.go. */
+  intentMatrix?: IntentMatrix;
   onChange: (trust: SessionTrust) => void;
 }
 
-export function TrustPill({ value, resolved, matrix, onChange }: TrustPillProps) {
+export function TrustPill({
+  value,
+  resolved,
+  matrix,
+  agentPermissions,
+  intentMatrix,
+  onChange,
+}: TrustPillProps) {
   const [open, setOpen] = useState(false);
   const levels = trustLevels(matrix);
   const selected = levels.find((t) => t.value === value);
   const resolvedLevel = levels.find((t) => t.value === resolved?.value);
+  const intentNotes = agentIntentNotes(agentPermissions, intentMatrix);
 
   const triggerLabel =
     selected?.label ?? (resolvedLevel ? `${resolvedLevel.label} (default)` : "Select trust");
@@ -57,6 +72,17 @@ export function TrustPill({ value, resolved, matrix, onChange }: TrustPillProps)
             <span className={pillStyles.optionDescription}>{t.description}</span>
           </button>
         ))}
+        {intentNotes.length > 0 && (
+          <div className={pillStyles.agentIntents}>
+            <span className={pillStyles.groupLabel}>This agent also declares</span>
+            {intentNotes.map((n) => (
+              <div key={n.intent} className={pillStyles.intentNote}>
+                <span className={pillStyles.optionLabel}>{n.label}</span>
+                <span className={pillStyles.optionDescription}>{n.note}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Popover>
   );

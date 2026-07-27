@@ -1476,6 +1476,12 @@ export const fixtureProviders: ProviderInfo[] = [
       branching: "unsupported",
       cwd_reroot: "unsupported",
     },
+    intents: {
+      deny_commands: "native",
+      path_scope: "unsupported",
+      read_only: "native",
+      require_approval: "native",
+    },
   },
   {
     name: "fake",

@@ -94,6 +94,20 @@ export interface AgentPermissions {
   denied_commands?: string[];
 }
 
+// mirrors pkg/contracts/permission.go PermissionIntent — the portable,
+// provider-independent vocabulary that SessionTrust and AgentPermissions
+// both compile down to (see AgentPermissions.Intents() in that file).
+// read_only and require_approval are session-trust-only today: they have no
+// AgentPermissions field, so nothing here can compile an agent record to
+// those two intents yet.
+export type PermissionIntent = "deny_commands" | "path_scope" | "read_only" | "require_approval";
+
+// mirrors providers/provider/intent.go IntentMatrix — a provider's declared
+// enforcement level for each intent in the v1 vocabulary. Absent means the
+// provider doesn't implement IntentEnforcer and has taken no stance; treat
+// that identically to "unsupported" (see ProviderInfo.intents below).
+export type IntentMatrix = Partial<Record<PermissionIntent, ProviderSupport>>;
+
 export interface AgentPreferences {
   model?: string;
 }
@@ -746,6 +760,8 @@ export type BehaviorLevel = "required" | "expected" | "optional";
 export interface ProviderInfo {
   name: string;
   matrix: Record<ProviderBehavior, ProviderSupport>;
+  /** Absent when the provider doesn't implement IntentEnforcer — no stance taken on any intent. */
+  intents?: IntentMatrix;
 }
 
 // mirrors services/router/internal/api/reads.go behaviorInfo

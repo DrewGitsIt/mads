@@ -62,3 +62,35 @@
 .error {
   color: var(--bad-fg);
 }
+
+.sectionNote {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.intentHeading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.fieldHint {
+  font-weight: normal;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.enforcementNote {
+  margin: 0;
+  color: var(--text3);
+  font-size: var(--fs-chip);
+  font-style: italic;
+}
+
+.disabledIntent {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  opacity: 0.6;
+}

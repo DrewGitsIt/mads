@@ -3,7 +3,7 @@ import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Toast } from "../../../components/Toast/Toast";
 import { router } from "../../../router/client";
-import type { Session, SessionDefaults, Workspace } from "../../../router/types";
+import type { Agent, Session, SessionDefaults, Workspace } from "../../../router/types";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
 import { WorkspacePill } from "./pills/WorkspacePill";
 import { AgentPill } from "./pills/AgentPill";
@@ -35,6 +35,7 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedConfig>({});
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
+  const [selectedAgent, setSelectedAgent] = useState<Agent | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
@@ -161,7 +162,10 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
           <AgentPill
             value={staged.agent}
             resolved={resolved?.agent}
-            onChange={(agent) => setStaged((prev) => ({ ...prev, agent: agent.name }))}
+            onChange={(agent) => {
+              setSelectedAgent(agent);
+              setStaged((prev) => ({ ...prev, agent: agent.name }));
+            }}
           />
           <ModelPill
             provider={staged.provider}
@@ -178,6 +182,11 @@ export function Launchpad({ createSession, onSessionCreated }: LaunchpadProps) {
             matrix={
               providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))
                 ?.matrix
+            }
+            agentPermissions={selectedAgent?.permissions}
+            intentMatrix={
+              providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))
+                ?.intents
             }
             onChange={(trust) => setStaged((prev) => ({ ...prev, trust }))}
           />
