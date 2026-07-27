@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import styles from "./Select.module.css";
 
 export interface SelectOption {
   value: string;
   label: string;
+  /** Groups adjacent options under a non-interactive header (e.g. provider name). */
+  groupLabel?: string;
 }
 
 export interface SelectProps {
@@ -90,18 +92,24 @@ export function Select({ value, options, onChange, placeholder = "—", id, disa
       {open && (
         <ul className={styles.listbox} role="listbox">
           {options.map((opt, index) => (
-            <li
-              key={opt.value}
-              role="option"
-              aria-selected={opt.value === value}
-              className={[styles.option, index === highlighted && styles.optionHighlighted]
-                .filter(Boolean)
-                .join(" ")}
-              onMouseEnter={() => setHighlighted(index)}
-              onClick={() => commit(index)}
-            >
-              {opt.label}
-            </li>
+            <Fragment key={opt.value}>
+              {opt.groupLabel && opt.groupLabel !== options[index - 1]?.groupLabel && (
+                <li className={styles.groupLabel} role="presentation">
+                  {opt.groupLabel}
+                </li>
+              )}
+              <li
+                role="option"
+                aria-selected={opt.value === value}
+                className={[styles.option, index === highlighted && styles.optionHighlighted]
+                  .filter(Boolean)
+                  .join(" ")}
+                onMouseEnter={() => setHighlighted(index)}
+                onClick={() => commit(index)}
+              >
+                {opt.label}
+              </li>
+            </Fragment>
           ))}
         </ul>
       )}
