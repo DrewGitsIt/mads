@@ -66,4 +66,72 @@ describe("AgentEditor", () => {
     );
     expect(screen.queryByText("Delete")).toBeNull();
   });
+
+  it("renders the Permissions section with the agent's declared intents", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    const agent: Agent = {
+      id: "a1",
+      name: "restricted-agent",
+      prompt: "p",
+      created_at: "t",
+      updated_at: "t",
+      permissions: { denied_commands: ["rm"], allowed_paths: ["src/"] },
+    };
+    render(
+      <AgentEditor
+        agent={agent}
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Permissions")).toBeTruthy();
+    expect(screen.getByText("Block commands")).toBeTruthy();
+    expect(screen.getByText("Restrict file paths")).toBeTruthy();
+    expect(screen.getByText("Read-only mode")).toBeTruthy();
+    expect(screen.getByText("Require approval")).toBeTruthy();
+    expect(screen.getByText("rm ×")).toBeTruthy();
+    expect(screen.getByText("src/ ×")).toBeTruthy();
+    // Never claims enforcement the editor has no provider context to back up.
+    expect(screen.queryByText(/enforced by/)).toBeNull();
+  });
+
+  it("edits denied_commands and allowed_paths and includes them in the save payload", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    const onCreate = vi.fn().mockResolvedValue({} as Agent);
+
+    render(
+      <AgentEditor
+        agent={null}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
+      target: { value: "restricted-agent" },
+    });
+    fireEvent.change(screen.getByText("Prompt").closest("label")!.querySelector("textarea")!, {
+      target: { value: "You are careful." },
+    });
+
+    const denyInput = screen.getByPlaceholderText("e.g. rm, git push --force");
+    fireEvent.change(denyInput, { target: { value: "rm" } });
+    fireEvent.click(denyInput.parentElement!.querySelector("button")!);
+
+    const pathInput = screen.getByPlaceholderText("e.g. src/, docs/");
+    fireEvent.change(pathInput, { target: { value: "src/" } });
+    fireEvent.click(pathInput.parentElement!.querySelector("button")!);
+
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).toMatchObject({
+      permissions: { denied_commands: ["rm"], allowed_paths: ["src/"] },
+    });
+  });
 });

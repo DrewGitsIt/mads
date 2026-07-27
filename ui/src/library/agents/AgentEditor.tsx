@@ -10,7 +10,8 @@ import {
   SideSheetHeader,
 } from "../../components/SideSheet/SideSheet";
 import { useCapabilities } from "../capabilities/useCapabilities";
-import type { Agent, AgentCapabilities, Quadrant } from "../../router/types";
+import type { Agent, AgentCapabilities, AgentPermissions, Quadrant } from "../../router/types";
+import { PERMISSION_INTENT_DESCRIPTIONS, PERMISSION_INTENT_LABELS } from "../../permissions/intents";
 import { EnrichmentActions } from "./EnrichmentActions";
 import { ImportFromProviderDialog } from "./ImportFromProviderDialog";
 import { ModelField } from "./ModelField";
@@ -60,6 +61,12 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
   const [mcpServers, setMcpServers] = useState<string[]>(agent?.capabilities?.mcp_servers ?? []);
   const [skills, setSkills] = useState<string[]>(agent?.capabilities?.skills ?? []);
   const [model, setModel] = useState(agent?.preferences?.model ?? "");
+  const [deniedCommands, setDeniedCommands] = useState<string[]>(
+    agent?.permissions?.denied_commands ?? [],
+  );
+  const [allowedPaths, setAllowedPaths] = useState<string[]>(
+    agent?.permissions?.allowed_paths ?? [],
+  );
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -89,6 +96,10 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
       mcp_servers: mcpServers.length ? mcpServers : undefined,
       skills: skills.length ? skills : undefined,
     };
+    const permissionsPayload: AgentPermissions = {
+      denied_commands: deniedCommands.length ? deniedCommands : undefined,
+      allowed_paths: allowedPaths.length ? allowedPaths : undefined,
+    };
     const payload: Partial<Agent> = {
       name,
       description: description || undefined,
@@ -96,6 +107,7 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
       quadrant,
       tags: tags.length ? tags : undefined,
       capabilities: capabilitiesPayload,
+      permissions: permissionsPayload,
       preferences: model ? { model } : undefined,
     };
     try {
@@ -194,7 +206,66 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
             />
           </Section>
 
-          {/* Permissions section (allowed_paths / denied_commands) lands here in a follow-up task. */}
+          <Section heading="Permissions">
+            <p className={styles.sectionNote}>
+              Constraints you place on this agent. At runtime they combine with the
+              session&rsquo;s trust choice — whichever is more restrictive applies.
+            </p>
+
+            <div className={styles.intentHeading}>
+              <strong>{PERMISSION_INTENT_LABELS.deny_commands}</strong>
+              <span className={styles.fieldHint}>
+                {PERMISSION_INTENT_DESCRIPTIONS.deny_commands}
+              </span>
+            </div>
+            <ChipListField
+              label="Denied command patterns"
+              value={deniedCommands}
+              onChange={setDeniedCommands}
+              placeholder="e.g. rm, git push --force"
+            />
+            {deniedCommands.length > 0 && (
+              <p className={styles.enforcementNote}>
+                Enforcement depends on the provider chosen when starting a session — see
+                Settings → Providers.
+              </p>
+            )}
+
+            <div className={styles.intentHeading}>
+              <strong>{PERMISSION_INTENT_LABELS.path_scope}</strong>
+              <span className={styles.fieldHint}>
+                {PERMISSION_INTENT_DESCRIPTIONS.path_scope}
+              </span>
+            </div>
+            <ChipListField
+              label="Allowed paths"
+              value={allowedPaths}
+              onChange={setAllowedPaths}
+              placeholder="e.g. src/, docs/"
+            />
+            {allowedPaths.length > 0 && (
+              <p className={styles.enforcementNote}>
+                Enforcement depends on the provider chosen when starting a session — see
+                Settings → Providers.
+              </p>
+            )}
+
+            <div className={styles.disabledIntent}>
+              <strong>{PERMISSION_INTENT_LABELS.read_only}</strong>
+              <span className={styles.fieldHint}>
+                {PERMISSION_INTENT_DESCRIPTIONS.read_only} Not yet an agent-level setting —
+                set via the session&rsquo;s trust level when starting a session.
+              </span>
+            </div>
+
+            <div className={styles.disabledIntent}>
+              <strong>{PERMISSION_INTENT_LABELS.require_approval}</strong>
+              <span className={styles.fieldHint}>
+                {PERMISSION_INTENT_DESCRIPTIONS.require_approval} Not yet an agent-level
+                setting — set via the session&rsquo;s trust level when starting a session.
+              </span>
+            </div>
+          </Section>
 
           <Section heading="Import">
             <Button variant="ghost" onClick={() => setShowImport(true)}>
