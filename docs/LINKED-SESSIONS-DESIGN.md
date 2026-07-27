@@ -169,3 +169,13 @@ Links are directed edges; nothing is 1:1 by design:
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +
    digest rendering (mockup pass first; flag-gated).
+8. **Staged links at create**: `POST /sessions` accepts an optional `links`
+   list of `LinkRequest`s with `"$new"` (`contracts.NewSessionPlaceholder`)
+   on either endpoint; the Router resolves the placeholder and creates the
+   links after the session record exists but before the child spawns, so a
+   staged leader's orchestrate MCP is live on the child's first turn (no
+   client-side create-then-link race against `setupOrchestrate`). The 201
+   body gains a `links` key (created links, IDs resolved) only when staged
+   links were sent. Any invalid staged entry fails the whole create —
+   never an orphan unlinked session. Flag-off, the `links` field itself is
+   a 400 (plain creates keep working; only /links routes 404 wholesale).
