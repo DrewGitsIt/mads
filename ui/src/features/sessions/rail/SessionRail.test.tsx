@@ -243,7 +243,11 @@ describe("SessionRail", () => {
     expect(onResume).not.toHaveBeenCalled();
   });
 
-  it("shows a Close (pause) affordance only for active sessions, wired to onClose", () => {
+  it("shows a Close (pause) affordance for active and inactive sessions alike, wired to onClose", () => {
+    // Close/terminate is safe against the Supervisor in every activity
+    // state, and the activity record can drift from the real child state —
+    // so it must never be hidden based on that record alone (unlike Resume,
+    // which stays gated to non-active sessions above).
     const onClose = vi.fn();
     const onSelect = vi.fn();
     render(
@@ -258,12 +262,11 @@ describe("SessionRail", () => {
       />,
     );
 
-    // Only the active card gets a Close button.
     expect(screen.getByRole("button", { name: "Close live one" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Close resume me" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Close resume me" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close live one" }));
-    expect(onClose).toHaveBeenCalledWith("a1");
+    fireEvent.click(screen.getByRole("button", { name: "Close resume me" }));
+    expect(onClose).toHaveBeenCalledWith("r1");
     expect(onSelect).not.toHaveBeenCalled();
   });
 

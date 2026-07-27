@@ -4,8 +4,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient } from "../router/fixtures";
+import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
+import { requestStreamReattach } from "./streamReattachSignal";
 import { TransportSwitchError, SessionWakeError } from "../router/client";
 import { FLAGS } from "../featureFlags";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
@@ -1026,6 +1027,23 @@ describe("ConversationTab", () => {
       });
       expect(getTranscript.mock.calls.length).toBe(callsBefore + 1);
       expect(screen.getByText("done — here is the fix")).toBeTruthy();
+    });
+
+    it("force-reattaches the stream on a mads:reattach-stream signal for this session, even while the cached record says inactive", async () => {
+      const client = new FakeRouterClient({
+        ...fixtureSessions,
+        "session-active": { ...fixtureSessions["session-active"], activity: "inactive" },
+      });
+      render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+      await waitFor(() => expect(client.sessionEventSources.length).toBe(1));
+
+      // A signal for a different session must be ignored.
+      act(() => requestStreamReattach("some-other-session"));
+      expect(client.sessionEventSources.length).toBe(1);
+
+      act(() => requestStreamReattach("session-active"));
+      await waitFor(() => expect(client.sessionEventSources.length).toBe(2));
     });
 
     it("never polls the transcript while idle", async () => {
