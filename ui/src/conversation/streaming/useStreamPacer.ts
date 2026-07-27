@@ -64,7 +64,7 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
   const frame = useCallback(
     (ts: number) => {
       const rate = rateRef.current;
-      if (rate === null) {
+      if (rate == null || !Number.isFinite(rate)) {
         commit(drainAll(stateRef.current));
         rafRef.current = null;
         lastTsRef.current = null;
@@ -97,7 +97,7 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
 
   const enqueueText = useCallback(
     (text: string) => {
-      if (rateRef.current === null) {
+      if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
         commit(drainAll(enqueueTextPure(stateRef.current, text)));
         return;
       }
@@ -109,7 +109,7 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
 
   const enqueueTool = useCallback(
     (tool: ToolUse) => {
-      if (rateRef.current === null) {
+      if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
         commit(drainAll(enqueueToolPure(stateRef.current, tool)));
         return;
       }

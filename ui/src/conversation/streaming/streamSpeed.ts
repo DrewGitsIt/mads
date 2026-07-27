@@ -18,8 +18,19 @@ const CHARS_PER_SEC: Record<StreamSpeed, number | null> = {
   fast: 120, // ~30 tok/s
 };
 
+// Total despite the Record type above lying about the domain: `speed` can
+// arrive from server config as any string (including "" for a pre-field
+// row — see normalizeStreamSpeed), and an out-of-domain key reads back
+// `undefined` at runtime, not a type error. Coerce that to passthrough.
 export function streamSpeedToCharsPerSec(speed: StreamSpeed): number | null {
-  return CHARS_PER_SEC[speed];
+  return CHARS_PER_SEC[speed] ?? null;
+}
+
+const VALID_SPEEDS = new Set<string>(["off", "slow", "medium", "fast"]);
+
+/** Any value that isn't a recognized speed (missing field, "", unknown string) maps to "off". */
+export function normalizeStreamSpeed(speed: unknown): StreamSpeed {
+  return typeof speed === "string" && VALID_SPEEDS.has(speed) ? (speed as StreamSpeed) : "off";
 }
 
 /**
@@ -34,7 +45,7 @@ export function useStreamSpeed(client: RouterClient): StreamSpeed {
       client
         .getConfig()
         .then((c) => {
-          if (!cancelled) setSpeed(c.stream_speed ?? "off");
+          if (!cancelled) setSpeed(normalizeStreamSpeed(c.stream_speed));
         })
         .catch(() => {});
     void load();

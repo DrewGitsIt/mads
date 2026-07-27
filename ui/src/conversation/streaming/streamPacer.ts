@@ -98,7 +98,7 @@ export function step(s: PacerState, chars: number): PacerState {
       continue;
     }
     const take = Math.floor(budget);
-    if (take <= 0) break;
+    if (!(take > 0)) break;
     if (head.text.length <= take) {
       items = reveal(items, head.text);
       budget -= head.text.length;
@@ -111,7 +111,9 @@ export function step(s: PacerState, chars: number): PacerState {
   }
 
   // Keep the sub-1 fraction only while text still waits; drop it once drained.
-  const carry = queue.some((e) => e.kind === "text") ? Math.max(0, budget) : 0;
+  // A non-finite budget (bad rate upstream) must not poison carry for later,
+  // legitimate calls — fall back to 0 rather than propagating NaN/Infinity.
+  const carry = queue.some((e) => e.kind === "text") && Number.isFinite(budget) ? Math.max(0, budget) : 0;
   return { items, queue, carry };
 }
 

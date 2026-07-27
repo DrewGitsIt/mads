@@ -28,7 +28,12 @@ func (c *Config) Get(ctx context.Context) (*contracts.Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: get: %w", err)
 	}
-	var cfg contracts.Config
+	// Start from DefaultConfig() rather than the zero Config: a field added
+	// after a row was written (e.g. stream_speed on a pre-existing install)
+	// is simply absent from the stored JSON, and unmarshaling onto the zero
+	// value would leave it at the Go zero value instead of its documented
+	// default.
+	cfg := contracts.DefaultConfig()
 	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
 		return nil, fmt.Errorf("config: corrupt data: %w", err)
 	}

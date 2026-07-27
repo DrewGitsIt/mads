@@ -100,4 +100,41 @@ describe("streamPacer", () => {
     s = enqueueText(s, "fg");
     expect(pendingChars(s)).toBe(7); // tools don't count
   });
+
+  // Regression for the 2026-07-27 renderer freeze: an invalid stream_speed
+  // upstream produced a NaN budget, and `take <= 0` is false for NaN, so the
+  // old loop guard never broke — an unbounded synchronous while loop.
+  describe("non-finite budgets never hang (2026-07-27 freeze regression)", () => {
+    it("terminates without draining on a NaN budget", () => {
+      let s = enqueueText(emptyPacer(), "hello");
+      s = step(s, NaN);
+      expect(text(s.items)).toBe("");
+      expect(hasPending(s)).toBe(true);
+      expect(Number.isFinite(s.carry)).toBe(true);
+    });
+
+    it("terminates without draining on an undefined-coerced budget", () => {
+      let s = enqueueText(emptyPacer(), "hello");
+      s = step(s, undefined as unknown as number);
+      expect(text(s.items)).toBe("");
+      expect(hasPending(s)).toBe(true);
+    });
+
+    it("drains fully on an Infinity budget", () => {
+      let s = enqueueText(emptyPacer(), "hello");
+      s = enqueueTool(s, { id: "t1", name: "Read" });
+      s = enqueueText(s, "world");
+      s = step(s, Infinity);
+      expect(text(s.items)).toBe("helloworld");
+      expect(hasPending(s)).toBe(false);
+    });
+
+    it("a NaN step does not poison carry for a later, legitimate step", () => {
+      let s = enqueueText(emptyPacer(), "hello");
+      s = step(s, NaN);
+      s = step(s, 5);
+      expect(text(s.items)).toBe("hello");
+      expect(hasPending(s)).toBe(false);
+    });
+  });
 });
