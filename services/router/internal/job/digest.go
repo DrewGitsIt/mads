@@ -11,14 +11,10 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
-	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/pkg/turndigest"
 )
 
 const DigestKind = "digest"
-
-const digestSystemPrompt = "You compress one turn of an AI coding agent's " +
-	"activity into a short digest for someone monitoring the session. Plain " +
-	"prose, a few sentences at most: what was asked, what the agent did."
 
 // GenerateDigest is the job body for a watched session's turn completing
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4, the `read` grant's push half):
@@ -64,15 +60,20 @@ func GenerateDigest(sessionID, delta string) Func {
 			return nil // no live per_turn readers; skip the fast-model call entirely
 		}
 
-		text, _, err := deps.FastModel.DoText(ctx, fastmodel.Job{
-			System: digestSystemPrompt, Prompt: delta,
+		res, err := turndigest.New(deps.FastModel).Digest(ctx, turndigest.Request{
+			Turns:    []turndigest.Turn{{Entries: turndigest.Parse(delta)}},
+			Audience: turndigest.MonitorPush,
+			// BudgetTokens deliberately 0: monitors always get a compressed
+			// digest, and a skippable backend degrades to empty ⇒ no push
+			// (both today's behavior).
 		})
 		if err != nil {
-			if fastmodel.IsSkippable(err) {
-				return nil // no Fast Model backend configured: skip, not a failure
-			}
 			return fmt.Errorf("digest: compress: %w", err)
 		}
+		if res.Text == "" {
+			return nil // skippable backend (or empty delta): skip, not a failure
+		}
+		text := res.Text
 
 		for _, l := range targets {
 			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
