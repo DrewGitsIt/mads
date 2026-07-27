@@ -1,5 +1,56 @@
 # HANDOFF: pkg/turndigest — shared n-turn compression for agent readers
 
+## Executor stage (2026-07-27)
+
+Implemented as designed; the design sections below are accurate to the code.
+
+What was done:
+
+- New `pkg/turndigest/`: `turndigest.go` (Entry/Turn/Request/Result types,
+  `Digester.Digest` pipeline, `truncate`), `normalize.go` (merge assistant
+  runs, collapse identical adjacent tool calls into a counted internal
+  `item`, 400-rune entry cap), `render.go` (`Render`/`Parse` canonical line
+  format plus multi-turn `— turn N —` headers), `prompt.go` (three audience
+  prompts; MonitorPush is the legacy `digestSystemPrompt` byte-for-byte,
+  pinned by a test constant).
+- `services/router/internal/job/digest.go`: `GenerateDigest` now routes
+  through `turndigest.Digest` (Parse → n=1 → MonitorPush → budget 0);
+  `digestSystemPrompt` and the `fastmodel` import removed. The `res.Text ==
+  ""` early return replaces the explicit `IsSkippable` check, per design.
+- `services/session/internal/runner/digest.go`: `digestEntry` replaced by
+  `turndigest.Entry`; `renderAndReset` delegates to `turndigest.Render`
+  (same bytes — wire payload unchanged).
+- Tests: 9 test functions in `pkg/turndigest/turndigest_test.go` covering
+  all six planned cases plus the runaway-reply backstop and the
+  empty-request path; goldens in `testdata/` generated with `-update`.
+
+What was NOT done (all listed out-of-scope in the design): no
+`fastmodel.Job.MaxTokens`, no `LeaderCatchup`/`RunDigest` call sites,
+no wire-format change, `synth/transcript.go` keeps its own
+`deltaEntry`/`renderDelta`.
+
+Verified: `go build ./... && go vet ./...` clean;
+`go test ./services/router/... ./services/session/... ./pkg/turndigest/`
+all pass with the pre-existing job/session tests unmodified.
+`go list` confirms turndigest imports only stdlib + `providers/fastmodel`.
+
+For the reviewer to scrutinize:
+
+- `Parse`'s best-effort choices: a leading unprefixed line opens a
+  KindAssistant entry (arbitrary but lossless); a continuation line landing
+  on a tool entry appends to its (never-rendered) Text. Both documented,
+  both unreachable from Render output.
+- The normalize order is merge → collapse → cap, so a merged assistant run
+  is capped as one entry (a long run of fragments truncates at 400 runes
+  total). This is what "cap per-entry length" was read to mean.
+- `truncate` backs off UTF-8 continuation bytes manually
+  (`s[max]&0xC0 == 0x80`) rather than via utf8 helpers — check the
+  boundary logic.
+
+---
+
+# Design stage handoff (original)
+
 Design stage output. Executor implements; no code has been written yet.
 
 ## Task
