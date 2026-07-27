@@ -178,7 +178,7 @@ func TestSetupCapabilitiesScopesEnvByDeclaration(t *testing.T) {
 	r := newTestRunner(sess.ID, dataclient.New(base, sess.ID), cs, t.TempDir())
 	cwd := t.TempDir()
 
-	env := r.setupCapabilities(ctx, sess, cwd)
+	env := r.setupCapabilities(ctx, cwd, agent, true)
 
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "MADS_TEST_FOO_TOKEN=foo-value") {
@@ -250,7 +250,7 @@ func TestSetupCapabilitiesMissingCredentialDegradesGracefully(t *testing.T) {
 	cwd := t.TempDir()
 
 	// Must not panic or otherwise abort — the session continues.
-	env := r.setupCapabilities(ctx, sess, cwd)
+	env := r.setupCapabilities(ctx, cwd, agent, true)
 	if !strings.Contains(strings.Join(env, "\n"), "GOOD_TOKEN=good-secret-value") {
 		t.Errorf("resolvable skill credential should still be injected: %v", env)
 	}
@@ -322,7 +322,7 @@ func TestSetupCapabilitiesHealthChangedFiresOnTransition(t *testing.T) {
 	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "runner-cap") })
 
 	// First attempt: credential missing, matches the zero-value default — no event.
-	r.setupCapabilities(ctx, sess, t.TempDir())
+	r.setupCapabilities(ctx, t.TempDir(), agent, true)
 	events, err := data.Events(ctx, 0, "", []string{"capability.health_changed"})
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +336,7 @@ func TestSetupCapabilitiesHealthChangedFiresOnTransition(t *testing.T) {
 	if err := cs.Set("RUNNING_TOKEN", "running-value"); err != nil {
 		t.Fatal(err)
 	}
-	r.setupCapabilities(ctx, sess, t.TempDir())
+	r.setupCapabilities(ctx, t.TempDir(), agent, true)
 
 	events, err = data.Events(ctx, 0, "", []string{"capability.health_changed"})
 	if err != nil {
@@ -423,7 +423,7 @@ func TestSetupCapabilitiesResolvesVaultBackedCredential(t *testing.T) {
 	r := newTestRunner(sess.ID, dataclient.New(base, sess.ID), cs, t.TempDir())
 	r.VaultResolver = resolver
 
-	env := r.setupCapabilities(ctx, sess, t.TempDir())
+	env := r.setupCapabilities(ctx, t.TempDir(), agent, true)
 
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "MADS_TEST_VAULT_TOKEN=vault-secret-value") {
@@ -499,7 +499,7 @@ func TestSetupCapabilitiesCrossWorkspaceIsolation(t *testing.T) {
 	r := newTestRunner(sessB.ID, dataclient.New(base, sessB.ID), cs, t.TempDir())
 	r.VaultResolver = resolver
 
-	env := r.setupCapabilities(ctx, sessB, t.TempDir())
+	env := r.setupCapabilities(ctx, t.TempDir(), agentB, true)
 	joined := strings.Join(env, "\n")
 	if strings.Contains(joined, "MADS_TEST_WORKSPACE_A_TOKEN") || strings.Contains(joined, "workspace-a-secret-value") {
 		t.Errorf("workspace B's session env must never see workspace A's credential: %v", env)

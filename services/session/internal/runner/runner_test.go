@@ -1394,3 +1394,141 @@ func TestRefLocateNeverOverridesWireAnnouncement(t *testing.T) {
 		t.Fatalf("provider_ref = %q after a scripted-wrong locator had time to fire, want unchanged %q", got.ProviderRef, wantRef)
 	}
 }
+
+// TestSystemPromptFromAgentReachesProviderLaunch proves a session whose
+// Agent resolves to a registry record starts with StartOptions.SystemPrompt
+// equal to that record's Prompt, byte-for-byte — no mads-authored preamble
+// prepended, appended, or templated in.
+func TestSystemPromptFromAgentReachesProviderLaunch(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+
+	wantPrompt := "You are Ferris, a distinctive test persona.\nBe terse and never apologize."
+	agent := contracts.Agent{Name: "prompt-agent", Prompt: wantPrompt}
+	if err := data.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	sess := newCapabilityTestSession(t, base, agent.Name)
+
+	fp := fake.New()
+	reg := provider.NewRegistry()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, dataclient.New(base, sess.ID), reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	starts := fp.StartCalls()
+	if len(starts) != 1 {
+		t.Fatalf("start calls = %d, want 1", len(starts))
+	}
+	if got := starts[0].SystemPrompt; got != wantPrompt {
+		t.Fatalf("SystemPrompt = %q, want exactly the agent's Prompt %q (no mads preamble)", got, wantPrompt)
+	}
+}
+
+// TestSystemPromptEmptyWithoutAgent proves the two degrade-gracefully cases
+// in the acceptance criteria both leave StartOptions.SystemPrompt empty: a
+// session with no Agent assigned, and one whose Agent name fails to resolve
+// against the registry (never fatal — the session still starts).
+func TestSystemPromptEmptyWithoutAgent(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("no agent", func(t *testing.T) {
+		base := datatest.Start(t)
+		sess := newSession(t, base)
+		data := dataclient.New(base, sess.ID)
+
+		fp := fake.New()
+		reg := provider.NewRegistry()
+		if err := reg.Register(fp); err != nil {
+			t.Fatalf("register fake: %v", err)
+		}
+
+		r := New(sess.ID, data, reg)
+		if err := r.Start(ctx); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+		starts := fp.StartCalls()
+		if len(starts) != 1 {
+			t.Fatalf("start calls = %d, want 1", len(starts))
+		}
+		if got := starts[0].SystemPrompt; got != "" {
+			t.Fatalf("SystemPrompt = %q, want empty for a session with no agent", got)
+		}
+	})
+
+	t.Run("agent fails to load", func(t *testing.T) {
+		base := datatest.Start(t)
+		sess := newCapabilityTestSession(t, base, "agent-that-does-not-exist")
+		data := dataclient.New(base, sess.ID)
+
+		fp := fake.New()
+		reg := provider.NewRegistry()
+		if err := reg.Register(fp); err != nil {
+			t.Fatalf("register fake: %v", err)
+		}
+
+		r := New(sess.ID, data, reg)
+		if err := r.Start(ctx); err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+		starts := fp.StartCalls()
+		if len(starts) != 1 {
+			t.Fatalf("start calls = %d, want 1", len(starts))
+		}
+		if got := starts[0].SystemPrompt; got != "" {
+			t.Fatalf("SystemPrompt = %q, want empty when the agent record fails to load", got)
+		}
+	})
+}
+
+// TestSystemPromptPreservedAcrossSwitchTransport proves SwitchTransport's
+// respawned process receives the same SystemPrompt the original transport
+// launched with — it reuses r.baseOpts (captured once in Start), so a
+// chat/terminal switch never silently drops the agent's persona.
+func TestSystemPromptPreservedAcrossSwitchTransport(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+
+	wantPrompt := "You are Ferris, a distinctive test persona."
+	agent := contracts.Agent{Name: "switch-prompt-agent", Prompt: wantPrompt}
+	if err := data.CreateAgent(ctx, &agent); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	sess := newCapabilityTestSession(t, base, agent.Name)
+
+	fp := fake.New()
+	reg := provider.NewRegistry()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(sess.ID, dataclient.New(base, sess.ID), reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	if _, err := r.SwitchTransport(ctx, provider.ModePTY); err != nil {
+		t.Fatalf("switch to pty: %v", err)
+	}
+
+	starts := fp.StartCalls()
+	if len(starts) != 2 {
+		t.Fatalf("start calls = %d, want 2 (initial + switch)", len(starts))
+	}
+	if got := starts[1].SystemPrompt; got != wantPrompt {
+		t.Fatalf("switched transport's SystemPrompt = %q, want unchanged %q", got, wantPrompt)
+	}
+}

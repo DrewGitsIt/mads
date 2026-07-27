@@ -10,8 +10,25 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
-// setupCapabilities resolves sess.Agent's declared capabilities (spec §12,
-// §13): starts/health-checks each declared MCP server with its own scoped
+// loadAgent loads sess.Agent's registry record, if any. ok is false when the
+// session has no agent assigned or the record fails to load (logged, not
+// fatal) — callers degrade gracefully: capability wiring (setupCapabilities)
+// and the chat system prompt (Runner.Start) both skip on !ok, matching the
+// existing per-capability silent-degrade convention below.
+func (r *Runner) loadAgent(ctx context.Context, sess contracts.Session) (agent contracts.Agent, ok bool) {
+	if sess.Agent == "" {
+		return contracts.Agent{}, false
+	}
+	a, err := r.data.Agent(ctx, sess.Agent)
+	if err != nil {
+		log.Printf("runner: load agent %s: %v", sess.Agent, err)
+		return contracts.Agent{}, false
+	}
+	return a, true
+}
+
+// setupCapabilities resolves agent's declared capabilities (spec §12, §13):
+// starts/health-checks each declared MCP server with its own scoped
 // credential env vars, installs each declared skill's availability into
 // cwd, and returns the env additions destined for the *agent's own* process
 // (StartOptions.Env) — the union of declared skill capabilities' credential
@@ -20,19 +37,16 @@ import (
 // paths are kept separate throughout, so an agent can never observe an MCP
 // capability's token it didn't declare as a skill.
 //
-// Nil-safe: sess.Agent == "", or CredStore/MCPRegistry unset, means no
-// capability wiring at all — existing callers/tests are unaffected.
-// Never returns an error: every failure (agent not found, capability not
-// found, missing credential, MCP spawn failure, skill dir missing) degrades
-// that one capability to unhealthy (via dataclient.SetCapabilityHealth) and
-// continues with the rest. The session must always start.
-func (r *Runner) setupCapabilities(ctx context.Context, sess contracts.Session, cwd string) []string {
-	if sess.Agent == "" || r.CredStore == nil || r.MCPRegistry == nil {
-		return nil
-	}
-	agent, err := r.data.Agent(ctx, sess.Agent)
-	if err != nil {
-		log.Printf("runner: load agent %s for capability wiring: %v", sess.Agent, err)
+// agent/agentOK come from loadAgent, called once by Start and shared with the
+// system-prompt wiring rather than fetched again here. Nil-safe: !agentOK, or
+// CredStore/MCPRegistry unset, means no capability wiring at all — existing
+// callers/tests are unaffected.
+// Never returns an error: every failure (capability not found, missing
+// credential, MCP spawn failure, skill dir missing) degrades that one
+// capability to unhealthy (via dataclient.SetCapabilityHealth) and continues
+// with the rest. The session must always start.
+func (r *Runner) setupCapabilities(ctx context.Context, cwd string, agent contracts.Agent, agentOK bool) []string {
+	if !agentOK || r.CredStore == nil || r.MCPRegistry == nil {
 		return nil
 	}
 
