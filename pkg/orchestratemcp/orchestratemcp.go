@@ -1,10 +1,10 @@
 // Package orchestratemcp implements the leader capability's MCP-over-stdio
 // server (docs/LINKED-SESSIONS-DESIGN.md decisions 1-3, decomposition item
-// 5): three tools — list_links, get_summary, send_message — each a thin
+// 5): list_links, get_summary, get_turns, send_message — each a thin
 // wrapper over one of the Router's /sessions/{id}/orchestrate/* and
 // /links/{id}/orchestrate/message routes. JSON-RPC 2.0, newline-delimited
 // framing per the MCP stdio transport; only initialize, tools/list, and
-// tools/call are implemented — the whole surface these three tools need, no
+// tools/call are implemented — the whole surface these tools need, no
 // resources/prompts/sampling.
 package orchestratemcp
 
@@ -145,6 +145,16 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
 		}
 		status, body, err = s.client.getSummary(ctx, args.SubjectSessionID)
+	case "get_turns":
+		var args struct {
+			SubjectSessionID string `json:"subject_session_id"`
+			FromTurn         int    `json:"from_turn"`
+			ToTurn           int    `json:"to_turn"`
+		}
+		if unmarshalErr := json.Unmarshal(params.Arguments, &args); unmarshalErr != nil {
+			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
+		}
+		status, body, err = s.client.getTurns(ctx, args.SubjectSessionID, args.FromTurn, args.ToTurn)
 	case "send_message":
 		var args struct {
 			LinkID string `json:"link_id"`
