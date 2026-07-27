@@ -498,4 +498,34 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
 
     await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
   });
+
+  it("shows the honest debounced-digest cadence badge on a nested subject row and allows editing it", async () => {
+    FLAGS.linkedSessions = true;
+    const client = new FakeRouterClient();
+    const updateLinkSpy = vi.spyOn(client, "updateLink");
+    render(
+      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
+    );
+
+    expect(screen.getByText("DEBOUNCED DIGESTS")).toBeTruthy();
+    fireEvent.click(screen.getByText("DEBOUNCED DIGESTS"));
+    fireEvent.click(screen.getByText("Catch up on request"));
+
+    await waitFor(() =>
+      expect(updateLinkSpy).toHaveBeenCalledWith("l1", {
+        granting_session_id: "lead",
+        subject_session_id: "a",
+        grants: ["read", "inject", "orchestrate"],
+        cadence: "manual_only",
+      }),
+    );
+  });
+
+  it("shows the manual-only cadence badge for a manual_only link", () => {
+    FLAGS.linkedSessions = true;
+    const manualLink = makeLink({ ...link, cadence: "manual_only" });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
+    expect(screen.getByText("MANUAL ONLY")).toBeTruthy();
+    expect(screen.queryByText("DEBOUNCED DIGESTS")).toBeNull();
+  });
 });

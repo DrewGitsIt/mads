@@ -1409,6 +1409,28 @@ export class FakeRouterClient implements RouterClient {
     return link;
   }
 
+  async updateLink(id: string, req: LinkRequest): Promise<Link> {
+    const cur = this.links.get(id);
+    const grants = req.grants ?? (req.preset ? PRESET_GRANTS[req.preset] : []);
+    if (grants.length === 0) {
+      throw new RouterValidationError([{ field: "grants", message: "must not be empty" }]);
+    }
+    const now = new Date().toISOString();
+    const link: Link = {
+      id,
+      granting_session_id: cur?.granting_session_id ?? req.granting_session_id,
+      subject_session_id: cur?.subject_session_id ?? req.subject_session_id,
+      created_at: cur?.created_at ?? now,
+      orchestrate_status: cur?.orchestrate_status,
+      ...cur,
+      grants,
+      cadence: req.cadence ?? cur?.cadence ?? "per_turn",
+      updated_at: now,
+    };
+    this.links.set(id, link);
+    return link;
+  }
+
   async deleteLink(id: string): Promise<void> {
     this.links.delete(id);
   }

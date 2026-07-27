@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
+import { LinkCadenceControl } from "./LinkCadenceControl";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, groupSessions, totalOpenTasks } from "./railGroups";
 import type { OpenTaskBreakdown } from "./railGroups";
@@ -8,7 +9,7 @@ import { buildRailRows, computeRailLinks } from "./railLinks";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import { router, type RouterClient } from "../../../router/client";
-import type { Link, OrchestrateStatus, Session } from "../../../router/types";
+import type { Grant, Link, LinkCadence, OrchestrateStatus, Session } from "../../../router/types";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -114,6 +115,7 @@ export function SessionRail({
               anchorWorkspace={anchorWorkspace}
               onStartLinkMode={startLinkMode}
               onToggleLinkSelection={toggleLinkSelection}
+              routerClient={routerClient}
             />
           ))}
         </div>
@@ -137,6 +139,7 @@ export function SessionRail({
               anchorWorkspace={anchorWorkspace}
               onStartLinkMode={startLinkMode}
               onToggleLinkSelection={toggleLinkSelection}
+              routerClient={routerClient}
             />
           ))}
         </div>
@@ -190,6 +193,7 @@ function RailRowGroup({
   anchorWorkspace,
   onStartLinkMode,
   onToggleLinkSelection,
+  routerClient,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
@@ -204,6 +208,7 @@ function RailRowGroup({
   anchorWorkspace?: string;
   onStartLinkMode: (id: string) => void;
   onToggleLinkSelection: (id: string) => void;
+  routerClient: RouterClient;
 }) {
   const isAnchor = linkMode?.anchorId === row.session.id;
   const isCrossWorkspace = Boolean(linkMode) && !isAnchor && row.session.workspace !== anchorWorkspace;
@@ -250,6 +255,11 @@ function RailRowGroup({
             isLinkSelected={false}
             onStartLinkMode={() => {}}
             onToggleLinkSelection={() => {}}
+            cadence={sub.cadence}
+            grants={sub.grants}
+            grantingSessionId={sub.grantingSessionId}
+            linkId={sub.linkId}
+            routerClient={routerClient}
           />
         ))}
     </>
@@ -287,6 +297,11 @@ function SessionRow({
   isLinkSelected,
   onStartLinkMode,
   onToggleLinkSelection,
+  cadence,
+  grants,
+  grantingSessionId,
+  linkId,
+  routerClient,
 }: {
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
@@ -307,6 +322,12 @@ function SessionRow({
   isLinkSelected: boolean;
   onStartLinkMode: () => void;
   onToggleLinkSelection: () => void;
+  /** Only set on nested subject rows — the underlying link's cadence, editable via LinkCadenceControl. */
+  cadence?: LinkCadence;
+  grants?: Grant[];
+  grantingSessionId?: string;
+  linkId?: string;
+  routerClient?: RouterClient;
 }) {
   const dot = dotState(session, openTaskBreakdown);
   const name = session.name || "Untitled session";
@@ -396,6 +417,16 @@ function SessionRow({
             >
               {orchestrateLabel}
             </span>
+          )}
+          {linkedSessionsEnabled && nested && cadence && linkId && grantingSessionId && routerClient && (
+            <LinkCadenceControl
+              linkId={linkId}
+              grantingSessionId={grantingSessionId}
+              subjectSessionId={session.id}
+              grants={grants ?? []}
+              cadence={cadence}
+              routerClient={routerClient}
+            />
           )}
         </div>
       )}

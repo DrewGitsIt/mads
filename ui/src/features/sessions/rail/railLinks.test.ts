@@ -34,8 +34,22 @@ describe("computeRailLinks", () => {
     ]);
     expect(holders.get("lead")?.badge).toBe("LEADER · 2");
     expect(holders.get("lead")?.subjects).toEqual([
-      { sessionId: "a", badge: "LINKED", linkId: "l1" },
-      { sessionId: "b", badge: "LINKED", linkId: "l2" },
+      {
+        sessionId: "a",
+        badge: "LINKED",
+        linkId: "l1",
+        cadence: "per_turn",
+        grants: ["read", "inject", "orchestrate"],
+        grantingSessionId: "lead",
+      },
+      {
+        sessionId: "b",
+        badge: "LINKED",
+        linkId: "l2",
+        cadence: "per_turn",
+        grants: ["read", "inject", "orchestrate"],
+        grantingSessionId: "lead",
+      },
     ]);
     expect(nestedSubjectIds).toEqual(new Set(["a", "b"]));
   });
@@ -52,7 +66,9 @@ describe("computeRailLinks", () => {
       makeLink({ id: "l1", granting_session_id: "mon", subject_session_id: "a", grants: ["read"] }),
     ]);
     expect(holders.get("mon")?.badge).toBe("MONITOR");
-    expect(holders.get("mon")?.subjects).toEqual([{ sessionId: "a", badge: "WATCHED", linkId: "l1" }]);
+    expect(holders.get("mon")?.subjects).toEqual([
+      { sessionId: "a", badge: "WATCHED", linkId: "l1", cadence: "per_turn", grants: ["read"], grantingSessionId: "mon" },
+    ]);
   });
 
   it("prefers the LEADER badge over MONITOR when a session holds both roles", () => {
@@ -62,8 +78,22 @@ describe("computeRailLinks", () => {
     ]);
     expect(holders.get("s")?.badge).toBe("LEADER");
     expect(holders.get("s")?.subjects).toEqual([
-      { sessionId: "a", badge: "LINKED", linkId: "l1" },
-      { sessionId: "b", badge: "WATCHED", linkId: "l2" },
+      {
+        sessionId: "a",
+        badge: "LINKED",
+        linkId: "l1",
+        cadence: "per_turn",
+        grants: ["read", "inject", "orchestrate"],
+        grantingSessionId: "s",
+      },
+      {
+        sessionId: "b",
+        badge: "WATCHED",
+        linkId: "l2",
+        cadence: "per_turn",
+        grants: ["read"],
+        grantingSessionId: "s",
+      },
     ]);
   });
 
@@ -85,7 +115,17 @@ describe("computeRailLinks", () => {
         orchestrate_status: "pending_restart",
       }),
     ]);
-    expect(holders.get("lead")?.subjects).toEqual([{ sessionId: "a", badge: "LINKED", linkId: "l1", orchestrateStatus: "pending_restart" }]);
+    expect(holders.get("lead")?.subjects).toEqual([
+      {
+        sessionId: "a",
+        badge: "LINKED",
+        linkId: "l1",
+        orchestrateStatus: "pending_restart",
+        cadence: "per_turn",
+        grants: ["read", "inject", "orchestrate"],
+        grantingSessionId: "lead",
+      },
+    ]);
   });
 
   it("leaves orchestrateStatus undefined on a monitor (WATCHED) row", () => {
@@ -109,7 +149,16 @@ describe("buildRailRows", () => {
 
     expect(rows.map((r) => r.session.id)).toEqual(["lead", "other"]);
     expect(rows[0].badge).toBe("LEADER");
-    expect(rows[0].subjects).toEqual([{ session: a, badge: "LINKED", linkId: "l1" }]);
+    expect(rows[0].subjects).toEqual([
+      {
+        session: a,
+        badge: "LINKED",
+        linkId: "l1",
+        cadence: "per_turn",
+        grants: ["read", "inject", "orchestrate"],
+        grantingSessionId: "lead",
+      },
+    ]);
     expect(rows[1].badge).toBeUndefined();
     expect(rows[1].subjects).toEqual([]);
   });
@@ -124,7 +173,9 @@ describe("buildRailRows", () => {
     const activeRows = buildRailRows([lead], allSessionsById, graph);
     const recentRows = buildRailRows([a], allSessionsById, graph);
 
-    expect(activeRows[0].subjects).toEqual([{ session: a, badge: "WATCHED", linkId: "l1" }]);
+    expect(activeRows[0].subjects).toEqual([
+      { session: a, badge: "WATCHED", linkId: "l1", cadence: "per_turn", grants: ["read"], grantingSessionId: "lead" },
+    ]);
     expect(recentRows).toEqual([]);
   });
 });

@@ -4,6 +4,7 @@ import { RouterValidationError, type RouterClient } from "../../../router/client
 import {
   NEW_SESSION_PLACEHOLDER,
   PRESET_GRANTS,
+  type LinkCadence,
   type LinkPreset,
   type LinkRequest,
   type Session,
@@ -25,6 +26,7 @@ export interface LinkChooserDialogProps {
   /** Staged mode only: seeds when reopening to edit an existing staged selection. */
   initialSubjectIds?: string[];
   initialPreset?: "monitor" | "leader";
+  initialCadence?: LinkCadence;
 }
 
 // Only Monitor and Leader are user-selectable (docs/linked-sessions-mockup.html,
@@ -44,6 +46,17 @@ const PRESET_COPY: Record<UserPreset, { title: string; description: string }> = 
   },
 };
 
+const CADENCE_COPY: Record<LinkCadence, { title: string; description: string }> = {
+  per_turn: {
+    title: "Follow intently",
+    description: "Digest after each burst of activity.",
+  },
+  manual_only: {
+    title: "Catch up on request",
+    description: "No automatic digests; the agent can ask for a summary.",
+  },
+};
+
 function sessionName(sessions: Session[], id: string): string {
   return sessions.find((s) => s.id === id)?.name || "Untitled session";
 }
@@ -58,8 +71,10 @@ export function LinkChooserDialog({
   stagedHolder,
   initialSubjectIds,
   initialPreset,
+  initialCadence,
 }: LinkChooserDialogProps) {
   const [preset, setPreset] = useState<UserPreset>(initialPreset ?? "leader");
+  const [cadence, setCadence] = useState<LinkCadence>(initialCadence ?? "per_turn");
   const [holderId, setHolderId] = useState<string>(
     stagedHolder ? NEW_SESSION_PLACEHOLDER : (sessionIds[0] ?? ""),
   );
@@ -100,6 +115,7 @@ export function LinkChooserDialog({
           granting_session_id: NEW_SESSION_PLACEHOLDER,
           subject_session_id: id,
           preset,
+          cadence,
         })),
       );
       return;
@@ -113,6 +129,7 @@ export function LinkChooserDialog({
           granting_session_id: holderId,
           subject_session_id: subjectId,
           preset,
+          cadence,
         });
       }
       onCreated?.();
@@ -164,6 +181,23 @@ export function LinkChooserDialog({
               </div>
             </button>
           ))}
+        </div>
+        <div className={styles.cadenceSection}>
+          <div className={styles.roleLabel}>How often should it hear back?</div>
+          <div className={styles.presets}>
+            {(Object.keys(CADENCE_COPY) as LinkCadence[]).map((c) => (
+              <button
+                key={c}
+                type="button"
+                className={styles.preset}
+                aria-selected={cadence === c}
+                onClick={() => setCadence(c)}
+              >
+                <div className={styles.pt}>{CADENCE_COPY[c].title}</div>
+                <div className={styles.pd}>{CADENCE_COPY[c].description}</div>
+              </button>
+            ))}
+          </div>
         </div>
         {stagedHolder && (
           <div className={styles.subjectPicker}>

@@ -93,6 +93,14 @@
   background: var(--bg1);
 }
 
+.cadenceSection {
+  margin-top: var(--space-3);
+}
+
+.cadenceSection .roleLabel {
+  margin-bottom: 6px;
+}
+
 .subjectPicker {
   display: flex;
   flex-direction: column;
