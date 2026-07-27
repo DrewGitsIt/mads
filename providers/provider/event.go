@@ -54,6 +54,17 @@ const (
 	// handler, since the decision loop lives in the session service, not the
 	// provider process.
 	EventPermissionRequest EventKind = "permission_request"
+	// EventCompact — the provider is running (or just finished) a native
+	// context-compaction pass. Today the only producer is the Runner's
+	// resume-above-threshold trigger (services/session/internal/runner/
+	// compact.go) asking a Compactor session to compact; Compact.Phase
+	// distinguishes the "start" status line from the "done" outcome, so the
+	// UI can render a completed/failed status instead of a "Compacting…"
+	// banner stuck forever. See providers/claudecode's wire.go systemEvents
+	// for the wire shapes this normalizes (verified empirically — claude-code
+	// 2.1.220 emits a "system"/"status" line with status "compacting", then
+	// another with compact_result "success"/"failed", not a single event).
+	EventCompact EventKind = "compact"
 )
 
 // Event is one entry in a session's normalized stream.
@@ -74,6 +85,22 @@ type Event struct {
 	IsError bool `json:"is_error,omitempty"`
 	// Permission for EventPermissionRequest.
 	Permission *PermissionRequest `json:"permission,omitempty"`
+	// Compact for EventCompact.
+	Compact *CompactStatus `json:"compact,omitempty"`
+}
+
+// CompactStatus carries EventCompact's detail: which phase of a native
+// compaction pass this event reports.
+type CompactStatus struct {
+	// Phase is "start" (compaction began) or "done" (finished, successfully
+	// or not).
+	Phase string `json:"phase"`
+	// Success is meaningful only when Phase is "done".
+	Success bool `json:"success,omitempty"`
+	// Error is the provider's failure reason when Phase is "done" and
+	// Success is false (e.g. claude-code's "Not enough messages to
+	// compact.").
+	Error string `json:"error,omitempty"`
 }
 
 // PermissionRequest is one parked PreToolUse hook call awaiting a decision.
