@@ -2,6 +2,8 @@ package runner
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"strings"
 
@@ -121,9 +123,11 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 // setupCapabilities' declared capabilities, this one is never stored via
 // r.data.Capability — it's system-generated per session, not user-registry
 // content, so it's built here and handed straight to EnsureStarted.
-// Re-checked once at Start; a grant acquired mid-session doesn't retroactively
-// spawn the tool (matching L3's own "next turn boundary" tolerance for the
-// analogous hand-raiser case).
+// Re-checked at Start and, for providers that support live MCP changes,
+// again by RefreshOrchestrate whenever a link mutation notifies this
+// session mid-conversation — see RefreshOrchestrate below, which reuses
+// this same function to compute the desired MCP set before deciding
+// whether/how to apply it.
 func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *provider.MCPServerRef {
 	if r.MCPRegistry == nil {
 		return nil
@@ -163,6 +167,106 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 		return nil
 	}
 	return &provider.MCPServerRef{Name: c.Name, Command: c.Config.Command, Env: env}
+}
+
+// RefreshOrchestrate re-evaluates this session's held orchestrate grants
+// against its currently running provider process (docs/
+// LINKED-SESSIONS-DESIGN.md: dynamic orchestrate materialization). Where the
+// provider supports live MCP changes (provider.BehaviorMCPServers.Works()),
+// it cycles the process via swapTransport — the same primitive
+// SwitchTransport uses — so the orchestrate MCP server actually appears or
+// disappears without a user-visible restart, then records the link(s) as
+// active. Where the provider doesn't support it, this only updates the link
+// records: unsupported (terminal — restarting never helps) if a grant is
+// held, otherwise nothing (the store already cleared the status when the
+// grant was removed). The local orchestrate-mcp capability process itself is
+// stopped whenever no grant remains, regardless of provider support — it's
+// an independent local subprocess, not something a provider's own launch
+// options control.
+//
+// Called from two places: the Router's fire-and-forget notification after a
+// link create/update/delete (services/router/internal/api/links.go, POST
+// /orchestrate/refresh), and onTurnEnd's deferred-apply when a refresh
+// arrived mid-turn. Busy (a turn in flight) defers by setting
+// orchestrateRefreshPending rather than failing — swapTransport itself
+// refuses mid-turn, and the caller here has no useful way to retry a
+// fire-and-forget notification.
+func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
+	r.mu.Lock()
+	prov := r.prov
+	busy := r.busy
+	mode := r.mode
+	r.mu.Unlock()
+	if prov == nil {
+		return ErrNotReady
+	}
+	if busy {
+		r.mu.Lock()
+		r.orchestrateRefreshPending = true
+		r.mu.Unlock()
+		return nil
+	}
+
+	sess, err := r.data.Session(ctx, r.sessionID)
+	if err != nil {
+		return fmt.Errorf("runner: load session for orchestrate refresh: %w", err)
+	}
+	desired := r.setupOrchestrate(ctx, sess)
+
+	if desired == nil && r.MCPRegistry != nil {
+		if err := r.MCPRegistry.Stop(ctx, "orchestrate-"+r.sessionID); err != nil {
+			log.Printf("runner: stop orchestrate capability: %v", err)
+		}
+	}
+
+	if !prov.Matrix()[provider.BehaviorMCPServers].Works() {
+		if desired != nil {
+			r.markOrchestrateLinks(ctx, contracts.OrchestrateUnsupported)
+		}
+		return nil
+	}
+
+	var mcp []provider.MCPServerRef
+	if desired != nil {
+		mcp = []provider.MCPServerRef{*desired}
+	}
+	if _, err := r.swapTransport(ctx, mode, mcp, true); err != nil {
+		if errors.Is(err, ErrNoResumeRef) || errors.Is(err, ErrSwitchBusy) {
+			// Leave whatever status the store already holds — pending_restart
+			// (the store default) is still an honest, non-blank answer, and a
+			// later refresh (next turn end, or another link mutation) retries.
+			return nil
+		}
+		return err
+	}
+	if desired != nil {
+		r.markOrchestrateLinks(ctx, contracts.OrchestrateActive)
+	}
+	return nil
+}
+
+// markOrchestrateLinks sets OrchestrateStatus to status on every link this
+// session currently grants the orchestrate capability through — called once
+// from Start right after the orchestrate MCP server is (or would be)
+// materialized, and again from RefreshOrchestrate after a live-refresh
+// cycle. Best-effort: logged, not returned. A failure here leaves the
+// store-defaulted pending_restart in place (store.Links.Create/Update), which
+// is still an honest, non-blank answer — never the silent nothing this
+// feature exists to eliminate.
+func (r *Runner) markOrchestrateLinks(ctx context.Context, status contracts.OrchestrateStatus) {
+	links, err := r.data.LinksForSession(ctx, r.sessionID)
+	if err != nil {
+		log.Printf("runner: load links to mark orchestrate status: %v", err)
+		return
+	}
+	for _, l := range links {
+		if l.GrantingSessionID != r.sessionID || !l.HasGrant(contracts.GrantOrchestrate) {
+			continue
+		}
+		if _, err := r.data.SetLinkOrchestrateStatus(ctx, l.ID, status); err != nil {
+			log.Printf("runner: set orchestrate status for link %s: %v", l.ID, err)
+		}
+	}
 }
 
 // resolveCredentialEnv resolves names from the local store first, then —

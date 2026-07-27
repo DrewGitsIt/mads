@@ -49,6 +49,14 @@ var ErrSwitchBusy = errors.New("runner: cannot switch transport mid-turn")
 // current transport isn't a terminal session.
 var ErrNotPTYMode = errors.New("runner: session is not in terminal mode")
 
+// ErrNoResumeRef is returned by swapTransport when there is no resumable
+// provider-native ref yet (mid-first-connection, before the wire
+// announcement or first turn ever established one) — cycling the process
+// here would silently start a brand new, unrelated provider session instead
+// of resuming, discarding conversation history. RefreshOrchestrate treats
+// this as "leave pending_restart and retry later" rather than a hard error.
+var ErrNoResumeRef = errors.New("runner: cannot cycle transport before a resumable ref exists")
+
 // Runner owns one provider.Session for the lifetime of this OS process.
 type Runner struct {
 	sessionID string
@@ -165,6 +173,14 @@ type Runner struct {
 	// turn, it queues behind it. onTurnEnd pops and delivers the head of
 	// this slice, FIFO, once the current turn ends.
 	pending []pendingInjection
+
+	// orchestrateRefreshPending is set by RefreshOrchestrate when a live
+	// materialize/teardown cycle was requested while a turn was in flight —
+	// swapTransport refuses to run mid-turn (ErrSwitchBusy), so the request
+	// is deferred and drained at the next turn boundary, the same
+	// deferred-at-turn-boundary pattern `pending` (queued injections) above
+	// already uses. Guarded by mu.
+	orchestrateRefreshPending bool
 
 	// sentTurns counts every turn sent so far (Send and Inject alike),
 	// 1-indexed — the ordinal Transcript correlates against turnAttributions
@@ -326,6 +342,18 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 	r.persistedRef = sess.ProviderRef
 	r.recordMu.Unlock()
+
+	if orchestrateMCP != nil {
+		// A fresh spawn always launches with the current desired MCP set
+		// already in opts.MCPServers (set above) — there is no "pending"
+		// case at Start, only whether this provider actually wires launch-
+		// time MCP config in at all (Matrix's BehaviorMCPServers).
+		status := contracts.OrchestrateUnsupported
+		if p.Matrix()[provider.BehaviorMCPServers].Works() {
+			status = contracts.OrchestrateActive
+		}
+		r.markOrchestrateLinks(ctx, status)
+	}
 
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type:      contracts.SessionProvisioning,
@@ -611,27 +639,42 @@ func (r *Runner) onTurnEnd() {
 
 	r.mu.Lock()
 	r.busy = false
-	if len(r.pending) == 0 {
+	if len(r.pending) > 0 {
+		next := r.pending[0]
+		r.pending = r.pending[1:]
+		r.deliverLocked(&next.attribution)
+		sess := r.sess
 		r.mu.Unlock()
+		if sess == nil {
+			return
+		}
+
+		r.synthEngine.OnUserSend(next.text)
+		r.digest.recordUser(next.text)
+
+		if err := sess.Send(context.Background(), next.text); err != nil {
+			log.Printf("runner: deliver queued injection: %v", err)
+			r.mu.Lock()
+			r.busy = false
+			r.mu.Unlock()
+		}
+		// orchestrateRefreshPending, if set, is left untouched here — it's
+		// only drained once the queue is truly empty (below), so a refresh
+		// requested mid-queue-drain retries at the next real turn boundary
+		// instead of racing this queued injection's own in-flight turn.
 		return
 	}
-	next := r.pending[0]
-	r.pending = r.pending[1:]
-	r.deliverLocked(&next.attribution)
-	sess := r.sess
+	refreshPending := r.orchestrateRefreshPending
+	r.orchestrateRefreshPending = false
+	closing := r.closing
 	r.mu.Unlock()
-	if sess == nil {
-		return
-	}
 
-	r.synthEngine.OnUserSend(next.text)
-	r.digest.recordUser(next.text)
-
-	if err := sess.Send(context.Background(), next.text); err != nil {
-		log.Printf("runner: deliver queued injection: %v", err)
-		r.mu.Lock()
-		r.busy = false
-		r.mu.Unlock()
+	if refreshPending && !closing {
+		go func() {
+			if err := r.RefreshOrchestrate(context.Background()); err != nil {
+				log.Printf("runner: deferred orchestrate refresh: %v", err)
+			}
+		}()
 	}
 }
 
@@ -682,8 +725,62 @@ func (r *Runner) Interrupt(ctx context.Context) error {
 // Refused with ErrSwitchBusy while a turn is in flight — the caller (UI)
 // offers interrupt-then-switch as the escape hatch. Idempotent: asking to
 // switch to the mode already active is a no-op that returns the current
-// ref without touching the provider process.
+// ref without touching the provider process. A thin wrapper over
+// swapTransport, carrying forward the MCP server set already in effect so a
+// plain transport switch never perturbs it.
 func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (string, error) {
+	return r.swapTransport(ctx, mode, r.currentMCPServers(), false)
+}
+
+// currentMCPServers reads the MCP server set the currently-running provider
+// process was last started (or cycled) with.
+func (r *Runner) currentMCPServers() []provider.MCPServerRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.baseOpts.MCPServers
+}
+
+// mcpServersEqual reports whether a and b describe the same MCP server set,
+// in the same order — swapTransport's idempotence check needs this so a
+// plain SwitchTransport call (which always passes the set already in
+// effect) never cycles the process on account of MCP servers alone, and so
+// RefreshOrchestrate's repeat calls with an unchanged desired set stay
+// no-ops.
+func mcpServersEqual(a, b []provider.MCPServerRef) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Name != b[i].Name || a[i].Command != b[i].Command || len(a[i].Env) != len(b[i].Env) {
+			return false
+		}
+		for j := range a[i].Env {
+			if a[i].Env[j] != b[i].Env[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// swapTransport is the shared "close old process, resume with the same ref,
+// start a new one" cycle behind both SwitchTransport (mode changes) and
+// RefreshOrchestrate (materializing/tearing down the orchestrate MCP server
+// on a running session without a user-visible restart, capability.go) — same
+// primitive, parameterized by mode and the MCP server set the new process
+// should advertise.
+//
+// Refused with ErrSwitchBusy while a turn is in flight. When
+// requireResumable is set (RefreshOrchestrate only — SwitchTransport passes
+// false, preserving its pre-existing "start fresh, let locate-mode discover
+// the ref" fallback for the mid-first-connection case, see locateArmed),
+// also refused with ErrNoResumeRef when there is no resumable ref yet:
+// cycling here would silently start an unrelated fresh provider session
+// instead of resuming, discarding conversation history; RefreshOrchestrate
+// treats that as "leave pending_restart, retry later" rather than a hard
+// failure. Idempotent: mode and mcp both already matching what's live is a
+// no-op that returns the current ref without touching the provider process.
+func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []provider.MCPServerRef, requireResumable bool) (string, error) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
 
@@ -696,7 +793,7 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 		r.mu.Unlock()
 		return "", ErrSwitchBusy
 	}
-	if r.sess != nil && r.sess.Mode() == mode {
+	if r.sess != nil && r.sess.Mode() == mode && mcpServersEqual(r.baseOpts.MCPServers, mcp) {
 		ref := r.sess.Ref()
 		r.mu.Unlock()
 		return ref, nil
@@ -705,6 +802,10 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	resumeRef := r.lastRef
 	if old != nil {
 		resumeRef = old.Ref()
+	}
+	if resumeRef == "" && requireResumable {
+		r.mu.Unlock()
+		return "", ErrNoResumeRef
 	}
 	prov := r.prov
 	opts := r.baseOpts
@@ -722,6 +823,7 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 
 	opts.Mode = mode
 	opts.Resume = resumeRef
+	opts.MCPServers = mcp
 
 	newSess, err := prov.Start(ctx, opts)
 	if err != nil {
@@ -735,6 +837,7 @@ func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (strin
 	r.sess = newSess
 	r.mode = mode
 	r.lastRef = newSess.Ref()
+	r.baseOpts.MCPServers = mcp
 	r.mu.Unlock()
 
 	r.watchRefAnnounce(ctx, newSess)

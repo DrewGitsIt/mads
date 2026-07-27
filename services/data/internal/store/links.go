@@ -134,6 +134,7 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 		}
 		now := time.Now().UTC()
 		link.CreatedAt, link.UpdatedAt = now, now
+		link.OrchestrateStatus = initialOrchestrateStatus(link.Grants)
 		if err := writeLink(tx, link); err != nil {
 			return err
 		}
@@ -146,6 +147,35 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			Type: contracts.LinkCreated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
 		})
 	})
+}
+
+// initialOrchestrateStatus decides the OrchestrateStatus a link should carry
+// right after writeLink for a create, or for an update that just added the
+// orchestrate grant where none was held before. Every such link starts
+// pending_restart — the store-defaulted half of "no silent nothing": even if
+// the runner-driven live-refresh call after this write never happens (crash,
+// no running child, unreached code path), the record already reads honestly
+// as not-yet-live rather than blank.
+func initialOrchestrateStatus(grants []contracts.Grant) contracts.OrchestrateStatus {
+	if hasGrant(grants, contracts.GrantOrchestrate) {
+		return contracts.OrchestratePending
+	}
+	return ""
+}
+
+// nextOrchestrateStatus computes the OrchestrateStatus an Update should
+// write: cleared if the orchestrate grant was dropped, preserved across a
+// grant-preserving update (so a live "active" or terminal "unsupported"
+// status set by RefreshOrchestrate survives an unrelated cadence/other-grant
+// edit), and reset to pending_restart when the grant is newly added.
+func nextOrchestrateStatus(old *contracts.Link, newGrants []contracts.Grant) contracts.OrchestrateStatus {
+	if !hasGrant(newGrants, contracts.GrantOrchestrate) {
+		return ""
+	}
+	if hasGrant(old.Grants, contracts.GrantOrchestrate) && old.OrchestrateStatus != "" {
+		return old.OrchestrateStatus
+	}
+	return contracts.OrchestratePending
 }
 
 // Update changes an existing link's grant set, emitting link.updated.
@@ -193,6 +223,7 @@ func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) 
 
 		link.CreatedAt = old.CreatedAt
 		link.UpdatedAt = time.Now().UTC()
+		link.OrchestrateStatus = nextOrchestrateStatus(old, link.Grants)
 		if err := writeLink(tx, link); err != nil {
 			return err
 		}
@@ -228,10 +259,61 @@ func (l *Links) Delete(ctx context.Context, id, actor string) error {
 	})
 }
 
+// SetOrchestrateStatus records whether a link's orchestrate grant has
+// materialized as live tools — the write side the runner's Start-time
+// materialization and RefreshOrchestrate cycle call after actually spawning
+// or cycling the granting session's provider process. Rejects links with no
+// orchestrate grant (status is meaningless there) and no-ops (no redundant
+// link.updated envelope) if the status already matches.
+func (l *Links) SetOrchestrateStatus(ctx context.Context, id string, status contracts.OrchestrateStatus, actor string) (*contracts.Link, error) {
+	if !status.Valid() {
+		var v contracts.ValidationError
+		v.Add("orchestrate_status", fmt.Sprintf("unknown status %q", status))
+		return nil, &v
+	}
+	var out *contracts.Link
+	err := l.log.WithTx(ctx, func(tx *Tx) error {
+		link, err := getLinkInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if !hasGrant(link.Grants, contracts.GrantOrchestrate) {
+			var v contracts.ValidationError
+			v.Add("orchestrate_status", "link does not carry the orchestrate grant")
+			return &v
+		}
+		if link.OrchestrateStatus == status {
+			out = link
+			return nil
+		}
+		link.OrchestrateStatus = status
+		link.UpdatedAt = time.Now().UTC()
+		if err := writeLink(tx, link); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(map[string]any{
+			"granting_session_id": link.GrantingSessionID,
+			"subject_session_id":  link.SubjectSessionID,
+			"grants":              link.Grants,
+		})
+		if err := tx.Append(&contracts.Envelope{
+			Type: contracts.LinkUpdated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
+		}); err != nil {
+			return err
+		}
+		out = link
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // Get returns one link.
 func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 	return scanLink(l.log.db.QueryRowContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -241,7 +323,7 @@ func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 // an empty result.
 func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
 	rows, err := l.log.db.QueryContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? OR subject_session_id = ? ORDER BY created_at`,
 		sessionID, sessionID)
 	if err != nil {
@@ -343,7 +425,7 @@ func (l *Links) RemoveImplicitHandRaiser(ctx context.Context, sessionID, actor s
 // RemoveImplicitHandRaiser's lookup.
 func implicitHandRaiserInTx(tx *Tx, sessionID string) (*contracts.Link, error) {
 	link, err := scanLinkRow(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? AND subject_session_id = ? AND implicit = 1`,
 		sessionID, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -448,7 +530,7 @@ func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
 	return scanLink(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -458,12 +540,12 @@ func writeLink(tx *Tx, link *contracts.Link) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, implicit, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
-		   grants = excluded.grants, cadence = excluded.cadence, updated_at = excluded.updated_at`,
+		   grants = excluded.grants, cadence = excluded.cadence, orchestrate_status = excluded.orchestrate_status, updated_at = excluded.updated_at`,
 		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON), string(link.Cadence),
-		boolToInt(link.Implicit), link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
+		boolToInt(link.Implicit), string(link.OrchestrateStatus), link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -483,18 +565,20 @@ func scanLink(row rowScanner) (*contracts.Link, error) {
 
 func scanLinkRow(row rowScanner) (*contracts.Link, error) {
 	var (
-		link       contracts.Link
-		grantsJSON string
-		cadence    string
-		implicit   int
-		createdAt  string
-		updatedAt  string
+		link              contracts.Link
+		grantsJSON        string
+		cadence           string
+		implicit          int
+		orchestrateStatus string
+		createdAt         string
+		updatedAt         string
 	)
-	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &implicit, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &implicit, &orchestrateStatus, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	link.Cadence = contracts.LinkCadence(cadence)
 	link.Implicit = implicit != 0
+	link.OrchestrateStatus = contracts.OrchestrateStatus(orchestrateStatus)
 	if err := json.Unmarshal([]byte(grantsJSON), &link.Grants); err != nil {
 		return nil, err
 	}

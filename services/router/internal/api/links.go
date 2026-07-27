@@ -1,10 +1,54 @@
 package api
 
 import (
+	"context"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
+
+// orchestrateRefreshTimeout bounds notifyOrchestrateRefresh's fire-and-forget
+// call to the granting session's own child — long enough to cover a
+// swapTransport cycle (close old process, start new one) without holding the
+// notification open indefinitely.
+const orchestrateRefreshTimeout = 30 * time.Second
+
+// notifyOrchestrateRefresh tells sessionID's running child (if any) to
+// re-evaluate its held orchestrate grants (docs/LINKED-SESSIONS-DESIGN.md:
+// dynamic orchestrate materialization) — POST /orchestrate/refresh, the
+// runner route that wraps Runner.RefreshOrchestrate
+// (services/session/internal/runner/capability.go). Fire-and-forget by
+// design: it runs in its own goroutine with its own timeout context, never
+// blocking or writing to the link CRUD handler's own ResponseWriter — a
+// session that isn't running has nothing to refresh (silent no-op, not an
+// error), and a session that is running gets this exactly once per grant
+// mutation regardless of how long the resulting cycle takes.
+func (s *server) notifyOrchestrateRefresh(sessionID string) {
+	addr, ok := s.sup.SessionAddr(sessionID)
+	if !ok {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), orchestrateRefreshTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/orchestrate/refresh", nil)
+		if err != nil {
+			log.Printf("router: build orchestrate refresh request for %s: %v", sessionID, err)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Printf("router: notify orchestrate refresh for %s: %v", sessionID, err)
+			return
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusAccepted {
+			log.Printf("router: orchestrate refresh for %s: status %d", sessionID, resp.StatusCode)
+		}
+	}()
+}
 
 // requireLinkedSessions 404s while the linked-sessions flag is off — every
 // route this feature exposes is gated identically
@@ -27,6 +71,11 @@ func (s *server) requireLinkedSessions(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// handleCreateLink notifies the granting session's running child
+// (notifyOrchestrateRefresh) whenever the new link carries the orchestrate
+// grant — the case this task exists for: a leader link created onto an
+// already-running session must materialize the tools without waiting for a
+// bounce, where the provider supports it.
 func (s *server) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 	var req contracts.LinkRequest
 	if !decode(w, r, &req) {
@@ -36,6 +85,9 @@ func (s *server) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	if link.HasGrant(contracts.GrantOrchestrate) {
+		s.notifyOrchestrateRefresh(link.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusCreated, link)
 }
@@ -49,9 +101,18 @@ func (s *server) handleGetLink(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, link)
 }
 
+// handleUpdateLink notifies on either side of an orchestrate-grant change —
+// newly added (materialize) or newly dropped (teardown) — by comparing the
+// grant set before and after the update. A monitor-only edit (orchestrate
+// absent both before and after) never notifies at all.
 func (s *server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 	var req contracts.LinkRequest
 	if !decode(w, r, &req) {
+		return
+	}
+	old, err := s.data.Link(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 	link, err := s.data.UpdateLink(r.Context(), r.PathValue("id"), req)
@@ -59,13 +120,27 @@ func (s *server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if old.HasGrant(contracts.GrantOrchestrate) || link.HasGrant(contracts.GrantOrchestrate) {
+		s.notifyOrchestrateRefresh(link.GrantingSessionID)
+	}
 	writeJSON(w, http.StatusOK, link)
 }
 
+// handleDeleteLink notifies the granting session's running child after
+// removing a link that carried the orchestrate grant — the symmetric
+// teardown half of handleCreateLink's materialization.
 func (s *server) handleDeleteLink(w http.ResponseWriter, r *http.Request) {
+	old, err := s.data.Link(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	if err := s.data.DeleteLink(r.Context(), r.PathValue("id")); err != nil {
 		writeError(w, err)
 		return
+	}
+	if old.HasGrant(contracts.GrantOrchestrate) {
+		s.notifyOrchestrateRefresh(old.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

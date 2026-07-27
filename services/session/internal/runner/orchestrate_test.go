@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -167,6 +168,395 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 func testMCPRegistry(t *testing.T) *capability.Registry {
 	t.Helper()
 	return capability.NewRegistry(t.TempDir())
+}
+
+// noMCPProvider wraps a fake.Fake but reports BehaviorMCPServers as
+// Unsupported, modeling kirocli's declared inability to pass MCP config at
+// launch (docs/LINKED-SESSIONS-DESIGN.md: providers that can't do it live
+// only ever get the link record's status updated, never a process cycle).
+type noMCPProvider struct{ *fake.Fake }
+
+func (noMCPProvider) Matrix() provider.Matrix {
+	m := fake.New().Matrix()
+	m[provider.BehaviorMCPServers] = provider.Unsupported
+	return m
+}
+
+// waitOrchestrateStatus polls until the link's OrchestrateStatus matches
+// want or the deadline expires — RefreshOrchestrate's swapTransport cycle
+// and markOrchestrateLinks both complete asynchronously to the caller of
+// RefreshOrchestrate in the mid-turn deferred-apply path.
+func waitOrchestrateStatus(t *testing.T, data *dataclient.Client, linkID string, want contracts.OrchestrateStatus) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		link, err := data.Link(context.Background(), linkID)
+		if err != nil {
+			t.Fatalf("load link: %v", err)
+		}
+		if link.OrchestrateStatus == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("link %s OrchestrateStatus = %q, want %q", linkID, link.OrchestrateStatus, want)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestRefreshOrchestrateMaterializesLive proves the acceptance criterion's
+// live-materialization half: a leader link created onto an already-running
+// session (with an announced, resumable ref) is picked up by
+// RefreshOrchestrate without a user-visible restart — the orchestrate MCP
+// server appears in the very next Start call's MCPServers, and the link is
+// marked active.
+func TestRefreshOrchestrateMaterializesLive(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	// No link yet at boot: no MCP server should have materialized.
+	assertNoOrchestrateMCPServer(t, leaderData, fp, leader.ID)
+
+	// Drive one turn so the fake announces its ref (fakeSession.Ref() reads
+	// "" until announced) — this is the "already-running session" precondition:
+	// a ref only swapTransport can resume.
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if link.OrchestrateStatus != contracts.OrchestratePending {
+		t.Fatalf("OrchestrateStatus after create = %q, want %q", link.OrchestrateStatus, contracts.OrchestratePending)
+	}
+
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+
+	refs := providerMCPServers(t, leaderData, fp, leader.ID)
+	if len(refs) != 1 || refs[0].Name != "orchestrate-"+leader.ID {
+		t.Fatalf("MCPServers = %+v, want one orchestrate-%s entry", refs, leader.ID)
+	}
+
+	got, err := leaderData.Link(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("load link: %v", err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestrateActive {
+		t.Fatalf("OrchestrateStatus after refresh = %q, want %q", got.OrchestrateStatus, contracts.OrchestrateActive)
+	}
+}
+
+// TestRefreshOrchestrateNoResumeRefLeavesPendingRestart covers the guard
+// that stops RefreshOrchestrate from ever cycling into a brand-new,
+// unrelated provider session: a session whose first turn hasn't begun yet
+// has no announced ref for swapTransport to resume, so the refresh must
+// leave the link's status exactly as the store defaulted it
+// (pending_restart) rather than erroring or silently discarding history.
+func TestRefreshOrchestrateNoResumeRefLeavesPendingRestart(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	startsBefore := len(fp.StartCalls())
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+	if got := len(fp.StartCalls()); got != startsBefore {
+		t.Fatalf("Start calls = %d, want %d (no cycle should have happened)", got, startsBefore)
+	}
+
+	got, err := leaderData.Link(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("load link: %v", err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestratePending {
+		t.Fatalf("OrchestrateStatus = %q, want %q", got.OrchestrateStatus, contracts.OrchestratePending)
+	}
+}
+
+// TestRefreshOrchestrateDefersWhileBusy proves a refresh that arrives
+// mid-turn doesn't refuse outright (unlike SwitchTransport's ErrSwitchBusy)
+// — it queues via orchestrateRefreshPending and onTurnEnd's deferred-apply
+// picks it up once the turn actually ends, without the caller (the Router's
+// fire-and-forget notification) needing to retry.
+func TestRefreshOrchestrateDefersWhileBusy(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	// Drive one full turn first so the ref is announced (see
+	// TestRefreshOrchestrateMaterializesLive) before starting the slow one.
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	if err := r.Send(ctx, "slow"); err != nil {
+		t.Fatalf("send slow: %v", err)
+	}
+
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate while busy: %v", err)
+	}
+	// Deferred, not applied yet: no swap should have happened while busy.
+	refs := providerMCPServers(t, leaderData, fp, leader.ID)
+	if len(refs) != 0 {
+		t.Fatalf("MCPServers while busy = %+v, want none (refresh must defer, not apply mid-turn)", refs)
+	}
+
+	if err := r.Interrupt(ctx); err != nil {
+		t.Fatalf("interrupt: %v", err)
+	}
+	// Drain until the interrupted "slow" turn's own turn_end so onTurnEnd's
+	// deferred-apply runs.
+	for {
+		select {
+		case ev, ok := <-ch:
+			if !ok {
+				t.Fatal("event channel closed before turn_end")
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				goto drained
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for turn_end after interrupt")
+		}
+	}
+drained:
+	unsubscribe()
+
+	waitOrchestrateStatus(t, leaderData, link.ID, contracts.OrchestrateActive)
+	refs = providerMCPServers(t, leaderData, fp, leader.ID)
+	if len(refs) != 1 || refs[0].Name != "orchestrate-"+leader.ID {
+		t.Fatalf("MCPServers after deferred apply = %+v, want one orchestrate-%s entry", refs, leader.ID)
+	}
+}
+
+// TestRefreshOrchestrateUnsupportedProviderDegradesLinkStatus covers the
+// task's "otherwise an explicit takes-effect-on-restart state" half for a
+// provider that can never do this live (kirocli declares MCP unsupported):
+// the link is marked unsupported (terminal — restarting never helps) and no
+// process cycle is attempted at all.
+func TestRefreshOrchestrateUnsupportedProviderDegradesLinkStatus(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := noMCPProvider{fake.New()}
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register no-mcp fake: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	startsBefore := len(fp.StartCalls())
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+	if got := len(fp.StartCalls()); got != startsBefore {
+		t.Fatalf("Start calls = %d, want %d (unsupported provider must never cycle)", got, startsBefore)
+	}
+
+	got, err := leaderData.Link(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("load link: %v", err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestrateUnsupported {
+		t.Fatalf("OrchestrateStatus = %q, want %q", got.OrchestrateStatus, contracts.OrchestrateUnsupported)
+	}
+}
+
+// TestRefreshOrchestrateTeardownOnGrantRemoval covers the task's "wire
+// teardown symmetrically for link removal" requirement: dropping the
+// orchestrate grant from an already-materialized leader link cycles the
+// live MCP set back down to empty and stops the local orchestrate-mcp
+// capability process, without needing a restart.
+func TestRefreshOrchestrateTeardownOnGrantRemoval(t *testing.T) {
+	putMadsOnPath(t)
+	ctx := context.Background()
+	base := datatest.Start(t)
+	data := dataclient.New(base, "test-bootstrap")
+	enableOrchestrateLinkedSessions(t, data)
+
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData := dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp := fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+
+	r := New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	// Grant held at boot: materialized immediately (TestSetupOrchestrateWithGrant).
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+	if refs := providerMCPServers(t, leaderData, fp, leader.ID); len(refs) != 1 {
+		t.Fatalf("MCPServers before removal = %+v, want 1 entry", refs)
+	}
+
+	if _, err := leaderData.UpdateLink(ctx, link.ID, contracts.LinkRequest{
+		GrantingSessionID: leader.ID,
+		SubjectSessionID:  subject.ID,
+		Preset:            contracts.PresetMonitor,
+	}); err != nil {
+		t.Fatalf("update link: %v", err)
+	}
+
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+
+	assertNoOrchestrateMCPServer(t, leaderData, fp, leader.ID)
+	if r.MCPRegistry.Running("orchestrate-" + leader.ID) {
+		t.Fatal("orchestrate-mcp capability process still running after grant removal")
+	}
 }
 
 func providerMCPServers(t *testing.T, data *dataclient.Client, fp *fake.Fake, sessionID string) []provider.MCPServerRef {

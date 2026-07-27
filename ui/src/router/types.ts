@@ -297,6 +297,11 @@ export const PRESET_GRANTS: Record<LinkPreset, Grant[]> = {
 // mirrors pkg/contracts/link.go LinkCadence
 export type LinkCadence = "per_turn" | "manual_only";
 
+// mirrors pkg/contracts/link.go OrchestrateStatus. Server-computed only —
+// never sent in a LinkRequest. Empty ("" — omitted from Link.orchestrate_status
+// when the link carries no orchestrate grant) reads the same as absent.
+export type OrchestrateStatus = "pending_restart" | "active" | "unsupported";
+
 // mirrors pkg/contracts/link.go Link
 export interface Link {
   id: string;
@@ -305,6 +310,7 @@ export interface Link {
   grants: Grant[];
   cadence: LinkCadence;
   implicit?: boolean;
+  orchestrate_status?: OrchestrateStatus;
   created_at: string;
   updated_at: string;
 }

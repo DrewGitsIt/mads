@@ -209,6 +209,24 @@
   color: var(--accent);
 }
 
+.orchestrateBadge {
+  flex: none;
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0.04em;
+  border-radius: var(--r-sm);
+  padding: 1px 7px;
+}
+
+.orchestrateBadgePending {
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+}
+
+.orchestrateBadgeUnsupported {
+  background: var(--bad-soft);
+  color: var(--bad-fg);
+}
+
 .nestedRow {
   position: relative;
   margin-left: 20px;

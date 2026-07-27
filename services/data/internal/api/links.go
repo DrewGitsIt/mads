@@ -72,6 +72,28 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, link)
 	})
 
+	// PUT /links/{id}/orchestrate-status is called by the granting session's
+	// own runner (services/session/internal/runner), never a user — it
+	// records whether the orchestrate grant has actually materialized as
+	// live tools (Start-time materialization, or RefreshOrchestrate's
+	// deferred live-cycle). The actor is hardcoded to "system" for the same
+	// reason as the hand-raiser routes below: this route only ever means one
+	// thing regardless of who calls it.
+	mux.HandleFunc("PUT /links/{id}/orchestrate-status", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Status contracts.OrchestrateStatus `json:"status"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		link, err := links.SetOrchestrateStatus(r.Context(), r.PathValue("id"), req.Status, "system")
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, link)
+	})
+
 	mux.HandleFunc("DELETE /links/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := links.Delete(r.Context(), r.PathValue("id"), actor(r)); err != nil {
 			writeStoreError(w, err)
