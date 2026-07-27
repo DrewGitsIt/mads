@@ -67,6 +67,41 @@ func TestInstallSkillCreatesSymlink(t *testing.T) {
 	}
 }
 
+// TestInstallSkillShippedPlaywrightSkill proves the shipped
+// playwright-ui-testing skill (ShippedCapabilities) InstallSkills into a
+// working, non-dangling symlink — the actual mechanism
+// services/session/internal/runner/capability.go uses to make it available
+// in a session's cwd, exercised here against the real shipped directory
+// rather than a synthetic t.TempDir() like TestInstallSkillCreatesSymlink.
+func TestInstallSkillShippedPlaywrightSkill(t *testing.T) {
+	var c contracts.Capability
+	for _, sc := range ShippedCapabilities {
+		if sc.Name == "playwright-ui-testing" {
+			c = sc
+		}
+	}
+	if c.Name == "" {
+		t.Fatal("playwright-ui-testing missing from ShippedCapabilities")
+	}
+
+	cwd := t.TempDir()
+	if err := InstallSkill(c, cwd); err != nil {
+		t.Fatal(err)
+	}
+
+	link := filepath.Join(cwd, ".claude", "skills", c.Name)
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("expected a symlink at %s: %v", link, err)
+	}
+	if target != c.Config.Path {
+		t.Errorf("symlink target = %q, want %q", target, c.Config.Path)
+	}
+	if _, err := os.Stat(filepath.Join(link, "SKILL.md")); err != nil {
+		t.Errorf("symlink does not resolve to a real SKILL.md (dangling?): %v", err)
+	}
+}
+
 func TestInstallSkillNonSkillCapabilityIsNoop(t *testing.T) {
 	cwd := t.TempDir()
 	c := contracts.Capability{Name: "jira", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}}

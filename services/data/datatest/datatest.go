@@ -6,6 +6,7 @@
 package datatest
 
 import (
+	"context"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -22,7 +23,7 @@ func Start(t *testing.T) string {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if err := store.Migrate(db, store.Migrations()); err != nil {
+	if err := store.Bootstrap(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(api.New(db))

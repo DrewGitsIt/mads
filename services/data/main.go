@@ -39,7 +39,7 @@ func main() {
 	}
 	defer func() { _ = db.Close() }()
 
-	if err := store.Migrate(db, store.Migrations()); err != nil {
+	if err := store.Bootstrap(context.Background(), db); err != nil {
 		log.Fatalf("data: %v", err)
 	}
 	if err := checkSchemaCompatible(db, store.Migrations()); err != nil {

@@ -100,7 +100,7 @@ func NewCapabilities(log *Log) *Registry[contracts.Capability] {
 		created: contracts.CapabilityCreated, updated: contracts.CapabilityUpdated, deleted: contracts.CapabilityDeleted,
 		id:     func(c *contracts.Capability) *string { return &c.ID },
 		name:   func(c *contracts.Capability) string { return c.Name },
-		system: func(*contracts.Capability) bool { return false },
+		system: func(c *contracts.Capability) bool { return c.System },
 		times: func(c *contracts.Capability) (*time.Time, *time.Time) {
 			return &c.CreatedAt, &c.UpdatedAt
 		},
