@@ -254,6 +254,15 @@ func (c *Client) UpdateSession(ctx context.Context, s *contracts.Session) error 
 	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(s.ID), s, s)
 }
 
+// SetSessionActivity flips a session's Activity field in one atomic round
+// trip, unlike Session-then-UpdateSession: that pair is exposed to a
+// lost-update race with any other concurrent writer of the same session
+// record (see pkg/pipelinerun's activateSession).
+func (c *Client) SetSessionActivity(ctx context.Context, id string, activity contracts.SessionActivity) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/activity",
+		map[string]any{"activity": activity}, nil)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
 }

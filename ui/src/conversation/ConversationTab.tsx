@@ -35,6 +35,7 @@ import { Composer } from "./Composer/Composer";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { ShellDock } from "./ShellDock/ShellDock";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
+import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import styles from "./ConversationTab.module.css";
 
 export interface ConversationTabProps {
@@ -301,6 +302,21 @@ export function ConversationTab({
       setStreamGeneration((g) => g + 1);
     }
   }, [streamBroken, session?.activity]);
+
+  // Forced reattach for "Restart agent" (SessionWorkspace's kebab) — fires
+  // unconditionally on a successful bounce, regardless of the cached
+  // session.activity value, unlike the passive reconnect above. See
+  // streamReattachSignal.ts for why this can't just wait on that path.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<StreamReattachDetail>).detail;
+      if (detail?.sessionId !== sessionId) return;
+      setStreamBroken(false);
+      setStreamGeneration((g) => g + 1);
+    };
+    window.addEventListener(STREAM_REATTACH_EVENT, handler);
+    return () => window.removeEventListener(STREAM_REATTACH_EVENT, handler);
+  }, [sessionId]);
 
   const terminalBridge = useMemo(
     () =>

@@ -158,6 +158,94 @@ describe("SessionWorkspace", () => {
     expect(bounce).toHaveBeenCalledWith(SESSION_ID);
   });
 
+  it("Restart Agent shows a pending state while the bounce is in flight, and clears it on completion", async () => {
+    const routerClient = new FakeRouterClient();
+    let resolveBounce!: () => void;
+    vi.spyOn(routerClient, "bounce").mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolveBounce = resolve;
+      }),
+    );
+    render(
+      <SessionWorkspace
+        sessionId={SESSION_ID}
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+        openTaskCount={0}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    const pending = screen.getByRole("button", { name: /Restarting Agent/ }) as HTMLButtonElement;
+    expect(pending.disabled).toBe(true);
+
+    await act(async () => {
+      resolveBounce();
+      await Promise.resolve();
+    });
+
+    // Menu is still open (restarting didn't close it) — the item is back
+    // to its normal, enabled state.
+    expect(screen.getByRole("button", { name: "Restart Agent" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("Restart Agent failure surfaces in the action-error toast rather than being swallowed", async () => {
+    const routerClient = new FakeRouterClient();
+    vi.spyOn(routerClient, "bounce").mockRejectedValue(new Error("child busy past terminate grace"));
+    render(
+      <SessionWorkspace
+        sessionId={SESSION_ID}
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+        openTaskCount={0}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
+
+    await waitFor(() => expect(screen.getByText("Session action failed")).toBeTruthy());
+    expect(screen.getByText("child busy past terminate grace")).toBeTruthy();
+  });
+
+  it("Restart Agent success refetches the session and re-attaches the stream, even though the cached record still says inactive", async () => {
+    const routerClient = new FakeRouterClient();
+    const bounce = vi.spyOn(routerClient, "bounce").mockResolvedValue(undefined);
+    const getSession = vi.spyOn(routerClient, "getSession");
+    render(
+      <SessionWorkspace
+        sessionId="session-inactive"
+        routerClient={routerClient}
+        pipelineClient={new FakePipelineClient()}
+        openTaskCount={0}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+    const sessionCallsBefore = getSession.mock.calls.length;
+    const streamCountBefore = routerClient.sessionEventSources.length;
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
+
+    expect(bounce).toHaveBeenCalledWith("session-inactive");
+    // Bounce fixture doesn't flip activity — refetch and reattach must still
+    // happen off the bounce succeeding, not off session.activity changing.
+    await waitFor(() => expect(getSession.mock.calls.length).toBeGreaterThan(sessionCallsBefore));
+    await waitFor(() =>
+      expect(routerClient.sessionEventSources.length).toBeGreaterThan(streamCountBefore),
+    );
+  });
+
   it("Shell menu item toggles the shell dock via the cross-tree signal", async () => {
     const onToggle = vi.fn();
     window.addEventListener("mads:toggle-shell", onToggle);
@@ -190,7 +278,7 @@ describe("SessionWorkspace", () => {
     expect(del.textContent).toContain("Close the session first");
   });
 
-  it("kebab always shows all three actions; while inactive, Resume and Delete are enabled and Close is disabled with a reason", async () => {
+  it("kebab always shows all three actions; while inactive, Resume, Delete, and Close are all enabled", async () => {
     renderWorkspace({ sessionId: "session-inactive" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
@@ -202,9 +290,12 @@ describe("SessionWorkspace", () => {
     expect((screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
-    const close = screen.getByRole("button", { name: /Close/ }) as HTMLButtonElement;
-    expect(close.disabled).toBe(true);
-    expect(close.textContent).toContain("Session is already inactive");
+    // Close is never gated on the activity record — TerminateSession is safe
+    // (and the only escape hatch) in every state, including one the record
+    // claims is already inactive.
+    expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it("Close calls routerClient.closeSession for this session", async () => {
@@ -217,6 +308,35 @@ describe("SessionWorkspace", () => {
     fireEvent.click(screen.getByText("Close"));
 
     expect(spy).toHaveBeenCalledWith("session-active");
+  });
+
+  it("Close is offered and issues terminate even when the cached record already says inactive", async () => {
+    const routerClient = new FakeRouterClient();
+    const spy = vi.spyOn(routerClient, "closeSession");
+    renderWorkspace({ sessionId: "session-inactive", routerClient });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    const close = screen.getByRole("button", { name: "Close" }) as HTMLButtonElement;
+    expect(close.disabled).toBe(false);
+
+    fireEvent.click(close);
+    expect(spy).toHaveBeenCalledWith("session-inactive");
+  });
+
+  it("Close/terminate failure surfaces in the action-error toast", async () => {
+    const routerClient = new FakeRouterClient();
+    vi.spyOn(routerClient, "closeSession").mockRejectedValue(
+      new Error("terminate session: child unresponsive"),
+    );
+    renderWorkspace({ sessionId: "session-active", routerClient });
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+    fireEvent.click(screen.getByText("Close"));
+
+    await waitFor(() => expect(screen.getByText("Session action failed")).toBeTruthy());
+    expect(screen.getByText("terminate session: child unresponsive")).toBeTruthy();
   });
 
   it("Resume calls routerClient.resumeSession for this session", async () => {
