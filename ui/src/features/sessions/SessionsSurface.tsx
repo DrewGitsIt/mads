@@ -65,7 +65,14 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   return (
     <div className={styles.surface}>
       <aside className={styles.rail}>
-        <Button variant="ghost" size="sm" onClick={() => setSelectedId(undefined)}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setSelectedId(undefined);
+            setActionError(undefined);
+          }}
+        >
           + New session
         </Button>
         {!loading && sessions.length === 0 ? (
@@ -80,6 +87,10 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onSelect={(id) => {
               setSelectedId((cur) => (cur === id ? undefined : id));
               setInitialTab(undefined);
+              // A prior action's error toast is scoped to the surface, not the
+              // session it named — clear it on navigation so it can't linger
+              // over an unrelated session.
+              setActionError(undefined);
             }}
             onResume={(id) => {
               router.resumeSession(id).catch((err: unknown) => {

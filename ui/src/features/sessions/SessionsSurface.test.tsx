@@ -227,6 +227,46 @@ describe("SessionsSurface", () => {
     });
   });
 
+  it("clears a rail action-error toast on navigation so it can't linger over another session", async () => {
+    const sessions = [
+      makeSession({ id: "s1", name: "Alpha", activity: "inactive" }),
+      makeSession({ id: "s2", name: "Bravo", activity: "active" }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = init?.method ?? "GET";
+        if (method === "POST" && url.match(/\/sessions\/[^/]+\/resume/)) {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: "session already has a running child" }), {
+              status: 409,
+            }),
+          );
+        }
+        if (url.match(/\/sessions\/[^/]+\/transcript/)) return json([]);
+        if (url.includes("/tasks")) return json([]);
+        if (url.match(/\/sessions\/[^/]+$/)) {
+          const id = url.split("/sessions/")[1];
+          const session = sessions.find((s) => s.id === id);
+          return session ? json(session) : Promise.resolve(new Response("not found", { status: 404 }));
+        }
+        if (url.includes("/sessions")) return json(sessions);
+        return json([]);
+      }),
+    );
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume Alpha" }));
+    await waitFor(() => expect(screen.getByText(/Couldn't resume/)).toBeTruthy());
+
+    // Navigating to another session drops the surface-scoped error.
+    fireEvent.click(rail().getByText("Bravo"));
+    await waitFor(() => expect(screen.queryByText(/Couldn't resume/)).toBeNull());
+  });
+
   it("selecting an inactive session renders without crashing", async () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha", activity: "inactive" })];
     stubSessionsAndConversationFetch(sessions);
