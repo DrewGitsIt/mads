@@ -1,6 +1,6 @@
 ---
 name: playwright-ui-testing
-description: Use this skill whenever a change touches ui/src and needs verification beyond vitest — a new flow, a modified journey, or a visual regression risk. Teaches how to run this repo's Playwright suite (ui/e2e), write a throwaway spec to exercise the change, and read failures via trace/screenshot. Covers the worker-parallelism pitfall specs must opt out of when they boot their own backend topology.
+description: Use this skill whenever a change touches ui/src and needs verification beyond vitest — a new flow, a modified journey, or a visual regression risk. Teaches how to run this repo's Playwright suite (ui/e2e), write a throwaway spec to exercise the change, and read failures via trace/screenshot. Covers when a new spec needs test.describe.configure({ mode: "serial" }) to avoid fullyParallel splitting order-dependent tests across workers.
 ---
 
 # Verifying UI work with Playwright
@@ -36,34 +36,46 @@ npx --prefix ui playwright test --config e2e/playwright.config.ts e2e/dashboard.
 Playwright's own flags compose normally: `--headed` to watch it, `--debug`
 for the inspector, `-g "<test name>"` to filter to one test.
 
-## Workers, parallelism, and why first-run.spec.ts is serial
+## Workers, parallelism, and when to configure serial mode
 
-`playwright.config.ts` sets `fullyParallel: true`: by default every spec
-file may run in its own worker, concurrently. Most specs (`dashboard.spec.ts`,
-`sessions.spec.ts`, etc.) are safe under this because they share **one**
-topology booted once in `globalSetup.ts` and read it from
-`process.env.MADS_ROUTER_URL` / `MADS_DATA_URL` / `MADS_BIN` /
-`MADS_WORKSPACE_ID` — they never boot their own backend.
+`playwright.config.ts` sets `fullyParallel: true`: by default Playwright is
+free to split even the tests *within one file* across different worker
+processes, not just distribute whole files across workers. That's fine for a
+file with a single top-level `test()` (nothing to split), but it breaks any
+file where multiple tests are meant to run in order against state one
+`test.beforeAll` set up once — a later test could land on a different worker
+than the one that ran `beforeAll`, or than the earlier test that established
+DOM/session state it depends on. `test.describe.configure({ mode: "serial"
+})` pins all tests in that `describe` block to one worker, in file order, and
+stops the block on first failure instead of running the rest against
+now-undefined state.
 
-`first-run.spec.ts` is the exception: it exercises the pre-onboarding wizard,
-so it can't reuse the shared, already-onboarded topology from
-`globalSetup.ts`. It boots its own `data`/`router`/`session` stack in
-`test.beforeAll`/tears it down in `test.afterAll`, storing them in
-module-level variables (`topology`, `fastModel`). If Playwright ran two
-`test()` blocks in that file concurrently, both would race over the same
-module-level state and startup/teardown would collide. That's why the file
-opens with:
+This is orthogonal to whether the spec shares the common topology from
+`globalSetup.ts` (`process.env.MADS_ROUTER_URL` / `MADS_DATA_URL` / `MADS_BIN`
+/ `MADS_WORKSPACE_ID`) or boots its own. `first-run.spec.ts` boots its own
+`data`/`router`/`session` stack (it exercises the pre-onboarding wizard, so it
+can't reuse the already-onboarded shared topology) and needs serial so its
+`beforeAll`/`afterAll` startup and teardown of module-level state can't race
+against its own tests. But plenty of specs that read the *shared* topology
+also declare serial — `session-work.spec.ts`, `pipeline-drillin.spec.ts`, and
+`pipeline-board-scroll.spec.ts` each wrap several tests in a
+`test.describe(...)` block whose `beforeAll` creates one session (or run)
+that every test in the block then reads or drills into in sequence.
+`linked-sessions.spec.ts` and `synthesis-proposals.spec.ts` currently hold
+only one test each but still declare it: they're wrapped in an explicit
+`test.describe(...)` with a `beforeAll` that creates sessions or flips global
+config, and the convention in this repo is that any such block gets `mode:
+"serial"` up front, so a second test added later doesn't silently inherit a
+parallelism footgun.
 
-```ts
-test.describe.configure({ mode: "serial" });
-```
-
-**The rule for a new spec:** if it reuses the shared topology (the common
-case — just read the `MADS_*` env vars like `dashboard.spec.ts` does), no
-serial configuration is needed; `fullyParallel` is fine. If it boots its own
-topology instead (only justified for flows the shared, already-onboarded
-stack can't represent, like first-run), add
-`test.describe.configure({ mode: "serial" })` at the top of that file.
+**The rule for a new spec:** a single top-level `test()` with no
+`test.describe` wrapper (like `dashboard.spec.ts`, `retro.spec.ts`) needs no
+serial configuration — there's nothing in the file to split across workers.
+The moment you wrap tests in a named `test.describe(...)` block, especially
+one with a `beforeAll` that creates shared state, add
+`test.describe.configure({ mode: "serial" })` as the first line inside it —
+regardless of whether the spec shares the common topology or boots its own,
+and even if the block only has one test today.
 
 ## Writing a throwaway spec to verify a change
 
