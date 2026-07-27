@@ -116,8 +116,15 @@ Links are directed edges; nothing is 1:1 by design:
 
 ## Unchanged from §1.12
 
-- Link creation UX: multi-select sessions in the rail → Link → choose preset.
-  Sessions must already exist. (UI mockup pass before the UI task.)
+- Link creation UX, two paths:
+  - Multi-select sessions in the rail → Link → choose preset. Sessions must
+    already exist. (UI mockup pass before the UI task.)
+  - Launchpad split "Start session" button → "Link to session(s)…" stages
+    leader/monitor links against the `"$new"` placeholder, submitted via
+    POST /sessions `links` so the session arrives already linked (no
+    post-create race with spawn). New session as holder only in v1; the
+    dialog keeps its holder-picker shape so new-session-as-subject is a
+    later unlock, not a redesign.
 - Constraint: linked sessions must NOT operate in different worktrees of the
   same repo (parallel-universe problem).
 - Leader→follower orientation only; no peer/bidirectional links (deadlock
