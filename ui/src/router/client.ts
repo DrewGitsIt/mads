@@ -264,6 +264,7 @@ export interface RouterClient {
   // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
   getSessionLinks(sessionId: string): Promise<Link[]>;
   createLink(req: LinkRequest): Promise<Link>;
+  updateLink(id: string, req: LinkRequest): Promise<Link>;
   deleteLink(id: string): Promise<void>;
 }
 
@@ -960,6 +961,10 @@ export class FetchRouterClient implements RouterClient {
 
   async createLink(req: LinkRequest): Promise<Link> {
     return routerPost(this.baseUrl, "/links", req);
+  }
+
+  async updateLink(id: string, req: LinkRequest): Promise<Link> {
+    return routerPut(this.baseUrl, `/links/${id}`, req);
   }
 
   async deleteLink(id: string): Promise<void> {

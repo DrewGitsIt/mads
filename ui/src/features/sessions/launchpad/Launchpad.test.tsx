@@ -319,7 +319,12 @@ describe("Launchpad", () => {
         expect(createSession).toHaveBeenCalledWith(
           expect.objectContaining({
             links: [
-              { granting_session_id: "$new", subject_session_id: "s1", preset: "leader" },
+              {
+                granting_session_id: "$new",
+                subject_session_id: "s1",
+                preset: "leader",
+                cadence: "per_turn",
+              },
             ],
           }),
         ),
@@ -370,7 +375,12 @@ describe("Launchpad", () => {
         expect(createSession).toHaveBeenCalledWith(
           expect.objectContaining({
             links: [
-              { granting_session_id: "$new", subject_session_id: "s2", preset: "leader" },
+              {
+                granting_session_id: "$new",
+                subject_session_id: "s2",
+                preset: "leader",
+                cadence: "per_turn",
+              },
             ],
           }),
         ),

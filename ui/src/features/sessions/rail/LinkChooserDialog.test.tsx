@@ -72,12 +72,54 @@ describe("LinkChooserDialog", () => {
       granting_session_id: "a",
       subject_session_id: "b",
       preset: "leader",
+      cadence: "per_turn",
     });
     expect(createLinkSpy).toHaveBeenCalledWith({
       granting_session_id: "a",
       subject_session_id: "c",
       preset: "leader",
+      cadence: "per_turn",
     });
+  });
+
+  it("defaults to the Follow intently (per_turn) cadence", () => {
+    render(
+      <LinkChooserDialog
+        sessionIds={["a", "b"]}
+        sessions={sessions}
+        routerClient={new FakeRouterClient()}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("Follow intently").closest("button")?.getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("sends manual_only cadence when Catch up on request is chosen", async () => {
+    const client = new FakeRouterClient();
+    const createLinkSpy = vi.spyOn(client, "createLink");
+    render(
+      <LinkChooserDialog
+        sessionIds={["a", "b"]}
+        sessions={sessions}
+        routerClient={client}
+        onClose={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByText("Catch up on request"));
+    fireEvent.click(screen.getByText("Create 1 link"));
+
+    await waitFor(() =>
+      expect(createLinkSpy).toHaveBeenCalledWith({
+        granting_session_id: "a",
+        subject_session_id: "b",
+        preset: "leader",
+        cadence: "manual_only",
+      }),
+    );
   });
 
   it("changes the holder when a different radio is picked", async () => {
@@ -100,6 +142,7 @@ describe("LinkChooserDialog", () => {
         granting_session_id: "b",
         subject_session_id: "a",
         preset: "leader",
+        cadence: "per_turn",
       }),
     );
   });
@@ -186,8 +229,8 @@ describe("LinkChooserDialog", () => {
       fireEvent.click(screen.getByText("Stage 2 links"));
 
       expect(onStage).toHaveBeenCalledWith([
-        { granting_session_id: "$new", subject_session_id: "a", preset: "monitor" },
-        { granting_session_id: "$new", subject_session_id: "b", preset: "monitor" },
+        { granting_session_id: "$new", subject_session_id: "a", preset: "monitor", cadence: "per_turn" },
+        { granting_session_id: "$new", subject_session_id: "b", preset: "monitor", cadence: "per_turn" },
       ]);
       expect(createLinkSpy).not.toHaveBeenCalled();
     });
@@ -202,6 +245,7 @@ describe("LinkChooserDialog", () => {
           stagedHolder={{ label: "This session (not started yet)", onStage: vi.fn() }}
           initialSubjectIds={["b"]}
           initialPreset="monitor"
+          initialCadence="manual_only"
         />,
       );
       const checkbox = screen.getByRole("checkbox", { name: "payments refactor" });
@@ -209,6 +253,9 @@ describe("LinkChooserDialog", () => {
       expect(screen.getByText("Monitor").closest("button")?.getAttribute("aria-selected")).toBe(
         "true",
       );
+      expect(
+        screen.getByText("Catch up on request").closest("button")?.getAttribute("aria-selected"),
+      ).toBe("true");
       expect(screen.getByText("Stage 1 link")).toBeTruthy();
     });
   });

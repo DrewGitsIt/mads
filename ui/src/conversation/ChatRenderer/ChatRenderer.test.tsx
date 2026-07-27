@@ -140,7 +140,26 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     );
     expect(screen.getByText(/payments refactor/)).toBeTruthy();
     expect(screen.getByText("compressed summary of the turn")).toBeTruthy();
-    expect(screen.getByText("cadence: per turn")).toBeTruthy();
+    expect(screen.getByText("cadence: digest after each burst of activity")).toBeTruthy();
+  });
+
+  it("renders honest manual-only cadence copy — no automatic digests promised", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "compressed summary of the turn",
+        attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+      },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ cadence: "manual_only" })]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText("cadence: manual — no automatic digests")).toBeTruthy();
   });
 
   it("falls back to the inject chip when the attributed link isn't resolved yet", () => {

@@ -1,4 +1,4 @@
-import type { Link, OrchestrateStatus, Session } from "../../../router/types";
+import type { Grant, Link, LinkCadence, OrchestrateStatus, Session } from "../../../router/types";
 
 export type SubjectBadge = "LINKED" | "WATCHED";
 
@@ -23,6 +23,10 @@ export interface RailSubjectRow {
   linkId: string;
   /** Only set for LINKED (leader) rows — the orchestrate grant's materialization state (pkg/contracts/link.go OrchestrateStatus). */
   orchestrateStatus?: OrchestrateStatus;
+  cadence: LinkCadence;
+  /** The underlying link's current grant set — a cadence-only PUT must resend it (store.Links.Update replaces the whole set). */
+  grants: Grant[];
+  grantingSessionId: string;
 }
 
 export interface RailHolderInfo {
@@ -64,10 +68,10 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
     for (const l of granterLinks) {
       if (linkRole(l) === "leader") leaderLinkBySubjectId.set(l.subject_session_id, l);
     }
-    const monitorLinkBySubjectId = new Map<string, string>();
+    const monitorLinkBySubjectId = new Map<string, Link>();
     for (const l of granterLinks) {
       if (linkRole(l) === "monitor" && !leaderLinkBySubjectId.has(l.subject_session_id)) {
-        monitorLinkBySubjectId.set(l.subject_session_id, l.id);
+        monitorLinkBySubjectId.set(l.subject_session_id, l);
       }
     }
 
@@ -86,11 +90,17 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
         linkId: link.id,
         badge: "LINKED" as const,
         orchestrateStatus: link.orchestrate_status,
+        cadence: link.cadence,
+        grants: link.grants,
+        grantingSessionId: link.granting_session_id,
       })),
-      ...[...monitorLinkBySubjectId].map(([sessionId, linkId]) => ({
+      ...[...monitorLinkBySubjectId].map(([sessionId, link]) => ({
         sessionId,
-        linkId,
+        linkId: link.id,
         badge: "WATCHED" as const,
+        cadence: link.cadence,
+        grants: link.grants,
+        grantingSessionId: link.granting_session_id,
       })),
     ];
 
@@ -104,7 +114,15 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
 export interface RailRow {
   session: Session;
   badge?: string;
-  subjects: { session: Session; badge: SubjectBadge; linkId: string; orchestrateStatus?: OrchestrateStatus }[];
+  subjects: {
+    session: Session;
+    badge: SubjectBadge;
+    linkId: string;
+    orchestrateStatus?: OrchestrateStatus;
+    cadence: LinkCadence;
+    grants: Grant[];
+    grantingSessionId: string;
+  }[];
 }
 
 /**
@@ -126,7 +144,17 @@ export function buildRailRows(
       const subjects = (holder?.subjects ?? []).flatMap((sub) => {
         const subSession = allSessionsById.get(sub.sessionId);
         return subSession
-          ? [{ session: subSession, badge: sub.badge, linkId: sub.linkId, orchestrateStatus: sub.orchestrateStatus }]
+          ? [
+              {
+                session: subSession,
+                badge: sub.badge,
+                linkId: sub.linkId,
+                orchestrateStatus: sub.orchestrateStatus,
+                cadence: sub.cadence,
+                grants: sub.grants,
+                grantingSessionId: sub.grantingSessionId,
+              },
+            ]
           : [];
       });
       return { session, badge: holder?.badge, subjects };

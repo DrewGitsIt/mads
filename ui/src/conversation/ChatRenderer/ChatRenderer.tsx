@@ -29,8 +29,8 @@ export interface ChatRendererProps {
 }
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
-  per_turn: "cadence: per turn",
-  manual_only: "cadence: manual only",
+  per_turn: "cadence: digest after each burst of activity",
+  manual_only: "cadence: manual — no automatic digests",
 };
 
 /**
