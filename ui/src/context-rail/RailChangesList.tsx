@@ -1,12 +1,9 @@
-import { useEffect, useState } from "react";
-import type { RouterClient } from "../router/client";
 import type { FileChange } from "../router/types";
-import { Chip } from "../components/Chip/Chip";
 import styles from "./RailChangesList.module.css";
 
 export interface RailChangesListProps {
-  sessionId: string;
-  routerClient: RouterClient;
+  changes: FileChange[];
+  /** Opens the file's diff (the Files tab's Monaco viewer). Rows are inert without it. */
   onOpenFile?: (path: string) => void;
 }
 
@@ -16,36 +13,58 @@ const CHANGE_BADGE: Record<FileChange["change"], string> = {
   deleted: "D",
 };
 
-/**
- * One-shot fetch, no live file.changed subscription (§7 — not required by
- * this task's acceptance criteria; only task.* streaming is tested).
- */
-export function RailChangesList({ sessionId, routerClient, onOpenFile }: RailChangesListProps) {
-  const [changes, setChanges] = useState<FileChange[]>([]);
+function basename(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? path : path.slice(i + 1);
+}
 
-  useEffect(() => {
-    routerClient.getSessionChanges(sessionId).then(setChanges);
-  }, [routerClient, sessionId]);
+function dirname(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? "" : path.slice(0, i);
+}
+
+/**
+ * Touched-file rows, filename-first: the basename is the primary line so the
+ * narrow rail stays legible (an absolute path ellipsized from the right just
+ * showed "/home/dre…" for every row). Directory and attribution drop to a
+ * dimmed meta line. Clicking a row opens the file's diff via onOpenFile.
+ * Presentational only — ContextRail owns the fetch so it can badge the tab
+ * with the change count.
+ */
+export function RailChangesList({ changes, onOpenFile }: RailChangesListProps) {
+  if (changes.length === 0) {
+    return <div className={styles.empty}>No file changes yet.</div>;
+  }
 
   return (
     <div className={styles.list}>
-      {changes.map((change) => (
-        <div
-          key={change.id}
-          className={styles.row}
-          role={onOpenFile ? "button" : undefined}
-          tabIndex={onOpenFile ? 0 : undefined}
-          onClick={onOpenFile ? () => onOpenFile(change.path) : undefined}
-        >
-          <span className={styles.badge} data-change={change.change}>
-            {CHANGE_BADGE[change.change]}
-          </span>
-          <span className={styles.path}>{change.path}</span>
-          <Chip tone={change.attributed ? "ok" : "neutral"}>
-            {change.attributed ? (change.actor ?? "attributed") : "unattributed"}
-          </Chip>
-        </div>
-      ))}
+      {changes.map((change) => {
+        const dir = dirname(change.path);
+        const attribution = change.attributed ? (change.actor ?? "attributed") : "unattributed";
+        return (
+          <button
+            key={change.id}
+            type="button"
+            className={styles.row}
+            disabled={!onOpenFile}
+            title={change.path}
+            onClick={onOpenFile ? () => onOpenFile(change.path) : undefined}
+          >
+            <span className={styles.badge} data-change={change.change}>
+              {CHANGE_BADGE[change.change]}
+            </span>
+            <span className={styles.file}>
+              <span className={styles.top}>
+                <span className={styles.name}>{basename(change.path)}</span>
+                <span className={styles.attr} data-attributed={change.attributed}>
+                  {attribution}
+                </span>
+              </span>
+              {dir && <span className={styles.dir}>{dir}</span>}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

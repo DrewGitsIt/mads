@@ -200,7 +200,7 @@ describe("SessionRail", () => {
     expect(screen.queryByText("⋯")).toBeNull();
   });
 
-  it("clicking a paused card resumes and opens it; clicking an active card only opens it", () => {
+  it("clicking a card only opens it — a paused card is not eagerly resumed", () => {
     const onSelect = vi.fn();
     const onResume = vi.fn();
     render(
@@ -215,16 +215,18 @@ describe("SessionRail", () => {
       />,
     );
 
+    // Active card: opens, no resume (it's already running).
     fireEvent.click(screen.getByText("live one"));
     expect(onSelect).toHaveBeenCalledWith("a1");
-    expect(onResume).not.toHaveBeenCalled();
 
+    // Paused card: opens read-only (so the summary shows / it wakes on send) —
+    // resume is the explicit ▶ pre-warm button, not a side effect of opening.
     fireEvent.click(screen.getByText("resume me"));
-    expect(onResume).toHaveBeenCalledWith("r1");
     expect(onSelect).toHaveBeenCalledWith("r1");
+    expect(onResume).not.toHaveBeenCalled();
   });
 
-  it("pressing Enter on a paused row resumes and opens it (keyboard-driven)", () => {
+  it("pressing Enter on a paused row opens it without resuming (keyboard-driven)", () => {
     const onSelect = vi.fn();
     const onResume = vi.fn();
     render(
@@ -237,8 +239,32 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("resume me").closest('[role="button"]')!;
     fireEvent.keyDown(row, { key: "Enter" });
-    expect(onResume).toHaveBeenCalledWith("r1");
     expect(onSelect).toHaveBeenCalledWith("r1");
+    expect(onResume).not.toHaveBeenCalled();
+  });
+
+  it("shows a Close (pause) affordance only for active sessions, wired to onClose", () => {
+    const onClose = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a1", name: "live one", activity: "active" }),
+          makeSession({ id: "r1", name: "resume me", activity: "inactive" }),
+        ]}
+        openTaskCounts={{}}
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+
+    // Only the active card gets a Close button.
+    expect(screen.getByRole("button", { name: "Close live one" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Close resume me" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Close live one" }));
+    expect(onClose).toHaveBeenCalledWith("a1");
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("action cluster exposes labeled resume and archive buttons, grouped under an aria-label", () => {

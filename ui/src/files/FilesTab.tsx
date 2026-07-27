@@ -13,6 +13,8 @@ export interface FilesTabProps {
   sessionId: string;
   taskId?: string;
   routerClient: RouterClient;
+  /** Path to auto-select in the diff viewer — set when opened from the Context Rail's Changes list. */
+  focusPath?: string;
 }
 
 type Scope = "session" | "task";
@@ -25,7 +27,7 @@ type Selection = { source: "working"; path: string } | { source: "commit"; hash:
  * also works from a session-only caller; the session/task scope switch is
  * only interactive once a `taskId` is actually available (HANDOFF §2/§8).
  */
-export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
+export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [scope, setScope] = useState<Scope>("session");
   const [changes, setChanges] = useState<FileChange[]>([]);
@@ -37,6 +39,15 @@ export function FilesTab({ sessionId, taskId, routerClient }: FilesTabProps) {
   const [diffError, setDiffError] = useState<string | undefined>();
 
   const scopedTaskId = scope === "task" ? taskId : undefined;
+
+  // Opened from the rail — select the working-change diff for that file. Keyed
+  // on focusPath so re-opening a different file re-selects; the rail always
+  // fetches session-scoped changes, so drop to session scope to match.
+  useEffect(() => {
+    if (!focusPath) return;
+    setScope("session");
+    setSelection({ source: "working", path: focusPath });
+  }, [focusPath]);
 
   useEffect(() => {
     let cancelled = false;

@@ -289,16 +289,18 @@ func (r *Runner) Start(ctx context.Context) error {
 	// non-isolated case where the session works directly on a real repo.
 	r.installHook(ctx, cwd)
 
-	capEnv := r.setupCapabilities(ctx, sess, cwd)
+	agent, agentOK := r.loadAgent(ctx, sess)
+	capEnv := r.setupCapabilities(ctx, cwd, agent, agentOK)
 	orchestrateMCP := r.setupOrchestrate(ctx, sess)
 
 	opts := provider.StartOptions{
-		Mode:   provider.ModeACP,
-		Model:  sess.Model,
-		Cwd:    cwd,
-		Resume: sess.ProviderRef,
-		Env:    capEnv,
-		Trust:  provider.Trust(sess.Trust),
+		Mode:         provider.ModeACP,
+		Model:        sess.Model,
+		Cwd:          cwd,
+		SystemPrompt: agent.Prompt, // "" when agentOK is false — no mads preamble, ever
+		Resume:       sess.ProviderRef,
+		Env:          capEnv,
+		Trust:        provider.Trust(sess.Trust),
 	}
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}

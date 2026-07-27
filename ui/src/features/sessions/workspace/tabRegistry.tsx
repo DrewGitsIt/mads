@@ -22,6 +22,10 @@ export interface WorkspaceTabContext {
   onProvisioningDone?: () => void;
   pendingFirstMessage?: string;
   onPendingFirstMessageHandled?: () => void;
+  /** Open a touched file's diff — Conversation tab's rail calls it; the workspace routes to the Files tab. */
+  onOpenFile?: (path: string) => void;
+  /** File to select in the Files tab's diff viewer, set when opened from the rail. */
+  focusFilePath?: string;
 }
 
 export interface WorkspaceTabDef {
@@ -44,6 +48,7 @@ function ConversationTabView({
   onProvisioningDone,
   pendingFirstMessage,
   onPendingFirstMessageHandled,
+  onOpenFile,
 }: WorkspaceTabContext) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   return (
@@ -64,6 +69,7 @@ function ConversationTabView({
         routerClient={routerClient}
         tasks={tasks}
         tasksById={tasksById}
+        onOpenFile={onOpenFile}
       />
     </div>
   );
@@ -73,10 +79,10 @@ function TasksTabView({ sessionId, routerClient, pipelineClient }: WorkspaceTabC
   return <TasksTab sessionId={sessionId} routerClient={routerClient} pipelineClient={pipelineClient} />;
 }
 
-function FilesTabView({ sessionId, routerClient }: WorkspaceTabContext) {
+function FilesTabView({ sessionId, routerClient, focusFilePath }: WorkspaceTabContext) {
   // taskId intentionally omitted — this is the session-level mount, no
   // single task in scope; FilesTab already handles taskId being undefined.
-  return <FilesTab sessionId={sessionId} routerClient={routerClient} />;
+  return <FilesTab sessionId={sessionId} routerClient={routerClient} focusPath={focusFilePath} />;
 }
 
 function PipelineTabView({ sessionId, pipelineClient }: WorkspaceTabContext) {

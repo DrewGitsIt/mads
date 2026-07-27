@@ -4,25 +4,43 @@
   gap: var(--space-2);
 }
 
-.row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line-soft);
-  border-radius: var(--r-sm);
+.empty {
+  padding: var(--space-3);
+  color: var(--text3);
   font-size: var(--fs-sm);
 }
 
-.row[role="button"] {
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
   cursor: pointer;
 }
 
+.row:not(:disabled):hover {
+  border-color: var(--line);
+  background: var(--bg2);
+}
+
+.row:disabled {
+  cursor: default;
+}
+
 .badge {
-  font-weight: 700;
-  font-family: var(--mono, monospace);
+  flex-shrink: 0;
   width: 1.2em;
   text-align: center;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
   color: var(--text2);
 }
 
@@ -36,10 +54,52 @@
   color: var(--bad-fg);
 }
 
-.path {
+.file {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   flex: 1;
+  min-width: 0;
+}
+
+.top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* Filename is the priority: it takes the row width and ellipsizes last. */
+.name {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--fs-sm);
   color: var(--text);
+}
+
+/* Attribution can't grow past the filename — a raw session-id actor truncates. */
+.attr {
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-chip);
+  color: var(--text3);
+}
+
+.attr[data-attributed="false"] {
+  color: var(--warn-fg);
+}
+
+.dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-chip);
+  color: var(--text3);
 }
