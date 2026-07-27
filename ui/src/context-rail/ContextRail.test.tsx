@@ -42,7 +42,7 @@ describe("ContextRail", () => {
     await waitFor(() =>
       expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy(),
     );
-    fireEvent.click(screen.getByText("Changes"));
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
     expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy();
   });
 
@@ -69,10 +69,8 @@ describe("ContextRail", () => {
         tasksById={tasksById}
       />,
     );
-    fireEvent.click(screen.getByText("Changes"));
-    await waitFor(() =>
-      expect(screen.getByText("services/data/internal/ingest.go")).toBeTruthy(),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
   });
 
   it("collapses and expands", () => {
@@ -101,11 +99,9 @@ describe("ContextRail", () => {
         onOpenFile={onOpenFile}
       />,
     );
-    fireEvent.click(screen.getByText("Changes"));
-    await waitFor(() =>
-      expect(screen.getByText("services/data/internal/ingest.go")).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("services/data/internal/ingest.go"));
+    fireEvent.click(screen.getByRole("button", { name: "Changes" }));
+    await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
+    fireEvent.click(screen.getByText("ingest.go"));
     expect(onOpenFile).toHaveBeenCalledWith("services/data/internal/ingest.go");
   });
 });

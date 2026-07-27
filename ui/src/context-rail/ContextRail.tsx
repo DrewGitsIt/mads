@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RouterClient } from "../router/client";
-import type { Task, TaskStatus } from "../router/types";
+import type { FileChange, Task, TaskStatus } from "../router/types";
 import { Chip } from "../components/Chip/Chip";
 import { Button } from "../components/Button/Button";
 import { RailTaskList } from "./RailTaskList";
@@ -47,7 +47,21 @@ export function ContextRail({
   const [tab, setTab] = useState<RailTab>("tasks");
   const [collapsed, setCollapsed] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | undefined>(undefined);
+  const [changes, setChanges] = useState<FileChange[]>([]);
   const proposals = useProposalStore(routerClient, sessionId);
+
+  // Fetched here (not in RailChangesList) so the Changes tab can show the
+  // touched-file count even while the Tasks tab is active — otherwise the tab
+  // gives no hint of what's behind it.
+  useEffect(() => {
+    let cancelled = false;
+    void routerClient.getSessionChanges(sessionId).then((fc) => {
+      if (!cancelled) setChanges(fc);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [routerClient, sessionId]);
 
   if (collapsed) {
     return (
@@ -81,6 +95,11 @@ export function ContextRail({
             onClick={() => setTab("changes")}
           >
             Changes
+            {changes.length > 0 && (
+              <span className={styles.count} aria-hidden="true">
+                {changes.length}
+              </span>
+            )}
           </button>
         </div>
         <Button
@@ -120,9 +139,7 @@ export function ContextRail({
         </>
       )}
 
-      {tab === "changes" && (
-        <RailChangesList sessionId={sessionId} routerClient={routerClient} onOpenFile={onOpenFile} />
-      )}
+      {tab === "changes" && <RailChangesList changes={changes} onOpenFile={onOpenFile} />}
     </div>
   );
 }

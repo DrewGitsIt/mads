@@ -5,6 +5,7 @@ import { LinkChooserDialog } from "./LinkChooserDialog";
 import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, groupSessions, totalOpenTasks } from "./railGroups";
 import type { OpenTaskBreakdown } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
+import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import { router, type RouterClient } from "../../../router/client";
 import type { Link, Session } from "../../../router/types";
@@ -16,6 +17,8 @@ export interface SessionRailProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
+  /** Close (pause) a running session — the terminate side of the resume/close pair. */
+  onClose?: (id: string) => void;
   onDelete?: (id: string) => void;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
@@ -35,6 +38,7 @@ export function SessionRail({
   selectedId,
   onSelect,
   onResume,
+  onClose,
   onDelete,
   links = [],
   routerClient = router,
@@ -102,6 +106,7 @@ export function SessionRail({
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
+              onClose={onClose}
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
@@ -124,6 +129,7 @@ export function SessionRail({
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
+              onClose={onClose}
               onDeleteRequest={setConfirmDeleteId}
               onUnlinkRequest={setUnlinkTarget}
               linkedSessionsEnabled={linkedSessionsEnabled}
@@ -176,6 +182,7 @@ function RailRowGroup({
   selectedId,
   onSelect,
   onResume,
+  onClose,
   onDeleteRequest,
   onUnlinkRequest,
   linkedSessionsEnabled,
@@ -189,6 +196,7 @@ function RailRowGroup({
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
+  onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
@@ -207,6 +215,7 @@ function RailRowGroup({
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
+        onClose={onClose}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
         linkedSessionsEnabled={linkedSessionsEnabled}
@@ -226,6 +235,7 @@ function RailRowGroup({
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
+            onClose={onClose}
             onDeleteRequest={onDeleteRequest}
             linkBadge={sub.badge}
             nested
@@ -251,6 +261,7 @@ function SessionRow({
   selected,
   onSelect,
   onResume,
+  onClose,
   onDeleteRequest,
   linkBadge,
   nested,
@@ -268,6 +279,7 @@ function SessionRow({
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
+  onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
   nested?: boolean;
@@ -287,8 +299,11 @@ function SessionRow({
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && Boolean(linkBadge));
   const showSummary = isPaused && Boolean(session.summary);
 
+  // Clicking a card opens it read-only — no eager resume. A paused session
+  // keeps its inactive state (so SessionSummaryCard shows the full summary)
+  // and wakes transparently on the first composer send. Explicit resume is the
+  // ▶ pre-warm button below (and the workspace kebab).
   function activate() {
-    if (isPaused && onResume) onResume(session.id);
     onSelect?.(session.id);
   }
 
@@ -357,7 +372,7 @@ function SessionRow({
           )}
         </div>
       )}
-      {showSummary && <div className={styles.summary}>{session.summary}</div>}
+      {showSummary && <div className={styles.summary}>{summaryTeaser(session.summary!)}</div>}
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}
@@ -381,7 +396,7 @@ function SessionRow({
             <button
               type="button"
               className={styles.actionButton}
-              title="Resume"
+              title="Resume agent"
               aria-label={`Resume ${name}`}
               onClick={(e) => {
                 e.stopPropagation();
@@ -389,6 +404,20 @@ function SessionRow({
               }}
             >
               ▶
+            </button>
+          )}
+          {!isPaused && onClose && (
+            <button
+              type="button"
+              className={styles.actionButton}
+              title="Close (pause) agent"
+              aria-label={`Close ${name}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose(session.id);
+              }}
+            >
+              ⏸
             </button>
           )}
           {linkedSessionsEnabled && !nested && (

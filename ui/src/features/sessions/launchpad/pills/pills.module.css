@@ -2,17 +2,30 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2) var(--space-3);
   background: var(--bg2);
-  border: 1px solid var(--line-soft);
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
   color: var(--text);
-  font: 500 var(--fs-chip) var(--sans);
+  font: 500 var(--fs-sm) var(--sans);
   cursor: pointer;
 }
 
 .trigger:hover {
   background: var(--bg3);
+  border-color: var(--text3);
+}
+
+/* a downward caret marks the pill as a menu the user can open */
+.trigger::after {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 4px solid currentColor;
+  opacity: 0.5;
+  margin-left: var(--space-1);
 }
 
 .key {
