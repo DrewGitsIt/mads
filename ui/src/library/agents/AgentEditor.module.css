@@ -1,7 +1,26 @@
 .form {
   display: flex;
   flex-direction: column;
+  gap: var(--space-5);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.sectionHeading {
+  font: 700 var(--fs-ui) var(--sans);
+  color: var(--text);
+  margin: 0;
 }
 
 .field {
@@ -14,6 +33,24 @@
 .field input,
 .field textarea {
   font-weight: normal;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+
+.field input:hover,
+.field textarea:hover {
+  border-color: var(--line);
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .promptInput {
