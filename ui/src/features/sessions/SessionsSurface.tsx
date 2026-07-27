@@ -120,7 +120,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
           />
         ) : (
-          <Launchpad createSession={createSession} onSessionCreated={handleSessionCreated} />
+          <Launchpad
+            createSession={createSession}
+            onSessionCreated={handleSessionCreated}
+            sessions={sessions}
+          />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
         {actionError && (

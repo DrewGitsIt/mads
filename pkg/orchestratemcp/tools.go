@@ -25,6 +25,20 @@ var toolDefs = []map[string]any{
 		},
 	},
 	{
+		"name":        "get_turns",
+		"description": "Get the raw turn deltas for a cited range — drill down into a get_summary digest's turn range.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"subject_session_id": map[string]any{"type": "string"},
+				"from_turn":          map[string]any{"type": "integer"},
+				"to_turn":            map[string]any{"type": "integer"},
+			},
+			"required":             []string{"subject_session_id", "from_turn", "to_turn"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		"name":        "send_message",
 		"description": "Send a message into a linked subject session's conversation. Delivered asynchronously; optionally wait briefly for a reply before returning.",
 		"inputSchema": map[string]any{

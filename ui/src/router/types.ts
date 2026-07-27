@@ -324,6 +324,12 @@ export interface LinkRequest {
   cadence?: LinkCadence;
 }
 
+// mirrors pkg/contracts/link.go NewSessionPlaceholder — the to-be-created
+// session's slot in a staged LinkRequest on POST /sessions.
+export const NEW_SESSION_PLACEHOLDER = "$new";
+
+export type CreateSessionPayload = Partial<Session> & { links?: LinkRequest[] };
+
 // mirrors providers/provider/event.go PermissionRequest — one parked
 // PreToolUse hook call awaiting an allow/deny decision (chat transport only,
 // TrustLimited/TrustReadOnly). status starts "pending" and moves to
