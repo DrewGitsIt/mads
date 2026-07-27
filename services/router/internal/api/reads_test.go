@@ -134,6 +134,64 @@ func TestListProviders(t *testing.T) {
 	}
 }
 
+// intentEnforcer wraps fake.Fake to implement provider.IntentEnforcer, so
+// TestListProvidersIntentMatrix can assert the router surfaces a declared
+// enforcement matrix without needing a real provider adapter.
+type intentEnforcer struct {
+	*fake.Fake
+	name string
+}
+
+func (f *intentEnforcer) Name() string { return f.name }
+
+func (f *intentEnforcer) IntentMatrix() provider.IntentMatrix {
+	return provider.IntentMatrix{
+		provider.IntentDenyCommands:    provider.Native,
+		provider.IntentPathScope:       provider.Unsupported,
+		provider.IntentReadOnly:        provider.Native,
+		provider.IntentRequireApproval: provider.Unsupported,
+	}
+}
+
+func TestListProvidersIntentMatrix(t *testing.T) {
+	srv := newTestServerWithProvider(t, &intentEnforcer{Fake: fake.New(), name: "intent-fake"})
+	resp, err := http.Get(srv.URL + "/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	infos := decodeJSON[[]struct {
+		Name    string            `json:"name"`
+		Intents map[string]string `json:"intents"`
+	}](t, resp)
+	if len(infos) != 1 || infos[0].Name != "intent-fake" {
+		t.Fatalf("GET /providers = %+v, want one entry named intent-fake", infos)
+	}
+	if got := infos[0].Intents["deny_commands"]; got != "native" {
+		t.Errorf("intents[deny_commands] = %q, want native", got)
+	}
+	if got := infos[0].Intents["path_scope"]; got != "unsupported" {
+		t.Errorf("intents[path_scope] = %q, want unsupported", got)
+	}
+}
+
+func TestListProvidersIntentMatrixOmittedWhenUndeclared(t *testing.T) {
+	srv := newTestServer(t)
+	resp, err := http.Get(srv.URL + "/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	infos := decodeJSON[[]struct {
+		Name    string            `json:"name"`
+		Intents map[string]string `json:"intents,omitempty"`
+	}](t, resp)
+	if len(infos) != 1 {
+		t.Fatalf("GET /providers = %+v, want one entry", infos)
+	}
+	if len(infos[0].Intents) != 0 {
+		t.Fatalf("GET /providers: fake entry has intents %v, want none declared", infos[0].Intents)
+	}
+}
+
 func TestListProviderBehaviors(t *testing.T) {
 	srv := newTestServer(t)
 	resp, err := http.Get(srv.URL + "/providers/behaviors")
