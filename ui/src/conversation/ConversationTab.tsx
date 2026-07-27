@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
-import { Chip } from "../components/Chip/Chip";
 import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { TransportSwitchError } from "../router/client";
@@ -638,28 +637,13 @@ export function ConversationTab({
             : undefined
         }
         contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
+        mode={activeMode}
+        onModeChange={(m) => void handleToggle(m)}
         onUpdateSession={handleUpdateSession}
       />
 
       <div className={styles.body}>
         <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll}>
-          <div className={styles.modeSwitch}>
-            <Chip
-              tone="neutral"
-              pressed={activeMode === "chat"}
-              onClick={() => void handleToggle("chat")}
-            >
-              Chat
-            </Chip>
-            <Chip
-              tone="neutral"
-              pressed={activeMode === "terminal"}
-              onClick={() => void handleToggle("terminal")}
-            >
-              Terminal
-            </Chip>
-          </div>
-
           {showHistory ? (
             <>
               {provisioning && (

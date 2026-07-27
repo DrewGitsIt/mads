@@ -13,6 +13,9 @@ export interface ConversationHeaderProps {
   session: Session;
   usedTokens?: number;
   contextWindow?: number;
+  /** Active display modality. When set, the Chat/Terminal switch renders here. */
+  mode?: "chat" | "terminal";
+  onModeChange?: (mode: "chat" | "terminal") => void;
   onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => void;
 }
 
@@ -28,6 +31,8 @@ export function ConversationHeader({
   session,
   usedTokens,
   contextWindow,
+  mode,
+  onModeChange,
   onUpdateSession,
 }: ConversationHeaderProps) {
   const [openPill, setOpenPill] = useState<PillField | null>(null);
@@ -68,6 +73,21 @@ export function ConversationHeader({
               if (id !== session.model) onUpdateSession?.({ model: id });
             }}
           />
+        )}
+
+        {mode && onModeChange && (
+          <div className={styles.modeSwitch}>
+            <Chip tone="neutral" pressed={mode === "chat"} onClick={() => onModeChange("chat")}>
+              Chat
+            </Chip>
+            <Chip
+              tone="neutral"
+              pressed={mode === "terminal"}
+              onClick={() => onModeChange("terminal")}
+            >
+              Terminal
+            </Chip>
+          </div>
         )}
       </div>
 

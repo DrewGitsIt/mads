@@ -1,0 +1,151 @@
+# Linked-sessions UX pass — already seeded (2026-07-27) into the design
+# conversation's own session, "Session Link UX & Compression"
+# (ses_addabdfff049c973). To re-seed elsewhere:
+#   bin/mads seed -session <ses_id> -file docs/linked-sessions-ux-tasks.yaml
+#
+# Source of these items: launchpad link-at-create design session (2026-07-27).
+# Model + constraints: docs/LINKED-SESSIONS-DESIGN.md; link dialog:
+# ui/src/features/sessions/rail/LinkChooserDialog.tsx; hero:
+# ui/src/features/sessions/launchpad/Launchpad.tsx.
+# Compression consolidation inspired by headroom
+# (github.com/headroomlabs-ai/headroom) — inspiration, not a dependency.
+tasks:
+  - title: "Router: accept staged links on session create"
+    description: >
+      Extend POST /sessions (handleCreateSession,
+      services/router/internal/api/sessions.go) with an optional `links` list
+      so a session can be born already linked. Each entry is a generic link
+      request (preset monitor/leader + cadence) where EITHER endpoint may be
+      the new-session placeholder — the server resolves the placeholder to the
+      new ID after data.CreateSession and before sup.SpawnSession. Server-side
+      ordering is the point: setupOrchestrate
+      (services/session/internal/runner/capability.go) materializes the
+      orchestrate MCP only at child boot, so a client-side
+      createLink-after-createSession races the spawn and a leader can silently
+      miss its tools. Direction-generic shape is deliberate: follower
+      ("led by") must work at the API level even though v1 UI only offers
+      leader/monitor — don't paint it out. Validation reuses the existing
+      Links store rules (user presets monitor/leader only, one orchestrate
+      holder per subject, no shared-repo-different-worktree pairs); any staged
+      link failing validation fails the whole create — never an orphan
+      unlinked session. Flag-gated behind linked-sessions.
+    acceptance_criteria: >
+      Creating a session with staged links persists the links before the child
+      spawns; a staged leader link gives the new session's agent
+      list_links/get_summary/send_message on its first turn with no bounce. A
+      staged link with the placeholder on the subject side (new session as
+      follower) round-trips at the API. An invalid staged link returns 4xx and
+      creates no session. With the flag off, a `links` payload is rejected.
+      Tests cover all four.
+    labels: [router, linked-sessions]
+
+  - title: "Launchpad: split Start button with link-at-create flow"
+    description: >
+      No new pill — the link affordance is an alternate mode of the Start
+      button. Add a downward-arrow split control to the "Start session" button
+      in Launchpad.tsx; its menu action "Link to session(s)…" opens the
+      existing LinkChooserDialog with a phantom "This session (not started
+      yet)" row pre-selected as the holder over the sessions the user picks,
+      with the usual Monitor/Leader preset choice. Confirming stages the
+      selection (a removable summary chip line near the composer footer) and
+      relabels the button ("Start & link"); submit threads the staged links
+      into the create payload from "Router: accept staged links on session
+      create". The holder radio stays fixed to the phantom row in v1 (new
+      session as leader/monitor only), but keep the dialog's holder-picker
+      shape so selecting an existing session as holder — new session as
+      subject/follower — is a later unlock, not a redesign. Update
+      docs/LINKED-SESSIONS-DESIGN.md's "link creation UX" line (rail
+      multi-select, sessions must already exist) to record this second path.
+      Flag-gated behind linked-sessions.
+    acceptance_criteria: >
+      With the flag on: stage leader/monitor links via the split button +
+      dialog, start, and the new session arrives already linked (rail badges
+      present, no dummy-session workaround). Removing all staged chips reverts
+      the plain "Start session" button. Flag off: plain button, no arrow.
+      Existing Launchpad submit/keyboard tests still pass.
+    labels: [ui, sessions, launchpad, linked-sessions]
+    depends_on:
+      - "Router: accept staged links on session create"
+
+  - title: "pkg/turndigest: shared n-turn compression for agent readers"
+    description: >
+      One package owning "n turns of agent activity in, minimum tokens for a
+      reading LLM out," consolidating today's sibling paths (the per-turn
+      digestSystemPrompt in services/router/internal/job/digest.go,
+      get_summary's raw transcript tail, run digests later). Promote the
+      session child's digestEntry shape (services/session/internal/runner/
+      digest.go, which already mirrors synth's deltaEntry) to a shared
+      Entry{Kind,Text,Tool,Path} contract. API: Digest(ctx, Request{Turns,
+      Audience, BudgetTokens, Subject}) returning Result{Text, Source
+      verbatim|compressed, FromTurn, ToTurn}. Pipeline, headroom-inspired:
+      (1) deterministic normalize pass — collapse repeated tool calls
+      ("Read foo.go ×6"), merge adjacent assistant fragments, cap per-entry
+      length; (2) if the normalized rendering fits BudgetTokens, return it
+      verbatim with no model call; (3) otherwise one fastmodel.DoText with an
+      audience-specific prompt (MonitorPush | LeaderCatchup | RunDigest) and a
+      prompt-side length target, hard truncation as backstop. On
+      fastmodel.IsSkippable degrade to truncated verbatim — never error, same
+      best-effort stance as every digest path. Results always carry
+      FromTurn/ToTurn anchors so readers can drill down. Refactor
+      job.GenerateDigest to call it (n=1, MonitorPush), behavior-preserving.
+      Out of scope, noted for later: a MaxTokens knob on fastmodel.Job.
+    acceptance_criteria: >
+      GenerateDigest routes through turndigest with unchanged observable
+      behavior. An under-budget delta returns Source=verbatim and makes zero
+      backend calls (observable via a counting fake). Normalize collapses
+      repeated tool calls and caps entry length (golden tests). The package
+      imports contracts/dataclient/fastmodel only — no router or session
+      service internals.
+    labels: [pkg, linked-sessions, fastmodel]
+
+  - title: "Leader tools: live get_summary via turndigest + get_turns drill-down"
+    description: >
+      handleOrchestrateSummary (services/router/internal/api/orchestrate.go)
+      today returns the durable task-grounded Session.Summary or a raw
+      uncompressed transcript tail — stale-or-raw for a live subject, which is
+      the leader's main case. Rework the live path: read the subject's last k
+      session.turn_ended envelopes (raw per-turn deltas persisted by
+      Runner.pushTurnEnded) and compress via pkg/turndigest
+      (audience=LeaderCatchup), prepending Session.Summary as the long-arc
+      prologue when present; keep the raw tail only as final fallback when no
+      envelopes exist. Where per-turn digests were already generated for
+      monitors, prefer compressing those (digest-of-digests, memoized by turn
+      range) over re-summarizing raw deltas. Add a get_turns(subject,
+      from_turn, to_turn) tool to pkg/orchestratemcp plus its backing router
+      endpoint, gated by the same orchestrate-link check as get_summary,
+      returning the normalized (not model-compressed) deltas for an anchor
+      range a digest cites — recoverable loss instead of minimal loss. The
+      raw-tool-I/O-stays-in-process posture is unchanged: deltas already carry
+      only tool name + path.
+    acceptance_criteria: >
+      get_summary on a live subject returns compressed recent-turn prose
+      citing a turn range, with the durable summary as prologue when present;
+      output size honors the budget on a long-transcript fixture. get_turns
+      returns the cited range and is 403 without an orchestrate link. No
+      change for subjects with no turn_ended envelopes (raw-tail fallback
+      preserved).
+    labels: [router, mcp, linked-sessions]
+    depends_on:
+      - "pkg/turndigest: shared n-turn compression for agent readers"
+
+  - title: "Dynamic orchestrate capability on running sessions"
+    description: >
+      setupOrchestrate runs once at child boot, so a leader link created from
+      the rail onto an already-running session doesn't materialize the
+      orchestrate MCP tools until the session bounces — today this fails
+      silently, and it's also the blocker for ever offering the follower
+      ("led by") direction at create time. First investigate what each
+      provider actually supports for mid-session tool changes (claudecode
+      passes --mcp-config at launch; kirocli declares MCP unsupported), then
+      implement the best available per provider: live materialization where
+      possible, otherwise an explicit "takes effect on restart" state
+      surfaced in the link API and rail UI — the one unacceptable outcome is
+      the current silent nothing. Wire teardown symmetrically for link
+      removal.
+    acceptance_criteria: >
+      Creating a leader link on a running session either materializes the
+      tools without user-visible restart (where the provider supports it) or
+      the link record + rail UI show an explicit pending-restart state;
+      removing the link reverses it. Automated coverage for the claudecode
+      path chosen and for the kirocli degrade.
+    labels: [session, providers, linked-sessions]
