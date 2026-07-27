@@ -19,11 +19,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/agentgen"
+	"github.com/drewkidwell/mads/pkg/agentselect"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/procid"
 	"github.com/drewkidwell/mads/pkg/template"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -106,6 +109,13 @@ type Config struct {
 	// <stage>-attempt-<n>.log — the Router serves these to the Pipeline
 	// tab's drill-in. Empty (the default) is a no-op: no log capture.
 	MadsHome string
+
+	// FastModel powers agent:auto stages that find no surviving candidate: it
+	// generates a new agent from the task (pkg/agentgen), which is registered
+	// and used for the stage — "that's what auto means", no confirmation
+	// step. nil (the default) means a no-candidate auto stage blocks with a
+	// clear reason instead of generating.
+	FastModel *fastmodel.Runner
 
 	// MergirafPath is the path to the mergiraf binary (mergiraf.org),
 	// registered as the land queue's git merge driver so adjacent-edit
@@ -213,17 +223,15 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	return e.run(ctx)
 }
 
-// resolveAgents freezes registry lookups at launch: every agent named by the
-// template, plus the executor for agent:auto stages.
+// resolveAgents freezes registry lookups at launch: every agent explicitly
+// named by the template. agent:auto stages resolve per-task at run time
+// (resolveStageAgent) — there's nothing to freeze in advance since the
+// selected (or generated) agent depends on the task.
 func resolveAgents(ctx context.Context, cfg Config) (map[string]contracts.Agent, error) {
 	names := map[string]bool{}
 	for _, st := range cfg.Template.Stages {
-		if st.Agent != "" {
-			name := st.Agent
-			if name == "auto" {
-				name = "executor" // minimal routing; quadrant routing is a later item (§9)
-			}
-			names[name] = true
+		if st.Agent != "" && st.Agent != "auto" {
+			names[st.Agent] = true
 		}
 	}
 	agents := map[string]contracts.Agent{}
@@ -995,12 +1003,59 @@ func (e *engine) runCommand(ctx context.Context, command, dir string) (string, e
 	return out, nil
 }
 
-func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
-	name := st.Agent
-	if name == "auto" {
-		name = "executor"
+// resolveStageAgent resolves which agent runs st for task: an explicitly
+// named agent is exactly what the template froze at launch (resolveAgents).
+// "auto" instead routes through pkg/agentselect (capability filter, then
+// quadrant filter on Classify's keyword heuristics, then failure exclusion,
+// then track-record/recency ranking) for this specific task, logging the
+// decision as an agent.selected event regardless of outcome. When no
+// candidate survives, generation is automatic (owner decision: "that's what
+// auto means" — no confirmation step): a draft is generated from the task via
+// pkg/agentgen (registry-grounded — invented capability references are
+// dropped, never persisted), registered, and used for this stage. A
+// generation failure — including no FastModel configured at all — fails the
+// stage with a clear reason; it never silently falls back to a hardcoded
+// agent.
+func (e *engine) resolveStageAgent(ctx context.Context, st template.Stage, task contracts.Task) (string, contracts.Agent, error) {
+	if st.Agent != "auto" {
+		return st.Agent, e.agents[st.Agent], nil
 	}
-	agent := e.agents[name]
+
+	req := agentselect.Request{
+		TaskID: task.ID, SessionID: e.cfg.SessionID, Stage: st.Name,
+		Title: task.Title, Description: task.Description, Labels: task.Labels,
+	}
+	sel, err := agentselect.New(e.cfg.Data).Select(ctx, req)
+	if err == nil {
+		agent, aerr := e.cfg.Data.Agent(ctx, sel.Agent)
+		if aerr != nil {
+			return "", contracts.Agent{}, fmt.Errorf("auto-select: fetch selected agent %q: %w", sel.Agent, aerr)
+		}
+		return sel.Agent, agent, nil
+	}
+	if !errors.Is(err, agentselect.ErrNoCandidates) {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: %w", err)
+	}
+
+	if e.cfg.FastModel == nil {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and no Fast Model is configured to generate one", task.Title)
+	}
+	res, gerr := agentgen.New(e.cfg.Data, e.cfg.FastModel).GenerateFromTask(ctx, req)
+	if gerr != nil {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and generation failed: %w", task.Title, gerr)
+	}
+	draft := res.Draft
+	if cerr := e.cfg.Data.CreateAgent(ctx, &draft); cerr != nil {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: register generated agent %q: %w", draft.Name, cerr)
+	}
+	return draft.Name, draft, nil
+}
+
+func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
+	name, agent, err := e.resolveStageAgent(ctx, st, task)
+	if err != nil {
+		return err.Error(), err
+	}
 	model := e.cfg.Model
 	if model == "" {
 		model = st.Model

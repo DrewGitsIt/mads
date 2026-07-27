@@ -13,6 +13,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/template"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/pipeline/engine"
 )
@@ -34,6 +35,10 @@ type Options struct {
 	WorktreeRoot string
 	DataURL      string
 	MadsHome     string
+	// FastModel powers agent:auto stages' generation fallback when no
+	// candidate agent survives selection; nil disables generation, and such
+	// a stage blocks with a clear reason instead (see engine.Config.FastModel).
+	FastModel *fastmodel.Runner
 
 	// ManagedExternally is true when the caller has its own way of deciding
 	// whether SessionID should go back to inactive once this run ends, and
@@ -110,6 +115,7 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 		WorktreeRoot: opts.WorktreeRoot,
 		DataURL:      opts.DataURL,
 		MadsHome:     opts.MadsHome,
+		FastModel:    opts.FastModel,
 	})
 }
 

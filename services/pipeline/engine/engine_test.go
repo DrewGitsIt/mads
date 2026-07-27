@@ -15,6 +15,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
 )
@@ -378,5 +379,148 @@ func TestForeignLeaseSkipsTask(t *testing.T) {
 	}
 	if got := h.task(t, seeded[1].ID); got.Status != contracts.StatusReady {
 		t.Errorf("foreign-leased task was touched: %s", got.Status)
+	}
+}
+
+// An "auto" stage routes through pkg/agentselect: a registered agent whose
+// quadrant matches the task's Classify heuristics is picked over the
+// hardcoded "executor", and the decision is recorded as agent.selected.
+// "investigate something" classifies to QuadrantInvestigator (agencyScore
+// via "investigate" as an exploration word, clarityScore via "something" as
+// a clarity-low word) — a quadrant none of the seeded system agents carry,
+// so investigator-bot is the only survivor.
+func TestAutoSelectsRegisteredAgent(t *testing.T) {
+	h := newHarness(t)
+	bot := contracts.Agent{Name: "investigator-bot", Prompt: "You investigate things.", Quadrant: contracts.QuadrantInvestigator}
+	if err := h.data.CreateAgent(context.Background(), &bot); err != nil {
+		t.Fatal(err)
+	}
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "auto-select", Rules: []fake.Rule{
+		{Match: "Pipeline stage: impl", Reply: "done"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := "name: solo\nstages:\n  - name: impl\n    agent: auto\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something"})
+	sum := h.run(t, f, tpl, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	sels := h.events(t, "agent.selected")
+	if len(sels) != 1 || !strings.Contains(string(sels[0].Payload), `"agent":"investigator-bot"`) {
+		t.Errorf("agent.selected: %+v", sels)
+	}
+}
+
+// When no candidate survives auto-selection, generation is automatic: a
+// draft is generated from the task via pkg/agentgen, registered, and used
+// for the stage — no confirmation step ("that's what auto means").
+func TestAutoGeneratesAgentWhenNoCandidate(t *testing.T) {
+	h := newHarness(t)
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "auto-generate", Rules: []fake.Rule{
+		{Match: "Generate an agent definition for this task", Reply: `{"name":"generated-investigator",` +
+			`"description":"Generated for this task","prompt":"You investigate things.",` +
+			`"quadrant":"investigator","tags":[],` +
+			`"capabilities":{"tools":[],"mcp_servers":[],"skills":[]},"permissions":{}}`},
+		{Match: "Pipeline stage: impl", Reply: "done"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
+	src := "name: solo\nstages:\n  - name: impl\n    agent: auto\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something"})
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: f, SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second, FastModel: fm,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	generated, err := h.data.Agent(context.Background(), "generated-investigator")
+	if err != nil {
+		t.Fatalf("generated agent was never registered: %v", err)
+	}
+	if generated.Quadrant != contracts.QuadrantInvestigator {
+		t.Errorf("generated agent quadrant: %s", generated.Quadrant)
+	}
+	if sels := h.events(t, "agent.selected"); len(sels) != 1 {
+		t.Errorf("agent.selected: %+v", sels)
+	}
+}
+
+// Generation failure (e.g. the Fast Model can't produce a usable draft)
+// blocks the stage with a clear reason; it never silently falls back to a
+// hardcoded agent.
+func TestAutoGenerationFailureBlocksStage(t *testing.T) {
+	h := newHarness(t)
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "auto-generate-fail", Rules: []fake.Rule{
+		// Valid JSON, but missing the required name/prompt fields: fails
+		// generatedAgent.Validate() on every retry attempt (the retry
+		// feedback is appended to, not replacing, this same matched prompt).
+		{Match: "Generate an agent definition for this task", Reply: `{"description":"missing name and prompt"}`},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
+	src := "name: solo\nstages:\n  - name: impl\n    agent: auto\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something"})
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: f, SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second, FastModel: fm,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Blocked) != 1 || sum.Blocked[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	blocked := h.task(t, seeded[0].ID)
+	var found bool
+	for _, n := range blocked.Notes {
+		if n.Type == contracts.NoteBlocker && strings.Contains(n.Content, "generat") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("blocked task notes lack a generation-failure reason: %+v", blocked.Notes)
+	}
+}
+
+// Explicit agent names are untouched by any of the auto-select/generation
+// machinery: no agent.selected event, and the stage runs the named agent.
+func TestExplicitAgentBypassesAutoSelect(t *testing.T) {
+	h := newHarness(t)
+	src := "name: solo\nstages:\n  - name: executor\n    agent: executor\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something"})
+	sum := h.run(t, fake.New(), tpl, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	if sels := h.events(t, "agent.selected"); len(sels) != 0 {
+		t.Errorf("agent.selected should not fire for an explicit agent: %+v", sels)
 	}
 }
