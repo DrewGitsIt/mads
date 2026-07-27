@@ -28,6 +28,8 @@ export interface Session {
   retro_id?: string;
   synthesis_mode?: string;
   provider_ref?: string;
+  /** Most recent turn's token accounting, persisted by the Runner on every turn end — the context meter's data source at wake time, before this process has seen a turn_end of its own. */
+  last_usage?: Usage;
   created_at: string;
   updated_at: string;
 }
@@ -315,6 +317,16 @@ export interface PermissionRequest {
   status: "pending" | "allowed" | "denied" | "expired";
 }
 
+// mirrors providers/provider/event.go CompactStatus — which phase of a
+// native compaction pass this is. Phase "start" is the ongoing state; "done"
+// carries success/error. Only claude-code's stream-json transport emits this
+// today (providers/claudecode/wire.go's systemEvents).
+export interface CompactStatus {
+  phase: "start" | "done";
+  success?: boolean;
+  error?: string;
+}
+
 // mirrors providers/provider/event.go Event (normalized data-plane stream)
 export type StreamEvent =
   | { kind: "text"; text: string }
@@ -323,7 +335,8 @@ export type StreamEvent =
   | { kind: "error"; text: string }
   | { kind: "pty_output"; text: string }
   | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean }
-  | { kind: "permission_request"; permission: PermissionRequest };
+  | { kind: "permission_request"; permission: PermissionRequest }
+  | { kind: "compact"; compact: CompactStatus };
 
 // mirrors pkg/contracts/session.go Session (fields this tab reads)
 

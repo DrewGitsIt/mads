@@ -34,6 +34,22 @@ type TranscriptMessage struct {
 	IsError bool `json:"is_error,omitempty"`
 }
 
+// Usage mirrors providers/provider/event.go Usage — duplicated here (not
+// imported from providers/provider) so pkg/contracts stays free of a
+// dependency on the provider layer, same as every other cross-boundary type
+// in this package. Persisted on Session.LastUsage so a resumed session's
+// context occupancy is known at wake time, not only after its first turn_end
+// in this process (ui/src/conversation/Header/ContextMeter.tsx's data gap;
+// also the resume-compaction trigger's input, services/session/internal/
+// runner/compact.go).
+type Usage struct {
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens,omitempty"`
+	Model                    string `json:"model,omitempty"`
+}
+
 // Attribution identifies the linked session a message was injected from
 // (docs/LINKED-SESSIONS-DESIGN.md decision 2): every injected message is
 // stamped with its source, end-to-end, so it can never be rendered or

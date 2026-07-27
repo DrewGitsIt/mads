@@ -25,6 +25,18 @@ type wireLine struct {
 	// init-line fields
 	Model string `json:"model"`
 
+	// system-line fields ("system" type; Subtype distinguishes "init",
+	// "status", and "compact_boundary" — verified against claude-code
+	// 2.1.220). Status carries "compacting" on the start-of-compaction line;
+	// the completion line instead carries CompactResult ("success"/"failed")
+	// with Status empty, and CompactError set on failure (e.g. "Not enough
+	// messages to compact."). CompactBoundary's richer token-count metadata
+	// on the success case is not surfaced today (see systemEvents) — the
+	// completion status line alone is enough for the UI's status item.
+	Status        string `json:"status"`
+	CompactResult string `json:"compact_result"`
+	CompactError  string `json:"compact_error"`
+
 	// stream_event-line field: the raw Anthropic streaming event, present only
 	// when claude runs with --include-partial-messages (interactive transport).
 	// Carries token-level content_block_delta text.
@@ -140,6 +152,8 @@ func toolPath(input json.RawMessage) string {
 // what already streamed, so it is dropped and only its tool_use blocks emit.
 func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 	switch l.Type {
+	case "system":
+		return l.systemEvents()
 	case "stream_event":
 		return l.streamDeltaEvents()
 	case "assistant":
@@ -197,8 +211,27 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 		}
 		return evs
 	default:
-		// init, thinking_tokens, rate_limit_event, control_response, ...:
+		// thinking_tokens, rate_limit_event, control_response, ...:
 		// bookkeeping, not conversation.
+		return nil
+	}
+}
+
+// systemEvents normalizes a "system"-type line. Only the compaction status
+// lines produce an event; "init" (session start/reconnect announcement, and
+// the line claude-code re-emits right after a compaction completes) and any
+// other subtype are bookkeeping, same as the events() default case.
+func (l *wireLine) systemEvents() []provider.Event {
+	switch {
+	case l.Subtype == "status" && l.Status == "compacting":
+		return []provider.Event{{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}}}
+	case l.Subtype == "status" && l.CompactResult != "":
+		return []provider.Event{{Kind: provider.EventCompact, Compact: &provider.CompactStatus{
+			Phase:   "done",
+			Success: l.CompactResult == "success",
+			Error:   l.CompactError,
+		}}}
+	default:
 		return nil
 	}
 }

@@ -637,7 +637,7 @@ describe("ConversationTab", () => {
     expect(screen.getByText("a reply after a long gap")).toBeTruthy();
   });
 
-  it("counts cached tokens in the context meter, not just the uncached delta", async () => {
+  it("counts cached tokens in the context meter, not just the uncached delta — and excludes output_tokens", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
@@ -656,8 +656,12 @@ describe("ConversationTab", () => {
       });
     });
 
-    // 2k+3k+90k+5k = 100k / 200k = 50% — input+output alone would read ~3%.
-    await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
+    // Occupancy is the prompt side only: 2k input + 90k cache_read + 5k
+    // cache_creation = 97k / 200k = 49% — output_tokens (3k) never
+    // contributes, since it's not part of what the next turn's request
+    // carries as context (regression test: previously summed input+output+
+    // cache, which would have read 50%).
+    await waitFor(() => expect(screen.getByText("49%")).toBeTruthy());
   });
 
   it("names the tool in the working indicator, then clears it once text starts streaming", async () => {
@@ -883,6 +887,49 @@ describe("ConversationTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Allow" }));
     expect(resolveSpy).toHaveBeenCalledWith("session-active", "session-active-perm-1", "allow");
+  });
+
+  // Native compaction (Runner's resume-above-threshold trigger,
+  // services/session/internal/runner/compact.go), surfaced as a visible
+  // status item since headless -p mode has no interactive "resume from
+  // summary" prompt.
+  it("surfaces a live compact stream event as a status item, through to a completion state", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "compact", compact: { phase: "start" } });
+    });
+    expect(screen.getByText("Compacting conversation…")).toBeTruthy();
+
+    act(() => {
+      source.emit({ kind: "compact", compact: { phase: "done", success: true } });
+    });
+    expect(screen.getByText("Conversation compacted.")).toBeTruthy();
+    expect(screen.queryByText("Compacting conversation…")).toBeNull();
+  });
+
+  // The context meter's data source at wake time — before this mount has
+  // seen a turn_end of its own — is the session record's own last_usage
+  // (services/session/internal/runner's persistUsage).
+  it("seeds the context meter from session.last_usage on mount, before any turn_end", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "resumed session",
+      activity: "active",
+      model: "claude-sonnet-5",
+      last_usage: { input_tokens: 100_000, output_tokens: 500 },
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
   });
 
   it("reconstructs a still-pending permission card from GET /permission-requests on mount, surviving a transcript refetch", async () => {
