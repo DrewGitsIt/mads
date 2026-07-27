@@ -11,3 +11,5 @@ export * from "./Popover/Popover";
 export * from "./ConfirmDialog/ConfirmDialog";
 export * from "./Select/Select";
 export * from "./Combobox/Combobox";
+export * from "./ChipListField/ChipListField";
+export * from "./CapabilityPickerField/CapabilityPickerField";

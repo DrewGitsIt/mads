@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -43,6 +44,51 @@ func TestAgentRegistryOverHTTP(t *testing.T) {
 	}
 	if resp := doJSON(t, srv, "DELETE", "/agents/release-notes", nil, nil); resp.StatusCode != 200 {
 		t.Errorf("delete: status %d", resp.StatusCode)
+	}
+}
+
+func TestAgentCapabilityRefsRejectedOverHTTP(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	var verr contracts.ValidationError
+	resp := doJSON(t, srv, "POST", "/agents", contracts.Agent{
+		Name: "phantom-agent", Prompt: "p",
+		Capabilities: contracts.AgentCapabilities{Skills: []string{"no-such-skill"}, MCPServers: []string{"no-such-mcp"}},
+	}, &verr)
+	if resp.StatusCode != 422 {
+		t.Fatalf("unknown capability refs: status %d, want 422", resp.StatusCode)
+	}
+	if len(verr.Errors) == 0 || !strings.Contains(verr.Errors[0].Message, "no-such-skill") ||
+		!strings.Contains(verr.Errors[0].Message, "no-such-mcp") {
+		t.Errorf("error doesn't name the offending refs: %+v", verr)
+	}
+
+	var cap contracts.Capability
+	resp = doJSON(t, srv, "POST", "/capabilities", contracts.Capability{
+		Name: "real-skill", Type: contracts.CapabilitySkill,
+		Config: contracts.CapabilityConfig{Path: "~/skills/real"},
+	}, &cap)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("capability create: status %d", resp.StatusCode)
+	}
+
+	var created contracts.Agent
+	resp = doJSON(t, srv, "POST", "/agents", contracts.Agent{
+		Name: "grounded-agent", Prompt: "p",
+		Capabilities: contracts.AgentCapabilities{Skills: []string{"real-skill"}},
+	}, &created)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("known capability ref: status %d", resp.StatusCode)
+	}
+
+	// PUT: a manual edit reintroducing a phantom ref is caught the same way.
+	created.Capabilities.Skills = append(created.Capabilities.Skills, "still-not-real")
+	resp = doJSON(t, srv, "PUT", "/agents/grounded-agent", created, &verr)
+	if resp.StatusCode != 422 {
+		t.Fatalf("update with unknown ref: status %d, want 422", resp.StatusCode)
+	}
+	if len(verr.Errors) == 0 || !strings.Contains(verr.Errors[0].Message, "still-not-real") {
+		t.Errorf("update error doesn't name the offending ref: %+v", verr)
 	}
 }
 

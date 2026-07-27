@@ -36,10 +36,14 @@ func (s *server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 }
 
 // providerInfo is one row of the Settings Providers panel's capability
-// matrix table (MADS-UX §11): the provider's declared support per behavior.
+// matrix table (MADS-UX §11): the provider's declared support per behavior,
+// plus its declared enforcement level per portable permission intent
+// (Intents is nil for a provider that doesn't implement IntentEnforcer —
+// it has taken no stance on any intent).
 type providerInfo struct {
-	Name   string          `json:"name"`
-	Matrix provider.Matrix `json:"matrix"`
+	Name    string                `json:"name"`
+	Matrix  provider.Matrix       `json:"matrix"`
+	Intents provider.IntentMatrix `json:"intents,omitempty"`
 }
 
 func (s *server) handleListProviders(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +54,11 @@ func (s *server) handleListProviders(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
-		out = append(out, providerInfo{Name: name, Matrix: p.Matrix()})
+		info := providerInfo{Name: name, Matrix: p.Matrix()}
+		if enforcer, ok := p.(provider.IntentEnforcer); ok {
+			info.Intents = enforcer.IntentMatrix()
+		}
+		out = append(out, info)
 	}
 	writeJSON(w, http.StatusOK, out)
 }

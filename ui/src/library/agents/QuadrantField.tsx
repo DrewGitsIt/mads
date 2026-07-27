@@ -1,5 +1,4 @@
-import { useState } from "react";
-import { Popover } from "../../components/Popover/Popover";
+import { Card } from "../../components";
 import type { Quadrant } from "../../router/types";
 import styles from "./QuadrantField.module.css";
 
@@ -34,50 +33,25 @@ export interface QuadrantFieldProps {
 }
 
 export function QuadrantField({ value, onChange }: QuadrantFieldProps) {
-  const [open, setOpen] = useState(false);
-
   return (
     <div className={styles.field}>
-      <label className={styles.label} htmlFor="quadrant-select">
+      <span className={styles.label} id="quadrant-label">
         Quadrant
-      </label>
-      <div className={styles.row}>
-        <select
-          id="quadrant-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value as Quadrant)}
-        >
-          <option value="" disabled>
-            Select a quadrant
-          </option>
-          {QUADRANTS.map((q) => (
-            <option key={q.value} value={q.value}>
-              {q.label}
-            </option>
-          ))}
-        </select>
-        <Popover
-          open={open}
-          onClose={() => setOpen(false)}
-          anchor={
+      </span>
+      <div className={styles.grid} role="group" aria-labelledby="quadrant-label">
+        {QUADRANTS.map((q) => (
+          <Card key={q.value} selected={value === q.value} className={styles.option}>
             <button
               type="button"
-              className={styles.help}
-              aria-label="What is a quadrant?"
-              onClick={() => setOpen((o) => !o)}
+              className={styles.optionButton}
+              aria-pressed={value === q.value}
+              onClick={() => onChange(q.value)}
             >
-              ?
+              <span className={styles.optionLabel}>{q.label}</span>
+              <span className={styles.optionDescription}>{q.description}</span>
             </button>
-          }
-        >
-          <ul className={styles.list}>
-            {QUADRANTS.map((q) => (
-              <li key={q.value}>
-                <strong>{q.label}</strong>: {q.description}
-              </li>
-            ))}
-          </ul>
-        </Popover>
+          </Card>
+        ))}
       </div>
     </div>
   );

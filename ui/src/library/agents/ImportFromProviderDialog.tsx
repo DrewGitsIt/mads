@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { Select, type SelectOption } from "../../components/Select/Select";
 import { SideSheet, SideSheetBody, SideSheetFooter, SideSheetHeader } from "../../components/SideSheet/SideSheet";
 import { IMPORT_FIXTURES } from "./importFixtures";
 import styles from "./ImportFromProviderDialog.module.css";
@@ -7,6 +8,11 @@ import styles from "./ImportFromProviderDialog.module.css";
 export interface ImportFromProviderDialogProps {
   onClose: () => void;
 }
+
+const PROVIDER_OPTIONS: SelectOption[] = IMPORT_FIXTURES.map((f, i) => ({
+  value: String(i),
+  label: f.providerName,
+}));
 
 /** Fixture-only mapping preview — no live provider-import backend exists yet (HANDOFF §5). */
 export function ImportFromProviderDialog({ onClose }: ImportFromProviderDialogProps) {
@@ -17,17 +23,12 @@ export function ImportFromProviderDialog({ onClose }: ImportFromProviderDialogPr
     <SideSheet>
       <SideSheetHeader>Import from provider</SideSheetHeader>
       <SideSheetBody>
-        <select
-          value={selected}
-          onChange={(e) => setSelected(Number(e.target.value))}
+        <Select
+          value={String(selected)}
+          onChange={(v) => setSelected(Number(v))}
+          options={PROVIDER_OPTIONS}
           className={styles.select}
-        >
-          {IMPORT_FIXTURES.map((f, i) => (
-            <option key={f.providerName} value={i}>
-              {f.providerName}
-            </option>
-          ))}
-        </select>
+        />
         <table className={styles.table}>
           <thead>
             <tr>

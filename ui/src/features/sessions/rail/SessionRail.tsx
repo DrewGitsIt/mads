@@ -406,7 +406,13 @@ function SessionRow({
               ▶
             </button>
           )}
-          {!isPaused && onClose && (
+          {onClose && (
+            // Always offered, regardless of the activity record: it's the
+            // Supervisor's TerminateSession underneath, which is safe to call
+            // in every state (kills a live child if one exists, or reconciles
+            // an already-inactive record as a no-op) — the record can drift
+            // from the real child state, so it must never be the thing that
+            // hides the one control that recovers from that drift.
             <button
               type="button"
               className={styles.actionButton}
