@@ -38,6 +38,14 @@ func mustCreateAgent(t *testing.T, c *dataclient.Client, a contracts.Agent) cont
 	return a
 }
 
+func mustCreateCapability(t *testing.T, c *dataclient.Client, cap contracts.Capability) contracts.Capability {
+	t.Helper()
+	if err := c.CreateCapability(context.Background(), &cap); err != nil {
+		t.Fatalf("create capability %s: %v", cap.Name, err)
+	}
+	return cap
+}
+
 func marshalIndent(t *testing.T, v any) []byte {
 	t.Helper()
 	raw, err := json.MarshalIndent(v, "", "  ")
@@ -51,7 +59,7 @@ func marshalIndent(t *testing.T, v any) []byte {
 // on a substring of the task title comes back mapped onto a full draft
 // contracts.Agent.
 func TestGenerateFromTaskGolden(t *testing.T) {
-	g, _ := setup(t, fake.Scenario{Name: "generate-from-task", Rules: []fake.Rule{{
+	g, c := setup(t, fake.Scenario{Name: "generate-from-task", Rules: []fake.Rule{{
 		Match: "Fix the flaky login test",
 		Reply: `{"name":"login-test-fixer","description":"Fixes flaky login tests",` +
 			`"prompt":"You are a QA engineer who stabilizes flaky login tests.",` +
@@ -59,6 +67,9 @@ func TestGenerateFromTaskGolden(t *testing.T) {
 			`"capabilities":{"tools":["shell","read","write"],"mcp_servers":[],"skills":["testing"]},` +
 			`"permissions":{"allowed_paths":["tests/**"],"denied_commands":["rm -rf *"]}}`,
 	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "testing", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/testing"},
+	})
 
 	result, err := g.GenerateFromTask(context.Background(), agentselect.Request{
 		TaskID: "tsk_1", Title: "Fix the flaky login test",
@@ -76,7 +87,7 @@ func TestGenerateFromTaskGolden(t *testing.T) {
 // The golden NL-description generation path: the Library editor's "describe
 // what you want" flow.
 func TestGenerateFromDescriptionGolden(t *testing.T) {
-	g, _ := setup(t, fake.Scenario{Name: "generate-from-description", Rules: []fake.Rule{{
+	g, c := setup(t, fake.Scenario{Name: "generate-from-description", Rules: []fake.Rule{{
 		Match: "database migrations and knows PostgreSQL",
 		Reply: `{"name":"db-migrator","description":"Specializes in PostgreSQL schema migrations",` +
 			`"prompt":"You are a database migration specialist who knows PostgreSQL deeply.",` +
@@ -84,6 +95,9 @@ func TestGenerateFromDescriptionGolden(t *testing.T) {
 			`"capabilities":{"tools":["shell","read","write"],"mcp_servers":["postgres"],"skills":[]},` +
 			`"permissions":{"allowed_paths":["migrations/**"],"denied_commands":["DROP DATABASE *"]}}`,
 	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "postgres", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-postgres"},
+	})
 
 	result, err := g.GenerateFromDescription(context.Background(),
 		"I need an agent that specializes in database migrations and knows PostgreSQL")
@@ -94,6 +108,88 @@ func TestGenerateFromDescriptionGolden(t *testing.T) {
 		t.Fatalf("Similar = %+v, want nil (empty registry)", result.Similar)
 	}
 	golden.Assert(t, "generate_from_description.golden.json", marshalIndent(t, result.Draft))
+}
+
+// The registry-grounding acceptance criteria: given a registry that knows
+// some of the model's emitted names but not others, only the known names
+// survive into the persisted draft, and the dropped ones are surfaced on
+// Result rather than silently disappearing.
+func TestGenerateKeepsOnlyRegisteredCapabilities(t *testing.T) {
+	g, c := setup(t, fake.Scenario{Name: "known-and-unknown-caps", Rules: []fake.Rule{{
+		Match: "Set up the reporting pipeline",
+		Reply: `{"name":"reporting-agent","description":"Builds reports","prompt":"You build reports.",` +
+			`"quadrant":"autonomous_executor",` +
+			`"capabilities":{"tools":["shell"],"mcp_servers":["postgres","made-up-mcp"],"skills":["testing","made-up-skill"]},` +
+			`"permissions":{}}`,
+	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "postgres", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-postgres"},
+	})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "testing", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/testing"},
+	})
+
+	result, err := g.GenerateFromTask(context.Background(), agentselect.Request{
+		TaskID: "tsk_mixed", Title: "Set up the reporting pipeline",
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromTask: %v", err)
+	}
+
+	gotCaps, _ := json.Marshal(result.Draft.Capabilities)
+	wantCaps, _ := json.Marshal(contracts.AgentCapabilities{
+		Tools: []string{"shell"}, MCPServers: []string{"postgres"}, Skills: []string{"testing"},
+	})
+	if string(gotCaps) != string(wantCaps) {
+		t.Fatalf("Capabilities = %s, want only registered names kept: %s", gotCaps, wantCaps)
+	}
+
+	wantDropped := map[string]bool{"made-up-mcp": true, "made-up-skill": true}
+	if len(result.Dropped) != len(wantDropped) {
+		t.Fatalf("Dropped = %v, want exactly %v", result.Dropped, wantDropped)
+	}
+	for _, d := range result.Dropped {
+		if !wantDropped[d] {
+			t.Errorf("Dropped contains unexpected name %q", d)
+		}
+	}
+}
+
+// The empty-registry acceptance criteria: with no capabilities registered at
+// all, every skill/MCP name the model emits is dropped, regardless of how
+// plausible-looking it is — tools are untouched (provider tool names, not
+// registry entries).
+func TestGenerateWithEmptyRegistryDropsAllSkillsAndMCP(t *testing.T) {
+	g, _ := setup(t, fake.Scenario{Name: "empty-registry", Rules: []fake.Rule{{
+		Match: "Set up the reporting pipeline",
+		Reply: `{"name":"reporting-agent","description":"Builds reports","prompt":"You build reports.",` +
+			`"quadrant":"autonomous_executor",` +
+			`"capabilities":{"tools":["shell","read"],"mcp_servers":["postgres"],"skills":["testing"]},` +
+			`"permissions":{}}`,
+	}}})
+
+	result, err := g.GenerateFromTask(context.Background(), agentselect.Request{
+		TaskID: "tsk_empty_registry", Title: "Set up the reporting pipeline",
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromTask: %v", err)
+	}
+
+	if len(result.Draft.Capabilities.Skills) != 0 {
+		t.Errorf("Capabilities.Skills = %v, want none (empty registry)", result.Draft.Capabilities.Skills)
+	}
+	if len(result.Draft.Capabilities.MCPServers) != 0 {
+		t.Errorf("Capabilities.MCPServers = %v, want none (empty registry)", result.Draft.Capabilities.MCPServers)
+	}
+	wantTools := []string{"shell", "read"}
+	gotTools, _ := json.Marshal(result.Draft.Capabilities.Tools)
+	wantToolsJSON, _ := json.Marshal(wantTools)
+	if string(gotTools) != string(wantToolsJSON) {
+		t.Errorf("Capabilities.Tools = %s, want untouched %s (tools aren't registry entries)", gotTools, wantToolsJSON)
+	}
+	if len(result.Dropped) != 2 {
+		t.Fatalf("Dropped = %v, want both postgres and testing dropped", result.Dropped)
+	}
 }
 
 // A near-duplicate generation request must return the similarity warning
@@ -108,6 +204,9 @@ func TestGenerateFromTaskNearDuplicateWarns(t *testing.T) {
 			`"capabilities":{"tools":["shell","sql"],"mcp_servers":["postgres"],"skills":[]},` +
 			`"permissions":{}}`,
 	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "postgres", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-postgres"},
+	})
 
 	mustCreateAgent(t, c, contracts.Agent{
 		Name: "pg-migration-helper", Prompt: "p", Description: "Handles postgres database migrations",
