@@ -20,12 +20,33 @@ func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	var sess contracts.Session
-	if !decode(w, r, &sess) {
+	var req struct {
+		contracts.Session
+		// Links stages link requests to create between the session record and
+		// its spawn, so a leader's orchestrate MCP is materialized on the
+		// child's first turn (setupOrchestrate reads LinksForSession at boot).
+		// Either endpoint may be contracts.NewSessionPlaceholder.
+		Links []contracts.LinkRequest `json:"links,omitempty"`
+	}
+	if !decode(w, r, &req) {
 		return
 	}
+	sess := &req.Session
 	sess.ID = ""
-	if err := s.resolveSessionDefaults(r.Context(), &sess); err != nil {
+	if len(req.Links) > 0 {
+		// Unlike requireLinkedSessions (which 404s whole routes), only the
+		// links field is refused flag-off — POST /sessions must keep working.
+		cfg, err := s.data.Config(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if !cfg.FeatureFlags.LinkedSessions {
+			writeErrMsg(w, http.StatusBadRequest, "create session: ", errors.New(`"links" requires the linked-sessions feature flag`))
+			return
+		}
+	}
+	if err := s.resolveSessionDefaults(r.Context(), sess); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -33,21 +54,35 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
 		return
 	}
-	if err := s.data.CreateSession(r.Context(), &sess); err != nil {
+	if err := s.validateStagedLinks(r.Context(), sess, req.Links); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.data.CreateSession(r.Context(), sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	links, err := s.createStagedLinks(r.Context(), sess.ID, req.Links)
+	if err != nil {
+		s.rollbackStagedCreate(links, sess.ID)
 		writeError(w, err)
 		return
 	}
 	addr, err := s.sup.SpawnSession(r.Context(), sess.ID)
 	if err != nil {
 		// Best-effort rollback so a failed spawn doesn't leave an orphaned
-		// session record with no child behind it. Uses a background context:
-		// the record still needs cleaning up even if the request that asked
-		// for it is gone.
-		_ = s.data.DeleteSession(context.Background(), sess.ID)
+		// session record (or its staged links) with no child behind it. Uses
+		// a background context: the records still need cleaning up even if
+		// the request that asked for them is gone.
+		s.rollbackStagedCreate(links, sess.ID)
 		writeErrMsg(w, http.StatusBadGateway, "spawn session: ", err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"session": sess, "addr": addr})
+	resp := map[string]any{"session": req.Session, "addr": addr}
+	if len(req.Links) > 0 {
+		resp["links"] = links
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // handleRenameSession sets a user-chosen name. NameSource=User marks it as

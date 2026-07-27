@@ -1,0 +1,98 @@
+package api
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/drewkidwell/mads/pkg/contracts"
+)
+
+// validateStagedLinks pre-checks staged link entries before the session
+// record exists, so a malformed payload never creates a session. Each entry
+// must carry contracts.NewSessionPlaceholder on exactly one endpoint and an
+// existing session on the other; everything else (preset resolution, one
+// orchestrate holder per subject, ...) stays with the Data Service at create
+// time. Must run after resolveSessionDefaults — the worktree check reads the
+// Isolation/Workspace it fills in.
+func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Session, links []contracts.LinkRequest) error {
+	var v contracts.ValidationError
+	for i, l := range links {
+		field := fmt.Sprintf("links[%d]", i)
+		grantingNew := l.GrantingSessionID == contracts.NewSessionPlaceholder
+		subjectNew := l.SubjectSessionID == contracts.NewSessionPlaceholder
+		switch {
+		case grantingNew && subjectNew:
+			v.Add(field, "the new-session placeholder cannot be both endpoints — a session cannot link to itself")
+			continue
+		case !grantingNew && !subjectNew:
+			v.Add(field, "exactly one endpoint must be the new-session placeholder \"$new\" — a link between two existing sessions belongs on POST /links")
+			continue
+		}
+		counterpartID := l.GrantingSessionID
+		if grantingNew {
+			counterpartID = l.SubjectSessionID
+		}
+		if counterpartID == "" {
+			v.Add(field, "the non-placeholder endpoint must name an existing session")
+			continue
+		}
+		counterpart, err := s.data.Session(ctx, counterpartID)
+		if err != nil {
+			return err // not-found → 404 via writeError, before any session is created
+		}
+		// The store's worktreeConflict can't catch this for a staged link: it
+		// short-circuits on empty WorktreeDir, and the new session's
+		// WorktreeDir is only written by the child at boot — after link
+		// creation. Worktree paths are per-session (<root>/<sessionID>), so a
+		// fresh worktree in the counterpart's workspace is a guaranteed
+		// different-worktree pair. Same known gap as the store: an unspawned
+		// counterpart (empty WorktreeDir) isn't caught.
+		if sess.Isolation == contracts.IsolationWorktree && counterpart.Workspace != "" &&
+			counterpart.Workspace == sess.Workspace && counterpart.WorktreeDir != "" {
+			v.Add(field+".worktree", "sessions are isolated in different worktrees of the same workspace — linked sessions must not operate in different worktrees of the same repo")
+		}
+	}
+	if !v.Empty() {
+		return &v
+	}
+	return nil
+}
+
+// createStagedLinks substitutes the placeholder with the new session's ID
+// (into a copy — req.Links stays untouched for error reporting) and creates
+// each link through the Data Service, where all remaining validation lives.
+// Entries run sequentially; each create runs in its own tx and sees prior
+// rows, so cross-entry conflicts fail correctly on the later entry. Returns
+// the links created so far alongside any error, so the caller can roll them
+// back.
+func (s *server) createStagedLinks(ctx context.Context, sessionID string, reqs []contracts.LinkRequest) ([]contracts.Link, error) {
+	created := make([]contracts.Link, 0, len(reqs))
+	for _, lr := range reqs {
+		if lr.GrantingSessionID == contracts.NewSessionPlaceholder {
+			lr.GrantingSessionID = sessionID
+		}
+		if lr.SubjectSessionID == contracts.NewSessionPlaceholder {
+			lr.SubjectSessionID = sessionID
+		}
+		link, err := s.data.CreateLink(ctx, lr)
+		if err != nil {
+			return created, err
+		}
+		created = append(created, link)
+	}
+	return created, nil
+}
+
+// rollbackStagedCreate best-effort deletes the created links, then the
+// session, after a mid-create failure — session deletion deliberately does
+// not cascade to links (see contracts.Link), so skipping the links would
+// leave dangling rows that LinksForSession still returns. Uses a background
+// context: the records still need cleaning up even if the request that asked
+// for them is gone.
+func (s *server) rollbackStagedCreate(links []contracts.Link, sessionID string) {
+	ctx := context.Background()
+	for _, l := range links {
+		_ = s.data.DeleteLink(ctx, l.ID)
+	}
+	_ = s.data.DeleteSession(ctx, sessionID)
+}

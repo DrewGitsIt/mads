@@ -73,6 +73,30 @@ describe("ConversationHeader", () => {
     expect(screen.queryByText("Restart Agent")).toBeNull();
   });
 
+  it("renders the Chat/Terminal switch in the header and reports changes via onModeChange", () => {
+    const onModeChange = vi.fn();
+    render(
+      <ConversationHeader
+        session={fixtureSessions["session-active"]}
+        mode="chat"
+        onModeChange={onModeChange}
+      />,
+    );
+
+    const chat = screen.getByRole("button", { name: /^chat$/i });
+    const terminal = screen.getByRole("button", { name: /^terminal$/i });
+    expect(chat.getAttribute("aria-pressed")).toBe("true");
+    expect(terminal.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(terminal);
+    expect(onModeChange).toHaveBeenCalledWith("terminal");
+  });
+
+  it("omits the mode switch when no mode/onModeChange is supplied", () => {
+    render(<ConversationHeader session={fixtureSessions["session-active"]} />);
+    expect(screen.queryByRole("button", { name: /^terminal$/i })).toBeNull();
+  });
+
   it("renders the context meter when usage numbers are supplied", () => {
     render(
       <ConversationHeader

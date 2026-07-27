@@ -20,12 +20,6 @@
   overflow-y: auto;
 }
 
-.modeSwitch {
-  display: flex;
-  gap: var(--space-1);
-  padding: var(--space-2) var(--space-4) 0;
-}
-
 .terminal {
   flex: 1;
   min-height: 0;
