@@ -94,8 +94,8 @@ and am shipping it as this task's result rather than duplicating the work.
   consistent with existing behavior, but worth a second look if the data
   service ever distinguishes "sent but empty" from "field omitted."
 - This recovery: the stale `ui/src/library/agents/HANDOFF.md` placeholder
-  doc from the second architect pass is still present on this branch and
-  should be swept along with this file per the usual pre-merge HANDOFF
-  cleanup — it describes a design that was superseded before this commit.
+  doc from the second architect pass has been removed (a prior code-review
+  pass flagged it as contradicting the actual shipped design). This file
+  itself is still swept per the usual pre-merge HANDOFF cleanup.
 - `make check` (golangci-lint, `go test -race ./...`, `npm run lint`, `npm run
   test`) all pass locally. No Go files were touched.
