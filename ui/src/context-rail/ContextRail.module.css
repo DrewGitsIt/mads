@@ -32,12 +32,27 @@
 
 .tab,
 .tabActive {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   background: none;
   border: none;
   padding: var(--space-1) var(--space-2);
   font-size: var(--fs-sm);
   cursor: pointer;
   border-bottom: 2px solid transparent;
+}
+
+/* Touched-file count — tells the user there's something behind the tab. */
+.count {
+  min-width: 1.4em;
+  padding: 0 var(--space-1);
+  border-radius: 999px;
+  background: var(--bg3);
+  color: var(--text2);
+  font-size: var(--fs-chip);
+  line-height: 1.4;
+  text-align: center;
 }
 
 .tab {

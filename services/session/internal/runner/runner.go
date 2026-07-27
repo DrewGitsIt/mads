@@ -358,6 +358,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.watchRefAnnounce(ctx, provSess)
 
 	go r.pump(provSess)
+	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
 	return nil
 }
 
@@ -841,6 +842,37 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 	}()
 }
 
+// persistUsage writes usage as the session record's LastUsage — the context
+// meter's data source at wake time (ui/src/conversation/Header/
+// ContextMeter.tsx, before this process has seen a turn_end of its own) and
+// the resume-compaction trigger's input (compact.go's shouldCompactOnResume).
+// Called on every EventTurnEnd that carries usage, unlike persistProviderRef's
+// dedup-on-unchanged-value: usage legitimately changes turn to turn, so there
+// is nothing to skip. Best-effort: a failure here only means the meter/trigger
+// are stale for the next resume, never surfaced to the caller.
+func (r *Runner) persistUsage(ctx context.Context, usage *provider.Usage) {
+	if usage == nil {
+		return
+	}
+	r.recordMu.Lock()
+	defer r.recordMu.Unlock()
+	cur, err := r.data.Session(ctx, r.sessionID)
+	if err != nil {
+		log.Printf("runner: load session to persist usage: %v", err)
+		return
+	}
+	cur.LastUsage = &contracts.Usage{
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		Model:                    usage.Model,
+	}
+	if err := r.data.UpdateSession(ctx, &cur); err != nil {
+		log.Printf("runner: persist usage: %v", err)
+	}
+}
+
 // refLocateACPWindow bounds the SessionLocator backstop on ACP: the wire
 // announcement is the primary, near-instant path there (session.go's
 // system/init line fires at connect, before Send is ever called — the
@@ -1019,6 +1051,7 @@ func (r *Runner) pump(sess provider.Session) {
 		if ev.Kind == provider.EventTurnEnd {
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
+			r.persistUsage(context.Background(), ev.Usage)
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 			r.recordFileChange(ev.Tool.Path)
@@ -1079,6 +1112,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 				if ev.Kind == provider.EventTurnEnd {
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
+					r.persistUsage(context.Background(), ev.Usage)
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
 					r.recordFileChange(ev.Tool.Path)

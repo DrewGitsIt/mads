@@ -208,6 +208,18 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 	return s.write(append(line, '\n'))
 }
 
+// Compact implements provider.Compactor: sends the native "/compact" slash
+// command as an ordinary user turn over stdin. Verified empirically against
+// claude-code 2.1.220 (a throwaway -p --input-format stream-json probe) that
+// this actually triggers a real compaction pass — the CLI has no separate
+// "command" wire shape for slash commands, so the same Send path a normal
+// message uses is all this needs. Progress and outcome arrive as ordinary
+// "system"/"status" lines on the same Events() stream (see wire.go's
+// systemEvents), not via this call's return.
+func (s *streamSession) Compact(ctx context.Context) error {
+	return s.Send(ctx, "/compact")
+}
+
 // Interrupt asks the harness to stop the current response via a stream-json
 // control request; the turn still closes with its result line.
 func (s *streamSession) Interrupt(_ context.Context) error {

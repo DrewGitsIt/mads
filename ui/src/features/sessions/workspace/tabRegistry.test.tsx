@@ -51,7 +51,7 @@ describe("WORKSPACE_TABS", () => {
       />,
     );
     // Rail chrome (tab switcher) renders regardless of display mode.
-    await waitFor(() => expect(screen.getByText("Changes")).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy());
     // A fixture synthesis proposal card renders inside the rail.
     await waitFor(() =>
       expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy(),

@@ -11,6 +11,7 @@ import {
   WORKSPACE_SESSION_EVENT_TYPES,
 } from "../router/sessionEventTypes";
 import type {
+  CompactStatus,
   PermissionRequest,
   Session,
   StreamEvent,
@@ -22,6 +23,7 @@ import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
+import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
 import { useStreamPacer } from "./streaming/useStreamPacer";
 import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpeed";
@@ -125,6 +127,13 @@ export function ConversationTab({
   // the stream's turn_end frame (the only place usage is reported); undefined
   // until this session view sees a turn finish.
   const [lastUsage, setLastUsage] = useState<Usage>();
+  // Native compaction progress (Runner's resume-above-threshold trigger,
+  // services/session/internal/runner/compact.go) — surfaced explicitly since
+  // headless -p mode has no interactive "resume from summary" prompt.
+  // Cleared on session switch same as everything else reset in the mount
+  // effect below; not persisted, since it's meaningful only while this tab
+  // is watching the live stream.
+  const [compactStatus, setCompactStatus] = useState<CompactStatus>();
   // Interactive permission prompts (chat transport, TrustLimited/
   // TrustReadOnly — see providers/claudecode/README.md "Trust enforcement").
   // Keyed by request id so a live "permission_request" stream event
@@ -165,6 +174,8 @@ export function ConversationTab({
     setTurnBlocked(undefined);
     pacerReset();
     setPermissionRequests(new Map());
+    setLastUsage(undefined);
+    setCompactStatus(undefined);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
@@ -172,7 +183,13 @@ export function ConversationTab({
     void routerClient
       .getSession(sessionId)
       .then((s) => {
-        if (!cancelled) setSession(s);
+        if (!cancelled) {
+          setSession(s);
+          // Seeds the header meter from the session record's last-known
+          // usage at wake time — before this mount has seen a turn_end of
+          // its own (services/session/internal/runner's persistUsage).
+          if (s.last_usage) setLastUsage(s.last_usage);
+        }
       })
       .catch(() => {
         if (!cancelled) setLoadError(true);
@@ -416,6 +433,11 @@ export function ConversationTab({
       if (parsed.kind !== "permission_request") return;
       upsertPermissionRequest(parsed.permission);
     };
+    const onCompact = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "compact") return;
+      setCompactStatus(parsed.compact);
+    };
     const onTurnEnd = (ev: MessageEvent<string>) => {
       // turn_end carries this turn's usage — the only place it's reported, so
       // it feeds the header context meter.
@@ -459,6 +481,7 @@ export function ConversationTab({
     eventSource.addEventListener("tool_result", onToolResult);
     eventSource.addEventListener("permission_request", onPermissionRequest);
     eventSource.addEventListener("turn_end", onTurnEnd);
+    eventSource.addEventListener("compact", onCompact);
     eventSource.addEventListener("error", onError);
     return () => {
       eventSource.removeEventListener("text", onText);
@@ -466,6 +489,7 @@ export function ConversationTab({
       eventSource.removeEventListener("tool_result", onToolResult);
       eventSource.removeEventListener("permission_request", onPermissionRequest);
       eventSource.removeEventListener("turn_end", onTurnEnd);
+      eventSource.removeEventListener("compact", onCompact);
       eventSource.removeEventListener("error", onError);
     };
   }, [
@@ -628,14 +652,7 @@ export function ConversationTab({
     <div className={styles.tab}>
       <ConversationHeader
         session={session}
-        usedTokens={
-          lastUsage
-            ? lastUsage.input_tokens +
-              lastUsage.output_tokens +
-              (lastUsage.cache_read_input_tokens ?? 0) +
-              (lastUsage.cache_creation_input_tokens ?? 0)
-            : undefined
-        }
+        usage={lastUsage}
         contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
         mode={activeMode}
         onModeChange={(m) => void handleToggle(m)}
@@ -719,6 +736,7 @@ export function ConversationTab({
                   <span>Waking the agent…</span>
                 </div>
               )}
+              <CompactionStatus status={compactStatus} />
               <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}

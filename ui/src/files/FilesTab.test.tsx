@@ -39,6 +39,21 @@ describe("FilesTab", () => {
     expect(editor.getAttribute("data-original")).toBe("func ingest() {\n\ttime.Sleep(retryDelay)\n}\n");
   });
 
+  it("auto-selects the diff for focusPath (opened from the Context Rail)", async () => {
+    const client = new FakeRouterClient();
+    render(
+      <FilesTab
+        sessionId="session-files-clean"
+        routerClient={client}
+        focusPath="services/data/internal/ingest.go"
+      />,
+    );
+
+    // No click — the diff is shown because focusPath drove the selection.
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-original")).toBe("func ingest() {\n\ttime.Sleep(retryDelay)\n}\n");
+  });
+
   it("renders the merge-back flow's status chip", async () => {
     const client = new FakeRouterClient();
     render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
