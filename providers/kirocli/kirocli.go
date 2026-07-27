@@ -109,6 +109,25 @@ func (p *Provider) Matrix() provider.Matrix {
 	}
 }
 
+// IntentMatrix declares this provider's enforcement of the portable
+// permission intents (pkg/contracts.PermissionIntent). Unlike the
+// Behavior matrix's BehaviorTrustLimited/BehaviorTrustReadOnly rows
+// (Emulated — the ACP kind-based auto-deny in session.go, or a human's own
+// PTY confirmation), no intent here has a harness-level enforcement
+// mechanism: kiro-cli never reads StartOptions.PermissionPromptURL (no
+// require_approval wiring exists at all), has no command blocklist flag, no
+// path-scoped write restriction, and no flag that blocks writes/commands
+// outright. Every intent is declared unenforced honestly rather than
+// implying otherwise; this task does not add kiro-cli enforcement.
+func (p *Provider) IntentMatrix() provider.IntentMatrix {
+	return provider.IntentMatrix{
+		provider.IntentDenyCommands:    provider.Unsupported,
+		provider.IntentPathScope:       provider.Unsupported,
+		provider.IntentReadOnly:        provider.Unsupported,
+		provider.IntentRequireApproval: provider.Unsupported,
+	}
+}
+
 // Models runs `kiro-cli chat --list-models --format json` and parses the
 // result. A parse or exec failure is returned as an error, never masked by
 // a static fallback — see Config.Models.

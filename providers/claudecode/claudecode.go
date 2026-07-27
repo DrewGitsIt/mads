@@ -132,6 +132,21 @@ func (p *Provider) Matrix() provider.Matrix {
 	}
 }
 
+// IntentMatrix declares this provider's enforcement of the portable
+// permission intents (pkg/contracts.PermissionIntent): deny_commands and
+// read_only are native via trustArgs' --disallowedTools sets, and
+// require_approval is native via the permission.go PreToolUse hook.
+// path_scope has no equivalent claude flag — writes are never confined to a
+// specific path allowlist — so it's declared unenforced rather than implied.
+func (p *Provider) IntentMatrix() provider.IntentMatrix {
+	return provider.IntentMatrix{
+		provider.IntentDenyCommands:    provider.Native,
+		provider.IntentPathScope:       provider.Unsupported,
+		provider.IntentReadOnly:        provider.Native,
+		provider.IntentRequireApproval: provider.Native,
+	}
+}
+
 // trustArgs maps a trust level to the CLI flag(s) that enforce it. Limited
 // and ReadOnly use --disallowedTools to remove tools from claude's palette
 // entirely, so the interactive ask-first prompt they'd otherwise trigger

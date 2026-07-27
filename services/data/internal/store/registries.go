@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -28,6 +29,13 @@ type Registry[T any] struct {
 	system   func(*T) bool
 	times    func(*T) (created, updated *time.Time)
 	validate func(*T) *contracts.ValidationError
+
+	// refCheck validates cross-registry references the shape-only validate
+	// func can't see (e.g. an agent's capability names against the live
+	// capabilities table). Optional; runs inside the write transaction so it
+	// sees a consistent snapshot. Returning a *contracts.ValidationError
+	// surfaces as 422 with the offending names, matching validate's shape.
+	refCheck func(tx *Tx, e *T) error
 }
 
 // NewAgents returns the agent registry (spec §9).
@@ -57,7 +65,32 @@ func NewAgents(log *Log) *Registry[contracts.Agent] {
 			}
 			return &v
 		},
+		refCheck: checkAgentCapabilityRefs,
 	}
+}
+
+// checkAgentCapabilityRefs rejects any capabilities.skills or
+// capabilities.mcp_servers entry with no matching capabilities table row
+// (owner decision: agentgen — and manual edits — may only reference real
+// capabilities). Tools are provider tool names, not registry entries, and
+// are left out of this check entirely.
+func checkAgentCapabilityRefs(tx *Tx, a *contracts.Agent) error {
+	var unknown []string
+	for _, name := range append(append([]string{}, a.Capabilities.Skills...), a.Capabilities.MCPServers...) {
+		var n int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM capabilities WHERE name = ?", name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	v := &contracts.ValidationError{}
+	v.Add("capabilities", fmt.Sprintf("unknown capability reference(s): %s", strings.Join(unknown, ", ")))
+	return v
 }
 
 // NewCapabilities returns the capability registry (spec §12).
@@ -173,6 +206,11 @@ func (r *Registry[T]) Create(ctx context.Context, e *T, actor string) error {
 		if err := r.checkNameFree(tx, r.name(e), ""); err != nil {
 			return err
 		}
+		if r.refCheck != nil {
+			if err := r.refCheck(tx, e); err != nil {
+				return err
+			}
+		}
 		if *r.id(e) == "" {
 			*r.id(e) = NewID(r.prefix)
 		}
@@ -202,6 +240,11 @@ func (r *Registry[T]) Update(ctx context.Context, e *T, actor string) error {
 		}
 		if err := r.checkNameFree(tx, r.name(e), id); err != nil {
 			return err
+		}
+		if r.refCheck != nil {
+			if err := r.refCheck(tx, e); err != nil {
+				return err
+			}
 		}
 		created, updated := r.times(e)
 		if *created, err = time.Parse(time.RFC3339Nano, createdRaw); err != nil {

@@ -7,7 +7,6 @@ import { router } from "../../router/client";
 import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
-import type { Suggestion } from "./launchpad/useSuggestions";
 import { SessionRail } from "./rail/SessionRail";
 import { EMPTY_OPEN_TASK_BREAKDOWN, totalOpenTasks } from "./rail/railGroups";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
@@ -63,18 +62,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
   }
 
-  /** "Resume" opens the session as-is; "Pick up" opens it on the Tasks tab so the ready task is in view. Neither seeds composer text. */
-  function handleSuggestionPick(suggestion: Suggestion) {
-    setSelectedId(suggestion.sessionId);
-    setInitialTab(suggestion.kind === "pickup" ? "tasks" : undefined);
-    const target = sessions.find((s) => s.id === suggestion.sessionId);
-    if (target && target.activity !== "active") {
-      router.resumeSession(suggestion.sessionId).catch((err: unknown) => {
-        reportActionError("resume", suggestion.sessionId, err);
-      });
-    }
-  }
-
   return (
     <div className={styles.surface}>
       <aside className={styles.rail}>
@@ -97,6 +84,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onResume={(id) => {
               router.resumeSession(id).catch((err: unknown) => {
                 reportActionError("resume", id, err);
+              });
+            }}
+            onClose={(id) => {
+              router.closeSession(id).catch((err: unknown) => {
+                reportActionError("close", id, err);
               });
             }}
             onDelete={(id) => {
@@ -128,11 +120,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
           />
         ) : (
-          <Launchpad
-            createSession={createSession}
-            onSessionCreated={handleSessionCreated}
-            onSuggestionPick={handleSuggestionPick}
-          />
+          <Launchpad createSession={createSession} onSessionCreated={handleSessionCreated} />
         )}
         {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
         {actionError && (

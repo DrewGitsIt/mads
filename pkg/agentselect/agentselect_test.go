@@ -13,12 +13,26 @@ import (
 )
 
 // setup starts a real Data Service and a Selector against it (never a mock —
-// project convention).
+// project convention). It pre-registers every MCP capability name the tests
+// in this file reference, since agent create/update now rejects any
+// capabilities.mcp_servers entry absent from the capability registry.
 func setup(t *testing.T) (*agentselect.Selector, *dataclient.Client) {
 	t.Helper()
 	base := datatest.Start(t)
 	c := dataclient.New(base, "selector")
+	for _, name := range []string{"acme-tool", "shared-tool", "unique-tool"} {
+		mustCreateCapability(t, c, name)
+	}
 	return agentselect.New(c), c
+}
+
+func mustCreateCapability(t *testing.T, c *dataclient.Client, name string) contracts.Capability {
+	t.Helper()
+	cap := contracts.Capability{Name: name, Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}}
+	if err := c.CreateCapability(context.Background(), &cap); err != nil {
+		t.Fatalf("create capability %s: %v", name, err)
+	}
+	return cap
 }
 
 func mustCreateAgent(t *testing.T, c *dataclient.Client, a contracts.Agent) contracts.Agent {
