@@ -8,6 +8,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/providers/fake"
 )
 
 func TestGetSession(t *testing.T) {
@@ -252,5 +253,84 @@ func TestCreateSessionUnknownProviderNoOrphan(t *testing.T) {
 	afterList := decodeJSON[[]contracts.Session](t, after)
 	if len(afterList) != len(beforeList) {
 		t.Fatalf("session count changed %d -> %d: unknown-provider create left a record behind", len(beforeList), len(afterList))
+	}
+}
+
+// Interactive session-start's agent="auto" (owner decision, 2026-07-30) must
+// resolve to a concrete, registered agent — never persist the literal
+// "auto" — by routing through the same agentselect.BuildRequest +
+// autostaff.SelectOrGenerate machinery pipeline agent:auto stages use. Here
+// a shipped system agent (autonomous_executor quadrant) survives the
+// filters, so no generation is needed.
+func TestCreateSessionAgentAutoResolvesToRegisteredAgent(t *testing.T) {
+	srv := newTestServer(t)
+	setDefaultProvider(t, srv.URL, "fake")
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{
+		"name": "auto-agent", "provider": "fake", "agent": "auto",
+		"opening_prompt": "fix the login bug",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp)
+	if created.Session.Agent == "" || created.Session.Agent == "auto" {
+		t.Fatalf("agent = %q, want a concrete registered agent name", created.Session.Agent)
+	}
+
+	agentResp, err := http.Get(srv.URL + "/agents/" + created.Session.Agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("resolved agent %q not found: status %d", created.Session.Agent, agentResp.StatusCode)
+	}
+
+	// Persisted, not just echoed.
+	getResp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted := decodeJSON[contracts.Session](t, getResp)
+	if persisted.Agent != created.Session.Agent {
+		t.Errorf("persisted agent = %q, want %q", persisted.Agent, created.Session.Agent)
+	}
+}
+
+// No shipped agent survives the filters for this quadrant (mirrors
+// engine_test.go's TestAutoGeneratesAgentWhenNoCandidate), so agent="auto"
+// must fall through to on-demand generation — the exact fallback pipeline
+// agent:auto stages already relied on, now shared via pkg/autostaff.
+func TestCreateSessionAgentAutoGeneratesWhenNoCandidate(t *testing.T) {
+	srv, _ := newTestServerWithScenario(t, fake.Scenario{Name: "session-auto-generate", Rules: []fake.Rule{{
+		Match: "Generate an agent definition for this task",
+		Reply: `{"name":"session-investigator","description":"Generated for this session",` +
+			`"prompt":"You investigate things.","quadrant":"investigator","tags":[],` +
+			`"capabilities":{"tools":[],"mcp_servers":[],"skills":[]},"permissions":{}}`,
+	}}})
+	setDefaultProvider(t, srv.URL, "fake")
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{
+		"name": "auto-agent-generated", "provider": "fake", "agent": "auto",
+		"opening_prompt": "investigate something",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session contracts.Session `json:"session"`
+	}](t, resp)
+	if created.Session.Agent != "session-investigator" {
+		t.Errorf("agent = %q, want generated session-investigator", created.Session.Agent)
+	}
+
+	agentResp, err := http.Get(srv.URL + "/agents/session-investigator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentResp.StatusCode != http.StatusOK {
+		t.Fatalf("generated agent was never registered: status %d", agentResp.StatusCode)
 	}
 }

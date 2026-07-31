@@ -182,6 +182,9 @@ export function TaskDetailSheet({
   const [notes, setNotes] = useState<Note[]>(task.notes ?? []);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [suggestedCapabilities, setSuggestedCapabilities] = useState<string[] | null>(null);
   const runState = useGraphRunState(draft.session_id, pipelineClient);
   const reducedMotion = usePrefersReducedMotion();
 
@@ -194,6 +197,8 @@ export function TaskDetailSheet({
   useEffect(() => {
     setDraft(task);
     setNotes(task.notes ?? []);
+    setSuggestedCapabilities(null);
+    setSuggestError(null);
   }, [task]);
 
   function set<K extends keyof Task>(key: K, value: Task[K]) {
@@ -211,6 +216,33 @@ export function TaskDetailSheet({
     } finally {
       setSaving(false);
     }
+  }
+
+  async function handleSuggestCapabilities() {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const names = await routerClient.suggestTaskCapabilities(
+        draft.title,
+        draft.description ?? "",
+        workspace?.id,
+      );
+      const already = new Set([...inheritedCapabilities, ...(draft.required_capabilities ?? [])]);
+      setSuggestedCapabilities(names.filter((n) => !already.has(n)));
+    } catch (e) {
+      setSuggestError(e instanceof Error ? e.message : "Failed to suggest capabilities");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  function confirmSuggestedCapability(name: string) {
+    set("required_capabilities", [...(draft.required_capabilities ?? []), name]);
+    setSuggestedCapabilities((prev) => (prev ?? []).filter((n) => n !== name));
+  }
+
+  function clearSuggestedCapabilities() {
+    setSuggestedCapabilities(null);
   }
 
   async function handleConfirmNote(noteId: number) {
@@ -312,6 +344,34 @@ export function TaskDetailSheet({
             value={draft.required_capabilities ?? []}
             onChange={(names) => set("required_capabilities", names)}
           />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleSuggestCapabilities}
+            disabled={suggesting || !draft.title.trim()}
+          >
+            {suggesting ? "Suggesting…" : "Suggest capabilities"}
+          </Button>
+          {suggestError && <p className={styles.error}>{suggestError}</p>}
+          {suggestedCapabilities && suggestedCapabilities.length > 0 && (
+            <div className={styles.chips}>
+              {suggestedCapabilities.map((name) => (
+                <Chip
+                  key={name}
+                  tone="draft"
+                  onClick={() => confirmSuggestedCapability(name)}
+                >
+                  {name} — confirm
+                </Chip>
+              ))}
+              <Button variant="ghost" size="sm" onClick={clearSuggestedCapabilities}>
+                Clear
+              </Button>
+            </div>
+          )}
+          {suggestedCapabilities && suggestedCapabilities.length === 0 && (
+            <p className={styles.placeholder}>No additional capabilities suggested.</p>
+          )}
         </div>
 
         <div className={styles.field}>

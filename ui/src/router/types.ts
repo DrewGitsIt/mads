@@ -329,7 +329,11 @@ export interface LinkRequest {
 // session's slot in a staged LinkRequest on POST /sessions.
 export const NEW_SESSION_PLACEHOLDER = "$new";
 
-export type CreateSessionPayload = Partial<Session> & { links?: LinkRequest[] };
+export type CreateSessionPayload = Partial<Session> & {
+  links?: LinkRequest[];
+  /** Composer's full opening text — only consumed when agent="auto" (pkg/capinfer inference); never persisted on the Session record. */
+  opening_prompt?: string;
+};
 
 // mirrors providers/provider/event.go PermissionRequest — one parked
 // PreToolUse hook call awaiting an allow/deny decision (chat transport only,

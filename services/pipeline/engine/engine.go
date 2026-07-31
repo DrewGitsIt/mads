@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drewkidwell/mads/pkg/agentgen"
 	"github.com/drewkidwell/mads/pkg/agentselect"
+	"github.com/drewkidwell/mads/pkg/autostaff"
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
@@ -1005,50 +1005,29 @@ func (e *engine) runCommand(ctx context.Context, command, dir string) (string, e
 
 // resolveStageAgent resolves which agent runs st for task: an explicitly
 // named agent is exactly what the template froze at launch (resolveAgents).
-// "auto" instead routes through pkg/agentselect (capability filter, then
-// quadrant filter on Classify's keyword heuristics, then failure exclusion,
-// then track-record/recency ranking) for this specific task, logging the
-// decision as an agent.selected event regardless of outcome. When no
-// candidate survives, generation is automatic (owner decision: "that's what
-// auto means" — no confirmation step): a draft is generated from the task via
-// pkg/agentgen (registry-grounded — invented capability references are
-// dropped, never persisted), registered, and used for this stage. A
-// generation failure — including no FastModel configured at all — fails the
-// stage with a clear reason; it never silently falls back to a hardcoded
-// agent.
+// "auto" instead routes through pkg/agentselect.BuildRequest (populating the
+// Request from the task, including its RequiredCapabilities expanded
+// against the live registry) and pkg/autostaff.SelectOrGenerate — the same
+// shared population + staffing path interactive session-start agent auto
+// uses (owner decision, 2026-07-30: one implementation, two call sites).
+// SelectOrGenerate logs the decision as an agent.selected event regardless
+// of outcome, and falls back to on-demand generation via pkg/agentgen when
+// no candidate survives (registry-grounded — invented capability
+// references are dropped, never persisted). A generation failure —
+// including no FastModel configured at all — fails the stage with a clear
+// reason; it never silently falls back to a hardcoded agent.
 func (e *engine) resolveStageAgent(ctx context.Context, st template.Stage, task contracts.Task) (string, contracts.Agent, error) {
 	if st.Agent != "auto" {
 		return st.Agent, e.agents[st.Agent], nil
 	}
 
-	req := agentselect.Request{
-		TaskID: task.ID, SessionID: e.cfg.SessionID, Stage: st.Name,
-		Title: task.Title, Description: task.Description, Labels: task.Labels,
+	registry, err := e.cfg.Data.Capabilities(ctx)
+	if err != nil {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: list capabilities: %w", err)
 	}
-	sel, err := agentselect.New(e.cfg.Data).Select(ctx, req)
-	if err == nil {
-		agent, aerr := e.cfg.Data.Agent(ctx, sel.Agent)
-		if aerr != nil {
-			return "", contracts.Agent{}, fmt.Errorf("auto-select: fetch selected agent %q: %w", sel.Agent, aerr)
-		}
-		return sel.Agent, agent, nil
-	}
-	if !errors.Is(err, agentselect.ErrNoCandidates) {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: %w", err)
-	}
-
-	if e.cfg.FastModel == nil {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and no Fast Model is configured to generate one", task.Title)
-	}
-	res, gerr := agentgen.New(e.cfg.Data, e.cfg.FastModel).GenerateFromTask(ctx, req)
-	if gerr != nil {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and generation failed: %w", task.Title, gerr)
-	}
-	draft := res.Draft
-	if cerr := e.cfg.Data.CreateAgent(ctx, &draft); cerr != nil {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: register generated agent %q: %w", draft.Name, cerr)
-	}
-	return draft.Name, draft, nil
+	req := agentselect.BuildRequest(task.ID, e.cfg.SessionID, st.Name,
+		task.Title, task.Description, task.Labels, task.RequiredCapabilities, registry)
+	return autostaff.SelectOrGenerate(ctx, e.cfg.Data, e.cfg.FastModel, req)
 }
 
 func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
