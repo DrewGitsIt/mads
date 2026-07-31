@@ -36,6 +36,10 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{t: t, cwd: t.TempDir(), base: datatest.Start(t)}
 	h.data = dataclient.New(h.base, "pipeline")
+	ws := contracts.Workspace{Name: "test"}
+	if err := h.data.CreateWorkspace(context.Background(), &ws); err != nil {
+		t.Fatal(err)
+	}
 	h.sess = contracts.Session{Name: "engine run", Workspace: "test"}
 	if err := h.data.CreateSession(context.Background(), &h.sess); err != nil {
 		t.Fatal(err)
@@ -503,6 +507,119 @@ func TestAutoGenerationFailureBlocksStage(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("blocked task notes lack a generation-failure reason: %+v", blocked.Notes)
+	}
+}
+
+// A task's RequiredCapabilities and its workspace's Capabilities both feed
+// auto-select's hard capability filter (their union, per
+// agentselect.EffectiveCapabilities): an agent missing either is eliminated,
+// and the logged agent.selected event names the missing capability so a
+// user learns what to add to which agent.
+func TestAutoSelectPopulatesEffectiveCapabilities(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	for _, name := range []string{"ws-cap", "task-cap"} {
+		cap := contracts.Capability{Name: name, Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}}
+		if err := h.data.CreateCapability(ctx, &cap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, err := h.data.Workspace(ctx, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws.Capabilities = []string{"ws-cap"}
+	if err := h.data.UpdateWorkspace(ctx, &ws); err != nil {
+		t.Fatal(err)
+	}
+
+	// under-declares: has task-cap, lacks the workspace-level ws-cap.
+	if err := h.data.CreateAgent(ctx, &contracts.Agent{
+		Name: "under-declared", Prompt: "p", Quadrant: contracts.QuadrantInvestigator,
+		Capabilities: contracts.AgentCapabilities{MCPServers: []string{"task-cap"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.data.CreateAgent(ctx, &contracts.Agent{
+		Name: "fully-declared", Prompt: "p", Quadrant: contracts.QuadrantInvestigator,
+		Capabilities: contracts.AgentCapabilities{MCPServers: []string{"ws-cap", "task-cap"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "auto-select-caps", Rules: []fake.Rule{
+		{Match: "Pipeline stage: impl", Reply: "done"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := "name: solo\nstages:\n  - name: impl\n    agent: auto\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something", RequiredCapabilities: []string{"task-cap"}})
+	sum := h.run(t, f, tpl, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+
+	sels := h.events(t, "agent.selected")
+	if len(sels) != 1 {
+		t.Fatalf("agent.selected: %+v", sels)
+	}
+	if !strings.Contains(string(sels[0].Payload), `"agent":"fully-declared"`) {
+		t.Errorf("expected fully-declared to win, got %s", sels[0].Payload)
+	}
+	if !strings.Contains(string(sels[0].Payload), `"eliminated":"capability (missing ws-cap)"`) {
+		t.Errorf("expected under-declared eliminated naming ws-cap, got %s", sels[0].Payload)
+	}
+}
+
+// When every registry agent is eliminated by the capability filter and no
+// Fast Model is configured to generate a replacement, the blocked task's
+// note names the missing capability instead of a bare failure.
+func TestAutoSelectNoCandidateNamesMissingCapability(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	cap := contracts.Capability{Name: "playwright", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}}
+	if err := h.data.CreateCapability(ctx, &cap); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.data.CreateAgent(ctx, &contracts.Agent{
+		Name: "no-playwright", Prompt: "p", Quadrant: contracts.QuadrantInvestigator,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	src := "name: solo\nstages:\n  - name: impl\n    agent: auto\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "investigate something", RequiredCapabilities: []string{"playwright"}})
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Blocked) != 1 || sum.Blocked[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	blocked := h.task(t, seeded[0].ID)
+	var found bool
+	for _, n := range blocked.Notes {
+		if n.Type == contracts.NoteBlocker && strings.Contains(n.Content, "missing playwright") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("blocked task notes lack a missing-capability reason: %+v", blocked.Notes)
 	}
 }
 

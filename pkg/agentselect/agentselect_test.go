@@ -78,8 +78,66 @@ func TestSelectCapabilityFilter(t *testing.T) {
 
 	got, _ := sel.Select(ctx, req)
 	for _, cb := range got.Candidates {
-		if cb.Agent == "candidate-a" && cb.Eliminated != "capability" {
-			t.Fatalf("candidate-a: got eliminated=%q, want capability", cb.Eliminated)
+		if cb.Agent == "candidate-a" && cb.Eliminated != "capability (missing acme-tool)" {
+			t.Fatalf("candidate-a: got eliminated=%q, want capability (missing acme-tool)", cb.Eliminated)
+		}
+	}
+}
+
+// TestSelectExtraneousCapabilities proves the least-extraneous-capabilities
+// tier actually decides an outcome — placed ahead of track record, so an
+// established kitchen-sink generalist's history can't outrank a leaner,
+// equally-relevant candidate (owner's explicit condition for accepting
+// additive-only capability composition).
+func TestSelectExtraneousCapabilities(t *testing.T) {
+	sel, c := setup(t)
+	ctx := context.Background()
+
+	// candidate-lean declares only the required capability.
+	mustCreateAgent(t, c, contracts.Agent{
+		Name: "candidate-lean", Prompt: "p", Quadrant: contracts.QuadrantAutonomousExecutor,
+		Tags:         []string{"payment"},
+		Capabilities: contracts.AgentCapabilities{MCPServers: acmeMCP},
+	})
+	// candidate-kitchen-sink declares the required capability plus two extras,
+	// and has a perfect track record — which must NOT be enough to win.
+	mustCreateAgent(t, c, contracts.Agent{
+		Name: "candidate-kitchen-sink", Prompt: "p", Quadrant: contracts.QuadrantAutonomousExecutor,
+		Tags:         []string{"payment"},
+		Capabilities: contracts.AgentCapabilities{MCPServers: []string{"acme-tool", "shared-tool", "unique-tool"}},
+	})
+
+	labels := []string{"payment"}
+	for _, ok := range []bool{true, true, true} {
+		if err := sel.RecordOutcome(ctx, "tsk_history", "", "s", "candidate-kitchen-sink", labels, ok); err != nil {
+			t.Fatalf("seed kitchen-sink: %v", err)
+		}
+	}
+
+	req := agentselect.Request{
+		TaskID: "tsk_new", Title: "Implement the payment retry logic",
+		Labels:             labels,
+		RequiredMCPServers: acmeMCP,
+	}
+
+	got, err := sel.Select(ctx, req)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if got.Agent != "candidate-lean" {
+		t.Fatalf("got %q, want candidate-lean (fewer extraneous capabilities beats a better track record)", got.Agent)
+	}
+
+	for _, cb := range got.Candidates {
+		switch cb.Agent {
+		case "candidate-lean":
+			if cb.Extraneous != 0 {
+				t.Fatalf("candidate-lean Extraneous = %d, want 0", cb.Extraneous)
+			}
+		case "candidate-kitchen-sink":
+			if cb.Extraneous != 2 {
+				t.Fatalf("candidate-kitchen-sink Extraneous = %d, want 2", cb.Extraneous)
+			}
 		}
 	}
 }
@@ -303,12 +361,14 @@ func TestSelectRecencyTiebreak(t *testing.T) {
 	sel, c := setup(t)
 	ctx := context.Background()
 
-	// candidate-recent additionally declares "unique-tool" so a throwaway
-	// request can single it out; the real comparison only requires
-	// "shared-tool", which both candidates (and no system agent) declare.
+	// candidate-recent additionally declares a "widget" tag so a throwaway
+	// request can single it out via label affinity; both candidates declare
+	// the identical capability set ("shared-tool" only), so they also tie on
+	// extraneous-capability count — recency is the only tier left to decide.
 	mustCreateAgent(t, c, contracts.Agent{
 		Name: "candidate-recent", Prompt: "p", Quadrant: contracts.QuadrantAutonomousExecutor,
-		Capabilities: contracts.AgentCapabilities{MCPServers: []string{"shared-tool", "unique-tool"}},
+		Tags:         []string{"widget"},
+		Capabilities: contracts.AgentCapabilities{MCPServers: []string{"shared-tool"}},
 	})
 	mustCreateAgent(t, c, contracts.Agent{
 		Name: "candidate-never", Prompt: "p", Quadrant: contracts.QuadrantAutonomousExecutor,
@@ -317,14 +377,16 @@ func TestSelectRecencyTiebreak(t *testing.T) {
 
 	throwaway := agentselect.Request{
 		TaskID: "tsk_throwaway", Title: "Implement the widget feature",
-		RequiredMCPServers: []string{"unique-tool"},
+		Labels:             []string{"widget"},
+		RequiredMCPServers: []string{"shared-tool"},
 	}
 	if got, err := sel.Select(ctx, throwaway); err != nil || got.Agent != "candidate-recent" {
 		t.Fatalf("throwaway select: %+v, %v", got, err)
 	}
 
-	// Head-to-head: tied on label affinity (both zero) and track record
-	// (both cold-start, 0.5) — recency must decide.
+	// Head-to-head: tied on label affinity (both zero), extraneous count
+	// (both zero), and track record (both cold-start, 0.5) — recency must
+	// decide.
 	req := agentselect.Request{
 		TaskID: "tsk_real", Title: "Implement the reporting export",
 		RequiredMCPServers: []string{"shared-tool"},

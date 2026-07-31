@@ -1021,9 +1021,15 @@ func (e *engine) resolveStageAgent(ctx context.Context, st template.Stage, task 
 		return st.Agent, e.agents[st.Agent], nil
 	}
 
+	tools, mcpServers, skills, capErr := e.effectiveCapabilities(ctx, task)
+	if capErr != nil {
+		return "", contracts.Agent{}, fmt.Errorf("auto-select: %w", capErr)
+	}
+
 	req := agentselect.Request{
 		TaskID: task.ID, SessionID: e.cfg.SessionID, Stage: st.Name,
 		Title: task.Title, Description: task.Description, Labels: task.Labels,
+		RequiredTools: tools, RequiredMCPServers: mcpServers, RequiredSkills: skills,
 	}
 	sel, err := agentselect.New(e.cfg.Data).Select(ctx, req)
 	if err == nil {
@@ -1036,19 +1042,73 @@ func (e *engine) resolveStageAgent(ctx context.Context, st template.Stage, task 
 	if !errors.Is(err, agentselect.ErrNoCandidates) {
 		return "", contracts.Agent{}, fmt.Errorf("auto-select: %w", err)
 	}
+	detail := describeElimination(sel)
 
 	if e.cfg.FastModel == nil {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and no Fast Model is configured to generate one", task.Title)
+		reason := fmt.Sprintf("auto-select: no candidate agent for task %q, and no Fast Model is configured to generate one", task.Title)
+		if detail != "" {
+			reason += " (" + detail + ")"
+		}
+		return "", contracts.Agent{}, errors.New(reason)
 	}
 	res, gerr := agentgen.New(e.cfg.Data, e.cfg.FastModel).GenerateFromTask(ctx, req)
 	if gerr != nil {
-		return "", contracts.Agent{}, fmt.Errorf("auto-select: no candidate agent for task %q, and generation failed: %w", task.Title, gerr)
+		reason := fmt.Errorf("auto-select: no candidate agent for task %q, and generation failed: %w", task.Title, gerr)
+		if detail != "" {
+			return "", contracts.Agent{}, fmt.Errorf("%w (%s)", reason, detail)
+		}
+		return "", contracts.Agent{}, reason
 	}
 	draft := res.Draft
 	if cerr := e.cfg.Data.CreateAgent(ctx, &draft); cerr != nil {
 		return "", contracts.Agent{}, fmt.Errorf("auto-select: register generated agent %q: %w", draft.Name, cerr)
 	}
 	return draft.Name, draft, nil
+}
+
+// effectiveCapabilities resolves task's effective required capabilities —
+// the task+workspace union (agentselect.EffectiveCapabilities) expanded
+// against the live capability registry (agentselect.ExpandCapabilities) —
+// into the Tools/MCPServers/Skills slices a Request needs so auto-select
+// treats declared requirements as a hard filter (spec §9), not merely a
+// ranking signal.
+func (e *engine) effectiveCapabilities(ctx context.Context, task contracts.Task) (tools, mcpServers, skills []string, err error) {
+	sess, err := e.cfg.Data.Session(ctx, e.cfg.SessionID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch session %q: %w", e.cfg.SessionID, err)
+	}
+	var workspace contracts.Workspace
+	if sess.Workspace != "" {
+		workspace, err = e.cfg.Data.Workspace(ctx, sess.Workspace)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("fetch workspace %q: %w", sess.Workspace, err)
+		}
+	}
+	registry, err := e.cfg.Data.Capabilities(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch capability registry: %w", err)
+	}
+	names := agentselect.EffectiveCapabilities(task, workspace)
+	tools, mcpServers, skills = agentselect.ExpandCapabilities(names, registry)
+	return tools, mcpServers, skills, nil
+}
+
+// describeElimination renders the missing-capability detail from every
+// "capability"-eliminated candidate in sel, so a "no candidate" stage
+// failure names what to add to which agent instead of a bare failure
+// (spec §9). Returns "" when nothing was eliminated for a capability
+// reason (e.g. every candidate failed on quadrant or prior failure alone).
+func describeElimination(sel agentselect.Selection) string {
+	var reasons []string
+	for _, cb := range sel.Candidates {
+		if strings.HasPrefix(cb.Eliminated, "capability") {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", cb.Agent, cb.Eliminated))
+		}
+	}
+	if len(reasons) == 0 {
+		return ""
+	}
+	return strings.Join(reasons, "; ")
 }
 
 func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {

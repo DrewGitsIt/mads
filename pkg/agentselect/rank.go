@@ -38,6 +38,20 @@ func (LexicalScorer) LabelAffinity(req Request, agent contracts.Agent) int {
 	return count
 }
 
+// extraneousCount is how many capabilities agent declares beyond req's
+// effective required set, summed across tools/MCP servers/skills (declared
+// minus effective-required, per spec §9's "least-extraneous" ranking
+// criterion — owner decision: additive-only capability composition is only
+// acceptable if leaner agents are actually favored over kitchen-sink
+// generalists, not just filtered in alongside them). Every candidate reaching
+// this point already passed the capability filter, so each per-slice
+// difference is non-negative.
+func extraneousCount(req Request, agent contracts.Agent) int {
+	return (len(agent.Capabilities.Tools) - len(req.RequiredTools)) +
+		(len(agent.Capabilities.MCPServers) - len(req.RequiredMCPServers)) +
+		(len(agent.Capabilities.Skills) - len(req.RequiredSkills))
+}
+
 func tokenSet(parts []string) map[string]struct{} {
 	set := make(map[string]struct{})
 	for _, p := range parts {
@@ -146,17 +160,26 @@ func (s *Selector) recency(ctx context.Context) (map[string]time.Time, error) {
 }
 
 // rankCandidates sorts surviving agents by the deterministic tiers (spec
-// §9): label affinity, then track record, then recency, all descending,
-// with alphabetical agent name as the final tiebreak. Every field the
-// comparator reads lives on ScoreBreakdown itself, never re-indexed from a
-// parallel slice — sorting permutes positions, so indexing back into
-// another slice inside the comparator would reintroduce a classic
-// index-after-swap bug.
+// §9): label affinity, then extraneous-capability count (fewer wins —
+// deliberately placed second, ahead of track record and recency, so an
+// established kitchen-sink generalist's history can't outrank a leaner
+// candidate that's equally relevant; the owner's explicit condition for
+// accepting additive-only capability composition was that leanness actually
+// decides among relevant candidates, not that it merely breaks ties nobody
+// reaches), then track record, then recency, all descending except
+// extraneous count (ascending), with alphabetical agent name as the final
+// tiebreak. Every field the comparator reads lives on ScoreBreakdown itself,
+// never re-indexed from a parallel slice — sorting permutes positions, so
+// indexing back into another slice inside the comparator would reintroduce a
+// classic index-after-swap bug.
 func rankCandidates(scored []ScoreBreakdown) {
 	sort.SliceStable(scored, func(i, j int) bool {
 		a, b := scored[i], scored[j]
 		if a.LabelAffinity != b.LabelAffinity {
 			return a.LabelAffinity > b.LabelAffinity
+		}
+		if a.Extraneous != b.Extraneous {
+			return a.Extraneous < b.Extraneous
 		}
 		if a.TrackRecord != b.TrackRecord {
 			return a.TrackRecord > b.TrackRecord
