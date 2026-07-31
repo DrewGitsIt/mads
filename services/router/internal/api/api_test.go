@@ -25,12 +25,18 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
+	gokeyring "github.com/zalando/go-keyring"
 )
 
 var testChildBin string
 var sessionBin string
 
 func TestMain(m *testing.M) {
+	// credstore.Set needs a data key from the OS keyring; run every test in
+	// this binary against an in-memory mock so the suite passes without a
+	// real Secret Service/D-Bus session (CI, containers).
+	gokeyring.MockInit()
+
 	dir, err := os.MkdirTemp("", "mads-router-api-test")
 	if err != nil {
 		panic(err)
