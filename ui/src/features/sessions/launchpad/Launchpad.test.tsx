@@ -88,6 +88,75 @@ describe("Launchpad", () => {
     );
   });
 
+  it("selecting Auto sends agent: 'auto' plus the composer's opening_prompt", async () => {
+    const session = makeSession({ id: "s44", agent: "investigator-bot" });
+    const createSession = vi.fn().mockResolvedValue(session);
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Auto"));
+    expect(screen.getByText("Auto")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), {
+      target: { value: "Investigate the flaky login test" },
+    });
+    fireEvent.click(screen.getByText("Start session"));
+
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "auto",
+          opening_prompt: "Investigate the flaky login test",
+        }),
+      ),
+    );
+  });
+
+  it("does not send opening_prompt for an explicitly chosen agent", async () => {
+    const session = makeSession({ id: "s45" });
+    const createSession = vi.fn().mockResolvedValue(session);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.includes("/agents")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify([
+                {
+                  id: "ag1",
+                  name: "backend-architect",
+                  prompt: "…",
+                  created_at: "2026-07-01T00:00:00Z",
+                  updated_at: "2026-07-01T00:00:00Z",
+                },
+              ]),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
+
+    fireEvent.click(screen.getByText("Select agent"));
+    await waitFor(() => expect(screen.getByText("backend-architect")).toBeTruthy());
+    fireEvent.click(screen.getByText("backend-architect"));
+
+    fireEvent.change(screen.getByLabelText("Describe your goal"), {
+      target: { value: "Fix the deploy script" },
+    });
+    fireEvent.click(screen.getByText("Start session"));
+
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agent: "backend-architect" }),
+      ),
+    );
+    expect(createSession.mock.calls[0][0].opening_prompt).toBeUndefined();
+  });
+
   it("stores the full first line, uncut, for a long first message", async () => {
     const longLine = "The deploy script fails on the new Ubuntu runners".repeat(3);
     const session = makeSession({ id: "s43", name: longLine });

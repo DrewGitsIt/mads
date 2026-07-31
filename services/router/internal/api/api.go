@@ -147,6 +147,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /retros/{id}/dpas/{dpaId}/reject", s.handleRejectDPA)
 	mux.HandleFunc("POST /tasks", s.handleCreateTask)
 	mux.HandleFunc("POST /tasks/import", s.handleImportTasks)
+	mux.HandleFunc("POST /tasks/suggest-capabilities", s.handleSuggestTaskCapabilities)
 	mux.HandleFunc("GET /tasks", s.handleListTasks)
 	mux.HandleFunc("GET /tasks/cycles", s.handleTaskCycles)
 	mux.HandleFunc("GET /tasks/{id}", s.handleGetTask)

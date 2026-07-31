@@ -8,9 +8,11 @@ export interface AgentPillProps {
   value?: string;
   resolved?: ResolvedSessionField;
   onChange: (agent: Agent) => void;
+  /** Selects capability-inferred staffing (pkg/capinfer + pkg/autostaff) instead of a fixed agent — resolved server-side from the composer's opening prompt when the session is created. */
+  onAuto: () => void;
 }
 
-export function AgentPill({ value, resolved, onChange }: AgentPillProps) {
+export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps) {
   const [open, setOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
 
@@ -21,7 +23,10 @@ export function AgentPill({ value, resolved, onChange }: AgentPillProps) {
       .catch(() => setAgents([]));
   }, []);
 
-  const triggerLabel = value ?? (resolved?.value ? `${resolved.value} (default)` : "Select agent");
+  const triggerLabel =
+    value === "auto"
+      ? "Auto"
+      : (value ?? (resolved?.value ? `${resolved.value} (default)` : "Select agent"));
 
   return (
     <Popover
@@ -38,6 +43,18 @@ export function AgentPill({ value, resolved, onChange }: AgentPillProps) {
       }
     >
       <div className={pillStyles.menu}>
+        <button
+          type="button"
+          className={[pillStyles.option, value === "auto" ? pillStyles.optionSelected : ""]
+            .filter(Boolean)
+            .join(" ")}
+          onClick={() => {
+            onAuto();
+            setOpen(false);
+          }}
+        >
+          Auto
+        </button>
         {agents.length === 0 && <div className={pillStyles.groupLabel}>No agents yet</div>}
         {agents.map((agent) => (
           <button

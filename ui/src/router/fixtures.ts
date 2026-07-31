@@ -972,6 +972,13 @@ export class FakeRouterClient implements RouterClient {
     return Promise.all(tasks.map((t) => this.createTask(t)));
   }
 
+  /** Tests set this to control what the next suggestTaskCapabilities call returns; defaults to none suggested. */
+  suggestedCapabilities: string[] = [];
+
+  async suggestTaskCapabilities(): Promise<string[]> {
+    return this.suggestedCapabilities;
+  }
+
   async taskCycles(sessionId: string): Promise<string[][]> {
     const bySession = [...this.tasks.values()].filter((t) => t.session_id === sessionId);
     const ids = new Set(bySession.map((t) => t.id));

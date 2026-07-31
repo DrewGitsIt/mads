@@ -27,6 +27,11 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		// child's first turn (setupOrchestrate reads LinksForSession at boot).
 		// Either endpoint may be contracts.NewSessionPlaceholder.
 		Links []contracts.LinkRequest `json:"links,omitempty"`
+		// OpeningPrompt is the composer's full text, sent only so agent="auto"
+		// (see resolveAutoAgent) has free text to infer from — the session
+		// record itself never persists it; Session.Name only ever carries the
+		// first line (see Launchpad's deriveSessionName).
+		OpeningPrompt string `json:"opening_prompt,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -49,6 +54,12 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	if err := s.resolveSessionDefaults(r.Context(), sess); err != nil {
 		writeError(w, err)
 		return
+	}
+	if sess.Agent == "auto" {
+		if err := s.resolveAutoAgent(r.Context(), sess, req.OpeningPrompt); err != nil {
+			writeErrMsg(w, http.StatusBadGateway, "create session: resolve auto agent: ", err)
+			return
+		}
 	}
 	if _, err := s.providers.Get(sess.Provider); err != nil {
 		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
