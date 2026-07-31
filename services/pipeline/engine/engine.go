@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,7 +22,9 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/agentgen"
 	"github.com/drewkidwell/mads/pkg/agentselect"
+	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/procid"
@@ -195,6 +198,17 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 	if own, ok := procid.Current(procid.Default); ok {
 		e.identity = own
 	}
+	if cfg.MadsHome != "" {
+		e.mcpRegistry = capability.NewRegistry(filepath.Join(cfg.MadsHome, "mcp"))
+		// A credstore failure degrades to "no credential env for mounted MCP
+		// servers", not a fatal error — same best-effort philosophy as
+		// services/session/main.go's identical open.
+		if cs, err := credstore.Open(filepath.Join(cfg.MadsHome, "credentials.json")); err != nil {
+			log.Printf("pipeline: open credential store: %v (mounted MCP servers get no credential env)", err)
+		} else {
+			e.credStore = cs
+		}
+	}
 	if cfg.Isolated {
 		if cfg.WorktreeRoot == "" {
 			return nil, errors.New("isolated runs require WorktreeRoot")
@@ -264,6 +278,14 @@ type engine struct {
 	wt       *worktrees              // nil unless Isolated
 	identity contracts.LeaseIdentity // this engine's own process identity (reap-on-launch); zero value if unavailable
 	clock    Clock                   // wall-clock source; never nil after Run's defaulting
+
+	// mcpRegistry/credStore back session-time capability mounting (scoped
+	// context assembly). Both are nil unless cfg.MadsHome is set — mounting
+	// then degrades to a no-op (skill install/MCP start skipped, decision
+	// still computed and logged), the same best-effort philosophy as
+	// services/session/internal/runner's nil-safe CredStore/MCPRegistry.
+	mcpRegistry *capability.Registry
+	credStore   *credstore.Store
 
 	mu     sync.Mutex
 	loops  map[string]int // task|stage → loop-backs taken
@@ -1093,6 +1115,111 @@ func (e *engine) effectiveCapabilities(ctx context.Context, task contracts.Task)
 	return tools, mcpServers, skills, nil
 }
 
+// scopedCapabilities computes which of agent's declared MCP servers and
+// skills a stage session should mount: the task's effective capability set
+// (task+workspace required capabilities) intersected with what the agent
+// declares — never more than the agent declared. An empty effective set (no
+// task/workspace capability requirements on this task) mounts the agent's
+// full declaration unchanged: scoped is false and nothing is skipped,
+// matching behavior from before this scoping existed.
+//
+// System/baseline capabilities that every session needs are never scoped
+// out — but no such marker exists on contracts.Capability today
+// (Capability.System is a registry lifecycle flag, "ships with mads;
+// editable but not deletable" §12, unrelated to session-time mounting), so
+// there is nothing to exempt yet. This is where that exemption belongs if
+// one is introduced later.
+//
+// Best-effort: a Data Service error falls back to the full agent
+// declaration (scoped=false) rather than failing the stage, since scoping
+// is an optimization, not a correctness requirement.
+func (e *engine) scopedCapabilities(ctx context.Context, task contracts.Task, agent contracts.Agent) (mountedMCP, skippedMCP, mountedSkills, skippedSkills []string, scoped bool) {
+	full := func() (mountedMCP, skippedMCP, mountedSkills, skippedSkills []string, scoped bool) {
+		return agent.Capabilities.MCPServers, nil, agent.Capabilities.Skills, nil, false
+	}
+	sess, err := e.cfg.Data.Session(ctx, e.cfg.SessionID)
+	if err != nil {
+		log.Printf("pipeline: scope capabilities: fetch session %q: %v (mounting full agent declaration)", e.cfg.SessionID, err)
+		return full()
+	}
+	var workspace contracts.Workspace
+	if sess.Workspace != "" {
+		workspace, err = e.cfg.Data.Workspace(ctx, sess.Workspace)
+		if err != nil {
+			log.Printf("pipeline: scope capabilities: fetch workspace %q: %v (mounting full agent declaration)", sess.Workspace, err)
+			return full()
+		}
+	}
+	names := agentselect.EffectiveCapabilities(task, workspace)
+	if len(names) == 0 {
+		return full()
+	}
+	effective := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		effective[n] = struct{}{}
+	}
+	mountedMCP, skippedMCP = intersectCapabilities(agent.Capabilities.MCPServers, effective)
+	mountedSkills, skippedSkills = intersectCapabilities(agent.Capabilities.Skills, effective)
+	return mountedMCP, skippedMCP, mountedSkills, skippedSkills, true
+}
+
+// intersectCapabilities splits declared into what's in the effective set
+// (mounted) and what isn't (skipped), preserving declared's order.
+func intersectCapabilities(declared []string, effective map[string]struct{}) (mounted, skipped []string) {
+	for _, name := range declared {
+		if _, ok := effective[name]; ok {
+			mounted = append(mounted, name)
+		} else {
+			skipped = append(skipped, name)
+		}
+	}
+	return mounted, skipped
+}
+
+// mountCapabilities installs the mounted skills and starts the mounted MCP
+// servers for one stage session (spec §12.4's availability/injection split:
+// this is session-time mounting, not a rewrite of provider agent config
+// files), then logs the mount/skip decision so a "tool missing" report is
+// diagnosable as scoping vs agent declaration vs health. Best-effort
+// throughout — a capability that fails to resolve, install, or start is
+// logged and the stage proceeds; mounting never fails the stage itself.
+func (e *engine) mountCapabilities(ctx context.Context, task contracts.Task, stage string, mountedMCP, skippedMCP, mountedSkills, skippedSkills []string, dir string, scoped bool) {
+	for _, name := range mountedSkills {
+		c, err := e.cfg.Data.Capability(ctx, name)
+		if err != nil {
+			log.Printf("pipeline: mount skill %q: %v", name, err)
+			continue
+		}
+		if err := capability.InstallSkill(c, dir); err != nil {
+			log.Printf("pipeline: install skill %q: %v", name, err)
+		}
+	}
+	if e.mcpRegistry != nil {
+		for _, name := range mountedMCP {
+			c, err := e.cfg.Data.Capability(ctx, name)
+			if err != nil {
+				log.Printf("pipeline: mount mcp %q: %v", name, err)
+				continue
+			}
+			var env []string
+			if e.credStore != nil {
+				env, _ = e.credStore.ResolveEnv(c.CredentialEnvVars)
+			}
+			if _, err := e.mcpRegistry.EnsureStarted(ctx, c, env); err != nil {
+				log.Printf("pipeline: start mcp %q: %v", name, err)
+			}
+		}
+	}
+	e.event(ctx, contracts.StageCapabilitiesMounted, task.ID, map[string]any{
+		"stage":               stage,
+		"scoped":              scoped,
+		"mounted_mcp_servers": mountedMCP,
+		"skipped_mcp_servers": skippedMCP,
+		"mounted_skills":      mountedSkills,
+		"skipped_skills":      skippedSkills,
+	})
+}
+
 // describeElimination renders the missing-capability detail from every
 // "capability"-eliminated candidate in sel, so a "no candidate" stage
 // failure names what to add to which agent instead of a bare failure
@@ -1116,6 +1243,10 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 	if err != nil {
 		return err.Error(), err
 	}
+
+	mountedMCP, skippedMCP, mountedSkills, skippedSkills, scoped := e.scopedCapabilities(ctx, task, agent)
+	e.mountCapabilities(ctx, task, st.Name, mountedMCP, skippedMCP, mountedSkills, skippedSkills, dir, scoped)
+
 	model := e.cfg.Model
 	if model == "" {
 		model = st.Model

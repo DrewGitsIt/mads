@@ -641,3 +641,124 @@ func TestExplicitAgentBypassesAutoSelect(t *testing.T) {
 		t.Errorf("agent.selected should not fire for an explicit agent: %+v", sels)
 	}
 }
+
+// An annotated task (non-empty effective capability set) mounts exactly the
+// intersection of what it requires and what the stage's agent declares —
+// never more than the agent declared — and logs the mount/skip decision.
+func TestScopedCapabilitiesMountsIntersection(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []contracts.Capability{
+		{Name: "mcp-in", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}},
+		{Name: "mcp-out", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}},
+		{Name: "skill-in", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: h.cwd}},
+		{Name: "skill-out", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: h.cwd}},
+	} {
+		if err := h.data.CreateCapability(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.data.CreateAgent(ctx, &contracts.Agent{
+		Name: "scoped-agent", Prompt: "p", Quadrant: contracts.QuadrantInvestigator,
+		Capabilities: contracts.AgentCapabilities{
+			MCPServers: []string{"mcp-in", "mcp-out"},
+			Skills:     []string{"skill-in", "skill-out"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "scoped-mount", Rules: []fake.Rule{
+		{Match: "Pipeline stage: executor", Reply: "done"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := "name: solo\nstages:\n  - name: executor\n    agent: scoped-agent\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "annotated", RequiredCapabilities: []string{"mcp-in", "skill-in"}})
+	sum := h.run(t, f, tpl, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+
+	mounts := h.events(t, "stage.capabilities_mounted")
+	if len(mounts) != 1 {
+		t.Fatalf("stage.capabilities_mounted: %+v", mounts)
+	}
+	payload := string(mounts[0].Payload)
+	for _, want := range []string{
+		`"scoped":true`,
+		`"mounted_mcp_servers":["mcp-in"]`,
+		`"skipped_mcp_servers":["mcp-out"]`,
+		`"mounted_skills":["skill-in"]`,
+		`"skipped_skills":["skill-out"]`,
+	} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("expected payload to contain %s, got %s", want, payload)
+		}
+	}
+}
+
+// An unannotated task (empty effective capability set) mounts the stage's
+// agent's full declaration unchanged — today's pre-scoping behavior.
+func TestUnscopedCapabilitiesMountsFullDeclaration(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	for _, c := range []contracts.Capability{
+		{Name: "mcp-a", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}},
+		{Name: "skill-a", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: h.cwd}},
+	} {
+		if err := h.data.CreateCapability(ctx, &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.data.CreateAgent(ctx, &contracts.Agent{
+		Name: "full-agent", Prompt: "p", Quadrant: contracts.QuadrantInvestigator,
+		Capabilities: contracts.AgentCapabilities{
+			MCPServers: []string{"mcp-a"},
+			Skills:     []string{"skill-a"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "unscoped-mount", Rules: []fake.Rule{
+		{Match: "Pipeline stage: executor", Reply: "done"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := "name: solo\nstages:\n  - name: executor\n    agent: full-agent\n"
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "unannotated"})
+	sum := h.run(t, f, tpl, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+
+	mounts := h.events(t, "stage.capabilities_mounted")
+	if len(mounts) != 1 {
+		t.Fatalf("stage.capabilities_mounted: %+v", mounts)
+	}
+	payload := string(mounts[0].Payload)
+	for _, want := range []string{
+		`"scoped":false`,
+		`"mounted_mcp_servers":["mcp-a"]`,
+		`"mounted_skills":["skill-a"]`,
+		`"skipped_mcp_servers":null`,
+		`"skipped_skills":null`,
+	} {
+		if !strings.Contains(payload, want) {
+			t.Errorf("expected payload to contain %s, got %s", want, payload)
+		}
+	}
+}
