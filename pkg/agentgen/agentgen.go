@@ -110,7 +110,38 @@ func (g *Generator) GenerateFromTask(ctx context.Context, req agentselect.Reques
 	if err != nil {
 		return Result{}, err
 	}
+	draft.Capabilities = mergeRequired(draft.Capabilities, req)
 	return g.withSimilar(ctx, draft, dropped)
+}
+
+// mergeRequired forces req's effective required capabilities into caps,
+// regardless of whether the Fast Model's own reply declared them (owner
+// decision: a generated draft must declare at least the effective required
+// set, so it survives its own auto-select capability filter on retry). These
+// names are not inventions subject to the registry-grounding drop in
+// generate/knownOnly — they arrived via agentselect.EffectiveCapabilities +
+// ExpandCapabilities, which only ever emit validated registry names.
+func mergeRequired(caps contracts.AgentCapabilities, req agentselect.Request) contracts.AgentCapabilities {
+	caps.Tools = unionStrings(caps.Tools, req.RequiredTools)
+	caps.MCPServers = unionStrings(caps.MCPServers, req.RequiredMCPServers)
+	caps.Skills = unionStrings(caps.Skills, req.RequiredSkills)
+	return caps
+}
+
+func unionStrings(have, add []string) []string {
+	set := make(map[string]struct{}, len(have))
+	for _, h := range have {
+		set[h] = struct{}{}
+	}
+	out := append([]string{}, have...)
+	for _, a := range add {
+		if _, ok := set[a]; ok {
+			continue
+		}
+		set[a] = struct{}{}
+		out = append(out, a)
+	}
+	return out
 }
 
 // GenerateFromDescription builds a draft from a free-text NL description —

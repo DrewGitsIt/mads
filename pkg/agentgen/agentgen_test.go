@@ -155,6 +155,40 @@ func TestGenerateKeepsOnlyRegisteredCapabilities(t *testing.T) {
 	}
 }
 
+// A requirement-bearing task's generated draft must declare the effective
+// required set even when the Fast Model's own reply omits it entirely — a
+// draft that doesn't declare its own task's requirements would fail
+// auto-select's capability filter on retry.
+func TestGenerateFromTaskDeclaresRequiredCapabilities(t *testing.T) {
+	g, c := setup(t, fake.Scenario{Name: "requires-capability", Rules: []fake.Rule{{
+		Match: "Scrape the pricing page",
+		Reply: `{"name":"scraper-agent","description":"Scrapes pricing pages","prompt":"You scrape pages.",` +
+			`"quadrant":"autonomous_executor",` +
+			`"capabilities":{"tools":["shell"],"mcp_servers":[],"skills":[]},"permissions":{}}`,
+	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "playwright", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx playwright-mcp"},
+	})
+
+	result, err := g.GenerateFromTask(context.Background(), agentselect.Request{
+		TaskID: "tsk_requires", Title: "Scrape the pricing page",
+		RequiredMCPServers: []string{"playwright"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateFromTask: %v", err)
+	}
+
+	var found bool
+	for _, m := range result.Draft.Capabilities.MCPServers {
+		if m == "playwright" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("Capabilities.MCPServers = %v, want playwright present despite the model's reply omitting it", result.Draft.Capabilities.MCPServers)
+	}
+}
+
 // The empty-registry acceptance criteria: with no capabilities registered at
 // all, every skill/MCP name the model emits is dropped, regardless of how
 // plausible-looking it is — tools are untouched (provider tool names, not

@@ -1,8 +1,12 @@
 // Package agentselect implements auto-select (spec §9): capability filter →
 // quadrant (persona) filter → deterministic ranking (failure exclusion →
-// label affinity → track record → recency → alphabetical), with every
-// selection logged to the event log so retros (§7) can evaluate ranking
-// quality after the fact.
+// label affinity → extraneous-capability count → track record → recency →
+// alphabetical), with every selection logged to the event log so retros
+// (§7) can evaluate ranking quality after the fact. The extraneous-capability
+// tier ranks the fewest-extraneous-capabilities qualified candidate highest
+// (owner decision: additive-only capability composition — see
+// EffectiveCapabilities — is only acceptable if lean agents actually beat
+// kitchen-sink generalists, keeping context small).
 package agentselect
 
 import (
@@ -38,12 +42,19 @@ type Request struct {
 // entry — Eliminated explains an early filter drop; entries that reached
 // ranking have real scores.
 type ScoreBreakdown struct {
-	Agent         string     `json:"agent"`
-	Eliminated    string     `json:"eliminated,omitempty"` // "capability" | "quadrant" | "failure" | ""
-	LabelAffinity int        `json:"label_affinity,omitempty"`
-	TrackRecord   float64    `json:"track_record,omitempty"` // [0,1]; 0.5 = no history (neutral, spec §9)
-	LastSelected  *time.Time `json:"last_selected,omitempty"`
-	Selected      bool       `json:"selected,omitempty"`
+	Agent string `json:"agent"`
+	// Eliminated is "" (survived), "quadrant", "failure", or
+	// "capability (missing <names>)" naming every required tool/MCP
+	// server/skill the agent doesn't declare, so a "no candidate" outcome
+	// tells the user what to add to which agent instead of a bare failure.
+	Eliminated    string `json:"eliminated,omitempty"`
+	LabelAffinity int    `json:"label_affinity,omitempty"`
+	// Extraneous is how many capabilities the agent declares beyond the
+	// request's effective required set (spec §9 ranking tier: fewer wins).
+	Extraneous   int        `json:"extraneous,omitempty"`
+	TrackRecord  float64    `json:"track_record,omitempty"` // [0,1]; 0.5 = no history (neutral, spec §9)
+	LastSelected *time.Time `json:"last_selected,omitempty"`
+	Selected     bool       `json:"selected,omitempty"`
 }
 
 // Selection is the full record of one auto-select decision — logged as the
@@ -148,6 +159,7 @@ func (s *Selector) Select(ctx context.Context, req Request) (Selection, error) {
 		sb := ScoreBreakdown{
 			Agent:         a.Name,
 			LabelAffinity: scorer.LabelAffinity(req, a),
+			Extraneous:    extraneousCount(req, a),
 			TrackRecord:   0.5,
 		}
 		if tr, ok := trackRecord[a.Name]; ok {
