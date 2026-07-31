@@ -150,8 +150,13 @@ type Workspace struct {
 	Repos         []WorkspaceRepo   `json:"repos,omitempty"`
 	Defaults      WorkspaceDefaults `json:"defaults,omitempty"`
 	SteeringFiles []string          `json:"steering_files,omitempty"`
-	CreatedAt     time.Time         `json:"created_at"`
-	UpdatedAt     time.Time         `json:"updated_at"`
+	// Capabilities lists registry capability names true of every task in this
+	// workspace (owner decision: the ambient-environment baseline — "repos on
+	// GitLab" — that a task's own RequiredCapabilities adds to, never
+	// subtracts from). Empty means "no workspace-level constraint."
+	Capabilities []string  `json:"capabilities,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // PrimaryRepo returns the filesystem path of the workspace's primary repo —

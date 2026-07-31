@@ -41,11 +41,18 @@ type Task struct {
 	// Dependencies lists task IDs that must be done before this task is
 	// eligible to run. Cycles may exist at rest; they block pipeline launch
 	// (spec §3.6).
-	Dependencies []string  `json:"dependencies,omitempty"`
-	Labels       []string  `json:"labels,omitempty"`
-	RetryCount   int       `json:"retry_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Dependencies []string `json:"dependencies,omitempty"`
+	Labels       []string `json:"labels,omitempty"`
+	// RequiredCapabilities lists registry capability names this task adds on
+	// top of its workspace's baseline (owner decision: workspace capabilities
+	// are ambient facts, task capabilities are work-specific additive deltas
+	// — no subtraction). Empty means "no task-local constraint beyond the
+	// workspace baseline." See pkg/agentselect.EffectiveCapabilities for the
+	// union + registry-lookup expansion consumers use.
+	RequiredCapabilities []string  `json:"required_capabilities,omitempty"`
+	RetryCount           int       `json:"retry_count"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
 
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`

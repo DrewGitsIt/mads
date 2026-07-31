@@ -3,6 +3,8 @@ import type { PipelineClient } from "../pipeline/client/pipelineClient";
 import type { RouterClient } from "../router/client";
 import { Button } from "../components/Button/Button";
 import { ContentColumn } from "../components/ContentColumn/ContentColumn";
+import { useCapabilities } from "../library/capabilities/useCapabilities";
+import { useSessionWorkspace } from "./useSessionWorkspace";
 import { useTaskStore } from "./useTaskStore";
 import { TaskListView } from "./ListView/TaskListView";
 import { TaskGraphView } from "./GraphView/TaskGraphView";
@@ -27,6 +29,8 @@ type OpenSheet = "detail" | "import" | null;
  */
 export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabProps) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
+  const workspace = useSessionWorkspace(routerClient, sessionId);
+  const { capabilities } = useCapabilities();
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [openSheet, setOpenSheet] = useState<OpenSheet>(null);
@@ -92,6 +96,8 @@ export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabPr
           onClose={() => setOpenSheet(null)}
           pipelineClient={pipelineClient}
           onSelectTask={(task) => selectTask(task.id)}
+          workspace={workspace}
+          capabilities={capabilities}
         />
       )}
 

@@ -249,6 +249,32 @@ export const fixtureCapabilities: CapabilitySummary[] = [
   },
 ];
 
+// Full Capability shape (Library editor / CapabilityPickerField registry) —
+// same names as fixtureCapabilities above, which is the CapabilitySummary
+// subset used by the / command palette.
+export const fixtureCapabilityRegistry: Capability[] = fixtureCapabilities.map((c) => ({
+  id: c.id,
+  name: c.name,
+  description: c.description,
+  type: c.type,
+  config: c.type === "mcp" ? { command: c.name } : { path: `skills/${c.name}` },
+  health: { healthy: c.healthy },
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+}));
+
+export const fixtureWorkspaces: Workspace[] = [
+  {
+    id: "ws-mads",
+    name: "mads",
+    description: "The mads monorepo",
+    defaults: {},
+    capabilities: ["code-review"],
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+];
+
 // Retro surface (W6.7) fixture — three DPAs deliberately span 3 different
 // remediation_layer values and both accepted/rejected statuses, so a single
 // fixture exercises DPACard's kind-agnostic rendering and gives the
@@ -1226,7 +1252,7 @@ export class FakeRouterClient implements RouterClient {
 
   // --- Workspaces ---
   async listWorkspaces(): Promise<Workspace[]> {
-    throw new Error("not fixtured: listWorkspaces");
+    return fixtureWorkspaces;
   }
 
   // --- Session defaults (Launchpad preview) ---
@@ -1281,7 +1307,7 @@ export class FakeRouterClient implements RouterClient {
 
   // --- Capabilities (Library) ---
   async listCapabilities(): Promise<Capability[]> {
-    throw new Error("not fixtured: listCapabilities");
+    return fixtureCapabilityRegistry;
   }
 
   async getCapability(): Promise<Capability> {

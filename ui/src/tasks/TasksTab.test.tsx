@@ -8,6 +8,9 @@ describe("TasksTab", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
+    // useCapabilities() hits the singleton router (real fetch), independent
+    // of the routerClient prop these tests otherwise fully control.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
   });
 
   afterEach(() => {

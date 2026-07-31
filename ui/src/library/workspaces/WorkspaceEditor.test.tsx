@@ -80,6 +80,54 @@ describe("WorkspaceEditor", () => {
     expect(onCreate.mock.calls[0][0]).toMatchObject({ defaults: { template: "deploy" } });
   });
 
+  it("edits capabilities and includes them in the save payload", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/capabilities")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify([
+                {
+                  id: "cap-verify",
+                  name: "verify",
+                  type: "skill",
+                  config: {},
+                  created_at: "t",
+                  updated_at: "t",
+                },
+              ]),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    const onCreate = vi.fn().mockResolvedValue({} as Workspace);
+
+    render(
+      <WorkspaceEditor
+        workspace={null}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByText("+ Add capabilities…")).toBeTruthy());
+    fireEvent.click(screen.getByText("+ Add capabilities…"));
+    fireEvent.click(screen.getByText("verify"));
+    fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
+      target: { value: "mads" },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).toMatchObject({ capabilities: ["verify"] });
+  });
+
   it("shows UsedBySessions only when editing an existing workspace", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     render(

@@ -121,3 +121,9 @@
   border-radius: var(--r);
   padding: var(--space-3);
 }
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}

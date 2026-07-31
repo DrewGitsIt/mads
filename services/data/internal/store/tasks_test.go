@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -299,6 +300,89 @@ func TestListFilters(t *testing.T) {
 	all, _ := s.List(ctx, TaskQuery{})
 	if len(all) != 4 {
 		t.Errorf("unfiltered list: %d", len(all))
+	}
+}
+
+// TestTaskRequiredCapabilitiesRoundTrip covers the schema round-trip
+// acceptance criterion: an empty set (the default — the owner decision that
+// users are never required to populate requirements) and a populated set
+// both persist through Create and Update.
+func TestTaskRequiredCapabilitiesRoundTrip(t *testing.T) {
+	s, _ := newTaskStore(t)
+	caps := NewCapabilities(s.log)
+	ctx := context.Background()
+	if err := caps.Create(ctx, &contracts.Capability{
+		Name: "playwright", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/playwright"},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	empty := mkTask(t, s, contracts.Task{Title: "no constraints"})
+	if len(empty.RequiredCapabilities) != 0 {
+		t.Errorf("want empty RequiredCapabilities by default, got %v", empty.RequiredCapabilities)
+	}
+	fetchedEmpty, err := s.Get(ctx, empty.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fetchedEmpty.RequiredCapabilities) != 0 {
+		t.Errorf("empty RequiredCapabilities did not round-trip: %v", fetchedEmpty.RequiredCapabilities)
+	}
+
+	populated := mkTask(t, s, contracts.Task{Title: "needs playwright", RequiredCapabilities: []string{"playwright"}})
+	fetched, err := s.Get(ctx, populated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fetched.RequiredCapabilities) != 1 || fetched.RequiredCapabilities[0] != "playwright" {
+		t.Errorf("populated RequiredCapabilities did not round-trip: %v", fetched.RequiredCapabilities)
+	}
+
+	// Update path round-trips too.
+	fetched.RequiredCapabilities = nil
+	if err := s.Update(ctx, fetched, "user"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := s.Get(ctx, populated.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cleared.RequiredCapabilities) != 0 {
+		t.Errorf("clearing RequiredCapabilities via update did not persist: %v", cleared.RequiredCapabilities)
+	}
+}
+
+// TestTaskCapabilityRefsValidated covers write-time rejection of
+// RequiredCapabilities names absent from the registry, on both Create and
+// Update, mirroring TestAgentCapabilityRefsValidated.
+func TestTaskCapabilityRefsValidated(t *testing.T) {
+	s, _ := newTaskStore(t)
+	caps := NewCapabilities(s.log)
+	ctx := context.Background()
+
+	var verr *contracts.ValidationError
+	err := s.Create(ctx, &contracts.Task{
+		Title: "bad", SessionID: "ses_t", Source: "user",
+		RequiredCapabilities: []string{"ghost-capability"},
+	}, "user")
+	if !errors.As(err, &verr) {
+		t.Fatalf("unknown capability ref: want ValidationError, got %v", err)
+	}
+	if !strings.Contains(verr.Error(), "ghost-capability") {
+		t.Errorf("error doesn't name the offending ref: %v", verr)
+	}
+
+	if err := caps.Create(ctx, &contracts.Capability{
+		Name: "real-cap", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/real"},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+	good := mkTask(t, s, contracts.Task{Title: "good", RequiredCapabilities: []string{"real-cap"}})
+
+	// Update path: flipping to an unknown ref is caught too.
+	good.RequiredCapabilities = []string{"ghost-capability"}
+	if err := s.Update(ctx, &good, "user"); !errors.As(err, &verr) {
+		t.Fatalf("update with unknown ref: want ValidationError, got %v", err)
 	}
 }
 

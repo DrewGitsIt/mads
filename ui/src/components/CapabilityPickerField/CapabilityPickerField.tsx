@@ -6,7 +6,7 @@ import styles from "./CapabilityPickerField.module.css";
 
 export interface CapabilityPickerFieldProps {
   label: string;
-  type: CapabilityType;
+  type?: CapabilityType;
   capabilities: Capability[];
   value: string[];
   onChange: (names: string[]) => void;
@@ -23,7 +23,10 @@ export function CapabilityPickerField({ label, type, capabilities, value, onChan
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const registry = useMemo(() => capabilities.filter((c) => c.type === type), [capabilities, type]);
+  const registry = useMemo(
+    () => (type ? capabilities.filter((c) => c.type === type) : capabilities),
+    [capabilities, type],
+  );
 
   const candidates = useMemo(
     () =>

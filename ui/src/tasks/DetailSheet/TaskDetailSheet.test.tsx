@@ -4,7 +4,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { TaskDetailSheet } from "./TaskDetailSheet";
-import { FakeRouterClient, fixtureTasks } from "../../router/fixtures";
+import {
+  FakeRouterClient,
+  fixtureCapabilityRegistry,
+  fixtureTasks,
+  fixtureWorkspaces,
+} from "../../router/fixtures";
 import { FakePipelineClient } from "../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import { recordedEnvelopes, recordedSessionId, recordedTaskIds, recordedTasks } from "../../pipeline/client/recordedRun";
@@ -346,6 +351,84 @@ describe("TaskDetailSheet", () => {
       fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
       await waitFor(() => expect(retriedId).toBe(blocked.id));
+    });
+  });
+
+  describe("capabilities", () => {
+    const workspace = fixtureWorkspaces[0]; // capabilities: ["code-review"]
+
+    it("renders workspace-inherited capabilities as read-only, non-removable chips", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      expect(screen.getByText("code-review")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "code-review" })).toBeNull();
+    });
+
+    it("renders task-local required capabilities as editable chips", () => {
+      const task = { ...byId("tsk_ready"), required_capabilities: ["verify"] };
+      render(
+        <TaskDetailSheet
+          task={task}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "verify ×" })).toBeTruthy();
+    });
+
+    it("excludes workspace-inherited capabilities from the task's add-picker candidates", () => {
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("+ Add task-specific capabilities…"));
+      // "code-review" still appears once, as the read-only inherited chip —
+      // it must not also appear as a candidate in the add-picker.
+      expect(screen.getAllByText("code-review")).toHaveLength(1);
+      expect(screen.getByText("verify")).toBeTruthy();
+    });
+
+    it("saves edited required_capabilities through the full-replace PUT", async () => {
+      const client = new FakeRouterClient();
+      const onSaved = vi.fn();
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("+ Add task-specific capabilities…"));
+      fireEvent.click(screen.getByText("verify"));
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(onSaved.mock.calls[0][0].required_capabilities).toEqual(["verify"]);
     });
   });
 });
