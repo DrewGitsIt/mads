@@ -18,6 +18,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
+	gokeyring "github.com/zalando/go-keyring"
 )
 
 // fakeVaultSource is a minimal vault.Source stub for runner tests — no
@@ -50,6 +51,11 @@ var envdumpBin string
 var madsBinDir string
 
 func TestMain(m *testing.M) {
+	// credstore.Set needs a data key from the OS keyring; run every test in
+	// this binary against an in-memory mock so the suite passes without a
+	// real Secret Service/D-Bus session (CI, containers).
+	gokeyring.MockInit()
+
 	dir, err := os.MkdirTemp("", "mads-capability-test")
 	if err != nil {
 		panic(err)
