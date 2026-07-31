@@ -53,6 +53,7 @@ export interface Workspace {
   repos?: WorkspaceRepo[];
   defaults: WorkspaceDefaults;
   steering_files?: string[];
+  capabilities?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -406,6 +407,7 @@ export interface Task {
   status: TaskStatus;
   dependencies?: string[];
   labels?: string[];
+  required_capabilities?: string[];
   retry_count: number;
   created_at: string;
   updated_at: string;

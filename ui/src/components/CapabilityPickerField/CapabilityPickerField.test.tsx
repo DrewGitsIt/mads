@@ -96,4 +96,20 @@ describe("CapabilityPickerField", () => {
     expect(screen.getByText("github")).toBeTruthy();
     expect(screen.queryByText("grep-search")).toBeNull();
   });
+
+  it("offers candidates of every type when type is omitted", () => {
+    render(
+      <CapabilityPickerField
+        label="Capabilities"
+        capabilities={[makeCapability({ type: "skill", name: "grep-search" }), makeCapability({ id: "cap-2", type: "mcp", name: "github" })]}
+        value={[]}
+        onChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("+ Add capabilities…"));
+
+    expect(screen.getByText("grep-search")).toBeTruthy();
+    expect(screen.getByText("github")).toBeTruthy();
+  });
 });

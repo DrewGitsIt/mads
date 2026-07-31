@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SideSheet,
   SideSheetBody,
@@ -6,12 +6,14 @@ import {
   SideSheetHeader,
 } from "../../components/SideSheet/SideSheet";
 import { Button } from "../../components/Button/Button";
+import { CapabilityPickerField } from "../../components/CapabilityPickerField/CapabilityPickerField";
+import { Chip } from "../../components/Chip/Chip";
 import { Markdown } from "../../conversation/ChatRenderer/markdown";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { BlockedTaskFeedback } from "../../pipeline/Board/BlockedTaskFeedback";
 import { StageTimeline } from "../../pipeline/DrillIn/StageTimeline";
 import type { RouterClient } from "../../router/client";
-import type { Note, NoteType, Task, TaskStatus } from "../../router/types";
+import type { Capability, Note, NoteType, Task, TaskStatus, Workspace } from "../../router/types";
 import { useGraphRunState } from "../GraphView/useGraphRunState";
 import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
 import { DependencyPicker } from "./DependencyPicker";
@@ -28,6 +30,9 @@ export interface TaskDetailSheetProps {
   /** Opt-in — no live run-state subscription (and no EventSource) is ever created without it. */
   pipelineClient?: PipelineClient;
   onSelectTask?: (task: Task) => void;
+  /** Ambient capabilities the task's workspace already provides — rendered read-only here. */
+  workspace?: Workspace | null;
+  capabilities?: Capability[];
 }
 
 const STATUS_OPTIONS: TaskStatus[] = [
@@ -170,6 +175,8 @@ export function TaskDetailSheet({
   onSaved,
   pipelineClient,
   onSelectTask,
+  workspace,
+  capabilities = [],
 }: TaskDetailSheetProps) {
   const [draft, setDraft] = useState<Task>(task);
   const [notes, setNotes] = useState<Note[]>(task.notes ?? []);
@@ -177,6 +184,12 @@ export function TaskDetailSheet({
   const [error, setError] = useState<string | null>(null);
   const runState = useGraphRunState(draft.session_id, pipelineClient);
   const reducedMotion = usePrefersReducedMotion();
+
+  const inheritedCapabilities = useMemo(() => workspace?.capabilities ?? [], [workspace]);
+  const taskCapabilityOptions = useMemo(
+    () => capabilities.filter((c) => !inheritedCapabilities.includes(c.name)),
+    [capabilities, inheritedCapabilities],
+  );
 
   useEffect(() => {
     setDraft(task);
@@ -281,6 +294,25 @@ export function TaskDetailSheet({
             }
           />
         </label>
+
+        <div className={styles.field}>
+          <span className={styles.fieldLabel}>Capabilities</span>
+          {inheritedCapabilities.length > 0 && (
+            <div className={styles.chips}>
+              {inheritedCapabilities.map((name) => (
+                <Chip key={name} tone="info">
+                  {name}
+                </Chip>
+              ))}
+            </div>
+          )}
+          <CapabilityPickerField
+            label="Task-specific capabilities"
+            capabilities={taskCapabilityOptions}
+            value={draft.required_capabilities ?? []}
+            onChange={(names) => set("required_capabilities", names)}
+          />
+        </div>
 
         <div className={styles.field}>
           <span className={styles.fieldLabel}>Description</span>

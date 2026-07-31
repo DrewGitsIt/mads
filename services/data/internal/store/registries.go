@@ -194,7 +194,31 @@ func NewWorkspaces(log *Log) *Registry[contracts.Workspace] {
 			}
 			return &v
 		},
+		refCheck: checkWorkspaceCapabilityRefs,
 	}
+}
+
+// checkWorkspaceCapabilityRefs rejects any Capabilities entry with no
+// matching capabilities table row (owner decision: the ambient workspace
+// baseline must resolve against the live registry, same as task-local
+// requirements — see checkTaskCapabilityRefs).
+func checkWorkspaceCapabilityRefs(tx *Tx, w *contracts.Workspace) error {
+	var unknown []string
+	for _, name := range w.Capabilities {
+		var n int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM capabilities WHERE name = ?", name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	v := &contracts.ValidationError{}
+	v.Add("capabilities", fmt.Sprintf("unknown capability reference(s): %s", strings.Join(unknown, ", ")))
+	return v
 }
 
 // Create stores a new entity, assigning ID and timestamps, and announces it.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -92,6 +93,9 @@ func (s *Tasks) Import(ctx context.Context, ts []*contracts.Task, actor string) 
 }
 
 func (s *Tasks) createInTx(tx *Tx, t *contracts.Task, actor string) error {
+	if err := checkTaskCapabilityRefs(tx, t); err != nil {
+		return err
+	}
 	if t.ID == "" {
 		t.ID = NewID("tsk")
 	}
@@ -104,14 +108,18 @@ func (s *Tasks) createInTx(tx *Tx, t *contracts.Task, actor string) error {
 	if err != nil {
 		return err
 	}
+	requiredCapabilities, err := json.Marshal(orEmpty(t.RequiredCapabilities))
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`INSERT INTO tasks (id, session_id, status, retry_count, created_at, updated_at,
-		                    title, description, acceptance_criteria, scope, draft, source, labels)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                    title, description, acceptance_criteria, scope, draft, source, labels, required_capabilities)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID, t.SessionID, string(t.Status), t.RetryCount,
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 		t.Title, t.Description, t.AcceptanceCriteria, t.Scope,
-		boolToInt(t.Draft), t.Source, string(labels),
+		boolToInt(t.Draft), t.Source, string(labels), string(requiredCapabilities),
 	); err != nil {
 		return fmt.Errorf("tasks: insert %s: %w", t.ID, err)
 	}
@@ -162,6 +170,9 @@ func (s *Tasks) updateInTx(tx *Tx, t *contracts.Task, actor string) error {
 	if err != nil {
 		return err
 	}
+	if err := checkTaskCapabilityRefs(tx, t); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	if err := checkAndRenew(tx, t.ID, actor, now); err != nil {
 		return err
@@ -171,13 +182,17 @@ func (s *Tasks) updateInTx(tx *Tx, t *contracts.Task, actor string) error {
 	if err != nil {
 		return err
 	}
+	requiredCapabilities, err := json.Marshal(orEmpty(t.RequiredCapabilities))
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`UPDATE tasks SET session_id=?, status=?, retry_count=?, updated_at=?,
-		        title=?, description=?, acceptance_criteria=?, scope=?, draft=?, source=?, labels=?
+		        title=?, description=?, acceptance_criteria=?, scope=?, draft=?, source=?, labels=?, required_capabilities=?
 		 WHERE id=?`,
 		t.SessionID, string(t.Status), t.RetryCount, now.Format(time.RFC3339Nano),
 		t.Title, t.Description, t.AcceptanceCriteria, t.Scope,
-		boolToInt(t.Draft), t.Source, string(labels), t.ID,
+		boolToInt(t.Draft), t.Source, string(labels), string(requiredCapabilities), t.ID,
 	); err != nil {
 		return fmt.Errorf("tasks: update %s: %w", t.ID, err)
 	}
@@ -403,7 +418,7 @@ func (s *Tasks) List(ctx context.Context, q TaskQuery) ([]contracts.Task, error)
 	}
 	rows, err := s.log.db.QueryContext(ctx,
 		`SELECT id, session_id, status, retry_count, created_at, updated_at,
-		        title, description, acceptance_criteria, scope, draft, source, labels
+		        title, description, acceptance_criteria, scope, draft, source, labels, required_capabilities
 		 FROM tasks WHERE `+where+` ORDER BY created_at, id`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: list: %w", err)
@@ -435,7 +450,7 @@ func (s *Tasks) List(ctx context.Context, q TaskQuery) ([]contracts.Task, error)
 func (s *Tasks) Get(ctx context.Context, id string) (*contracts.Task, error) {
 	rows, err := s.log.db.QueryContext(ctx,
 		`SELECT id, session_id, status, retry_count, created_at, updated_at,
-		        title, description, acceptance_criteria, scope, draft, source, labels
+		        title, description, acceptance_criteria, scope, draft, source, labels, required_capabilities
 		 FROM tasks WHERE id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: get %s: %w", id, err)
@@ -465,7 +480,7 @@ func (s *Tasks) Get(ctx context.Context, id string) (*contracts.Task, error) {
 func (s *Tasks) getInTx(tx *Tx, id string) (*contracts.Task, error) {
 	rows, err := tx.tx.Query(
 		`SELECT id, session_id, status, retry_count, created_at, updated_at,
-		        title, description, acceptance_criteria, scope, draft, source, labels
+		        title, description, acceptance_criteria, scope, draft, source, labels, required_capabilities
 		 FROM tasks WHERE id = ?`, id)
 	if err != nil {
 		return nil, fmt.Errorf("tasks: get %s: %w", id, err)
@@ -688,9 +703,10 @@ func scanTask(rows *sql.Rows) (*contracts.Task, error) {
 		createdAt, updatedAt string
 		draft                int
 		labels               string
+		requiredCapabilities string
 	)
 	if err := rows.Scan(&t.ID, &t.SessionID, &t.Status, &t.RetryCount, &createdAt, &updatedAt,
-		&t.Title, &t.Description, &t.AcceptanceCriteria, &t.Scope, &draft, &t.Source, &labels); err != nil {
+		&t.Title, &t.Description, &t.AcceptanceCriteria, &t.Scope, &draft, &t.Source, &labels, &requiredCapabilities); err != nil {
 		return nil, fmt.Errorf("tasks: scan: %w", err)
 	}
 	var err error
@@ -704,7 +720,32 @@ func scanTask(rows *sql.Rows) (*contracts.Task, error) {
 	if err := json.Unmarshal([]byte(labels), &t.Labels); err != nil {
 		return nil, fmt.Errorf("tasks: labels for %s: %w", t.ID, err)
 	}
+	if err := json.Unmarshal([]byte(requiredCapabilities), &t.RequiredCapabilities); err != nil {
+		return nil, fmt.Errorf("tasks: required_capabilities for %s: %w", t.ID, err)
+	}
 	return &t, nil
+}
+
+// checkTaskCapabilityRefs enforces the agent-side invariant (owner decision):
+// a task's RequiredCapabilities must all resolve against the live capability
+// registry at write time.
+func checkTaskCapabilityRefs(tx *Tx, t *contracts.Task) error {
+	var unknown []string
+	for _, name := range t.RequiredCapabilities {
+		var n int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM capabilities WHERE name = ?", name).Scan(&n); err != nil {
+			return err
+		}
+		if n == 0 {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	v := &contracts.ValidationError{}
+	v.Add("required_capabilities", fmt.Sprintf("unknown capability reference(s): %s", strings.Join(unknown, ", ")))
+	return v
 }
 
 func (s *Tasks) hydrate(ctx context.Context, t *contracts.Task) error {

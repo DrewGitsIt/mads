@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { CapabilityPickerField } from "../../components/CapabilityPickerField/CapabilityPickerField";
 import {
   SideSheet,
   SideSheetBody,
   SideSheetFooter,
   SideSheetHeader,
 } from "../../components/SideSheet/SideSheet";
+import { useCapabilities } from "../capabilities/useCapabilities";
 import { useTemplates } from "../templates/useTemplates";
 import type { Workspace, WorkspaceRepo } from "../../router/types";
 import { RepoList } from "./RepoList";
@@ -23,9 +25,13 @@ export interface WorkspaceEditorProps {
 /** SideSheet-hosted create/edit form for a single workspace (MADS-UX §3.5). */
 export function WorkspaceEditor({ workspace, onClose, onCreate, onUpdate, onDelete }: WorkspaceEditorProps) {
   const { templates } = useTemplates();
+  const { capabilities } = useCapabilities();
   const [name, setName] = useState(workspace?.name ?? "");
   const [description, setDescription] = useState(workspace?.description ?? "");
   const [repos, setRepos] = useState<WorkspaceRepo[]>(workspace?.repos ?? []);
+  const [workspaceCapabilities, setWorkspaceCapabilities] = useState<string[]>(
+    workspace?.capabilities ?? [],
+  );
   const [agent, setAgent] = useState(workspace?.defaults.agent ?? "");
   const [model, setModel] = useState(workspace?.defaults.model ?? "");
   const [isolation, setIsolation] = useState(workspace?.defaults.isolation ?? "");
@@ -40,6 +46,7 @@ export function WorkspaceEditor({ workspace, onClose, onCreate, onUpdate, onDele
       name,
       description: description || undefined,
       repos: repos.length ? repos : undefined,
+      capabilities: workspaceCapabilities.length ? workspaceCapabilities : undefined,
       defaults: {
         agent: agent || undefined,
         model: model || undefined,
@@ -120,6 +127,13 @@ export function WorkspaceEditor({ workspace, onClose, onCreate, onUpdate, onDele
               ))}
             </select>
           </label>
+
+          <CapabilityPickerField
+            label="Capabilities"
+            capabilities={capabilities}
+            value={workspaceCapabilities}
+            onChange={setWorkspaceCapabilities}
+          />
 
           {workspace && <UsedBySessions workspaceId={workspace.id} />}
 

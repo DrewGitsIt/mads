@@ -273,3 +273,45 @@ func TestWorkspacePrimaryRepoRule(t *testing.T) {
 		t.Errorf("repo-less workspace refused: %v", err)
 	}
 }
+
+// TestWorkspaceCapabilityRefsValidated covers write-time rejection of
+// Capabilities names absent from the registry, on both Create and Update
+// (owner decision: workspace-level ambient capabilities must resolve against
+// the live registry, same invariant as task-local requirements).
+func TestWorkspaceCapabilityRefsValidated(t *testing.T) {
+	l := openMigratedDB(t)
+	ws := NewWorkspaces(l)
+	caps := NewCapabilities(l)
+	ctx := context.Background()
+
+	var verr *contracts.ValidationError
+	bad := contracts.Workspace{Name: "bad-workspace", Capabilities: []string{"ghost-capability"}}
+	if err := ws.Create(ctx, &bad, "user"); !errors.As(err, &verr) {
+		t.Fatalf("unknown capability ref: want ValidationError, got %v", err)
+	}
+	if !strings.Contains(verr.Error(), "ghost-capability") {
+		t.Errorf("error doesn't name the offending ref: %v", verr)
+	}
+
+	// Empty is the default — no constraint — and is always valid.
+	bare := contracts.Workspace{Name: "no-constraints"}
+	if err := ws.Create(ctx, &bare, "user"); err != nil {
+		t.Fatalf("empty Capabilities rejected: %v", err)
+	}
+
+	if err := caps.Create(ctx, &contracts.Capability{
+		Name: "gitlab-access", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"},
+	}, "user"); err != nil {
+		t.Fatal(err)
+	}
+	good := contracts.Workspace{Name: "good-workspace", Capabilities: []string{"gitlab-access"}}
+	if err := ws.Create(ctx, &good, "user"); err != nil {
+		t.Fatalf("known capability ref rejected: %v", err)
+	}
+
+	// Update path: flipping to an unknown ref is caught too.
+	good.Capabilities = []string{"ghost-capability"}
+	if err := ws.Update(ctx, &good, "user"); !errors.As(err, &verr) {
+		t.Fatalf("update with unknown ref: want ValidationError, got %v", err)
+	}
+}
