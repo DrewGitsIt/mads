@@ -118,6 +118,9 @@ export interface RouterClient {
   discardTask(id: string): Promise<void>;
   importTasks(tasks: Partial<Task>[]): Promise<Task[]>;
   taskCycles(sessionId: string): Promise<string[][]>;
+  // Draft-chip source for the task editor (pkg/capinfer, call site A) — never
+  // persists, caller must confirm into Task.required_capabilities via updateTask.
+  suggestTaskCapabilities(title: string, description: string, workspace?: string): Promise<string[]>;
   addNote(taskId: string, note: { type: NoteType; content: string }): Promise<Note>;
   confirmNote(taskId: string, noteId: number): Promise<void>;
   discardNote(taskId: string, noteId: number): Promise<void>;
@@ -566,6 +569,19 @@ export class FetchRouterClient implements RouterClient {
       session_id: sessionId,
     });
     return body.cycles;
+  }
+
+  async suggestTaskCapabilities(
+    title: string,
+    description: string,
+    workspace?: string,
+  ): Promise<string[]> {
+    const body = await routerPost<{ capabilities: string[] }>(
+      this.baseUrl,
+      "/tasks/suggest-capabilities",
+      { title, description, workspace },
+    );
+    return body.capabilities;
   }
 
   async addNote(taskId: string, note: { type: NoteType; content: string }): Promise<Note> {

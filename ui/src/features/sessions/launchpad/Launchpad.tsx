@@ -90,6 +90,7 @@ export function Launchpad({
         model: staged.model,
         trust: staged.trust,
         isolation: staged.isolation,
+        ...(staged.agent === "auto" ? { opening_prompt: trimmed } : {}),
         ...(stagedLinks.length > 0 ? { links: stagedLinks } : {}),
       });
       setText("");
@@ -248,6 +249,10 @@ export function Launchpad({
             onChange={(agent) => {
               setSelectedAgent(agent);
               setStaged((prev) => ({ ...prev, agent: agent.name }));
+            }}
+            onAuto={() => {
+              setSelectedAgent(undefined);
+              setStaged((prev) => ({ ...prev, agent: "auto" }));
             }}
           />
           <ModelPill

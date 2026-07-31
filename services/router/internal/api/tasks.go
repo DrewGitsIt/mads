@@ -1,10 +1,13 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
+	"github.com/drewkidwell/mads/pkg/capinfer"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 // This file is a pure pass-through over dataclient's task/note/file-change
@@ -23,6 +26,39 @@ func (s *server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, t)
+}
+
+// handleSuggestTaskCapabilities is the task editor's draft-chip source (call
+// site A of the 2026-07-30 owner decision): a fast, side-effect-free,
+// synchronous Fast Model call — same run-inline-not-through-job.Runner
+// shape as handleSuggestCapabilities in agents.go — over pkg/capinfer, the
+// single inference mechanism session-start's agent="auto" (resolveAutoAgent)
+// also uses. Suggestions are never persisted here; the caller must confirm
+// them into Task.RequiredCapabilities via PUT /tasks/{id}.
+func (s *server) handleSuggestTaskCapabilities(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Workspace   string `json:"workspace"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	var repos []contracts.WorkspaceRepo
+	if body.Workspace != "" {
+		if ws, err := s.data.Workspace(r.Context(), body.Workspace); err == nil {
+			repos = ws.Repos
+		} else if !errors.Is(err, dataclient.ErrNotFound) {
+			writeError(w, err)
+			return
+		}
+	}
+	suggested, err := capinfer.New(s.data, s.jobs.FastModel()).Infer(r.Context(), body.Title+"\n"+body.Description, repos)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "suggest task capabilities: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"capabilities": suggested})
 }
 
 func (s *server) handleImportTasks(w http.ResponseWriter, r *http.Request) {

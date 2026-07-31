@@ -263,6 +263,40 @@ func TestCreateTaskValidation(t *testing.T) {
 	}
 }
 
+// The task editor's suggestion source (call site A, owner decision
+// 2026-07-30): grounds the Fast Model's reply against the live registry,
+// dropping any hallucinated name — same rule pkg/capinfer enforces for
+// session-start's agent auto (call site B). Suggestions are advisory only;
+// this endpoint must never write Task.RequiredCapabilities itself.
+func TestSuggestTaskCapabilitiesDropsHallucinatedNames(t *testing.T) {
+	srv, dataBase := newTestServerWithScenario(t, fake.Scenario{Name: "suggest-task-caps", Rules: []fake.Rule{{
+		Match: "Wire up Playwright E2E coverage",
+		Reply: `{"capabilities":["playwright","ghost-capability"]}`,
+	}}})
+
+	direct := dataclient.New(dataBase, "test-setup")
+	cap := contracts.Capability{
+		Name: "playwright", Type: contracts.CapabilitySkill,
+		Config: contracts.CapabilityConfig{Path: "~/skills/playwright"},
+	}
+	if err := direct.CreateCapability(context.Background(), &cap); err != nil {
+		t.Fatalf("CreateCapability: %v", err)
+	}
+
+	resp := postJSON(t, srv.URL+"/tasks/suggest-capabilities", map[string]string{
+		"title": "Wire up Playwright E2E coverage", "description": "add browser tests",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := decodeJSON[struct {
+		Capabilities []string `json:"capabilities"`
+	}](t, resp)
+	if len(body.Capabilities) != 1 || body.Capabilities[0] != "playwright" {
+		t.Fatalf("capabilities = %+v, want only [\"playwright\"] (hallucinated ghost-capability dropped)", body.Capabilities)
+	}
+}
+
 func TestGetTaskNotFound(t *testing.T) {
 	srv := newTestServer(t)
 

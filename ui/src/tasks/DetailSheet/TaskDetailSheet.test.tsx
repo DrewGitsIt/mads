@@ -431,4 +431,127 @@ describe("TaskDetailSheet", () => {
       expect(onSaved.mock.calls[0][0].required_capabilities).toEqual(["verify"]);
     });
   });
+
+  describe("capability suggestions (draft chips)", () => {
+    const workspace = fixtureWorkspaces[0]; // capabilities: ["code-review"]
+
+    it("renders suggestions as draft chips, excluding names already applied", async () => {
+      const client = new FakeRouterClient();
+      client.suggestedCapabilities = ["verify", "code-review", "playwright"];
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("Suggest capabilities"));
+
+      await waitFor(() => expect(screen.getByText("verify — confirm")).toBeTruthy());
+      expect(screen.getByText("playwright — confirm")).toBeTruthy();
+      // code-review is already workspace-inherited — must not be offered as a draft.
+      expect(screen.queryByText("code-review — confirm")).toBeNull();
+    });
+
+    it("confirming a draft chip writes it into required_capabilities without saving", async () => {
+      const client = new FakeRouterClient();
+      client.suggestedCapabilities = ["verify"];
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("Suggest capabilities"));
+      await waitFor(() => expect(screen.getByText("verify — confirm")).toBeTruthy());
+
+      fireEvent.click(screen.getByText("verify — confirm"));
+
+      // Now editable via the normal picker's chip, and the draft chip is gone.
+      expect(screen.getByRole("button", { name: "verify ×" })).toBeTruthy();
+      expect(screen.queryByText("verify — confirm")).toBeNull();
+
+      // Not persisted until Save.
+      const fromServer = await client.getTask("tsk_ready");
+      expect(fromServer.required_capabilities ?? []).not.toContain("verify");
+    });
+
+    it("edit path: a confirmed suggestion can be removed like any other chip, and Save persists the final set", async () => {
+      const client = new FakeRouterClient();
+      client.suggestedCapabilities = ["verify"];
+      const onSaved = vi.fn();
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          onSaved={onSaved}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("Suggest capabilities"));
+      await waitFor(() => expect(screen.getByText("verify — confirm")).toBeTruthy());
+      fireEvent.click(screen.getByText("verify — confirm"));
+
+      fireEvent.click(screen.getByRole("button", { name: "verify ×" }));
+      fireEvent.click(screen.getByText("Save"));
+
+      await waitFor(() => expect(onSaved).toHaveBeenCalled());
+      expect(onSaved.mock.calls[0][0].required_capabilities ?? []).not.toContain("verify");
+    });
+
+    it("clear path: dismisses all remaining suggestions without touching required_capabilities", async () => {
+      const client = new FakeRouterClient();
+      client.suggestedCapabilities = ["verify", "playwright"];
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+          workspace={workspace}
+          capabilities={fixtureCapabilityRegistry}
+        />,
+      );
+      fireEvent.click(screen.getByText("Suggest capabilities"));
+      await waitFor(() => expect(screen.getByText("verify — confirm")).toBeTruthy());
+
+      fireEvent.click(screen.getByText("Clear"));
+
+      expect(screen.queryByText("verify — confirm")).toBeNull();
+      expect(screen.queryByText("playwright — confirm")).toBeNull();
+      expect(screen.queryByRole("button", { name: "verify ×" })).toBeNull();
+    });
+
+    it("shows a no-suggestions message when the inference returns nothing new", async () => {
+      const client = new FakeRouterClient();
+      client.suggestedCapabilities = [];
+      render(
+        <TaskDetailSheet
+          task={byId("tsk_ready")}
+          tasksById={tasksById}
+          sessionTasks={fixtureTasks}
+          routerClient={client}
+          onClose={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByText("Suggest capabilities"));
+      await waitFor(() =>
+        expect(screen.getByText("No additional capabilities suggested.")).toBeTruthy(),
+      );
+    });
+  });
 });
