@@ -6,6 +6,7 @@ import { Button } from "../components/Button/Button";
 import { RailTaskList } from "./RailTaskList";
 import { RailChangesList } from "./RailChangesList";
 import { RailProposalList } from "./RailProposalList";
+import { collapseChanges } from "./collapseChanges";
 import { useProposalStore } from "./useProposalStore";
 import styles from "./ContextRail.module.css";
 
@@ -63,6 +64,11 @@ export function ContextRail({
     };
   }, [routerClient, sessionId]);
 
+  // getSessionChanges returns the append-only ledger (one row per touch), so a
+  // file edited across tasks or created-then-modified shows up many times.
+  // Collapse to a set of touched files for both the count badge and the list.
+  const touched = collapseChanges(changes);
+
   if (collapsed) {
     return (
       <div className={styles.collapsed}>
@@ -95,9 +101,9 @@ export function ContextRail({
             onClick={() => setTab("changes")}
           >
             Changes
-            {changes.length > 0 && (
+            {touched.length > 0 && (
               <span className={styles.count} aria-hidden="true">
-                {changes.length}
+                {touched.length}
               </span>
             )}
           </button>
@@ -139,7 +145,7 @@ export function ContextRail({
         </>
       )}
 
-      {tab === "changes" && <RailChangesList changes={changes} onOpenFile={onOpenFile} />}
+      {tab === "changes" && <RailChangesList changes={touched} onOpenFile={onOpenFile} />}
     </div>
   );
 }

@@ -11,8 +11,28 @@
   font-weight: 600;
 }
 
-.field input,
-.field select {
+.field input {
+  font-weight: normal;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+
+.field input:hover {
+  border-color: var(--line);
+}
+
+.field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Select's trigger inherits font from .field (bold label); keep the value normal. */
+.control {
   font-weight: normal;
 }
 

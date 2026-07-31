@@ -67,10 +67,9 @@ describe("WorkspaceEditor", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByText("deploy")).toBeTruthy());
-    fireEvent.change(screen.getByText("Default template").closest("label")!.querySelector("select")!, {
-      target: { value: "deploy" },
-    });
+    // Open the themed template Select and pick "deploy" (options only render while open).
+    fireEvent.click(screen.getByLabelText("Default template"));
+    fireEvent.click(await screen.findByText("deploy"));
     fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
       target: { value: "mads" },
     });
@@ -78,6 +77,60 @@ describe("WorkspaceEditor", () => {
 
     await waitFor(() => expect(onCreate).toHaveBeenCalled());
     expect(onCreate.mock.calls[0][0]).toMatchObject({ defaults: { template: "deploy" } });
+  });
+
+  it("populates the agent and model dropdowns from the registry and saves the picks", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/agents")) {
+          return Promise.resolve(
+            new Response(JSON.stringify([{ id: "a1", name: "reviewer", prompt: "p" }]), {
+              status: 200,
+            }),
+          );
+        }
+        if (url.endsWith("/providers")) {
+          return Promise.resolve(
+            new Response(JSON.stringify([{ name: "anthropic", matrix: {} }]), { status: 200 }),
+          );
+        }
+        if (url.includes("/providers/anthropic/models")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ models: [{ id: "claude-opus-5", name: "Claude Opus 5" }] }),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response("[]", { status: 200 }));
+      }),
+    );
+    const onCreate = vi.fn().mockResolvedValue({} as Workspace);
+
+    render(
+      <WorkspaceEditor
+        workspace={null}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+        onUpdate={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("Default agent"));
+    fireEvent.click(await screen.findByText("reviewer"));
+    fireEvent.click(screen.getByLabelText("Default model"));
+    fireEvent.click(await screen.findByText("Claude Opus 5"));
+    fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
+      target: { value: "mads" },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).toMatchObject({
+      defaults: { agent: "reviewer", model: "claude-opus-5" },
+    });
   });
 
   it("edits capabilities and includes them in the save payload", async () => {

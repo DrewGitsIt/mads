@@ -41,3 +41,23 @@
   display: flex;
   gap: var(--space-1);
 }
+
+.add input {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: var(--fs-body);
+}
+
+.add input:hover {
+  border-color: var(--line);
+}
+
+.add input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
