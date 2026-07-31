@@ -1030,6 +1030,51 @@ func (e *engine) resolveStageAgent(ctx context.Context, st template.Stage, task 
 	return autostaff.SelectOrGenerate(ctx, e.cfg.Data, e.cfg.FastModel, req)
 }
 
+// effectiveCapabilities resolves task's effective required capabilities —
+// the task+workspace union (agentselect.EffectiveCapabilities) expanded
+// against the live capability registry (agentselect.ExpandCapabilities) —
+// into the Tools/MCPServers/Skills slices a Request needs so auto-select
+// treats declared requirements as a hard filter (spec §9), not merely a
+// ranking signal.
+func (e *engine) effectiveCapabilities(ctx context.Context, task contracts.Task) (tools, mcpServers, skills []string, err error) {
+	sess, err := e.cfg.Data.Session(ctx, e.cfg.SessionID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch session %q: %w", e.cfg.SessionID, err)
+	}
+	var workspace contracts.Workspace
+	if sess.Workspace != "" {
+		workspace, err = e.cfg.Data.Workspace(ctx, sess.Workspace)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("fetch workspace %q: %w", sess.Workspace, err)
+		}
+	}
+	registry, err := e.cfg.Data.Capabilities(ctx)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("fetch capability registry: %w", err)
+	}
+	names := agentselect.EffectiveCapabilities(task, workspace)
+	tools, mcpServers, skills = agentselect.ExpandCapabilities(names, registry)
+	return tools, mcpServers, skills, nil
+}
+
+// describeElimination renders the missing-capability detail from every
+// "capability"-eliminated candidate in sel, so a "no candidate" stage
+// failure names what to add to which agent instead of a bare failure
+// (spec §9). Returns "" when nothing was eliminated for a capability
+// reason (e.g. every candidate failed on quadrant or prior failure alone).
+func describeElimination(sel agentselect.Selection) string {
+	var reasons []string
+	for _, cb := range sel.Candidates {
+		if strings.HasPrefix(cb.Eliminated, "capability") {
+			reasons = append(reasons, fmt.Sprintf("%s: %s", cb.Agent, cb.Eliminated))
+		}
+	}
+	if len(reasons) == 0 {
+		return ""
+	}
+	return strings.Join(reasons, "; ")
+}
+
 func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
 	name, agent, err := e.resolveStageAgent(ctx, st, task)
 	if err != nil {
