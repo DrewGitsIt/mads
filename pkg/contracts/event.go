@@ -277,6 +277,19 @@ const (
 	// {"stage": string, "attempt": int, "ref": string}. Providers with no
 	// wire-level ref announcement never emit this.
 	StageAttemptRef EventType = "stage.attempt_ref"
+	// StageCapabilitiesMounted fires once per stage session right before an
+	// agent stage's one-shot begins, recording which of the agent's declared
+	// capabilities were mounted (started/installed) versus skipped by
+	// effective-capability scoping (task+workspace required capabilities,
+	// spec's context-assembly scoping) — so a "tool missing" report is
+	// diagnosable as scoping vs agent declaration vs health. Payload:
+	// {"stage": string, "scoped": bool, "mounted_skills": []string,
+	// "skipped_skills": []string, "mounted_mcp_servers": []string,
+	// "skipped_mcp_servers": []string}. scoped is false when the task's
+	// effective capability set was empty — the full agent declaration is
+	// mounted unchanged and nothing is skipped, matching pre-scoping
+	// behavior.
+	StageCapabilitiesMounted EventType = "stage.capabilities_mounted"
 
 	// SynthesisProposalCreated fires when the background task synthesizer
 	// (spec §4) persists a create_task/add_note/update_task proposal for
@@ -312,7 +325,7 @@ var EventTypes = []EventType{
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried, LandAutofixed,
 	UsageRecorded, CapabilityInvoked,
-	StageAttemptRef,
+	StageAttemptRef, StageCapabilitiesMounted,
 	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,
 }
 
