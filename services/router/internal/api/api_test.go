@@ -59,6 +59,20 @@ func TestMain(m *testing.M) {
 		panic("build session: " + err.Error() + "\n" + string(out))
 	}
 
+	// A real mads binary, resolvable via PATH: the session child's
+	// orchestrate capability hardcodes "mads internal orchestrate-mcp" as
+	// its Command (runner/capability.go), so the link-materialization tests
+	// need `mads` on PATH the same way it would be once installed — the
+	// runner package's madsBinDir/putMadsOnPath does the same.
+	build = exec.Command("go", "build", "-o", filepath.Join(dir, "mads"),
+		"github.com/drewkidwell/mads/cmd/mads")
+	if out, err := build.CombinedOutput(); err != nil {
+		panic("build mads: " + err.Error() + "\n" + string(out))
+	}
+	if err := os.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH")); err != nil {
+		panic("prepend PATH: " + err.Error())
+	}
+
 	code := m.Run()
 
 	if err := testleakcheck.Verify(testChildBin); err != nil {
