@@ -1,0 +1,32 @@
+[
+  {
+    "id": "20260829_16",
+    "name": "mads-capture-fallback",
+    "user_set_name": true,
+    "working_dir": "/tmp/mads-goose-capture-oneshot",
+    "created_at": "2026-08-29T19:40:24Z",
+    "updated_at": "2026-08-29T19:40:29Z",
+    "session_type": "user",
+    "message_count": 2
+  },
+  {
+    "id": "20260829_15",
+    "name": "Shell file creation",
+    "user_set_name": false,
+    "working_dir": "/tmp/mads-goose-capture-oneshot",
+    "created_at": "2026-08-29T19:39:39Z",
+    "updated_at": "2026-08-29T19:40:02Z",
+    "session_type": "user",
+    "message_count": 6
+  },
+  {
+    "id": "20260829_14",
+    "name": "mads-arch-probe-1",
+    "user_set_name": true,
+    "working_dir": "/tmp/goose-arch-probe",
+    "created_at": "2026-08-29T19:36:26Z",
+    "updated_at": "2026-08-29T19:36:31Z",
+    "session_type": "user",
+    "message_count": 2
+  }
+]
