@@ -414,6 +414,49 @@ func TestBounceSession(t *testing.T) {
 	}
 }
 
+func TestSetSessionTrust(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "trust me", "provider": "fake"})
+	created := decodeJSON[struct {
+		Session struct {
+			ID    string `json:"id"`
+			Trust string `json:"trust"`
+		} `json:"session"`
+	}](t, resp)
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/trust", map[string]string{"trust": "full"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set trust status = %d, want 200", resp.StatusCode)
+	}
+	updated := decodeJSON[struct {
+		Trust string `json:"trust"`
+	}](t, resp)
+	if updated.Trust != "full" {
+		t.Fatalf("trust = %q, want %q", updated.Trust, "full")
+	}
+
+	// GET reflects the persisted change (the respawned child reads this
+	// record at start — trust is spawn-time-only in the runner).
+	getResp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := decodeJSON[struct {
+		Trust string `json:"trust"`
+	}](t, getResp)
+	if fetched.Trust != "full" {
+		t.Fatalf("fetched trust = %q, want %q", fetched.Trust, "full")
+	}
+
+	// Fail closed on anything outside the registry — a typo must never fall
+	// through to the provider's default (full-access) spawn branch.
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/trust", map[string]string{"trust": "Full Access"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid trust status = %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestStartCancelPipeline(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	data := dataclient.New(base, "test")

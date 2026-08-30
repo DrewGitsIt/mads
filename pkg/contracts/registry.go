@@ -1,6 +1,11 @@
 package contracts
 
-import "time"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 // Quadrant labels an agent's collaboration style (spec §9): the persona
 // filter used by auto-selection and the agent picker.
@@ -133,6 +138,20 @@ type WorkspaceRepo struct {
 	Primary bool   `json:"primary,omitempty"`
 }
 
+// AbsPath returns Path with a leading "~" expanded to the user's home
+// directory. Repo paths are stored as the user typed them ("~/repo/mads"
+// stays home-relative in the DB), but nothing downstream expands ~ — not
+// exec.Cmd.Dir, not git -C — so any consumer that touches the filesystem
+// must go through this, not Path.
+func (r WorkspaceRepo) AbsPath() string {
+	if r.Path == "~" || strings.HasPrefix(r.Path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, r.Path[1:])
+		}
+	}
+	return r.Path
+}
+
 // WorkspaceDefaults are the settings sessions inherit from their workspace
 // (spec §10: workspace overrides global, session overrides workspace).
 type WorkspaceDefaults struct {
@@ -161,11 +180,12 @@ type Workspace struct {
 
 // PrimaryRepo returns the filesystem path of the workspace's primary repo —
 // the one that anchors worktree isolation (spec §17) — and whether one is
-// declared at all.
+// declared at all. The path is home-expanded (AbsPath): callers hand it
+// straight to chdir/git.
 func (w Workspace) PrimaryRepo() (string, bool) {
 	for _, r := range w.Repos {
 		if r.Primary {
-			return r.Path, true
+			return r.AbsPath(), true
 		}
 	}
 	return "", false

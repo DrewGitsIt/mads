@@ -123,9 +123,15 @@ type ToolUse struct {
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input,omitempty"`
-	// Path is set when the tool touched a file — the provider layer's
-	// contribution to §5 attribution (origin tool_use).
+	// Path is set when the tool referenced a file — read or write. Digests
+	// and transcripts render it for both; §5 file-change tracking must not
+	// use it alone, because a Read/Grep/Glob carries a Path too.
 	Path string `json:"path,omitempty"`
+	// Mutates is true only when the tool writes or deletes the file at Path,
+	// per the adapter's own knowledge of its tool vocabulary (claude-code
+	// tool names, ACP's kind taxonomy). This, not Path, is the §5
+	// file-change signal.
+	Mutates bool `json:"mutates,omitempty"`
 }
 
 // Usage is token accounting for one turn or one-shot (event log → metrics

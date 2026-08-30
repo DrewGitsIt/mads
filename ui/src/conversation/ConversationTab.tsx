@@ -113,7 +113,6 @@ export function ConversationTab({
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
-  const [turnBlocked, setTurnBlocked] = useState<string>();
   // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
   // the ordered items; enqueue/finish/reset are stable across renders.
   const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed(routerClient)));
@@ -172,7 +171,6 @@ export function ConversationTab({
     setSession(null);
     setMessages([]);
     setTurnPhase("idle");
-    setTurnBlocked(undefined);
     pacerReset();
     setPermissionRequests(new Map());
     setLastUsage(undefined);
@@ -251,6 +249,28 @@ export function ConversationTab({
       setSession((s) => (s ? { ...s, ...patch } : s));
     },
     [],
+  );
+
+  // Header trust pill → POST /sessions/{id}/trust. Unlike the local-only
+  // pills above this one persists (and the Router bounces a live child so
+  // the new level actually applies — trust is spawn-time-only in the
+  // runner); the toast says so instead of leaving the restart mysterious.
+  const handleChangeTrust = useCallback(
+    (trust: NonNullable<Session["trust"]>) => {
+      void routerClient
+        .setSessionTrust(sessionId, trust)
+        .then((updated) => {
+          setSession((s) => (s ? { ...s, trust: updated.trust } : s));
+          setCommandToast({ tone: "ok", message: `Trust set to ${trust} — agent restarted to apply it.` });
+        })
+        .catch((err) => {
+          setCommandToast({
+            tone: "bad",
+            message: err instanceof Error ? err.message : "Failed to change trust.",
+          });
+        });
+    },
+    [routerClient, sessionId],
   );
 
   // Shares SessionWorkspace's session-scoped subscription (see
@@ -408,7 +428,6 @@ export function ConversationTab({
     pacerFinish(() => {
       void refetchAfterTurn().finally(() => {
         setTurnPhase("idle");
-        setTurnBlocked(undefined);
         pacerReset();
       });
     });
@@ -436,13 +455,13 @@ export function ConversationTab({
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_result") return;
       // Attach the result to its live tool card (matched by id) so the card
-      // shows its outcome as it arrives — never a silent no-op, and an error
-      // (e.g. a permission denial) also raises the blocked banner even if the
-      // process then stalls with no further wire activity.
+      // shows its outcome as it arrives — never a silent no-op. An is_error
+      // result renders as the card's own error state; it is NOT a permission
+      // signal (claude reports every ordinary tool failure this way — a
+      // non-zero exit, a missing file), so it must not raise the blocked
+      // banner. Genuine permission stalls arrive as permission_request
+      // events and drive the banner below.
       pacerApplyToolResult(parsed.tool?.id, { text: parsed.text, is_error: parsed.is_error });
-      if (parsed.is_error) {
-        setTurnBlocked("blocked awaiting permission — switch to terminal or raise trust");
-      }
     };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -473,7 +492,6 @@ export function ConversationTab({
       pacerFinish(() => {
         void refetchAfterTurn().finally(() => {
           setTurnPhase("idle");
-          setTurnBlocked(undefined);
           pacerReset();
         });
       });
@@ -488,7 +506,6 @@ export function ConversationTab({
       }
       const parsed = JSON.parse(ev.data) as StreamEvent;
       setTurnPhase("idle");
-      setTurnBlocked(undefined);
       pacerReset();
       setSendError(parsed.kind === "error" ? parsed.text : "The agent hit an error.");
     };
@@ -641,6 +658,15 @@ export function ConversationTab({
   const inChatTurn = activeMode === "chat" && turnPhase === "live";
   const liveItems = inChatTurn ? pacer.items : [];
   const lastLiveItem = liveItems[liveItems.length - 1];
+  // A genuinely parked tool call: the PreToolUse hook broadcast a
+  // permission_request and hasn't seen a decision yet. Derived (not stored)
+  // so the banner clears itself the moment the terminal-status event
+  // (allowed/denied/expired) upserts over the pending entry — no separate
+  // clear-on-turn-end bookkeeping to get out of sync.
+  const pendingPermission = [...permissionRequests.values()].find((r) => r.status === "pending");
+  const turnBlocked = pendingPermission
+    ? `blocked awaiting permission for ${pendingPermission.tool} — allow or deny below, or raise trust in the header`
+    : undefined;
   // Trailing "working" affordance — only when the tail isn't itself visibly
   // streaming: pre-first-output, a tool awaiting its result, or a stall.
   const working: { tool?: ToolUse; blocked?: string } | false = !inChatTurn
@@ -673,6 +699,7 @@ export function ConversationTab({
         mode={activeMode}
         onModeChange={(m) => void handleToggle(m)}
         onUpdateSession={handleUpdateSession}
+        onChangeTrust={handleChangeTrust}
       />
 
       <div className={styles.body}>

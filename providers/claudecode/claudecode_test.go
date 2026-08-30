@@ -785,6 +785,20 @@ func TestDefaultModelsAreVersionQualified(t *testing.T) {
 	}
 }
 
+// Guards against duplicate entries in the pinned list — the UI keys its
+// picker rows by ID, so a repeated ID renders twice (and trips React's
+// duplicate-key warning). A copy-paste duplicate shipped exactly this way
+// once; nothing downstream dedups (reads.go copies the slice verbatim).
+func TestDefaultModelsHaveUniqueIDs(t *testing.T) {
+	seen := map[string]bool{}
+	for _, m := range DefaultModels {
+		if seen[m.ID] {
+			t.Errorf("model ID %q appears more than once", m.ID)
+		}
+		seen[m.ID] = true
+	}
+}
+
 // TestRealClaudeSmoke exercises the real binary. Opt-in: it spends real
 // tokens. MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run Smoke
 func TestRealClaudeSmoke(t *testing.T) {

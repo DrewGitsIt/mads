@@ -1193,7 +1193,7 @@ func (r *Runner) pump(sess provider.Session) {
 			r.syncProviderRef(context.Background(), sess)
 			r.persistUsage(context.Background(), ev.Usage)
 		}
-		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
+		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 			r.recordFileChange(ev.Tool.Path)
 		}
 		r.synthEngine.OnEvent(ev)
@@ -1254,7 +1254,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 					r.syncProviderRef(context.Background(), sess)
 					r.persistUsage(context.Background(), ev.Usage)
 				}
-				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" {
+				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 					r.recordFileChange(ev.Tool.Path)
 				}
 				r.synthEngine.OnEvent(ev)
@@ -1288,9 +1288,10 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 	r.died.Do(func() { close(r.Died) })
 }
 
-// recordFileChange reports one path the agent's tools touched to the Data
-// Service (spec §5). "added" on first sighting this run, "modified" after —
-// best effort, since a dropped observation shouldn't interrupt the turn.
+// recordFileChange reports one path the agent's tools wrote (Tool.Mutates —
+// reads carry a Path too but are not changes) to the Data Service (spec §5).
+// "added" on first sighting this run, "modified" after — best effort, since
+// a dropped observation shouldn't interrupt the turn.
 func (r *Runner) recordFileChange(path string) {
 	r.mu.Lock()
 	change := "modified"

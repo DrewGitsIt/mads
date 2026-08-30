@@ -41,6 +41,13 @@ func validateSession(s *contracts.Session) *contracts.ValidationError {
 	if s.SynthesisMode != "" && !s.SynthesisMode.Valid() {
 		v.Add("synthesis_mode", fmt.Sprintf("unknown synthesis mode %q", s.SynthesisMode))
 	}
+	// Fail closed: an unrecognized trust value would otherwise fall through
+	// trustArgs' default branch at spawn (providers/claudecode) and run with
+	// FULL access — a typo'd "read-only" must be rejected here, not silently
+	// granted everything.
+	if s.Trust != "" && !s.Trust.Valid() {
+		v.Add("trust", "must be one of: full, limited, read_only")
+	}
 	if v.Empty() {
 		return nil
 	}

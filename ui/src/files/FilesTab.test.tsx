@@ -29,6 +29,23 @@ describe("FilesTab", () => {
     expect(await screen.findByText(/ingest: add retry backoff/)).toBeTruthy();
   });
 
+  it("collapses the append-only ledger to one working-change row per file", async () => {
+    const sid = "session-files-clean";
+    const client = new FakeRouterClient(undefined, undefined, undefined, undefined, undefined, {
+      [sid]: [
+        { id: 1, session_id: sid, path: "src/a.ts", change: "added" as const, origin: "tool_use" as const, attributed: true, timestamp: "2026-08-29T00:00:01Z" },
+        { id: 2, session_id: sid, path: "src/a.ts", change: "modified" as const, origin: "tool_use" as const, attributed: true, timestamp: "2026-08-29T00:00:02Z" },
+        { id: 3, session_id: sid, path: "src/a.ts", change: "modified" as const, origin: "tool_use" as const, attributed: true, timestamp: "2026-08-29T00:00:03Z" },
+        { id: 4, session_id: sid, path: "src/b.ts", change: "modified" as const, origin: "tool_use" as const, attributed: true, timestamp: "2026-08-29T00:00:04Z" },
+      ],
+    });
+    render(<FilesTab sessionId={sid} routerClient={client} />);
+
+    expect(await screen.findByText("src/a.ts")).toBeTruthy();
+    expect(screen.getAllByText("src/a.ts")).toHaveLength(1);
+    expect(screen.getAllByText("src/b.ts")).toHaveLength(1);
+  });
+
   it("shows the diff for a selected file", async () => {
     const client = new FakeRouterClient();
     render(<FilesTab sessionId="session-files-clean" routerClient={client} />);

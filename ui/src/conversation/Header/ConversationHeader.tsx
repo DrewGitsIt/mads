@@ -3,9 +3,10 @@ import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import { Popover } from "../../components/Popover/Popover";
-import type { Model, Session, Usage } from "../../router/types";
+import type { Model, Session, SessionTrust, Usage } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
+import { trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
 import { ContextMeter } from "./ContextMeter";
 import styles from "./ConversationHeader.module.css";
 
@@ -17,9 +18,15 @@ export interface ConversationHeaderProps {
   mode?: "chat" | "terminal";
   onModeChange?: (mode: "chat" | "terminal") => void;
   onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => void;
+  /**
+   * Changes the session's trust level live (POST /sessions/{id}/trust) —
+   * the actionable half of the blocked-permission banner's "raise trust".
+   * Absent → the pill renders as a static chip (e.g. gallery renders).
+   */
+  onChangeTrust?: (trust: SessionTrust) => void;
 }
 
-type PillField = "agent" | "model";
+type PillField = "agent" | "model" | "trust";
 
 /**
  * Conversation-tab meta strip: context meter + agent/model pills + workspace/
@@ -34,6 +41,7 @@ export function ConversationHeader({
   mode,
   onModeChange,
   onUpdateSession,
+  onChangeTrust,
 }: ConversationHeaderProps) {
   const [openPill, setOpenPill] = useState<PillField | null>(null);
   const modelsByProvider = useProviderModels();
@@ -74,6 +82,20 @@ export function ConversationHeader({
             }}
           />
         )}
+
+        <TrustPickerPill
+          trust={session.trust}
+          open={openPill === "trust"}
+          onOpen={() => setOpenPill("trust")}
+          onClose={() => setOpenPill(null)}
+          onSelect={
+            onChangeTrust &&
+            ((t) => {
+              setOpenPill(null);
+              if (t !== session.trust) onChangeTrust(t);
+            })
+          }
+        />
 
         {mode && onModeChange && (
           <div className={styles.modeSwitch}>
@@ -151,6 +173,69 @@ function PillPopover({ value: rawValue, label, open, onOpen, onCommit, onClose }
         </Panel>
       )}
     </div>
+  );
+}
+
+interface TrustPickerPillProps {
+  trust?: SessionTrust;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect?: (trust: SessionTrust) => void;
+}
+
+/**
+ * Shows the session's live trust level and switches it from a dropdown —
+ * the affordance the blocked-permission banner's "raise trust" points at.
+ * An unset trust renders as "limited": that's the backend's builtin default
+ * (services/router/internal/api/sessiondefaults.go), so showing anything
+ * else here would misreport what the spawned agent can actually do. Trust
+ * is spawn-time-only in the runner, so selecting a level restarts the agent
+ * process (the Router bounces a live child as part of the call).
+ */
+function TrustPickerPill({ trust, open, onOpen, onClose, onSelect }: TrustPickerPillProps) {
+  const levels = trustLevels();
+  const current = trust ?? "limited";
+  const label = `trust: ${levels.find((l) => l.value === current)?.label ?? current}`;
+
+  if (!onSelect) {
+    return <Chip tone="info">{label}</Chip>;
+  }
+
+  return (
+    <Popover
+      open={open}
+      onClose={onClose}
+      anchor={
+        <button
+          type="button"
+          className={styles.modelTrigger}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          onClick={() => (open ? onClose() : onOpen())}
+        >
+          {label}
+          <span className={styles.caret} aria-hidden="true">▾</span>
+        </button>
+      }
+    >
+      <div className={styles.modelMenu} role="listbox" aria-label="Trust level">
+        {levels.map((l) => (
+          <button
+            key={l.value}
+            type="button"
+            role="option"
+            aria-selected={l.value === current}
+            className={[styles.modelOption, l.value === current ? styles.modelOptionSelected : ""]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={() => onSelect(l.value)}
+          >
+            {l.label}
+          </button>
+        ))}
+      </div>
+    </Popover>
   );
 }
 

@@ -116,7 +116,7 @@ describe("useMentionResolver", () => {
     const client = new FakeRouterClient();
     const models: Model[] = [
       { id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true },
-      { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      { id: "claude-opus-5", name: "Claude Opus 5" },
     ];
     vi.spyOn(client, "listModels").mockResolvedValue(models);
 
@@ -128,8 +128,8 @@ describe("useMentionResolver", () => {
     expect(client.listModels).toHaveBeenCalledWith("claudecode");
     expect(result.current.candidates).toEqual([
       expect.objectContaining({
-        id: "claude-opus-4-8",
-        label: "Claude Opus 4.8",
+        id: "claude-opus-5",
+        label: "Claude Opus 5",
         kind: "command-action",
         group: "model",
       }),

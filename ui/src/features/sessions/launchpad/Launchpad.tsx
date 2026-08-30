@@ -59,6 +59,15 @@ export function Launchpad({
   const [stagedLinks, setStagedLinks] = useState<LinkRequest[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  // In-flight create guard. Creating a session is slow by construction
+  // (agent auto-selection runs Fast-Model calls inside the request, then the
+  // child spawn waits for a readiness handshake) — without this, every Enter
+  // press or button click in that multi-second window fires another real
+  // POST /sessions (the incident: one goal, three sessions). The ref is the
+  // synchronous arbiter (state updates don't land within a same-tick double
+  // keypress); the state drives the disabled button and "Starting…" label.
+  const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { providers } = useProviderMatrix();
 
@@ -79,7 +88,9 @@ export function Launchpad({
 
   async function submit() {
     const trimmed = text.trim();
-    if (trimmed === "") return;
+    if (trimmed === "" || submittingRef.current) return;
+    submittingRef.current = true;
+    setSubmitting(true);
     try {
       const session = await createSession({
         name: deriveSessionName(trimmed),
@@ -101,6 +112,9 @@ export function Launchpad({
       onSessionCreated(session, buildGoalText(trimmed, attachments));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      submittingRef.current = false;
+      setSubmitting(false);
     }
   }
 
@@ -173,10 +187,10 @@ export function Launchpad({
                   <Button
                     variant="primary"
                     className={styles.splitMain}
-                    disabled={text.trim() === ""}
+                    disabled={text.trim() === "" || submitting}
                     onClick={() => void submit()}
                   >
-                    {stagedLinks.length > 0 ? "Start & link" : "Start session"}
+                    {submitting ? "Starting…" : stagedLinks.length > 0 ? "Start & link" : "Start session"}
                   </Button>
                   <Popover
                     open={menuOpen}
@@ -217,10 +231,10 @@ export function Launchpad({
               ) : (
                 <Button
                   variant="primary"
-                  disabled={text.trim() === ""}
+                  disabled={text.trim() === "" || submitting}
                   onClick={() => void submit()}
                 >
-                  Start session
+                  {submitting ? "Starting…" : "Start session"}
                 </Button>
               )}
             </div>

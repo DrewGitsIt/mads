@@ -35,6 +35,7 @@ import type {
   Retro,
   Session,
   SessionDefaults,
+  SessionTrust,
   StreamEvent,
   Task,
   TaskOutcomes,
@@ -894,6 +895,13 @@ export class FakeRouterClient implements RouterClient {
     if (!session) throw new Error(`fixture session not found: ${id}`);
     session.name = name;
     session.name_source = "user";
+    return session;
+  }
+
+  async setSessionTrust(id: string, trust: SessionTrust): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`fixture session not found: ${id}`);
+    session.trust = trust;
     return session;
   }
 

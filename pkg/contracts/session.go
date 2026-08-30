@@ -27,6 +27,19 @@ const (
 	TrustReadOnly SessionTrust = "read_only"
 )
 
+// SessionTrusts is the full registry, for validation and enumeration.
+var SessionTrusts = []SessionTrust{TrustFull, TrustLimited, TrustReadOnly}
+
+// Valid reports whether t is a registered trust level.
+func (t SessionTrust) Valid() bool {
+	for _, v := range SessionTrusts {
+		if t == v {
+			return true
+		}
+	}
+	return false
+}
+
 // SynthesisMode controls the synthesis engine's trigger sensitivity (spec §4,
 // §10): off does nothing, light surfaces only high-confidence drafts, full
 // surfaces everything the fast model proposes.

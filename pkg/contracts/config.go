@@ -285,7 +285,7 @@ func ValidateConfig(c *Config) *ValidationError {
 	if c.CostAlertCents < 0 {
 		v.Add("cost_alert_cents", "must not be negative")
 	}
-	if c.DefaultTrust != "" && c.DefaultTrust != TrustFull && c.DefaultTrust != TrustLimited && c.DefaultTrust != TrustReadOnly {
+	if c.DefaultTrust != "" && !c.DefaultTrust.Valid() {
 		v.Add("default_trust", "must be one of: full, limited, read_only")
 	}
 	if c.EnvMode != "" && !c.EnvMode.Valid() {

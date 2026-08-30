@@ -69,7 +69,7 @@ func shellSingleQuote(s string) string {
 // denies rather than leaving claude to interpret empty/malformed stdout.
 func writePermissionSettings(url string) (path string, err error) {
 	command := fmt.Sprintf(
-		`curl -s -X POST --max-time %d -d @- %s || echo '{"hookSpecificOutput":{"permissionDecision":"deny"},"systemMessage":"permission service unreachable"}'`,
+		`curl -s -X POST --max-time %d -d @- %s || echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"permission service unreachable"}'`,
 		curlMaxTimeSeconds, shellSingleQuote(url),
 	)
 	cfg := settingsFile{PreToolUse: []matcherEntry{{

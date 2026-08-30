@@ -88,6 +88,39 @@ describe("Launchpad", () => {
     );
   });
 
+  it("fires exactly one create for rapid repeat submits while the request is in flight", async () => {
+    // Regression: creating a session takes multi-second server work (agent
+    // auto-selection, child spawn) and there was no in-flight guard — every
+    // Enter press or click in that window POSTed another real session (the
+    // incident: one goal, three sessions, each burning a full turn).
+    const session = makeSession({ id: "s43", name: "One goal one session" });
+    let resolveCreate!: (s: Session) => void;
+    const createSession = vi
+      .fn()
+      .mockImplementation(() => new Promise<Session>((r) => (resolveCreate = r)));
+    const onSessionCreated = vi.fn();
+    render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+
+    const composer = screen.getByLabelText("Describe your goal");
+    fireEvent.change(composer, { target: { value: "One goal one session" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    fireEvent.click(screen.getByText("Starting…"));
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    // Visible pending affordance: the button reads "Starting…" and is
+    // disabled instead of sitting inert and clickable.
+    expect((screen.getByText("Starting…") as HTMLButtonElement).disabled).toBe(true);
+
+    resolveCreate(session);
+    await waitFor(() => expect(onSessionCreated).toHaveBeenCalledTimes(1));
+    // Guard releases after the flight: a fresh goal can submit again.
+    fireEvent.change(composer, { target: { value: "A second, separate goal" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+  });
+
   it("selecting Auto sends agent: 'auto' plus the composer's opening_prompt", async () => {
     const session = makeSession({ id: "s44", agent: "investigator-bot" });
     const createSession = vi.fn().mockResolvedValue(session);

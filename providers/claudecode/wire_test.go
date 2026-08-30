@@ -44,6 +44,32 @@ func TestStreamEventNonTextIgnored(t *testing.T) {
 // The whole-message assistant text block is a duplicate of the streamed
 // deltas on the interactive transport (partial=true) — dropped there, but
 // still the sole text source for the one-shot path (partial=false).
+// Only the write tools mark Mutates; Read/Grep still carry a Path for
+// digest/transcript rendering but must not feed §5 file tracking — a
+// session that read 15 files and edited 2 changed 2 files, not 17.
+func TestToolUseMutatesOnlyForWriteTools(t *testing.T) {
+	l := parseWireLine(t, `{"type":"assistant","message":{"role":"assistant","content":[`+
+		`{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.go"}},`+
+		`{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"a.go"}},`+
+		`{"type":"tool_use","id":"t3","name":"Write","input":{"file_path":"b.go"}},`+
+		`{"type":"tool_use","id":"t4","name":"Grep","input":{"path":"pkg"}}]}}`)
+
+	evs := l.events(false, false)
+	if len(evs) != 4 {
+		t.Fatalf("want 4 tool_use events, got %+v", evs)
+	}
+	want := []struct {
+		path    string
+		mutates bool
+	}{{"a.go", false}, {"a.go", true}, {"b.go", true}, {"pkg", false}}
+	for i, w := range want {
+		tool := evs[i].Tool
+		if tool == nil || tool.Path != w.path || tool.Mutates != w.mutates {
+			t.Errorf("event %d: got %+v, want path=%q mutates=%v", i, tool, w.path, w.mutates)
+		}
+	}
+}
+
 func TestAssistantTextSkippedWhenPartial(t *testing.T) {
 	l := parseWireLine(t, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"whole reply"},{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.go"}}]}}`)
 

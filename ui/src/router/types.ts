@@ -534,10 +534,9 @@ export interface MergeResult {
   files?: string[];
 }
 
-// Matches GET /sessions/{id}/commits/{hash}/diff's fileDiff response
-// (services/router/internal/api/commit_diff.go). GET /sessions/{id}/changes
-// (getFileDiff, working-change diffs) has no Router route yet — see
-// knownGapRoutes in route_manifest_test.go — but the shape is shared.
+// Matches the fileDiff response shared by GET
+// /sessions/{id}/commits/{hash}/diff (commit_diff.go) and GET
+// /sessions/{id}/changes (working_diff.go, working-change diffs).
 // `language` is a Monaco language id, guessed client-side from the path
 // extension — fine to get wrong, it only affects syntax highlighting.
 export interface FileDiff {

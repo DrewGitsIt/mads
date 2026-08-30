@@ -52,6 +52,15 @@ const (
 	// SessionCrashed fires when the Router's supervision detects a Session
 	// Service child exited unexpectedly. Payload: {"reason": string}.
 	SessionCrashed EventType = "session.crashed"
+	// SessionPermissionRequested fires when a PreToolUse hook parks a tool
+	// call awaiting an allow/deny decision (chat transport, limited/
+	// read-only trust). Payload: {"request_id", "tool": string}. Its
+	// resolution fires SessionPermissionResolved with {"request_id", "tool",
+	// "status": "allowed"|"denied"|"expired"}. Persisted (unlike the live
+	// EventPermissionRequest stream frame) so a stalled-awaiting-permission
+	// incident is diagnosable from the event log after the fact.
+	SessionPermissionRequested EventType = "session.permission_requested"
+	SessionPermissionResolved  EventType = "session.permission_resolved"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -307,6 +316,7 @@ const (
 // EventTypes is the full registry, for validation and enumeration.
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
+	SessionPermissionRequested, SessionPermissionResolved,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

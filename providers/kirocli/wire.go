@@ -138,5 +138,9 @@ func (u *toolCallUpdate) toolUse() *provider.ToolUse {
 	if u == nil {
 		return nil
 	}
-	return &provider.ToolUse{Name: u.Title, Input: u.Input, Path: toolPath(u.Input)}
+	// Title is free display text, so mutation is derived from ACP's Kind
+	// taxonomy instead: edit/delete/move touch the file, everything else
+	// (read/search/execute/think/fetch/other) is a read for §5 purposes.
+	mutates := u.Kind == "edit" || u.Kind == "delete" || u.Kind == "move"
+	return &provider.ToolUse{Name: u.Title, Input: u.Input, Path: toolPath(u.Input), Mutates: mutates}
 }

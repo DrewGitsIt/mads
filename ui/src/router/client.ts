@@ -36,6 +36,7 @@ import type {
   Retro,
   Session,
   SessionDefaults,
+  SessionTrust,
   Task,
   TaskOutcomes,
   TaskStatus,
@@ -105,6 +106,7 @@ export interface RouterClient {
   closeSession(sessionId: string): Promise<void>;
   resumeSession(sessionId: string): Promise<{ addr: string }>;
   renameSession(id: string, name: string): Promise<Session>;
+  setSessionTrust(id: string, trust: SessionTrust): Promise<Session>;
   deleteSession(id: string): Promise<void>;
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
@@ -519,6 +521,12 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, `/sessions/${id}/rename`, { name });
   }
 
+  async setSessionTrust(id: string, trust: SessionTrust): Promise<Session> {
+    // Trust is spawn-time-only in the runner, so the Router bounces a live
+    // child as part of this call — an in-flight turn is interrupted.
+    return routerPost(this.baseUrl, `/sessions/${id}/trust`, { trust });
+  }
+
   async deleteSession(id: string): Promise<void> {
     return routerDelete(this.baseUrl, `/sessions/${id}`);
   }
@@ -624,8 +632,8 @@ export class FetchRouterClient implements RouterClient {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/commits`);
   }
 
-  // No diff-content endpoint exists anywhere yet (HANDOFF §1) — hits the
-  // MADS-UX-named path so it's a rename, not a redesign, once one lands.
+  // Working-change diff (services/router/internal/api/working_diff.go):
+  // HEAD-vs-disk for a file in the session's file-change ledger.
   async getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId });
   }

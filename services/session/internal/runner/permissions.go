@@ -1,10 +1,13 @@
 package runner
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -45,6 +48,11 @@ func (r *Runner) RequestPermission(tool string, input json.RawMessage) string {
 	r.permMu.Unlock()
 
 	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &pp.req})
+	// Persisted (unlike the hub frame, which only live viewers see) so a
+	// session that sat parked awaiting a decision is diagnosable from the
+	// event log after the fact.
+	r.appendPermissionEvent(contracts.SessionPermissionRequested,
+		map[string]string{"request_id": id, "tool": tool})
 
 	timeout := r.PermissionTimeout
 	if timeout <= 0 {
@@ -96,7 +104,25 @@ func (r *Runner) finishPermission(id, decision, status string) bool {
 	pp.req.Status = status
 	pp.resolved <- decision
 	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &pp.req})
+	r.appendPermissionEvent(contracts.SessionPermissionResolved,
+		map[string]string{"request_id": id, "tool": pp.req.Tool, "status": status})
 	return true
+}
+
+// appendPermissionEvent persists one permission lifecycle event, best-effort
+// (a failed append is logged, never blocks the decision path). Nil r.data —
+// unit tests build Runners without a Data Service — is a no-op.
+func (r *Runner) appendPermissionEvent(t contracts.EventType, payload map[string]string) {
+	if r.data == nil {
+		return
+	}
+	if err := r.data.Append(context.Background(), &contracts.Envelope{
+		Type:      t,
+		SessionID: r.sessionID,
+		Payload:   mustJSON(payload),
+	}); err != nil {
+		log.Printf("runner: append %s: %v", t, err)
+	}
 }
 
 // PermissionRequests returns every still-pending request for this session —

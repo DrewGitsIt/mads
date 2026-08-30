@@ -343,8 +343,16 @@ func (s *server) handlePermissionHook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	decision := s.runner.RequestPermission(body.ToolName, body.ToolInput)
+	// hookEventName is part of claude's hookSpecificOutput contract for
+	// PreToolUse (the repo's own SessionStart hook includes its equivalent —
+	// see providers/claudecode/complete_test.go). Omitting it risks claude
+	// treating the output as malformed and falling back to its default
+	// ask-with-nobody-to-answer, i.e. a silent indefinite stall.
 	resp := map[string]any{
-		"hookSpecificOutput": map[string]string{"permissionDecision": decision},
+		"hookSpecificOutput": map[string]string{
+			"hookEventName":      "PreToolUse",
+			"permissionDecision": decision,
+		},
 	}
 	if decision == "deny" {
 		resp["systemMessage"] = "Permission request was denied (or expired awaiting a response) via the chat UI."

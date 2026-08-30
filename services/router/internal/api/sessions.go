@@ -126,6 +126,47 @@ func (s *server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// handleSetSessionTrust changes a session's trust level after creation —
+// the "raise trust" path the blocked-permission banner points at. Trust is
+// read exactly once, at child spawn (services/session/internal/runner), so
+// when a child is currently running the session is bounced to apply the new
+// level — same semantics as the header's restart action, meaning an
+// in-flight turn is interrupted. With no live child, the updated record is
+// simply what the next spawn reads.
+func (s *server) handleSetSessionTrust(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Trust contracts.SessionTrust `json:"trust"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if !body.Trust.Valid() {
+		writeErrMsg(w, http.StatusBadRequest, "set session trust: ",
+			errors.New("trust must be one of: full, limited, read_only"))
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess.Trust = body.Trust
+	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	if _, running := s.sup.SessionPID(id); running {
+		if _, err := s.sup.BounceSession(r.Context(), id); err != nil {
+			// The record is updated either way; report the bounce failure so
+			// the UI can say "applies on next restart" instead of lying.
+			writeErrMsg(w, http.StatusBadGateway, "set session trust: applied, but restarting the agent failed: ", err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, sess)
+}
+
 func (s *server) handleTerminateSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := s.sup.TerminateSession(r.Context(), id); err != nil {

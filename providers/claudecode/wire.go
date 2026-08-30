@@ -125,8 +125,21 @@ func toolResultText(raw json.RawMessage) string {
 	return strings.Join(texts, "\n")
 }
 
-// toolPath digs the touched file out of a tool input, if any — the §5
-// tool-use attribution signal.
+// toolMutates reports whether a claude-code tool writes the file its input
+// names. Everything else that carries a file_path/path (Read, Grep, Glob,
+// unknown MCP tools) is a read as far as §5 file tracking is concerned —
+// fail closed: an unrecognized tool is not reported as a file change.
+func toolMutates(name string) bool {
+	switch name {
+	case "Write", "Edit", "MultiEdit", "NotebookEdit":
+		return true
+	}
+	return false
+}
+
+// toolPath digs the referenced file out of a tool input, if any — rendered
+// in digests/transcripts for reads and writes alike; pair with toolMutates
+// for the §5 file-change signal.
 func toolPath(input json.RawMessage) string {
 	var in struct {
 		FilePath     string `json:"file_path"`
@@ -167,6 +180,7 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 			case "tool_use":
 				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 					ID: b.ID, Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
+					Mutates: toolMutates(b.Name),
 				}})
 			}
 		}

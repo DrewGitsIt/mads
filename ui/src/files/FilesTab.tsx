@@ -3,6 +3,7 @@ import { Chip } from "../components/Chip/Chip";
 import { Panel, PanelBody, PanelHeader } from "../components/Panel/Panel";
 import type { RouterClient } from "../router/client";
 import type { Commit, FileChange, FileDiff, Session } from "../router/types";
+import { collapseChanges } from "../context-rail/collapseChanges";
 import { ChangeList } from "./ChangeList/ChangeList";
 import { CommitList } from "./ChangeList/CommitList";
 import { DiffViewer } from "./DiffViewer/DiffViewer";
@@ -39,6 +40,11 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
   const [diffError, setDiffError] = useState<string | undefined>();
 
   const scopedTaskId = scope === "task" ? taskId : undefined;
+
+  // getFileChanges returns the append-only touch ledger (one row per
+  // observation), so a file edited many times would render many rows here.
+  // Collapse to one row per file with its net status, as the rail does.
+  const workingChanges = collapseChanges(changes);
 
   // Opened from the rail — select the working-change diff for that file. Keyed
   // on focusPath so re-opening a different file re-selects; the rail always
@@ -130,7 +136,7 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
           </div>
         )}
 
-        {commits.length === 0 && changes.length === 0 ? (
+        {commits.length === 0 && workingChanges.length === 0 ? (
           <Panel>
             <PanelBody>
               <div className={styles.emptyBoth}>
@@ -157,12 +163,12 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
                 </PanelBody>
               </Panel>
             )}
-            {changes.length > 0 && (
+            {workingChanges.length > 0 && (
               <Panel>
                 <PanelHeader>Working changes</PanelHeader>
                 <PanelBody>
                   <ChangeList
-                    changes={changes}
+                    changes={workingChanges}
                     selectedPath={selection?.source === "working" ? selection.path : undefined}
                     onSelect={(path) => setSelection({ source: "working", path })}
                   />

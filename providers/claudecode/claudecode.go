@@ -61,9 +61,8 @@ type Config struct {
 // call, hence model_discovery: emulated in the matrix.
 var DefaultModels = []provider.Model{
 	{ID: "claude-fable-5", Name: "Claude Fable 5"},
-	{ID: "claude-fable-5", Name: "Claude Fable 5"},
 	{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Default: true},
-	{ID: "claude-opus-4-8", Name: "Claude Opus 4.8"},
+	{ID: "claude-opus-5", Name: "Claude Opus 5"},
 	{ID: "claude-haiku-4-5-20251001", Name: "Claude Haiku 4.5"},
 }
 

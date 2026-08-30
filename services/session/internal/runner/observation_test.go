@@ -15,8 +15,10 @@ import (
 	"github.com/drewkidwell/mads/services/data/datatest"
 )
 
-// A fake-provider session whose scripted tool writes a file yields the
-// correct touched-file set through the session's own read path (spec §5).
+// A fake-provider session whose scripted tools write one file and read
+// another yields exactly the written file through the session's own read
+// path (spec §5) — a read-only tool use carries a Path too, and recording
+// it as a change is what once inflated a session's file count 40%.
 func TestFilesTracksToolUsePaths(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)
@@ -28,6 +30,9 @@ func TestFilesTracksToolUsePaths(t *testing.T) {
 		Rules: []fake.Rule{
 			{Match: "write it", Reply: "done", Tools: []fake.ToolStep{
 				{Name: "write_file", Path: "foo.txt", Content: "hello"},
+				// Path but no Content: the fake's read shape (executeTool
+				// skips it) — must not appear in the touched-file set.
+				{Name: "read_file", Path: "bar.txt"},
 			}},
 		},
 	})

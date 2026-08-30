@@ -142,10 +142,13 @@ pins `events()`'s live parsing of it, alongside
 `TestTranscriptNormalizationDenialGolden`'s existing coverage of the
 on-disk path.
 
-The frontend renders an `EventToolResult` with `is_error: true` as a
-system-toned banner on the pending tool card ("blocked awaiting permission —
-switch to terminal or raise trust") rather than leaving the working
-indicator spinning silently — see `ui/src/conversation/ChatRenderer/`.
+The frontend renders an `EventToolResult` with `is_error: true` as the
+error state on its own tool card (claude reports *every* ordinary tool
+failure this way — a non-zero exit, a missing file — so it must not be
+treated as a permission signal). The "blocked awaiting permission" banner is
+driven exclusively by `EventPermissionRequest` (the hook below), which
+carries the parked tool's name and clears itself when the request resolves —
+see `ui/src/conversation/ConversationTab.tsx` and `ChatRenderer/`.
 
 ### Answering the prompt itself: the permission hook (chat transport only)
 

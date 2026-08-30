@@ -22,6 +22,7 @@ var routeManifest = []struct {
 	{"GET", "/sessions/abc", "GET /sessions/{id}"},
 	{"GET", "/sessions/abc/transcript", "GET /sessions/{id}/transcript"},
 	{"POST", "/sessions/abc/bounce", "POST /sessions/{id}/bounce"},
+	{"POST", "/sessions/abc/trust", "POST /sessions/{id}/trust"},
 	{"GET", "/capabilities", "GET /capabilities"},
 	{"GET", "/tasks", "GET /tasks"},
 	{"GET", "/tasks/abc", "GET /tasks/{id}"},
@@ -37,6 +38,7 @@ var routeManifest = []struct {
 	{"GET", "/sessions/abc/files", "GET /sessions/{id}/files"},
 	{"GET", "/sessions/abc/commits", "GET /sessions/{id}/commits"},
 	{"GET", "/sessions/abc/commits/def/diff", "GET /sessions/{id}/commits/{hash}/diff"},
+	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes"},
 	{"GET", "/events", "GET /events"},
 	{"GET", "/sessions", "GET /sessions"},
 	{"POST", "/sessions", "POST /sessions"},
@@ -126,7 +128,6 @@ var knownGapRoutes = []struct {
 	method, path, pattern, reason string
 }{
 	{"GET", "/mentionables", "GET /mentionables", "getMentionables, not built"},
-	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes", "Files tab / merge-back (getFileDiff), not built"},
 	{"POST", "/system/open-editor", "POST /system/open-editor", "Files tab / merge-back (openInEditor), not built"},
 	{"POST", "/sessions/abc/merge", "POST /sessions/{id}/merge", "Files tab / merge-back (mergeSession), not built"},
 }

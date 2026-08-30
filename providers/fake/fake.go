@@ -541,6 +541,9 @@ func toolEvent(ts ToolStep) provider.Event {
 	}
 	return provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 		Name: ts.Name, Input: input, Path: ts.Path,
+		// Mirrors executeTool: a step only writes when both are set, so a
+		// Path-only step behaves like a read and must not report a change.
+		Mutates: ts.Path != "" && ts.Content != "",
 	}}
 }
 

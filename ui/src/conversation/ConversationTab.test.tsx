@@ -683,7 +683,12 @@ describe("ConversationTab", () => {
     expect(screen.queryByRole("status", { name: "Using Read…" })).toBeNull();
   });
 
-  it("renders a blocked banner instead of a silent stall when a tool_result reports is_error", async () => {
+  it("keeps an errored tool_result on its card without raising the permission banner", async () => {
+    // Regression: claude reports every ordinary tool failure (non-zero exit,
+    // missing file) as tool_result is_error — that used to raise a
+    // "blocked awaiting permission" banner on full-trust sessions and stick
+    // until turn_end, reading as a silent stall. An error is card-local; only
+    // a real permission_request may block the turn indicator.
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
@@ -691,7 +696,7 @@ describe("ConversationTab", () => {
     const source = client.sessionEventSources.at(-1)!;
 
     act(() => {
-      source.emit({ kind: "tool_use", tool: { name: "Bash" } });
+      source.emit({ kind: "tool_use", tool: { id: "toolu_1", name: "Bash" } });
     });
     expect(screen.getByRole("status", { name: "Using Bash…" })).toBeTruthy();
 
@@ -699,17 +704,53 @@ describe("ConversationTab", () => {
       source.emit({
         kind: "tool_result",
         tool: { id: "toolu_1", name: "" },
-        text: "permission denied",
+        text: "Exit code 1",
         is_error: true,
       });
     });
 
+    expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
+    // The turn goes on: the next tool's spinner shows as usual.
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "toolu_2", name: "Read" } });
+    });
+    expect(screen.getByRole("status", { name: "Using Read…" })).toBeTruthy();
+  });
+
+  it("raises the blocked banner from a pending permission_request and clears it on resolution", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "toolu_1", name: "Bash" } });
+    });
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-1", tool: "Bash", input: { command: "rm -rf" }, status: "pending" },
+      });
+    });
+
+    // The banner names the parked tool and replaces the plain spinner.
     expect(
-      screen.getByText("blocked awaiting permission — switch to terminal or raise trust"),
+      screen.getByText(
+        "blocked awaiting permission for Bash — allow or deny below, or raise trust in the header",
+      ),
     ).toBeTruthy();
-    // Never a silent no-op: the pre-turn_end working indicator must not
-    // still be showing the plain "Using Bash…" spinner once blocked.
     expect(screen.queryByRole("status", { name: "Using Bash…" })).toBeNull();
+
+    // The terminal-status broadcast (runner's finishPermission) upserts over
+    // the pending entry — the banner derives from it and clears itself.
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-1", tool: "Bash", input: { command: "rm -rf" }, status: "allowed" },
+      });
+    });
+    expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
   });
 
   it("clears the streamed bubble and replaces it with the persisted transcript on turn_end", async () => {

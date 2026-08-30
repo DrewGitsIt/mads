@@ -163,7 +163,7 @@ func RepoSignals(repos []contracts.WorkspaceRepo, registry []contracts.Capabilit
 	seen := make(map[string]struct{})
 	var out []string
 	for _, repo := range repos {
-		host, ok := remoteHost(repo.Path)
+		host, ok := remoteHost(repo.AbsPath())
 		if !ok {
 			continue
 		}

@@ -28,7 +28,7 @@ describe("ConversationHeader", () => {
   });
 
   it("falls back to the raw model ID when discovery has no match", async () => {
-    stubProviderModels([{ id: "claude-opus-4-8", name: "Claude Opus 4.8" }]);
+    stubProviderModels([{ id: "claude-opus-5", name: "Claude Opus 5" }]);
 
     render(<ConversationHeader session={fixtureSessions["session-active"]} />);
 
@@ -47,7 +47,7 @@ describe("ConversationHeader", () => {
   it("switches models from the provider dropdown via onUpdateSession", async () => {
     stubProviderModels([
       { id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true },
-      { id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      { id: "claude-opus-5", name: "Claude Opus 5" },
     ]);
     const onUpdateSession = vi.fn();
     render(
@@ -60,9 +60,44 @@ describe("ConversationHeader", () => {
     // Discovery must land so the pill is a dropdown, not the static fallback chip.
     await waitFor(() => expect(screen.getByText("Claude Sonnet 5")).toBeTruthy());
     fireEvent.click(screen.getByText("Claude Sonnet 5"));
-    fireEvent.click(screen.getByText("Claude Opus 4.8"));
+    fireEvent.click(screen.getByText("Claude Opus 5"));
 
-    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-4-8" });
+    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" });
+  });
+
+  it("shows the session's trust level, defaulting the display to limited when unset", () => {
+    // fixtureSessions["session-active"] has no trust — the backend's builtin
+    // default is limited, so the pill must not claim anything stronger.
+    render(<ConversationHeader session={fixtureSessions["session-active"]} />);
+    expect(screen.getByText("trust: Limited")).toBeTruthy();
+
+    render(
+      <ConversationHeader session={{ ...fixtureSessions["session-active"], trust: "full" }} />,
+    );
+    expect(screen.getByText("trust: Full access")).toBeTruthy();
+  });
+
+  it("changes trust from the dropdown via onChangeTrust", () => {
+    const onChangeTrust = vi.fn();
+    render(
+      <ConversationHeader
+        session={{ ...fixtureSessions["session-active"], trust: "limited" }}
+        onChangeTrust={onChangeTrust}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("trust: Limited"));
+    fireEvent.click(screen.getByRole("option", { name: "Full access" }));
+
+    expect(onChangeTrust).toHaveBeenCalledWith("full");
+  });
+
+  it("renders trust as a static chip when no onChangeTrust handler is wired", () => {
+    render(<ConversationHeader session={{ ...fixtureSessions["session-active"], trust: "full" }} />);
+
+    const chip = screen.getByText("trust: Full access");
+    fireEvent.click(chip);
+    expect(screen.queryByRole("listbox", { name: "Trust level" })).toBeNull();
   });
 
   it("no longer renders Shell / Restart Agent (moved to the workspace kebab)", () => {

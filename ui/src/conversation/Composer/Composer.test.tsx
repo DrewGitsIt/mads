@@ -420,7 +420,7 @@ describe("Composer", () => {
 
   it("'/model' descends to the session's provider model list and rebinds on select", async () => {
     const client = new FakeRouterClient();
-    const models: Model[] = [{ id: "claude-opus-4-8", name: "Claude Opus 4.8" }];
+    const models: Model[] = [{ id: "claude-opus-5", name: "Claude Opus 5" }];
     vi.spyOn(client, "listModels").mockResolvedValue(models);
     const onUpdateSession = vi.fn();
     const onCommandExecuted = vi.fn();
@@ -443,14 +443,14 @@ describe("Composer", () => {
     expect(textarea.value).toBe("/model ");
 
     await waitFor(() =>
-      expect(menu().getByRole("option", { name: "Claude Opus 4.8" })).toBeTruthy(),
+      expect(menu().getByRole("option", { name: "Claude Opus 5" })).toBeTruthy(),
     );
-    fireEvent.mouseDown(menu().getByRole("option", { name: "Claude Opus 4.8" }));
+    fireEvent.mouseDown(menu().getByRole("option", { name: "Claude Opus 5" }));
 
     expect(client.listModels).toHaveBeenCalledWith("claudecode");
-    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-4-8" });
+    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" });
     await waitFor(() =>
-      expect(onCommandExecuted).toHaveBeenCalledWith("Model set to Claude Opus 4.8"),
+      expect(onCommandExecuted).toHaveBeenCalledWith("Model set to Claude Opus 5"),
     );
     expect(textarea.value).toBe("");
   });
