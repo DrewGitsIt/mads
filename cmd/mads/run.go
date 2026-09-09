@@ -25,7 +25,7 @@ import (
 
 func cmdRun(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	data := fs.String("data", "http://localhost:8081", "Data Service URL")
+	data := fs.String("data", "http://localhost:17374", "Data Service URL")
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")

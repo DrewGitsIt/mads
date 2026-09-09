@@ -140,8 +140,8 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 }
 
 func main() {
-	addr := flag.String("addr", "localhost:8080", "listen address")
-	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
+	addr := flag.String("addr", "localhost:17373", "listen address")
+	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	sessionCmd := flag.String("session-cmd", defaultChildCmd("session", "go run ./services/session"), "command to spawn a Session Service child")
 	pipelineCmd := flag.String("pipeline-cmd", defaultChildCmd("pipeline", "go run ./services/pipeline"), "command to spawn a Pipeline Engine child")
 	fastmodelBaseURL := flag.String("fastmodel-base-url", "", "OpenAI-compatible Fast Model endpoint, used when Settings' Config doesn't set one (empty and unset in Config: Fast Model jobs skip silently)")

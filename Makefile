@@ -51,8 +51,8 @@ e2e-smoke:
 # cached at ~/.cache/ms-playwright (Linux default) — key CI's cache on that
 # path plus the pinned Playwright version in ui/package-lock.json.
 # VITE_ROUTER_URL="" bakes a relative (same-origin) router base into ui/dist
-# instead of the localhost:8080 default (client.ts's ROUTER_BASE) — the
-# Router serves this build itself on an ephemeral port, never 8080.
+# instead of the localhost:17373 default (client.ts's ROUTER_BASE) — the
+# Router serves this build itself on an ephemeral port, never 17373.
 # `flock` around the install: the shared ~/.cache/ms-playwright browser
 # cache is safe to reuse concurrently once populated (Playwright checks a
 # marker file and no-ops), but a concurrent *cold* install from two

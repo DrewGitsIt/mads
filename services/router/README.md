@@ -26,11 +26,11 @@ tasks.
 ## Run it alone
 
 ```sh
-make run        # listens on localhost:8080 (-addr to change)
-curl localhost:8080/health
+make run        # listens on localhost:17373 (-addr to change)
+curl localhost:17373/health
 ```
 
-Flags: `-data-url` (default `http://localhost:8081`) points at the Data Service;
+Flags: `-data-url` (default `http://localhost:17374`) points at the Data Service;
 `-session-cmd`/`-pipeline-cmd` are the commands used to spawn children, defaulting to a
 same-directory sibling binary (`session`/`pipeline`) of the running router executable if
 one exists — the layout `make build` produces — else falling back to `go run
@@ -241,7 +241,7 @@ same whether the rejection came from its own decoding or a proxied dataclient ca
 ## CORS
 
 The Router serves the UI's HTTP surface, but the Vite dev server runs on its own
-origin (`localhost:5173`) and calling the Router (`localhost:8080`) cross-origin
+origin (`localhost:5173`) and calling the Router (`localhost:17373`) cross-origin
 would otherwise be blocked by the browser (Electron isn't affected — it doesn't
 enforce Origin). `internal/api/cors.go` wraps the whole mux with a default-on,
 localhost-only CORS policy — no flag/env to toggle it off:
@@ -262,7 +262,7 @@ localhost-only CORS policy — no flag/env to toggle it off:
 
 The Router serves the built UI (`ui/dist`, or wherever `-ui-dist` points) directly at `/`
 (`internal/static`), so the packaged app is same-origin with its own API — Electron loads
-`http://localhost:8080` via `win.loadURL`, not `file://`, and no longer needs
+`http://localhost:17373` via `win.loadURL`, not `file://`, and no longer needs
 `webSecurity: false` (`file://` sends `Origin: null`, which the CORS policy above would
 otherwise refuse). `internal/static` is a separate package from `internal/api` on purpose —
 it's pure file-serving with no JSON/dataclient dependency — and the UI itself is not

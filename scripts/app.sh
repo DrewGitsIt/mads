@@ -16,21 +16,21 @@ trap cleanup EXIT
 
 up() { curl -sf -o /dev/null "$1" 2>/dev/null; }
 
-if ! up http://localhost:8081/health; then
+if ! up http://localhost:17374/health; then
   go build -o bin/data ./services/data
-  ./bin/data -addr localhost:8081 >> /tmp/mads-data.log 2>&1 &
+  ./bin/data -addr localhost:17374 >> /tmp/mads-data.log 2>&1 &
   started+=($!)
-  until up http://localhost:8081/health; do sleep 0.2; done
-  echo "app.sh: started data service (:8081)"
+  until up http://localhost:17374/health; do sleep 0.2; done
+  echo "app.sh: started data service (:17374)"
 fi
 
-if ! up http://localhost:8080/health; then
+if ! up http://localhost:17373/health; then
   go build -o bin/router ./services/router
   go build -o bin/session ./services/session
-  ./bin/router -addr localhost:8080 -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
+  ./bin/router -addr localhost:17373 -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
   started+=($!)
-  until up http://localhost:8080/health; do sleep 0.2; done
-  echo "app.sh: started router (:8080)"
+  until up http://localhost:17373/health; do sleep 0.2; done
+  echo "app.sh: started router (:17373)"
 fi
 
 npm --prefix ui start

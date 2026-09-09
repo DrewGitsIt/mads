@@ -186,7 +186,7 @@ func main() {
 	runID := flag.String("run-id", "", "pipeline run ID (required)")
 	sessionID := flag.String("session-id", "", "session ID (required)")
 	tplName := flag.String("template", "", "pipeline template (registry name, required)")
-	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
+	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root (env MADS_HOME)")
 	flag.Parse()
 

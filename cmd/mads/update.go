@@ -20,7 +20,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/update"
 )
 
-const defaultRouterURL = "http://localhost:8080"
+const defaultRouterURL = "http://localhost:17373"
 
 // cmdUpdate dispatches `mads update check` / `mads update apply`.
 func cmdUpdate(args []string, stdin io.Reader, out io.Writer) error {

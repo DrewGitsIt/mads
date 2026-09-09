@@ -81,7 +81,7 @@ func newTaskID() string {
 
 func cmdSeed(args []string) error {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	data := fs.String("data", "http://localhost:8081", "Data Service URL")
+	data := fs.String("data", "http://localhost:17374", "Data Service URL")
 	session := fs.String("session", "", "session ID (required)")
 	file := fs.String("file", "", "task graph YAML (required)")
 	_ = fs.Parse(args)
@@ -113,7 +113,7 @@ func cmdSeed(args []string) error {
 
 func cmdNewSession(args []string) error {
 	fs := flag.NewFlagSet("new-session", flag.ExitOnError)
-	data := fs.String("data", "http://localhost:8081", "Data Service URL")
+	data := fs.String("data", "http://localhost:17374", "Data Service URL")
 	name := fs.String("name", "", "session name (required)")
 	workspace := fs.String("workspace", "", "workspace label")
 	_ = fs.Parse(args)
@@ -130,7 +130,7 @@ func cmdNewSession(args []string) error {
 
 func cmdTasks(args []string) error {
 	fs := flag.NewFlagSet("tasks", flag.ExitOnError)
-	data := fs.String("data", "http://localhost:8081", "Data Service URL")
+	data := fs.String("data", "http://localhost:17374", "Data Service URL")
 	session := fs.String("session", "", "session ID (required)")
 	_ = fs.Parse(args)
 	if *session == "" {

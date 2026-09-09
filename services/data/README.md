@@ -19,8 +19,8 @@ Router's retro engine (`services/router`'s `job.GenerateRetro`).
 ## Run it alone
 
 ```sh
-make run        # listens on localhost:8081 (-addr to change)
-curl localhost:8081/health
+make run        # listens on localhost:17374 (-addr to change)
+curl localhost:17374/health
 ```
 
 Data lives in `~/.mads/mads.db` by default; override with `-data-dir` or

@@ -8,7 +8,7 @@ import (
 )
 
 // TestDefaultAddrIsProductionPort locks in that a bare "./bin/data" launch
-// binds :8081, the port the Router's -data-url default and every other
+// binds :17374, the port the Router's -data-url default and every other
 // service in the stack expect — not the ephemeral "localhost:0" the
 // runtime-isolated-gates change briefly made the default. Every gate/e2e
 // path passes -addr explicitly, so ephemeral-by-default belongs there, not
@@ -25,7 +25,7 @@ func TestDefaultAddrIsProductionPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("-h: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), `listen address (default "localhost:8081")`) {
-		t.Fatalf("data's default -addr changed, want localhost:8081:\n%s", out)
+	if !strings.Contains(string(out), `listen address (default "localhost:17374")`) {
+		t.Fatalf("data's default -addr changed, want localhost:17374:\n%s", out)
 	}
 }

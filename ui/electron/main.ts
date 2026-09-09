@@ -5,7 +5,7 @@ import { registerPtyHandlers } from "./pty/ptyHost";
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 // Same env var the renderer's own RouterClient reads (see ui/src/router/client.ts)
 // so a single override points both processes at a non-default Router.
-const ROUTER_BASE_URL = process.env.VITE_ROUTER_URL ?? "http://localhost:8080";
+const ROUTER_BASE_URL = process.env.VITE_ROUTER_URL ?? "http://localhost:17373";
 
 // Trimmed replacement for Electron's stock File/Edit/View/Window/Help menu,
 // which is out of theme and mostly dead weight for this app. We still need a

@@ -329,9 +329,9 @@ export class SessionWakeError extends Error {
 
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
 // components. The Router's address is exposed via VITE_ROUTER_URL; the
-// default matches the Router's own `-addr` flag default (localhost:8080).
+// default matches the Router's own `-addr` flag default (localhost:17373).
 export const ROUTER_BASE =
-  (import.meta.env.VITE_ROUTER_URL as string | undefined) ?? "http://localhost:8080";
+  (import.meta.env.VITE_ROUTER_URL as string | undefined) ?? "http://localhost:17373";
 
 /**
  * On failure, a {errors:[{field,message}]} body throws RouterValidationError;

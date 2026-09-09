@@ -81,7 +81,7 @@ func TestServesIndexAtRoot(t *testing.T) {
 
 // TestServesIndexAtRootWithoutHTMLAccept covers curl/health-check-shaped
 // requests (default Accept "*/*", the same header a plain "curl
-// localhost:8080/" sends): "/" must 200 with the built index.html the same
+// localhost:17373/" sends): "/" must 200 with the built index.html the same
 // as a browser navigation, not fall through to isNavigationRequest's
 // Accept-sniffing 404 meant for disambiguating unknown routes.
 func TestServesIndexAtRootWithoutHTMLAccept(t *testing.T) {

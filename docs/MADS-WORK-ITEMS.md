@@ -238,7 +238,7 @@ claude-code agents in worktrees, producing linked commits.
 
 ### W4.1 Router core: supervision & lifecycle
 **Goal:** the always-running, user-facing coordinator (§15).
-**Includes:** HTTP server for the UI (default port 8080, configurable); spawn/kill of Session
+**Includes:** HTTP server for the UI (default port 17373, configurable); spawn/kill of Session
 and Pipeline Engine child processes with ephemeral port/unix-socket discovery; **supervision as
 primary liveness** — on child exit, release its leases immediately via W1.4's bulk endpoint and
 emit the failure event (TTL remains the backstop only); session and pipeline lifecycle endpoints

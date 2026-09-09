@@ -1420,7 +1420,7 @@ Tasks are the shared data problem — both sessions and pipeline stages mutate t
 
 ### Communication Protocols
 
-**UI ↔ Router**: HTTP REST + SSE over localhost. The UI makes REST calls for actions and subscribes to SSE for real-time updates. Port is configurable (default 8080).
+**UI ↔ Router**: HTTP REST + SSE over localhost. The UI makes REST calls for actions and subscribes to SSE for real-time updates. Port is configurable (default 17373).
 
 **Router ↔ Sessions/Pipeline**: HTTP over localhost (each session/pipeline gets an ephemeral port or unix socket). Router discovers these at spawn time.
 

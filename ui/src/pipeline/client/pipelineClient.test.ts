@@ -23,7 +23,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     const tasks = await client.listTasks("ses_1");
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/tasks?session_id=ses_1",
+      "http://localhost:17373/tasks?session_id=ses_1",
     );
     expect(tasks).toEqual([{ id: "t1" }]);
   });
@@ -33,7 +33,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     const result = await client.startPipeline("ses_1", "tpl_1");
     const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
-    expect(url.toString()).toBe("http://localhost:8080/pipelines");
+    expect(url.toString()).toBe("http://localhost:17373/pipelines");
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body as string)).toEqual({
       session_id: "ses_1",
@@ -47,7 +47,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     await client.cancelPipeline("run_1");
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/pipelines/run_1/cancel",
+      "http://localhost:17373/pipelines/run_1/cancel",
     );
   });
 
@@ -56,7 +56,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     const task = await client.retryTask("t1");
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/tasks/t1/retry",
+      "http://localhost:17373/tasks/t1/retry",
     );
     expect(task.retry_count).toBe(1);
   });
@@ -83,7 +83,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     const runs = await client.listRuns("ses_1");
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/metrics/pipelines?session_id=ses_1",
+      "http://localhost:17373/metrics/pipelines?session_id=ses_1",
     );
     expect(runs).toEqual([{ session_id: "ses_1", run_seq: 7, outcome: "completed" }]);
   });
@@ -93,7 +93,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     await client.getRunEvents("ses_1", 6);
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/events?session_id=ses_1&since=6&types=pipeline.started%2Cpipeline.completed%2Cpipeline.cancelled%2Cpipeline.failed%2Cstage.started%2Cstage.completed%2Cstage.failed%2Cstage.skipped%2Cfile.changed",
+      "http://localhost:17373/events?session_id=ses_1&since=6&types=pipeline.started%2Cpipeline.completed%2Cpipeline.cancelled%2Cpipeline.failed%2Cstage.started%2Cstage.completed%2Cstage.failed%2Cstage.skipped%2Cfile.changed",
     );
   });
 
@@ -107,7 +107,7 @@ describe("FetchPipelineClient", () => {
       const client = new FetchPipelineClient();
       client.streamTaskOutput("ses_1", "t1");
       expect(FakeEventSource.instances[0].url).toBe(
-        "http://localhost:8080/sessions/ses_1/pipeline/tasks/t1/output",
+        "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/output",
       );
     });
 
@@ -163,7 +163,7 @@ describe("FetchPipelineClient", () => {
       const client = new FetchPipelineClient();
       client.streamTaskTurns("ses_1", "t1");
       expect(FakeEventSource.instances[0].url).toBe(
-        "http://localhost:8080/sessions/ses_1/pipeline/tasks/t1/turns",
+        "http://localhost:17373/sessions/ses_1/pipeline/tasks/t1/turns",
       );
     });
 

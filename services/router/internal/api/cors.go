@@ -10,7 +10,7 @@ import (
 var localhostOrigin = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:[0-9]+)?$`)
 
 // withCORS lets a browser page served from the Vite dev server
-// (localhost:5173) call the Router (localhost:8080) without
+// (localhost:5173) call the Router (localhost:17373) without
 // --disable-web-security. Non-localhost origins get no CORS headers at all —
 // this is not a wildcard policy. OPTIONS is intercepted for every request
 // (matching or not) because the mux below has no route registered for it;

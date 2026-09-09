@@ -13,7 +13,7 @@ never talks to other sessions.
 ## Run it alone
 
 ```sh
-go run . -session-id <id> -data-url http://localhost:8081   # -addr to pin the port
+go run . -session-id <id> -data-url http://localhost:17374   # -addr to pin the port
 curl localhost:<logged port>/health
 ```
 

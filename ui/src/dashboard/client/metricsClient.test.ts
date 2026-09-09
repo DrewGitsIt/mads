@@ -21,7 +21,7 @@ describe("FetchMetricsClient", () => {
     const fetchMock = mockFetchOnce({ by_day: [], by_session: [], by_pipeline_run: [] });
     const client = new FetchMetricsClient();
     const result = await client.metricsCost();
-    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:8080/metrics/cost");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:17373/metrics/cost");
     expect(result).toEqual({ by_day: [], by_session: [], by_pipeline_run: [] });
   });
 
@@ -29,7 +29,7 @@ describe("FetchMetricsClient", () => {
     const fetchMock = mockFetchOnce([{ agent: "executor" }]);
     const client = new FetchMetricsClient();
     const result = await client.metricsAgentLeaderboard();
-    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:8080/metrics/agents");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:17373/metrics/agents");
     expect(result).toEqual([{ agent: "executor" }]);
   });
 
@@ -37,7 +37,7 @@ describe("FetchMetricsClient", () => {
     const fetchMock = mockFetchOnce({ counts: {}, total: 0, completion_rate: 0 });
     const client = new FetchMetricsClient();
     await client.metricsTaskOutcomes();
-    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:8080/metrics/tasks");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:17373/metrics/tasks");
   });
 
   it("metricsCapabilityUsage GETs /metrics/capabilities", async () => {
@@ -45,7 +45,7 @@ describe("FetchMetricsClient", () => {
     const client = new FetchMetricsClient();
     const result = await client.metricsCapabilityUsage();
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:8080/metrics/capabilities",
+      "http://localhost:17373/metrics/capabilities",
     );
     expect(result).toEqual([{ capability: "git-review", type: "skill", invocations: 0 }]);
   });
@@ -54,13 +54,13 @@ describe("FetchMetricsClient", () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchMetricsClient();
     await client.metricsPipelineRuns();
-    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:8080/metrics/pipelines");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:17373/metrics/pipelines");
   });
 
   it("listSessions GETs /sessions", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchMetricsClient();
     await client.listSessions();
-    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:8080/sessions");
+    expect(fetchMock.mock.calls[0][0].toString()).toBe("http://localhost:17373/sessions");
   });
 });

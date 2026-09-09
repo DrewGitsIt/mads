@@ -71,8 +71,8 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
-	dataURL := flag.String("data-url", "http://localhost:8081", "Data Service base URL")
-	routerURL := flag.String("router-url", "http://localhost:8080", "Router base URL (used by session-scoped capabilities, e.g. the orchestrate MCP server)")
+	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
+	routerURL := flag.String("router-url", "http://localhost:17373", "Router base URL (used by session-scoped capabilities, e.g. the orchestrate MCP server)")
 	cwd := flag.String("cwd", ".", "provider session working directory")
 	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")

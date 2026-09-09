@@ -50,7 +50,7 @@ mads update check                          # asks the Router to check the releas
 mads update apply -yes                     # download, verify, swap, restart, health-check
 ```
 
-Both subcommands talk to a running Router (`-router http://localhost:8080` by
+Both subcommands talk to a running Router (`-router http://localhost:17373` by
 default). `check` proxies `POST /update/check` (`pkg/update.Check`, spec
 §14.3): it never fires on its own — no polling, no phone-home — only in
 response to this explicit command, hitting `Config.UpdateFeedURL` (empty by

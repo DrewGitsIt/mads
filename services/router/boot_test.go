@@ -364,7 +364,7 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 
 // TestDefaultAddrIsProductionPort locks in that a bare "./bin/router" launch
 // (the shepherd's post-drain restart, scripts/app.sh, any human running the
-// binary directly) binds :8080, the port dataclient's default and every
+// binary directly) binds :17373, the port dataclient's default and every
 // other service in the stack expects — not the ephemeral "localhost:0" the
 // runtime-isolated-gates change briefly made the default. Every gate/e2e
 // path (this file included) passes -addr explicitly, so ephemeral-by-
@@ -377,7 +377,7 @@ func TestDefaultAddrIsProductionPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("-h: %v\n%s", err, out)
 	}
-	if !strings.Contains(string(out), `listen address (default "localhost:8080")`) {
-		t.Fatalf("router's default -addr changed, want localhost:8080:\n%s", out)
+	if !strings.Contains(string(out), `listen address (default "localhost:17373")`) {
+		t.Fatalf("router's default -addr changed, want localhost:17373:\n%s", out)
 	}
 }

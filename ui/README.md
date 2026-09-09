@@ -52,7 +52,7 @@ npm run dev     # renderer dev server (Vite), open the printed localhost URL
 npm start       # build + launch the Electron shell
 ```
 
-`npm start`'s Electron window loads the Router's own address (`http://localhost:8080` by
+`npm start`'s Electron window loads the Router's own address (`http://localhost:17373` by
 default, `VITE_ROUTER_URL` to override — the same env var the renderer's `RouterClient`
 reads) via `win.loadURL`, same-origin with the API it calls; it needs a running Router
 that's already serving the just-built `ui/dist` (see `services/router/README.md`'s
