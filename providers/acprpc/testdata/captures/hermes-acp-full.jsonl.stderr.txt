@@ -1,0 +1,69 @@
+2026-09-09 16:09:22 [INFO] acp_adapter.entry: Loaded env from /home/user/.hermes/.env
+2026-09-09 16:09:22 [INFO] acp_adapter.entry: Starting hermes-agent ACP adapter
+2026-09-09 16:09:22 [INFO] acp_adapter.server: ACP client connected
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'browser-browser-use' registered browser provider: browser-use
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'browser-browserbase' registered browser provider: browserbase
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'browser-firecrawl' registered browser provider: firecrawl
+2026-09-09 16:09:22 [INFO] acp_adapter.server: Initialize from unknown (protocol v1)
+2026-09-09 16:09:22 [INFO] run_agent: Loaded environment variables from /home/user/.hermes/.env
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'deepinfra' registered image_gen provider: deepinfra
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'fal' registered image_gen provider: fal
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'krea' registered image_gen provider: krea
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'meta-ai-image-gen' registered image_gen provider: meta-ai
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'openai' registered image_gen provider: openai
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'openai-codex' registered image_gen provider: openai-codex
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'openrouter' registered image_gen provider: openrouter
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'openrouter' registered image_gen provider: nous
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'xai' registered image_gen provider: xai
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'deepinfra' registered video_gen provider: deepinfra
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'fal' registered video_gen provider: fal
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'xai' registered video_gen provider: xai
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-brave-free' registered web provider: brave-free
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-ddgs' registered web provider: ddgs
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-exa' registered web provider: exa
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-firecrawl' registered web provider: firecrawl
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-keenable' registered web provider: keenable
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-parallel' registered web provider: parallel
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-perplexity' registered web provider: perplexity
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-searxng' registered web provider: searxng
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-tavily' registered web provider: tavily
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin 'web-xai' registered web provider: xai
+2026-09-09 16:09:22 [INFO] hermes_cli.plugins: Plugin discovery complete: 57 found, 51 enabled
+2026-09-09 16:09:22 [WARNING] acp_adapter.session: Background MCP discovery previously exited with no connected servers; retrying discovery thread
+2026-09-09 16:09:23 [INFO] run_agent: OpenAI client created (agent_init, shared=True) thread=MainThread:267290390765600 provider=custom base_url=http://localhost:11434/v1 model=qwen3.8:latest
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_back_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn _browser_cdp_check returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_click_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn _browser_dialog_check returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_navigate_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_press_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_scroll_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_snapshot_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_type_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] tools.registry: check_fn check_browser_vision_requirements returned False; dependent tools will be unavailable this turn
+2026-09-09 16:09:23 [WARNING] agent.auxiliary_client: Auxiliary: marking openrouter unhealthy for 60s (payment / credit error). Subsequent auxiliary calls will skip it until 16:10:23.
+2026-09-09 16:09:23 [INFO] tools.tool_search: tool_search activated (tier 1): 15 core/visible tools kept, 3 deferred (~1476 tokens), listing full (budget ~4000 tokens)
+2026-09-09 16:09:23 [INFO] acp_adapter.session: Created ACP session bac06249-4a7f-490f-badc-d826a345a5ac (cwd=/tmp/mads-acp-probe/hermes)
+2026-09-09 16:09:23 [INFO] acp_adapter.server: New session bac06249-4a7f-490f-badc-d826a345a5ac (cwd=/tmp/mads-acp-probe/hermes)
+2026-09-09 16:09:26 [WARNING] agent.credential_pool: Copilot token exchange degraded to RAW token (exchange unavailable); enterprise-only models may 400 with model_not_available_for_integrator until exchange recovers.
+2026-09-09 16:09:26 [WARNING] agent.credential_pool: Copilot token exchange degraded to RAW token (exchange unavailable); enterprise-only models may 400 with model_not_available_for_integrator until exchange recovers.
+2026-09-09 16:09:35 [INFO] acp_adapter.server: Prompt on session bac06249-4a7f-490f-badc-d826a345a5ac: Create a file named probe.txt in the current directory containing exactly the text acp-probe, then t
+2026-09-09 16:09:35 [INFO] agent.turn_context: conversation turn: session=bac06249-4a7f-490f-badc-d826a345a5ac model=qwen3.8:latest provider=custom platform=acp history=0 msg='Create a file named probe.txt in the current directory containing exactly the te...'
+2026-09-09 16:09:35 [INFO] agent.auxiliary_client: Auxiliary auto-detect: using main provider custom (qwen3.8:latest)
+2026-09-09 16:09:35 [INFO] agent.auxiliary_client: Auxiliary title_generation: using custom (qwen3.8:latest) at http://localhost:11434/v1/
+2026-09-09 16:09:35 [INFO] run_agent: OpenAI client created (chat_completion_stream_request, shared=False) thread=Thread-3 (<lambda>):267290057306528 provider=custom base_url=http://localhost:11434/v1 model=qwen3.8:latest
+2026-09-09 16:10:03 [INFO] agent.conversation_loop: API call #1: model=qwen3.8:latest provider=custom in=11378 out=196 total=11574 latency=28.4s id=chatcmpl-331
+2026-09-09 16:10:03 [INFO] tools.file_tools: Creating new local environment for task session:...
+2026-09-09 16:10:03 [INFO] tools.environments.base: Session snapshot created (session=eb2c0c72cb5b, cwd=/tmp/mads-acp-probe/hermes)
+2026-09-09 16:10:03 [INFO] tools.file_tools: local environment ready for task session:
+2026-09-09 16:10:03 [INFO] agent.tool_executor: tool write_file completed (0.08s, 247 chars)
+2026-09-09 16:10:05 [INFO] agent.auxiliary_client: Auxiliary title_generation: transient transport error (attempt 1/2); retrying same provider after 1.0s before fallback: Request timed out.
+2026-09-09 16:10:10 [INFO] agent.conversation_loop: API call #2: model=qwen3.8:latest provider=custom in=11524 out=98 total=11622 latency=6.5s id=chatcmpl-237
+2026-09-09 16:10:10 [INFO] agent.conversation_loop: Turn ended: reason=text_response(finish_reason=stop) model=qwen3.8:latest api_calls=2/9223372036854775807 budget=2/9223372036854775807 tool_turns=1 last_msg_role=assistant response_len=52 session=bac06249-4a7f-490f-badc-d826a345a5ac
+2026-09-09 16:10:10 [INFO] acp_adapter.server: Prompt on session bac06249-4a7f-490f-badc-d826a345a5ac: Count slowly from 1 to 50, one number per line.
+2026-09-09 16:10:10 [INFO] acp_adapter.server: Cancelled session bac06249-4a7f-490f-badc-d826a345a5ac
+2026-09-09 16:10:10 [INFO] run_agent: session turn lease wait aborted by interrupt: bac06249-4a7f-490f-badc-d826a345a5ac
+2026-09-09 16:10:10 [INFO] tools.terminal_tool: Shutting down 1 remaining sandbox(es)...
+2026-09-09 16:10:10 [INFO] tools.terminal_tool: Manually cleaned up environment for task: session:bac06249-4a7f-490f-badc-d826a345a5ac
+2026-09-09 16:10:10 [INFO] tools.terminal_tool: Cleaned 1 environments

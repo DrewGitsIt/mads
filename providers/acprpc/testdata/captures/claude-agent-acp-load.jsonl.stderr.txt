@@ -1,0 +1,15 @@
+[session/models] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=read-transcript durationMs=5 totalMs=5 messages=5 model=claude-opus-5
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=validate-cwd durationMs=0 totalMs=0
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=settings durationMs=28 totalMs=29
+[session/query] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e resume=c98f4661-bcdb-4d11-b408-c1d83735902e apiType=native baseUrl=native
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=prepare-query durationMs=7 totalMs=36
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=sdk-initialize durationMs=1098 totalMs=1134
+[session/models] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=set-model durationMs=1 model=opus[1m] outcome=success
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=models durationMs=2 totalMs=1136
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=modes durationMs=0 totalMs=1136
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=agents durationMs=0 totalMs=1136
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=register durationMs=0 totalMs=1136
+[session/load] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=session-ready durationMs=1142 totalMs=1142
+[session/replay] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=read durationMs=0 messages=5
+[session/replay] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=publish durationMs=1 totalMs=1 messages=5
+[session/load] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=replay durationMs=1 totalMs=1143

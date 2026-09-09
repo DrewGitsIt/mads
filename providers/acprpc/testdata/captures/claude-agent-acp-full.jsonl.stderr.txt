@@ -1,0 +1,16 @@
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=validate-cwd durationMs=0 totalMs=0
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=settings durationMs=27 totalMs=27
+[session/query] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e resume=none apiType=native baseUrl=native
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=prepare-query durationMs=6 totalMs=34
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=sdk-initialize durationMs=932 totalMs=966
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=models durationMs=0 totalMs=967
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=modes durationMs=0 totalMs=967
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=agents durationMs=0 totalMs=967
+[session/create] sessionId=c98f4661-bcdb-4d11-b408-c1d83735902e phase=register durationMs=0 totalMs=967
+Session c98f4661-bcdb-4d11-b408-c1d83735902e: query stream error: ACP connection closed
+Session c98f4661-bcdb-4d11-b408-c1d83735902e: cancellation failed during teardown Error: Query closed before response received
+    at Gy.performCleanup (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:100:22914)
+    at Gy.cleanup (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:100:22569)
+    at Gy.close (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/claude-agent-acp/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs:100:22441)
+    at ClaudeAcpAgent.closeQueryStream (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js:4686:23)
+    at ClaudeAcpAgent.runConsumer (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/claude-agent-acp/dist/acp-agent.js:4362:22)
