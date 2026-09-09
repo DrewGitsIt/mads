@@ -1,0 +1,174 @@
+<!doctype html>
+<!--
+  Animated before/after mockup for the tool-card motion + working-indicator
+  polish (2026-09-08 conversation-UX pass, issue 3). Self-contained: open in
+  any browser. "Replay" restarts both panes' scripted turns.
+
+  BEFORE reproduces the old behavior: cards blip into existence fully
+  formed, nothing indicates a running tool, the working indicator flickers
+  out whenever the tail looks finished, and summaries are raw first-input
+  keys. AFTER shows the shipped design: 180ms fade+rise entrance, a spinner
+  "running" state that crossfades into the ok-chip + duration, tool-aware
+  summary lines, and a persistent working indicator with an elapsed counter
+  that lives for the whole turn.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>mads — tool card motion mockup</title>
+<style>
+  :root {
+    --bg: #0f1115; --bg2: #171a21; --card: #1c2028; --line: #2a2f3a;
+    --text: #e6e9ef; --text2: #9aa3b2; --text3: #6b7383;
+    --info: #7aa2f7; --ok: #9ece6a; --bad: #f7768e; --accent: #7aa2f7;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header p { margin: 0; color: var(--text2); font-size: 12.5px; flex: 1; }
+  button.replay { background: var(--accent); color: #0f1115; border: none; border-radius: 6px; padding: 6px 14px; font: 600 13px var(--sans); cursor: pointer; }
+  .panes { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .pane { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-height: 380px; }
+  .pane h2 { margin: 0 0 4px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .pane.before h2 { color: var(--bad); }
+  .pane.after h2 { color: var(--ok); }
+  .pane .sub { color: var(--text3); font-size: 12px; margin: 0 0 14px; }
+  .stream { display: flex; flex-direction: column; gap: 10px; }
+  .prose { color: var(--text); max-width: 62ch; }
+  .prose.user { color: var(--text2); }
+  .prose.user::before { content: "you  "; color: var(--text3); font: 11px var(--mono); }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; display: none; }
+  .card.on { display: block; }
+  .cardHead { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+  .chip { font: 600 11px var(--sans); padding: 2px 8px; border-radius: 999px; }
+  .chip.tool { background: rgba(122,162,247,0.15); color: var(--info); }
+  .chip.ok { background: rgba(158,206,106,0.15); color: var(--ok); }
+  .summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text2); font: 12px var(--mono); }
+  .duration { color: var(--text3); font: 12px var(--mono); }
+  .chev { color: var(--text3); }
+
+  /* AFTER: eased entrance + running→done crossfade */
+  .after .card.on { animation: card-in 180ms ease-out; }
+  @keyframes card-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  .status { display: flex; align-items: center; gap: 6px; }
+  .spinner { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--info); animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .runLabel { color: var(--text3); font: 12px var(--sans); }
+  .status.done { display: none; animation: fade 200ms ease-out; }
+  .card[data-done] .status.run { display: none; }
+  .card[data-done] .status.done { display: flex; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+  .working { display: none; align-items: center; gap: 8px; }
+  .working.on { display: flex; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); animation: pulse 1s ease-in-out infinite; }
+  .dot:nth-child(2) { animation-delay: 0.15s; }
+  .dot:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes pulse { 50% { opacity: 0.3; } }
+  .wLabel { color: var(--text3); font: 12px var(--sans); }
+  .elapsed { color: var(--text3); font: 12px var(--mono); font-variant-numeric: tabular-nums; }
+
+  .note { color: var(--text3); font-size: 12px; padding: 0 20px 20px; max-width: 1200px; margin: 0 auto; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tool card motion — before / after</h1>
+  <p>Left: cards blip in fully formed, silent while running, indicator flickers. Right: eased entrance, live running state, persistent working indicator with elapsed time.</p>
+  <button class="replay" onclick="replay()">Replay</button>
+</header>
+
+<div class="panes">
+  <div class="pane before">
+    <h2>Before — blips, silence, flicker</h2>
+    <p class="sub">no entrance, no running state, raw first-input-key summaries, indicator vanishes mid-turn</p>
+    <div class="stream" id="b">
+      <div class="prose user">why is the ingest test flaky?</div>
+      <div class="card" data-t="600"><div class="cardHead">
+        <span class="chip tool">Bash</span><span class="summary">command: go test ./services/data/... -run TestIngest -count=20</span><span class="chev">▸</span>
+      </div></div>
+      <div class="card" data-t="2400" data-fin><div class="cardHead">
+        <span class="chip tool">Grep</span><span class="summary">pattern: time.Sleep</span>
+        <span class="status done on"><span class="chip ok">ok</span></span><span class="chev">▸</span>
+      </div></div>
+      <div class="prose" data-t="3600" style="display:none">Found it — the test polls with a fixed 10ms sleep…</div>
+      <div class="working" id="bWork"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="wLabel">Working…</span></div>
+    </div>
+  </div>
+
+  <div class="pane after">
+    <h2>After — eased, informative, steady</h2>
+    <p class="sub">180ms fade+rise entrance · spinner while running → ok + duration · tool-aware summaries · turn-long indicator</p>
+    <div class="stream" id="a">
+      <div class="prose user">why is the ingest test flaky?</div>
+      <div class="card" data-t="600" data-done-t="2200" data-dur="1.6s"><div class="cardHead">
+        <span class="chip tool">Bash</span><span class="summary">Run the ingest test 20 times to reproduce the flake</span>
+        <span class="status run"><span class="spinner"></span><span class="runLabel">running</span></span>
+        <span class="status done"><span class="chip ok">ok</span><span class="duration">1.6s</span></span>
+        <span class="chev">▸</span>
+      </div></div>
+      <div class="card" data-t="2400" data-done-t="3200" data-dur="0.8s"><div class="cardHead">
+        <span class="chip tool">Grep</span><span class="summary">time.Sleep in services/data</span>
+        <span class="status run"><span class="spinner"></span><span class="runLabel">running</span></span>
+        <span class="status done"><span class="chip ok">ok</span><span class="duration">0.8s</span></span>
+        <span class="chev">▸</span>
+      </div></div>
+      <div class="prose" data-t="3600" style="display:none">Found it — the test polls with a fixed 10ms sleep…</div>
+      <div class="working on" id="aWork"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="wLabel" id="aLabel">Working…</span><span class="elapsed" id="aElapsed"></span></div>
+    </div>
+  </div>
+</div>
+
+<p class="note">
+  The BEFORE pane's second card appears already resolved (that's the real bug: nothing on the card until its result lands,
+  then it pops in complete), and its working indicator blinks out whenever the last item looks finished. The AFTER pane's
+  indicator survives the whole turn — its label switches to “Using Bash…”/“Using Grep…” while a tool is pending — and the
+  elapsed counter answers “is it still going?” at a glance. Under <code>prefers-reduced-motion</code> all animation is disabled,
+  matching <code>ui/src/styles/global.css</code>.
+</p>
+
+<script>
+  let timers = [];
+  function replay() {
+    timers.forEach(clearTimeout); timers = [];
+    // reset
+    document.querySelectorAll(".card").forEach(c => { c.classList.remove("on"); c.removeAttribute("data-done"); });
+    document.querySelectorAll(".prose[data-t]").forEach(p => p.style.display = "none");
+    const bWork = document.getElementById("bWork"), aWork = document.getElementById("aWork");
+    const aLabel = document.getElementById("aLabel"), aElapsed = document.getElementById("aElapsed");
+    bWork.classList.remove("on"); aWork.classList.add("on"); aLabel.textContent = "Working…"; aElapsed.textContent = "";
+
+    const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+
+    // AFTER pane: elapsed counter ticks for the whole turn
+    const t0 = Date.now();
+    const tick = () => { aElapsed.textContent = Math.max(1, Math.round((Date.now() - t0) / 1000)) + "s"; };
+    for (let s = 1; s <= 5; s++) at(s * 1000, tick);
+
+    document.querySelectorAll(".card[data-t]").forEach(c => {
+      at(+c.dataset.t, () => c.classList.add("on"));
+      if (c.dataset.doneT) at(+c.dataset.doneT, () => c.setAttribute("data-done", ""));
+    });
+    document.querySelectorAll(".prose[data-t]").forEach(p => at(+p.dataset.t, () => p.style.display = "block"));
+
+    // BEFORE pane's flicker: indicator only exists in the gaps
+    at(200, () => bWork.classList.add("on"));
+    at(600, () => bWork.classList.remove("on"));   // gone as soon as a card exists
+    at(1400, () => bWork.classList.add("on"));      // pops back briefly
+    at(2400, () => bWork.classList.remove("on"));   // gone again — turn still live
+
+    // AFTER pane label follows the pending tool
+    at(600, () => aLabel.textContent = "Using Bash…");
+    at(2200, () => aLabel.textContent = "Working…");
+    at(2400, () => aLabel.textContent = "Using Grep…");
+    at(3200, () => aLabel.textContent = "Working…");
+    at(5000, () => { aWork.classList.remove("on"); });  // turn_end
+  }
+  replay();
+</script>
+</body>
+</html>

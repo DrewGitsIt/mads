@@ -974,6 +974,127 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
   });
 
+  // The user-facing half of auto-compaction's fix: the server only force-
+  // compacts near the window limit; below that the UI offers the choice
+  // (the resume options interactive claude-code shows that headless -p
+  // lacks), derived locally from the same last_usage the meter reads.
+  it("suggests compaction at high occupancy, and Compact now runs it", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "big session",
+      activity: "active",
+      model: "claude-sonnet-5",
+      last_usage: { input_tokens: 500, output_tokens: 50, context_tokens: 130_000, context_window: 200_000 },
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    const compactSpy = vi.spyOn(client, "compactSession").mockResolvedValue();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(screen.getByText(/using ~65% of the context window/)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Compact now" }));
+    expect(compactSpy).toHaveBeenCalledWith("session-active");
+    // The suggestion yields to the (optimistic) progress banner immediately.
+    await waitFor(() => expect(screen.getByText("Compacting conversation…")).toBeTruthy());
+    expect(screen.queryByText(/of the context window/)).toBeNull();
+  });
+
+  it("Not now dismisses the compaction suggestion, and low occupancy never shows it", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "big session",
+      activity: "active",
+      model: "claude-sonnet-5",
+      last_usage: { input_tokens: 500, output_tokens: 50, context_tokens: 130_000, context_window: 200_000 },
+    });
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(screen.getByText(/of the context window/)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByText(/of the context window/)).toBeNull();
+
+    // Below the 60% suggestion line (and with the accurate context_tokens
+    // beating the inflated aggregate): no banner at all.
+    const quiet = new FakeRouterClient();
+    vi.spyOn(quiet, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "small session",
+      activity: "active",
+      model: "claude-sonnet-5",
+      last_usage: { input_tokens: 500, output_tokens: 50, cache_read_input_tokens: 400_000, context_tokens: 40_000, context_window: 200_000 },
+    });
+    render(<ConversationTab sessionId="session-active" routerClient={quiet} />);
+    // The meter proves the same accurate numbers rendered: 40k/200k = 20%,
+    // not the aggregate's 400k.
+    await waitFor(() => expect(screen.getByText("20%")).toBeTruthy());
+    expect(screen.queryByText(/of the context window/)).toBeNull();
+  });
+
+  // The "compaction completed banner sticks around far longer than it
+  // should" fix: success is a transient confirmation, auto-dismissed.
+  it("auto-dismisses a successful compaction banner after a few seconds", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    // Fake timers only from here — the mount above needs real ones for its
+    // async fetches; the dismissal timer is what's under test.
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        source.emit({ kind: "compact", compact: { phase: "done", success: true } });
+      });
+      expect(screen.getByText("Conversation compacted.")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(6500);
+      });
+      expect(screen.queryByText("Conversation compacted.")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the working indicator visible for the entire live turn, until turn_end", async () => {
+    const client = new FakeRouterClient();
+    const getTranscript = vi
+      .spyOn(client, "getTranscript")
+      .mockResolvedValue([{ role: "user", text: "hi" }]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(screen.getByText("hi")).toBeTruthy());
+    const source = client.sessionEventSources.at(-1)!;
+
+    // Regression: `working` used to compute false whenever the tail was a
+    // finished text run or a completed tool call, blinking the indicator
+    // out mid-turn — exactly when "is it done?" matters.
+    act(() => source.emit({ kind: "text", text: "checking the logs" }));
+    expect(screen.getByText("checking the logs")).toBeTruthy();
+    expect(screen.getByLabelText("Working…")).toBeTruthy();
+
+    act(() => source.emit({ kind: "tool_use", tool: { id: "wt1", name: "Read", path: "a.go" } }));
+    expect(screen.getByLabelText("Using Read…")).toBeTruthy();
+
+    act(() => source.emit({ kind: "tool_result", tool: { id: "wt1", name: "" }, text: "contents" }));
+    expect(screen.getByLabelText("Working…")).toBeTruthy();
+
+    getTranscript.mockResolvedValue([
+      { role: "user", text: "hi" },
+      { role: "agent", text: "checking the logs" },
+    ]);
+    await act(async () => {
+      source.emit({ kind: "turn_end" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByLabelText("Working…")).toBeNull());
+  });
+
   it("reconstructs a still-pending permission card from GET /permission-requests on mount, surviving a transcript refetch", async () => {
     const client = new FakeRouterClient();
     client.seedPermissionRequest("session-active", {

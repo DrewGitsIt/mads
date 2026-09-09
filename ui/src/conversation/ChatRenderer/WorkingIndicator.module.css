@@ -28,3 +28,9 @@
   font: var(--fs-chip) var(--sans);
   color: var(--text3);
 }
+
+.elapsed {
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+  font-variant-numeric: tabular-nums;
+}

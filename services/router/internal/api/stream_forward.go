@@ -58,6 +58,25 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	s.proxyTo(w, r, addr, "/messages")
 }
 
+// handleSessionCompact forwards the UI's "Compact now" action to the running
+// session child's own POST /compact. It wakes a dormant session first, like
+// handleSessionMessages rather than handleSessionInterrupt: the action's
+// whole point is trimming a large conversation before the next turn, which
+// applies at least as much to a session that isn't currently running.
+func (s *server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	addr, ok := s.sup.SessionAddr(id)
+	if !ok {
+		var err error
+		addr, err = s.wakeSession(r.Context(), id)
+		if err != nil {
+			writeWakeError(w, err)
+			return
+		}
+	}
+	s.proxyTo(w, r, addr, "/compact")
+}
+
 func (s *server) handleSessionInterrupt(w http.ResponseWriter, r *http.Request) {
 	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
 	if !ok {

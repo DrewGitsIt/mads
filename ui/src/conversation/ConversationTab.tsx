@@ -134,6 +134,12 @@ export function ConversationTab({
   // effect below; not persisted, since it's meaningful only while this tab
   // is watching the live stream.
   const [compactStatus, setCompactStatus] = useState<CompactStatus>();
+  // "Not now" on the compact-suggestion banner — sticky per mount, so
+  // declining once quiets the banner until the session is next opened. The
+  // server only force-compacts near the window limit (compact.go's ~85%
+  // threshold); everything below that is this user choice, replicating the
+  // resume options interactive claude-code offers that headless -p lacks.
+  const [compactSuggestionDismissed, setCompactSuggestionDismissed] = useState(false);
   // Interactive permission prompts (chat transport, TrustLimited/
   // TrustReadOnly — see providers/claudecode/README.md "Trust enforcement").
   // Keyed by request id so a live "permission_request" stream event
@@ -165,6 +171,15 @@ export function ConversationTab({
     return () => window.removeEventListener(SHELL_TOGGLE_EVENT, handler);
   }, []);
 
+  // A successful "Conversation compacted." is a transient confirmation, not
+  // standing state — auto-dismiss it (it used to sit until session switch).
+  // A failed pass stays until the user dismisses it via the banner's ×.
+  useEffect(() => {
+    if (compactStatus?.phase !== "done" || !compactStatus.success) return;
+    const id = window.setTimeout(() => setCompactStatus(undefined), 6000);
+    return () => window.clearTimeout(id);
+  }, [compactStatus]);
+
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
@@ -175,6 +190,7 @@ export function ConversationTab({
     setPermissionRequests(new Map());
     setLastUsage(undefined);
     setCompactStatus(undefined);
+    setCompactSuggestionDismissed(false);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
@@ -433,6 +449,21 @@ export function ConversationTab({
     });
   }, [routerClient, sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
 
+  const handleCompactNow = useCallback(async () => {
+    // Optimistic "Compacting…" so the click lands visibly even before the
+    // provider's own compact/start stream event arrives (the Router may
+    // first have to wake a dormant session); the real done/failed event
+    // overwrites it.
+    setCompactSuggestionDismissed(true);
+    setCompactStatus({ phase: "start" });
+    try {
+      await routerClient.compactSession(sessionId);
+    } catch (err) {
+      setCompactStatus(undefined);
+      setSendError(err instanceof Error ? err.message : "Failed to compact the conversation.");
+    }
+  }, [routerClient, sessionId]);
+
   // Consumes the same live output stream SessionTerminalBridge rides for
   // terminal mode (set up above) — chat mode folds its text/tool_use/
   // turn_end/error frames into the turn-state machine instead of opening a
@@ -667,17 +698,20 @@ export function ConversationTab({
   const turnBlocked = pendingPermission
     ? `blocked awaiting permission for ${pendingPermission.tool} — allow or deny below, or raise trust in the header`
     : undefined;
-  // Trailing "working" affordance — only when the tail isn't itself visibly
-  // streaming: pre-first-output, a tool awaiting its result, or a stall.
+  // Trailing "working" affordance — truthy for the ENTIRE live turn, never
+  // just while the tail happens to look busy. It used to go false whenever
+  // the last live item was finished text or a completed tool call, which
+  // made the indicator flicker out mid-turn between a tool result and the
+  // next stream event — exactly when "is it done?" matters most. Blocked
+  // beats tool-pending beats plain "Working…"; WorkingIndicator stays
+  // mounted throughout, so its elapsed counter spans the turn.
   const working: { tool?: ToolUse; blocked?: string } | false = !inChatTurn
     ? false
     : turnBlocked
       ? { blocked: turnBlocked }
-      : liveItems.length === 0
-        ? {}
-        : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
-          ? { tool: lastLiveItem.tool }
-          : false;
+      : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
+        ? { tool: lastLiveItem.tool }
+        : {};
   // Never carry a stale open overlay across a switch back to chat and later
   // back to terminal — a bare `!showHistory` gate on `open` below would hide
   // it visually but leave the state true, popping it back open unprompted.
@@ -689,6 +723,24 @@ export function ConversationTab({
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
   const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  // Compact-suggestion input, derived locally from the same usage the header
+  // meter reads (session.last_usage at mount, turn_end frames after) — no
+  // extra stream event or server round-trip, and no race against the
+  // Runner's own Start-time trigger, which only fires near the window limit.
+  const occupancyWindow = lastUsage?.context_window || contextWindowForModel(session.model);
+  const occupancyTokens = lastUsage
+    ? lastUsage.context_tokens ||
+      lastUsage.input_tokens +
+        (lastUsage.cache_read_input_tokens ?? 0) +
+        (lastUsage.cache_creation_input_tokens ?? 0)
+    : 0;
+  const occupancyPct = occupancyWindow > 0 ? Math.round((occupancyTokens / occupancyWindow) * 100) : 0;
+  const showCompactSuggestion =
+    activeMode === "chat" &&
+    !inChatTurn &&
+    !compactSuggestionDismissed &&
+    !compactStatus &&
+    occupancyPct >= 60;
 
   return (
     <div className={styles.tab}>
@@ -779,7 +831,27 @@ export function ConversationTab({
                   <span>Waking the agent…</span>
                 </div>
               )}
-              <CompactionStatus status={compactStatus} />
+              {showCompactSuggestion && (
+                <div className={styles.transportBanner}>
+                  <span>
+                    This conversation is using ~{occupancyPct}% of the context window. Compacting
+                    summarizes older messages to free space.
+                  </span>
+                  <div className={styles.transportActions}>
+                    <Button variant="secondary" size="sm" onClick={() => void handleCompactNow()}>
+                      Compact now
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setCompactSuggestionDismissed(true)}
+                    >
+                      Not now
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <CompactionStatus status={compactStatus} onDismiss={() => setCompactStatus(undefined)} />
               <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}

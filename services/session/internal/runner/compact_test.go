@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -19,17 +20,40 @@ func TestShouldCompactOnResume(t *testing.T) {
 		want  bool
 	}{
 		{name: "nil usage never triggers", usage: nil, want: false},
-		{name: "below threshold", usage: &contracts.Usage{InputTokens: 10_000}, want: false},
-		{name: "above threshold", usage: &contracts.Usage{InputTokens: 30_000}, want: true},
+		{name: "below threshold", usage: &contracts.Usage{InputTokens: 100_000}, want: false},
+		{name: "above threshold", usage: &contracts.Usage{InputTokens: 180_000}, want: true},
 		{
 			name:  "cache tokens count toward the prompt side",
-			usage: &contracts.Usage{InputTokens: 5_000, CacheReadInputTokens: 20_000, CacheCreationInputTokens: 5_000},
+			usage: &contracts.Usage{InputTokens: 5_000, CacheReadInputTokens: 150_000, CacheCreationInputTokens: 30_000},
 			want:  true,
 		},
 		{
 			name:  "output tokens alone never trigger",
 			usage: &contracts.Usage{InputTokens: 1_000, OutputTokens: 190_000},
 			want:  false,
+		},
+		{
+			// The summed fields are claude-code's per-turn billing aggregate
+			// (~N× real occupancy on multi-tool turns); ContextTokens is the
+			// final API call's true prompt side and must win when present —
+			// this exact shape is why 10%-of-aggregate compacted nearly every
+			// resumed session.
+			name:  "accurate context_tokens beats the inflated aggregate",
+			usage: &contracts.Usage{InputTokens: 500, CacheReadInputTokens: 400_000, ContextTokens: 45_000},
+			want:  false,
+		},
+		{
+			name:  "context_tokens alone can trigger",
+			usage: &contracts.Usage{ContextTokens: 180_000},
+			want:  true,
+		},
+		{
+			// A provider-reported window (here a 128k local model) beats the
+			// static 200k table: 120k is under 85% of 200k but over 85% of
+			// the real window.
+			name:  "provider-reported window beats the static table",
+			usage: &contracts.Usage{ContextTokens: 120_000, ContextWindow: 128_000},
+			want:  true,
 		},
 	}
 	for _, tc := range tests {
@@ -105,8 +129,9 @@ func TestStartTriggersCompactionAboveThreshold(t *testing.T) {
 }
 
 // TestStartSkipsCompactionBelowThreshold mirrors the above-threshold case
-// with LastUsage well under the 10% cutoff: no compaction should be
-// requested.
+// with LastUsage well under the near-limit cutoff: no compaction should be
+// requested — an ordinary resume (or trust-change bounce) must not silently
+// compact a conversation that still fits comfortably.
 func TestStartSkipsCompactionBelowThreshold(t *testing.T) {
 	ctx := context.Background()
 	base := datatest.Start(t)
@@ -147,6 +172,39 @@ func TestStartSkipsCompactionBelowThreshold(t *testing.T) {
 
 	if calls := shared.CompactCalls(); len(calls) != 0 {
 		t.Fatalf("CompactCalls() = %v, want none", calls)
+	}
+}
+
+// TestCompactNow covers the user-requested path (POST /compact): no
+// threshold applies — the user asked — and calling before Start answers
+// ErrNotReady rather than panicking on a nil session.
+func TestCompactNow(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	shared := fake.New()
+	reg := provider.NewRegistry()
+	if err := reg.Register(shared); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := New(sess.ID, data, reg)
+
+	if err := r.CompactNow(ctx); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("CompactNow before Start = %v, want ErrNotReady", err)
+	}
+
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	if err := r.CompactNow(ctx); err != nil {
+		t.Fatalf("CompactNow: %v", err)
+	}
+	if calls := shared.CompactCalls(); len(calls) != 1 {
+		t.Fatalf("CompactCalls() = %v, want exactly 1 call", calls)
 	}
 }
 

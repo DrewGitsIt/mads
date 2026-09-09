@@ -16,11 +16,11 @@ type wireLine struct {
 	Message   *wireMessage `json:"message"`
 
 	// result-line fields
-	Result       string                     `json:"result"`
-	IsError      bool                       `json:"is_error"`
-	Usage        *wireUsage                 `json:"usage"`
-	TotalCostUSD float64                    `json:"total_cost_usd"`
-	ModelUsage   map[string]json.RawMessage `json:"modelUsage"`
+	Result       string                    `json:"result"`
+	IsError      bool                      `json:"is_error"`
+	Usage        *wireUsage                `json:"usage"`
+	TotalCostUSD float64                   `json:"total_cost_usd"`
+	ModelUsage   map[string]wireModelUsage `json:"modelUsage"`
 
 	// init-line fields
 	Model string `json:"model"`
@@ -83,6 +83,32 @@ type wireUsage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	// Iterations, present only on a result line's usage, breaks the turn
+	// down per API call. The top-level token fields are the SUM across
+	// iterations — a billing figure that overstates context occupancy by
+	// ~len(Iterations) on multi-tool turns, since every iteration re-reads
+	// the whole cached prefix. The last iteration's prompt side is the real
+	// end-of-turn occupancy (contextTokens).
+	Iterations []wireUsage `json:"iterations"`
+}
+
+// contextTokens is the prompt-side size of the turn's final API call — the
+// true context occupancy after this turn, as opposed to the aggregate the
+// top-level fields report. Zero when the line carries no iteration breakdown
+// (older CLIs), letting consumers fall back to the aggregate.
+func (u *wireUsage) contextTokens() int {
+	if len(u.Iterations) == 0 {
+		return 0
+	}
+	last := u.Iterations[len(u.Iterations)-1]
+	return last.InputTokens + last.CacheReadInputTokens + last.CacheCreationInputTokens
+}
+
+// wireModelUsage is one modelUsage entry on a result line. Only the runtime-
+// reported window size is consumed today; the per-model token/cost fields are
+// redundant with the top-level usage/total_cost_usd.
+type wireModelUsage struct {
+	ContextWindow int `json:"contextWindow"`
 }
 
 // blocks decodes message content: a bare string becomes one text block.
@@ -194,6 +220,9 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 				CacheCreationInputTokens: l.Usage.CacheCreationInputTokens,
 				CacheReadInputTokens:     l.Usage.CacheReadInputTokens,
 				Model:                    l.model(),
+				CostUSD:                  l.TotalCostUSD,
+				ContextTokens:            l.Usage.contextTokens(),
+				ContextWindow:            l.ModelUsage[l.model()].ContextWindow,
 			}
 		}
 		if l.IsError {

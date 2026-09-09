@@ -24,7 +24,7 @@ export interface ChatRendererProps {
   viewedSessionId?: string;
   /** The in-flight turn's ordered items (text runs + tool cards), rendered after `messages` and replaced by the persisted transcript on turn_end. */
   liveItems?: StreamItem[];
-  /** Trailing "agent is working" affordance — shown while a turn is live but the tail isn't itself visibly streaming (no output yet, or a tool call awaiting its result). `blocked` overrides it with a system-toned banner. */
+  /** Trailing "agent is working" affordance — shown for the entire live turn (send to turn_end), naming the pending tool when there is one. `blocked` overrides it with a system-toned banner. */
   working?: { tool?: ToolUse; blocked?: string } | false;
 }
 
@@ -98,7 +98,7 @@ export function ChatRenderer({
             <Markdown className={styles.prose} text={item.text} />
           </div>
         ) : (
-          <ToolCard key={`live-${i}`} tool={item.tool} />
+          <ToolCard key={`live-${i}`} tool={item.tool} live />
         ),
       )}
       {working && <WorkingIndicator tool={working.tool} blocked={working.blocked} />}

@@ -261,6 +261,15 @@ export interface Usage {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
   model?: string;
+  // Prompt-side occupancy of the turn's FINAL API call — the accurate
+  // context measure. The token fields above are a per-turn billing
+  // aggregate on providers that iterate (claude-code sums cache reads
+  // across every tool round-trip), which overstates occupancy by roughly
+  // the iteration count; prefer this when present.
+  context_tokens?: number;
+  // Provider-reported window size for model — authoritative over the
+  // static CONTEXT_WINDOWS table (modelDisplay.ts).
+  context_window?: number;
 }
 
 // mirrors pkg/contracts/transcript.go Attribution — identifies the linked

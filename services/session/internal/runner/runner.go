@@ -1007,6 +1007,8 @@ func (r *Runner) persistUsage(ctx context.Context, usage *provider.Usage) {
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
 		Model:                    usage.Model,
+		ContextTokens:            usage.ContextTokens,
+		ContextWindow:            usage.ContextWindow,
 	}
 	if err := r.data.UpdateSession(ctx, &cur); err != nil {
 		log.Printf("runner: persist usage: %v", err)

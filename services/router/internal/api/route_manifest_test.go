@@ -104,6 +104,7 @@ var routeManifest = []struct {
 	{"POST", "/registry/publish", "POST /registry/publish"},
 	{"POST", "/sessions/abc/messages", "POST /sessions/{id}/messages"},
 	{"POST", "/sessions/abc/interrupt", "POST /sessions/{id}/interrupt"},
+	{"POST", "/sessions/abc/compact", "POST /sessions/{id}/compact"},
 	{"GET", "/sessions/abc/output", "GET /sessions/{id}/output"},
 	{"POST", "/sessions/abc/transport", "POST /sessions/{id}/transport"},
 	{"GET", "/sessions/abc/transport", "GET /sessions/{id}/transport"},

@@ -28,6 +28,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
 	mux.HandleFunc("POST /inject", s.handleInject)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
+	mux.HandleFunc("POST /compact", s.handleCompact)
 	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /output", s.handleStream)
 	mux.HandleFunc("POST /transport", s.handleTransport)
@@ -91,6 +92,17 @@ func (s *server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleCompact runs a native context-compaction pass on user request (the
+// UI's "Compact now" action). Accepted means started — progress and outcome
+// arrive as compact events on /output, mirroring the resume-triggered pass.
+func (s *server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if err := s.runner.CompactNow(r.Context()); err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
 // handleMerge attempts to merge the session's isolated worktree branch back
@@ -399,6 +411,8 @@ func writeRunnerError(w http.ResponseWriter, err error) {
 	case errors.Is(err, runner.ErrSwitchBusy):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, runner.ErrNotPTYMode):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	case errors.Is(err, runner.ErrCompactUnsupported):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

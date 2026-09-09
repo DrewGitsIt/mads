@@ -40,4 +40,34 @@ describe("ContextMeter", () => {
     expect(screen.getByText("50%")).toBeTruthy();
     expect(screen.queryByText("100%")).toBeNull();
   });
+
+  it("prefers context_tokens over the summed aggregate (regression: claude-code sums cache reads per iteration, pegging the meter)", () => {
+    // A 10-round-trip turn on a ~40k conversation: the billing aggregate
+    // reads ~400k (meter would peg at 100%); the final API call's real
+    // occupancy is 40k → 20%.
+    render(
+      <ContextMeter
+        usage={{ input_tokens: 500, output_tokens: 0, cache_read_input_tokens: 400000, context_tokens: 40000 }}
+        contextWindow={200000}
+      />,
+    );
+    expect(screen.getByText("20%")).toBeTruthy();
+  });
+
+  it("prefers the provider-reported context_window over the static prop", () => {
+    // A local 128k model judged against the 200k table would read 50%; the
+    // runtime-reported window says 78%.
+    render(
+      <ContextMeter
+        usage={{ input_tokens: 100000, output_tokens: 0, context_window: 128000 }}
+        contextWindow={200000}
+      />,
+    );
+    expect(screen.getByText("78%")).toBeTruthy();
+  });
+
+  it("renders from usage.context_window alone, without the static prop", () => {
+    render(<ContextMeter usage={{ input_tokens: 64000, output_tokens: 0, context_window: 128000 }} />);
+    expect(screen.getByText("50%")).toBeTruthy();
+  });
 });

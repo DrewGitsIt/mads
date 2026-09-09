@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"log"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -10,31 +11,48 @@ import (
 
 // compactOccupancyThreshold is the fraction of the model's context window
 // above which Start requests a native compaction pass immediately after
-// resuming, rather than resuming silently. Interactive claude-code offers a
-// "resume from summary" prompt at this point; headless -p mode (what mads
-// always runs) has no equivalent, so an uncompacted resume of a large
-// transcript burns far more of the user's usage limit on the very next turn
-// than it needs to.
-const compactOccupancyThreshold = 0.10
+// resuming, rather than resuming silently. This is near-limit protection
+// only — the user-visible "compact now?" choice lives in the UI (which reads
+// the same last_usage and offers a banner well before this point), so the
+// server must not preempt it except when the next turn genuinely risks
+// overflowing the window. It was originally 0.10, computed from the
+// per-turn billing aggregate (~N× real occupancy on multi-tool turns) —
+// together those made nearly every session bounce (resume, trust change,
+// restart) silently compact.
+const compactOccupancyThreshold = 0.85
+
+// contextOccupancy returns usage's context occupancy as a fraction of
+// model's window, or 0 when unknowable. ContextTokens (the final API call's
+// prompt side, wire.go's iterations breakdown) is the accurate numerator;
+// the summed token fields are a per-turn billing aggregate kept only as a
+// fallback for providers that don't report per-call occupancy — an
+// overestimate there, which for a >threshold trigger errs toward compacting.
+// The provider-reported window beats the static table for the same reason
+// (a local 128k model would otherwise be judged against 200k).
+func contextOccupancy(usage *contracts.Usage, model string) float64 {
+	if usage == nil {
+		return 0
+	}
+	tokens := usage.ContextTokens
+	if tokens == 0 {
+		tokens = usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
+	}
+	window := usage.ContextWindow
+	if window <= 0 {
+		window = provider.ContextWindowForModel(model)
+	}
+	if window <= 0 {
+		return 0
+	}
+	return float64(tokens) / float64(window)
+}
 
 // shouldCompactOnResume reports whether a resumed session's last-known usage
 // occupies more than compactOccupancyThreshold of model's context window.
-// The prompt side of a turn (input + cache tokens, excluding output) is the
-// right basis for occupancy: it's what the next turn's request will actually
-// carry as context, the same approximation the UI's context meter uses
-// (ui/src/conversation/Header/ContextMeter.tsx). A nil usage — a session
-// that never completed a turn before this process resumed it — never
-// triggers: there is nothing to estimate occupancy from.
+// A nil usage — a session that never completed a turn before this process
+// resumed it — never triggers: there is nothing to estimate occupancy from.
 func shouldCompactOnResume(usage *contracts.Usage, model string) bool {
-	if usage == nil {
-		return false
-	}
-	promptTokens := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
-	window := provider.ContextWindowForModel(model)
-	if window <= 0 {
-		return false
-	}
-	return float64(promptTokens)/float64(window) > compactOccupancyThreshold
+	return contextOccupancy(usage, model) > compactOccupancyThreshold
 }
 
 // maybeRequestCompact asks sess to run a native compaction pass if resuming
@@ -55,4 +73,34 @@ func (r *Runner) maybeRequestCompact(ctx context.Context, sess provider.Session,
 	if err := compactor.Compact(ctx); err != nil {
 		log.Printf("runner: request resume compaction: %v", err)
 	}
+}
+
+// ErrCompactUnsupported is returned by CompactNow when the active provider
+// session doesn't implement provider.Compactor. Distinct from the silent
+// no-op maybeRequestCompact does for the same case: an explicit user request
+// deserves an explicit "this provider can't" answer.
+var ErrCompactUnsupported = errors.New("runner: provider does not support compaction")
+
+// CompactNow runs a native compaction pass on user request (the UI's
+// "Compact now" action, POST /compact). Unlike the resume trigger it applies
+// no threshold — the user asked. Progress and outcome arrive as EventCompact
+// on the stream, same as the resume path; this returns once the request is
+// accepted, not once compaction finishes.
+func (r *Runner) CompactNow(ctx context.Context) error {
+	r.mu.Lock()
+	if r.sess == nil {
+		r.mu.Unlock()
+		return ErrNotReady
+	}
+	if r.busy {
+		r.mu.Unlock()
+		return ErrTurnInFlight
+	}
+	sess := r.sess
+	r.mu.Unlock()
+	compactor, ok := sess.(provider.Compactor)
+	if !ok {
+		return ErrCompactUnsupported
+	}
+	return compactor.Compact(ctx)
 }

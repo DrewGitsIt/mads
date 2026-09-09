@@ -78,6 +78,12 @@ export interface RouterClient {
     body: { text: string; mentions?: string[] },
   ): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
+  /**
+   * Run a native context-compaction pass now (the "Compact now" banner
+   * action). Resolves once the request is accepted; progress and outcome
+   * arrive as `compact` stream events, same as a resume-triggered pass.
+   */
+  compactSession(sessionId: string): Promise<void>;
   bounce(sessionId: string): Promise<void>;
 
   // --- Chat/Terminal transport handoff (single provider conversation,
@@ -445,6 +451,10 @@ export class FetchRouterClient implements RouterClient {
 
   async interrupt(sessionId: string): Promise<void> {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/interrupt`);
+  }
+
+  async compactSession(sessionId: string): Promise<void> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/compact`);
   }
 
   async bounce(sessionId: string): Promise<void> {

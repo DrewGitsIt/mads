@@ -150,6 +150,20 @@ type Usage struct {
 	// it (BehaviorCostReporting). Zero when unknown — the platform does no
 	// pricing math of its own (spec §11's hookpoint for usage.recorded).
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// ContextTokens is the prompt-side occupancy of the turn's FINAL API
+	// call (input + cache read + cache creation) — what the next turn will
+	// actually carry as context. Distinct from the fields above, which
+	// claude-code reports as a per-turn billing aggregate summed across
+	// every API iteration: on a multi-tool turn that aggregate overstates
+	// occupancy by roughly the iteration count, so it must never be used as
+	// a context measure when this field is set. Zero when the provider
+	// doesn't report per-call occupancy.
+	ContextTokens int `json:"context_tokens,omitempty"`
+	// ContextWindow is the model's context window size as reported by the
+	// provider at runtime (claude-code's modelUsage[model].contextWindow;
+	// goose's usage_update size) — authoritative over any static table.
+	// Zero when unreported.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // Message is one normalized transcript entry (TranscriptReader). Synthesis

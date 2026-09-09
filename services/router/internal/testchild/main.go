@@ -82,6 +82,11 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, `{"status":"ok"}`)
 	})
+	mux.HandleFunc("POST /compact", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = fmt.Fprint(w, `{"status":"accepted"}`)
+	})
 	// The "mode" value doubles as a way for router tests to force the
 	// child's documented switch-failure responses (409 busy, 502 resume
 	// failed) through the proxy without a real runner/provider stack.

@@ -99,4 +99,57 @@ describe("ToolCard — result", () => {
     expect(screen.getByText("Show less")).toBeTruthy();
     expect(screen.getByText(huge)).toBeTruthy();
   });
+
+  it("shows a running state on a live card until the result attaches", () => {
+    const { rerender } = render(<ToolCard tool={{ name: "Bash", input: { command: "sleep 5" } }} live />);
+    expect(screen.getByText("running")).toBeTruthy();
+
+    rerender(
+      <ToolCard
+        tool={{ name: "Bash", input: { command: "sleep 5" }, result: { text: "done" } }}
+        live
+      />,
+    );
+    expect(screen.queryByText("running")).toBeNull();
+    expect(screen.getByText("ok")).toBeTruthy();
+  });
+
+  it("never shows a running state on a historical (non-live) card without a result", () => {
+    render(<ToolCard tool={{ name: "Bash", input: { command: "sleep 5" } }} />);
+    expect(screen.queryByText("running")).toBeNull();
+  });
+
+  describe("summary line", () => {
+    it("Bash prefers the human description over the command", () => {
+      render(<ToolCard tool={{ name: "Bash", input: { command: "git status", description: "Show working tree status" } }} />);
+      expect(screen.getByText("Show working tree status")).toBeTruthy();
+    });
+
+    it("Bash falls back to the command without a description", () => {
+      render(<ToolCard tool={{ name: "Bash", input: { command: "git status" } }} />);
+      expect(screen.getByText("git status")).toBeTruthy();
+    });
+
+    it("Grep shows pattern in path", () => {
+      render(<ToolCard tool={{ name: "Grep", input: { pattern: "TODO", path: "src/" } }} />);
+      expect(screen.getByText("TODO in src/")).toBeTruthy();
+    });
+
+    it("Task shows its description", () => {
+      render(<ToolCard tool={{ name: "Task", input: { description: "Search for callers", prompt: "long prompt…" } }} />);
+      expect(screen.getByText("Search for callers")).toBeTruthy();
+    });
+
+    it("WebFetch shows the url, WebSearch the query", () => {
+      render(<ToolCard tool={{ name: "WebFetch", input: { url: "https://example.com/x" } }} />);
+      expect(screen.getByText("https://example.com/x")).toBeTruthy();
+      render(<ToolCard tool={{ name: "WebSearch", input: { query: "goose usage_update" } }} />);
+      expect(screen.getByText("goose usage_update")).toBeTruthy();
+    });
+
+    it("unknown tools keep the first-input-key fallback", () => {
+      render(<ToolCard tool={{ name: "mcp__custom__thing", input: { target: "abc" } }} />);
+      expect(screen.getByText("target: abc")).toBeTruthy();
+    });
+  });
 });

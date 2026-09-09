@@ -172,6 +172,29 @@ func TestSessionInterruptForwarding(t *testing.T) {
 	}
 }
 
+func TestSessionCompactForwarding(t *testing.T) {
+	srv, _ := newTestServerWithData(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "compact test", "provider": "fake"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201", resp.StatusCode)
+	}
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	cResp, err := http.Post(srv.URL+"/sessions/"+created.Session.ID+"/compact", "application/json", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cResp.Body.Close() }()
+	if cResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("compact status = %d, want 202", cResp.StatusCode)
+	}
+}
+
 func TestSessionInterruptNotRunning(t *testing.T) {
 	srv, _ := newTestServerWithData(t)
 	resp, err := http.Post(srv.URL+"/sessions/does-not-exist/interrupt", "application/json", nil)

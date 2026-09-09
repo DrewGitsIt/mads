@@ -9,6 +9,14 @@ export interface ToolCardProps {
   /** When the tool_use itself was recorded — paired with tool.result.timestamp for the duration hint. */
   timestamp?: string;
   defaultExpanded?: boolean;
+  /**
+   * Rendered from the in-flight turn's stream (ChatRenderer liveItems)
+   * rather than the persisted transcript. Live cards ease in instead of
+   * blipping, and show a running spinner until their result attaches —
+   * historical cards (and the transcript re-render on turn_end) stay
+   * static, so a refetch never replays entrance motion.
+   */
+  live?: boolean;
 }
 
 // Above this, the result body is capped with a "Show more" toggle rather
@@ -62,13 +70,42 @@ function diffStat(hunks: DiffHunk[]): { adds: number; dels: number } {
   );
 }
 
+/**
+ * One line of the most relevant input for the header, per tool: what the
+ * command does (Bash), what's being searched for and where (Grep/Glob), the
+ * delegated task (Task), the target (WebFetch/WebSearch), the file (anything
+ * with a path). Falls back to the first input key only for tools with no
+ * better-known shape.
+ */
 function summarize(tool: ToolUse): string {
-  if (tool.path) return tool.path;
-  if (tool.input && typeof tool.input === "object") {
-    const entries = Object.entries(tool.input as Record<string, unknown>);
-    const first = entries[0];
-    if (first) return `${first[0]}: ${String(first[1]).slice(0, 60)}`;
+  const input =
+    tool.input && typeof tool.input === "object" ? (tool.input as Record<string, unknown>) : {};
+  const str = (v: unknown) => (typeof v === "string" && v.trim() !== "" ? v : undefined);
+  switch (tool.name) {
+    case "Bash":
+      return str(input.description) ?? str(input.command) ?? "no input";
+    case "Grep":
+    case "Glob": {
+      const pattern = str(input.pattern);
+      if (pattern) {
+        const where = str(input.path);
+        return where ? `${pattern} in ${where}` : pattern;
+      }
+      break;
+    }
+    case "Task":
+      if (str(input.description)) return input.description as string;
+      break;
+    case "WebFetch":
+      if (str(input.url)) return input.url as string;
+      break;
+    case "WebSearch":
+      if (str(input.query)) return input.query as string;
+      break;
   }
+  if (tool.path) return tool.path;
+  const first = Object.entries(input)[0];
+  if (first) return `${first[0]}: ${String(first[1]).slice(0, 60)}`;
   return "no input";
 }
 
@@ -80,7 +117,7 @@ function formatDuration(startIso?: string, endIso?: string): string | undefined 
 }
 
 /** Collapsible tool-call card. Defaults collapsed; expand state is local, not persisted. */
-export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardProps) {
+export function ToolCard({ tool, timestamp, defaultExpanded = false, live = false }: ToolCardProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [resultExpanded, setResultExpanded] = useState(false);
   const [diffExpanded, setDiffExpanded] = useState(false);
@@ -90,7 +127,7 @@ export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardP
   const stat = hunks ? diffStat(hunks) : undefined;
 
   return (
-    <Card className={styles.card}>
+    <Card className={live ? [styles.card, styles.cardEnter].join(" ") : styles.card}>
       <button
         type="button"
         className={styles.header}
@@ -103,6 +140,14 @@ export function ToolCard({ tool, timestamp, defaultExpanded = false }: ToolCardP
           <span className={styles.diffStat}>
             {stat.adds > 0 && <span className={styles.diffStatAdd}>+{stat.adds}</span>}
             {stat.dels > 0 && <span className={styles.diffStatDel}>−{stat.dels}</span>}
+          </span>
+        )}
+        {live && !result && (
+          <span className={styles.status}>
+            <span className={styles.spinner} aria-hidden="true" />
+            <span className={styles.running} role="status">
+              running
+            </span>
           </span>
         )}
         {result && (

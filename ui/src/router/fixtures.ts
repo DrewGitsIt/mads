@@ -830,6 +830,8 @@ export class FakeRouterClient implements RouterClient {
 
   async interrupt(): Promise<void> {}
 
+  async compactSession(): Promise<void> {}
+
   async bounce(): Promise<void> {}
 
   // Fixture-backed no-ops, same convention as sendMessage/interrupt/bounce

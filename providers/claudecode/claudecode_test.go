@@ -68,6 +68,15 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	if res.Ref != "30fc99b6-4dce-4fd4-869d-4faa311b4ff7" {
 		t.Errorf("ref: %q, want session_id from the fixture", res.Ref)
 	}
+	// Context occupancy comes from the LAST usage.iterations entry (the final
+	// API call's prompt side), never the summed top-level aggregate; the
+	// window from modelUsage[model].contextWindow.
+	if want := 10 + 28169 + 8827; res.Usage.ContextTokens != want {
+		t.Errorf("context tokens: %d, want %d from the fixture's last iteration", res.Usage.ContextTokens, want)
+	}
+	if res.Usage.ContextWindow != 200000 {
+		t.Errorf("context window: %d, want 200000 from the fixture's modelUsage", res.Usage.ContextWindow)
+	}
 }
 
 // OnEvent switches OneShot to the stream-json wire format and fires as

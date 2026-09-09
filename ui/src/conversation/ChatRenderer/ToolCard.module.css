@@ -3,6 +3,41 @@
   overflow: hidden;
 }
 
+/* Live (in-flight turn) cards ease in instead of blipping fully formed.
+   global.css's prefers-reduced-motion rule disables this wholesale. */
+.cardEnter {
+  animation: card-in 180ms ease-out;
+}
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* running state: shown on a live card until its tool_result attaches */
+.spinner {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--line-soft);
+  border-top-color: var(--info-fg);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.running {
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}
+
 .header {
   display: flex;
   align-items: center;

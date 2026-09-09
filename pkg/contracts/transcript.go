@@ -48,6 +48,16 @@ type Usage struct {
 	CacheCreationInputTokens int    `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int    `json:"cache_read_input_tokens,omitempty"`
 	Model                    string `json:"model,omitempty"`
+	// ContextTokens is the prompt-side occupancy of the turn's final API
+	// call — the accurate context measure. The token fields above are a
+	// per-turn billing aggregate on providers that iterate (claude-code),
+	// which overstates occupancy by ~the iteration count; prefer this when
+	// set. Zero when the provider doesn't report per-call occupancy.
+	ContextTokens int `json:"context_tokens,omitempty"`
+	// ContextWindow is the provider-reported window size for Model —
+	// authoritative over the static ContextWindowForModel table. Zero when
+	// unreported.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // Attribution identifies the linked session a message was injected from
