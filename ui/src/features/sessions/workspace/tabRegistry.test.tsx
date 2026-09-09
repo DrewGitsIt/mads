@@ -82,7 +82,7 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    await waitFor(() => expect(screen.getByText("Working changes")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Working changes \(\d+\)/)).toBeTruthy());
   });
 
   it("PipelineTabView renders the real PipelineTab", async () => {

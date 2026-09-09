@@ -32,6 +32,13 @@ describe("MergeBackFlow", () => {
     expect(screen.getByText("Not merged")).toBeTruthy();
   });
 
+  it("does not leak the placeholder dev note into the UI", () => {
+    const client = new FakeRouterClient();
+    render(<MergeBackFlow sessionId="session-files-clean" routerClient={client} />);
+    expect(screen.queryByText(/placeholder only/i)).toBeNull();
+    expect(screen.getByLabelText("Target branch").getAttribute("placeholder")).toBe("main");
+  });
+
   it("calls mergeSession with the typed target branch and shows Merging…", async () => {
     const client = new FakeRouterClient();
     render(<MergeBackFlow sessionId="session-files-clean" routerClient={client} />);

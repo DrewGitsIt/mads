@@ -3,16 +3,46 @@
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
+  /* The diff pane takes whatever width the lists column leaves (FilesTab.module.css .tab is the flex row); min-width 0 lets long diffs shrink instead of forcing overflow. */
+  flex: 1;
+  min-width: 0;
 }
 
 .toolbar {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  min-width: 0;
 }
 
 .spacer {
   flex: 1;
+}
+
+.pathLabel {
+  /* flex: 1 makes this the toolbar's flexible region (replacing .spacer);
+     RTL context puts the truncation ellipsis on the start side so the
+     filename tail stays visible, .pathText restores LTR character order. */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text);
+}
+
+.pathText {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.editorWrap {
+  /* Editor fills the pane's remaining height (height="100%" inside); min-height 0 keeps the flex chain collapsible so it never forces page scroll. */
+  flex: 1;
+  min-height: 0;
 }
 
 .status {

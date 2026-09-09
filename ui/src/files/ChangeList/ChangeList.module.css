@@ -38,9 +38,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* RTL context flips the ellipsis to the start side so the filename tail
+     survives truncation; .pathText restores in-order LTR rendering. */
+  direction: rtl;
+  text-align: left;
   font: var(--fs-sm) var(--mono);
   /* AA-contrast paths (MADS-UX §3.3/§13) — full-strength text, not a muted tone */
   color: var(--text);
+}
+
+.pathText {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .empty {

@@ -36,6 +36,8 @@ function guessLanguage(path: string): string {
 export interface DiffViewerProps {
   /** The selected file's path — kept even when `diff` fails to load, since "Open in editor" stays visible either way (MADS-UX §3.3). */
   path?: string;
+  /** Repo-relative display form of `path` (see ../displayPath) — the toolbar label; `path` stays the title/editor target. */
+  pathLabel?: string;
   /** Short hash of the commit this diff is from, when the selection is a committed file rather than a working change. */
   commitHash?: string;
   diff: FileDiff | null;
@@ -45,7 +47,7 @@ export interface DiffViewerProps {
 }
 
 /** Side-by-side/inline Monaco diff viewer, plus the always-visible "Open in editor" action. */
-export function DiffViewer({ path, commitHash, diff, loading, error, onOpenInEditor }: DiffViewerProps) {
+export function DiffViewer({ path, pathLabel, commitHash, diff, loading, error, onOpenInEditor }: DiffViewerProps) {
   const [sideBySide, setSideBySide] = useState(true);
 
   return (
@@ -58,7 +60,14 @@ export function DiffViewer({ path, commitHash, diff, loading, error, onOpenInEdi
           Inline
         </Chip>
         {commitHash && <Chip tone="neutral">Diff from commit {commitHash.slice(0, 7)}</Chip>}
-        <div className={styles.spacer} />
+        {/* Same start-side (RTL) truncation as ChangeList rows — the filename tail is the identifying part; the span doubles as the toolbar's flexible spacer. */}
+        {path ? (
+          <span className={styles.pathLabel} title={path}>
+            <span className={styles.pathText}>{pathLabel ?? path}</span>
+          </span>
+        ) : (
+          <div className={styles.spacer} />
+        )}
         <Button
           variant="secondary"
           size="sm"
@@ -76,14 +85,17 @@ export function DiffViewer({ path, commitHash, diff, loading, error, onOpenInEdi
       )}
       {!loading && !error && diff && (
         <Suspense fallback={<div className={styles.status}>Loading editor…</div>}>
-          <MonacoDiffEditor
-            height="480px"
-            theme="vs-dark"
-            language={diff.language ?? guessLanguage(diff.path)}
-            original={diff.original}
-            modified={diff.modified}
-            options={{ renderSideBySide: sideBySide, readOnly: true }}
-          />
+          {/* automaticLayout re-measures on pane resize — without it Monaco leaves stale canvas blocks when the flex column changes size. */}
+          <div className={styles.editorWrap}>
+            <MonacoDiffEditor
+              height="100%"
+              theme="vs-dark"
+              language={diff.language ?? guessLanguage(diff.path)}
+              original={diff.original}
+              modified={diff.modified}
+              options={{ renderSideBySide: sideBySide, readOnly: true, automaticLayout: true }}
+            />
+          </div>
         </Suspense>
       )}
     </div>

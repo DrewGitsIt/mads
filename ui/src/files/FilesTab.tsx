@@ -4,6 +4,7 @@ import { Panel, PanelBody, PanelHeader } from "../components/Panel/Panel";
 import type { RouterClient } from "../router/client";
 import type { Commit, FileChange, FileDiff, Session } from "../router/types";
 import { collapseChanges } from "../context-rail/collapseChanges";
+import { displayPath } from "./displayPath";
 import { ChangeList } from "./ChangeList/ChangeList";
 import { CommitList } from "./ChangeList/CommitList";
 import { DiffViewer } from "./DiffViewer/DiffViewer";
@@ -148,7 +149,7 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
           <>
             {commits.length > 0 && (
               <Panel>
-                <PanelHeader>Committed</PanelHeader>
+                <PanelHeader>Committed ({commits.length})</PanelHeader>
                 <PanelBody>
                   <CommitList
                     commits={commits}
@@ -165,12 +166,14 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
             )}
             {workingChanges.length > 0 && (
               <Panel>
-                <PanelHeader>Working changes</PanelHeader>
+                <PanelHeader>Working changes ({workingChanges.length})</PanelHeader>
                 <PanelBody>
                   <ChangeList
                     changes={workingChanges}
                     selectedPath={selection?.source === "working" ? selection.path : undefined}
                     onSelect={(path) => setSelection({ source: "working", path })}
+                    sessionId={sessionId}
+                    worktreeDir={session?.worktree_dir}
                   />
                 </PanelBody>
               </Panel>
@@ -187,6 +190,7 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
 
       <DiffViewer
         path={selection?.path}
+        pathLabel={selection ? displayPath(selection.path, session?.worktree_dir) : undefined}
         commitHash={selection?.source === "commit" ? selection.hash : undefined}
         diff={diff}
         loading={diffLoading}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Commit, FileChange } from "../../router/types";
-import { attributionForChange, attributionForCommit } from "./attribution";
+import { attributionForChange, attributionForCommit, isOwnActor } from "./attribution";
 
 function fileChange(overrides: Partial<FileChange>): FileChange {
   return {
@@ -34,6 +34,23 @@ describe("attributionForChange", () => {
     expect(
       attributionForChange(fileChange({ attributed: false, origin: "observed", actor: undefined })),
     ).toBe("unattributed");
+  });
+});
+
+describe("isOwnActor", () => {
+  it("matches the viewed session case-insensitively (ledger SES_… vs route ses_…)", () => {
+    expect(isOwnActor("SES_58F8C18E9B4B0433", "ses_58f8c18e9b4b0433")).toBe(true);
+    expect(isOwnActor("ses_a", "ses_a")).toBe(true);
+  });
+
+  it("does not match a foreign actor", () => {
+    expect(isOwnActor("ses_other", "ses_a")).toBe(false);
+  });
+
+  it("is false when either side is missing", () => {
+    expect(isOwnActor(undefined, "ses_a")).toBe(false);
+    expect(isOwnActor("ses_a", undefined)).toBe(false);
+    expect(isOwnActor(undefined, undefined)).toBe(false);
   });
 });
 

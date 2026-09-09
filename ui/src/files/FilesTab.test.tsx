@@ -106,16 +106,65 @@ describe("FilesTab", () => {
     expect(
       await screen.findByText(/no commits recorded and no working changes observed/i),
     ).toBeTruthy();
-    expect(screen.queryByText("Committed")).toBeNull();
-    expect(screen.queryByText("Working changes")).toBeNull();
+    expect(screen.queryByText(/Committed/)).toBeNull();
+    expect(screen.queryByText(/Working changes/)).toBeNull();
   });
 
   it("renders only the Committed section when only commits are non-empty", async () => {
     const client = new FakeRouterClient();
     render(<FilesTab sessionId="session-files-commits-only" routerClient={client} />);
 
-    expect(await screen.findByText("Committed")).toBeTruthy();
-    expect(screen.queryByText("Working changes")).toBeNull();
+    expect(await screen.findByText("Committed (1)")).toBeTruthy();
+    expect(screen.queryByText(/Working changes/)).toBeNull();
+  });
+
+  it("summarizes list sizes in the section headers", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
+
+    expect(await screen.findByText("Working changes (3)")).toBeTruthy();
+    expect(screen.getByText("Committed (1)")).toBeTruthy();
+  });
+
+  it("relativizes absolute working-change paths against the session worktree, keeping the full path in title", async () => {
+    const sid = "session-files-clean"; // fixture worktree_dir: /home/drew/.mads/worktrees/ses_x/tsk_retry-backoff
+    const abs = "/home/drew/.mads/worktrees/ses_x/tsk_retry-backoff/services/session/internal/runner/runner.go";
+    const client = new FakeRouterClient(undefined, undefined, undefined, undefined, undefined, {
+      [sid]: [
+        { id: 1, session_id: sid, path: abs, change: "modified" as const, origin: "tool_use" as const, attributed: true, timestamp: "2026-08-29T00:00:01Z" },
+      ],
+    });
+    render(<FilesTab sessionId={sid} routerClient={client} />);
+
+    const relative = await screen.findByText("services/session/internal/runner/runner.go");
+    expect(relative.closest("[title]")?.getAttribute("title")).toBe(abs);
+    expect(screen.queryByText(abs)).toBeNull();
+  });
+
+  it("hides the attribution chip when the actor is the viewed session, regardless of casing", async () => {
+    const sid = "session-files-clean";
+    const client = new FakeRouterClient(undefined, undefined, undefined, undefined, undefined, {
+      [sid]: [
+        { id: 1, session_id: sid, path: "src/own.ts", change: "modified" as const, origin: "tool_use" as const, attributed: true, actor: "SESSION-FILES-CLEAN", timestamp: "2026-08-29T00:00:01Z" },
+        { id: 2, session_id: sid, path: "src/foreign.ts", change: "modified" as const, origin: "tool_use" as const, attributed: true, actor: "ses_other", timestamp: "2026-08-29T00:00:02Z" },
+      ],
+    });
+    render(<FilesTab sessionId={sid} routerClient={client} />);
+
+    await screen.findByText("src/own.ts");
+    expect(screen.queryByText("SESSION-FILES-CLEAN")).toBeNull();
+    expect(screen.getByText("ses_other")).toBeTruthy();
+  });
+
+  it("labels the diff toolbar with the selected file's path", async () => {
+    const client = new FakeRouterClient();
+    render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
+
+    fireEvent.click(await screen.findByText("services/data/internal/ingest.go"));
+    await screen.findByTestId("fake-diff-editor");
+
+    // Once in the change row, once in the diff toolbar.
+    expect(screen.getAllByTitle("services/data/internal/ingest.go")).toHaveLength(2);
   });
 
   it("shows the diff for a selected committed file, labeled with its commit", async () => {

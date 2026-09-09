@@ -8,6 +8,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* The row lives in the narrow lists column — it must absorb the squeeze itself (via .branchInput), never overflow into a page scrollbar. */
+  min-width: 0;
 }
 
 .branchInput {
@@ -17,12 +19,18 @@
   border: 1px solid var(--line-soft);
   border-radius: var(--r-sm);
   padding: var(--space-2);
-  width: 200px;
+  /* The one shrinking element in the row: chip and button keep their labels intact, the input gives up width down to a still-typable floor. */
+  flex: 0 1 200px;
+  width: auto;
+  min-width: 6ch;
 }
 
-.hint {
-  font: var(--fs-sm) var(--sans);
-  color: var(--text3);
+.statusChip {
+  flex-shrink: 0;
+}
+
+.mergeButton {
+  flex-shrink: 0;
 }
 
 .spacer {

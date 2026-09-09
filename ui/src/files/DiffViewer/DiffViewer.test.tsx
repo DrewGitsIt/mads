@@ -11,14 +11,17 @@ vi.mock("@monaco-editor/react", () => ({
     original: string;
     modified: string;
     language?: string;
-    options?: { renderSideBySide?: boolean };
+    height?: string;
+    options?: { renderSideBySide?: boolean; automaticLayout?: boolean };
   }) => (
     <div
       data-testid="fake-diff-editor"
       data-original={props.original}
       data-modified={props.modified}
       data-language={props.language}
+      data-height={props.height}
       data-side-by-side={String(props.options?.renderSideBySide)}
+      data-automatic-layout={String(props.options?.automaticLayout)}
     />
   ),
 }));
@@ -73,6 +76,40 @@ describe("DiffViewer", () => {
     render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={onOpenInEditor} />);
     fireEvent.click(screen.getByText("Open in editor"));
     expect(onOpenInEditor).toHaveBeenCalledWith(diff.path);
+  });
+
+  it("fills the pane instead of a fixed height, with automaticLayout for resizes", async () => {
+    render(<DiffViewer path={diff.path} diff={diff} onOpenInEditor={vi.fn()} />);
+
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-height")).toBe("100%");
+    expect(editor.getAttribute("data-automatic-layout")).toBe("true");
+  });
+
+  it("labels the toolbar with the display path, keeping the full path in title", () => {
+    render(
+      <DiffViewer
+        path="/wt/services/data/internal/ingest.go"
+        pathLabel="services/data/internal/ingest.go"
+        diff={diff}
+        onOpenInEditor={vi.fn()}
+      />,
+    );
+
+    const label = screen.getByText("services/data/internal/ingest.go");
+    expect(label.closest("[title]")?.getAttribute("title")).toBe(
+      "/wt/services/data/internal/ingest.go",
+    );
+  });
+
+  it("falls back to the raw path in the toolbar when no pathLabel is given", () => {
+    render(<DiffViewer path={diff.path} diff={null} onOpenInEditor={vi.fn()} />);
+    expect(screen.getByTitle(diff.path).textContent).toBe(diff.path);
+  });
+
+  it("shows no path label when nothing is selected", () => {
+    render(<DiffViewer diff={null} onOpenInEditor={vi.fn()} />);
+    expect(screen.queryByTitle(/./)).toBeNull();
   });
 
   it("shows the commit label when commitHash is passed", () => {

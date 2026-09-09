@@ -101,6 +101,8 @@ export function MergeBackFlow({
   return (
     <div className={styles.flow}>
       <div className={styles.row}>
+        {/* placeholder="main" is display-only — an empty input sends no target
+            branch, and mergeSession() applies no real default yet. */}
         <input
           className={styles.branchInput}
           value={targetBranch}
@@ -109,12 +111,14 @@ export function MergeBackFlow({
           aria-label="Target branch"
           disabled={status === "attempting"}
         />
-        <span className={styles.hint}>placeholder only — no real default yet</span>
         <div className={styles.spacer} />
-        <Chip tone={STATUS_TONE[status]}>{STATUS_LABEL[status]}</Chip>
+        <Chip tone={STATUS_TONE[status]} className={styles.statusChip}>
+          {STATUS_LABEL[status]}
+        </Chip>
         <Button
           variant="primary"
           size="sm"
+          className={styles.mergeButton}
           disabled={status === "attempting"}
           onClick={attemptMerge}
         >

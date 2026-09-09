@@ -66,15 +66,92 @@ func TestFilesTracksToolUsePaths(t *testing.T) {
 	if len(files) != 1 || files[0].Path != "foo.txt" {
 		t.Fatalf("touched files = %+v, want exactly [foo.txt]", files)
 	}
-	if files[0].Change != "added" {
-		t.Errorf("change = %q, want added", files[0].Change)
+	// "modified", not "added": the fake executes each scripted tool before
+	// emitting its tool_use event, so the created file already exists when
+	// recordFileChange stats it — the documented post-execution limitation.
+	// Providers that announce tool_use pre-execution (claudecode) classify
+	// a created file "added"; TestFileChangeClassification covers that
+	// ordering directly.
+	if files[0].Change != "modified" {
+		t.Errorf("change = %q, want modified", files[0].Change)
 	}
 	if files[0].Origin != contracts.OriginToolUse {
 		t.Errorf("origin = %q, want %q", files[0].Origin, contracts.OriginToolUse)
 	}
+	if files[0].Repo != r.Cwd {
+		t.Errorf("repo = %q, want the session cwd %q", files[0].Repo, r.Cwd)
+	}
 
 	if _, err := os.Stat(filepath.Join(r.Cwd, "foo.txt")); err != nil {
 		t.Errorf("scripted write didn't land on disk: %v", err)
+	}
+}
+
+// Classification reflects reality, not sighting order (spec §5): a
+// pre-existing file's first touch is "modified", only a path absent at
+// observation time is "added" (later touches stay "modified" — the UI's
+// collapseChanges reads first=="added" as created-in-session), and a
+// touched path gone by turn end is swept as "deleted". Drives
+// recordFileChange/sweepDeletedFiles directly to control the
+// observation-vs-execution ordering the fake provider can't (it executes
+// before emitting).
+func TestFileChangeClassification(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	r := New(sess.ID, data, provider.NewRegistry())
+	dir := t.TempDir()
+	r.Cwd = dir
+
+	if err := os.WriteFile(filepath.Join(dir, "pre.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r.recordFileChange("pre.txt") // existed before the session touched it
+	r.recordFileChange("new.txt") // absent at observation: the tool is about to create it
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.recordFileChange("new.txt") // later touch of a created file
+	if err := os.Remove(filepath.Join(dir, "pre.txt")); err != nil {
+		t.Fatal(err)
+	}
+	r.sweepDeletedFiles() // turn end: pre.txt is gone
+
+	files, err := r.Files(ctx)
+	if err != nil {
+		t.Fatalf("files: %v", err)
+	}
+	want := []struct{ path, change string }{
+		{"pre.txt", "modified"},
+		{"new.txt", "added"},
+		{"new.txt", "modified"},
+		{"pre.txt", "deleted"},
+	}
+	if len(files) != len(want) {
+		t.Fatalf("ledger = %+v, want %d rows", files, len(want))
+	}
+	for i, w := range want {
+		if files[i].Path != w.path || files[i].Change != w.change {
+			t.Errorf("row %d = %s %q, want %s %q", i, files[i].Path, files[i].Change, w.path, w.change)
+		}
+	}
+
+	// A second sweep must not repeat the deletion; a recreated path reads
+	// as created again rather than inheriting the pre-deletion verdict.
+	r.sweepDeletedFiles()
+	r.recordFileChange("pre.txt")
+	files, err = r.Files(ctx)
+	if err != nil {
+		t.Fatalf("files: %v", err)
+	}
+	if len(files) != len(want)+1 {
+		t.Fatalf("ledger after resweep+retouch = %+v, want %d rows", files, len(want)+1)
+	}
+	if last := files[len(files)-1]; last.Path != "pre.txt" || last.Change != "added" {
+		t.Errorf("retouch after deletion = %s %q, want pre.txt added", last.Path, last.Change)
 	}
 }
 

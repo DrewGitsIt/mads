@@ -11,8 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -244,9 +248,14 @@ type Runner struct {
 	// internal "done" channel one layer up.
 	shutdownCh chan struct{}
 
-	// touched tracks paths already reported this run, so recordFileChange
-	// can tell an "added" first sighting from a later "modified" one.
-	touched map[string]bool
+	// touched maps each path reported this run to the last verdict recorded
+	// for it ("added"/"modified"/"deleted"). The first touch of a path is
+	// classified by stat in recordFileChange; the verdict is remembered here
+	// rather than re-derived because the UI's collapseChanges reads a first
+	// touch of "added" as created-in-session, so every later touch must be
+	// "modified" — except after a recorded "deleted", which resets
+	// classification so a recreated path reads as created again.
+	touched map[string]string
 }
 
 // pendingInjection is one queued Inject call, waiting for the in-flight
@@ -267,7 +276,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		Cwd:              ".",
 		Died:             make(chan struct{}),
 		hub:              newHub(),
-		touched:          make(map[string]bool),
+		touched:          make(map[string]string),
 		turnAttributions: make(map[int]contracts.Attribution),
 		shutdownCh:       make(chan struct{}),
 		permPending:      make(map[string]*pendingPermission),
@@ -1191,6 +1200,9 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 func (r *Runner) pump(sess provider.Session) {
 	for ev := range sess.Events() {
 		if ev.Kind == provider.EventTurnEnd {
+			// Before onTurnEnd: it can start a queued next turn, whose
+			// tools must not blur which turn deleted a touched file.
+			r.sweepDeletedFiles()
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
 			r.persistUsage(context.Background(), ev.Usage)
@@ -1252,6 +1264,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			defer wg.Done()
 			for ev := range events {
 				if ev.Kind == provider.EventTurnEnd {
+					r.sweepDeletedFiles()
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
 					r.persistUsage(context.Background(), ev.Usage)
@@ -1292,19 +1305,95 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 
 // recordFileChange reports one path the agent's tools wrote (Tool.Mutates —
 // reads carry a Path too but are not changes) to the Data Service (spec §5).
-// "added" on first sighting this run, "modified" after — best effort, since
-// a dropped observation shouldn't interrupt the turn.
+// A path's first touch this run is classified by stat: providers announce
+// tool_use on the wire before the tool executes (providers/claudecode
+// wire.go emits it from the "assistant" message, ahead of the "user"
+// tool_result), so a path that already exists predates the session's edit
+// ("modified") and a missing one is about to be created ("added"). The stat
+// races the tool on a provider that only reports tool_use after executing
+// it (providers/fake), where a session-created file resolves as "modified"
+// — the under-claiming direction. Best effort throughout: a failed stat
+// falls back to the old first-sighting "added" rather than interrupting
+// the turn. Later touches are "modified" per r.touched's convention.
 func (r *Runner) recordFileChange(path string) {
 	r.mu.Lock()
-	change := "modified"
-	if !r.touched[path] {
-		change = "added"
-		r.touched[path] = true
-	}
+	base := r.touchBaseLocked()
+	prev, seen := r.touched[path]
 	r.mu.Unlock()
 
+	change := "modified"
+	if !seen || prev == "deleted" {
+		// Missing means the tool is about to create it; any stat failure
+		// keeps the old first-sighting verdict rather than dropping the
+		// touch.
+		change = "added"
+		if _, err := os.Stat(touchAbs(base, path)); err == nil {
+			change = "modified"
+		}
+	}
+
+	r.mu.Lock()
+	r.touched[path] = change
+	r.mu.Unlock()
+
+	r.appendFileChange(path, change, base)
+}
+
+// sweepDeletedFiles runs at turn end, once every tool of the turn has
+// finished: a deletion (e.g. a Bash rm) carries no Path of its own on the
+// wire, so it is only observable as a previously touched path that no
+// longer exists. Only a definite absence counts — a stat failure other than
+// not-exist is no evidence the file is gone.
+func (r *Runner) sweepDeletedFiles() {
+	r.mu.Lock()
+	base := r.touchBaseLocked()
+	paths := make([]string, 0, len(r.touched))
+	for path, change := range r.touched {
+		if change != "deleted" {
+			paths = append(paths, path)
+		}
+	}
+	r.mu.Unlock()
+	slices.Sort(paths) // map order would make multi-deletion ledger order flap
+
+	for _, path := range paths {
+		if _, err := os.Stat(touchAbs(base, path)); !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		r.mu.Lock()
+		r.touched[path] = "deleted"
+		r.mu.Unlock()
+		r.appendFileChange(path, "deleted", base)
+	}
+}
+
+// touchBaseLocked is the dir tool-reported relative paths resolve against —
+// providerCwd once Start has resolved worktree isolation, r.Cwd before.
+// Caller holds r.mu.
+func (r *Runner) touchBaseLocked() string {
+	if r.providerCwd != "" {
+		return r.providerCwd
+	}
+	return r.Cwd
+}
+
+// touchAbs resolves a tool-reported path for stat; the ledger keeps the
+// path exactly as reported.
+func touchAbs(base, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(base, path)
+}
+
+// appendFileChange records one row of the append-only §5 ledger. Repo is
+// the session's resolved working root (its worktree when isolated), the
+// spec §17 multi-repo hook. Best effort: a failed append is logged, never
+// interrupts the turn.
+func (r *Runner) appendFileChange(path, change, repo string) {
 	fc := &contracts.FileChange{
 		SessionID: r.sessionID,
+		Repo:      repo,
 		Path:      path,
 		Change:    change,
 		Origin:    contracts.OriginToolUse,

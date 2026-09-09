@@ -21,6 +21,16 @@ export function attributionForChange(fc: FileChange): AttributionKind {
   return fc.attributed ? "actor" : "unattributed";
 }
 
+/**
+ * Whether a change's actor is the session being viewed — in a single-session
+ * Files tab that chip is noise, so it's hidden; foreign/unattributed actors
+ * keep theirs. Case-insensitive because the ledger's actor casing differs
+ * from the route's session id (SES_… vs ses_…).
+ */
+export function isOwnActor(actor: string | undefined, sessionId: string | undefined): boolean {
+  return !!actor && !!sessionId && actor.toLowerCase() === sessionId.toLowerCase();
+}
+
 export function attributionForCommit(c: Commit): AttributionKind {
   if (c.orphan) return "orphan";
   if (c.linked_via === "trailer") return "trailer";
