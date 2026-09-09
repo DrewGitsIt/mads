@@ -2,6 +2,7 @@ package inhibit
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"testing"
 	"time"
@@ -59,6 +60,20 @@ func TestLogindIntegration(t *testing.T) {
 	if _, err := listInhibitors(obj); err != nil {
 		t.Skip("no logind: " + err.Error())
 	}
+
+	// Listing inhibitors can be allowed where *taking* a block inhibitor is
+	// not: polkit denies inhibit-block-* outside an active local session
+	// (e.g. over SSH), and Acquire only logs that failure. Probe the real
+	// Inhibit call so those environments skip instead of failing.
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), acquireTimeout)
+	defer probeCancel()
+	var probeFD dbus.UnixFD
+	probe := obj.CallWithContext(probeCtx, "org.freedesktop.login1.Manager.Inhibit", 0,
+		"sleep:idle", who, "inhibit integration test probe", "block")
+	if err := probe.Store(&probeFD); err != nil {
+		t.Skip("logind Inhibit unavailable: " + err.Error())
+	}
+	_ = os.NewFile(uintptr(probeFD), "probe").Close()
 
 	why := "inhibit integration test " + strconv.FormatInt(time.Now().UnixNano(), 10)
 	h := NewLocker().Acquire(why)
