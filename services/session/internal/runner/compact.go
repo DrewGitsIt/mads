@@ -23,19 +23,18 @@ const compactOccupancyThreshold = 0.85
 
 // contextOccupancy returns usage's context occupancy as a fraction of
 // model's window, or 0 when unknowable. ContextTokens (the final API call's
-// prompt side, wire.go's iterations breakdown) is the accurate numerator;
-// the summed token fields are a per-turn billing aggregate kept only as a
-// fallback for providers that don't report per-call occupancy — an
-// overestimate there, which for a >threshold trigger errs toward compacting.
-// The provider-reported window beats the static table for the same reason
-// (a local 128k model would otherwise be judged against 200k).
+// prompt side, wire.go's iterations breakdown) is the only trusted
+// numerator. The summed token fields are a per-turn billing aggregate —
+// ~N× real occupancy on multi-tool turns — and a LastUsage persisted before
+// ContextTokens existed carries only that aggregate, so summing it here made
+// waking a dormant session read e.g. 267212/200000 = 1.34 and auto-compact
+// it. No ContextTokens means occupancy is unknown, and unknown must never
+// compact: the aggregate is a UI better-than-nothing at most, never a
+// trigger. The provider-reported window beats the static table for the same
+// reason (a local 128k model would otherwise be judged against 200k).
 func contextOccupancy(usage *contracts.Usage, model string) float64 {
-	if usage == nil {
+	if usage == nil || usage.ContextTokens == 0 {
 		return 0
-	}
-	tokens := usage.ContextTokens
-	if tokens == 0 {
-		tokens = usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 	}
 	window := usage.ContextWindow
 	if window <= 0 {
@@ -44,13 +43,15 @@ func contextOccupancy(usage *contracts.Usage, model string) float64 {
 	if window <= 0 {
 		return 0
 	}
-	return float64(tokens) / float64(window)
+	return float64(usage.ContextTokens) / float64(window)
 }
 
 // shouldCompactOnResume reports whether a resumed session's last-known usage
 // occupies more than compactOccupancyThreshold of model's context window.
 // A nil usage — a session that never completed a turn before this process
-// resumed it — never triggers: there is nothing to estimate occupancy from.
+// resumed it — never triggers, and neither does an aggregate-only usage
+// (persisted before ContextTokens existed): contextOccupancy reports both
+// as unknown rather than trusting the inflated billing sum.
 func shouldCompactOnResume(usage *contracts.Usage, model string) bool {
 	return contextOccupancy(usage, model) > compactOccupancyThreshold
 }

@@ -314,7 +314,7 @@ func parseOneShot(raw []byte) (*provider.OneShotResult, error) {
 		res.Usage.CacheReadInputTokens = l.Usage.CacheReadInputTokens
 		res.Usage.Model = l.model()
 		res.Usage.ContextTokens = l.Usage.contextTokens()
-		res.Usage.ContextWindow = l.ModelUsage[l.model()].ContextWindow
+		res.Usage.ContextWindow = l.contextWindowFor(l.model())
 	}
 	return res, nil
 }

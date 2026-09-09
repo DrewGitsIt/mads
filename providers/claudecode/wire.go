@@ -111,6 +111,33 @@ type wireModelUsage struct {
 	ContextWindow int `json:"contextWindow"`
 }
 
+// contextWindowFor resolves model's runtime-reported window from the line's
+// modelUsage map. The keys don't reliably equal the model id: a scaled-window
+// session suffixes it ("claude-opus-5[1m]"), and a turn that ran helper
+// models lists several entries — an exact lookup alone drops the window
+// there, so a genuine 1M session gets judged against the static 200k table
+// (~5× overstated occupancy). Exact key first, then a key whose trailing
+// bracketed suffix stripped equals model, then the sole entry when the map
+// is unambiguous; 0 when it stays ambiguous.
+func (l *wireLine) contextWindowFor(model string) int {
+	if mu, ok := l.ModelUsage[model]; ok {
+		return mu.ContextWindow
+	}
+	if model != "" {
+		for key, mu := range l.ModelUsage {
+			if i := strings.LastIndex(key, "["); i > 0 && key[:i] == model {
+				return mu.ContextWindow
+			}
+		}
+	}
+	if len(l.ModelUsage) == 1 {
+		for _, mu := range l.ModelUsage {
+			return mu.ContextWindow
+		}
+	}
+	return 0
+}
+
 // blocks decodes message content: a bare string becomes one text block.
 func (m *wireMessage) blocks() []wireBlock {
 	if m == nil || len(m.Content) == 0 {
@@ -222,7 +249,7 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 				Model:                    l.model(),
 				CostUSD:                  l.TotalCostUSD,
 				ContextTokens:            l.Usage.contextTokens(),
-				ContextWindow:            l.ModelUsage[l.model()].ContextWindow,
+				ContextWindow:            l.contextWindowFor(l.model()),
 			}
 		}
 		if l.IsError {

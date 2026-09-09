@@ -20,16 +20,11 @@ func TestShouldCompactOnResume(t *testing.T) {
 		want  bool
 	}{
 		{name: "nil usage never triggers", usage: nil, want: false},
-		{name: "below threshold", usage: &contracts.Usage{InputTokens: 100_000}, want: false},
-		{name: "above threshold", usage: &contracts.Usage{InputTokens: 180_000}, want: true},
-		{
-			name:  "cache tokens count toward the prompt side",
-			usage: &contracts.Usage{InputTokens: 5_000, CacheReadInputTokens: 150_000, CacheCreationInputTokens: 30_000},
-			want:  true,
-		},
+		{name: "below threshold", usage: &contracts.Usage{ContextTokens: 100_000}, want: false},
+		{name: "above threshold", usage: &contracts.Usage{ContextTokens: 180_000}, want: true},
 		{
 			name:  "output tokens alone never trigger",
-			usage: &contracts.Usage{InputTokens: 1_000, OutputTokens: 190_000},
+			usage: &contracts.Usage{ContextTokens: 1_000, OutputTokens: 190_000},
 			want:  false,
 		},
 		{
@@ -46,6 +41,15 @@ func TestShouldCompactOnResume(t *testing.T) {
 			name:  "context_tokens alone can trigger",
 			usage: &contracts.Usage{ContextTokens: 180_000},
 			want:  true,
+		},
+		{
+			// A pre-ContextTokens LastUsage carries only the billing aggregate
+			// (267212 here — 1.34 "occupancy" against 200k). Trusting it made
+			// waking a dormant session auto-compact; occupancy without
+			// ContextTokens is unknown and unknown never compacts.
+			name:  "aggregate-only usage never triggers, however huge",
+			usage: &contracts.Usage{InputTokens: 18, CacheCreationInputTokens: 23_710, CacheReadInputTokens: 243_484},
+			want:  false,
 		},
 		{
 			// A provider-reported window (here a 128k local model) beats the
@@ -104,7 +108,7 @@ func TestStartTriggersCompactionAboveThreshold(t *testing.T) {
 	if cur.ProviderRef == "" {
 		t.Fatal("provider_ref not persisted after r1's first turn")
 	}
-	cur.LastUsage = &contracts.Usage{InputTokens: 190_000, Model: "fake-fast"}
+	cur.LastUsage = &contracts.Usage{ContextTokens: 190_000, Model: "fake-fast"}
 	if err := data.UpdateSession(ctx, &cur); err != nil {
 		t.Fatalf("seed last_usage: %v", err)
 	}
@@ -155,7 +159,7 @@ func TestStartSkipsCompactionBelowThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load session: %v", err)
 	}
-	cur.LastUsage = &contracts.Usage{InputTokens: 5_000, Model: "fake-fast"}
+	cur.LastUsage = &contracts.Usage{ContextTokens: 5_000, Model: "fake-fast"}
 	if err := data.UpdateSession(ctx, &cur); err != nil {
 		t.Fatalf("seed last_usage: %v", err)
 	}

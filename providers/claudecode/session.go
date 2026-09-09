@@ -159,8 +159,16 @@ func (s *streamSession) handleLine(raw []byte) {
 	s.mu.Unlock()
 
 	for _, ev := range l.events(interrupted, true) {
-		if ev.Usage != nil && ev.Usage.Model == "" {
-			ev.Usage.Model = model // learned from the init line
+		if ev.Usage != nil {
+			if ev.Usage.Model == "" {
+				ev.Usage.Model = model // learned from the init line
+			}
+			// events() resolves the window from the line alone; a result line
+			// whose modelUsage lists several models needs the init-line model
+			// to pick the right (possibly "[1m]"-suffixed) entry.
+			if ev.Usage.ContextWindow == 0 {
+				ev.Usage.ContextWindow = l.contextWindowFor(ev.Usage.Model)
+			}
 		}
 		s.events <- ev
 	}

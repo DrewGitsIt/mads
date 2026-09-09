@@ -728,18 +728,22 @@ export function ConversationTab({
   // extra stream event or server round-trip, and no race against the
   // Runner's own Start-time trigger, which only fires near the window limit.
   const occupancyWindow = lastUsage?.context_window || contextWindowForModel(session.model);
-  const occupancyTokens = lastUsage
-    ? lastUsage.context_tokens ||
-      lastUsage.input_tokens +
-        (lastUsage.cache_read_input_tokens ?? 0) +
-        (lastUsage.cache_creation_input_tokens ?? 0)
-    : 0;
-  const occupancyPct = occupancyWindow > 0 ? Math.round((occupancyTokens / occupancyWindow) * 100) : 0;
+  // Only context_tokens (the final API call's prompt side) feeds the
+  // suggestion: the summed token fields are claude-code's per-turn billing
+  // aggregate (~N× real occupancy — a 3-iteration small turn reads 60%+),
+  // so a proactive "compact?" off them is a false positive. The meter keeps
+  // its aggregate fallback rendering for stale sessions; without trusted
+  // numbers the suggestion simply stays away. Clamped at 100 like the meter
+  // so the two can never contradict ("~134%" is impossible).
+  const occupancyTokens = lastUsage?.context_tokens ?? 0;
+  const occupancyPct =
+    occupancyWindow > 0 ? Math.min(100, Math.round((occupancyTokens / occupancyWindow) * 100)) : 0;
   const showCompactSuggestion =
     activeMode === "chat" &&
     !inChatTurn &&
     !compactSuggestionDismissed &&
     !compactStatus &&
+    occupancyTokens > 0 &&
     occupancyPct >= 60;
 
   return (

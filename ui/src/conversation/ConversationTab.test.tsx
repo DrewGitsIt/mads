@@ -1036,6 +1036,36 @@ describe("ConversationTab", () => {
     expect(screen.queryByText(/of the context window/)).toBeNull();
   });
 
+  // A last_usage persisted before context_tokens existed carries only the
+  // per-turn billing aggregate (~N× real occupancy) — off it the banner used
+  // to claim an impossible "~134%" while the meter showed 100%. Untrusted
+  // numbers must never raise the suggestion; the meter's clamped fallback
+  // rendering is all such a session gets.
+  it("never suggests compaction from an aggregate-only last_usage", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "stale aggregate session",
+      activity: "active",
+      model: "claude-sonnet-5",
+      last_usage: {
+        input_tokens: 18,
+        output_tokens: 50,
+        cache_creation_input_tokens: 23_710,
+        cache_read_input_tokens: 243_484,
+      },
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    // The meter's intentional fallback rendering (267,212 aggregate against
+    // the static 200k table, clamped) proves the seeded usage mounted.
+    await waitFor(() => expect(screen.getByText("100%")).toBeTruthy());
+    expect(screen.queryByText(/of the context window/)).toBeNull();
+  });
+
   // The "compaction completed banner sticks around far longer than it
   // should" fix: success is a transient confirmation, auto-dismissed.
   it("auto-dismisses a successful compaction banner after a few seconds", async () => {

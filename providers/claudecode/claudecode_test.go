@@ -79,6 +79,57 @@ func TestOneShotParsesCapturedResult(t *testing.T) {
 	}
 }
 
+// Result lines from a scaled-window session key modelUsage with a bracketed
+// suffix ("claude-opus-5[1m]"), and a turn that ran helper models lists
+// several entries — an exact-key lookup misses both, dropping the
+// runtime-reported window so a genuine 1M session gets judged against the
+// static 200k table (~5× overstated occupancy).
+func TestContextWindowResolvesSuffixedMultiModelUsage(t *testing.T) {
+	raw := []byte(`{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s-1m","usage":{"input_tokens":12,"output_tokens":7,"iterations":[{"input_tokens":12,"output_tokens":7,"cache_read_input_tokens":400000,"cache_creation_input_tokens":0,"type":"message"}]},"modelUsage":{"claude-haiku-4-5-20251001":{"contextWindow":200000},"claude-opus-5[1m]":{"contextWindow":1000000}}}`)
+	var l wireLine
+	if err := json.Unmarshal(raw, &l); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.contextWindowFor("claude-opus-5"); got != 1000000 {
+		t.Errorf("contextWindowFor(claude-opus-5) = %d, want 1000000 via the [1m]-suffixed key", got)
+	}
+	if got := l.contextWindowFor("claude-haiku-4-5-20251001"); got != 200000 {
+		t.Errorf("contextWindowFor(exact key) = %d, want 200000", got)
+	}
+	if got := l.contextWindowFor("claude-sonnet-5"); got != 0 {
+		t.Errorf("contextWindowFor(unlisted model in an ambiguous map) = %d, want 0", got)
+	}
+
+	// The streaming transport learns the model from the init line and must
+	// backfill the window onto the turn-end usage the same way it backfills
+	// the model — events() alone can't disambiguate a multi-model map.
+	s := &streamSession{events: make(chan provider.Event, 8), announced: make(chan string, 1)}
+	s.handleLine([]byte(`{"type":"system","subtype":"init","session_id":"s-1m","model":"claude-opus-5"}`))
+	s.handleLine(raw)
+	var turnEnd *provider.Event
+drain:
+	for {
+		select {
+		case ev := <-s.events:
+			if ev.Kind == provider.EventTurnEnd {
+				turnEnd = &ev
+				break drain
+			}
+		default:
+			break drain
+		}
+	}
+	if turnEnd == nil || turnEnd.Usage == nil {
+		t.Fatal("no turn-end usage from the result line")
+	}
+	if turnEnd.Usage.Model != "claude-opus-5" {
+		t.Errorf("stream turn-end model: %q, want the init-line model", turnEnd.Usage.Model)
+	}
+	if turnEnd.Usage.ContextWindow != 1000000 {
+		t.Errorf("stream turn-end context window: %d, want 1000000 via the [1m]-suffixed key", turnEnd.Usage.ContextWindow)
+	}
+}
+
 // OnEvent switches OneShot to the stream-json wire format and fires as
 // assistant text lines arrive; the final result is equivalent to the
 // non-streaming path (same reply, concatenation of the streamed chunks).
