@@ -4,6 +4,7 @@ GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
 .PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate
+.PHONY: services ui mads data router session pipeline
 
 build: ui-deps
 	go build ./...
@@ -29,6 +30,59 @@ tidy:
 
 ui-deps:
 	npm --prefix ui ci
+
+# --- Targeted rebuilds ------------------------------------------------------
+#
+# `make build` is the all-or-nothing gate (and drags in `npm ci`). These
+# targets rebuild one piece at a time against a *running* instance, which is
+# the normal inner loop. They deliberately skip `ui-deps` — run `make ui-deps`
+# once after a package-lock.json change, not on every rebuild.
+#
+# All of them are safe to run while mads is up: `go build` replaces the output
+# file by unlink+write, so a live process keeps the binary it started with.
+# What differs is how each one reaches a running instance.
+
+# Every Go binary, no UI, no npm. The whole set is ~2s warm.
+services: mads data router session pipeline
+
+mads:
+	go build -o $(GOBIN)/mads ./cmd/mads
+
+# Picked up by the *next* pipeline run — the Router execs -pipeline-cmd fresh
+# per spawn, so nothing needs restarting.
+pipeline:
+	go build -o $(GOBIN)/pipeline ./services/pipeline
+
+# Picked up by the *next* session spawn (-session-cmd is exec'd fresh too).
+# To move an already-running session onto the new binary without disturbing
+# any other session:  curl -sX POST localhost:17373/sessions/<id>/bounce
+session:
+	go build -o $(GOBIN)/session ./services/session
+
+# Needs a restart to take effect, and that restart is the disruptive one: the
+# Router's SIGTERM handler terminates every session and pipeline child it
+# supervises. SIGTERM only — a SIGKILL'd Router leaves its children alive as
+# orphans (they run in their own process groups) while the next boot's orphan
+# sweep marks their sessions inactive. Relaunch from the repo root: -ui-dist
+# defaults to a cwd-relative ui/dist.
+#   kill "$$(cat ~/.mads/router.pid)"
+#   ./bin/router -addr localhost:17373 -session-cmd ./bin/session
+router:
+	go build -o $(GOBIN)/router ./services/router
+
+# Needs a restart, but a survivable one: state lives in ~/.mads/mads.db and
+# the Router's watchers re-subscribe with backoff. In-flight SSE streams break
+# and resume from their last sequence number.
+data:
+	go build -o $(GOBIN)/data ./services/data
+
+# No restart at all. The Router serves ui/dist off disk (it is not embedded in
+# the binary) and re-checks it per request, so this plus a window reload
+# (Ctrl+R / View -> Reload) is the entire loop. Note that vite empties ui/dist
+# before writing it: reloading *during* the build briefly shows the "UI not
+# built" placeholder.
+ui:
+	npm --prefix ui run build
 
 $(LINT):
 	GOBIN=$(GOBIN) go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
