@@ -18,15 +18,24 @@ type providerBinary struct {
 }
 
 // knownProviderBinaries is deliberately small and honest: one entry per
-// provider adapter this repo actually ships (providers/claudecode). Add
-// kiro-cli's entry here when W7.1 lands that adapter — nothing else in this
-// file changes.
+// provider adapter this repo actually ships (providers/claudecode,
+// providers/goosecli). Add kiro-cli's entry here when W7.1 lands that
+// adapter — nothing else in this file changes.
 var knownProviderBinaries = map[string]providerBinary{
 	"claude-code": {
 		Bin:          "claude",
 		VersionArgs:  []string{"--version"},
 		ParseVersion: parseSemverish,
 		InstallHint:  "install Claude Code (https://docs.claude.com/en/docs/claude-code) and ensure `claude` is on PATH",
+	},
+	"goose": {
+		Bin:         "goose",
+		VersionArgs: []string{"--version"},
+		// `goose --version` prints the bare version with a leading space
+		// (" 1.46.0" / " 1.48.0" — docs/GOOSE-ADAPTER-DESIGN.md);
+		// parseSemverish tolerates that.
+		ParseVersion: parseSemverish,
+		InstallHint:  "install goose (https://block.github.io/goose/) and ensure `goose` is on PATH",
 	},
 }
 

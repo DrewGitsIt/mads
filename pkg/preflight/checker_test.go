@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -96,6 +97,48 @@ func TestRun_HappyPath(t *testing.T) {
 	disk := findCheck(t, checks, "disk_space")
 	if !disk.Healthy {
 		t.Errorf("disk_space check = %+v, want healthy", disk)
+	}
+}
+
+// TestCheckProviderBinary_GooseLeadingSpace proves the goose row end to end
+// with a scripted stand-in: `goose --version` prints the bare version with a
+// leading space (" 1.46.0" — docs/GOOSE-ADAPTER-DESIGN.md), and the probe
+// must both parse it and pass the compat gate at the proven floor.
+func TestCheckProviderBinary_GooseLeadingSpace(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "goose")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho ' 1.46.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	check := checkProviderBinary(context.Background(), "goose", knownProviderBinaries["goose"])
+	if !check.Healthy || check.Detail != "goose v1.46.0" {
+		t.Errorf("checkProviderBinary(goose) = %+v, want healthy with Detail %q", check, "goose v1.46.0")
+	}
+}
+
+// TestGooseCompatRange pins the proven 1.46–1.48 window: versions inside it
+// pass, versions on either side get guidance (Max is exclusive at 1.49.0 so
+// the whole proven 1.48.x line passes).
+func TestGooseCompatRange(t *testing.T) {
+	r, known := compatMatrix["goose"]
+	if !known {
+		t.Fatal("no goose row in compatMatrix")
+	}
+	for version, want := range map[string]bool{
+		"1.45.9": false,
+		"1.46.0": true,
+		"1.48.0": true,
+		"1.48.5": true,
+		"1.49.0": false,
+	} {
+		ok, guidance := r.evaluate(version)
+		if ok != want {
+			t.Errorf("goose compat evaluate(%s) = %v, want %v", version, ok, want)
+		}
+		if !ok && guidance == "" {
+			t.Errorf("goose compat evaluate(%s) rejected without guidance", version)
+		}
 	}
 }
 
