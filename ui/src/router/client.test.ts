@@ -48,6 +48,22 @@ describe("FetchRouterClient", () => {
     ).rejects.toThrow(/500/);
   });
 
+  it("sendMessage surfaces a code-less JSON error body without double-reading the stream", async () => {
+    // A real Response enforces single-read body semantics; the Router's
+    // standard error shape has `error` but no `code`, so the error path
+    // must clone before json() or the text() fallback throws
+    // "body stream already read" and masks the real error.
+    const body = JSON.stringify({ error: "not found", path: "/sessions/s1/messages" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(body, { status: 404 })),
+    );
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.sendMessage("s1", { text: "hi" })).rejects.toThrow(
+      /404 .*not found/,
+    );
+  });
+
   it("getMentionables encodes the query string", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchRouterClient("http://router.local");

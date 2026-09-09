@@ -431,7 +431,14 @@ export class FetchRouterClient implements RouterClient {
       body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const errBody = (await res.json().catch(() => null)) as {
+      // Parse the clone, like readJSON: the Router's standard error shape
+      // ({error, path}) has no `code`, and falling through to res.text()
+      // after res.json() consumed the body throws "body stream already
+      // read" — masking the actual error.
+      const errBody = (await res
+        .clone()
+        .json()
+        .catch(() => null)) as {
         error?: string;
         code?: string;
         retryable?: boolean;
