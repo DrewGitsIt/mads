@@ -37,12 +37,15 @@ test.describe("linked sessions: link UI behind the flag", () => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
 
-    // Check leader first so it's the chooser's default holder (checkedIds is
-    // a Set — insertion order); the holder radio is still selected
-    // explicitly below so this doesn't rely on that ordering.
-    await rail.getByLabel(`Select ${leaderName}`).check();
-    await rail.getByLabel(`Select ${workerName}`).check();
-    await rail.getByRole("button", { name: /^Link 2 sessions/ }).click();
+    // Link mode starts from the leader row's 🔗 action, which anchors and
+    // auto-selects that row (so the leader is the chooser's default holder);
+    // other rows then toggle by clicking them, and the link bar's
+    // "Choose mode" opens the chooser once ≥2 are selected. The holder radio
+    // is still selected explicitly below so this doesn't rely on ordering.
+    await rail.getByLabel(`Add ${leaderName} to link selection`).click();
+    await rail.getByText(workerName, { exact: true }).click();
+    await expect(rail.getByLabel(`Remove ${workerName} from link selection`)).toBeChecked();
+    await rail.getByRole("button", { name: "Choose mode" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Link sessions" });
     await expect(dialog).toBeVisible();
@@ -68,9 +71,11 @@ test.describe("linked sessions: link UI behind the flag", () => {
 
     await expect(dialog).not.toBeVisible();
 
-    const leaderRow = rail.getByText(leaderName, { exact: true }).locator("..");
+    // The name span sits in .rowTop and the badge in the sibling .rowMeta,
+    // so the shared ancestor is two levels up from the name text.
+    const leaderRow = rail.getByText(leaderName, { exact: true }).locator("../..");
     await expect(leaderRow.getByText("LEADER", { exact: true })).toBeVisible();
-    const workerRow = rail.getByText(workerName, { exact: true }).locator("..");
+    const workerRow = rail.getByText(workerName, { exact: true }).locator("../..");
     await expect(workerRow.getByText("LINKED", { exact: true })).toBeVisible();
 
     // Subject session's conversation: an injected message from the leader
@@ -102,6 +107,8 @@ test.describe("linked sessions: link UI behind the flag", () => {
     // one regex spanning both nodes.
     await expect(leaderPanel.locator("b", { hasText: workerName }).last()).toBeVisible();
     await expect(leaderPanel.getByText(DIGEST_FIXTURE_TEXT).last()).toBeVisible();
-    await expect(leaderPanel.getByText("cadence: per turn").last()).toBeVisible();
+    await expect(
+      leaderPanel.getByText("cadence: digest after each burst of activity").last(),
+    ).toBeVisible();
   });
 });

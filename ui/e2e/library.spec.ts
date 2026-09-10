@@ -15,6 +15,14 @@ test("library journey: agents, capabilities, workspaces, templates", async ({
 }) => {
   await page.goto(routerURL);
   await page.getByRole("button", { name: "Library" }).click();
+  // Drop focus and park the pointer on the main surface so the icon rail's
+  // peek collapses: the rail expands on :hover OR :focus-within, and after
+  // the click above the Library item still holds focus while Playwright's
+  // pointer sits inside the expanded rail — which overlays the left-edge
+  // shelf chips, so every click aimed there would land on the rail instead.
+  await page.getByRole("button", { name: "Library" }).blur();
+  await page.locator("main").hover();
+  await expect(page.locator("nav[data-collapsed]")).toHaveCSS("width", "44px");
 
   // Agents shelf is the default — seeded by services/data at migration time
   // (0005_registries.up.sql), assert real names render, not a count. Each

@@ -81,7 +81,12 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
 
     await page.getByRole("tab", { name: "Tasks" }).click();
-    await expect(page.getByText("e2e session-work task")).toBeVisible();
+    // Scoped to the Tasks panel: the conversation panel's context rail also
+    // renders TaskRow copies (hidden while collapsed), which an unscoped
+    // getByText would collide with under strict mode.
+    await expect(
+      page.locator("#workspace-panel-tasks").getByText("e2e session-work task"),
+    ).toBeVisible();
   });
 
   // Reproduces tsk_15aa8fee6de66967's blocker: with the rail and the Tasks
@@ -98,7 +103,7 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
 
-    await page.getByText(workTask.title, { exact: true }).click();
+    await page.locator("#workspace-panel-tasks").getByText(workTask.title, { exact: true }).click();
     await page.getByLabel("Title").fill(`${workTask.title} (edited)`);
     await page.getByRole("button", { name: "Save" }).click();
 
@@ -118,7 +123,13 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByText(changedFilePath)).toBeVisible();
     await expect(page.getByText(commitMessage)).toBeVisible();
     await expect(page.getByText(commitHash.slice(0, 7))).toBeVisible();
-    await expect(page.getByText(workTask.title)).toBeVisible();
+    // Scoped to the Files panel (the conversation panel's context rail holds
+    // a hidden TaskRow copy of this title) and .first(): within Files the
+    // title legitimately recurs — two attribution chips plus the pipeline
+    // auto-commit message all contain it.
+    await expect(
+      page.locator("#workspace-panel-files").getByText(workTask.title).first(),
+    ).toBeVisible();
 
     // The seeded commit's file (src/commit-file.ts, added against a real
     // parent commit that didn't contain it — recordRealCommit) opens its
@@ -137,7 +148,12 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
 
     await page.getByRole("tab", { name: "Pipeline" }).click();
-    const doneColumn = page.getByText("Done", { exact: true }).locator("../..");
+    // Scoped to the Pipeline panel: the hidden Tasks panel and the
+    // conversation panel's context rail carry "Done" status chips too.
+    const doneColumn = page
+      .locator("#workspace-panel-pipeline")
+      .getByText("Done", { exact: true })
+      .locator("../..");
     await expect(doneColumn.getByText("e2e session-work task")).toBeVisible();
 
     // The run finished before this page load. The Data Service's SSE stream
@@ -200,7 +216,9 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await page.getByRole("button", { name: "Graph", exact: true }).click();
 
     await expect(page.getByText("Runs when a slot opens", { exact: false })).toBeVisible();
-    await expect(page.getByText("e2e session-work task")).toBeVisible(); // tray
+    await expect(
+      page.locator("#workspace-panel-tasks").getByText("e2e session-work task"),
+    ).toBeVisible(); // tray
     await expect(page.locator(".react-flow__node").getByText("e2e graph dependent")).toBeVisible(); // canvas
 
     // All 4 seeded tasks end up "done" once both scripted pipeline runs
@@ -212,7 +230,10 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
 
     // The seeded workTask ended "done" and lives in the tray (no deps) — it
     // must visibly recede there too, same as a done canvas card would.
-    const workTaskCard = page.getByText(workTask.title).locator("..");
+    const workTaskCard = page
+      .locator("#workspace-panel-tasks")
+      .getByText(workTask.title)
+      .locator("..");
     await expect(workTaskCard).toHaveCSS("opacity", "0.55");
   });
 
@@ -225,7 +246,10 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
 
-    await page.getByText(dependentTask.title, { exact: true }).click();
+    await page
+      .locator("#workspace-panel-tasks")
+      .getByText(dependentTask.title, { exact: true })
+      .click();
     // Scoped to the open detail sheet — depTask/secondRunTask's own list-view
     // rows sit behind it in the DOM with the same title text.
     const sheet = page.getByRole("complementary");
@@ -314,7 +338,9 @@ test.describe("session workspace: blocked task review from Tasks tab", () => {
     await rail.getByText(sessionName, { exact: true }).click();
     await page.getByRole("tab", { name: "Tasks" }).click();
 
-    await page.getByText(taskTitle, { exact: true }).click();
+    // Same Tasks-panel scoping as above: the context rail's hidden TaskRow
+    // copy of this title would otherwise be the first strict-mode match.
+    await page.locator("#workspace-panel-tasks").getByText(taskTitle, { exact: true }).click();
     const sheet = page.getByRole("complementary");
     await expect(sheet.getByRole("combobox")).toHaveValue("blocked");
     // The blocker note is intentionally duplicated: once in the Pipeline run

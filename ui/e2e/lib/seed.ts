@@ -180,7 +180,7 @@ export async function setConfig(
 /** Writes a trivial Makefile and git-inits dir so the default template's build/test/merge stages succeed, mirroring scripts/e2esmoke/main_test.go's setupWorkspace. */
 export function setupWorkspace(dir: string): void {
   mkdirSync(dir, { recursive: true });
-  writeFileSync(dir + "/Makefile", "build:\n\t@true\ntest:\n\t@true\n");
+  writeFileSync(dir + "/Makefile", "build:\n\t@true\ntest:\n\t@true\ncheck:\n\t@true\n");
   const run = (args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
   run(["init", "-q", "-b", "main", "."]);
   run(["-c", "user.email=e2e@smoke.test", "-c", "user.name=e2esmoke", "add", "."]);

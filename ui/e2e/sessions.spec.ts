@@ -33,7 +33,9 @@ test("sessions journey: hero goal opens the conversation and gets a reply", asyn
   await page.getByRole("button", { name: "Chat" }).click();
   await expect(transcript.filter({ hasText: goal })).toBeVisible();
 
-  await page.getByRole("button", { name: "Back to Launchpad" }).click();
+  // "+ New session" clears the open workspace back to the Launchpad (the
+  // dedicated "Back to Launchpad" button no longer exists).
+  await page.getByRole("button", { name: "+ New session" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 });
 
@@ -136,12 +138,12 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   }).toPass();
   await page.getByLabel("Workspace actions").click();
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
-  // Close is now disabled-with-reason rather than absent — same discovery-
-  // over-minimalism rule applies once activity flips.
+  // Close stays enabled even while inactive ("honest Close", 495afa4): the
+  // activity record can drift from the real child state, so Close is always
+  // offered and the server treats an already-inactive close as a no-op.
   const closeWhileInactive = kebabList.getByRole("button", { name: /Close/ });
   await expect(closeWhileInactive).toBeVisible();
-  await expect(closeWhileInactive).toBeDisabled();
-  await expect(closeWhileInactive).toContainText("Session is already inactive");
+  await expect(closeWhileInactive).toBeEnabled();
 
   // Resume is reachable here (menu item present, wired to
   // routerClient.resumeSession — covered by SessionWorkspace.test.tsx and
@@ -163,13 +165,13 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await expect(dialog).toHaveCount(0);
   await expect(sessionRow).toBeVisible();
 
-  // Delete-from-rail: back at the Launchpad (workspace not open), the same
-  // shared confirm dialog is reachable from the rail row's "⋯" menu.
-  await page.getByRole("button", { name: "Back to Launchpad" }).click();
+  // Delete-from-rail: back at the Launchpad ("+ New session" clears the open
+  // workspace), the same shared confirm dialog is reachable from the rail
+  // row's always-visible 🗑 button (aria-label "Archive <name>").
+  await page.getByRole("button", { name: "+ New session" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 
-  await rail.getByLabel(`${goal} actions`).click();
-  await page.getByRole("button", { name: "Delete", exact: true }).click();
+  await rail.getByLabel(`Archive ${goal}`).click();
 
   const railDialog = page.getByRole("alertdialog");
   await expect(railDialog).toBeVisible();
