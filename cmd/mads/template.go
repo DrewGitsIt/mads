@@ -87,18 +87,18 @@ func reportTemplateValidation(out io.Writer, results []dataclient.TemplateValida
 	invalid := 0
 	for _, res := range results {
 		if res.Valid {
-			fmt.Fprintf(out, "%s  ok\n", res.Name)
+			_, _ = fmt.Fprintf(out, "%s  ok\n", res.Name)
 			continue
 		}
 		invalid++
-		fmt.Fprintf(out, "%s  INVALID\n", res.Name)
+		_, _ = fmt.Fprintf(out, "%s  INVALID\n", res.Name)
 		for _, fe := range res.Errors {
-			fmt.Fprintf(out, "  %s: %s\n", fe.Field, fe.Message)
+			_, _ = fmt.Fprintf(out, "  %s: %s\n", fe.Field, fe.Message)
 		}
 	}
 	if invalid > 0 {
 		return fmt.Errorf("%d of %d template(s) invalid", invalid, len(results))
 	}
-	fmt.Fprintf(out, "%d template(s) valid\n", len(results))
+	_, _ = fmt.Fprintf(out, "%d template(s) valid\n", len(results))
 	return nil
 }

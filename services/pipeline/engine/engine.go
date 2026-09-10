@@ -667,7 +667,7 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			// pkg/template.Validate rejects retry: on the merge stage
 			// outright, so st.Retry/Defaults.Retry resolving here would
 			// only ever apply to a genuine non-merge stage anyway).
-			output, err, blocked, attempt = e.runStageWithRetry(ctx, st, &task, feedback, run.dir, attempt, &lost, &terminal, blockReason)
+			output, err, blocked = e.runStageWithRetry(ctx, st, &task, feedback, run.dir, attempt, &lost, &terminal, blockReason)
 			if blocked {
 				return contracts.StatusBlocked
 			}
@@ -766,11 +766,10 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 // on_fail's point of view, a retry-exhausted failure and a failure that was
 // never retried are the same value: nothing marks the difference.
 //
-// finalAttempt is the stage-entry attempt number the LAST try actually ran
-// under. It starts as the caller's attempt (the number runTask's top-of-loop
-// bump already computed for this stage entry) and is exactly what a pass,
-// or a first-try failure with no eligible retry, reports back unchanged.
-// Every policy retry bumps it via e.nextAttempt — a policy retry is a
+// The local finalAttempt tracks the stage-entry attempt number the current
+// try is running under. It starts as the caller's attempt (the number
+// runTask's top-of-loop bump already computed for this stage entry), and
+// every policy retry bumps it via e.nextAttempt — a policy retry is a
 // genuinely new attempt, so it needs its own output log
 // (<stage>-attempt-<n>.log) and its own usage.recorded/stage.attempt_ref
 // attribution — which is the opposite of runStageRateLimited's OWN internal
@@ -778,9 +777,15 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 // number across every rate-limit pause. Those two loops are independent
 // meters over the same stage entry; see runStageRateLimited's doc comment
 // for why that one holds its attempt number fixed.
-func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, attempt int, lost, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool, finalAttempt int) {
+//
+// It is deliberately NOT returned: everything that consumes an attempt
+// number (the output log path, usage.recorded, stage.attempt_ref) is
+// emitted downstream of the value threaded INTO runStage, so the caller has
+// nothing to do with it. runTask recomputes its own attempt from e.attempts
+// at the top of the next iteration.
+func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, attempt int, lost, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
 	maxRetries, when, backoff, hasPolicy := retryPolicy(e.cfg.Template, st)
-	finalAttempt = attempt
+	finalAttempt := attempt
 	for retries := 0; ; retries++ {
 		output, err, blocked = e.runStageRateLimited(ctx, st, task, feedback, dir, finalAttempt, lost, terminal, blockReason)
 		if err == nil || blocked || lost.Load() {
