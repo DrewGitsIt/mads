@@ -786,15 +786,21 @@ func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task 
 		if err == nil || blocked || lost.Load() {
 			return
 		}
-		// A cancelled run (stage timeout already fired at the top level,
-		// or the task's lease was lost) must not spend a retry trying to
-		// re-run into a context that's already done — runStage would just
-		// fail again immediately for an unrelated reason.
+		// ctx here is runStageWithRetry's OWN ctx, not runStage's per-call
+		// sctx — runStage builds sctx via context.WithTimeout(ctx, timeout)
+		// and defer cancel()s it internally, so a stage timeout only ever
+		// cancels that inner sctx; ctx itself is untouched by it and this
+		// guard never fires for one (a timed-out attempt is retried like
+		// any other infra failure, subject only to the checks below). What
+		// DOES cancel ctx — run cancellation or the task's lease being
+		// lost — must not spend a retry trying to re-run into a context
+		// that's already done; runStage would just fail again immediately
+		// for an unrelated reason.
 		if !hasPolicy || retries >= maxRetries || ctx.Err() != nil || !retryEligible(err, when) {
 			return
 		}
 		e.event(ctx, contracts.StageRetried, task.ID, map[string]any{
-			"stage": st.Name, "attempt": retries + 1, "max": maxRetries, "reason": trim(err.Error(), 2000),
+			"stage": st.Name, "attempt": retries + 1, "stage_attempt": finalAttempt, "max": maxRetries, "reason": trim(err.Error(), 2000),
 		})
 		// backoff: zero (the template default) means "retry immediately",
 		// a legitimate choice pkg/template's checkRetry explicitly allows —
@@ -906,7 +912,7 @@ func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, tas
 			return output, err, true
 		}
 		e.event(ctx, contracts.StageRateLimited, task.ID, map[string]any{
-			"stage": st.Name, "attempt": attempt, "message": rle.Message,
+			"stage": st.Name, "attempt": attempt, "stage_attempt": stageAttempt, "message": rle.Message,
 			"backoff": e.cfg.RateLimitBackoff.String(),
 		})
 		select {
@@ -914,7 +920,7 @@ func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, tas
 		case <-ctx.Done():
 		}
 		e.event(ctx, contracts.StageRateLimitCleared, task.ID, map[string]any{
-			"stage": st.Name, "attempt": attempt,
+			"stage": st.Name, "attempt": attempt, "stage_attempt": stageAttempt,
 		})
 	}
 }

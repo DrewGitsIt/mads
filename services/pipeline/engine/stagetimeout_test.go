@@ -273,3 +273,39 @@ func TestStageTimeoutPrecedence(t *testing.T) {
 		})
 	}
 }
+
+// TestStageTimeoutIsRetried proves the single most important case in the
+// retry design and the one acceptance criteria singles out as currently
+// unproven: a stage that hits its own timeout is retried exactly like any
+// other infra failure, not treated as unretryable just because a
+// context.WithTimeout cancellation caused it. build's command drops a
+// marker on its way into a long sleep on the first run — so the first try
+// blows well past its 200ms budget and gets killed by runStage's sctx — and
+// finds the marker already there on the retry, exiting immediately.
+func TestStageTimeoutIsRetried(t *testing.T) {
+	h := newHarness(t)
+	const tmpl = `name: timeout-retry
+stages:
+  - name: build
+    command: sh -c 'test -f timeout.marker || (touch timeout.marker && sleep 5)'
+    timeout: 200ms
+    retry: { max: 1 }
+`
+	parsed, verr := template.Check([]byte(tmpl), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "timeout then pass"})
+
+	sum := h.run(t, fake.New(), parsed, 1)
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v, want done (the timed-out first try retried and the second passed): %+v",
+			sum, h.task(t, seeded[0].ID))
+	}
+	if fails := h.events(t, "stage.failed"); len(fails) != 0 {
+		t.Errorf("stage.failed: %+v, want none — a timed-out stage is retried, not surfaced as a failure", fails)
+	}
+	if retried := h.events(t, "stage.retried"); len(retried) != 1 {
+		t.Errorf("stage.retried: %d, want exactly 1: %+v", len(retried), retried)
+	}
+}

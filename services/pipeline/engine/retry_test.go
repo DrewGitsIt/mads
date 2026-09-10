@@ -464,3 +464,79 @@ stages:
 		}
 	})
 }
+
+// TestPolicyRetryStageAttemptSurvivesLoopBack proves stage.retried's
+// stage_attempt names the stage-ENTRY attempt (e.attempts) the failing try
+// actually ran under — and so the output log it actually wrote
+// (<stage>-attempt-<n>.log) — while attempt keeps naming the LOCAL retry
+// ordinal within that entry. This is the exact case the two-key split
+// exists for: executor is entered three times (twice via code_review's
+// loop_back, exhausting max_loops: 2), and the retry policy fires on
+// executor's THIRD entry — before the fix both events used the same
+// "attempt" key, so a consumer joining stage.retried to a log/transcript
+// ref via "attempt" would land on executor-attempt-1.log instead of the
+// executor-attempt-3.log the failing try (and this event's own "reason")
+// actually describe.
+func TestPolicyRetryStageAttemptSurvivesLoopBack(t *testing.T) {
+	h := newHarness(t)
+	cp := &scriptedCallProvider{on: func(call int) (*provider.OneShotResult, error) {
+		switch call {
+		case 1, 3: // executor entries 1 and 2: pass, sending the task to code_review
+			return &provider.OneShotResult{Text: "STAGE: pass"}, nil
+		case 2, 4: // code_review entries 1 and 2: fail -> loop_back into executor
+			return &provider.OneShotResult{Text: "not good enough\nSTAGE: fail — needs more work"}, nil
+		case 5: // executor entry 3, first try: infra failure -> policy retry
+			return nil, errors.New("transient: provider process died")
+		case 6: // executor entry 3, retry (its own stage-entry attempt 4): pass
+			return &provider.OneShotResult{Text: "STAGE: pass"}, nil
+		case 7: // code_review entry 3: pass -> task done
+			return &provider.OneShotResult{Text: "STAGE: pass"}, nil
+		}
+		return nil, errors.New("unexpected call")
+	}}
+	src := `name: retry-stage-attempt
+stages:
+  - name: executor
+    agent: executor
+    retry: { max: 1 }
+  - name: code_review
+    agent: code-reviewer
+    on_fail: { loop_back: executor, max_loops: 2 }
+`
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "loop then retry"})
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: cp, SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+	if got := cp.Calls(); got != 7 {
+		t.Errorf("OneShot calls: %d, want 7 (2 loop-back round-trips + a failed/retried third executor entry + the passing review)", got)
+	}
+
+	retried := h.events(t, "stage.retried")
+	if len(retried) != 1 {
+		t.Fatalf("stage.retried: %d, want exactly 1: %+v", len(retried), retried)
+	}
+	type retriedPayload struct {
+		Stage        string `json:"stage"`
+		Attempt      int    `json:"attempt"`
+		StageAttempt int    `json:"stage_attempt"`
+	}
+	var p retriedPayload
+	if err := json.Unmarshal(retried[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p.Stage != "executor" || p.Attempt != 1 || p.StageAttempt != 3 {
+		t.Errorf("stage.retried payload: %+v, want {stage: executor, attempt: 1, stage_attempt: 3}", p)
+	}
+}

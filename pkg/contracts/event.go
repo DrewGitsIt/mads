@@ -127,18 +127,35 @@ const (
 	// StageRateLimited fires when an agent stage hits a provider rate limit
 	// (spec §11.9) and the engine pauses to retry the same attempt instead
 	// of treating it as a stage failure — no on_fail loop-back is consumed
-	// and no rate-limit text reaches the next agent prompt. Payload:
-	// {"stage": string, "attempt": int, "message": string, "backoff": string}.
+	// and no rate-limit text reaches the next agent prompt. attempt is the
+	// LOCAL rate-limit-retry ordinal (1 on the first pause within this
+	// stage entry, counting only rate-limit pauses); stage_attempt is the
+	// stage-entry attempt number (e.attempts) held fixed across every pause
+	// here since a rate-limit retry re-runs the SAME attempt — it's what
+	// names the output log (<stage>-attempt-<n>.log) and matches
+	// usage.recorded/stage.attempt_ref's own "attempt" field. Payload:
+	// {"stage": string, "attempt": int, "stage_attempt": int, "message":
+	// string, "backoff": string}.
 	StageRateLimited EventType = "stage.rate_limited"
 	// StageRateLimitCleared fires when a rate-limited stage's pause ends and
-	// the engine is about to retry. Payload: {"stage": string, "attempt": int}.
+	// the engine is about to retry. attempt/stage_attempt carry the same
+	// meaning as StageRateLimited's own fields (see its doc comment).
+	// Payload: {"stage": string, "attempt": int, "stage_attempt": int}.
 	StageRateLimitCleared EventType = "stage.rate_limit_cleared"
 	// StageRetried fires when a stage's own retry: policy (pkg/template.Retry)
 	// re-runs it after an ordinary failure — distinct from StageRateLimited,
 	// which never consumes retry budget at all. attempt is this policy
-	// retry's 1-based count (1 on the first retry), not the stage's overall
-	// attempt number. Payload:
-	// {"stage": string, "attempt": int, "max": int, "reason": string}.
+	// retry's LOCAL 1-based count (1 on the first retry of this stage
+	// entry), not the stage's overall attempt number. stage_attempt is the
+	// stage-entry attempt number (e.attempts) that the FAILING try — the
+	// one reason describes — actually ran under; it's what names that
+	// attempt's output log (<stage>-attempt-<n>.log) and matches
+	// usage.recorded/stage.attempt_ref's own "attempt" field. A loop_back
+	// that re-enters this stage bumps stage_attempt again on the next
+	// entry, while attempt resets to 1 for that entry's own first retry —
+	// the two counters answer different questions and are not
+	// interchangeable. Payload: {"stage": string, "attempt": int,
+	// "stage_attempt": int, "max": int, "reason": string}.
 	StageRetried EventType = "stage.retried"
 
 	RetroStarted   EventType = "retro.started"
