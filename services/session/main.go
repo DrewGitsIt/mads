@@ -29,6 +29,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/api"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // shutdownGrace bounds Runner.Shutdown, leaving headroom inside the
@@ -75,6 +76,7 @@ func main() {
 	routerURL := flag.String("router-url", "http://localhost:17373", "Router base URL (used by session-scoped capabilities, e.g. the orchestrate MCP server)")
 	cwd := flag.String("cwd", ".", "provider session working directory")
 	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
+	shadowRoot := flag.String("shadow-root", shadow.DefaultRoot(), "base dir for per-session shadow git stores (docs/SHADOW-GIT-DIFFS-ADR.md; empty disables shadowing)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
 	flag.Parse()
@@ -122,6 +124,7 @@ func main() {
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
 	r.WorktreeRoot = *worktreeRoot
+	r.ShadowRoot = *shadowRoot
 	r.RouterURL = *routerURL
 	r.FastModel = fastmodel.New(fmProvider, fastmodel.Config{})
 

@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -47,16 +48,31 @@ func (s *server) transcriptFor(ctx context.Context, sess contracts.Session) []co
 // normalizeTurns maps provider-native transcript messages onto the
 // contracts wire shape shared by GET /sessions/{id}/transcript and the
 // pipeline drill-in's GET .../turns (pipeline_turns.go) — the same mapping,
-// two callers.
+// two callers. Enrichment (kind/title/locations/server) is carried through
+// and statuses are resolved with the same rule engine the live child uses,
+// so a dormant session's transcript renders identically to a live refetch.
 func normalizeTurns(msgs []provider.Message) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
 		if m.Tool != nil {
-			tm.Tool = &contracts.ToolUse{ID: m.Tool.ID, Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
+			tm.Tool = &contracts.ToolUse{
+				ID:     m.Tool.ID,
+				Name:   m.Tool.Name,
+				Input:  m.Tool.Input,
+				Path:   m.Tool.Path,
+				Kind:   string(m.Tool.Kind),
+				Title:  m.Tool.Title,
+				Status: string(m.Tool.Status),
+				Server: m.Tool.Server,
+			}
+			for _, loc := range m.Tool.Locations {
+				tm.Tool.Locations = append(tm.Tool.Locations, contracts.ToolLocation{Path: loc.Path, Line: loc.Line})
+			}
 		}
 		result[i] = tm
 	}
+	toolstatus.StampTranscriptStatuses(result)
 	return result
 }
 

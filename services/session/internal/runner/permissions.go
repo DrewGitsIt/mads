@@ -24,6 +24,11 @@ const defaultPermissionTimeout = 10 * time.Minute
 type pendingPermission struct {
 	req      provider.PermissionRequest
 	resolved chan string
+	// toolUseID is the wire ID of the tool call this park blocked, tied
+	// best-effort by r.toolStatus (the hook wire carries only the tool
+	// name); "" when no announced call matched. Lets an allow move the
+	// call's synthesized status pending → in_progress.
+	toolUseID string
 }
 
 // RequestPermission is called by the session service's POST /permission-hook
@@ -53,6 +58,21 @@ func (r *Runner) RequestPermission(tool string, input json.RawMessage) string {
 	// event log after the fact.
 	r.appendPermissionEvent(contracts.SessionPermissionRequested,
 		map[string]string{"request_id": id, "tool": tool})
+
+	// Status synthesis (pkg/toolstatus): the parked call is "pending" until
+	// answered. Best-effort by tool name — the hook can fire before the
+	// pump has processed the announcing tool_use line, in which case no
+	// call matches and the card alone tells the story.
+	if up, ok := r.toolStatus.PermissionParked(tool); ok {
+		r.permMu.Lock() // finishPermission reads toolUseID under the same lock
+		pp.toolUseID = up.ToolUseID
+		r.permMu.Unlock()
+		r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
+			ToolUseID:       up.ToolUseID,
+			Status:          up.Status,
+			ParentToolUseID: up.ParentToolUseID,
+		})
+	}
 
 	timeout := r.PermissionTimeout
 	if timeout <= 0 {
@@ -97,6 +117,10 @@ func (r *Runner) finishPermission(id, decision, status string) bool {
 	if ok {
 		delete(r.permPending, id)
 	}
+	var toolUseID string
+	if ok {
+		toolUseID = pp.toolUseID
+	}
 	r.permMu.Unlock()
 	if !ok {
 		return false
@@ -106,6 +130,20 @@ func (r *Runner) finishPermission(id, decision, status string) bool {
 	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &pp.req})
 	r.appendPermissionEvent(contracts.SessionPermissionResolved,
 		map[string]string{"request_id": id, "tool": pp.req.Tool, "status": status})
+
+	// An allow un-parks the call: pending → in_progress (pkg/toolstatus).
+	// Deny/expiry needs no transition here — the harness reports the
+	// denial as an error tool_result (→ failed), and the turn-end sweep
+	// backstops a harness that doesn't.
+	if status == "allowed" && toolUseID != "" {
+		if up, resumed := r.toolStatus.PermissionResolved(toolUseID); resumed {
+			r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
+				ToolUseID:       up.ToolUseID,
+				Status:          up.Status,
+				ParentToolUseID: up.ParentToolUseID,
+			})
+		}
+	}
 	return true
 }
 

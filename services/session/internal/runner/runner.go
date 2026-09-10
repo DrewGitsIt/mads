@@ -26,11 +26,13 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
 	"github.com/drewkidwell/mads/services/session/internal/worktree"
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // ErrNotReady is returned by Send/Interrupt before Start has completed.
@@ -77,6 +79,15 @@ type Runner struct {
 	// Empty (the default) disables isolation entirely, keeping every
 	// existing caller — which never sets this — on today's behavior.
 	WorktreeRoot string
+
+	// ShadowRoot is the base dir for per-session shadow git stores
+	// (docs/SHADOW-GIT-DIFFS-ADR.md; services/session/shadow) — normally
+	// $XDG_DATA_HOME/mads/shadow, set by main.go. Empty (the default)
+	// disables shadowing entirely, same convention as WorktreeRoot. Also
+	// skipped when the session's resolved cwd is "." — mirroring
+	// installHook's guard, a shadow of "whatever directory this process
+	// happens to run from" would baseline an arbitrary repo.
+	ShadowRoot string
 
 	// FastModel backs the synthesis engine's structured drafting calls.
 	// Callers set it (from main.go) before calling Start, same pattern as
@@ -131,7 +142,21 @@ type Runner struct {
 
 	wt *worktree.Manager // built lazily the first time isolation is needed
 
+	// shadowStore is this session's shadow git store, built in Start when
+	// ShadowRoot is set (nil otherwise). Every shadow.Store method is
+	// nil-safe, so the pump hooks call it unconditionally; every operation
+	// inside is best-effort and can never block or fail the agent's turn.
+	shadowStore *shadow.Store
+
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
+
+	// toolStatus synthesizes tool-call lifecycle statuses (pkg/toolstatus —
+	// the one authoritative rule set, docs/CONVERSATION-REDESIGN-TASKS.md
+	// T5). Fed by the pump (tool_use/tool_result/turn_end via
+	// observeConversation, conversation.go) and by the permission flow
+	// (RequestPermission/finishPermission, permissions.go). Own internal
+	// lock — those two run on different goroutines.
+	toolStatus *toolstatus.Tracker
 
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
@@ -280,6 +305,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		turnAttributions: make(map[int]contracts.Attribution),
 		shutdownCh:       make(chan struct{}),
 		permPending:      make(map[string]*pendingPermission),
+		toolStatus:       toolstatus.New(),
 	}
 }
 
@@ -313,6 +339,16 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Isolated worktrees get the hook via Manager.Create; this covers the
 	// non-isolated case where the session works directly on a real repo.
 	r.installHook(ctx, cwd)
+
+	// Shadow store provisioning (docs/SHADOW-GIT-DIFFS-ADR.md): record the
+	// store's base path on the session record now (persisted with the
+	// provider ref below, so the Router never guesses), baseline the
+	// primary root in the background once startup succeeds. Skipped for an
+	// implicit cwd, same rationale as installHook's guard.
+	if r.ShadowRoot != "" && cwd != "" && cwd != "." {
+		r.shadowStore = shadow.New(r.ShadowRoot, r.sessionID)
+		sess.ShadowDir = r.shadowStore.Dir()
+	}
 
 	agent, agentOK := r.loadAgent(ctx, sess)
 	capEnv := r.setupCapabilities(ctx, cwd, agent, agentOK)
@@ -393,6 +429,12 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.mu.Unlock()
 
 	r.watchRefAnnounce(ctx, provSess)
+
+	// Primary-root baseline, backgrounded: measured 6.3s on a 39 GB
+	// checkout — it must never block provisioning. Other roots baseline on
+	// first touch (shadow.Store.Capture). No-op when already baselined
+	// (bounce/resume) or when shadowing is disabled (nil-safe).
+	go r.shadowStore.Baseline(cwd)
 
 	go r.pump(provSess)
 	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
@@ -1203,17 +1245,33 @@ func (r *Runner) pump(sess provider.Session) {
 			// Before onTurnEnd: it can start a queued next turn, whose
 			// tools must not blur which turn deleted a touched file.
 			r.sweepDeletedFiles()
+			r.shadowStore.CommitTurnAsync()
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
 			r.persistUsage(context.Background(), ev.Usage)
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
+			// Pre-image capture first: on providers that announce tool_use
+			// before executing (claudecode), this reads the file inside the
+			// same pre-execution window recordFileChange's stat relies on.
+			r.shadowCapture(ev.Tool)
 			r.recordFileChange(ev.Tool.Path)
 		}
+		// After the shadow/file-change block (their pre-execution stat
+		// window must stay tight), before synth/digest/broadcast (so every
+		// consumer sees the status-stamped event) — see conversation.go.
+		ev = r.observeConversation(ev)
 		r.synthEngine.OnEvent(ev)
 		r.digest.recordEvent(ev)
 		r.hub.broadcast(ev)
 	}
+
+	// The stream closed. Normally the turn-end sweep already ran and this
+	// is a no-op; a mid-turn close (Shutdown, or the provider dying) is the
+	// "session stops" case of the status policy — resolve every still-open
+	// tool call to interrupted so the event log never shows one running
+	// forever.
+	r.flushInterruptedTools()
 
 	r.mu.Lock()
 	// The identity check matters, not just busy: SwitchTransport nils
@@ -1265,16 +1323,22 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 			for ev := range events {
 				if ev.Kind == provider.EventTurnEnd {
 					r.sweepDeletedFiles()
+					r.shadowStore.CommitTurnAsync()
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
 					r.persistUsage(context.Background(), ev.Usage)
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
+					r.shadowCapture(ev.Tool)
 					r.recordFileChange(ev.Tool.Path)
 				}
+				// Same status/persistence hook as pump — no broadcast
+				// here, but the event log must not depend on transport.
+				ev = r.observeConversation(ev)
 				r.synthEngine.OnEvent(ev)
 				r.digest.recordEvent(ev)
 			}
+			r.flushInterruptedTools()
 		}()
 	}
 
@@ -1301,6 +1365,24 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 	log.Printf("runner: provider session for %s ended unexpectedly (terminal)", r.sessionID)
 	r.hub.broadcast(provider.Event{Kind: provider.EventError, Text: "provider process exited unexpectedly"})
 	r.died.Do(func() { close(r.Died) })
+}
+
+// shadowCapture records one mutating tool call's pre-image blob into the
+// session's shadow store (docs/SHADOW-GIT-DIFFS-ADR.md), keyed by the
+// provider-native tool_use ID. The read happens here, synchronously in the
+// pump — on providers that announce tool_use pre-execution the file is
+// still the pre-image, at single-file cost (~1–5 ms, same budget as
+// recordFileChange's stat). Nil-safe end to end and best-effort inside;
+// a tool_use without a wire ID has nothing to correlate a diff to, so it
+// is skipped (the turn-end tree commit still catches its effect).
+func (r *Runner) shadowCapture(tool *provider.ToolUse) {
+	if r.shadowStore == nil || tool.ID == "" {
+		return
+	}
+	r.mu.Lock()
+	base := r.touchBaseLocked()
+	r.mu.Unlock()
+	r.shadowStore.Capture(tool.ID, touchAbs(base, tool.Path))
 }
 
 // recordFileChange reports one path the agent's tools wrote (Tool.Mutates —

@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -54,9 +55,7 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	var userIdx int
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
-		if m.Tool != nil {
-			tm.Tool = &contracts.ToolUse{ID: m.Tool.ID, Name: m.Tool.Name, Input: m.Tool.Input, Path: m.Tool.Path}
-		}
+		tm.Tool = contractsToolUse(m.Tool) // full enriched mapping — kind/title/status/locations/server
 		if m.Role == "user" {
 			userIdx++
 			if a, ok := attrs[userIdx]; ok {
@@ -65,5 +64,10 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 		}
 		result[i] = tm
 	}
+	// Same T5 rule engine as the live stream: resolve each recorded call's
+	// status from its recorded result; calls with no result stay honestly
+	// open (a refetch has no turn-end signal to distinguish "still running"
+	// from "interrupted" — see conversation.go).
+	toolstatus.StampTranscriptStatuses(result)
 	return result
 }
