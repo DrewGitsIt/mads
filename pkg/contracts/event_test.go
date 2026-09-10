@@ -70,6 +70,21 @@ func TestEventTypeRegistry(t *testing.T) {
 	}
 }
 
+// TestEventTypesRegistryGolden pins the full registered event-type list
+// (EventTypes) byte-for-byte. An event type added to an engine's vocabulary
+// without threading it through this registry is exactly the "quietly not
+// registered" failure mode spec §15 exists to catch — this golden fails the
+// moment EventTypes drifts from what every consumer (Router filters, UI
+// event tables) was built against, forcing a deliberate -update instead of
+// a silent addition.
+func TestEventTypesRegistryGolden(t *testing.T) {
+	got, err := json.MarshalIndent(contracts.EventTypes, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	golden.Assert(t, "event_types.json", append(got, '\n'))
+}
+
 func TestMatchesFilter(t *testing.T) {
 	cases := []struct {
 		typ     contracts.EventType

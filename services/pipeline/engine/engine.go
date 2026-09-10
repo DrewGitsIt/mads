@@ -47,6 +47,18 @@ type Config struct {
 	// Template is the frozen copy (spec §6: saves never disturb in-flight
 	// runs) — parse+validate before calling Run; Run re-checks structure.
 	Template *template.Template
+	// TemplateVersion is the contracts.Template registry record's Version
+	// this Template was parsed from, purely for the pipeline.started event's
+	// audit trail (attributing a run to the exact revision it launched
+	// from). It's a separate field rather than something Run reads off
+	// Template itself because Template is pkg/template's parsed YAML
+	// structure — it has no storage-side identity or version at all, only
+	// the shape the pipeline actually executes; the version lives on the
+	// registry record (contracts.Template) that produced it, which callers
+	// fetch separately (see pipelinerun.LoadTemplate). Zero means "unknown"
+	// (pre-versioning row, or a caller that bypassed LoadTemplate) and is
+	// omitted from the event payload rather than reported as a real version.
+	TemplateVersion int
 	// Cwd is where command stages run and agent one-shots execute. W3.2
 	// replaces this with per-task worktrees.
 	Cwd string
@@ -194,7 +206,7 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		return nil, fmt.Errorf("dependency cycles block launch (spec §3.6): %v", cycles)
 	}
 
-	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}, clock: cfg.Clock}
+	e := &engine{cfg: cfg, agents: agents, conds: conds, loops: map[string]int{}, attempts: map[string]int{}, clock: cfg.Clock}
 	if own, ok := procid.Current(procid.Default); ok {
 		e.identity = own
 	}
@@ -287,17 +299,47 @@ type engine struct {
 	mcpRegistry *capability.Registry
 	credStore   *credstore.Store
 
-	mu     sync.Mutex
-	loops  map[string]int // task|stage → loop-backs taken
-	runSeq int64          // the pipeline.started event's seq; written once before any task goroutine starts
+	mu    sync.Mutex
+	loops map[string]int // task|stage → loop-backs taken
+
+	// attempts counts, per task|stage, how many times that stage has
+	// actually run — bumped once on every entry (including a loop-back's
+	// re-entry into a DIFFERENT stage, and a per-stage retry policy's
+	// re-entry into the SAME stage via nextAttempt), never on a when-guard
+	// skip. This answers a different question from loops: loops is keyed on
+	// the stage whose on_fail fired (the FAILING stage) and caps how many
+	// times ITS on_fail may loop back before giving up; attempts is keyed on
+	// the stage being ENTERED and answers "which run of this stage is
+	// this" — the number openOutputLog, recordUsage, and recordRef need. A
+	// build → executor loop-back increments loops["task|build"], but it's
+	// executor's OWN attempt counter that must advance so its second run
+	// gets its own log file instead of appending into the first one; loops
+	// never touches executor's key at all. A policy retry (runStageWithRetry,
+	// below) advances this SAME counter for the SAME stage instead — it is a
+	// genuinely new attempt, unlike a rate-limit pause (runStageRateLimited),
+	// which deliberately keeps re-running the one attempt number it started
+	// with. Keep all of these meters conceptually separate even though two
+	// of them share this one map.
+	attempts map[string]int
+
+	runSeq int64 // the pipeline.started event's seq; written once before any task goroutine starts
 }
 
 func (e *engine) run(ctx context.Context) (*Summary, error) {
 	e.reapDeadLeases(ctx)
-	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", map[string]any{
+	payload := map[string]any{
 		"template":    e.cfg.Template.Name,
 		"concurrency": e.cfg.Concurrency,
-	})
+	}
+	// Omitted rather than sent as 0: a genuine version is always >= 1
+	// (contracts.Template.Version), so 0 only ever means "the caller
+	// couldn't tell us" (a pre-versioning row, or a bypassed LoadTemplate) —
+	// reporting that as a real version would be misleading to anything
+	// reading the audit trail back later.
+	if e.cfg.TemplateVersion > 0 {
+		payload["template_version"] = e.cfg.TemplateVersion
+	}
+	e.runSeq = e.event(ctx, contracts.PipelineStarted, "", payload)
 
 	// The live work queue (spec §6): task.* events for this session poke the
 	// scheduler so mid-run inserts are picked up promptly. The stream is an
@@ -579,6 +621,19 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 		}
 		e.event(ctx, contracts.StageStarted, task.ID, map[string]any{"stage": st.Name})
 
+		// One counter bump per actual stage entry — including a fresh entry
+		// via loop_back into a stage the failure jumped to, which is exactly
+		// the case e.loops cannot answer (see the attempts field comment):
+		// it's keyed on this stage regardless of which stage's on_fail sent
+		// execution here. Computed once here, not re-derived at the point of
+		// use, so a rate-limit retry of the same attempt (runStageRateLimited,
+		// below) never double-counts it.
+		attemptKey := task.ID + "|" + st.Name
+		e.mu.Lock()
+		e.attempts[attemptKey]++
+		attempt := e.attempts[attemptKey]
+		e.mu.Unlock()
+
 		var output string
 		var err error
 		if e.wt != nil && isMergeStage(st) {
@@ -606,7 +661,13 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			}
 		} else {
 			var blocked bool
-			output, err, blocked = e.runStageRateLimited(ctx, st, &task, feedback, run.dir, &lost, &terminal, blockReason)
+			// runStageWithRetry layers the stage's retry: policy on top of
+			// runStageRateLimited's own rate-limit handling; it never
+			// applies to the merge stage (this branch excludes it —
+			// pkg/template.Validate rejects retry: on the merge stage
+			// outright, so st.Retry/Defaults.Retry resolving here would
+			// only ever apply to a genuine non-merge stage anyway).
+			output, err, blocked, attempt = e.runStageWithRetry(ctx, st, &task, feedback, run.dir, attempt, &lost, &terminal, blockReason)
 			if blocked {
 				return contracts.StatusBlocked
 			}
@@ -690,16 +751,145 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 	return contracts.StatusDone
 }
 
+// runStageWithRetry runs st via runStageRateLimited, then — for an ordinary
+// stage failure (not a rate-limit pause, which runStageRateLimited already
+// resolved internally; not a lost lease) — consults the stage's retry:
+// policy (pkg/template.Retry, resolved by retryPolicy) before handing the
+// failure back to runTask's on_fail routing.
+//
+// This is the one place retry and loop_back meet, and they compose in
+// exactly one direction: a stage retries ITSELF, here, up to policy.Max
+// times; only once retries are exhausted (or the failure doesn't qualify
+// under `when`, via retryEligible) does the failure fall through to
+// runTask's on_fail handling — loop_back, e.loops, max_loops, the on_loop
+// guard, `then: block` — none of which this function touches at all. From
+// on_fail's point of view, a retry-exhausted failure and a failure that was
+// never retried are the same value: nothing marks the difference.
+//
+// finalAttempt is the stage-entry attempt number the LAST try actually ran
+// under. It starts as the caller's attempt (the number runTask's top-of-loop
+// bump already computed for this stage entry) and is exactly what a pass,
+// or a first-try failure with no eligible retry, reports back unchanged.
+// Every policy retry bumps it via e.nextAttempt — a policy retry is a
+// genuinely new attempt, so it needs its own output log
+// (<stage>-attempt-<n>.log) and its own usage.recorded/stage.attempt_ref
+// attribution — which is the opposite of runStageRateLimited's OWN internal
+// loop just below, which deliberately keeps re-running the SAME attempt
+// number across every rate-limit pause. Those two loops are independent
+// meters over the same stage entry; see runStageRateLimited's doc comment
+// for why that one holds its attempt number fixed.
+func (e *engine) runStageWithRetry(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, attempt int, lost, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool, finalAttempt int) {
+	maxRetries, when, backoff, hasPolicy := retryPolicy(e.cfg.Template, st)
+	finalAttempt = attempt
+	for retries := 0; ; retries++ {
+		output, err, blocked = e.runStageRateLimited(ctx, st, task, feedback, dir, finalAttempt, lost, terminal, blockReason)
+		if err == nil || blocked || lost.Load() {
+			return
+		}
+		// A cancelled run (stage timeout already fired at the top level,
+		// or the task's lease was lost) must not spend a retry trying to
+		// re-run into a context that's already done — runStage would just
+		// fail again immediately for an unrelated reason.
+		if !hasPolicy || retries >= maxRetries || ctx.Err() != nil || !retryEligible(err, when) {
+			return
+		}
+		e.event(ctx, contracts.StageRetried, task.ID, map[string]any{
+			"stage": st.Name, "attempt": retries + 1, "max": maxRetries, "reason": trim(err.Error(), 2000),
+		})
+		// backoff: zero (the template default) means "retry immediately",
+		// a legitimate choice pkg/template's checkRetry explicitly allows —
+		// so only pause when the template actually asked for one, and race
+		// the pause against ctx so a cancelled run doesn't sit out a long
+		// backoff before noticing.
+		if backoff > 0 {
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+			}
+		}
+		// Feed the failed attempt's output to the next try, the same way
+		// loop_back feedback reaches an agent today (taskPrompt) — a retry
+		// with no context about why the last try failed is a wasted call.
+		feedback = err.Error()
+		finalAttempt = e.nextAttempt(task.ID, st.Name)
+	}
+}
+
+// retryPolicy resolves the effective retry policy for st, most-specific
+// level first: the stage's own retry: overrides the template's defaults:
+// retry:; if neither is set, there is no policy at all. Mirrors
+// stageTimeout's resolution shape and is equally defensive about a nil
+// Template/Defaults/Retry — a directly constructed Config in a test may
+// carry any of those as nil, since engine.Run does not itself call
+// pkg/template.Validate (only pipelinerun.LoadTemplate does).
+//
+// hasPolicy is what distinguishes "no retry: block at all" from an explicit
+// "retry: {max: 0}": both produce zero actual retries, but only the latter
+// is a real, validated policy (pkg/template.Validate already enforces max
+// in [0,10] and when in {"", "error", "always", "never"} — retryPolicy does
+// not re-validate either, it only resolves precedence).
+func retryPolicy(t *template.Template, st template.Stage) (maxRetries int, when string, backoff time.Duration, hasPolicy bool) {
+	if st.Retry != nil {
+		return st.Retry.Max, st.Retry.When, time.Duration(st.Retry.Backoff), true
+	}
+	if t != nil && t.Defaults != nil && t.Defaults.Retry != nil {
+		return t.Defaults.Retry.Max, t.Defaults.Retry.When, time.Duration(t.Defaults.Retry.Backoff), true
+	}
+	return 0, "", 0, false
+}
+
+// retryEligible reports whether a stage failure qualifies for a policy
+// retry under when (pkg/template.Retry.When — already validated by
+// pkg/template to be "", "error", "always", or "never"). The distinction it
+// keys off is exactly stageVerdictError: an infrastructure failure (a
+// crashed provider call, a transport error, or the stage timeout/lease-loss
+// context cancelling the attempt out from under it) is worth retrying by
+// default; a considered verdict about the work itself (an agent's
+// FailMarker, a command's own non-zero exit) is not — a reviewer that
+// rejected the work will reject it again. "always" exists precisely for the
+// rare stage that wants that anyway (e.g. flaky-detection).
+func retryEligible(err error, when string) bool {
+	if when == "never" {
+		return false
+	}
+	var verdict *stageVerdictError
+	if errors.As(err, &verdict) {
+		return when == "always"
+	}
+	return true // infra failure: "" (the default, meaning "error") and "always" both retry it
+}
+
+// nextAttempt bumps and returns the stage-entry attempt counter for
+// task|stage — the same e.attempts meter runTask's top-of-loop bump uses
+// for a fresh stage entry, exposed here for a policy retry
+// (runStageWithRetry): unlike runStageRateLimited's rate-limit pauses,
+// which deliberately keep re-running the SAME attempt number, a policy
+// retry is a genuinely new attempt and must get a new number — getting this
+// wrong silently recreates the exact "second run appends into the first
+// attempt's log instead of opening its own" bug the attempts field exists
+// to prevent (see its doc comment on the engine struct).
+func (e *engine) nextAttempt(taskID, stage string) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.attempts[taskID+"|"+stage]++
+	return e.attempts[taskID+"|"+stage]
+}
+
 // runStageRateLimited runs st, pausing and retrying the SAME attempt (same
 // feedback, no loop-back consumed) each time the provider reports a rolling
 // rate limit — the engine waits it out instead of treating it like a stage
 // failure (spec §11.9). blocked reports whether it already parked the task
 // at the retry cap; callers must return StatusBlocked without further
-// handling in that case.
-func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, lost *atomic.Bool, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
+// handling in that case. stageAttempt is the stage-entry attempt number the
+// caller already computed (e.attempts) — passed straight through to
+// runStage/runAgent unchanged across every rate-limit retry below, since a
+// rate limit retry re-runs the SAME attempt rather than starting a new one;
+// it is unrelated to this function's own local attempt counter, which counts
+// rate-limit retries instead.
+func (e *engine) runStageRateLimited(ctx context.Context, st template.Stage, task *contracts.Task, feedback, dir string, stageAttempt int, lost *atomic.Bool, terminal *atomic.Bool, blockReason func(string) string) (output string, err error, blocked bool) {
 	var attempt int
 	for {
-		output, err = e.runStage(ctx, st, *task, feedback, dir)
+		output, err = e.runStage(ctx, st, *task, feedback, dir, stageAttempt)
 		if lost.Load() {
 			return output, err, false
 		}
@@ -786,6 +976,21 @@ type gateFailure struct{ err error }
 
 func (g *gateFailure) Error() string { return g.err.Error() }
 func (g *gateFailure) Unwrap() error { return g.err }
+
+// stageVerdictError marks a stage failure that is a considered verdict about
+// the work itself — an agent's FailMarker line (runAgent), or a command's
+// own non-zero exit (runCommand) — as distinct from an infrastructure
+// failure (a crashed or errored provider call, a transport error, or the
+// stage timeout/lease-loss context cancelling the attempt out from under
+// it). retryEligible keys retry policy's `when` off exactly this split: an
+// infra failure is worth retrying by default, a verdict usually isn't (a
+// reviewer that rejected the work will reject it again). Modeled on
+// gateFailure (above), which wraps a different distinction the same way and
+// is unwrapped the same way, via errors.As — never string-matched.
+type stageVerdictError struct{ err error }
+
+func (v *stageVerdictError) Error() string { return v.err.Error() }
+func (v *stageVerdictError) Unwrap() error { return v.err }
 
 // landAttempt runs one FIFO-serialized land attempt for the merge stage:
 // commit stray work, rebase the branch onto current trunk, run the
@@ -965,10 +1170,47 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 // resumes — only the elapsed comparison it makes needs the wall clock.
 const stageTimeoutPoll = 200 * time.Millisecond
 
+// stageTimeout resolves the effective timeout for st, most specific level
+// first: the stage's own timeout: overrides the template's defaults:
+// timeout:, which overrides the engine-wide cfg.StageTimeout (already
+// defaulted to 10m by Run if the caller left it zero). Most-specific-wins
+// is the same precedence the doc comments on Stage.Timeout and
+// Defaults.Timeout promise — a stage that bothers to spell out its own
+// timeout: is stating intent explicitly, and no broader fallback should
+// second-guess it.
+//
+// A level is skipped, rather than propagated, whenever it is non-positive.
+// That covers two cases the same way on purpose: a template author who
+// wrote a genuinely non-positive timeout (template.Validate rejects those
+// before a template-driven launch ever reaches here) and pkg/template's
+// invalidDuration sentinel for a timeout string that failed to parse
+// (Validate rejects that too, but engine.Run does not itself call
+// Validate — only pipelinerun.LoadTemplate does — so a directly
+// constructed Config in a test can still carry one). The sentinel is
+// math.MinInt64 nanoseconds, deeply negative, so the same ">0" check that
+// rejects an author's "timeout: 0" also rejects it without needing to
+// import pkg/template's unexported sentinel check. Falling through to the
+// next level is safer than handing a stage a deadline that fires before
+// it can do anything, or never.
+func (e *engine) stageTimeout(st template.Stage) time.Duration {
+	if st.Timeout != nil {
+		if d := time.Duration(*st.Timeout); d > 0 {
+			return d
+		}
+	}
+	if t := e.cfg.Template; t != nil && t.Defaults != nil && t.Defaults.Timeout != nil {
+		if d := time.Duration(*t.Defaults.Timeout); d > 0 {
+			return d
+		}
+	}
+	return e.cfg.StageTimeout
+}
+
 // runStage executes one stage in dir; a nil error is a pass. output carries
 // the failure detail for feedback notes.
-func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (output string, err error) {
-	sctx, cancel := context.WithTimeout(ctx, e.cfg.StageTimeout)
+func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string, attempt int) (output string, err error) {
+	timeout := e.stageTimeout(st)
+	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// context.WithTimeout runs on CLOCK_MONOTONIC, which pauses for a
 	// suspended machine's entire downtime: a stage 5 minutes into a
@@ -987,7 +1229,7 @@ func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts
 			case <-sctx.Done():
 				return
 			case <-watchdog.C:
-				if e.clock.Now().Sub(start) >= e.cfg.StageTimeout {
+				if e.clock.Now().Sub(start) >= timeout {
 					cancel()
 					return
 				}
@@ -997,7 +1239,7 @@ func (e *engine) runStage(ctx context.Context, st template.Stage, task contracts
 	if st.Command != "" {
 		return e.runCommand(sctx, st.Command, dir)
 	}
-	return e.runAgent(sctx, st, task, feedback, dir)
+	return e.runAgent(sctx, st, task, feedback, dir, attempt)
 }
 
 func (e *engine) runCommand(ctx context.Context, command, dir string) (string, error) {
@@ -1020,7 +1262,25 @@ func (e *engine) runCommand(ctx context.Context, command, dir string) (string, e
 	raw, err := cmd.CombinedOutput()
 	out := string(raw)
 	if err != nil {
-		return out, fmt.Errorf("command %q failed: %v\n%s", command, err, trim(out, 2000))
+		wrapped := fmt.Errorf("command %q failed: %v\n%s", command, err, trim(out, 2000))
+		if ctx.Err() != nil {
+			// ctx was cancelled out from under the command — the stage
+			// timeout watchdog or the task's own lease-loss cancellation
+			// fired, and cmd.Cancel SIGKILLed the process. That surfaces
+			// through CombinedOutput as an ordinary non-zero exit (a
+			// killed process is not a "success status" in exec.Cmd's
+			// terms, so Wait reports the kill, not ctx.Err() itself) —
+			// but it is an infrastructure failure, not the command's own
+			// considered exit status, so it must NOT be wrapped as a
+			// stageVerdictError: retry policy's default (when: error)
+			// needs to see this as retryable.
+			return out, wrapped
+		}
+		// The command ran to completion under its own steam and simply
+		// exited non-zero: a considered verdict, exactly like an agent's
+		// FailMarker — retry policy's `when: error` (the default) does
+		// not retry this; only `when: always` does.
+		return out, &stageVerdictError{err: wrapped}
 	}
 	return out, nil
 }
@@ -1187,7 +1447,7 @@ func (e *engine) mountCapabilities(ctx context.Context, task contracts.Task, sta
 	})
 }
 
-func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string) (string, error) {
+func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts.Task, feedback, dir string, attempt int) (string, error) {
 	name, agent, err := e.resolveStageAgent(ctx, st, task)
 	if err != nil {
 		return err.Error(), err
@@ -1204,9 +1464,12 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 		model = agent.Preferences.Model
 	}
 
-	e.mu.Lock()
-	attempt := e.loops[task.ID+"|"+st.Name] + 1
-	e.mu.Unlock()
+	// attempt is this stage's entry count (e.attempts), computed once by the
+	// caller at stage entry — not e.loops, which counts a DIFFERENT stage's
+	// loop-back consumption (see the attempts field comment on the engine
+	// struct) and would leave a looped-into stage's own attempt number stuck
+	// at 1 forever, silently appending its second run's log into the first's
+	// file instead of opening executor-attempt-2.log.
 	log := openOutputLog(e.cfg.MadsHome, e.cfg.SessionID, e.runSeq, task.ID, st.Name, attempt, model)
 
 	res, err := e.cfg.Provider.OneShot(ctx, provider.OneShotRequest{
@@ -1226,13 +1489,21 @@ func (e *engine) runAgent(ctx context.Context, st template.Stage, task contracts
 		},
 	})
 	if err != nil {
+		// Infrastructure failure — a crash, a transport error, or (sctx's
+		// deadline in runStage) the stage timeout cancelling this one-shot
+		// out from under it. Left unwrapped so retryEligible's default
+		// (when: error) retries it.
 		log.close("error", err.Error())
 		return "", fmt.Errorf("agent %s: %w", name, err)
 	}
 	e.recordUsage(ctx, task.ID, st.Name, attempt, res.Usage)
 	if line := lastLine(res.Text); strings.HasPrefix(strings.ToUpper(line), strings.ToUpper(FailMarker)) {
 		log.close("fail", res.Text)
-		return res.Text, fmt.Errorf("agent %s failed the stage: %s", name, line)
+		// A considered verdict, not an infrastructure failure — wrapped so
+		// retryEligible only retries it under `when: always`: a reviewer
+		// that rejected the work will reject it again, so retrying under
+		// the default policy would just waste the call.
+		return res.Text, &stageVerdictError{err: fmt.Errorf("agent %s failed the stage: %s", name, line)}
 	}
 	log.close("pass", res.Text)
 	return res.Text, nil
@@ -1251,6 +1522,15 @@ func taskPrompt(stage string, task contracts.Task, feedback string) string {
 	}
 	if feedback != "" {
 		fmt.Fprintf(&b, "\nA previous attempt failed downstream. Address this feedback:\n%s\n", feedback)
+		// The worktree is never reset on retry or loop-back (owner
+		// decision): the failing stage may be far down the pipeline, and
+		// discarding it would throw away everything earlier stages
+		// legitimately produced. Whenever there's feedback to relay, this
+		// attempt is re-entering the SAME working tree an earlier attempt
+		// (of this stage, or a later one that sent work back) left
+		// behind — say so, since the agent is now looking at a tree it (or
+		// a prior attempt) may have half-edited, not a clean checkout.
+		b.WriteString("\nThe working tree may contain partial work from a previous failed attempt at this task — inspect it before assuming a clean slate.\n")
 	}
 	b.WriteString("\nWhen you are done, end your reply with a final line reporting the stage outcome: 'STAGE: pass', or 'STAGE: fail — <reason>' if the work under review does not meet the bar. No marker counts as a pass.\n")
 	return b.String()

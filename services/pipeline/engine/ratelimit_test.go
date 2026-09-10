@@ -100,3 +100,51 @@ func TestRateLimitNeverRecoversBlocks(t *testing.T) {
 		t.Errorf("stage.failed: %+v, want none (blocked via the rate-limit path, not the generic failure path)", fails)
 	}
 }
+
+// Rate-limit pauses and policy retries are two independent meters over the
+// same stage entry (see runStageWithRetry's doc comment). Proof: a stage
+// with retry: {max: 0} — a validated policy that allows literally zero
+// retries — still succeeds after being rate-limited twice. If a rate-limit
+// pause ever consumed retry budget the way a policy retry does, the very
+// first rate-limit "retry" would have nothing left to spend and the task
+// would block instead of pausing and eventually passing.
+func TestRateLimitDoesNotConsumeRetryBudget(t *testing.T) {
+	h := newHarness(t)
+	f := mustScenario(t,
+		fake.Rule{Match: "rate limit", Reply: "STAGE: fail — feedback leaked rate limit text"},
+		fake.Rule{Match: "Task: zero-retry-budget task", RateLimitTimes: 2, Reply: "STAGE: pass"},
+	)
+	seeded := h.seed(contracts.Task{Title: "zero-retry-budget task"})
+	src := `name: rate-limit-vs-retry-budget
+stages:
+  - name: executor
+    agent: executor
+    retry: { max: 0 }
+`
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: f, SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout:     30 * time.Second,
+		RateLimitBackoff: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("done: %v, want just %s (retry: max:0 must not block a rate-limit-only pause path); task: %+v",
+			sum.Done, seeded[0].ID, h.task(t, seeded[0].ID))
+	}
+	if rl := h.events(t, "stage.rate_limited"); len(rl) != 2 {
+		t.Errorf("stage.rate_limited: %d, want 2: %+v", len(rl), rl)
+	}
+	if retried := h.events(t, "stage.retried"); len(retried) != 0 {
+		t.Errorf("stage.retried: %+v, want none — rate-limit pauses never touch the policy-retry meter", retried)
+	}
+	if fails := h.events(t, "stage.failed"); len(fails) != 0 {
+		t.Errorf("stage.failed: %+v, want none", fails)
+	}
+}

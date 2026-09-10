@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -288,6 +289,103 @@ stages:
 	fails := h.events(t, "stage.failed")
 	if len(fails) != 1 || !strings.Contains(string(fails[0].Payload), "build") {
 		t.Errorf("stage.failed: %+v", fails)
+	}
+}
+
+// A build -> executor loop-back must advance EXECUTOR's own attempt number,
+// not build's: e.loops is keyed on the stage whose on_fail fired (build), so
+// reading e.loops for the attempt left the looped-into stage (executor)
+// stuck reporting attempt 1 forever on every re-run. Concretely that bug
+// meant openOutputLog (opened O_APPEND) silently appended the second
+// executor run into executor-attempt-1.log instead of creating
+// executor-attempt-2.log, and usage.recorded/stage.attempt_ref both
+// mislabeled the second run as attempt 1. This is the same loop-back
+// scenario as TestCommandFailureFeedbackLoop, with MadsHome set so the
+// output logs are captured and the attempt numbering is directly observable.
+func TestLoopBackAdvancesLoopedIntoStageAttempt(t *testing.T) {
+	h := newHarness(t)
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "build-loop-attempt", Rules: []fake.Rule{
+		// More specific rule first: the fake matches in order, and the
+		// feedback-bearing second attempt must not fall through to the
+		// generic executor rule below it.
+		{Match: "Address this feedback", Reply: "fixed it, second pass",
+			Tools: []fake.ToolStep{{Name: "write_file", Path: "fixed.marker", Content: "ok"}}},
+		{Match: "Pipeline stage: executor", Reply: "first pass, no marker yet"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := `name: loop-attempt-test
+stages:
+  - name: executor
+    agent: executor
+  - name: build
+    command: test -f fixed.marker
+    on_fail: { loop_back: executor, max_loops: 2 }
+`
+	tpl, verr := template.Check([]byte(src), func(string) bool { return true })
+	if verr != nil {
+		t.Fatal(verr)
+	}
+	seeded := h.seed(contracts.Task{Title: "make it build"})
+	madsHome := t.TempDir()
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: f, SessionID: h.sess.ID,
+		Template: tpl, Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second, MadsHome: madsHome,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v; task: %+v", sum, h.task(t, seeded[0].ID))
+	}
+
+	started := h.events(t, "pipeline.started")
+	if len(started) != 1 {
+		t.Fatalf("pipeline.started: %+v", started)
+	}
+	runSeq := started[0].Seq
+
+	attempt1, err := os.ReadFile(outputLogPath(madsHome, h.sess.ID, runSeq, seeded[0].ID, "executor", 1))
+	if err != nil {
+		t.Fatalf("executor attempt-1 log: %v", err)
+	}
+	if strings.Contains(string(attempt1), "fixed it, second pass") {
+		t.Errorf("executor attempt-1 log was appended into by the second run instead of it opening its own attempt-2 log: %q", attempt1)
+	}
+	if !strings.HasPrefix(string(attempt1), "=== stage=executor attempt=1 ") {
+		t.Errorf("executor attempt-1 header: %q", attempt1)
+	}
+
+	attempt2, err := os.ReadFile(outputLogPath(madsHome, h.sess.ID, runSeq, seeded[0].ID, "executor", 2))
+	if err != nil {
+		t.Fatalf("executor attempt-2 log was never created — the loop-back re-run kept appending into attempt-1 instead: %v", err)
+	}
+	if !strings.HasPrefix(string(attempt2), "=== stage=executor attempt=2 ") {
+		t.Errorf("executor attempt-2 header: %q", attempt2)
+	}
+	if !strings.Contains(string(attempt2), "fixed it, second pass") {
+		t.Errorf("executor attempt-2 log missing the second run's output: %q", attempt2)
+	}
+
+	type stageAttempt struct {
+		Stage   string `json:"stage"`
+		Attempt int    `json:"attempt"`
+	}
+	var executorAttempts []int
+	for _, ev := range h.events(t, "usage.recorded") {
+		var p stageAttempt
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.Stage == "executor" {
+			executorAttempts = append(executorAttempts, p.Attempt)
+		}
+	}
+	if want := []int{1, 2}; len(executorAttempts) != len(want) ||
+		executorAttempts[0] != want[0] || executorAttempts[1] != want[1] {
+		t.Errorf("executor usage.recorded attempts: %v, want %v (climbing across the build loop-back)", executorAttempts, want)
 	}
 }
 
@@ -760,5 +858,52 @@ func TestUnscopedCapabilitiesMountsFullDeclaration(t *testing.T) {
 		if !strings.Contains(payload, want) {
 			t.Errorf("expected payload to contain %s, got %s", want, payload)
 		}
+	}
+}
+
+// TestPipelineStartedCarriesTemplateVersion covers W1.5's audit trail: when
+// the caller (pipelinerun.LoadTemplate, via its own fetch of the
+// contracts.Template registry record) supplies a real version, it rides the
+// pipeline.started payload verbatim — this is the one place a historical run
+// gets attributed to the exact template revision it executed.
+func TestPipelineStartedCarriesTemplateVersion(t *testing.T) {
+	h := newHarness(t)
+	seeded := h.seed(contracts.Task{Title: "versioned run"})
+	sum, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second, TemplateVersion: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Done) != 1 || sum.Done[0] != seeded[0].ID {
+		t.Fatalf("summary: %+v", sum)
+	}
+	started := h.events(t, "pipeline.started")
+	if len(started) != 1 || !strings.Contains(string(started[0].Payload), `"template_version":7`) {
+		t.Fatalf("pipeline.started: %+v", started)
+	}
+}
+
+// TestPipelineStartedOmitsZeroTemplateVersion covers the zero-safety half:
+// an unknown version (pre-versioning row, or a caller that bypassed
+// pipelinerun.LoadTemplate) must never be reported as the literal version 0
+// — it's omitted from the payload entirely, same convention as other
+// optional event fields.
+func TestPipelineStartedOmitsZeroTemplateVersion(t *testing.T) {
+	h := newHarness(t)
+	h.seed(contracts.Task{Title: "unversioned run"})
+	_, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID,
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := h.events(t, "pipeline.started")
+	if len(started) != 1 || strings.Contains(string(started[0].Payload), "template_version") {
+		t.Fatalf("pipeline.started should omit template_version when zero: %+v", started)
 	}
 }

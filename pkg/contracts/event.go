@@ -133,6 +133,13 @@ const (
 	// StageRateLimitCleared fires when a rate-limited stage's pause ends and
 	// the engine is about to retry. Payload: {"stage": string, "attempt": int}.
 	StageRateLimitCleared EventType = "stage.rate_limit_cleared"
+	// StageRetried fires when a stage's own retry: policy (pkg/template.Retry)
+	// re-runs it after an ordinary failure — distinct from StageRateLimited,
+	// which never consumes retry budget at all. attempt is this policy
+	// retry's 1-based count (1 on the first retry), not the stage's overall
+	// attempt number. Payload:
+	// {"stage": string, "attempt": int, "max": int, "reason": string}.
+	StageRetried EventType = "stage.retried"
 
 	RetroStarted   EventType = "retro.started"
 	RetroProgress  EventType = "retro.progress"
@@ -357,7 +364,7 @@ var EventTypes = []EventType{
 	FileChanged,
 	CommitCreated, CommitLinked,
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
-	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared,
+	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared, StageRetried,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
 	RetroCancelled, RetroDPAAccepted, RetroDPARejected, RetroDPAEdited, RetroFollowUpCreated,
 	JobQueued, JobStarted, JobCompleted, JobFailed, JobCancelled,
