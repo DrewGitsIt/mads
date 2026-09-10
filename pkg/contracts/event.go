@@ -61,6 +61,40 @@ const (
 	// incident is diagnosable from the event log after the fact.
 	SessionPermissionRequested EventType = "session.permission_requested"
 	SessionPermissionResolved  EventType = "session.permission_resolved"
+	// SessionSubagentEvent fires for every conversation event a spawned
+	// subagent's sidechain produces (parent-tagged text, tool_use,
+	// tool_result, and thinking — providers/provider/event.go
+	// Event.ParentToolUseID). Payload: contracts.SubagentEvent. Persisted by
+	// the session runner because this event log is the ONLY historical
+	// source for subagent streams: claude-code's own on-disk transcript
+	// omits sidechains entirely, so a transcript refetch can never replay
+	// them (docs/CONVERSATION-REDESIGN-TASKS.md T6).
+	SessionSubagentEvent EventType = "session.subagent_event"
+	// SessionSubagentTask fires for each lifecycle update of a spawned
+	// subagent task (the harness's own bookkeeping — spawn, progress
+	// counters, final status + summary; providers/provider/event.go
+	// EventTask). Payload: contracts.SubagentTask; payload.phase
+	// distinguishes started/progress/updated/notification. "session." not
+	// "task." — the task.* domain is the mads work-item schema
+	// (pkg/contracts/task.go), an unrelated thing.
+	SessionSubagentTask EventType = "session.subagent_task"
+	// SessionThinking fires for each whole extended-thinking block the
+	// session's main agent emits (providers/provider/event.go
+	// EventThinking with text). Payload: contracts.ThinkingBlock. Live
+	// estimated-token progress ticks (EventThinking with only a count) are
+	// NOT persisted — they are indicator fuel, high-frequency and worthless
+	// after the fact; a subagent's thinking blocks arrive parent-tagged and
+	// persist as SessionSubagentEvent instead.
+	SessionThinking EventType = "session.thinking"
+	// SessionToolStatusChanged fires when the runner's defensive status
+	// synthesis (pkg/toolstatus) changes a tool call's lifecycle state
+	// outside any wire event that could carry it: "interrupted" when a turn
+	// ends (or the session stops) with no result for the call, "pending"
+	// when the call parks behind a permission request, "in_progress" when
+	// that park is allowed. Statuses that ride a wire event (in_progress on
+	// tool_use, completed/failed on tool_result) are stamped onto the event
+	// itself, not duplicated here. Payload: contracts.ToolStatusChange.
+	SessionToolStatusChanged EventType = "session.tool_status_changed"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -317,6 +351,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

@@ -15,12 +15,16 @@ type wireLine struct {
 	SessionID string       `json:"session_id"`
 	Message   *wireMessage `json:"message"`
 
-	// result-line fields
+	// result-line fields. Origin distinguishes the extra result line a
+	// background-subagent notification re-invocation closes with (kind
+	// "task-notification") from the ordinary user-turn result, which carries
+	// no origin at all — see events()'s "result" case.
 	Result       string                    `json:"result"`
 	IsError      bool                      `json:"is_error"`
 	Usage        *wireUsage                `json:"usage"`
 	TotalCostUSD float64                   `json:"total_cost_usd"`
 	ModelUsage   map[string]wireModelUsage `json:"modelUsage"`
+	Origin       *wireOrigin               `json:"origin"`
 
 	// init-line fields
 	Model string `json:"model"`
@@ -37,10 +41,52 @@ type wireLine struct {
 	CompactResult string `json:"compact_result"`
 	CompactError  string `json:"compact_error"`
 
+	// task-lifecycle system-line fields (subtypes "task_started",
+	// "task_progress", "task_updated", "task_notification" — claude-code 2.x,
+	// verified against the real capture in testdata/
+	// stream-task-subagent.jsonl). Status doubles as task_notification's
+	// final state; Usage doubles as the {total_tokens, tool_uses,
+	// duration_ms} counters on progress/notification lines (see wireUsage).
+	TaskID         string         `json:"task_id"`
+	ToolUseID      string         `json:"tool_use_id"`
+	Description    string         `json:"description"`
+	Prompt         string         `json:"prompt"`
+	IsBackgrounded bool           `json:"is_backgrounded"`
+	SpawnDepth     int            `json:"spawn_depth"`
+	LastToolName   string         `json:"last_tool_name"`
+	Summary        string         `json:"summary"`
+	OutputFile     string         `json:"output_file"`
+	Patch          *wireTaskPatch `json:"patch"`
+
+	// thinking_tokens system-line field: the running estimate streamed while
+	// the model thinks.
+	EstimatedTokens int `json:"estimated_tokens"`
+
+	// subagent-sidechain tagging, present at top level on the assistant/user
+	// lines a Task/Agent subagent produces (claude-code 2.x; the main
+	// agent's lines carry parent_tool_use_id null). SubagentType is shared
+	// with the task-lifecycle system lines above — same key, same meaning.
+	ParentToolUseID string `json:"parent_tool_use_id"`
+	SubagentType    string `json:"subagent_type"`
+	TaskDescription string `json:"task_description"`
+
 	// stream_event-line field: the raw Anthropic streaming event, present only
 	// when claude runs with --include-partial-messages (interactive transport).
 	// Carries token-level content_block_delta text.
 	Event json.RawMessage `json:"event"`
+}
+
+// wireOrigin is a result line's origin marker. Only the "task-notification"
+// kind is known today — the re-invocation that delivers a background
+// subagent's completion closes with a second result line stamped with it.
+type wireOrigin struct {
+	Kind string `json:"kind"`
+}
+
+// wireTaskPatch is a task_updated line's patch object. end_time also rides
+// along on the wire but the status transition is all consumers need.
+type wireTaskPatch struct {
+	Status string `json:"status"`
 }
 
 // model names the model where the line says: init lines carry it directly,
@@ -90,6 +136,13 @@ type wireUsage struct {
 	// the whole cached prefix. The last iteration's prompt side is the real
 	// end-of-turn occupancy (contextTokens).
 	Iterations []wireUsage `json:"iterations"`
+	// TotalTokens, ToolUses, and DurationMS are the task-counter shape a
+	// task_progress/task_notification system line carries under the same
+	// "usage" key (see wireLine's task-lifecycle fields); absent on result
+	// lines, where the fields above apply instead.
+	TotalTokens int `json:"total_tokens"`
+	ToolUses    int `json:"tool_uses"`
+	DurationMS  int `json:"duration_ms"`
 }
 
 // contextTokens is the prompt-side size of the turn's final API call — the
@@ -221,7 +274,7 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 	case "system":
 		return l.systemEvents()
 	case "stream_event":
-		return l.streamDeltaEvents()
+		return l.tagged(l.streamDeltaEvents())
 	case "assistant":
 		var evs []provider.Event
 		for _, b := range l.Message.blocks() {
@@ -230,15 +283,39 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 				if !partial && b.Text != "" {
 					evs = append(evs, provider.Event{Kind: provider.EventText, Text: b.Text})
 				}
+			case "thinking":
+				// Emitted in both partial and whole modes: streamDeltaEvents
+				// ignores thinking_delta lines, so unlike text there is no
+				// duplicate to drop. Signature-only blocks (empty thinking
+				// text — the shape the real capture in testdata/
+				// stream-task-subagent.jsonl actually carries) say nothing.
+				if b.Thinking != "" {
+					evs = append(evs, provider.Event{Kind: provider.EventThinking, Text: b.Thinking})
+				}
 			case "tool_use":
-				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
-					ID: b.ID, Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
-					Mutates: toolMutates(b.Name),
-				}})
+				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: newToolUse(b.ID, b.Name, b.Input)})
 			}
 		}
-		return evs
+		return l.tagged(evs)
 	case "result":
+		// A background subagent's completion notification re-invokes the
+		// model inside the same user turn, and that internal continuation
+		// closes with a second result line — stamped origin
+		// "task-notification", while the canonical user-turn result carries
+		// no origin. Emitting both as turn ends would double-fire every
+		// per-turn consumer (queued-message delivery, digest turn records, a
+		// second turn boundary in the UI) and double-count total_cost_usd,
+		// which the notification line repeats as a cumulative figure. So the
+		// notification result is not a turn boundary: suppress it, keeping
+		// only an error surface should the re-invocation itself fail. Its
+		// per-invocation usage detail is dropped with it — the next real
+		// turn's result refreshes occupancy.
+		if l.Origin != nil && l.Origin.Kind == "task-notification" {
+			if l.IsError {
+				return []provider.Event{{Kind: provider.EventError, Text: l.Result}}
+			}
+			return nil
+		}
 		ev := provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
 		if l.Usage != nil {
 			ev.Usage = &provider.Usage{
@@ -279,18 +356,40 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 				IsError: b.IsError,
 			})
 		}
-		return evs
+		return l.tagged(evs)
 	default:
-		// thinking_tokens, rate_limit_event, control_response, ...:
-		// bookkeeping, not conversation.
+		// rate_limit_event, control_response, ...: bookkeeping, not
+		// conversation.
 		return nil
 	}
 }
 
-// systemEvents normalizes a "system"-type line. Only the compaction status
-// lines produce an event; "init" (session start/reconnect announcement, and
-// the line claude-code re-emits right after a compaction completes) and any
-// other subtype are bookkeeping, same as the events() default case.
+// tagged stamps the line's subagent-sidechain identity onto every event it
+// produced. Untagged lines (the main agent's — parent_tool_use_id absent or
+// null) pass through unchanged, so the zero value keeps meaning "main
+// agent". Without this, a Task subagent's thinking/text/tool events
+// interleave into the main transcript as if the main agent produced them —
+// the live bug P0 exists to fix.
+func (l *wireLine) tagged(evs []provider.Event) []provider.Event {
+	if l.ParentToolUseID == "" {
+		return evs
+	}
+	for i := range evs {
+		evs[i].ParentToolUseID = l.ParentToolUseID
+		evs[i].SubagentType = l.SubagentType
+		evs[i].TaskDescription = l.TaskDescription
+	}
+	return evs
+}
+
+// systemEvents normalizes a "system"-type line: compaction status, task
+// lifecycle, and thinking progress. "init" (session start/reconnect
+// announcement, the line claude-code re-emits right after a compaction
+// completes, and the second one a background subagent's notification
+// re-invocation opens with — session.go's handleLine still reads it for
+// ref/model, and its refFired guard keeps the repeat harmless) and any other
+// subtype ("background_tasks_changed", ...) are bookkeeping, same as the
+// events() default case.
 func (l *wireLine) systemEvents() []provider.Event {
 	switch {
 	case l.Subtype == "status" && l.Status == "compacting":
@@ -301,9 +400,45 @@ func (l *wireLine) systemEvents() []provider.Event {
 			Success: l.CompactResult == "success",
 			Error:   l.CompactError,
 		}}}
+	case l.Subtype == "task_started" || l.Subtype == "task_progress" ||
+		l.Subtype == "task_updated" || l.Subtype == "task_notification":
+		return []provider.Event{{Kind: provider.EventTask, Task: l.taskStatus()}}
+	case l.Subtype == "thinking_tokens":
+		return []provider.Event{{Kind: provider.EventThinking, ThinkingTokens: l.EstimatedTokens}}
 	default:
 		return nil
 	}
+}
+
+// taskStatus maps one task-lifecycle system line onto the normalized
+// TaskStatus. The wire spreads the fields unevenly across subtypes (see the
+// TaskStatus field docs); absent ones simply stay zero. task_updated is the
+// one shape that nests its payload — the status transition rides in a patch
+// object rather than at top level.
+func (l *wireLine) taskStatus() *provider.TaskStatus {
+	ts := &provider.TaskStatus{
+		Phase:          strings.TrimPrefix(l.Subtype, "task_"),
+		TaskID:         l.TaskID,
+		ToolUseID:      l.ToolUseID,
+		Description:    l.Description,
+		SubagentType:   l.SubagentType,
+		Prompt:         l.Prompt,
+		IsBackgrounded: l.IsBackgrounded,
+		SpawnDepth:     l.SpawnDepth,
+		LastToolName:   l.LastToolName,
+		Status:         l.Status,
+		Summary:        l.Summary,
+		OutputFile:     l.OutputFile,
+	}
+	if ts.Status == "" && l.Patch != nil {
+		ts.Status = l.Patch.Status
+	}
+	if l.Usage != nil {
+		ts.TotalTokens = l.Usage.TotalTokens
+		ts.ToolUses = l.Usage.ToolUses
+		ts.DurationMS = l.Usage.DurationMS
+	}
+	return ts
 }
 
 // streamDeltaEvents pulls token-level text out of a "stream_event" line's

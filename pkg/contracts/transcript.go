@@ -17,6 +17,30 @@ type ToolUse struct {
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input,omitempty"`
 	Path  string          `json:"path,omitempty"`
+	// Kind classifies the call for rendering — providers/provider/event.go
+	// ToolKind's vocabulary: "read", "edit", "delete", "move", "search",
+	// "execute", "think", "fetch", "agent", "mcp", "skill", "plan", "other".
+	// Empty on records persisted before enrichment; readers must treat that
+	// as unknown, not "other".
+	Kind string `json:"kind,omitempty"`
+	// Title is the adapter-built one-line human summary of the call.
+	Title string `json:"title,omitempty"`
+	// Status is the call's lifecycle state — providers/provider/event.go
+	// ToolStatus's vocabulary: "pending", "in_progress", "completed",
+	// "failed", "interrupted". Empty means unknown.
+	Status string `json:"status,omitempty"`
+	// Locations lists the file positions the call touched, when known.
+	Locations []ToolLocation `json:"locations,omitempty"`
+	// Server is the MCP server name, set only when Kind is "mcp".
+	Server string `json:"server,omitempty"`
+}
+
+// ToolLocation mirrors providers/provider/event.go ToolLocation — one file
+// position a tool call touched, absolute path when the harness reports one.
+// Line is 1-based; zero means the whole file.
+type ToolLocation struct {
+	Path string `json:"path"`
+	Line int    `json:"line,omitempty"`
 }
 
 // TranscriptMessage mirrors providers/provider/event.go Message — one

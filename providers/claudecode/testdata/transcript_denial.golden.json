@@ -12,7 +12,14 @@
       "input": {
         "file_path": "docs/screenshot.png"
       },
-      "path": "docs/screenshot.png"
+      "path": "docs/screenshot.png",
+      "kind": "read",
+      "title": "docs/screenshot.png",
+      "locations": [
+        {
+          "path": "docs/screenshot.png"
+        }
+      ]
     },
     "timestamp": "2026-07-19T10:00:01Z"
   },
@@ -38,7 +45,9 @@
       "name": "Bash",
       "input": {
         "command": "go test ./..."
-      }
+      },
+      "kind": "execute",
+      "title": "go test ./..."
     },
     "timestamp": "2026-07-19T10:00:04Z"
   },

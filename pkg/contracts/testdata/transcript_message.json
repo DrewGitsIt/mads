@@ -1,0 +1,40 @@
+[
+  {
+    "role": "tool",
+    "tool": {
+      "id": "toolu_01edit",
+      "name": "Edit",
+      "input": {
+        "file_path": "/home/u/app/main.go",
+        "old_string": "a",
+        "new_string": "b"
+      },
+      "path": "/home/u/app/main.go",
+      "kind": "edit",
+      "title": "/home/u/app/main.go",
+      "status": "completed",
+      "locations": [
+        {
+          "path": "/home/u/app/main.go",
+          "line": 12
+        }
+      ]
+    },
+    "timestamp": "2026-09-09T18:38:15Z"
+  },
+  {
+    "role": "tool",
+    "tool": {
+      "id": "toolu_02mcp",
+      "name": "mcp__github__create_issue",
+      "input": {
+        "title": "flaky test"
+      },
+      "kind": "mcp",
+      "title": "github:create_issue — flaky test",
+      "status": "in_progress",
+      "server": "github"
+    },
+    "timestamp": "2026-09-09T18:38:16Z"
+  }
+]

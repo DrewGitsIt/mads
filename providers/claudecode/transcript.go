@@ -41,15 +41,28 @@ func (p *Provider) Transcript(_ context.Context, ref string) ([]provider.Message
 // Beyond user/assistant messages the file holds bookkeeping (queue
 // operations, attachments, summaries) — all skipped.
 type transcriptLine struct {
-	Type        string       `json:"type"`
-	IsSidechain bool         `json:"isSidechain"`
-	Message     *wireMessage `json:"message"`
+	Type        string `json:"type"`
+	IsSidechain bool   `json:"isSidechain"`
+	// IsMeta marks harness-injected user lines (caveat preambles, scheduled
+	// prompt re-invocations, hook payloads) — text the human never typed.
+	IsMeta  bool         `json:"isMeta"`
+	Message *wireMessage `json:"message"`
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
 	Cwd string `json:"cwd"`
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`
+}
+
+// isCommandMarkup reports whether a user text block is claude CLI
+// slash-command bookkeeping rather than typed input: `/compact` and friends
+// log `<command-name>…` request lines and `<local-command-stdout>…` output
+// lines as user-role text without the isMeta flag (observed on real 2.x
+// transcripts; the caveat preamble variant does carry isMeta).
+func isCommandMarkup(text string) bool {
+	t := strings.TrimSpace(text)
+	return strings.HasPrefix(t, "<command-name>") || strings.HasPrefix(t, "<local-command-")
 }
 
 // normalizeTranscript maps transcript JSONL onto the provider-independent
@@ -85,7 +98,12 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 			for _, b := range l.Message.blocks() {
 				switch b.Type {
 				case "text":
-					if b.Text != "" {
+					// Harness-injected lines (isMeta) and the CLI's
+					// slash-command bookkeeping (<command-name>,
+					// <local-command-stdout>) are not something the human
+					// typed — rendering them as user bubbles misattributes
+					// them. Tool results on such lines still flow below.
+					if b.Text != "" && !l.IsMeta && !isCommandMarkup(b.Text) {
 						texts = append(texts, b.Text)
 					}
 				case "tool_result":
@@ -109,9 +127,7 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts})
 					}
 				case "tool_use":
-					msgs = append(msgs, provider.Message{Role: "tool", Tool: &provider.ToolUse{
-						ID: b.ID, Name: b.Name, Input: b.Input, Path: toolPath(b.Input),
-					}, Timestamp: ts})
+					msgs = append(msgs, provider.Message{Role: "tool", Tool: newToolUse(b.ID, b.Name, b.Input), Timestamp: ts})
 				}
 			}
 		}
