@@ -52,6 +52,9 @@
     "vite": "^6.0.5",
     "vitest": "^3.2.4"
   },
+  "engines": {
+    "node": ">=20 <24.16"
+  },
   "allowScripts": {
     "electron@33.4.11": true,
     "esbuild@0.25.12": true,
