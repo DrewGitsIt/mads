@@ -177,6 +177,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /sessions/{id}/commits", s.handleSessionCommits)
 	mux.HandleFunc("GET /sessions/{id}/commits/{hash}/diff", s.handleSessionCommitDiff)
 	mux.HandleFunc("GET /sessions/{id}/changes", s.handleSessionWorkingDiff)
+	mux.HandleFunc("GET /sessions/{id}/tool-diff", s.handleSessionToolDiff)
 	mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
 	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /sessions", s.handleListSessions)

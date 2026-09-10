@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/api"
 	"github.com/drewkidwell/mads/services/data/internal/store"
 )
@@ -60,6 +61,30 @@ func main() {
 			} else if n > 0 {
 				log.Printf("data: lease sweep released %d expired lease(s)", n)
 			}
+		}
+	}()
+
+	// Shadow-store retention (docs/SHADOW-GIT-DIFFS-ADR.md): archived
+	// sessions keep their shadow git store 30 days (config-overridable via
+	// shadow_retention_days), then it's swept. Once at boot, then hourly —
+	// day-granularity retention needs nothing tighter.
+	sessions := store.NewSessions(store.NewLog(db))
+	cfgStore := store.NewConfig(store.NewLog(db))
+	sweepShadows := func() {
+		days := contracts.DefaultShadowRetentionDays
+		if cfg, err := cfgStore.Get(context.Background()); err == nil && cfg.ShadowRetentionDays > 0 {
+			days = cfg.ShadowRetentionDays
+		}
+		if n, err := sessions.SweepExpiredShadows(context.Background(), time.Duration(days)*24*time.Hour); err != nil {
+			log.Printf("data: shadow sweep: %v", err)
+		} else if n > 0 {
+			log.Printf("data: shadow sweep removed %d expired shadow store(s)", n)
+		}
+	}
+	go func() {
+		sweepShadows()
+		for range time.Tick(time.Hour) {
+			sweepShadows()
 		}
 	}()
 

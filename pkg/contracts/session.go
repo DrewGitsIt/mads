@@ -138,7 +138,14 @@ type Session struct {
 	// session has isolated work not yet merged back — the UI's signal to flag
 	// the session, active or inactive, as needing merge-back.
 	WorktreeBranch string `json:"worktree_branch,omitempty"`
-	Summary        string `json:"summary,omitempty"`
+	// ShadowDir is the absolute base path of this session's shadow git store
+	// (docs/SHADOW-GIT-DIFFS-ADR.md; services/session/shadow) — one shadow
+	// git dir per touched root underneath it, plus the capture index. Set by
+	// the Session runner at provisioning so the Router reads diffs from the
+	// recorded location instead of guessing; empty means no shadow store
+	// (shadowing disabled, or a session predating it).
+	ShadowDir string `json:"shadow_dir,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 	// ActiveTaskID is the session's current task context (spec §1) — the
 	// second rung of the commit-linkage chain.
 	ActiveTaskID string `json:"active_task_id,omitempty"`

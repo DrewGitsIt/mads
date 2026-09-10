@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -168,13 +171,17 @@ func (s *Sessions) SetActivity(ctx context.Context, id string, activity contract
 
 // Delete hard-deletes a session and all its orchestration artifacts (spec §1):
 // tasks (with their deps/handoffs/notes/leases via cascade), file changes,
-// commits. Provider transcripts live in the provider's storage and survive.
+// commits, and — after the transaction lands — its shadow git store
+// (docs/SHADOW-GIT-DIFFS-ADR.md: shadow dirs die with their session).
+// Provider transcripts live in the provider's storage and survive.
 func (s *Sessions) Delete(ctx context.Context, id, actor string) error {
-	return s.log.WithTx(ctx, func(tx *Tx) error {
+	var shadowDir string
+	err := s.log.WithTx(ctx, func(tx *Tx) error {
 		old, err := s.getInTx(tx, id)
 		if err != nil {
 			return err
 		}
+		shadowDir = old.ShadowDir
 		// tasks don't FK to sessions (they may be created before session
 		// records in tests); cascade explicitly.
 		if _, err := tx.Exec("DELETE FROM tasks WHERE session_id = ?", id); err != nil {
@@ -188,6 +195,74 @@ func (s *Sessions) Delete(ctx context.Context, id, actor string) error {
 			Type: contracts.SessionDeleted, SessionID: id, Actor: actor, Payload: payload,
 		})
 	})
+	if err != nil {
+		return err
+	}
+	removeShadowDir(shadowDir, id)
+	return nil
+}
+
+// removeShadowDir best-effort deletes one session's shadow store. The
+// recorded path is only honored when its final element is the session ID —
+// the shape the session runner writes (<shadow root>/<session_id>) — so a
+// corrupt or hand-edited record can never aim RemoveAll anywhere else.
+func removeShadowDir(dir, sessionID string) {
+	if dir == "" {
+		return
+	}
+	if filepath.Base(dir) != sessionID {
+		log.Printf("sessions: refusing to remove shadow dir %q (basename is not session %s)", dir, sessionID)
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Printf("sessions: remove shadow dir %s: %v", dir, err)
+	}
+}
+
+// SweepExpiredShadows removes the shadow git stores of archived sessions
+// past retention (docs/SHADOW-GIT-DIFFS-ADR.md: archived sessions keep
+// their shadow 30 days, config-overridable; deliberately no global size
+// cap). "Archived" is an inactive session record; UpdatedAt — bumped when
+// the session went inactive — is the archive timestamp. Each swept
+// session's ShadowDir is cleared in its own transaction, re-checking
+// activity inside it so a session resumed mid-sweep is left alone; the
+// record's UpdatedAt is deliberately not bumped, so sweeping never
+// reorders session lists. Returns how many stores were removed.
+func (s *Sessions) SweepExpiredShadows(ctx context.Context, retention time.Duration) (int, error) {
+	sessions, err := s.List(ctx, contracts.SessionInactive)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().UTC().Add(-retention)
+	n := 0
+	for _, sess := range sessions {
+		if sess.ShadowDir == "" || sess.UpdatedAt.After(cutoff) {
+			continue
+		}
+		var dir string
+		err := s.log.WithTx(ctx, func(tx *Tx) error {
+			cur, err := s.getInTx(tx, sess.ID)
+			if err != nil {
+				return err
+			}
+			if cur.Activity != contracts.SessionInactive || cur.ShadowDir == "" {
+				return nil // woke up (or already swept) since the List above
+			}
+			dir = cur.ShadowDir
+			cur.ShadowDir = ""
+			return s.write(tx, cur)
+		})
+		if err != nil {
+			log.Printf("sessions: shadow sweep %s: %v", sess.ID, err)
+			continue
+		}
+		if dir == "" {
+			continue
+		}
+		removeShadowDir(dir, sess.ID)
+		n++
+	}
+	return n, nil
 }
 
 // Get returns one session.

@@ -199,6 +199,14 @@ type Config struct {
 	LogRetentionDays    int          `json:"log_retention_days"`
 	FeatureFlags        FeatureFlags `json:"feature_flags"`
 
+	// ShadowRetentionDays is how long an archived (inactive) session keeps
+	// its shadow git store before the retention sweep removes it
+	// (docs/SHADOW-GIT-DIFFS-ADR.md: 30 days decided, config-overridable;
+	// deliberately no global size cap). 0/absent means the default
+	// (DefaultShadowRetentionDays), so clients that PUT a config without
+	// this field stay on the default instead of failing validation.
+	ShadowRetentionDays int `json:"shadow_retention_days"`
+
 	// OnboardingComplete gates the first-run wizard (§3.9): false until the
 	// wizard's last step finishes.
 	OnboardingComplete bool `json:"onboarding_complete"`
@@ -239,6 +247,11 @@ var RestartRequiredFields = map[string]bool{
 	"synthesis_debounce_ms": true,
 }
 
+// DefaultShadowRetentionDays is the decided post-archive shadow-store
+// retention (docs/SHADOW-GIT-DIFFS-ADR.md, Resolutions), applied when
+// ShadowRetentionDays is 0/absent.
+const DefaultShadowRetentionDays = 30
+
 // DefaultConfig is the config a fresh install starts with, before the
 // first-run wizard runs.
 func DefaultConfig() Config {
@@ -261,6 +274,7 @@ func DefaultConfig() Config {
 		SynthesisDebounceMS: 2000,
 		DigestDebounceMS:    2000,
 		LogRetentionDays:    30,
+		ShadowRetentionDays: DefaultShadowRetentionDays,
 		FeatureFlags:        FeatureFlags{},
 
 		OnboardingComplete: false,
@@ -308,6 +322,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.DigestDebounceMS < 0 {
 		v.Add("digest_debounce_ms", "must not be negative")
+	}
+	if c.ShadowRetentionDays < 0 {
+		v.Add("shadow_retention_days", "must not be negative")
 	}
 	if c.LogRetentionDays < 1 {
 		v.Add("log_retention_days", "must be at least 1")

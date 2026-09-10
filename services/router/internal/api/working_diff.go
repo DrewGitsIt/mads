@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // handleSessionWorkingDiff resolves one working file's before/after content
@@ -82,13 +83,18 @@ func readWorkingFile(path string) (string, error) {
 	return string(raw), nil
 }
 
-// workingOriginal best-effort resolves the file's pre-session content in
-// whatever git repo contains it (the session's checkout or worktree — the
-// ledger records absolute paths): the session-base rev when the session has
-// recorded commits in that repo, HEAD otherwise. Every failure — not in a
-// repo, not present at the base rev (file the session added, base of a root
-// commit), no HEAD at all — is the benign empty-original shape, same as
-// commit_diff's added-file case.
+// workingOriginal best-effort resolves the file's pre-session content.
+// First choice is the session's shadow baseline commit (docs/
+// SHADOW-GIT-DIFFS-ADR.md) — the root's literal state when the session
+// first touched it, which works even for sessions that never commit and
+// for non-git roots. Absent a usable shadow (older session, baseline still
+// running, shadowing disabled), fall back to whatever git repo contains
+// the path: the session-base rev when the session has recorded commits in
+// that repo (the pre-shadow heuristic — parent of the earliest recorded
+// commit), HEAD otherwise. Every failure — not in a repo, not present at
+// the base rev (file the session added, base of a root commit), no HEAD at
+// all — is the benign empty-original shape, same as commit_diff's
+// added-file case.
 func (s *server) workingOriginal(ctx context.Context, sessionID, path string) string {
 	dir := filepath.Dir(path)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -96,10 +102,28 @@ func (s *server) workingOriginal(ctx context.Context, sessionID, path string) st
 	//nolint:gosec // path is gated by the session's file-change ledger
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel")
 	out, err := cmd.Output()
-	if err != nil {
+	repo := ""
+	if err == nil {
+		repo = strings.TrimSpace(string(out))
+	}
+
+	// Shadow roots mirror the runner's discovery rule: the containing git
+	// repo, or the file's own directory when it isn't in one.
+	if sess, err := s.data.Session(ctx, sessionID); err == nil && sess.ShadowDir != "" {
+		root := repo
+		if root == "" {
+			root = dir
+		}
+		if rel, err := filepath.Rel(root, path); err == nil {
+			if original, ok := shadow.BaselineOriginal(ctx, sess.ShadowDir, root, filepath.ToSlash(rel)); ok {
+				return original
+			}
+		}
+	}
+
+	if repo == "" {
 		return ""
 	}
-	repo := strings.TrimSpace(string(out))
 	rel, err := filepath.Rel(repo, path)
 	if err != nil {
 		return ""

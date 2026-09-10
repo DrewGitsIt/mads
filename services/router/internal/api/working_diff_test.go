@@ -283,6 +283,106 @@ func TestSessionWorkingDiffTaskScope(t *testing.T) {
 	}
 }
 
+// TestSessionWorkingDiffPrefersShadowBaseline: with a shadow store
+// baselined at session start, "original" is the baseline content even
+// after the user repo's HEAD has caught up to the session's edit AND the
+// session recorded no commits — the case the sessionBaseRev heuristic
+// cannot resolve (it falls back to HEAD, erasing the diff).
+func TestSessionWorkingDiffPrefersShadowBaseline(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess, store := shadowSession(t, data)
+
+	repo := t.TempDir()
+	gitCommitTestRun(t, repo, "init", "-q")
+	path := filepath.Join(repo, "hello.txt")
+	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed")
+	store.Baseline(repo)
+
+	// The session edits and commits (no recorded session commit): HEAD now
+	// matches disk, so the heuristic would produce an empty diff.
+	if err := os.WriteFile(path, []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "edit")
+	recordChange(t, data, sess.ID, "", path, "modified")
+
+	resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, path, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[fileDiffResp](t, resp)
+	if got.Original != "base\n" || got.Modified != "edited\n" {
+		t.Errorf("diff = %+v, want {Original:\"base\\n\" Modified:\"edited\\n\"} from the shadow baseline", got)
+	}
+}
+
+// TestSessionWorkingDiffShadowBaselineNonGitRoot: the shadow baseline also
+// resolves originals for files outside any git repo — where the heuristic
+// has nothing at all (previously always an empty original).
+func TestSessionWorkingDiffShadowBaselineNonGitRoot(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess, store := shadowSession(t, data)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "plain.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store.Baseline(dir)
+	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recordChange(t, data, sess.ID, "", path, "modified")
+
+	resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, path, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[fileDiffResp](t, resp)
+	if got.Original != "before\n" || got.Modified != "after\n" {
+		t.Errorf("diff = %+v, want {Original:\"before\\n\" Modified:\"after\\n\"}", got)
+	}
+}
+
+// TestSessionWorkingDiffShadowFallbackToHeuristic: a session whose record
+// carries a shadow_dir but whose root has no usable baseline (still
+// running, or failed) falls back to the pre-shadow behavior — HEAD (or the
+// session-base rev) resolves the original.
+func TestSessionWorkingDiffShadowFallbackToHeuristic(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess, _ := shadowSession(t, data) // shadow_dir recorded, but nothing baselined
+
+	repo := t.TempDir()
+	gitCommitTestRun(t, repo, "init", "-q")
+	path := filepath.Join(repo, "hello.txt")
+	if err := os.WriteFile(path, []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "add hello")
+	if err := os.WriteFile(path, []byte("hi there\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recordChange(t, data, sess.ID, "", path, "modified")
+
+	resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, path, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[fileDiffResp](t, resp)
+	if got.Original != "hi\n" || got.Modified != "hi there\n" {
+		t.Errorf("diff = %+v, want the HEAD-based fallback {Original:\"hi\\n\" Modified:\"hi there\\n\"}", got)
+	}
+}
+
 // TestSessionWorkingDiffMissingPath: missing path query param 400s.
 func TestSessionWorkingDiffMissingPath(t *testing.T) {
 	srv, base := newTestServerWithData(t)

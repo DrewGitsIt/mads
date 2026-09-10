@@ -39,6 +39,7 @@ var routeManifest = []struct {
 	{"GET", "/sessions/abc/commits", "GET /sessions/{id}/commits"},
 	{"GET", "/sessions/abc/commits/def/diff", "GET /sessions/{id}/commits/{hash}/diff"},
 	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes"},
+	{"GET", "/sessions/abc/tool-diff", "GET /sessions/{id}/tool-diff"},
 	{"GET", "/events", "GET /events"},
 	{"GET", "/sessions", "GET /sessions"},
 	{"POST", "/sessions", "POST /sessions"},
