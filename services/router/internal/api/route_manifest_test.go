@@ -72,6 +72,7 @@ var routeManifest = []struct {
 	{"PUT", "/templates/abc", "PUT /templates/{id}"},
 	{"DELETE", "/templates/abc", "DELETE /templates/{id}"},
 	{"POST", "/templates/validate", "POST /templates/validate"},
+	{"POST", "/templates/validate-all", "POST /templates/validate-all"},
 	{"GET", "/workspaces", "GET /workspaces"},
 	{"POST", "/workspaces", "POST /workspaces"},
 	{"PUT", "/workspaces/abc", "PUT /workspaces/{id}"},

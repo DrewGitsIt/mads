@@ -5,6 +5,7 @@
 //	mads new-session -name "Wave 4" [-workspace label]
 //	mads seed        -session ses_x -file tasks.yaml
 //	mads tasks       -session ses_x
+//	mads template validate [name...]
 //	mads run         -session ses_x -workspace ~/repo/mads [flags]
 //	mads uninstall   [-keep-data] [-yes]
 //	mads update      check | apply [-feed-url URL] [-router URL] [-yes]
@@ -29,6 +30,8 @@ func main() {
 		err = cmdSeed(os.Args[2:])
 	case "tasks":
 		err = cmdTasks(os.Args[2:])
+	case "template":
+		err = cmdTemplate(os.Args[2:], os.Stdout)
 	case "run":
 		err = cmdRun(os.Args[2:], os.Stdout)
 	case "uninstall":
@@ -57,6 +60,9 @@ func usage() {
   mads new-session -name NAME [-workspace LABEL] [-data URL]
   mads seed        -session ID -file tasks.yaml    [-data URL]
   mads tasks       -session ID                     [-data URL]
+  mads template validate [name...]                 [-data URL]
+      no names given validates every stored template; exits non-zero if any
+      named or stored template is invalid
   mads run         -session ID -workspace DIR      [-data URL]
       [-template default-implementation] [-provider claude-code|fake]
       [-model M] [-concurrency 5] [-isolated=true] [-worktree-root DIR]

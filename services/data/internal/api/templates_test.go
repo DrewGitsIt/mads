@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/services/data/internal/store"
 )
 
 func TestDefaultTemplateSeededAndValid(t *testing.T) {
@@ -24,6 +26,61 @@ func TestDefaultTemplateSeededAndValid(t *testing.T) {
 		map[string]string{"source": list[0].Source}, &ok)
 	if resp.StatusCode != 200 || !ok["valid"] {
 		t.Fatalf("seeded default template does not validate: status %d", resp.StatusCode)
+	}
+}
+
+// TestTemplateVersionStamping covers W1.5's audit trail (spec §6): the
+// seeded default starts at version 1, and each subsequent save bumps it by
+// exactly one — off the last-stored record, not off whatever the client's
+// PUT body happened to carry.
+func TestTemplateVersionStamping(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	var list []contracts.Template
+	doJSON(t, srv, "GET", "/templates", nil, &list)
+	if len(list) != 1 || list[0].Version != 1 {
+		t.Fatalf("fresh install: want the seeded default at version 1, got %+v", list)
+	}
+
+	tpl := list[0]
+	tpl.Description = "first edit"
+	var afterFirst contracts.Template
+	if resp := doJSON(t, srv, "PUT", "/templates/"+tpl.Name, tpl, &afterFirst); resp.StatusCode != 200 {
+		t.Fatalf("first edit: status %d", resp.StatusCode)
+	}
+	if afterFirst.Version != 2 {
+		t.Fatalf("first edit: version = %d, want 2", afterFirst.Version)
+	}
+
+	afterFirst.Description = "second edit"
+	var afterSecond contracts.Template
+	if resp := doJSON(t, srv, "PUT", "/templates/"+tpl.Name, afterFirst, &afterSecond); resp.StatusCode != 200 {
+		t.Fatalf("second edit: status %d", resp.StatusCode)
+	}
+	if afterSecond.Version != 3 {
+		t.Fatalf("second edit: version = %d, want 3", afterSecond.Version)
+	}
+}
+
+// TestTemplateCreateForcesVersion1 guards against a client-supplied Version
+// (a stale copy, a duplicated export, or just a client bug) seeding the
+// audit trail at anything other than 1 — the same reasoning that already
+// forces ID/System to their defaults on create.
+func TestTemplateCreateForcesVersion1(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	tpl := contracts.Template{
+		Name:    "sneaky",
+		Version: 99,
+		Source: "name: sneaky\nstages:\n" +
+			"  - name: executor\n    agent: executor\n",
+	}
+	var created contracts.Template
+	if resp := doJSON(t, srv, "POST", "/templates", tpl, &created); resp.StatusCode != 201 {
+		t.Fatalf("create: status %d", resp.StatusCode)
+	}
+	if created.Version != 1 {
+		t.Fatalf("create: version = %d, want 1 regardless of client-supplied value", created.Version)
 	}
 }
 
@@ -115,5 +172,61 @@ func TestTemplateDeleteGuards(t *testing.T) {
 	doJSON(t, srv, "GET", "/templates/nightly", nil, &out)
 	if len(out.UsedBy) != 1 || out.UsedBy[0] != "mads-core" {
 		t.Errorf("used_by: %v", out.UsedBy)
+	}
+}
+
+// TestValidateAllReportsEachStoredTemplate covers the discovery surface for
+// stored templates a grammar tightening leaves behind: a template that
+// fails semantic validation (here, an unresolvable agent reference) can
+// still land in the store directly at the Registry layer, which only
+// guarantees shape (see store.NewTemplates's doc) — the same route a
+// template saved under a since-tightened pkg/template grammar would have
+// taken. validate-all must still surface it, distinctly from the seeded,
+// valid default.
+func TestValidateAllReportsEachStoredTemplate(t *testing.T) {
+	srv, db := newTestServer(t)
+
+	legacy := contracts.Template{
+		Name: "legacy",
+		Source: "name: legacy\nstages:\n" +
+			"  - name: build\n    agent: ghost-agent\n",
+	}
+	templates := store.NewTemplates(store.NewLog(db))
+	if err := templates.Create(context.Background(), &legacy, "test"); err != nil {
+		t.Fatalf("seed legacy template directly at the store layer: %v", err)
+	}
+
+	var out struct {
+		Results []TemplateValidation `json:"results"`
+	}
+	resp := doJSON(t, srv, "POST", "/templates/validate-all", nil, &out)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status %d, want 200 even with an invalid template present", resp.StatusCode)
+	}
+	if len(out.Results) != 2 {
+		t.Fatalf("want one row per stored template (default + legacy), got %+v", out.Results)
+	}
+
+	var gotDefault, gotLegacy *TemplateValidation
+	for i := range out.Results {
+		switch out.Results[i].Name {
+		case "default-implementation":
+			gotDefault = &out.Results[i]
+		case "legacy":
+			gotLegacy = &out.Results[i]
+		}
+	}
+	if gotDefault == nil || !gotDefault.Valid || len(gotDefault.Errors) != 0 {
+		t.Errorf("seeded default: want valid with no errors, got %+v", gotDefault)
+	}
+	if gotLegacy == nil || gotLegacy.Valid || len(gotLegacy.Errors) == 0 {
+		t.Fatalf("legacy: want invalid with errors, got %+v", gotLegacy)
+	}
+	if gotLegacy.ID != legacy.ID {
+		t.Errorf("legacy row id = %q, want %q", gotLegacy.ID, legacy.ID)
+	}
+	if !strings.Contains(gotLegacy.Errors[0].Message, "ghost-agent") &&
+		!strings.Contains(gotLegacy.Errors[0].Message, "unknown agent") {
+		t.Errorf("legacy error should explain the unresolved agent, got %+v", gotLegacy.Errors)
 	}
 }

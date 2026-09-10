@@ -46,6 +46,24 @@ func main() {
 	if err := checkSchemaCompatible(db, store.Migrations()); err != nil {
 		log.Fatalf("%v", err)
 	}
+
+	// One-time-upgrade discovery, not a health check (see
+	// api.ValidateStoredTemplates / handleValidateAll's doc): pkg/template
+	// began rejecting unknown YAML keys it used to silently drop, so a
+	// template saved under the old, lax grammar can be invalid today even
+	// though nothing new can be saved invalid anymore. This never blocks
+	// startup and never touches the exit path — a broken template is
+	// something for a human to fix (mads template validate), not a reason
+	// to refuse to serve every other request. Log-only, once per boot.
+	if results, err := api.ValidateStoredTemplates(context.Background(), store.NewLog(db)); err != nil {
+		log.Printf("data: template validation sweep: %v", err)
+	} else {
+		for _, res := range results {
+			if !res.Valid {
+				log.Printf("data: stored template %q (%s) no longer validates: %v", res.Name, res.ID, res.Errors)
+			}
+		}
+	}
 	version, err := store.Version(db)
 	if err != nil {
 		log.Fatalf("data: %v", err)

@@ -70,3 +70,19 @@ func (s *server) handleValidateTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"valid": true})
 }
+
+// handleValidateAllTemplates proxies the Data Service's one-time-upgrade
+// discovery report straight through: dataclient.TemplateValidation already
+// mirrors the exact {id,name,valid,errors} shape the UI client is built
+// against, so there is nothing to reshape here, only to relay. A store-level
+// failure (e.g. the Data Service is unreachable) still goes through
+// writeError like every other proxy in this file — only an individual
+// template being invalid is "200 with a finding," not the request itself.
+func (s *server) handleValidateAllTemplates(w http.ResponseWriter, r *http.Request) {
+	results, err := s.data.ValidateAllTemplates(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}

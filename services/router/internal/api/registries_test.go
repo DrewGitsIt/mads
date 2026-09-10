@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
 )
 
 func jsonBody(t *testing.T, v any) io.Reader {
@@ -248,6 +249,25 @@ func TestTemplateCRUDAndValidateOverRouter(t *testing.T) {
 	verr := decodeJSON[contracts.ValidationError](t, resp)
 	if len(verr.Errors) < 3 {
 		t.Fatalf("want at least 3 errors reported together, got %d: %+v", len(verr.Errors), verr.Errors)
+	}
+
+	// validate-all proxies the Data Service's discovery report straight
+	// through: one row per stored template (the seeded default plus
+	// "nightly" created above), 200 regardless of validity.
+	resp = postJSON(t, srv.URL+"/templates/validate-all", nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("validate-all: status %d, want 200", resp.StatusCode)
+	}
+	all := decodeJSON[struct {
+		Results []dataclient.TemplateValidation `json:"results"`
+	}](t, resp)
+	if len(all.Results) < 2 {
+		t.Fatalf("validate-all: want at least 2 rows (default + nightly), got %+v", all.Results)
+	}
+	for _, row := range all.Results {
+		if row.Name == "nightly" && (!row.Valid || row.Errors == nil) {
+			t.Errorf("nightly row: want valid with a non-nil (empty) errors slice, got %+v", row)
+		}
 	}
 
 	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/templates/"+created.ID, nil)

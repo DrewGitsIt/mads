@@ -624,6 +624,30 @@ func (c *Client) ValidateTemplate(ctx context.Context, source string) error {
 	return c.do(ctx, http.MethodPost, "/templates/validate", map[string]string{"source": source}, nil)
 }
 
+// TemplateValidation is one row of the Data Service's validate-all report
+// (services/data/internal/api/templates.go's handleValidateAll). Mirrored
+// here rather than shared via pkg/contracts because it's a response DTO for
+// this one report, not a stored record like contracts.Template.
+type TemplateValidation struct {
+	ID     string                 `json:"id"`
+	Name   string                 `json:"name"`
+	Valid  bool                   `json:"valid"`
+	Errors []contracts.FieldError `json:"errors"`
+}
+
+// ValidateAllTemplates re-validates every stored template — the discovery
+// surface for pkg/template's now-strict grammar (a template saved under the
+// old, lax one can be invalid today even though nothing new can be saved
+// invalid). Always succeeds at the HTTP level even when some templates are
+// invalid: that's data in the response, not a request failure.
+func (c *Client) ValidateAllTemplates(ctx context.Context) ([]TemplateValidation, error) {
+	var wrapper struct {
+		Results []TemplateValidation `json:"results"`
+	}
+	err := c.do(ctx, http.MethodPost, "/templates/validate-all", nil, &wrapper)
+	return wrapper.Results, err
+}
+
 // --- Links (docs/LINKED-SESSIONS-DESIGN.md) ---
 
 // CreateLink creates a link from a preset or an explicit grant set — the

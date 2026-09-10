@@ -315,3 +315,58 @@ func TestWorkspaceCapabilityRefsValidated(t *testing.T) {
 		t.Fatalf("update with unknown ref: want ValidationError, got %v", err)
 	}
 }
+
+// TestSharedRegistryUpdateHasNoVersionConcept guards template version
+// stamping's placement: the bump lives in services/data/internal/api's
+// template-specific handleUpdate, not in this file's generic
+// Registry[T].Update, precisely because Agent/Capability/Workspace have no
+// business gaining a version field just because Template needs one. Since
+// none of the three types declares a Version field, this is normally
+// enforced by the type system alone — this test is the canary that would
+// catch someone reintroducing version bumping in the shared path anyway
+// (e.g. by copy-pasting a Version field onto one of these types without
+// also adding the same stale-write guard Template's handler has).
+func TestSharedRegistryUpdateHasNoVersionConcept(t *testing.T) {
+	l := openMigratedDB(t)
+	ctx := context.Background()
+
+	agents := NewAgents(l)
+	a := contracts.Agent{Name: "versionless-agent", Prompt: "x"}
+	if err := agents.Create(ctx, &a, "user"); err != nil {
+		t.Fatal(err)
+	}
+	a.Description = "edited"
+	if err := agents.Update(ctx, &a, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	caps := NewCapabilities(l)
+	c := contracts.Capability{Name: "versionless-cap", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "true"}}
+	if err := caps.Create(ctx, &c, "user"); err != nil {
+		t.Fatal(err)
+	}
+	c.Description = "edited"
+	if err := caps.Update(ctx, &c, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	ws := NewWorkspaces(l)
+	w := contracts.Workspace{Name: "versionless-workspace"}
+	if err := ws.Create(ctx, &w, "user"); err != nil {
+		t.Fatal(err)
+	}
+	w.Description = "edited"
+	if err := ws.Update(ctx, &w, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	for table, id := range map[string]string{"agents": a.ID, "capabilities": c.ID, "workspaces": w.ID} {
+		var data string
+		if err := l.db.QueryRow("SELECT data FROM "+table+" WHERE id = ?", id).Scan(&data); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(data, `"version"`) {
+			t.Errorf("%s: stored JSON gained a version key after update — version bumping has leaked into the shared registry path: %s", table, data)
+		}
+	}
+}

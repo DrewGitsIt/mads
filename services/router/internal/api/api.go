@@ -140,6 +140,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("PUT /templates/{id}", s.handleUpdateTemplate)
 	mux.HandleFunc("DELETE /templates/{id}", s.handleDeleteTemplate)
 	mux.HandleFunc("POST /templates/validate", s.handleValidateTemplate)
+	mux.HandleFunc("POST /templates/validate-all", s.handleValidateAllTemplates)
 	mux.HandleFunc("POST /retros", s.handleStartRetro)
 	mux.HandleFunc("POST /jobs/{id}/cancel", s.handleCancelJob)
 	mux.HandleFunc("POST /retros/{id}/follow-up-session", s.handleRetroFollowUpSession)
