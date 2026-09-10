@@ -36,6 +36,13 @@ func gitRun(t *testing.T, dir string, args ...string) {
 func initRepo(t *testing.T, dir string) {
 	t.Helper()
 	gitRun(t, dir, "init", "-q", "-b", "main", ".")
+	// Repo-local identity, not just -c flags on the commit below: Merge's
+	// own `git merge` writes a merge commit from production code that has
+	// no -c flags of its own, and CI runners carry no global git identity
+	// (git then exits 128, "Committer identity unknown"). A worktree shares
+	// its parent repo's config, so this covers the session worktree too.
+	gitRun(t, dir, "config", "user.email", "t@t")
+	gitRun(t, dir, "config", "user.name", "t")
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("init\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
