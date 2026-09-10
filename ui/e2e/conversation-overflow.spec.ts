@@ -43,7 +43,13 @@ test("conversation pane never scrolls horizontally on unbreakable content", asyn
 
   await composer.fill(`echo \`${"B".repeat(400)}\``);
   await composer.press("Enter");
-  await expect(page.getByText("B".repeat(400))).toBeVisible();
+  // Two matches, not one: your own message row AND the agent's echo of it
+  // both carry the token. toBeVisible() raced that — locally it resolved
+  // while only the first had rendered and passed; on CI both landed first
+  // and strict mode rejected the ambiguous locator. Asserting the count
+  // waits for the settled state, which is also exactly what the overflow
+  // measurement below needs rendered.
+  await expect(page.getByText("B".repeat(400))).toHaveCount(2);
 
   expect(await horizontalOverflowers(page)).toEqual([]);
 });
