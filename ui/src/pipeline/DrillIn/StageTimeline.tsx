@@ -31,6 +31,9 @@ export function StageTimeline({ attempts }: StageTimelineProps) {
           <div className={styles.row}>
             <span className={styles.stage}>{attempt.stage}</span>
             {attempt.attempt > 1 && <Chip tone="warn">loop-back {attempt.attempt}</Chip>}
+            {!!attempt.retries && attempt.retries > 0 && (
+              <Chip tone="info">retried ×{attempt.retries}</Chip>
+            )}
             <Chip tone={statusTone(attempt.status)}>{attempt.status}</Chip>
           </div>
           {attempt.reason && <p className={styles.reason}>{attempt.reason}</p>}

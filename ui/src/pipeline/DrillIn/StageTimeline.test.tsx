@@ -50,4 +50,40 @@ describe("StageTimeline", () => {
     render(<StageTimeline attempts={[]} />);
     expect(screen.getByText("No stages started yet.")).toBeTruthy();
   });
+
+  it("shows a retried chip for a structural retry, distinct from the loop-back chip", () => {
+    render(
+      <StageTimeline
+        attempts={[
+          { stage: "build", attempt: 1, status: "started", retries: 2, startedSeq: 1 },
+        ]}
+      />,
+    );
+    expect(screen.getByText("retried ×2")).toBeTruthy();
+    expect(screen.queryByText(/loop-back/)).toBeNull();
+  });
+
+  it("shows both the loop-back and retried chips together for a stage reached by loop-back that then structurally retried", () => {
+    render(
+      <StageTimeline
+        attempts={[
+          { stage: "code_review", attempt: 2, status: "started", retries: 1, startedSeq: 1 },
+        ]}
+      />,
+    );
+    expect(screen.getByText("loop-back 2")).toBeTruthy();
+    expect(screen.getByText("retried ×1")).toBeTruthy();
+  });
+
+  it("omits the retried chip when retries is 0 or unset", () => {
+    render(
+      <StageTimeline
+        attempts={[
+          { stage: "build", attempt: 1, status: "started", retries: 0, startedSeq: 1 },
+          { stage: "verify", attempt: 1, status: "started", startedSeq: 2 },
+        ]}
+      />,
+    );
+    expect(screen.queryByText(/retried/)).toBeNull();
+  });
 });

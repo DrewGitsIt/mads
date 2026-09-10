@@ -93,7 +93,7 @@ describe("FetchPipelineClient", () => {
     const client = new FetchPipelineClient();
     await client.getRunEvents("ses_1", 6);
     expect(fetchMock.mock.calls[0][0].toString()).toBe(
-      "http://localhost:17373/events?session_id=ses_1&since=6&types=pipeline.started%2Cpipeline.completed%2Cpipeline.cancelled%2Cpipeline.failed%2Cstage.started%2Cstage.completed%2Cstage.failed%2Cstage.skipped%2Cfile.changed",
+      "http://localhost:17373/events?session_id=ses_1&since=6&types=pipeline.started%2Cpipeline.completed%2Cpipeline.cancelled%2Cpipeline.failed%2Cstage.started%2Cstage.completed%2Cstage.failed%2Cstage.skipped%2Cstage.retried%2Cfile.changed",
     );
   });
 

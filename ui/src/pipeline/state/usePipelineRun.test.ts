@@ -250,4 +250,138 @@ describe("usePipelineRun", () => {
 
     await waitFor(() => expect(result.current.phase).toBe("finished"));
   });
+
+  it("a stage.retried bumps `retries` on the open attempt without creating a new attempt (structural retry, not a loop-back)", async () => {
+    const client = newClient();
+    client.runs = [];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+
+    act(() => {
+      const source = FakeEventSource.instances[0];
+      const envs = [
+        {
+          seq: 200,
+          timestamp: "2026-07-16T05:00:00Z",
+          type: "pipeline.started",
+          session_id: recordedSessionId,
+          actor: "pipeline",
+          payload: { template: "default-implementation" },
+        },
+        {
+          seq: 201,
+          timestamp: "2026-07-16T05:00:01Z",
+          type: "stage.started",
+          session_id: recordedSessionId,
+          task_id: recordedTaskIds.coreLib,
+          actor: "pipeline",
+          payload: { stage: "build" },
+        },
+        {
+          seq: 202,
+          timestamp: "2026-07-16T05:00:02Z",
+          type: "stage.retried",
+          session_id: recordedSessionId,
+          task_id: recordedTaskIds.coreLib,
+          actor: "pipeline",
+          payload: { stage: "build", attempt: 1, stage_attempt: 2, max: 3, reason: "provider crashed" },
+        },
+      ];
+      for (const env of envs) source.emit(env.type, JSON.stringify(env));
+    });
+
+    await waitFor(() => {
+      const attempt = result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0];
+      expect(attempt?.retries).toBe(1);
+    });
+    const attempt = result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0];
+    // Still a single attempt entry — a retry never opens a new stage.started attempt.
+    expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts).toHaveLength(1);
+    expect(attempt?.attempt).toBe(1);
+    expect(attempt?.status).toBe("started");
+
+    // A second retried event on the same open attempt keeps incrementing.
+    act(() => {
+      const env = {
+        seq: 203,
+        timestamp: "2026-07-16T05:00:03Z",
+        type: "stage.retried",
+        session_id: recordedSessionId,
+        task_id: recordedTaskIds.coreLib,
+        actor: "pipeline",
+        payload: { stage: "build", attempt: 2, stage_attempt: 2, max: 3, reason: "provider crashed again" },
+      };
+      FakeEventSource.instances[0].emit(env.type, JSON.stringify(env));
+    });
+
+    await waitFor(() => {
+      expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.retries).toBe(2);
+    });
+  });
+
+  it("a stage.retried with no open attempt for that stage is a no-op", async () => {
+    const client = newClient();
+    client.runs = [];
+    const { result } = renderHook(() => usePipelineRun(recordedSessionId, client));
+    await waitFor(() => expect(result.current.resuming).toBe(false));
+
+    act(() => {
+      const source = FakeEventSource.instances[0];
+      const envs = [
+        {
+          seq: 300,
+          timestamp: "2026-07-16T05:00:00Z",
+          type: "pipeline.started",
+          session_id: recordedSessionId,
+          actor: "pipeline",
+          payload: { template: "default-implementation" },
+        },
+        {
+          seq: 301,
+          timestamp: "2026-07-16T05:00:01Z",
+          type: "stage.started",
+          session_id: recordedSessionId,
+          task_id: recordedTaskIds.coreLib,
+          actor: "pipeline",
+          payload: { stage: "build" },
+        },
+        {
+          seq: 302,
+          timestamp: "2026-07-16T05:00:02Z",
+          type: "stage.completed",
+          session_id: recordedSessionId,
+          task_id: recordedTaskIds.coreLib,
+          actor: "pipeline",
+          payload: { stage: "build" },
+        },
+      ];
+      for (const env of envs) source.emit(env.type, JSON.stringify(env));
+    });
+
+    await waitFor(() => {
+      expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.status).toBe(
+        "completed",
+      );
+    });
+    const before = result.current.taskRunState[recordedTaskIds.coreLib];
+
+    // The stage already closed out — a late/stray stage.retried for it has no open attempt to bump.
+    act(() => {
+      const env = {
+        seq: 303,
+        timestamp: "2026-07-16T05:00:03Z",
+        type: "stage.retried",
+        session_id: recordedSessionId,
+        task_id: recordedTaskIds.coreLib,
+        actor: "pipeline",
+        payload: { stage: "build", attempt: 1, stage_attempt: 1, max: 3, reason: "provider crashed" },
+      };
+      FakeEventSource.instances[0].emit(env.type, JSON.stringify(env));
+    });
+
+    // Give the fold a tick to (not) apply the event, then assert state is unchanged.
+    await Promise.resolve();
+    expect(result.current.taskRunState[recordedTaskIds.coreLib]).toEqual(before);
+    expect(result.current.taskRunState[recordedTaskIds.coreLib]?.attempts[0]?.retries).toBeUndefined();
+  });
 });

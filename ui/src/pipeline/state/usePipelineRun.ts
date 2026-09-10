@@ -22,6 +22,7 @@ export const FOLD_EVENT_TYPES = [
   "stage.completed",
   "stage.failed",
   "stage.skipped",
+  "stage.retried",
   "file.changed",
 ];
 
@@ -30,11 +31,24 @@ export type StageAttemptStatus = "started" | "completed" | "failed" | "skipped";
 
 export interface StageAttempt {
   stage: string;
-  /** 1-based count of stage.started events for this stage on this task. */
+  /**
+   * 1-based count of stage.started events (stage ENTRIES) for this stage on
+   * this task — i.e. how many times the pipeline has loop-backed into this
+   * stage. Policy retries (structural failure: timeout, provider crash) do
+   * NOT emit stage.started — they happen inside a single stage entry and are
+   * counted separately by `retries` below, not folded into this number.
+   */
   attempt: number;
   status: StageAttemptStatus;
   /** stage.failed's `reason` — the loop-back/blocker feedback text (HANDOFF.md §1c). */
   reason?: string;
+  /**
+   * Policy retries that ran inside this stage entry (structural failure:
+   * timeout, provider crash) — distinct from `attempt`, which counts stage
+   * entries/loop-backs. Undefined/0 means the entry ran to completion (or is
+   * still running) without a structural retry.
+   */
+  retries?: number;
   startedSeq: number;
   endedSeq?: number;
 }
@@ -68,6 +82,18 @@ function taskRunStateOf(state: RunFoldState, taskId: string): TaskRunState {
   return state.taskRunState[taskId] ?? { taskId, attempts: [], touchedFiles: [] };
 }
 
+// Shared by the stage.completed/stage.failed close-out and stage.retried
+// bump below — both need "the most recent attempt for this stage that's
+// still open" (status === "started").
+function findOpenAttemptIndex(attempts: StageAttempt[], stage: string): number {
+  for (let i = attempts.length - 1; i >= 0; i--) {
+    if (attempts[i].stage === stage && attempts[i].status === "started") {
+      return i;
+    }
+  }
+  return -1;
+}
+
 function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
   if (state.phase !== "running" || state.runStartSeq === undefined || env.seq < state.runStartSeq) {
     return state;
@@ -95,15 +121,21 @@ function foldStageEvent(state: RunFoldState, env: Envelope): RunFoldState {
       },
     ];
     if (env.type === "stage.started") currentStage = stage;
+  } else if (env.type === "stage.retried") {
+    // Retry re-runs the same stage entry in place — no stage.started, so no
+    // new attempt. Bump `retries` on the open attempt; if none is open
+    // (e.g. this envelope arrived before the run's seeded prefix), no-op.
+    const openIndex = findOpenAttemptIndex(attempts, stage);
+    if (openIndex !== -1) {
+      attempts = attempts.slice();
+      attempts[openIndex] = {
+        ...attempts[openIndex],
+        retries: (attempts[openIndex].retries ?? 0) + 1,
+      };
+    }
   } else {
     // stage.completed | stage.failed — close out the most recent open attempt for this stage.
-    let openIndex = -1;
-    for (let i = attempts.length - 1; i >= 0; i--) {
-      if (attempts[i].stage === stage && attempts[i].status === "started") {
-        openIndex = i;
-        break;
-      }
-    }
+    const openIndex = findOpenAttemptIndex(attempts, stage);
     if (openIndex !== -1) {
       const status: StageAttemptStatus = env.type === "stage.completed" ? "completed" : "failed";
       attempts = attempts.slice();
@@ -176,6 +208,7 @@ export function foldReducer(state: RunFoldState, env: Envelope): RunFoldState {
     case "stage.completed":
     case "stage.failed":
     case "stage.skipped":
+    case "stage.retried":
       return foldStageEvent(state, env);
     case "file.changed":
       return foldFileChanged(state, env);
