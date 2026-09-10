@@ -23,11 +23,25 @@ const THEN_OPTIONS = [
   { value: "block", label: "Block" },
 ];
 
+// "" reads as the server-side default ("error": retry infra failures only —
+// crashes, transport errors, timeouts — never a considered verdict like a
+// reviewer's rejection or a command's non-zero exit).
+const RETRY_WHEN_OPTIONS = [
+  { value: "", label: "—" },
+  { value: "error", label: "Error" },
+  { value: "always", label: "Always" },
+  { value: "never", label: "Never" },
+];
+
 function errorFor(errors: FieldError[], field: string): string | undefined {
   return errors.find((e) => e.field === field)?.message;
 }
 
-/** One pipeline stage's fields, covering pkg/template's actual grammar (§6). */
+/**
+ * One pipeline stage's fields, covering pkg/template's actual grammar (§6):
+ * agent/command mode, on_fail, model, and now per-stage timeout and retry
+ * (max/when/backoff). There is deliberately no different_agent field.
+ */
 export function StageCard({
   stage,
   index,
@@ -56,6 +70,10 @@ export function StageCard({
 
   function setOnFail(patch: Partial<NonNullable<TemplateStage["on_fail"]>>) {
     onChange({ ...stage, on_fail: { ...stage.on_fail, ...patch } });
+  }
+
+  function setRetry(patch: Partial<NonNullable<TemplateStage["retry"]>>) {
+    onChange({ ...stage, retry: { ...stage.retry, ...patch } });
   }
 
   return (
@@ -118,6 +136,16 @@ export function StageCard({
       </label>
       {errorFor(errors, "when") && <div className={styles.error}>{errorFor(errors, "when")}</div>}
 
+      <label className={styles.field}>
+        <span className={styles.fieldLabel}>Timeout</span>
+        <input
+          value={stage.timeout ?? ""}
+          placeholder="e.g. 15m"
+          onChange={(e) => onChange({ ...stage, timeout: e.target.value || undefined })}
+        />
+      </label>
+      {errorFor(errors, "timeout") && <div className={styles.error}>{errorFor(errors, "timeout")}</div>}
+
       <details className={styles.onFail} open={!!stage.on_fail}>
         <summary className={styles.onFailSummary}>On fail</summary>
         <div className={styles.onFailBody}>
@@ -154,6 +182,50 @@ export function StageCard({
           </label>
           {errorFor(errors, "on_fail.then") && (
             <div className={styles.error}>{errorFor(errors, "on_fail.then")}</div>
+          )}
+        </div>
+      </details>
+
+      <details className={styles.onFail} open={!!stage.retry}>
+        <summary className={styles.onFailSummary}>Retry</summary>
+        <div className={styles.onFailBody}>
+          {errorFor(errors, "retry") && <div className={styles.error}>{errorFor(errors, "retry")}</div>}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Max retries</span>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={stage.retry?.max ?? ""}
+              onChange={(e) =>
+                setRetry({ max: e.target.value === "" ? undefined : Number(e.target.value) })
+              }
+            />
+          </label>
+          {errorFor(errors, "retry.max") && (
+            <div className={styles.error}>{errorFor(errors, "retry.max")}</div>
+          )}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Retry on</span>
+            <Select
+              value={stage.retry?.when ?? ""}
+              options={RETRY_WHEN_OPTIONS}
+              onChange={(next) => setRetry({ when: next || undefined })}
+            />
+          </label>
+          {errorFor(errors, "retry.when") && (
+            <div className={styles.error}>{errorFor(errors, "retry.when")}</div>
+          )}
+          <label className={styles.field}>
+            <span className={styles.fieldLabel}>Backoff</span>
+            <input
+              value={stage.retry?.backoff ?? ""}
+              placeholder="e.g. 5s"
+              onChange={(e) => setRetry({ backoff: e.target.value || undefined })}
+            />
+          </label>
+          {errorFor(errors, "retry.backoff") && (
+            <div className={styles.error}>{errorFor(errors, "retry.backoff")}</div>
           )}
         </div>
       </details>

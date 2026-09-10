@@ -299,6 +299,33 @@ describe("FetchRouterClient — typed methods built on the private transport hel
     );
   });
 
+  it("validateAllTemplates POSTs to /templates/validate-all and unwraps the results array", async () => {
+    const fetchMock = mockFetchOnce({
+      results: [
+        { id: "tpl_x", name: "default-implementation", valid: true, errors: [] },
+        {
+          id: "tpl_y",
+          name: "old-one",
+          valid: false,
+          errors: [{ field: "source", message: 'line 7: unknown field "retires" — did you mean "retry"?' }],
+        },
+      ],
+    });
+    const client = new FetchRouterClient("http://router.local");
+    const result = await client.validateAllTemplates();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/templates/validate-all",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result).toHaveLength(2);
+    expect(result[1]).toEqual({
+      id: "tpl_y",
+      name: "old-one",
+      valid: false,
+      errors: [{ field: "source", message: 'line 7: unknown field "retires" — did you mean "retry"?' }],
+    });
+  });
+
   it("updateAgent PUTs a JSON body and decodes the response", async () => {
     const fetchMock = mockFetchOnce({ id: "a1" });
     const client = new FetchRouterClient("http://router.local");

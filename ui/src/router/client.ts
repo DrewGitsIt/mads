@@ -41,6 +41,7 @@ import type {
   TaskOutcomes,
   TaskStatus,
   Template,
+  TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
   UpdateCheckResult,
@@ -214,6 +215,12 @@ export interface RouterClient {
   updateTemplate(t: Template): Promise<Template>;
   deleteTemplate(id: string): Promise<void>;
   validateTemplate(source: string): Promise<{ valid: boolean }>;
+  /**
+   * POST /templates/validate-all — a one-shot sweep used to badge invalid
+   * templates in the shelf. Callers must treat a rejection as "no badges
+   * this session", not as a reason to hide the template list.
+   */
+  validateAllTemplates(): Promise<TemplateValidationResult[]>;
 
   // --- Workspaces (Library) ---
   listWorkspaces(): Promise<Workspace[]>;
@@ -845,6 +852,14 @@ export class FetchRouterClient implements RouterClient {
 
   async validateTemplate(source: string): Promise<{ valid: boolean }> {
     return routerPost(this.baseUrl, "/templates/validate", { source });
+  }
+
+  async validateAllTemplates(): Promise<TemplateValidationResult[]> {
+    const res = await routerPost<{ results: TemplateValidationResult[] }>(
+      this.baseUrl,
+      "/templates/validate-all",
+    );
+    return res.results;
   }
 
   // --- Workspaces (Library) ---

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Chip } from "../../components/Chip/Chip";
 import {
@@ -38,6 +38,16 @@ export function TemplateEditor({ template, onClose, onCreate, onUpdate, onDelete
   const { errors, validating, valid, validate } = useTemplateValidation();
 
   const { parsed, error: parseError } = useMemo(() => parse(source), [source]);
+
+  // Opening an already-invalid template (e.g. hand-edited YAML that drifted
+  // from the grammar) used to show nothing until the user clicked Validate.
+  // Run the same check once on mount so its errors are on screen immediately.
+  useEffect(() => {
+    void validate(source);
+    // Intentionally mount-only — re-running on every keystroke belongs to
+    // the Validate button and Save, not this one-shot opening check.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function applyParsedChange(next: NonNullable<ReturnType<typeof parse>["parsed"]>) {
     setSource(serialize(next));
@@ -84,7 +94,18 @@ export function TemplateEditor({ template, onClose, onCreate, onUpdate, onDelete
 
   return (
     <SideSheet width={640}>
-      <SideSheetHeader>{template ? `Edit ${template.name}` : "New template"}</SideSheetHeader>
+      <SideSheetHeader>
+        {template ? (
+          <>
+            {`Edit ${template.name}`}
+            <Chip tone="neutral" className={styles.versionChip}>
+              v{template.version}
+            </Chip>
+          </>
+        ) : (
+          "New template"
+        )}
+      </SideSheetHeader>
       <SideSheetBody>
         <div className={styles.form}>
           <label className={styles.field}>

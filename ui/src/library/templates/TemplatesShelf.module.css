@@ -46,6 +46,10 @@
   font-weight: 600;
 }
 
+.versionChip {
+  opacity: 0.7;
+}
+
 .systemChip {
   margin-left: auto;
 }

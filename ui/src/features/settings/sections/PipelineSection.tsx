@@ -184,6 +184,28 @@ export function PipelineSection({ config }: PipelineSectionProps) {
         {fieldErrors.cost_alert_cents && <div className={styles.error}>{fieldErrors.cost_alert_cents}</div>}
       </div>
 
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="pipeline-stage-timeout-minutes">
+          Stage timeout (minutes)
+        </label>
+        <input
+          id="pipeline-stage-timeout-minutes"
+          type="number"
+          className={styles.input}
+          value={draft.pipeline_stage_timeout_minutes}
+          onChange={(e) =>
+            setDraft({ ...draft, pipeline_stage_timeout_minutes: Number(e.target.value) })
+          }
+        />
+        <div className={styles.hint}>
+          How long a single pipeline stage (one agent invocation) may run before it's killed as
+          stuck. Applies to both UI-launched and CLI runs.
+        </div>
+        {fieldErrors.pipeline_stage_timeout_minutes && (
+          <div className={styles.error}>{fieldErrors.pipeline_stage_timeout_minutes}</div>
+        )}
+      </div>
+
       <section className={styles.fastModel}>
         <h3 className={styles.heading}>Fast Model</h3>
         <div className={styles.row}>

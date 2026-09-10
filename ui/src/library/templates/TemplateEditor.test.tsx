@@ -98,6 +98,7 @@ describe("TemplateEditor", () => {
       name: "deploy",
       source: "name: deploy\nstages: []\n",
       system: true,
+      version: 1,
       created_at: "t",
       updated_at: "t",
     };

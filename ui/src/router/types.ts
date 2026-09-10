@@ -169,8 +169,22 @@ export interface Template {
   description?: string;
   source: string; // the YAML text — single source of truth for both editor views
   system?: boolean;
+  // Monotonically increasing save counter — 1 on create, incremented on
+  // every update. An audit-trail affordance only; never used for optimistic
+  // concurrency or diffing.
+  version: number;
   created_at: string;
   updated_at: string;
+}
+
+// mirrors the parallel validate-all sweep endpoint's response item — POST
+// /templates/validate-all. `errors` is always an array, never null, even
+// when `valid` is true.
+export interface TemplateValidationResult {
+  id: string;
+  name: string;
+  valid: boolean;
+  errors: { field: string; message: string }[];
 }
 
 // mirrors pkg/registryclient's wire contract for the remote registry
@@ -193,6 +207,18 @@ export interface RegistryPublishItem {
 // pkg/template's parsed grammar, frontend-only — this is YAML the Library's
 // Templates shelf parses client-side for the visual editor view (no Go JSON
 // tags to mirror; pkg/template only ever round-trips YAML).
+// `when` on a stage's retry block defaults server-side to "error" (retry
+// infrastructure failures only — crashes, transport errors, timeouts — but
+// NOT a considered verdict like a reviewer's rejection or a command's
+// non-zero exit); "always" also retries verdicts; "never" disables. Left as
+// a plain string (not a closed union) since the frontend never branches on
+// it — only renders whatever the Select picked and forwards it verbatim.
+export interface TemplateRetry {
+  max?: number; // 0..10; rejected outright by the validator on a `git merge` stage
+  when?: string;
+  backoff?: string; // Go duration string, e.g. "5s"
+}
+
 export interface TemplateStage {
   name: string;
   agent?: string; // "auto" or a registry agent name; mutually exclusive with command
@@ -200,11 +226,26 @@ export interface TemplateStage {
   when?: string;
   on_fail?: { loop_back?: string; max_loops?: number; then?: string };
   model?: string; // freeform model id; empty/absent = inherit (agent pref, then provider default)
+  timeout?: string; // Go duration string, e.g. "15m"
+  retry?: TemplateRetry;
+}
+
+// Template-level defaults a stage inherits when it doesn't set its own
+// timeout/model/retry — same shapes as the per-stage fields above.
+export interface TemplateDefaults {
+  timeout?: string;
+  model?: string;
+  retry?: TemplateRetry;
 }
 
 export interface ParsedTemplate {
   name: string;
   stages: TemplateStage[];
+  defaults?: TemplateDefaults;
+  // Other top-level keys the grammar defines that this frontend doesn't
+  // model explicitly yet. templateSync.parse() must preserve these verbatim
+  // — see the comment there for why.
+  [key: string]: unknown;
 }
 
 export type Provider = string;
@@ -847,6 +888,13 @@ export interface Config {
   agent_selection_mode: AgentSelectionMode;
   default_model_tier: ModelTier;
   cost_alert_cents?: number;
+  // pipeline_stage_timeout_minutes bounds how long a single pipeline stage
+  // (one agent invocation) may run before the engine kills it as stuck —
+  // mirrors pkg/contracts/config.go's PipelineStageTimeoutMinutes. 0/absent
+  // means the server-side default (30m), so this is intentionally typed
+  // as a plain number, not optional: the server always returns a resolved
+  // value, never a bare absence.
+  pipeline_stage_timeout_minutes: number;
 
   default_workspace?: string;
   default_provider?: string;

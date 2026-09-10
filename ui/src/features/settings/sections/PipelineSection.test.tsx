@@ -80,6 +80,25 @@ describe("PipelineSection", () => {
     expect(screen.getAllByText("invalid")).toHaveLength(2);
   });
 
+  it("changing the stage timeout updates the draft", () => {
+    stubCredentials([]);
+    const config = makeConfig();
+    render(<PipelineSection config={config} />);
+    fireEvent.change(screen.getByLabelText(/stage timeout/i), { target: { value: "45" } });
+    expect(config.setDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ pipeline_stage_timeout_minutes: 45 }),
+    );
+  });
+
+  it("shows the stage timeout field error", () => {
+    stubCredentials([]);
+    const config = makeConfig({
+      fieldErrors: { pipeline_stage_timeout_minutes: "must not be negative" },
+    });
+    render(<PipelineSection config={config} />);
+    expect(screen.getByText("must not be negative")).toBeTruthy();
+  });
+
   it("shows the Fast Model group dormant in endpoint mode when no endpoint is configured", () => {
     stubCredentials([]);
     const config = makeConfig({ draft: { ...fixtureConfig, fast_model_mode: "endpoint" } });

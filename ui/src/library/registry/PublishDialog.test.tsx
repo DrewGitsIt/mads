@@ -31,6 +31,7 @@ function makeTemplate(overrides: Partial<Template> = {}): Template {
     id: "t1",
     name: "nightly",
     source: "stages: []",
+    version: 1,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides,

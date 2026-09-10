@@ -192,6 +192,166 @@ describe("StageCard", () => {
     });
   });
 
+  it("edits the timeout field", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto" }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={[]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByText("Timeout").closest("label")!.querySelector("input")!, {
+      target: { value: "15m" },
+    });
+
+    expect(onChange).toHaveBeenCalledWith({ name: "build", agent: "auto", timeout: "15m" });
+  });
+
+  it("clears timeout to undefined when blanked", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", timeout: "15m" }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={[]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByText("Timeout").closest("label")!.querySelector("input")!, {
+      target: { value: "" },
+    });
+
+    expect(onChange).toHaveBeenCalledWith({ name: "build", agent: "auto", timeout: undefined });
+  });
+
+  it("renders a timeout field error", () => {
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", timeout: "not-a-duration" }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[{ field: "timeout", message: "invalid duration" }]}
+        knownModelIds={[]}
+        onChange={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("invalid duration")).toBeTruthy();
+  });
+
+  it("edits retry.max, defaulting to open when a retry block is already present", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", retry: { max: 2 } }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={[]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    const maxInput = screen.getByText("Max retries").closest("label")!.querySelector("input")!;
+    expect((maxInput as HTMLInputElement).value).toBe("2");
+
+    fireEvent.change(maxInput, { target: { value: "0" } });
+    expect(onChange).toHaveBeenCalledWith({ name: "build", agent: "auto", retry: { max: 0 } });
+  });
+
+  it("selects retry.when from the three valid values", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", retry: {} }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={[]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByText("Retry on").closest("label")!.querySelector("button")!;
+    fireEvent.click(trigger);
+    const options = screen.getAllByRole("option").map((o) => o.textContent);
+    expect(options).toEqual(["—", "Error", "Always", "Never"]);
+
+    fireEvent.click(screen.getByRole("option", { name: "Always" }));
+    expect(onChange).toHaveBeenCalledWith({ name: "build", agent: "auto", retry: { when: "always" } });
+  });
+
+  it("edits retry.backoff", () => {
+    const onChange = vi.fn();
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", retry: {} }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[]}
+        knownModelIds={[]}
+        onChange={onChange}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByText("Backoff").closest("label")!.querySelector("input")!, {
+      target: { value: "5s" },
+    });
+    expect(onChange).toHaveBeenCalledWith({ name: "build", agent: "auto", retry: { backoff: "5s" } });
+  });
+
+  it("routes retry.max/when/backoff errors to the retry block", () => {
+    render(
+      <StageCard
+        stage={{ name: "build", agent: "auto", retry: { max: 20 } }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[
+          { field: "retry.max", message: "must be between 0 and 10" },
+          { field: "retry.when", message: "unknown value" },
+          { field: "retry.backoff", message: "invalid duration" },
+        ]}
+        knownModelIds={[]}
+        onChange={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("must be between 0 and 10")).toBeTruthy();
+    expect(screen.getByText("unknown value")).toBeTruthy();
+    expect(screen.getByText("invalid duration")).toBeTruthy();
+  });
+
+  it("routes a whole-block retry error (e.g. rejected on a merge stage)", () => {
+    render(
+      <StageCard
+        stage={{ name: "merge", command: "git merge main", retry: { max: 1 } }}
+        index={0}
+        earlierStageNames={[]}
+        errors={[{ field: "retry", message: "retry is not allowed on a merge stage" }]}
+        knownModelIds={[]}
+        onChange={vi.fn()}
+        onRemove={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("retry is not allowed on a merge stage")).toBeTruthy();
+  });
+
   it("navigates model suggestions with the keyboard and selects on Enter", () => {
     const onChange = vi.fn();
     render(

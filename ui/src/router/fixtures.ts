@@ -41,6 +41,7 @@ import type {
   TaskOutcomes,
   TaskStatus,
   Template,
+  TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
   UpdateCheckResult,
@@ -1297,6 +1298,10 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: validateTemplate");
   }
 
+  async validateAllTemplates(): Promise<TemplateValidationResult[]> {
+    throw new Error("not fixtured: validateAllTemplates");
+  }
+
   // --- Workspaces ---
   async listWorkspaces(): Promise<Workspace[]> {
     return fixtureWorkspaces;
@@ -1515,6 +1520,7 @@ export const fixtureConfig: Config = {
   synthesis_auto_approve: false,
   agent_selection_mode: "full",
   default_model_tier: "balanced",
+  pipeline_stage_timeout_minutes: 30,
   default_trust: "limited",
   display_mode: "comfortable",
   keybindings: "default",

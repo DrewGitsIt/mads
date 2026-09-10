@@ -64,3 +64,9 @@
 .error {
   color: var(--bad-fg);
 }
+
+.versionChip {
+  margin-left: var(--space-2);
+  opacity: 0.7;
+  vertical-align: middle;
+}
