@@ -206,3 +206,106 @@ rules:
 		t.Errorf("expected an active transition after the first run's events, got %d total events", len(events))
 	}
 }
+
+// runSeedFixture sets up the minimal git repo + workspace + template + task
+// TestRunStageTimeout* need to drive cmdRun to completion — a single
+// command-type stage, so no agent provider is actually invoked and the run
+// finishes fast regardless of stage timeout.
+func runSeedFixture(t *testing.T, client *dataclient.Client, ctx context.Context) (ws string, sess contracts.Session) {
+	t.Helper()
+	ws = t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "Makefile"), []byte("test:\n\t@true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", "."},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "add", "."},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = ws
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	sess = contracts.Session{Name: "stage-timeout rehearsal"}
+	if err := client.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &contracts.Template{Name: "stage-timeout-check", Source: "name: stage-timeout-check\nstages:\n  - name: verify\n    command: make test\n"}
+	if err := client.CreateTemplate(ctx, tpl); err != nil {
+		t.Fatal(err)
+	}
+	task := &contracts.Task{SessionID: sess.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"}
+	if err := client.CreateTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	return ws, sess
+}
+
+// TestRunStageTimeoutDefaultsFromStoredConfig is the CLI-side half of the
+// UI/CLI stage-timeout divergence fix: an unflagged `mads run` must pick up
+// PipelineStageTimeoutMinutes from the stored config (the same config
+// services/pipeline/main.go's run() reads), not a hardcoded 30m literal —
+// otherwise the CLI and UI launch paths could silently drift again the
+// moment someone changes the setting.
+func TestRunStageTimeoutDefaultsFromStoredConfig(t *testing.T) {
+	base := datatest.Start(t)
+	client := dataclient.New(base, "user")
+	ctx := context.Background()
+
+	cfg, err := client.Config(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PipelineStageTimeoutMinutes = 7
+	if err := client.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, sess := runSeedFixture(t, client, ctx)
+
+	var out bytes.Buffer
+	if err := cmdRun([]string{
+		"-data", base, "-session", sess.ID, "-workspace", ws,
+		"-template", "stage-timeout-check", "-provider", "fake", "-worktree-root", t.TempDir(),
+	}, &out); err != nil {
+		t.Fatalf("cmdRun: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "stage-timeout=7m0s") {
+		t.Errorf("run output missing stage-timeout=7m0s (from stored config): %s", out.String())
+	}
+}
+
+// TestRunStageTimeoutFlagOverridesStoredConfig checks -stage-timeout still
+// wins over the stored config default (acceptance: "mads run -stage-timeout
+// 5m still overrides").
+func TestRunStageTimeoutFlagOverridesStoredConfig(t *testing.T) {
+	base := datatest.Start(t)
+	client := dataclient.New(base, "user")
+	ctx := context.Background()
+
+	cfg, err := client.Config(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.PipelineStageTimeoutMinutes = 7
+	if err := client.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, sess := runSeedFixture(t, client, ctx)
+
+	var out bytes.Buffer
+	if err := cmdRun([]string{
+		"-data", base, "-session", sess.ID, "-workspace", ws,
+		"-template", "stage-timeout-check", "-provider", "fake", "-worktree-root", t.TempDir(),
+		"-stage-timeout", "5m",
+	}, &out); err != nil {
+		t.Fatalf("cmdRun: %v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "stage-timeout=5m0s") {
+		t.Errorf("run output missing stage-timeout=5m0s (explicit flag should override stored config): %s", out.String())
+	}
+}

@@ -159,6 +159,26 @@ type Config struct {
 	DefaultModelTier   ModelTier          `json:"default_model_tier"`
 	CostAlertCents     int                `json:"cost_alert_cents,omitempty"`
 
+	// PipelineStageTimeoutMinutes bounds how long a single pipeline stage
+	// (one agent invocation) may run before the engine kills it as stuck
+	// (services/pipeline/engine/engine.go). This used to be two different,
+	// hardcoded numbers depending on launch path: cmd/mads/run.go's CLI
+	// path defaulted to 30m, while services/pipeline/main.go — the
+	// Router-spawned pipeline child that backs every UI-launched run —
+	// never set it at all and silently fell through to the engine's own
+	// internal 10m default. That meant identical templates timed out twice
+	// as fast from the UI as from the CLI, with no setting anywhere to
+	// change either. 0/absent means the default
+	// (DefaultPipelineStageTimeoutMinutes), same absent-means-default
+	// contract as ShadowRetentionDays below, so an install whose stored
+	// config predates this field gets the default rather than a validation
+	// error or a silent 0-minute timeout (which would kill every stage
+	// instantly). The default is 30m, not 10m: a stage timing out too early
+	// silently kills a long-running agent mid-task, which is the bug this
+	// field exists to fix — the safer failure mode is a run that takes
+	// longer than expected, not one that gets truncated.
+	PipelineStageTimeoutMinutes int `json:"pipeline_stage_timeout_minutes"`
+
 	// SynthesisAutoApprove applies every synthesis proposal immediately on
 	// creation, skipping manual review (spec §4's "power-user preference").
 	// Zero value (false) is the correct default: a fresh install reviews
@@ -252,6 +272,11 @@ var RestartRequiredFields = map[string]bool{
 // ShadowRetentionDays is 0/absent.
 const DefaultShadowRetentionDays = 30
 
+// DefaultPipelineStageTimeoutMinutes is applied when PipelineStageTimeoutMinutes
+// is 0/absent — see its doc comment for why 30m (the pre-existing CLI
+// default) was chosen over the engine's lower internal default.
+const DefaultPipelineStageTimeoutMinutes = 30
+
 // DefaultConfig is the config a fresh install starts with, before the
 // first-run wizard runs.
 func DefaultConfig() Config {
@@ -259,6 +284,8 @@ func DefaultConfig() Config {
 		SynthesisMode:      SynthesisLight,
 		AgentSelectionMode: AgentSelectionLight,
 		DefaultModelTier:   ModelTierBalanced,
+
+		PipelineStageTimeoutMinutes: DefaultPipelineStageTimeoutMinutes,
 
 		// TrustLimited, not TrustFull — HANDOFF §2.1: a fresh install
 		// shouldn't default new sessions to unattended full-trust execution.
@@ -325,6 +352,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.ShadowRetentionDays < 0 {
 		v.Add("shadow_retention_days", "must not be negative")
+	}
+	if c.PipelineStageTimeoutMinutes < 0 {
+		v.Add("pipeline_stage_timeout_minutes", "must not be negative")
 	}
 	if c.LogRetentionDays < 1 {
 		v.Add("log_retention_days", "must be at least 1")

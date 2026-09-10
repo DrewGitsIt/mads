@@ -68,6 +68,41 @@ func TestConfigGetBackfillsMissingStreamSpeed(t *testing.T) {
 	}
 }
 
+// TestConfigGetBackfillsMissingPipelineStageTimeout is the same "predates
+// the field" scenario as TestConfigGetBackfillsMissingStreamSpeed, for
+// PipelineStageTimeoutMinutes: an install whose stored config predates the
+// field must get DefaultPipelineStageTimeoutMinutes back, not the Go zero
+// value (0), which services/pipeline/main.go and cmd/mads/run.go would
+// otherwise treat as "use the default" anyway — but PUT /config validation
+// must not reject a config missing the key outright either.
+func TestConfigGetBackfillsMissingPipelineStageTimeout(t *testing.T) {
+	l := openMigratedDB(t)
+	cfg := NewConfig(l)
+	ctx := context.Background()
+
+	const preFieldJSON = `{"synthesis_mode":"light","agent_selection_mode":"light",` +
+		`"default_model_tier":"balanced","default_trust":"limited","display_mode":"comfortable",` +
+		`"keybindings":"default","theme":"dark","palette":"clay","concurrency_limit":3,` +
+		`"synthesis_debounce_ms":2000,"log_retention_days":30,` +
+		`"feature_flags":{"multi_repo":false,"linked_sessions":false,"remote_registry":false},` +
+		`"onboarding_complete":false}`
+	if _, err := l.db.ExecContext(ctx, `UPDATE config SET data = ? WHERE id = 1`, preFieldJSON); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := cfg.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PipelineStageTimeoutMinutes != contracts.DefaultPipelineStageTimeoutMinutes {
+		t.Fatalf("PipelineStageTimeoutMinutes = %d, want %d",
+			got.PipelineStageTimeoutMinutes, contracts.DefaultPipelineStageTimeoutMinutes)
+	}
+	if verr := contracts.ValidateConfig(got); !verr.Empty() {
+		t.Fatalf("backfilled config failed validation: %+v", verr.Errors)
+	}
+}
+
 func TestConfigUpdateValidatesEverything(t *testing.T) {
 	l := openMigratedDB(t)
 	cfg := NewConfig(l)

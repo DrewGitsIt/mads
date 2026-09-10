@@ -23,18 +23,26 @@ import (
 // directly) so Run can wrap the launch with session-activation bookkeeping
 // common to both callers.
 type Options struct {
-	Data         *dataclient.Client
-	Provider     provider.Provider
-	SessionID    string
-	Template     *template.Template
-	Cwd          string
-	Concurrency  int
-	Model        string
-	StageTimeout time.Duration
-	Isolated     bool
-	WorktreeRoot string
-	DataURL      string
-	MadsHome     string
+	Data      *dataclient.Client
+	Provider  provider.Provider
+	SessionID string
+	Template  *template.Template
+	// TemplateVersion is the contracts.Template.Version this Template was
+	// parsed from — LoadTemplate's caller reads it off the registry record
+	// LoadTemplate fetched and must pass it through separately, since the
+	// parsed *template.Template (pure YAML structure) has no notion of a
+	// registry revision at all. Zero (pre-versioning rows, or a caller that
+	// skips LoadTemplate) is a valid "unknown" and is simply omitted from
+	// the pipeline.started payload rather than reported as a real version.
+	TemplateVersion int
+	Cwd             string
+	Concurrency     int
+	Model           string
+	StageTimeout    time.Duration
+	Isolated        bool
+	WorktreeRoot    string
+	DataURL         string
+	MadsHome        string
 	// FastModel powers agent:auto stages' generation fallback when no
 	// candidate agent survives selection; nil disables generation, and such
 	// a stage blocks with a clear reason instead (see engine.Config.FastModel).
@@ -57,20 +65,25 @@ type Options struct {
 
 // LoadTemplate fetches a template by registry name/ID and runs the same
 // launch-check validation the template editor and engine.Run both rely on
-// (M9), returning a frozen copy safe to hand to engine.Run.
-func LoadTemplate(ctx context.Context, data *dataclient.Client, name string) (*template.Template, error) {
+// (M9), returning a frozen copy safe to hand to engine.Run, plus the
+// registry record's Version — the caller needs both: the parsed
+// *template.Template to run, and the version to attribute the run's
+// pipeline.started event to the exact revision it launched from (the parsed
+// struct itself carries no version, since it's derived purely from the YAML
+// source).
+func LoadTemplate(ctx context.Context, data *dataclient.Client, name string) (*template.Template, int, error) {
 	rec, err := data.Template(ctx, name)
 	if err != nil {
-		return nil, fmt.Errorf("template %q: %w", name, err)
+		return nil, 0, fmt.Errorf("template %q: %w", name, err)
 	}
 	tpl, verr := template.Check([]byte(rec.Source), func(agentName string) bool {
 		_, err := data.Agent(ctx, agentName)
 		return err == nil
 	})
 	if verr != nil {
-		return nil, fmt.Errorf("template %q fails launch checks: %w", name, verr)
+		return nil, 0, fmt.Errorf("template %q fails launch checks: %w", name, verr)
 	}
-	return tpl, nil
+	return tpl, rec.Version, nil
 }
 
 // Run activates the session for the run's duration, deactivating it again
@@ -103,19 +116,20 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 	}
 
 	return engine.Run(ctx, engine.Config{
-		Data:         opts.Data,
-		Provider:     opts.Provider,
-		SessionID:    opts.SessionID,
-		Template:     opts.Template,
-		Cwd:          opts.Cwd,
-		Concurrency:  opts.Concurrency,
-		Model:        opts.Model,
-		StageTimeout: opts.StageTimeout,
-		Isolated:     opts.Isolated,
-		WorktreeRoot: opts.WorktreeRoot,
-		DataURL:      opts.DataURL,
-		MadsHome:     opts.MadsHome,
-		FastModel:    opts.FastModel,
+		Data:            opts.Data,
+		Provider:        opts.Provider,
+		SessionID:       opts.SessionID,
+		Template:        opts.Template,
+		TemplateVersion: opts.TemplateVersion,
+		Cwd:             opts.Cwd,
+		Concurrency:     opts.Concurrency,
+		Model:           opts.Model,
+		StageTimeout:    opts.StageTimeout,
+		Isolated:        opts.Isolated,
+		WorktreeRoot:    opts.WorktreeRoot,
+		DataURL:         opts.DataURL,
+		MadsHome:        opts.MadsHome,
+		FastModel:       opts.FastModel,
 	})
 }
 

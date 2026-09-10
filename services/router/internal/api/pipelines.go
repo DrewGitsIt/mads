@@ -53,7 +53,7 @@ func (s *server) handleStartPipeline(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "workspace " + ws.Name + " has no primary repo configured"})
 		return
 	}
-	if _, err := pipelinerun.LoadTemplate(ctx, s.data, body.TemplateID); err != nil {
+	if _, _, err := pipelinerun.LoadTemplate(ctx, s.data, body.TemplateID); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

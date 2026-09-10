@@ -77,6 +77,24 @@ func TestResolveAgentEnv_IsolatedSelectsBoundCredentialsFromParentEnv(t *testing
 	}
 }
 
+func TestResolveStageTimeout_DefaultsWhenAbsentOrZero(t *testing.T) {
+	for _, minutes := range []int{0, -1} {
+		got := resolveStageTimeout(contracts.Config{PipelineStageTimeoutMinutes: minutes})
+		want := time.Duration(contracts.DefaultPipelineStageTimeoutMinutes) * time.Minute
+		if got != want {
+			t.Fatalf("PipelineStageTimeoutMinutes=%d: resolveStageTimeout = %v, want %v", minutes, got, want)
+		}
+	}
+}
+
+func TestResolveStageTimeout_HonorsConfiguredValue(t *testing.T) {
+	got := resolveStageTimeout(contracts.Config{PipelineStageTimeoutMinutes: 5})
+	want := 5 * time.Minute
+	if got != want {
+		t.Fatalf("resolveStageTimeout = %v, want %v", got, want)
+	}
+}
+
 func TestHealth(t *testing.T) {
 	srv := httptest.NewServer(newMux())
 	defer srv.Close()

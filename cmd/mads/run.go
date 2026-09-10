@@ -42,18 +42,47 @@ func cmdRun(args []string, out io.Writer) error {
 	kiroArgs := fs.String("kiro-args", "--trust-all-tools",
 		"extra args for every kiro-cli invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
 	fakeScenario := fs.String("fake-scenario", "", "scenario YAML for -provider fake (rehearsal runs)")
-	stageTimeout := fs.Duration("stage-timeout", 30*time.Minute, "per-stage timeout")
+	// The flag default here is only a last-resort fallback (Data Service
+	// unreachable before we can load the real default below) — it is not
+	// what an unflagged `mads run` actually gets. That comes from the
+	// stored config so this CLI path agrees with the Router-spawned
+	// pipeline child (services/pipeline/main.go) instead of the two
+	// silently drifting, which was the bug: this flag's old hardcoded 30m
+	// default vs. the child's fallthrough to the engine's lower 10m
+	// default for the exact same template.
+	stageTimeout := fs.Duration("stage-timeout", contracts.DefaultPipelineStageTimeoutMinutes*time.Minute, "per-stage timeout")
 	_ = fs.Parse(args)
 	if *session == "" {
 		return fmt.Errorf("run: -session is required")
 	}
+	stageTimeoutSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "stage-timeout" {
+			stageTimeoutSet = true
+		}
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	client := dataclient.New(*data, "pipeline")
 
+	// An unflagged run defers to the stored config so it agrees with the
+	// UI launch path (services/pipeline/main.go reads the same field from
+	// the same config row). -stage-timeout still overrides explicitly, and
+	// a config-load failure here falls back to the flag default set above
+	// rather than failing the whole run over a secondary lookup.
+	if !stageTimeoutSet {
+		if cfg, err := client.Config(ctx); err == nil {
+			minutes := cfg.PipelineStageTimeoutMinutes
+			if minutes <= 0 {
+				minutes = contracts.DefaultPipelineStageTimeoutMinutes
+			}
+			*stageTimeout = time.Duration(minutes) * time.Minute
+		}
+	}
+
 	// Frozen template copy + the same validation the editor runs (M9).
-	tpl, err := pipelinerun.LoadTemplate(ctx, client, *tplName)
+	tpl, tplVersion, err := pipelinerun.LoadTemplate(ctx, client, *tplName)
 	if err != nil {
 		return err
 	}
@@ -113,12 +142,12 @@ func cmdRun(args []string, out io.Writer) error {
 		tail(tailCtx, client, *session, out, completed)
 	}()
 
-	_, _ = fmt.Fprintf(out, "run: session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d\n\n",
-		*session, tpl.Name, *providerName, ws, *isolated, *concurrency)
+	_, _ = fmt.Fprintf(out, "run: session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d stage-timeout=%s\n\n",
+		*session, tpl.Name, *providerName, ws, *isolated, *concurrency, *stageTimeout)
 
 	sum, err := pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: *session,
-		Template: tpl, Cwd: ws, Concurrency: *concurrency,
+		Template: tpl, TemplateVersion: tplVersion, Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		Isolated: *isolated, WorktreeRoot: root, DataURL: *data,
 		MadsHome: madsHome,

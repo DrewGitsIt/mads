@@ -128,6 +128,15 @@ type Template struct {
 	System      bool      `json:"system,omitempty"` // ships with mads; editable, not deletable
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+	// Version increases by one on every save: 1 for a newly created
+	// template, bumped again on each subsequent update. It exists purely as
+	// an audit trail — attributing a historical pipeline run (spec §6's
+	// pipeline.started event) to the exact template revision it actually
+	// executed — not as a correctness mechanism: in-flight runs already hold
+	// their own frozen, parsed copy of the template (services/pipeline/engine
+	// reads it once at launch), so a save can never disturb them regardless
+	// of what Version says.
+	Version int `json:"version"`
 }
 
 // WorkspaceRepo is one repository a workspace declares (spec §17). Exactly

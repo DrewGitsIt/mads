@@ -13,26 +13,70 @@ func TestDefaultConfigValid(t *testing.T) {
 	}
 }
 
+// TestDefaultConfigStageTimeoutMatchesPreExistingCLIDefault pins the fix for
+// the UI/CLI stage-timeout divergence: cmd/mads/run.go's -stage-timeout used
+// to default to 30m while services/pipeline/main.go (the Router-spawned
+// pipeline child behind every UI-launched run) never set StageTimeout at
+// all and fell through to the engine's own 10m default. Both launch paths
+// now read PipelineStageTimeoutMinutes from the same config, so this pins
+// the default at 30 — the safer, more permissive of the two old values —
+// rather than 10.
+func TestDefaultConfigStageTimeoutMatchesPreExistingCLIDefault(t *testing.T) {
+	c := DefaultConfig()
+	if c.PipelineStageTimeoutMinutes != 30 {
+		t.Fatalf("DefaultConfig().PipelineStageTimeoutMinutes = %d, want 30", c.PipelineStageTimeoutMinutes)
+	}
+	if c.PipelineStageTimeoutMinutes != DefaultPipelineStageTimeoutMinutes {
+		t.Fatalf("DefaultConfig().PipelineStageTimeoutMinutes = %d, want DefaultPipelineStageTimeoutMinutes = %d",
+			c.PipelineStageTimeoutMinutes, DefaultPipelineStageTimeoutMinutes)
+	}
+}
+
+// TestConfigRoundTripsPipelineStageTimeout guards the JSON wire shape
+// (json tag, no accidental omitempty) since services/data's config store
+// persists Config as an opaque JSON blob (services/data/internal/store/config.go).
+func TestConfigRoundTripsPipelineStageTimeout(t *testing.T) {
+	c := DefaultConfig()
+	c.PipelineStageTimeoutMinutes = 45
+
+	data, err := json.Marshal(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"pipeline_stage_timeout_minutes":45`) {
+		t.Fatalf("marshaled config missing pipeline_stage_timeout_minutes:45: %s", data)
+	}
+
+	var got Config
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.PipelineStageTimeoutMinutes != 45 {
+		t.Fatalf("PipelineStageTimeoutMinutes round-tripped as %d, want 45", got.PipelineStageTimeoutMinutes)
+	}
+}
+
 func TestValidateConfigReportsEveryProblem(t *testing.T) {
 	c := Config{
-		SynthesisMode:       "bogus",
-		AgentSelectionMode:  "bogus",
-		DefaultModelTier:    "bogus",
-		CostAlertCents:      -1,
-		DefaultTrust:        "bogus",
-		Theme:               "bogus",
-		Palette:             "bogus",
-		ConcurrencyLimit:    0,
-		SynthesisDebounceMS: -1,
-		LogRetentionDays:    0,
-		UpdateFeedURL:       "not-a-url",
-		EnvMode:             "bogus",
+		SynthesisMode:               "bogus",
+		AgentSelectionMode:          "bogus",
+		DefaultModelTier:            "bogus",
+		CostAlertCents:              -1,
+		PipelineStageTimeoutMinutes: -1,
+		DefaultTrust:                "bogus",
+		Theme:                       "bogus",
+		Palette:                     "bogus",
+		ConcurrencyLimit:            0,
+		SynthesisDebounceMS:         -1,
+		LogRetentionDays:            0,
+		UpdateFeedURL:               "not-a-url",
+		EnvMode:                     "bogus",
 	}
 	verr := ValidateConfig(&c)
 	if verr.Empty() {
 		t.Fatal("expected validation failures")
 	}
-	want := 12
+	want := 13
 	if len(verr.Errors) != want {
 		t.Fatalf("got %d errors, want %d (report every problem at once): %+v", len(verr.Errors), want, verr.Errors)
 	}

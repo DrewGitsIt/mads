@@ -109,6 +109,23 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 	return mode, cfg.EnvPassthrough, agentenv.Select(parentEnv, cfg.CredentialBindings)
 }
 
+// resolveStageTimeout turns the stored config's PipelineStageTimeoutMinutes
+// into the duration pipelinerun.Options needs. 0/absent (pre-field installs,
+// or an explicit 0 PUT) both mean "use the default" — same contract
+// cfg.ShadowRetentionDays uses (services/data/main.go). This is the fix for
+// the UI/CLI stage-timeout divergence: this binary is the Router-spawned
+// pipeline child behind every UI-launched run, and it used to build
+// pipelinerun.Options without a StageTimeout at all, silently falling
+// through to the engine's own lower internal default (10m) while
+// cmd/mads/run.go's CLI path defaulted to 30m for the exact same template.
+func resolveStageTimeout(cfg contracts.Config) time.Duration {
+	minutes := cfg.PipelineStageTimeoutMinutes
+	if minutes <= 0 {
+		minutes = contracts.DefaultPipelineStageTimeoutMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 // run resolves the session's workspace, template, provider, and concurrency,
 // then hands off to pipelinerun.Run — the child-mode equivalent of
 // cmd/mads/run.go's own resolution chain.
@@ -131,7 +148,7 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		return fmt.Errorf("workspace %s has no primary repo configured", ws.Name)
 	}
 
-	tpl, err := pipelinerun.LoadTemplate(ctx, client, tplName)
+	tpl, tplVersion, err := pipelinerun.LoadTemplate(ctx, client, tplName)
 	if err != nil {
 		return err
 	}
@@ -164,13 +181,16 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		worktreeRoot = filepath.Join(madsHome, "worktrees", sessionID)
 	}
 
-	log.Printf("pipeline: run=%s session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d",
-		runID, sessionID, tpl.Name, providerName, repo, isolated, cfg.ConcurrencyLimit)
+	stageTimeout := resolveStageTimeout(cfg)
+
+	log.Printf("pipeline: run=%s session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d stage_timeout=%s",
+		runID, sessionID, tpl.Name, providerName, repo, isolated, cfg.ConcurrencyLimit, stageTimeout)
 
 	_, err = pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: sessionID,
-		Template: tpl, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
-		Model: sess.Model, Isolated: isolated, WorktreeRoot: worktreeRoot,
+		Template: tpl, TemplateVersion: tplVersion, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
+		Model: sess.Model, StageTimeout: stageTimeout,
+		Isolated: isolated, WorktreeRoot: worktreeRoot,
 		DataURL: dataURL, MadsHome: madsHome,
 		// This binary is only ever spawned by the Router (see package doc
 		// above) — its Supervisor owns deactivating sessionID on exit
