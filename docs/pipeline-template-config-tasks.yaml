@@ -1,0 +1,294 @@
+# Pipeline template configuration: retry, timeouts, strict grammar
+# (docs/PIPELINE-TEMPLATE-CONFIG-DESIGN.md) — seed with:
+#   SES=$(bin/mads new-session -name "pipeline template config")
+#   bin/mads seed -session $SES -file docs/pipeline-template-config-tasks.yaml
+#
+# Design doc: docs/PIPELINE-TEMPLATE-CONFIG-DESIGN.md — authoritative for the
+# retry-vs-loop_back semantics, the four validation-discovery surfaces, and
+# the two standing owner decisions (strictness is in; a retry NEVER resets the
+# worktree). Spec reconciliation already landed: REBUILD-SPEC.md §6 gained an
+# "Implemented Surface (v1 conformance)" subsection and its aspirational YAML
+# example is now marked as such; MADS-UX.md §3.5 no longer claims the editor
+# carries "the full §6 grammar".
+#
+# Chaining: tasks 1-4 are CHAINED — they all edit pkg/template/template.go
+# and/or services/pipeline/engine/engine.go, so serialized merges avoid a
+# conflict storm. Task 5 (discovery surfaces) and task 6 (editor fields) are
+# a parallel track once the grammar types exist; they touch disjoint files
+# (services/data, cmd/mads, ui/src).
+
+tasks:
+  - title: "Engine: a real per-stage attempt counter"
+    labels: [pipeline, bug]
+    description: >
+      engine.go:1208 computes a stage's attempt number as
+      e.loops[task.ID+"|"+st.Name]+1, but e.loops is keyed on the stage that
+      FAILED (engine.go:655), not the stage looped back to. A build failure
+      looping to executor increments loops["t|build"], so executor's attempt
+      stays 1 forever: the second run O_APPENDs into executor-attempt-1.log
+      and its usage.recorded / stage.attempt_ref events are attributed to
+      attempt 1. The UI's attempt badge (TaskCard.tsx:18) and the drill-in
+      log picker both undercount.
+
+      Add e.attempts map[string]int keyed task|stage, incremented once per
+      stage ENTRY (loop-back re-entries included), and use it for
+      openOutputLog, recordUsage and recordRef. Keep e.loops exactly as it is
+      for loop_back accounting. Two separate meters, deliberately — merging
+      them would make max_loops consume retry budget once retry lands.
+
+      Land this first: it is a standalone bug fix, and the retry work builds
+      directly on the counter.
+    acceptance_criteria: |
+      1. A build -> executor loop-back writes executor-attempt-2.log; attempt 1's
+         file is not appended to.
+      2. usage.recorded and stage.attempt_ref for the second executor run carry
+         attempt=2.
+      3. e.loops semantics are unchanged: max_loops still caps at the same count.
+      4. Guarded by a test that fails against the current implementation.
+
+  - title: "Grammar: Duration type, defaults block, and per-stage timeout"
+    labels: [pipeline, template]
+    description: >
+      Add to pkg/template: a named Duration type (UnmarshalYAML via
+      time.ParseDuration so "15m" works and a bad value is a ValidationError
+      on stages[i].timeout rather than a YAML type error; MarshalYAML back to
+      the string form so the editor's YAML round-trip preserves "15m" instead
+      of rewriting it to 900000000000). Then Template.Defaults *Defaults
+      {Timeout, Model, Retry} and Stage.Timeout.
+
+      Validation: timeout parseable and > 0; retry.max >= 0 capped at 10;
+      retry.when in {error, always, never}; retry rejected on the merge stage.
+      Deliberately NO different_agent field (owner decision: out of scope this
+      pass, and accept-and-ignore is the exact bug the strictness task kills).
+
+      pkg/template ONLY — no engine wiring. Both the Retry type and
+      Defaults.Model are defined here but honored by the next two tasks, which
+      is why this one touches no engine file and can run parallel to task 1.
+    acceptance_criteria: |
+      1. "timeout: 15m" parses; "timeout: banana" and "timeout: 0" report as
+         field errors on the right stage index, alongside any other errors.
+      2. A template with a defaults: block round-trips through
+         Parse -> Marshal with "15m" still spelled "15m".
+      3. Existing templates with no defaults:/timeout: parse and validate
+         unchanged.
+
+  - title: "Engine: per-stage timeout resolution and config wiring"
+    depends_on: ["Grammar: Duration type, defaults block, and per-stage timeout"]
+    labels: [pipeline, engine, bug]
+    description: >
+      runStage (engine.go:971) reads one process-global e.cfg.StageTimeout.
+      Resolve per stage instead: st.Timeout -> tpl.Defaults.Timeout ->
+      cfg.StageTimeout -> engine default (10m). The wall-clock watchdog
+      (stageTimeoutPoll, for suspend survival) is unchanged — it just reads
+      the resolved value.
+
+      Also fix the live split this exposes: cmd/mads/run.go:45 defaults
+      -stage-timeout to 30m, but services/pipeline/main.go:170 — the
+      Router-spawned child, i.e. EVERY UI-launched run — never sets
+      StageTimeout at all, so it silently falls to the engine's 10m default.
+      Add PipelineStageTimeoutMinutes to contracts.Config (§3.7 Pipeline
+      panel) with a store migration, surface it in Settings, and have both
+      launch paths read the same value.
+    acceptance_criteria: |
+      1. A stage with timeout: 1s times out while its siblings under a 10m
+         default do not.
+      2. A UI-launched run and a CLI run with no flags get the SAME effective
+         stage timeout.
+      3. Settings round-trips the new config field; existing installs get the
+         documented default rather than a validation failure on PUT /config.
+
+  - title: "Engine + grammar: per-stage retry policy"
+    depends_on: ["Engine: per-stage timeout resolution and config wiring"]
+    labels: [pipeline, engine, template]
+    description: >
+      Retry re-runs THIS stage for a transient failure; loop_back re-runs an
+      EARLIER stage for a substantive rejection. They compose one way only:
+      run -> fail -> retry (up to retry.max) -> still failing -> consult
+      on_fail -> loop_back or block. Nothing about loop_back accounting,
+      on_loop guards, or then: block changes.
+
+      retry.when keys off a distinction the engine already makes but does not
+      expose. In runAgent an error from Provider.OneShot (crash, transport,
+      timeout cancelling sctx) is categorically different from the
+      "STAGE: fail" marker in the agent's own final line — a considered
+      verdict, which a reviewer will simply repeat if retried. So
+      when: error (the default) retries only the former; when: always also
+      retries verdicts and non-zero command exits; when: never disables.
+      Implement by returning the two cases distinguishably — add a
+      stageVerdictError sentinel, exactly parallel to the existing
+      gateFailure type, wrapping the verdict paths in runAgent and runCommand.
+
+      Fold the retry loop into the EXISTING runStageRateLimited attempt loop
+      rather than nesting a second loop around it. Critically: a rate-limit
+      pause must NOT count against retry.max — it has its own cap and its own
+      inform-and-wait semantics (§11.9).
+
+      A retry NEVER resets the worktree (owner decision): the failing stage
+      may be far down the pipeline and a reset would discard everything the
+      earlier stages legitimately produced. The retried stage re-enters the
+      same worktree with the previous attempt's partial work in place — same
+      as loop_back today. taskPrompt should say so, since the agent is now
+      looking at a tree it half-edited.
+
+      New event stage.retried {stage, attempt, max, reason}: add to
+      pkg/contracts/event.go, the type registry, and regenerate the golden.
+      Validation: retry.max >= 0 capped at 10 (a typo'd max: 1000 must not
+      burn a day of tokens); retry.when in {error, always, never};
+      retry rejected on the merge stage, because landAttempt holds the FIFO
+      land queue AND the cross-process workspace lock and already has its own
+      bounded retry (maxLandRetries) — a template retry wrapped around it
+      would hold both locks across repeated full rebase+gate cycles.
+    acceptance_criteria: |
+      1. A stage whose provider one-shot errors twice under retry {max: 2}
+         succeeds on the third attempt without consuming a loop_back.
+      2. A stage failing via the STAGE: fail marker is NOT retried under the
+         default when: error, and IS retried under when: always.
+      3. Rate-limit pauses do not decrement retry budget.
+      4. Retry exhaustion falls through to on_fail exactly as an unretried
+         failure does today (loop_back if set, else block).
+      5. retry: on the merge stage is a validation error.
+      6. stage.retried appears in the event registry golden.
+
+  - title: "Grammar: reject unknown keys"
+    depends_on: ["Engine + grammar: per-stage retry policy"]
+    labels: [pipeline, template, breaking]
+    description: >
+      Parse uses yaml.Unmarshal with no KnownFields, so on_failure:, timeout:,
+      retry:, or a misspelled loop_back all validate green and vanish. This is
+      what makes every other gap dangerous — users believe they configured
+      something. Switch to yaml.NewDecoder + KnownFields(true) + Decode.
+
+      GOTCHA: Decode returns io.EOF on empty input where Unmarshal succeeded
+      with a zero Template. Treat io.EOF as an empty template so it keeps
+      failing with the friendly "name required" / "at least one stage
+      required" pair rather than an opaque parse error —
+      POST /templates/validate with {"source":""} is reachable from the editor.
+
+      yaml.v3 returns a *yaml.TypeError whose Errors slice carries every
+      unknown field at once (good — matches ValidationError's
+      all-errors-together contract), but the messages are line-numbered, not
+      field-pathed. Emit them as source-field errors with the line preserved,
+      plus a did-you-mean against the known field set:
+      `source: line 7: unknown field "retires" — did you mean "retry"?`.
+      Do NOT build a yaml.Node path mapper for v1: an unknown key has no
+      widget in visual mode anyway, so sending the user to YAML mode where the
+      line number is directly actionable is correct behavior, not a compromise.
+
+      Land this AFTER retry and timeout so the did-you-mean table can name the
+      fields those tasks just added.
+    acceptance_criteria: |
+      1. Every unknown key in a template reports in ONE response, each with its
+         line number.
+      2. A misspelling within edit distance 2 of a real field gets a suggestion.
+      3. Empty source still yields the two friendly required-field errors.
+      4. The seeded default-implementation template still validates.
+
+  - title: "Surface invalid stored templates to the user"
+    depends_on: ["Grammar: reject unknown keys"]
+    labels: [pipeline, template, ui]
+    description: >
+      Strictness without a discovery path just moves the failure from save
+      time to launch time. handleCreate/handleUpdate already validate, so no
+      NEW invalid template can be stored once strictness lands — the at-risk
+      set is exactly the templates saved under the old lax grammar. A bounded,
+      one-time upgrade problem, which is why four modest surfaces suffice
+      rather than a validation subsystem. In rough priority order:
+
+      (a) Validate on editor open. TemplateEditor only calls validate() from
+      the Validate button and from Save; add a mount-time effect on the
+      existing hook. Cheapest fix, and it is where a user who clicks a badged
+      template lands.
+
+      (b) POST /templates/validate-all returning [{id, name, valid, errors}],
+      called once by TemplatesShelf on mount to badge broken templates.
+      Deliberately NOT a valid field on GET /templates: handleList returns a
+      bare []contracts.Template, so adding one means either polluting the
+      contract (validity is not a property of the record) or wrapping the
+      response — a breaking change for the session-start template picker and
+      workspace binding, which also should not pay for per-stage agent
+      registry lookups on a cheap read.
+
+      (c) `mads template validate [name...]`, no args = all. The pipeline is
+      CLI-launchable so the path cannot be UI-only; this is also what makes
+      the upgrade instruction writable and gives CI a hook. Fits the existing
+      cmd/mads/main.go dispatch alongside run/seed/tasks.
+
+      (d) A log-only sweep after store.Bootstrap: validate every stored
+      template, log one warning per invalid one. Must not block startup.
+
+      Explicitly NOT auto-repair: stripping unknown keys during a migration is
+      strictly worse than the bug being fixed, since silently dropping a key
+      the user meant IS the current failure mode. And explicitly not folded
+      into pkg/preflight, which is environment health (git, node-pty, provider
+      binaries) — a template typo is a different category.
+    acceptance_criteria: |
+      1. Opening a template with an unknown key shows its errors with no click.
+      2. The shelf badges an invalid template without opening it.
+      3. `mads template validate` exits non-zero and names the offending
+         template + line when any stored template is invalid.
+      4. Data Service startup logs a warning per invalid template and serves
+         normally.
+
+  - title: "Editor: retry and timeout fields, and stop dropping top-level keys"
+    depends_on: ["Grammar: Duration type, defaults block, and per-stage timeout"]
+    labels: [pipeline, ui]
+    description: >
+      MUST FIX FIRST, and easy to miss: templateSync.parse returns
+      { name: doc.name ?? "", stages: doc.stages ?? [] }, discarding every
+      other top-level key — and TemplateEditor round-trips YAML -> object ->
+      YAML on EVERY visual edit (applyParsedChange -> serialize). A defaults:
+      block would be deleted the instant the user touched any field. Fix to
+      {...doc, name, stages}. Stage-level keys already survive, so this bites
+      defaults: specifically.
+
+      Then: TemplateStage in ui/src/router/types.ts gains timeout?: string and
+      retry?: {...}; ParsedTemplate gains defaults?. StageCard gets a "Retry"
+      <details> block mirroring the existing "On fail" one, plus a timeout
+      input. The field-error plumbing already works by prefix stripping —
+      errorFor(errors, "retry.max") needs no new machinery.
+    acceptance_criteria: |
+      1. A template with defaults: survives a visual-mode edit to an unrelated
+         stage field — guarded by a test, since this is a silent data-loss bug.
+      2. Retry and timeout are editable in visual mode and their validation
+         errors render on the right stage card.
+      3. Existing templates with neither field render unchanged.
+
+  - title: "Template versioning: stamp saves, record per run, surface in the UX"
+    depends_on: ["Engine: a real per-stage attempt counter"]
+    labels: [pipeline, template, ui]
+    description: >
+      W1.5 promised "saves version-stamped so in-flight runs keep their frozen
+      copy (§6)" and it was never built: there is no version column in
+      0006_templates.up.sql and no Version field on contracts.Template. The
+      BEHAVIOUR was achieved another way — the engine holds a parsed in-memory
+      copy, so saves genuinely do not disturb in-flight runs — so this is not a
+      correctness fix. What is missing is the audit trail: nothing records
+      which template revision a historical run executed, which W5.7's pipeline
+      run-history drill-in needs.
+
+      contracts.Template gains Version int (1 for existing rows). Bump it in
+      services/data/internal/api/templates.go handleUpdate, right where it
+      already does `t.ID, t.System = cur.ID, cur.System` — add
+      `t.Version = cur.Version + 1`. Do NOT put the bump in
+      Registry[T].Update (registries.go:249): that generic is shared with
+      agents, capabilities and workspaces, none of which want it. The stored
+      `data` blob is JSON of contracts.Template, so the field persists with no
+      column change; add a migration only if you want it queryable, and say so
+      in the commit if you skip it.
+
+      Record it per run on pipeline.started (engine.go:297), which already
+      carries {"template", "concurrency"} — add "template_version". That event's
+      Seq is e.runSeq, already the run's stable identity, so run history joins
+      on it with nothing new.
+
+      UX (owner asked for this explicitly): show the version on the
+      TemplatesShelf card, in the TemplateEditor header, and on the pipeline
+      run header so a run can be traced to the revision it executed.
+    acceptance_criteria: |
+      1. A fresh install reports version 1 for the seeded default; editing it
+         twice reports 3.
+      2. pipeline.started carries template_version matching the template at
+         launch, and a save mid-run does not change the in-flight run's stamp.
+      3. Agents/capabilities/workspaces are unaffected — no version bumping
+         leaked into the shared registry path.
+      4. Version is visible in the shelf, the editor, and the run header.

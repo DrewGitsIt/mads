@@ -563,6 +563,13 @@ Not all stages are LLM calls. A stage has a `type` that determines its behavior:
 
 ### Stage Definition (YAML)
 
+> **Aspirational — not the implemented grammar.** The example below predates
+> the build and uses seven key spellings that `pkg/template` does not accept
+> (`pipeline:` wrapper, `id`, `type`, `run`, `on_failure`, `reads`,
+> `produces`). Do not copy it into a real template. The grammar that actually
+> validates is in [Implemented Surface (v1 conformance)](#implemented-surface-v1-conformance)
+> at the end of this section.
+
 Each stage in a template specifies:
 
 ```yaml
@@ -725,6 +732,60 @@ Synthesis (Section 4) only runs in human-agent interactive sessions. Pipeline ag
 ### Isolation
 
 Each agent works in its own environment. Parallel tasks must not interfere with each other's file state. The isolation mechanism is part of the sandbox/environment design (cross-cutting concern with Sections 1, 5, and 15).
+
+### Implemented Surface (v1 conformance)
+
+This section is normative for what exists today; everything else in §6 is the
+roadmap it was scoped down from. The narrowing was deliberate (MADS-UX §3.5,
+MADS-WORK-ITEMS W1.5/W3.1/W3.2) but was never recorded here, so §6 read as a
+contract it did not keep. Validation lives in `pkg/template` and is shared
+verbatim by the editor's Validate, the Data Service's create/update, and the
+Pipeline Engine at launch — if it isn't in this grammar, it isn't enforced
+anywhere.
+
+```yaml
+name: default-implementation          # required
+stages:                               # required, >= 1, linear
+  - name: executor                    # required, unique
+    agent: executor                   # agent XOR command; "auto" selects (§9)
+    command: make build && make test  # shell, via sh -c
+    model: claude-sonnet-5            # agent stages only; freeform, unvalidated
+    when: '!contains(labels, "trivial")'
+    on_fail:
+      loop_back: architect            # must name an EARLIER stage
+      max_loops: 2                    # >= 1 when loop_back is set
+      then: block                     # "block" is the only accepted value
+```
+
+`when:` accepts exactly four forms: `contains(labels, "x")`, `on_loop`, and
+the `!` negation of either. `on_loop` is true only on a `loop_back` re-entry.
+
+| §6 feature | Status |
+|---|---|
+| `agent` / `command` stages, `agent: auto` | Shipped |
+| `when:` guards | Shipped, but only the four forms above — not "any evaluable expression" |
+| `on_failure: {goto, max_loops}` feedback loops | Shipped, renamed `on_fail: {loop_back, max_loops}` |
+| Circuit breaker → blocked with accumulated feedback | Shipped |
+| Worktree isolation, merge/verify, land queue | Shipped (W3.2), plus a post-rebase gate §6 does not describe |
+| Live work queue, concurrency limit, lifecycle | Shipped |
+| Per-stage `model:` | Shipped — an addition beyond §6, not in it |
+| `id:`, `type:`, `run:` | Renamed / dropped: `name:`, and agent-vs-command is inferred from which field is set |
+| `gate` stage type | **Deferred.** Gate-like behavior exists only as the hardcoded post-rebase `verify` stage |
+| `retry: {max, when}`, per-stage `timeout:` | **Shipped.** `retry: {max (0-10), when: error\|always\|never, backoff}`; `when: error` (the default) retries infrastructure failures but not a considered verdict. Rejected on the merge stage — the land queue owns that retry. Per-stage `timeout:` resolves stage → `defaults:` → global config → 10m |
+| `defaults:` block | **Shipped** — `timeout`, `model`, `retry` |
+| `reads:` / `produces:` | **Deferred.** Stages exchange context only via the task's handoffs and the previous failure's output |
+| Pipeline Data Contract namespace, `{{}}` interpolation | **Deferred.** No `stages.<id>.<key>`, no `file_changes`, no interpolation |
+| `version: 1` / version-stamped saves | **Shipped** (closes W1.5's unbuilt promise). `contracts.Template.Version` bumps per save; `pipeline.started` carries `template_version` so a run is attributable to the revision it ran. In-flight runs were already safe via the engine's frozen in-memory copy — this adds the audit trail, not the protection |
+| "Retry with a different agent" (Requirements #5) | **Deferred.** Deliberately absent from the grammar rather than accepted-and-ignored: writing `different_agent` is a validation error, not a silent no-op |
+| "Agent timeout — interrupt if no progress" | Partial: the stage timeout is total elapsed, not idle-progress |
+
+Unknown keys are **rejected**, with the line number and a did-you-mean
+suggestion seeded from the aspirational spellings above (`on_failure` →
+`on_fail`, `run` → `command`, `id` → `name`, `goto` → `loop_back`, ...), all
+reported together. Templates saved under the older lax grammar are surfaced
+by `POST /templates/validate-all` (badged in the Library shelf), by
+`mads template validate`, and by a log-only sweep at Data Service startup.
+Design notes: `docs/PIPELINE-TEMPLATE-CONFIG-DESIGN.md`.
 
 ### Open Questions
 
