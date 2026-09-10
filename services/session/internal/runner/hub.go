@@ -13,9 +13,12 @@ import (
 const ptyReplayCap = 4 << 20 // 4 MiB
 
 // hub fans one provider event stream out to any number of subscribers
-// (spec §15's ephemeral data-plane feed). Slow subscribers are dropped
-// from, not allowed to block, the broadcast — the same non-blocking
-// contract providers/fake uses for its own event delivery.
+// (spec §15's ephemeral data-plane feed). Broadcast never blocks on a slow
+// subscriber: PTY frames overflow silently (the ring buffer replays them on
+// the next attach), while a chat-frame overflow closes that subscription —
+// a silent chat gap can swallow turn_end and freeze the consumer's pane,
+// whereas a closed stream triggers the client's reconnect-and-refetch
+// recovery path.
 //
 // It also keeps a bounded ring buffer of raw PTY bytes (EventPTYOutput
 // only) so a newly attached terminal stream can replay recent scrollback
@@ -73,7 +76,7 @@ func (h *hub) ptySnapshot() []byte {
 }
 
 func (h *hub) subscribe() (<-chan provider.Event, func()) {
-	ch := make(chan provider.Event, 256)
+	ch := make(chan provider.Event, 1024)
 
 	h.mu.Lock()
 	if h.closed {
@@ -101,7 +104,7 @@ func (h *hub) subscribe() (<-chan provider.Event, func()) {
 // otherwise either land only in the snapshot, only on the channel, or be
 // lost — this makes it exactly one or the other).
 func (h *hub) subscribeWithPTYReplay() (replay []byte, ch <-chan provider.Event, unsubscribe func()) {
-	c := make(chan provider.Event, 256)
+	c := make(chan provider.Event, 1024)
 
 	h.mu.Lock()
 	if h.closed {
@@ -133,6 +136,18 @@ func (h *hub) broadcast(ev provider.Event) {
 		select {
 		case ch <- ev:
 		default:
+			// PTY floods are recoverable: a dropped frame's bytes are in the
+			// ring buffer and the next attach replays them.
+			if ev.Kind == provider.EventPTYOutput {
+				continue
+			}
+			// A chat frame has no replay — silently skipping it froze panes
+			// mid-turn when the end-of-turn burst overran a slow consumer and
+			// took turn_end with it. Kill the subscription instead: the SSE
+			// client's auto-reconnect refetches the transcript and resumes
+			// cleanly, which is honest where a gap-with-no-signal is not.
+			delete(h.subs, ch)
+			close(ch)
 		}
 	}
 }

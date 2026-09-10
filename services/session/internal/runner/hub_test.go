@@ -66,3 +66,51 @@ func TestHubPTYReplayEmptyForChatEvents(t *testing.T) {
 		t.Fatalf("replay = %q, want nil for a chat-only session", replay)
 	}
 }
+
+// TestHubChatOverflowClosesSubscriber: a slow consumer whose buffer fills
+// must not silently lose chat frames (a swallowed turn_end froze the
+// conversation pane until remount — observed live 2026-09-09). The hub
+// closes the subscription instead, which the SSE handler surfaces as a
+// stream end → client reconnect → transcript refetch.
+func TestHubChatOverflowClosesSubscriber(t *testing.T) {
+	h := newHub()
+	ch, unsubscribe := h.subscribe()
+	defer unsubscribe()
+	for i := 0; i < cap(ch)+1; i++ {
+		h.broadcast(provider.Event{Kind: provider.EventText, Text: "x"})
+	}
+	drained := 0
+	for range ch { // closed by the overflowing broadcast
+		drained++
+	}
+	if drained != cap(ch) {
+		t.Errorf("drained %d frames, want the full buffer %d", drained, cap(ch))
+	}
+}
+
+// TestHubPTYOverflowKeepsSubscriber: PTY floods stay silently droppable —
+// the ring buffer replays them on the next attach, so overflow must NOT
+// kill the subscription the way a chat frame does.
+func TestHubPTYOverflowKeepsSubscriber(t *testing.T) {
+	h := newHub()
+	ch, unsubscribe := h.subscribe()
+	defer unsubscribe()
+	for i := 0; i < cap(ch)+100; i++ {
+		h.broadcast(provider.Event{Kind: provider.EventPTYOutput, Text: "y"})
+	}
+	// The subscription survives the flood: the full buffer drains, and the
+	// channel is empty-but-open afterwards. (A chat frame arriving while
+	// still full would close it — that's TestHubChatOverflowClosesSubscriber.)
+	for i := 0; i < cap(ch); i++ {
+		if _, ok := <-ch; !ok {
+			t.Fatal("subscription closed by PTY overflow")
+		}
+	}
+	select {
+	case _, ok := <-ch:
+		if !ok {
+			t.Fatal("subscription closed by PTY overflow")
+		}
+	default: // empty but open — fine
+	}
+}
