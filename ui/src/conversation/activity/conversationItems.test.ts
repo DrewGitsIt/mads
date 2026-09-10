@@ -1,0 +1,224 @@
+import { describe, expect, it } from "vitest";
+import type { Envelope, TranscriptMessage } from "../../router/types";
+import {
+  appendSubagentItem,
+  applyTaskEvent,
+  buildItems,
+  finishRunningTasks,
+  foldHistoryEvents,
+  mergeTranscript,
+  type SourceEntry,
+  type TaskModel,
+} from "./conversationItems";
+
+const msg = (text: string): SourceEntry => ({ type: "message", message: { role: "agent", text } });
+const tool = (name: string, id?: string, input?: unknown): SourceEntry => ({
+  type: "tool",
+  tool: { id, name, input },
+});
+
+describe("buildItems — grouping", () => {
+  it("always groups consecutive tool events, even a single call", () => {
+    const items = buildItems([tool("Read", "t1")]);
+    expect(items).toHaveLength(1);
+    expect(items[0].type).toBe("activity");
+  });
+
+  it("splits groups on prose, keeps runs together", () => {
+    const items = buildItems([
+      msg("investigating"),
+      tool("Grep", "t1"),
+      tool("Read", "t2"),
+      msg("found it"),
+      tool("Bash", "t3"),
+    ]);
+    expect(items.map((i) => i.type)).toEqual(["message", "activity", "message", "activity"]);
+    expect(items[1].type === "activity" && items[1].entries).toHaveLength(2);
+  });
+
+  it("folds thinking entries into the surrounding group", () => {
+    const items = buildItems([
+      tool("Read", "t1"),
+      { type: "thinking", text: "the ledger never distinguishes" },
+      tool("Bash", "t2"),
+    ]);
+    expect(items).toHaveLength(1);
+    expect(items[0].type === "activity" && items[0].entries.map((e) => e.type)).toEqual([
+      "tool",
+      "thinking",
+      "tool",
+    ]);
+  });
+
+  it("keys a group by its first tool id, stable across a live→history re-render", () => {
+    const live = buildItems([tool("Read", "toolu_9")]);
+    const historical = buildItems([msg("hi"), tool("Read", "toolu_9")]);
+    expect(live[0].key).toBe(historical[1].key);
+  });
+});
+
+describe("buildItems — plan widget (T14)", () => {
+  const todos1 = { todos: [{ content: "a", status: "in_progress" }, { content: "b", status: "pending" }] };
+  const todos2 = { todos: [{ content: "a", status: "completed" }, { content: "b", status: "in_progress" }] };
+
+  it("renders TodoWrite as a plan item, not an activity row", () => {
+    const items = buildItems([tool("TodoWrite", "t1", todos1)]);
+    expect(items).toHaveLength(1);
+    expect(items[0].type).toBe("plan");
+  });
+
+  it("successive TodoWrite calls update the same widget in place", () => {
+    const items = buildItems([
+      tool("TodoWrite", "t1", todos1),
+      tool("Read", "t2"),
+      tool("TodoWrite", "t3", todos2),
+    ]);
+    const plans = items.filter((i) => i.type === "plan");
+    expect(plans).toHaveLength(1);
+    expect(plans[0].type === "plan" && plans[0].todos[0].status).toBe("completed");
+    // The two TodoWrite calls don't break the Read's group either side.
+    expect(items.map((i) => i.type)).toEqual(["plan", "activity"]);
+  });
+});
+
+describe("buildItems — task cards (T15)", () => {
+  it("renders an agent-kind tool_use as a task item, outside any group", () => {
+    const items = buildItems([
+      tool("Read", "t1"),
+      { type: "tool", tool: { id: "t2", name: "Task", kind: "agent", input: { description: "verify" } } },
+      tool("Bash", "t3"),
+    ]);
+    expect(items.map((i) => i.type)).toEqual(["activity", "task", "activity"]);
+  });
+});
+
+describe("mergeTranscript", () => {
+  it("interleaves thinking blocks by timestamp", () => {
+    const messages: TranscriptMessage[] = [
+      { role: "user", text: "go", timestamp: "2026-09-09T10:00:00Z" },
+      { role: "tool", tool: { id: "t1", name: "Read" }, timestamp: "2026-09-09T10:00:10Z" },
+      { role: "agent", text: "done", timestamp: "2026-09-09T10:00:20Z" },
+    ];
+    const entries = mergeTranscript(messages, [
+      { text: "hmm", timestamp: "2026-09-09T10:00:05Z" },
+      { text: "late thought", timestamp: "2026-09-09T10:00:30Z" },
+    ]);
+    expect(entries.map((e) => e.type)).toEqual([
+      "message",
+      "thinking",
+      "tool",
+      "message",
+      "thinking",
+    ]);
+  });
+});
+
+describe("task lifecycle folding", () => {
+  it("folds started→progress→notification into a completed model", () => {
+    let tasks = new Map<string, TaskModel>();
+    tasks = applyTaskEvent(
+      tasks,
+      { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "verify", subagent_type: "general-purpose" },
+      true,
+    );
+    expect(tasks.get("tk1")?.running).toBe(true);
+    tasks = applyTaskEvent(
+      tasks,
+      { phase: "progress", task_id: "tk1", total_tokens: 9800, tool_uses: 4, duration_ms: 27000, last_tool_name: "Bash" },
+      true,
+    );
+    expect(tasks.get("tk1")?.totalTokens).toBe(9800);
+    tasks = applyTaskEvent(
+      tasks,
+      { phase: "notification", task_id: "tk1", status: "completed", summary: "all good" },
+      true,
+    );
+    const t = tasks.get("tk1")!;
+    expect(t.running).toBe(false);
+    expect(t.completed).toBe(true);
+    expect(t.summary).toBe("all good");
+  });
+
+  it("a replayed lifecycle never claims running; no notification = interrupted-shape", () => {
+    let tasks = new Map<string, TaskModel>();
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "tk1", tool_use_id: "tu1" }, false);
+    tasks = applyTaskEvent(tasks, { phase: "progress", task_id: "tk1", total_tokens: 100 }, false);
+    const t = tasks.get("tk1")!;
+    expect(t.running).toBe(false);
+    expect(t.completed).toBe(false);
+  });
+
+  it("finishRunningTasks marks still-running tasks interrupted at turn end", () => {
+    let tasks = new Map<string, TaskModel>();
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "tk1" }, true);
+    tasks = finishRunningTasks(tasks);
+    expect(tasks.get("tk1")?.running).toBe(false);
+    expect(tasks.get("tk1")?.status).toBe("interrupted");
+  });
+});
+
+describe("subagent stream folding", () => {
+  it("appends text/tool/thinking and folds tool_results by id", () => {
+    let streams = new Map();
+    streams = appendSubagentItem(streams, "tu1", { kind: "text", text: "spawning" });
+    streams = appendSubagentItem(streams, "tu1", {
+      kind: "tool_use",
+      tool: { id: "s1", name: "Bash", input: { command: "go test" } },
+    });
+    streams = appendSubagentItem(streams, "tu1", {
+      kind: "tool_result",
+      tool: { id: "s1", name: "" },
+      text: "ok",
+    });
+    const items = streams.get("tu1")!;
+    expect(items).toHaveLength(2);
+    expect(items[1].type === "tool" && items[1].tool.result?.text).toBe("ok");
+  });
+
+  it("stamps the tool entry's start and the folded result's end so durations can render", () => {
+    let streams = new Map();
+    streams = appendSubagentItem(streams, "tu1", {
+      kind: "tool_use",
+      tool: { id: "s1", name: "Bash", input: { command: "go test" } },
+      timestamp: "2026-09-09T10:00:00Z",
+    });
+    streams = appendSubagentItem(streams, "tu1", {
+      kind: "tool_result",
+      tool: { id: "s1", name: "" },
+      text: "ok",
+      timestamp: "2026-09-09T10:00:03Z",
+    });
+    const items = streams.get("tu1")!;
+    expect(items[0].type === "tool" && items[0].timestamp).toBe("2026-09-09T10:00:00Z");
+    expect(items[0].type === "tool" && items[0].tool.result?.timestamp).toBe("2026-09-09T10:00:03Z");
+  });
+});
+
+describe("foldHistoryEvents (T17)", () => {
+  const env = (seq: number, type: string, payload: unknown): Envelope => ({
+    seq,
+    timestamp: `2026-09-09T10:00:0${seq}Z`,
+    type,
+    session_id: "s1",
+    actor: "system",
+    payload,
+  });
+
+  it("folds statuses, task lifecycles, subagent streams and thinking from the event log", () => {
+    const h = foldHistoryEvents([
+      env(3, "session.thinking", { text: "pondering" }),
+      env(1, "session.tool_status_changed", { tool_use_id: "t1", status: "interrupted" }),
+      env(2, "session.subagent_task", { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "audit" }),
+      env(4, "session.subagent_event", {
+        parent_tool_use_id: "tu1",
+        kind: "tool_use",
+        tool: { id: "s1", name: "Read", path: "a.go" },
+      }),
+    ]);
+    expect(h.statuses.get("t1")).toBe("interrupted");
+    expect(h.tasks.get("tk1")?.description).toBe("audit");
+    expect(h.tasks.get("tk1")?.running).toBe(false);
+    expect(h.subagentStreams.get("tu1")).toHaveLength(1);
+    expect(h.thinking[0].text).toBe("pondering");
+  });
+});

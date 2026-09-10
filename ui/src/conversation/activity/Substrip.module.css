@@ -1,0 +1,58 @@
+/* Pinned running-subagent strip (mockup v3 .substrip). */
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  padding: 10px 16px;
+  font: 13px var(--mono);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: var(--shadow);
+}
+.strip:hover {
+  background: var(--bg2);
+}
+.strip + .strip {
+  margin-top: var(--space-1);
+}
+
+.name {
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40%;
+}
+
+.op {
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  animation: op-in 0.25s ease-out;
+}
+@keyframes op-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.counters {
+  margin-left: auto;
+  color: var(--text3);
+  font-size: 12px;
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}

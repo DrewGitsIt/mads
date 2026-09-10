@@ -1164,11 +1164,15 @@ describe("ConversationTab", () => {
         source.emit({ kind: "text", text: "found it — a missing nil check" });
       });
 
-      // Structure appears BEFORE turn_end — two distinct paragraphs split by a
-      // tool card, straight off the stream.
+      // Structure appears BEFORE turn_end — two distinct paragraphs split by
+      // a live activity group (open, growing in place), straight off the
+      // stream.
       expect(screen.getByText("first, let me check the logs")).toBeTruthy();
       expect(screen.getByText("found it — a missing nil check")).toBeTruthy();
-      expect(screen.getByText("Read")).toBeTruthy();
+      expect(screen.getByTestId("activity-group")).toBeTruthy();
+      // The live group is open (its row shows) and the working indicator's
+      // ticker names the same current activity.
+      expect(screen.getAllByText("a.go").length).toBeGreaterThanOrEqual(1);
       expect(document.querySelectorAll('[class*="prose"]').length).toBeGreaterThanOrEqual(3);
       // The rubber-band source is gone: no transcript is polled mid-turn.
       expect(getTranscript.mock.calls.length).toBe(callsAfterLoad);

@@ -41,6 +41,7 @@ import type {
   TaskOutcomes,
   TaskStatus,
   Template,
+  ToolDiff,
   TranscriptMessage,
   UpdateCheckResult,
   VersionInfo,
@@ -1126,8 +1127,37 @@ export class FakeRouterClient implements RouterClient {
     return this.mergeResults[sessionId] ?? fixtureCleanMerge;
   }
 
-  async getEvents(): Promise<Envelope[]> {
-    throw new Error("not fixtured: getEvents");
+  /** Seeded control-plane event log — empty by default so the Conversation tab's history-merge fetch (T17) is a no-op unless a test seeds envelopes via seedEvent. */
+  private readonly eventLog: Envelope[] = [];
+
+  /** Test hook: seeds one persisted envelope for getEvents to replay. */
+  seedEvent(envelope: Envelope): void {
+    this.eventLog.push(envelope);
+  }
+
+  async getEvents(filter: {
+    sessionId: string;
+    since?: number;
+    types?: string[];
+  }): Promise<Envelope[]> {
+    return this.eventLog.filter(
+      (e) =>
+        (!filter.sessionId || e.session_id === filter.sessionId) &&
+        (filter.since === undefined || e.seq > filter.since) &&
+        (!filter.types?.length || filter.types.includes(e.type)),
+    );
+  }
+
+  /** Seeded tool-diff captures by tool_use_id — absent means the real route's 404 ("keep the input-derived diff"). */
+  private readonly toolDiffs = new Map<string, ToolDiff>();
+
+  /** Test hook: seeds a shadow-store capture for getToolDiff. */
+  seedToolDiff(toolUseId: string, diff: ToolDiff): void {
+    this.toolDiffs.set(toolUseId, diff);
+  }
+
+  async getToolDiff(_sessionId: string, toolUseId: string): Promise<ToolDiff | null> {
+    return this.toolDiffs.get(toolUseId) ?? null;
   }
 
   // --- Sessions (session-agnostic) ---

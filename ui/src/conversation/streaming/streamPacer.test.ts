@@ -83,6 +83,17 @@ describe("streamPacer", () => {
     expect(tool2?.kind === "tool" && tool2.tool.result?.text).toBe("done");
   });
 
+  it("carries arrival timestamps through reveal and result attachment (duration fuel)", () => {
+    let s = enqueueTool(emptyPacer(), { id: "t1", name: "Bash" }, "2026-09-09T10:00:00Z");
+    s = step(s, 1000);
+    s = applyToolResult(s, "t1", { text: "ok", timestamp: "2026-09-09T10:00:02Z" });
+    const tool = s.items.find((i) => i.kind === "tool");
+    // the entry keeps its start stamp after the result patch, and the
+    // result carries its end stamp — losing either kills row durations
+    expect(tool?.kind === "tool" && tool.timestamp).toBe("2026-09-09T10:00:00Z");
+    expect(tool?.kind === "tool" && tool.tool.result?.timestamp).toBe("2026-09-09T10:00:02Z");
+  });
+
   it("drainAll reveals the whole queue at once (off / fast-finish)", () => {
     let s = emptyPacer();
     s = enqueueText(s, "one");

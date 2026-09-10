@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { FLAGS } from "../../featureFlags";
 import type { Link, TranscriptMessage } from "../../router/types";
@@ -32,17 +32,23 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("hi back")).toBeTruthy();
   });
 
-  it("renders tool messages as collapsed ToolCards", () => {
+  it("renders tool messages as a collapsed activity group that expands to rows", () => {
     const messages: TranscriptMessage[] = [
       { role: "tool", tool: { name: "Read", path: "a.go" } },
     ];
     render(<ChatRenderer messages={messages} />);
-    const button = screen.getByRole("button");
-    expect(button.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.getByText("Read")).toBeTruthy();
+    const header = screen.getByRole("button", { name: /1 action · 1 read/ });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("activity-row")).toBeNull();
+
+    fireEvent.click(header);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    // The row title is the server title (absent here) falling back to the
+    // legacy summarize() — the path for a Read.
+    expect(screen.getByText("a.go")).toBeTruthy();
   });
 
-  it("folds a tool_result into its tool_use's card — one card per call, zero standalone result cards", () => {
+  it("folds a tool_result into its tool_use's row — one row per call, zero standalone result cards", () => {
     const messages: TranscriptMessage[] = [
       { role: "user", text: "read the image and run the tests" },
       {
@@ -72,13 +78,18 @@ describe("ChatRenderer", () => {
     ];
     render(<ChatRenderer messages={messages} />);
 
-    expect(screen.getAllByRole("button")).toHaveLength(2);
+    // Two activity groups (split by the agent's prose), each carrying its
+    // one call's outcome — never a standalone result card.
+    const groups = screen.getAllByTestId("activity-group");
+    expect(groups).toHaveLength(2);
     expect(screen.queryByText("no input")).toBeNull();
 
-    const [readButton, bashButton] = screen.getAllByRole("button");
-    expect(readButton.textContent).toContain("error");
-    expect(bashButton.textContent).toContain("ok");
-    expect(bashButton.textContent).toContain("5.0s");
+    const [readGroup, bashGroup] = groups;
+    // Aggregate status glyphs on the collapsed headers: the failed Read
+    // renders ✕, the ok Bash ✓ with its duration.
+    expect(readGroup.querySelector('[data-status="failed"]')).toBeTruthy();
+    expect(bashGroup.querySelector('[data-status="completed"]')).toBeTruthy();
+    expect(bashGroup.textContent).toContain("5.0s");
   });
 
   it("with the flag off, ignores attribution entirely and renders the plain role bubble", () => {

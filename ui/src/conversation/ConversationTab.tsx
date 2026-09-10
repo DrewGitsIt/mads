@@ -15,16 +15,33 @@ import type {
   PermissionRequest,
   Session,
   StreamEvent,
+  ToolStatus,
+  ToolStatusChange,
   ToolUse,
   TranscriptMessage,
   Usage,
 } from "../router/types";
+import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
 import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
+import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
+import { ActivityDock, type DockView } from "./activity/ActivityDock";
+import { Substrip, type SubstripEntry } from "./activity/Substrip";
+import {
+  appendSubagentItem,
+  applyTaskEvent,
+  CONVERSATION_EVENT_TYPES,
+  finishRunningTasks,
+  foldHistoryEvents,
+  tasksByToolUse,
+  type SubStreamItem,
+  type TaskModel,
+} from "./activity/conversationItems";
+import { formatTokens, toolTitle } from "./activity/toolDisplay";
 import { useStreamPacer } from "./streaming/useStreamPacer";
 import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpeed";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
@@ -119,6 +136,7 @@ export function ConversationTab({
   const {
     enqueueText: pacerEnqueueText,
     enqueueTool: pacerEnqueueTool,
+    enqueueThinking: pacerEnqueueThinking,
     applyToolResult: pacerApplyToolResult,
     finish: pacerFinish,
     reset: pacerReset,
@@ -165,8 +183,57 @@ export function ConversationTab({
   const [streamGeneration, setStreamGeneration] = useState(0);
   const links = useSessionLinks([sessionId]);
 
+  // --- Conversation-redesign state (T12–T17) ---
+  // Out-of-band tool status changes (pkg/toolstatus synthesis:
+  // interrupted/pending/in_progress), merged by tool_use id — live from the
+  // session.tool_status_changed control-plane stream, historical from the
+  // event-log replay in the mount effect below.
+  const [toolStatuses, setToolStatuses] = useState<Map<string, ToolStatus>>(new Map());
+  // Task subagent lifecycles by task_id (live "task" stream frames +
+  // replayed session.subagent_task envelopes).
+  const [tasks, setTasks] = useState<Map<string, TaskModel>>(new Map());
+  // Each subagent's own conversation stream, keyed by the spawning Agent
+  // tool_use id. Parent-tagged /output events land here and NEVER in the
+  // main stream (the interleave bug this redesign fixes); history replays
+  // from session.subagent_event — claude-code's transcript omits sidechains.
+  const [subagentStreams, setSubagentStreams] = useState<Map<string, SubStreamItem[]>>(new Map());
+  // Whole historical thinking blocks (session.thinking), merged into the
+  // rendered stream by timestamp. Live thinking rides the pacer instead.
+  const [thinkingHistory, setThinkingHistory] = useState<{ text: string; timestamp?: string }[]>([]);
+  // The V2 working indicator's current-activity ticker: latest tool title,
+  // or "Thinking" fed by thinking_tokens ticks.
+  const [currentActivity, setCurrentActivity] = useState<string>();
+  // Bottom-dock target — one tool's full detail or one subagent's stream.
+  // Stored as ids so the open dock keeps tracking live updates; resolved to
+  // a fresh DockView at render time below.
+  const [dockTarget, setDockTarget] = useState<
+    | { type: "tool"; toolId?: string; tool: ToolUse }
+    | { type: "subagent"; parentToolUseId: string; title: string; subtype?: string }
+    | null
+  >(null);
+
+  const appendSubagent = useCallback(
+    (
+      parentId: string,
+      ev: { kind: "text" | "tool_use" | "tool_result" | "thinking"; text?: string; tool?: ToolUse; is_error?: boolean },
+    ) => {
+      // Live wire frames carry no timestamps — stamp arrival time so
+      // subagent rows and their group headers can report durations.
+      const stamped = { ...ev, timestamp: new Date().toISOString() };
+      setSubagentStreams((m) => appendSubagentItem(m, parentId, stamped));
+    },
+    [],
+  );
+
   useEffect(() => {
-    const handler = () => setShellOpen((x) => !x);
+    const handler = () =>
+      setShellOpen((x) => {
+        const next = !x;
+        // Two bottom surfaces never stack: opening the Shell dock closes
+        // the activity dock (and vice versa — see the open handlers below).
+        if (next) setDockTarget(null);
+        return next;
+      });
     window.addEventListener(SHELL_TOGGLE_EVENT, handler);
     return () => window.removeEventListener(SHELL_TOGGLE_EVENT, handler);
   }, []);
@@ -191,6 +258,12 @@ export function ConversationTab({
     setLastUsage(undefined);
     setCompactStatus(undefined);
     setCompactSuggestionDismissed(false);
+    setToolStatuses(new Map());
+    setTasks(new Map());
+    setSubagentStreams(new Map());
+    setThinkingHistory([]);
+    setCurrentActivity(undefined);
+    setDockTarget(null);
     // Reset to the chat default up front — the mode lookup below is async,
     // so a stale mode carried over from whatever session was mounted before
     // this one must never leak into this session's initial render.
@@ -237,6 +310,22 @@ export function ConversationTab({
       .then((reqs) => {
         if (cancelled) return;
         setPermissionRequests(new Map(reqs.map((r) => [r.id, r])));
+      })
+      .catch(() => {});
+    // History parity (T17): the control-plane event log is the only
+    // historical source for subagent streams, task lifecycles, main-agent
+    // thinking, and out-of-band status changes — the provider transcript
+    // omits all four. Merge live-wins: anything the stream delivered while
+    // this fetch was in flight is fresher than the replay.
+    void routerClient
+      .getEvents({ sessionId, types: CONVERSATION_EVENT_TYPES })
+      .then((envelopes) => {
+        if (cancelled) return;
+        const h = foldHistoryEvents(envelopes);
+        setToolStatuses((live) => new Map([...h.statuses, ...live]));
+        setTasks((live) => new Map([...h.tasks, ...live]));
+        setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
+        setThinkingHistory(h.thinking);
       })
       .catch(() => {});
     void routerClient
@@ -441,6 +530,8 @@ export function ConversationTab({
       setSendError(err instanceof Error ? err.message : "Failed to stop the agent.");
       return;
     }
+    setCurrentActivity(undefined);
+    setTasks((m) => finishRunningTasks(m));
     pacerFinish(() => {
       void refetchAfterTurn().finally(() => {
         setTurnPhase("idle");
@@ -448,6 +539,31 @@ export function ConversationTab({
       });
     });
   }, [routerClient, sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
+
+  // Durable turn-completion reconciliation: /output is ephemeral and can
+  // shed frames under an end-of-turn burst (the hub closes overflowing
+  // subscriptions rather than silently gapping, but a frame can still be
+  // lost to a dying connection). The runner's session.turn_ended envelope
+  // rides the control-plane event log — lossless — so it finalizes any turn
+  // the stream's own turn_end frame failed to close, instead of leaving the
+  // pane frozen on its last streamed item until a remount. Idempotent when
+  // both signals arrive: an idle pane just re-checks the transcript.
+  useEffect(() => {
+    return subscribeToEvents({ sessionId, types: ["session.turn_ended"] }, () => {
+      if (turnPhaseRef.current !== "idle") {
+        setCurrentActivity(undefined);
+        setTasks((m) => finishRunningTasks(m));
+        pacerFinish(() => {
+          void refetchAfterTurn().finally(() => {
+            setTurnPhase("idle");
+            pacerReset();
+          });
+        });
+      } else {
+        void refetchAfterTurn();
+      }
+    });
+  }, [sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
 
   const handleCompactNow = useCallback(async () => {
     // Optimistic "Compacting…" so the click lands visibly even before the
@@ -470,21 +586,42 @@ export function ConversationTab({
   // second stream.
   useEffect(() => {
     if (!eventSource) return;
+    // Parent-tagged events are a subagent's sidechain: they route to that
+    // subagent's own stream (dock + substrip), NEVER into the main
+    // transcript — interleaving them was the live bug this redesign fixes.
     const onText = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "text") return;
       setTurnPhase("live");
+      if (parsed.parent_tool_use_id) {
+        appendSubagent(parsed.parent_tool_use_id, { kind: "text", text: parsed.text });
+        return;
+      }
       pacerEnqueueText(parsed.text);
     };
     const onTool = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_use") return;
       setTurnPhase("live");
-      pacerEnqueueTool(parsed.tool);
+      if (parsed.parent_tool_use_id) {
+        appendSubagent(parsed.parent_tool_use_id, { kind: "tool_use", tool: parsed.tool });
+        return;
+      }
+      pacerEnqueueTool(parsed.tool, new Date().toISOString());
+      setCurrentActivity(toolTitle(parsed.tool));
     };
     const onToolResult = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_result") return;
+      if (parsed.parent_tool_use_id) {
+        appendSubagent(parsed.parent_tool_use_id, {
+          kind: "tool_result",
+          tool: parsed.tool,
+          text: parsed.text,
+          is_error: parsed.is_error,
+        });
+        return;
+      }
       // Attach the result to its live tool card (matched by id) so the card
       // shows its outcome as it arrives — never a silent no-op. An is_error
       // result renders as the card's own error state; it is NOT a permission
@@ -492,7 +629,36 @@ export function ConversationTab({
       // non-zero exit, a missing file), so it must not raise the blocked
       // banner. Genuine permission stalls arrive as permission_request
       // events and drive the banner below.
-      pacerApplyToolResult(parsed.tool?.id, { text: parsed.text, is_error: parsed.is_error });
+      pacerApplyToolResult(parsed.tool?.id, {
+        text: parsed.text,
+        is_error: parsed.is_error,
+        timestamp: new Date().toISOString(),
+      });
+    };
+    const onThinking = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "thinking") return;
+      setTurnPhase("live");
+      if (parsed.parent_tool_use_id) {
+        if (parsed.text) {
+          appendSubagent(parsed.parent_tool_use_id, { kind: "thinking", text: parsed.text });
+        }
+        return;
+      }
+      // A whole block joins the live stream as a think row; a bare
+      // thinking_tokens count is just the indicator's ticker.
+      if (parsed.text) pacerEnqueueThinking(parsed.text);
+      setCurrentActivity(
+        parsed.thinking_tokens
+          ? `Thinking · ${formatTokens(parsed.thinking_tokens)} tokens`
+          : "Thinking…",
+      );
+    };
+    const onTask = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "task") return;
+      setTurnPhase("live");
+      setTasks((m) => applyTaskEvent(m, parsed.task, true));
     };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -517,6 +683,10 @@ export function ConversationTab({
           // non-JSON turn_end frame — leave the meter on its last value
         }
       }
+      setCurrentActivity(undefined);
+      // A turn ending with no task_notification means those subagents never
+      // finished — interrupted-shape, never a spinner that ticks forever.
+      setTasks((m) => finishRunningTasks(m));
       // Drain whatever the pacer still has buffered (so a paced turn finishes
       // typing smoothly), then reconcile once with the persisted transcript and
       // go idle — frozen-visible throughout, so there's never a flash to empty.
@@ -538,11 +708,15 @@ export function ConversationTab({
       const parsed = JSON.parse(ev.data) as StreamEvent;
       setTurnPhase("idle");
       pacerReset();
+      setCurrentActivity(undefined);
+      setTasks((m) => finishRunningTasks(m));
       setSendError(parsed.kind === "error" ? parsed.text : "The agent hit an error.");
     };
     eventSource.addEventListener("text", onText);
     eventSource.addEventListener("tool_use", onTool);
     eventSource.addEventListener("tool_result", onToolResult);
+    eventSource.addEventListener("thinking", onThinking);
+    eventSource.addEventListener("task", onTask);
     eventSource.addEventListener("permission_request", onPermissionRequest);
     eventSource.addEventListener("turn_end", onTurnEnd);
     eventSource.addEventListener("compact", onCompact);
@@ -551,6 +725,8 @@ export function ConversationTab({
       eventSource.removeEventListener("text", onText);
       eventSource.removeEventListener("tool_use", onTool);
       eventSource.removeEventListener("tool_result", onToolResult);
+      eventSource.removeEventListener("thinking", onThinking);
+      eventSource.removeEventListener("task", onTask);
       eventSource.removeEventListener("permission_request", onPermissionRequest);
       eventSource.removeEventListener("turn_end", onTurnEnd);
       eventSource.removeEventListener("compact", onCompact);
@@ -560,12 +736,28 @@ export function ConversationTab({
     eventSource,
     refetchAfterTurn,
     upsertPermissionRequest,
+    appendSubagent,
     pacerEnqueueText,
     pacerEnqueueTool,
+    pacerEnqueueThinking,
     pacerApplyToolResult,
     pacerFinish,
     pacerReset,
   ]);
+
+  // Out-of-band status synthesis (session.tool_status_changed) rides the
+  // control-plane /events stream, not the data-plane /output — subscribe
+  // alongside the WORKSPACE_SESSION_EVENT_TYPES subscription above.
+  useEffect(() => {
+    return subscribeToEvents(
+      { sessionId, types: ["session.tool_status_changed"] },
+      (envelope) => {
+        const p = envelope.payload as ToolStatusChange | undefined;
+        if (!p?.tool_use_id || !p.status) return;
+        setToolStatuses((m) => new Map(m).set(p.tool_use_id, p.status));
+      },
+    );
+  }, [sessionId]);
 
   // Native EventSource auto-reconnects after a mid-stream drop (unlike the
   // dead-on-arrival case streamBroken handles above, which never retries on
@@ -723,6 +915,58 @@ export function ConversationTab({
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
   const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  // --- Redesign wiring: dock targets, running-subagent substrip ---
+  const tasksByToolUseMap = tasksByToolUse(tasks);
+  const substripEntries: SubstripEntry[] = [...tasks.values()]
+    .filter((t) => t.running)
+    .map((model) => {
+      const stream = model.toolUseId ? subagentStreams.get(model.toolUseId) : undefined;
+      const last = stream && stream.length > 0 ? stream[stream.length - 1] : undefined;
+      const op =
+        last?.type === "tool"
+          ? toolTitle(last.tool)
+          : last?.type === "thinking"
+            ? "Thinking…"
+            : model.lastToolName;
+      return { model, op };
+    });
+  const openTool = (tool: ToolUse) => {
+    setShellOpen(false); // never both bottom surfaces at once
+    setDockTarget({ type: "tool", toolId: tool.id, tool });
+  };
+  const openSubagent = (parentToolUseId: string, title: string, subtype?: string) => {
+    setShellOpen(false);
+    setDockTarget({ type: "subagent", parentToolUseId, title, subtype });
+  };
+  // Resolve the open dock target against the freshest data every render, so
+  // a live result/counter lands in the open dock without a re-click.
+  let dockView: DockView | null = null;
+  if (dockTarget?.type === "tool") {
+    let tool = dockTarget.tool;
+    let toolTimestamp: string | undefined;
+    if (dockTarget.toolId) {
+      for (const m of foldToolResults(messages)) {
+        if (m.role === "tool" && m.tool?.id === dockTarget.toolId) {
+          tool = m.tool;
+          toolTimestamp = m.timestamp;
+        }
+      }
+      for (const item of pacer.items) {
+        if (item.kind === "tool" && item.tool.id === dockTarget.toolId) tool = item.tool;
+      }
+    }
+    dockView = { type: "tool", tool, timestamp: toolTimestamp };
+  } else if (dockTarget?.type === "subagent") {
+    const model = [...tasks.values()].find((t) => t.toolUseId === dockTarget.parentToolUseId);
+    dockView = {
+      type: "subagent",
+      parentToolUseId: dockTarget.parentToolUseId,
+      title: model?.description ?? dockTarget.title,
+      subtype: dockTarget.subtype ?? model?.subagentType,
+      items: subagentStreams.get(dockTarget.parentToolUseId) ?? [],
+      task: model,
+    };
+  }
   // Compact-suggestion input, derived locally from the same usage the header
   // meter reads (session.last_usage at mount, turn_end frames after) — no
   // extra stream event or server round-trip, and no race against the
@@ -776,7 +1020,19 @@ export function ConversationTab({
                   links={links}
                   viewedSessionId={sessionId}
                   liveItems={liveItems}
-                  working={working}
+                  turnActive={inChatTurn}
+                  thinkingHistory={thinkingHistory}
+                  toolStatuses={toolStatuses}
+                  tasks={tasksByToolUseMap}
+                  selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
+                  onOpenTool={openTool}
+                  onOpenTask={(toolUseId, tool) =>
+                    openSubagent(
+                      toolUseId,
+                      tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
+                      tasksByToolUseMap.get(toolUseId)?.subagentType,
+                    )
+                  }
                 />
               )}
               {livePermissionRequests.map((req) => (
@@ -856,7 +1112,26 @@ export function ConversationTab({
                 </div>
               )}
               <CompactionStatus status={compactStatus} onDismiss={() => setCompactStatus(undefined)} />
-              <Composer
+              {/* Pinned bottom cluster (T16): running-subagent substrip +
+                  turn-long working indicator + composer stick together at
+                  the bottom of the scrollable stream — none can scroll off
+                  screen while the conversation is on screen. */}
+              <div className={styles.pinned} data-testid="pinned-cluster">
+                <Substrip
+                  entries={substripEntries}
+                  onOpen={(model) =>
+                    model.toolUseId &&
+                    openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
+                  }
+                />
+                {working && (
+                  <WorkingIndicator
+                    tool={working.tool}
+                    blocked={working.blocked}
+                    activity={currentActivity}
+                  />
+                )}
+                <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}
                 agentId={session.agent}
@@ -894,7 +1169,8 @@ export function ConversationTab({
                   setMessages((m) => [...m, { role: "user", text }]);
                   if (wasDormant) void refetchAfterTurn();
                 }}
-              />
+                />
+              </div>
             </>
           ) : terminalBridge ? (
             <TerminalView
@@ -930,6 +1206,16 @@ export function ConversationTab({
             setTerminalComposerOpen(false);
             terminalViewRef.current?.focus();
           }}
+        />
+      )}
+
+      {dockView && (
+        <ActivityDock
+          view={dockView}
+          sessionId={sessionId}
+          client={routerClient}
+          statuses={toolStatuses}
+          onClose={() => setDockTarget(null)}
         />
       )}
 

@@ -15,7 +15,10 @@ import type { StreamItem } from "../ChatRenderer/ChatRenderer";
  * All functions are pure — the timing/rAF lives in useStreamPacer.
  */
 
-type QueueEntry = { kind: "text"; text: string } | { kind: "tool"; tool: ToolUse };
+type QueueEntry =
+  | { kind: "text"; text: string }
+  | { kind: "tool"; tool: ToolUse; timestamp?: string }
+  | { kind: "thinking"; text: string };
 
 export interface PacerState {
   /** Revealed items — exactly what ChatRenderer renders for the live turn. */
@@ -49,22 +52,30 @@ export function enqueueText(s: PacerState, text: string): PacerState {
   return { ...s, queue: [...s.queue, { kind: "text", text }] };
 }
 
-/** Queue a tool card at the current position in the stream. */
-export function enqueueTool(s: PacerState, tool: ToolUse): PacerState {
-  return { ...s, queue: [...s.queue, { kind: "tool", tool }] };
+/** Queue a tool card at the current position in the stream. `timestamp` is
+ * the client-side arrival time — the wire's live frames carry none, and
+ * without a start stamp no duration can ever render until the post-turn
+ * transcript refetch replaces the live items. */
+export function enqueueTool(s: PacerState, tool: ToolUse, timestamp?: string): PacerState {
+  return { ...s, queue: [...s.queue, { kind: "tool", tool, timestamp }] };
+}
+
+/** Queue a whole thinking block — reveals like a tool (pops for free, never paced char-by-char). */
+export function enqueueThinking(s: PacerState, text: string): PacerState {
+  return { ...s, queue: [...s.queue, { kind: "thinking", text }] };
 }
 
 /** Attach a tool result to its card, whether already revealed or still queued (matched by id). */
 export function applyToolResult(
   s: PacerState,
   id: string | undefined,
-  result: { text?: string; is_error?: boolean },
+  result: { text?: string; is_error?: boolean; timestamp?: string },
 ): PacerState {
   if (!id) return s;
   const patch = (e: QueueEntry): QueueEntry =>
-    e.kind === "tool" && e.tool.id === id ? { kind: "tool", tool: { ...e.tool, result } } : e;
+    e.kind === "tool" && e.tool.id === id ? { ...e, tool: { ...e.tool, result } } : e;
   const patchItem = (it: StreamItem): StreamItem =>
-    it.kind === "tool" && it.tool.id === id ? { kind: "tool", tool: { ...it.tool, result } } : it;
+    it.kind === "tool" && it.tool.id === id ? { ...it, tool: { ...it.tool, result } } : it;
   return { ...s, items: s.items.map(patchItem), queue: s.queue.map(patch) };
 }
 
@@ -92,7 +103,7 @@ export function step(s: PacerState, chars: number): PacerState {
 
   while (queue.length > 0) {
     const head = queue[0];
-    if (head.kind === "tool") {
+    if (head.kind !== "text") {
       items = [...items, head];
       queue = queue.slice(1);
       continue;
@@ -122,7 +133,7 @@ export function drainAll(s: PacerState): PacerState {
   if (s.queue.length === 0) return s;
   let items = s.items;
   for (const e of s.queue) {
-    items = e.kind === "tool" ? [...items, e] : reveal(items, e.text);
+    items = e.kind === "text" ? reveal(items, e.text) : [...items, e];
   }
   return { items, queue: [], carry: 0 };
 }

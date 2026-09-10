@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>mads · conversation pane redesign — design lab v3</title>
+<style>
+  :root {
+    --bg: #1c1a17;
+    --bg-raised: #252220;
+    --bg-hover: #2d2a27;
+    --bg-inset: #171512;
+    --border: #38342f;
+    --border-soft: #2e2b27;
+    --text: #e8e2d9;
+    --text-dim: #a89f92;
+    --text-faint: #6e675d;
+    --accent: #e0885a;
+    --accent-dim: #a5643f;
+    --ok: #8fbf7f;
+    --bad: #d97a6c;
+    --pend: #d9b36c;
+    --kind-read: #8fb4d9;
+    --kind-search: #b49bd9;
+    --kind-execute: #e0885a;
+    --kind-edit: #8fbf7f;
+    --kind-fetch: #6cc5c9;
+    --kind-think: #8a8175;
+    --kind-agent: #d9a06c;
+    --kind-mcp: #a98fd9;
+    --kind-skill: #d9c96c;
+    --kind-plan: #8fd9c0;
+    --kind-delete: #d97a6c;
+    --kind-move: #6c9dd9;
+    --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+    --sans: -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14.5px; line-height: 1.55; padding: 40px 24px 160px; }
+  .lab { max-width: 1080px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  .sub { color: var(--text-dim); margin-bottom: 36px; max-width: 80ch; }
+  .sub b { color: var(--text); }
+  h2 { font-size: 15px; font-weight: 600; margin: 48px 0 6px; color: var(--accent); }
+  .note { color: var(--text-dim); font-size: 13.5px; margin-bottom: 16px; max-width: 84ch; }
+  .note b { color: var(--text); font-weight: 600; }
+  .note code { font-family: var(--mono); font-size: 12.5px; color: #d9c9a6; }
+
+  /* ---------- vocabulary ---------- */
+  .vocab { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .vocab .k { display: inline-flex; align-items: center; gap: 8px; background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: 20px; padding: 5px 14px 5px 9px; font-size: 13px; color: var(--text-dim); }
+  .ki { display: inline-flex; width: 22px; height: 22px; border-radius: 6px; align-items: center; justify-content: center; font-family: var(--mono); font-size: 13px; flex-shrink: 0; }
+  .ki-read    { color: var(--kind-read);    background: color-mix(in srgb, var(--kind-read) 14%, transparent); }
+  .ki-search  { color: var(--kind-search);  background: color-mix(in srgb, var(--kind-search) 14%, transparent); }
+  .ki-execute { color: var(--kind-execute); background: color-mix(in srgb, var(--kind-execute) 14%, transparent); }
+  .ki-edit    { color: var(--kind-edit);    background: color-mix(in srgb, var(--kind-edit) 14%, transparent); }
+  .ki-fetch   { color: var(--kind-fetch);   background: color-mix(in srgb, var(--kind-fetch) 14%, transparent); }
+  .ki-think   { color: var(--kind-think);   background: color-mix(in srgb, var(--kind-think) 14%, transparent); }
+  .ki-agent   { color: var(--kind-agent);   background: color-mix(in srgb, var(--kind-agent) 14%, transparent); }
+  .ki-mcp     { color: var(--kind-mcp);     background: color-mix(in srgb, var(--kind-mcp) 14%, transparent); }
+  .ki-skill   { color: var(--kind-skill);   background: color-mix(in srgb, var(--kind-skill) 14%, transparent); }
+  .ki-plan    { color: var(--kind-plan);    background: color-mix(in srgb, var(--kind-plan) 14%, transparent); }
+  .ki-delete  { color: var(--kind-delete);  background: color-mix(in srgb, var(--kind-delete) 14%, transparent); }
+  .ki-move    { color: var(--kind-move);    background: color-mix(in srgb, var(--kind-move) 14%, transparent); }
+  .st-ok { color: var(--ok); } .st-bad { color: var(--bad); } .st-pend { color: var(--pend); } .st-int { color: var(--text-faint); }
+
+  .badge { font: 11px var(--mono); color: var(--kind-mcp); border: 1px solid color-mix(in srgb, var(--kind-mcp) 35%, transparent); border-radius: 4px; padding: 1px 6px; flex-shrink: 0; }
+
+  /* ---------- surface tabs ---------- */
+  .tabs { display: flex; gap: 6px; margin: 14px 0 18px; }
+  .tabs button { font: 600 13px var(--sans); color: var(--text-dim); background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  .tabs button:hover { color: var(--text); }
+  .tabs button[data-on] { color: var(--accent); border-color: var(--accent-dim); background: color-mix(in srgb, var(--accent) 8%, var(--bg-raised)); }
+  .modeblurb { font-size: 13.5px; color: var(--text-dim); margin-bottom: 14px; min-height: 38px; max-width: 84ch; }
+
+  /* ---------- stream ---------- */
+  .stage { position: relative; }
+  .stream { background: var(--bg-inset); border: 1px solid var(--border-soft); border-radius: 12px; padding: 24px 24px 28px; }
+  .msg-user { background: var(--bg-raised); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px 14px; margin: 0 0 18px auto; max-width: 78%; width: fit-content; }
+  .msg-agent { max-width: 88ch; margin-bottom: 18px; }
+  .msg-agent p + p { margin-top: 8px; }
+  .msg-agent code { font-family: var(--mono); font-size: 13px; color: #d9c9a6; background: var(--bg-raised); border-radius: 4px; padding: 1px 5px; }
+
+  /* ---------- plan widget ---------- */
+  .plan { border: 1px solid var(--border-soft); border-left: 3px solid var(--kind-plan); border-radius: 10px; margin: 4px 0 18px; padding: 12px 16px; max-width: 62ch; }
+  .plan-head { display: flex; align-items: center; gap: 9px; font: 13px var(--mono); color: var(--text-dim); margin-bottom: 8px; }
+  .plan-head .count { margin-left: auto; color: var(--text-faint); font-size: 12px; }
+  .plan-item { display: flex; gap: 10px; font-size: 13.5px; padding: 3px 0; align-items: baseline; }
+  .plan-item.done { color: var(--text-faint); }
+  .plan-item.done .pi-text { text-decoration: line-through; text-decoration-color: var(--border); }
+  .plan-item.now { color: var(--text); }
+  .plan-item.todo { color: var(--text-dim); }
+  .pi-mark { font-family: var(--mono); font-size: 13px; width: 15px; flex-shrink: 0; }
+  .plan-item.done .pi-mark { color: var(--ok); }
+  .plan-item.now .pi-mark { color: var(--accent); }
+
+  /* ---------- activity group ---------- */
+  .group { border: 1px solid var(--border-soft); border-radius: 10px; margin: 4px 0 18px; }
+  .group-head { display: flex; align-items: center; gap: 11px; width: 100%; padding: 10px 14px; background: none; border: 0; color: var(--text-dim); font: 13px var(--mono); cursor: pointer; text-align: left; border-radius: 10px; }
+  .group-head:hover { background: var(--bg-hover); }
+  .group[data-open] .group-head { border-bottom: 1px solid var(--border-soft); border-radius: 10px 10px 0 0; }
+  .group-chevron { color: var(--text-faint); transition: transform .15s; font-size: 11px; }
+  .group[data-open] .group-chevron { transform: rotate(90deg); }
+  .group-kinds { display: inline-flex; gap: 5px; }
+  .group-kinds .ki { width: 18px; height: 18px; font-size: 11px; border-radius: 5px; }
+  .group-meta { margin-left: auto; color: var(--text-faint); display: inline-flex; gap: 12px; align-items: center; }
+  .group-body { display: none; padding: 5px 8px 8px; }
+  .group[data-open] .group-body { display: block; }
+
+  /* ---------- rows ---------- */
+  .row { position: relative; border-radius: 7px; }
+  .row-line { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; background: none; border: 0; color: var(--text); font: 13.5px var(--mono); cursor: pointer; text-align: left; border-radius: 7px; }
+  .row-line:hover { background: var(--bg-hover); }
+  .row[data-sel] .row-line { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .row-title .dim { color: var(--text-faint); }
+  .row-meta { margin-left: auto; display: inline-flex; align-items: center; gap: 10px; color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+  .diffstat b { font-weight: 600; }
+  .diffstat .a { color: var(--ok); } .diffstat .d { color: var(--bad); }
+  .row.think .row-title { color: var(--text-faint); font-style: italic; }
+
+  /* detail payload (hidden template; shown per surface) */
+  .row-detail { display: none; }
+  [data-mode="acc"] .row[data-open] .row-detail { display: block; margin: 2px 10px 10px 42px; border-left: 2px solid var(--border); padding: 9px 14px; font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); max-height: 260px; overflow: auto; }
+  .lbl { color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; margin: 9px 0 3px; font-family: var(--sans); }
+  .lbl:first-child { margin-top: 0; }
+  .row-detail pre, .peek pre, .surface-body pre { font-family: var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--text); }
+  .row-detail pre { font-size: 12.5px; }
+
+  /* diff block */
+  .diff { font-family: var(--mono); font-size: 12.5px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border-soft); margin-top: 4px; }
+  .diff .dl { display: flex; padding: 1.5px 9px; white-space: pre-wrap; word-break: break-word; }
+  .diff .dl .g { width: 17px; flex-shrink: 0; color: var(--text-faint); }
+  .diff .del { background: color-mix(in srgb, var(--bad) 12%, transparent); color: #e7b3aa; }
+  .diff .add { background: color-mix(in srgb, var(--ok) 11%, transparent); color: #c2ddb8; }
+
+  /* hover peek — always on (committed) */
+  .peek { display: none; position: absolute; left: 40px; top: calc(100% + 2px); z-index: 30; width: min(540px, 90%); background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; font: 12.5px var(--mono); color: var(--text-dim); box-shadow: 0 10px 32px rgba(0,0,0,.45); pointer-events: none; }
+  .row:hover .peek { display: block; }
+  .row[data-open]:hover .peek { display: none; }
+  .peek pre { font-size: 12px; max-height: 130px; overflow: hidden; }
+  .peek-hint { margin-top: 8px; color: var(--text-faint); font-size: 11px; font-family: var(--sans); }
+
+  /* ---------- surface D: bottom dock (tight-wrapped, centered) ---------- */
+  .dock { position: fixed; left: 50%; bottom: 0; z-index: 60; width: min(980px, 96vw); background: var(--bg-raised); border: 1px solid var(--border); border-bottom: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -12px 40px rgba(0,0,0,.5); transform: translate(-50%, 105%); transition: transform .22s ease; height: 340px; display: flex; flex-direction: column; }
+  .dock[data-open] { transform: translate(-50%, 0); }
+  .surface-head { display: flex; align-items: center; gap: 11px; padding: 12px 20px; border-bottom: 1px solid var(--border-soft); font: 13px var(--mono); flex-shrink: 0; }
+  .surface-head .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .surface-head .m { color: var(--text-faint); font-size: 12px; flex-shrink: 0; }
+  .surface-head .x { margin-left: auto; background: none; border: 0; color: var(--text-faint); cursor: pointer; font-size: 16px; padding: 2px 6px; }
+  .surface-head .x:hover { color: var(--text); }
+  .surface-body { flex: 1; overflow: auto; padding: 14px 22px 20px; font: 13px var(--mono); color: var(--text-dim); }
+  .surface-body .group { margin-bottom: 12px; }
+
+  /* ---------- surface E: overlay sheet ---------- */
+  .sheet { position: fixed; top: 0; right: 0; bottom: 0; z-index: 60; width: min(580px, 92vw); background: var(--bg-raised); border-left: 1px solid var(--border); box-shadow: -16px 0 48px rgba(0,0,0,.5); transform: translateX(105%); transition: transform .22s ease; display: flex; flex-direction: column; }
+  .sheet[data-open] { transform: none; }
+
+  /* ---------- Task subagent card + pinned strip ---------- */
+  .taskcard { border: 1px solid var(--border-soft); border-left: 3px solid var(--kind-agent); border-radius: 10px; margin: 4px 0 18px; }
+  .task-head { display: flex; align-items: center; gap: 11px; padding: 11px 14px; font: 13px var(--mono); color: var(--text); cursor: pointer; border-radius: 10px; }
+  .task-head:hover { background: var(--bg-hover); }
+  .task-sub { color: var(--text-faint); }
+  .task-meta { margin-left: auto; color: var(--text-faint); font-size: 12px; display: inline-flex; gap: 12px; align-items: center; }
+  .task-summary { border-top: 1px solid var(--border-soft); padding: 10px 16px 12px; color: var(--text-dim); font-size: 13.5px; max-width: 84ch; }
+
+  .substrip { display: flex; align-items: center; gap: 11px; background: var(--bg-raised); border: 1px solid var(--accent-dim); border-radius: 10px; padding: 10px 16px; font: 13px var(--mono); color: var(--text); cursor: pointer; box-shadow: 0 8px 28px rgba(0,0,0,.45); width: 100%; text-align: left; }
+  .substrip:hover { background: var(--bg-hover); }
+  .substrip .op { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; transition: opacity .25s; }
+  .substrip .op.fading { opacity: 0; }
+  .substrip .counters { margin-left: auto; color: var(--text-faint); font-size: 12px; display: inline-flex; gap: 12px; align-items: center; flex-shrink: 0; }
+
+  /* ---------- spinner / motion ---------- */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner { width: 12px; height: 12px; border: 1.5px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; display: inline-block; flex-shrink: 0; }
+  @keyframes row-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+  .row-enter { animation: row-in .18s ease-out both; }
+
+  /* ---------- V2 working indicator (committed) ---------- */
+  .wi { display: flex; align-items: center; gap: 10px; padding: 12px 4px 0; font: 13px var(--mono); color: var(--text-dim); min-height: 36px; }
+  .wi .elapsed { color: var(--text-faint); }
+  .wi-status-line { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .replaybtn { font: 600 13px var(--sans); color: var(--bg); background: var(--accent); border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer; margin-bottom: 14px; }
+  .replaybtn:hover { filter: brightness(1.08); }
+
+  /* ---------- pinned bottom cluster: substrip + indicator + composer never leave the screen ---------- */
+  .pinned { position: sticky; bottom: 0; z-index: 40; margin: 20px -24px -28px; padding: 12px 24px 18px; background: color-mix(in srgb, var(--bg-inset) 94%, transparent); backdrop-filter: blur(5px); border-top: 1px solid var(--border-soft); border-radius: 0 0 12px 12px; }
+  .pinned .substrip { margin-bottom: 4px; }
+  .pinned .wi { min-height: 30px; padding-top: 8px; }
+  .composer { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
+  .composer input { flex: 1; min-width: 0; background: var(--bg-raised); border: 1px solid var(--border); border-radius: 10px; padding: 11px 14px; color: var(--text); font: 13.5px var(--sans); outline: none; }
+  .composer input::placeholder { color: var(--text-faint); }
+  .composer input:focus { border-color: var(--accent-dim); }
+  .stopbtn { font: 600 13px var(--sans); color: var(--bad); background: none; border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); border-radius: 8px; padding: 9px 14px; cursor: pointer; flex-shrink: 0; }
+  .stopbtn:hover { background: color-mix(in srgb, var(--bad) 10%, transparent); }
+  .sendbtn { font: 600 13px var(--sans); color: var(--bg); background: var(--accent); border: 0; border-radius: 8px; padding: 9px 18px; cursor: pointer; flex-shrink: 0; }
+  .sendbtn:hover { filter: brightness(1.08); }
+</style>
+</head>
+<body>
+<div class="lab">
+  <h1>Conversation pane redesign — design lab v3</h1>
+  <p class="sub">v3 changes: <b>everything sized up</b> (icons 22px, rows 13.5px); the <b>dock is now
+  tight-wrapped and centered</b> (~980px, rounded shoulders) and <b>closes on outside click</b> or Esc;
+  and subagents got their real treatment — an in-stream card that <b>opens the full subagent stream in the
+  dock</b>, plus a <b>pinned bottom cluster</b>: the running-subagent strip, the working indicator, and the
+  <b>composer (input + Stop/Send)</b> stick together at the bottom — none of them can scroll out of sight.</p>
+
+  <h2>0 · Vocabulary</h2>
+  <div class="vocab">
+    <span class="k"><span class="ki ki-read">▤</span> read</span>
+    <span class="k"><span class="ki ki-search">⌕</span> search</span>
+    <span class="k"><span class="ki ki-execute">❯</span> execute</span>
+    <span class="k"><span class="ki ki-edit">±</span> edit</span>
+    <span class="k"><span class="ki ki-delete">✕</span> delete</span>
+    <span class="k"><span class="ki ki-move">⇄</span> move</span>
+    <span class="k"><span class="ki ki-fetch">⇣</span> fetch</span>
+    <span class="k"><span class="ki ki-think">◌</span> think</span>
+    <span class="k"><span class="ki ki-agent">⛬</span> agent</span>
+    <span class="k"><span class="ki ki-mcp">◇</span> mcp <span class="badge">server</span></span>
+    <span class="k"><span class="ki ki-skill">✦</span> skill</span>
+    <span class="k"><span class="ki ki-plan">≣</span> plan</span>
+    <span class="k"><span class="st-ok">✓</span> completed</span>
+    <span class="k"><span class="st-bad">✕</span> failed</span>
+    <span class="k"><span class="st-pend">◔</span> pending approval</span>
+    <span class="k"><span class="st-int">⊘</span> interrupted</span>
+    <span class="k"><span class="spinner"></span> in&nbsp;progress</span>
+  </div>
+
+  <h2>1 · The stream</h2>
+  <div class="tabs" id="tabs">
+    <button data-m="acc">A′ · Capped accordion</button>
+    <button data-m="dock" data-on>D · Bottom dock</button>
+    <button data-m="sheet">E · Overlay sheet</button>
+  </div>
+  <div class="modeblurb" id="modeblurb"></div>
+
+  <div class="stage" id="stage" data-mode="dock">
+    <div class="stream">
+
+      <div class="msg-user">The Files tab shows every change as “modified”, even brand-new files. Can you root-cause and fix?</div>
+
+      <div class="msg-agent"><p>I’ll trace how file changes get classified, starting from the ledger that records them.</p></div>
+
+      <div class="plan">
+        <div class="plan-head"><span class="ki ki-plan">≣</span> Plan <span class="count">3 of 5 · updates in place</span></div>
+        <div class="plan-item done"><span class="pi-mark">✓</span><span class="pi-text">Trace ledger classification path</span></div>
+        <div class="plan-item done"><span class="pi-mark">✓</span><span class="pi-text">Reproduce with a brand-new file</span></div>
+        <div class="plan-item done"><span class="pi-mark">✓</span><span class="pi-text">Fix first-touch classification</span></div>
+        <div class="plan-item now"><span class="pi-mark">▸</span><span class="pi-text">Cover added / modified / deleted in tests</span></div>
+        <div class="plan-item todo"><span class="pi-mark">○</span><span class="pi-text">Verify end-to-end in the UI</span></div>
+      </div>
+
+      <!-- burst 1: investigation -->
+      <div class="group" id="g1">
+        <button class="group-head" onclick="toggleGroup('g1')">
+          <span class="group-chevron">▶</span>
+          <span class="group-kinds"><span class="ki ki-search">⌕</span><span class="ki ki-read">▤</span><span class="ki ki-execute">❯</span></span>
+          <span class="group-title">9 actions · 3 search · 4 read · 2 execute</span>
+          <span class="group-meta"><span>12s</span><span class="st-ok">✓</span></span>
+        </button>
+        <div class="group-body">
+          <div class="row" data-id="r1">
+            <button class="row-line" onclick="rowClick('r1')">
+              <span class="ki ki-search">⌕</span>
+              <span class="row-title">recordFileChange <span class="dim">in services/session</span></span>
+              <span class="row-meta"><span>0.4s</span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail">
+              <div class="lbl">Grep · input</div><pre>pattern: recordFileChange
+path: services/session</pre>
+              <div class="lbl">result</div><pre>internal/runner/runner.go:412: func (r *Runner) recordFileChange(...)
+internal/runner/runner.go:436:   r.appendFileChange(verdict, path)</pre>
+            </div>
+            <div class="peek"><div class="lbl">Grep · input</div><pre>recordFileChange in services/session</pre><div class="lbl">result</div><pre>runner.go:412 func (r *Runner) recordFileChange(...)</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+          <div class="row" data-id="r2">
+            <button class="row-line" onclick="rowClick('r2')">
+              <span class="ki ki-read">▤</span>
+              <span class="row-title">services/session/internal/runner/runner.go</span>
+              <span class="row-meta"><span>0.2s</span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Read</div><pre>touched := map[string]bool{}   // every touch records "modified"
+// … 60 more lines …</pre></div>
+            <div class="peek"><div class="lbl">Read</div><pre>touched := map[string]bool{} // every touch records "modified"…</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+          <div class="row think" data-id="r3">
+            <button class="row-line" onclick="rowClick('r3')">
+              <span class="ki ki-think">◌</span>
+              <span class="row-title">Thought for 4s — the ledger never distinguishes created vs. edited files</span>
+              <span class="row-meta"></span>
+            </button>
+            <div class="row-detail"><div class="lbl">thinking</div><pre>Every touch is recorded with the same verdict. The wire emits tool_use before execution, so a stat at that moment can tell created from edited…</pre></div>
+            <div class="peek"><div class="lbl">thinking</div><pre>Every touch records the same verdict. Stat at tool_use time can tell created from edited…</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+          <div class="row" data-id="r4">
+            <button class="row-line" onclick="rowClick('r4')">
+              <span class="ki ki-execute">❯</span>
+              <span class="row-title">Run session runner test suite</span>
+              <span class="row-meta"><span>8.1s</span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Bash · command</div><pre>go test ./services/session/...</pre><div class="lbl">output</div><pre>ok  github.com/drewkidwell/mads/services/session/internal/runner  7.83s
+ok  github.com/drewkidwell/mads/services/session  0.41s
+(422 more lines)</pre></div>
+            <div class="peek"><div class="lbl">Bash</div><pre>go test ./services/session/...</pre><div class="lbl">output</div><pre>ok …/runner 7.83s</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+          <div class="row" data-id="r5">
+            <button class="row-line" onclick="rowClick('r5')">
+              <span class="ki ki-execute">❯</span>
+              <span class="row-title">Check classification of a brand-new file</span>
+              <span class="row-meta"><span>1.2s</span><span class="st-bad">✕</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Bash · command</div><pre>curl -s localhost:17373/sessions/ses_x/files | jq '.[0].change'</pre><div class="lbl">error</div><pre>"modified"   # expected "added"</pre></div>
+            <div class="peek"><div class="lbl">Bash</div><pre>curl …/files | jq '.[0].change'</pre><div class="lbl">error</div><pre>"modified"  # expected "added"</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg-agent"><p>Found it — <code>recordFileChange</code> writes the same verdict for every touch. The wire emits <code>tool_use</code> before execution, so a stat at that moment gives an honest answer. Applying the fix:</p></div>
+
+      <!-- burst 2: edits -->
+      <div class="group" id="g2" data-open>
+        <button class="group-head" onclick="toggleGroup('g2')">
+          <span class="group-chevron">▶</span>
+          <span class="group-kinds"><span class="ki ki-edit">±</span><span class="ki ki-execute">❯</span></span>
+          <span class="group-title">3 actions · 2 edit · 1 execute</span>
+          <span class="group-meta"><span class="diffstat"><b class="a">+24</b> <b class="d">−6</b></span><span>21s</span><span class="st-ok">✓</span></span>
+        </button>
+        <div class="group-body">
+          <div class="row" data-id="r6">
+            <button class="row-line" onclick="rowClick('r6')">
+              <span class="ki ki-edit">±</span>
+              <span class="row-title">runner.go <span class="dim">· classify first touch by stat</span></span>
+              <span class="row-meta"><span class="diffstat"><b class="a">+9</b> <b class="d">−4</b></span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail">
+              <div class="lbl">Edit · services/session/internal/runner/runner.go</div>
+              <div class="diff">
+                <div class="dl del"><span class="g">−</span>touched := map[string]bool{}</div>
+                <div class="dl del"><span class="g">−</span>r.appendFileChange("modified", path)</div>
+                <div class="dl add"><span class="g">+</span>touched := map[string]string{} // last verdict per path</div>
+                <div class="dl add"><span class="g">+</span>verdict := "modified"</div>
+                <div class="dl add"><span class="g">+</span>if _, err := os.Stat(r.touchAbs(path)); errors.Is(err, fs.ErrNotExist) {</div>
+                <div class="dl add"><span class="g">+</span>    verdict = "added" // first touch and the file isn't on disk yet</div>
+                <div class="dl add"><span class="g">+</span>}</div>
+                <div class="dl add"><span class="g">+</span>r.appendFileChange(verdict, path)</div>
+              </div>
+            </div>
+            <div class="peek"><div class="lbl">Edit · runner.go</div><div class="diff"><div class="dl del"><span class="g">−</span>r.appendFileChange("modified", path)</div><div class="dl add"><span class="g">+</span>r.appendFileChange(verdict, path)</div></div><div class="peek-hint">click for full diff</div></div>
+          </div>
+          <div class="row" data-id="r7">
+            <button class="row-line" onclick="rowClick('r7')">
+              <span class="ki ki-edit">±</span>
+              <span class="row-title">observation_test.go <span class="dim">· cover added/modified/deleted</span></span>
+              <span class="row-meta"><span class="diffstat"><b class="a">+15</b> <b class="d">−2</b></span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Edit</div><pre>+ func TestFileChangeClassification(t *testing.T) { … }</pre></div>
+            <div class="peek"><div class="lbl">Edit · observation_test.go</div><pre>+ TestFileChangeClassification …</pre><div class="peek-hint">click for full diff</div></div>
+          </div>
+          <div class="row" data-id="r8">
+            <button class="row-line" onclick="rowClick('r8')">
+              <span class="ki ki-execute">❯</span>
+              <span class="row-title">Re-run runner suite</span>
+              <span class="row-meta"><span>9.3s</span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Bash</div><pre>go test ./services/session/... → ok (all green)</pre></div>
+            <div class="peek"><div class="lbl">Bash</div><pre>go test ./services/session/... → ok</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RUNNING subagent: compact in-stream card; full stream opens in the dock -->
+      <div class="taskcard">
+        <button class="task-head" onclick="openSubagent('live')" style="width:100%; border:0; background:none;">
+          <span class="ki ki-agent">⛬</span>
+          <span>Verify classification end-to-end <span class="task-sub">· general-purpose</span></span>
+          <span class="task-meta"><span id="taskprog">9.8k tok · 4 tools · 27s</span><span class="spinner"></span></span>
+        </button>
+      </div>
+
+      <!-- COMPLETED subagent: summary lives inline, stream still one click away -->
+      <div class="taskcard">
+        <button class="task-head" onclick="openSubagent('done')" style="width:100%; border:0; background:none;">
+          <span class="ki ki-agent">⛬</span>
+          <span>Audit sweep idempotency <span class="task-sub">· general-purpose</span></span>
+          <span class="task-meta"><span>11.8k tok · 4 tools</span><span>38s</span><span class="st-ok">✓</span></span>
+        </button>
+        <div class="task-summary">Re-sweeping a turn with no deletions records nothing; recreating a swept file flows deleted → added correctly. One nit filed on ledger Repo normalization.</div>
+      </div>
+
+      <!-- burst 3: wrap-up with skill + interrupted examples -->
+      <div class="group" id="g3">
+        <button class="group-head" onclick="toggleGroup('g3')">
+          <span class="group-chevron">▶</span>
+          <span class="group-kinds"><span class="ki ki-skill">✦</span><span class="ki ki-execute">❯</span></span>
+          <span class="group-title">2 actions · 1 skill · 1 execute</span>
+          <span class="group-meta"><span>1m 04s</span><span class="st-int">⊘</span></span>
+        </button>
+        <div class="group-body">
+          <div class="row" data-id="r12">
+            <button class="row-line" onclick="rowClick('r12')">
+              <span class="ki ki-skill">✦</span>
+              <span class="row-title">/code-review <span class="dim">· staged changes</span></span>
+              <span class="row-meta"><span>58s</span><span class="st-ok">✓</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Skill · code-review</div><pre>2 findings, both addressed: missing Repo on ledger rows; sweep not idempotent.</pre></div>
+            <div class="peek"><div class="lbl">Skill</div><pre>/code-review → 2 findings, both addressed</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+          <div class="row" data-id="r13">
+            <button class="row-line" onclick="rowClick('r13')">
+              <span class="ki ki-execute">❯</span>
+              <span class="row-title">go test ./ui/... <span class="dim">· stopped by user</span></span>
+              <span class="row-meta"><span class="st-int">⊘ interrupted</span></span>
+            </button>
+            <div class="row-detail"><div class="lbl">Bash · interrupted</div><pre>go test ./ui/...
+^ turn interrupted before the result arrived — no output was recorded</pre></div>
+            <div class="peek"><div class="lbl">Bash · interrupted</div><pre>no result — turn was interrupted</pre><div class="peek-hint">click for full detail</div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg-agent"><p>Fixed and verified. First touches are classified by a stat at <code>tool_use</code> time, a turn-end sweep records deletions, and the subagent is confirming the full added → modified → deleted flow now.</p></div>
+
+      <button class="replaybtn" onclick="replay()">▶ Replay a live turn</button>
+      <div id="livezone"></div>
+
+      <!-- pinned bottom cluster: subagent strip, working indicator, and the composer
+           (input + Stop/Send) stick together above the viewport bottom — none of them
+           can scroll out of sight while the conversation is on screen -->
+      <div class="pinned">
+        <button class="substrip" onclick="openSubagent('live')" title="Open subagent stream">
+          <span class="ki ki-agent">⛬</span>
+          <span>Verify classification end-to-end</span>
+          <span class="op" id="stripop">❯ Drive create/edit/delete, poll ledger</span>
+          <span class="counters"><span id="stripprog">9.8k tok · 4 tools · 27s</span><span class="spinner"></span></span>
+        </button>
+        <div class="wi" id="wi"></div>
+        <div class="composer">
+          <input type="text" placeholder="Message the agent — @ to mention, / for commands">
+          <button class="stopbtn">■ Stop</button>
+          <button class="sendbtn">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- surface D -->
+    <div class="dock" id="dock">
+      <div class="surface-head"><span id="dock-ki"></span><span class="t" id="dock-title"></span><span class="m" id="dock-meta"></span><button class="x" onclick="closeSurfaces()">✕</button></div>
+      <div class="surface-body" id="dock-body"></div>
+    </div>
+
+    <!-- surface E -->
+    <div class="sheet" id="sheet">
+      <div class="surface-head"><span id="sheet-ki"></span><span class="t" id="sheet-title"></span><span class="m" id="sheet-meta"></span><button class="x" onclick="closeSurfaces()">✕</button></div>
+      <div class="surface-body" id="sheet-body"></div>
+    </div>
+  </div>
+
+  <!-- hidden template: the subagent's own stream, rendered with the same grouping UX -->
+  <template id="subagent-stream">
+    <div class="msg-agent" style="font-size:13.5px; color:var(--text-dim)">Spawning a session against the fake provider, then driving create/edit/delete and watching the ledger.</div>
+    <div class="group" data-open>
+      <div class="group-head" style="cursor:default"><span class="group-chevron" style="transform:rotate(90deg)">▶</span>
+        <span class="group-kinds"><span class="ki ki-execute">❯</span><span class="ki ki-mcp">◇</span></span>
+        <span class="group-title">4 actions · 3 execute · 1 mcp</span>
+        <span class="group-meta"><span class="spinner"></span></span></div>
+      <div class="group-body">
+        <div class="row"><div class="row-line" style="cursor:default"><span class="ki ki-execute">❯</span><span class="row-title">Start disposable session against fake provider</span><span class="row-meta"><span>2.1s</span><span class="st-ok">✓</span></span></div></div>
+        <div class="row"><div class="row-line" style="cursor:default"><span class="ki ki-mcp">◇</span><span class="row-title">screenshot <span class="dim">· Files tab</span></span><span class="badge">playwright</span><span class="row-meta"><span>1.8s</span><span class="st-ok">✓</span></span></div></div>
+        <div class="row"><div class="row-line" style="cursor:default"><span class="ki ki-execute">❯</span><span class="row-title">Create new.txt, verify ledger says "added"</span><span class="row-meta"><span>3.0s</span><span class="st-ok">✓</span></span></div></div>
+        <div class="row"><div class="row-line" style="cursor:default"><span class="ki ki-execute">❯</span><span class="row-title">Drive create/edit/delete, poll ledger</span><span class="row-meta"><span class="spinner"></span></span></div></div>
+      </div>
+    </div>
+    <div class="wi" style="padding-top:4px"><span class="wi-status-line">Drive create/edit/delete, poll ledger</span><span style="color:var(--text-faint)">·</span><span class="spinner"></span><span>Working</span><span class="elapsed">27s</span></div>
+  </template>
+
+</div>
+
+<script>
+  const blurbs = {
+    acc: "A′ — click expands in place, capped at ~260px with internal scroll, so the reflow is bounded. Zero extra chrome; detail lives exactly where the action happened.",
+    dock: "D — click opens a centered, tight-wrapped drawer (~980px) along the bottom, ShellDock-style. The stream never moves; click outside, Esc, or ✕ closes; clicking another row retargets. Subagent cards and the pinned strip open the full subagent stream here.",
+    sheet: "E — click slides a sheet over the right edge. No standing footprint, but it covers part of the conversation while open. Same close behavior as the dock.",
+  };
+  const stage = document.getElementById("stage");
+  const blurb = document.getElementById("modeblurb");
+  const tabs = document.getElementById("tabs");
+  const dock = document.getElementById("dock");
+  const sheet = document.getElementById("sheet");
+  blurb.textContent = blurbs.dock;
+  tabs.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    tabs.querySelectorAll("button").forEach((x) => x.removeAttribute("data-on"));
+    b.setAttribute("data-on", "");
+    stage.dataset.mode = b.dataset.m;
+    blurb.textContent = blurbs[b.dataset.m];
+    closeSurfaces();
+    document.querySelectorAll(".row[data-open]").forEach((r) => r.removeAttribute("data-open"));
+  });
+
+  function toggleGroup(id) {
+    const g = document.getElementById(id);
+    if (g.hasAttribute("data-open")) g.removeAttribute("data-open"); else g.setAttribute("data-open", "");
+  }
+
+  function fillSurface(prefix, kiHTML, title, meta, bodyHTML) {
+    document.getElementById(prefix + "-ki").innerHTML = kiHTML;
+    document.getElementById(prefix + "-title").textContent = title;
+    document.getElementById(prefix + "-meta").textContent = meta;
+    document.getElementById(prefix + "-body").innerHTML = bodyHTML;
+  }
+
+  function rowClick(id) {
+    const row = document.querySelector(`.row[data-id="${id}"]`);
+    const mode = stage.dataset.mode;
+    if (mode === "acc") {
+      if (row.hasAttribute("data-open")) row.removeAttribute("data-open"); else row.setAttribute("data-open", "");
+      return;
+    }
+    document.querySelectorAll(".row[data-sel]").forEach((r) => r.removeAttribute("data-sel"));
+    row.setAttribute("data-sel", "");
+    const detail = row.querySelector(".row-detail");
+    const meta = row.querySelector(".row-meta");
+    const args = [row.querySelector(".ki").outerHTML, row.querySelector(".row-title").textContent.trim(),
+      meta ? meta.textContent.trim() : "", detail ? detail.innerHTML : "no detail"];
+    if (mode === "dock") { fillSurface("dock", ...args); dock.setAttribute("data-open", ""); }
+    if (mode === "sheet") { fillSurface("sheet", ...args); sheet.setAttribute("data-open", ""); }
+  }
+
+  // subagent stream always opens in the dock (its content wants width + scroll)
+  function openSubagent(state) {
+    const body = document.getElementById("subagent-stream").innerHTML;
+    const meta = state === "live" ? "general-purpose · live" : "general-purpose · completed · 38s";
+    const title = state === "live" ? "Verify classification end-to-end" : "Audit sweep idempotency";
+    fillSurface("dock", '<span class="ki ki-agent">⛬</span>', title, meta, body);
+    sheet.removeAttribute("data-open");
+    dock.setAttribute("data-open", "");
+  }
+
+  function closeSurfaces() {
+    dock.removeAttribute("data-open");
+    sheet.removeAttribute("data-open");
+    document.querySelectorAll(".row[data-sel]").forEach((r) => r.removeAttribute("data-sel"));
+  }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSurfaces(); });
+  document.addEventListener("click", (e) => {
+    if (!dock.hasAttribute("data-open") && !sheet.hasAttribute("data-open")) return;
+    if (e.target.closest(".dock, .sheet, .row-line, .task-head, .substrip, .tabs")) return;
+    closeSurfaces();
+  });
+
+  // task_progress ticker: card, pinned strip counters, and strip's current-op line
+  const progStates = ["9.8k tok · 4 tools · 27s", "10.4k tok · 4 tools · 30s", "11.1k tok · 5 tools · 33s", "11.6k tok · 5 tools · 36s"];
+  const opStates = ["❯ Drive create/edit/delete, poll ledger", "❯ Delete gone.txt, expect \"deleted\"", "▤ Recheck ChangeList render", "◌ Thinking"];
+  let pi = 0;
+  const stripop = document.getElementById("stripop");
+  setInterval(() => {
+    pi = (pi + 1) % progStates.length;
+    document.getElementById("taskprog").textContent = progStates[pi];
+    document.getElementById("stripprog").textContent = progStates[pi];
+    stripop.classList.add("fading");
+    setTimeout(() => { stripop.textContent = opStates[pi]; stripop.classList.remove("fading"); }, 250);
+  }, 3000);
+
+  // ---------- live-turn replay (V2 indicator: title ticker + Working) ----------
+  const liveActions = [
+    { ki: "ki-search", g: "⌕", title: "sweepDeletedFiles call sites", dur: 600 },
+    { ki: "ki-read", g: "▤", title: "services/session/internal/runner/runner.go", dur: 500 },
+    { ki: "ki-think", g: "◌", title: "Thought for 3s — sweep must also run on the PTY pump", think: true, dur: 1400 },
+    { ki: "ki-edit", g: "±", title: "runner.go · sweep on both pumps", stat: "+6 −1", dur: 900 },
+    { ki: "ki-execute", g: "❯", title: "go test ./services/session/...", dur: 2600 },
+  ];
+  let replaying = false;
+  async function replay() {
+    if (replaying) return; replaying = true;
+    const zone = document.getElementById("livezone");
+    const wi = document.getElementById("wi");
+    zone.innerHTML = `<div class="msg-agent"><p>One more hardening pass — the deletion sweep should cover the PTY transport too.</p></div>
+      <div class="group" data-open id="liveg">
+        <button class="group-head"><span class="group-chevron">▶</span>
+          <span class="group-kinds" id="livekinds"></span>
+          <span class="group-title" id="livetitle">0 actions</span>
+          <span class="group-meta" id="livemeta"><span class="spinner"></span></span></button>
+        <div class="group-body" id="livebody"></div></div>`;
+    const t0 = Date.now();
+    let n = 0, current = "…";
+    const tick = setInterval(() => {
+      wi.innerHTML = `<span class="wi-status-line">${current}</span>
+        <span style="color:var(--text-faint)">·</span>
+        <span class="spinner"></span><span>Working</span>
+        <span class="elapsed">${Math.round((Date.now() - t0) / 1000)}s</span>`;
+    }, 250);
+    const seenKinds = new Set();
+    for (const a of liveActions) {
+      current = a.think ? "Thinking" : a.title;
+      const el = document.createElement("div");
+      el.className = "row row-enter" + (a.think ? " think" : "");
+      el.innerHTML = `<button class="row-line"><span class="ki ${a.ki}">${a.g}</span>
+        <span class="row-title">${a.title}</span>
+        <span class="row-meta"><span class="spinner"></span></span></button>`;
+      document.getElementById("livebody").appendChild(el);
+      if (!seenKinds.has(a.ki) && !a.think) {
+        seenKinds.add(a.ki);
+        document.getElementById("livekinds").innerHTML += `<span class="ki ${a.ki}">${a.g}</span>`;
+      }
+      n++;
+      document.getElementById("livetitle").textContent = `${n} action${n > 1 ? "s" : ""}`;
+      await new Promise((r) => setTimeout(r, a.dur));
+      el.querySelector(".row-meta").innerHTML = a.stat
+        ? `<span class="diffstat"><b class="a">${a.stat.split(" ")[0]}</b> <b class="d">${a.stat.split(" ")[1]}</b></span><span class="st-ok">✓</span>`
+        : a.think ? "" : `<span>${(a.dur / 1000).toFixed(1)}s</span><span class="st-ok">✓</span>`;
+    }
+    clearInterval(tick);
+    document.getElementById("livemeta").innerHTML = `<span>${Math.round((Date.now() - t0) / 1000)}s</span><span class="st-ok">✓</span>`;
+    document.getElementById("liveg").removeAttribute("data-open");
+    zone.insertAdjacentHTML("beforeend", `<div class="msg-agent row-enter"><p>Sweep now runs on both pumps; suite is green. That closes the hardening pass.</p></div>`);
+    wi.innerHTML = "";
+    replaying = false;
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,200 @@
+/* Activity group (mockup v3 "burst" treatment) — always-grouped tool runs. */
+
+.group {
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: 0;
+  color: var(--text2);
+  /* Same scale as the rows below (.rowLine, full-size KindIcons) — a header
+     smaller than its own expanded content reads upside-down. */
+  font: 13.5px var(--mono);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 10px;
+}
+.head:hover {
+  background: var(--bg2);
+}
+.group[data-open] .head {
+  border-bottom: 1px solid var(--line-soft);
+  border-radius: 10px 10px 0 0;
+}
+
+.chevron {
+  color: var(--text3);
+  transition: transform 0.15s;
+  font-size: 11px;
+}
+.group[data-open] .chevron {
+  transform: rotate(90deg);
+}
+
+.kinds {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.meta {
+  margin-left: auto;
+  color: var(--text3);
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.body {
+  padding: 5px 8px 8px;
+}
+
+/* ---------- rows ---------- */
+
+.row {
+  position: relative;
+  border-radius: 7px;
+}
+
+.rowLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  color: var(--text);
+  font: 13.5px var(--mono);
+  text-align: left;
+  border-radius: 7px;
+}
+button.rowLine {
+  cursor: pointer;
+}
+button.rowLine:hover {
+  background: var(--bg2);
+}
+.row[data-sel] .rowLine {
+  background: var(--accent-soft);
+}
+
+.rowName {
+  color: var(--text3);
+  flex-shrink: 0;
+}
+
+/* Start-truncated title: ellipsis at the left so the tail (basename, the
+   distinguishing part) stays visible; <bdi> keeps the LTR text rendering
+   correctly inside the RTL overflow container. */
+.rowTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  direction: rtl;
+  text-align: left;
+}
+.rowTitle bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.rowLoc {
+  color: var(--text3);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.rowMeta {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text3);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.think .rowTitle {
+  color: var(--text3);
+  font-style: italic;
+}
+
+/* Live rows ease in instead of blipping — same discipline as ToolCard's
+   cardEnter; global.css's prefers-reduced-motion rule disables wholesale. */
+.rowEnter {
+  animation: row-in 0.18s ease-out both;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- hover peek ---------- */
+
+.peek {
+  position: absolute;
+  left: 40px;
+  top: calc(100% + 2px);
+  /* Above the pinned bottom cluster (z 40, translucent + backdrop-blur):
+     a peek opening from a low row would otherwise slide underneath it and
+     its text would ghost through the cluster's surface. Stays below the
+     dock (z 60). */
+  z-index: 50;
+  width: min(540px, 90%);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text2);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
+/* Flipped variant: opens above the row when the downward card would
+   overflow the scroll container's bottom edge (usePeekFlip). */
+.peekUp {
+  top: auto;
+  bottom: calc(100% + 2px);
+}
+
+.peek pre {
+  font: 12px var(--mono);
+  max-height: 130px;
+  overflow: hidden;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  margin: 0;
+}
+
+.peekHint {
+  margin-top: var(--space-2);
+  color: var(--text3);
+  font: 11px var(--sans);
+}
+
+.lbl {
+  color: var(--text3);
+  font: 11px var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 9px 0 3px;
+}
+.lbl:first-child {
+  margin-top: 0;
+}

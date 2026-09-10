@@ -122,6 +122,32 @@ describe("FetchRouterClient", () => {
     );
   });
 
+  it("getToolDiff GETs /sessions/:id/tool-diff with the tool_use_id query param", async () => {
+    const fetchMock = mockFetchOnce({
+      path: "runner.go",
+      original: "old",
+      modified: "new",
+    });
+    const client = new FetchRouterClient("http://router.local");
+    const diff = await client.getToolDiff("s1", "toolu_42");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/tool-diff?tool_use_id=toolu_42",
+    );
+    expect(diff?.original).toBe("old");
+  });
+
+  it("getToolDiff resolves null on 404 — the documented keep-your-input-derived-diff answer, never a throw", async () => {
+    mockFetchOnce({ error: "no capture recorded for tool_use_id" }, false, 404);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.getToolDiff("s1", "toolu_42")).resolves.toBeNull();
+  });
+
+  it("getToolDiff still throws on a non-404 failure", async () => {
+    mockFetchOnce(undefined, false, 500);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.getToolDiff("s1", "toolu_42")).rejects.toThrow(/500/);
+  });
+
   it("openInEditor POSTs the path and throws on a non-ok response", async () => {
     mockFetchOnce(undefined, false, 500);
     const client = new FetchRouterClient("http://router.local");

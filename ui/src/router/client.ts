@@ -41,6 +41,7 @@ import type {
   TaskOutcomes,
   TaskStatus,
   Template,
+  ToolDiff,
   TranscriptMessage,
   UpdateCheckResult,
   VersionInfo,
@@ -147,6 +148,13 @@ export interface RouterClient {
   getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
 
   getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff>;
+  /**
+   * One mutating tool call's historically-accurate before/after from the
+   * shadow store (docs/SHADOW-GIT-DIFFS-ADR.md). Resolves null on 404 —
+   * the documented "no capture recorded, keep your input-derived diff"
+   * answer, expected for old sessions and non-captured calls.
+   */
+  getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
   openInEditor(path: string): Promise<void>;
   mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
 
@@ -657,6 +665,16 @@ export class FetchRouterClient implements RouterClient {
 
   async getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/commits/${hash}/diff`, { path });
+  }
+
+  async getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null> {
+    const res = await fetch(
+      buildUrl(this.baseUrl, `/sessions/${sessionId}/tool-diff`, { tool_use_id: toolUseId }),
+    );
+    // 404 is the route's documented degrade signal (no shadow store / no
+    // capture for this call) — "keep the input-derived diff", not an error.
+    if (res.status === 404) return null;
+    return readJSON<ToolDiff>(res);
   }
 
   // MADS-UX §3.3's open-in-editor action; no `/system/open-editor` route

@@ -1,0 +1,54 @@
+/* In-stream Task subagent card (mockup v3 .taskcard). */
+
+.card {
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid #d9a06c;
+  border-radius: 10px;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 14px;
+  background: none;
+  border: 0;
+  font: 13px var(--mono);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  border-radius: 10px;
+}
+.head:hover {
+  background: var(--bg2);
+}
+
+.title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.sub {
+  color: var(--text3);
+}
+
+.meta {
+  margin-left: auto;
+  color: var(--text3);
+  font-size: 12px;
+  display: inline-flex;
+  gap: 12px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.summary {
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 16px 12px;
+  color: var(--text2);
+  font: 13.5px var(--sans);
+  max-width: 84ch;
+}

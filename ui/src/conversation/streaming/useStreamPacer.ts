@@ -6,6 +6,7 @@ import {
   drainAll,
   emptyPacer,
   enqueueText as enqueueTextPure,
+  enqueueThinking as enqueueThinkingPure,
   enqueueTool as enqueueToolPure,
   hasPending,
   pendingChars,
@@ -25,8 +26,12 @@ export interface StreamPacer {
   /** Revealed items to render for the live turn. */
   items: StreamItem[];
   enqueueText: (text: string) => void;
-  enqueueTool: (tool: ToolUse) => void;
-  applyToolResult: (id: string | undefined, result: { text?: string; is_error?: boolean }) => void;
+  enqueueTool: (tool: ToolUse, timestamp?: string) => void;
+  enqueueThinking: (text: string) => void;
+  applyToolResult: (
+    id: string | undefined,
+    result: { text?: string; is_error?: boolean; timestamp?: string },
+  ) => void;
   /** Keep draining what's queued, then invoke `onDrained` (used at turn_end). */
   finish: (onDrained: () => void) => void;
   /** Clear everything (session switch, turn reset). */
@@ -108,19 +113,31 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
   );
 
   const enqueueTool = useCallback(
-    (tool: ToolUse) => {
+    (tool: ToolUse, timestamp?: string) => {
       if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
-        commit(drainAll(enqueueToolPure(stateRef.current, tool)));
+        commit(drainAll(enqueueToolPure(stateRef.current, tool, timestamp)));
         return;
       }
-      stateRef.current = enqueueToolPure(stateRef.current, tool);
+      stateRef.current = enqueueToolPure(stateRef.current, tool, timestamp);
+      ensureLoop();
+    },
+    [commit, ensureLoop],
+  );
+
+  const enqueueThinking = useCallback(
+    (text: string) => {
+      if (rateRef.current == null || !Number.isFinite(rateRef.current)) {
+        commit(drainAll(enqueueThinkingPure(stateRef.current, text)));
+        return;
+      }
+      stateRef.current = enqueueThinkingPure(stateRef.current, text);
       ensureLoop();
     },
     [commit, ensureLoop],
   );
 
   const applyToolResult = useCallback(
-    (id: string | undefined, result: { text?: string; is_error?: boolean }) => {
+    (id: string | undefined, result: { text?: string; is_error?: boolean; timestamp?: string }) => {
       commit(applyToolResultPure(stateRef.current, id, result));
     },
     [commit],
@@ -153,5 +170,5 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
     };
   }, []);
 
-  return { items, enqueueText, enqueueTool, applyToolResult, finish, reset };
+  return { items, enqueueText, enqueueTool, enqueueThinking, applyToolResult, finish, reset };
 }

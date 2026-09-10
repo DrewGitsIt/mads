@@ -233,12 +233,52 @@ export interface Envelope {
  * the per-session process or not at all.
  */
 
+// mirrors providers/provider/event.go ToolKind — ACP's tool-kind vocabulary
+// plus mads extensions (mcp, skill, plan). Icon choice and activity grouping
+// key off this, never off the harness-specific tool name.
+export type ToolKind =
+  | "read"
+  | "edit"
+  | "delete"
+  | "move"
+  | "search"
+  | "execute"
+  | "think"
+  | "fetch"
+  | "agent"
+  | "mcp"
+  | "skill"
+  | "plan"
+  | "other";
+
+// mirrors providers/provider/event.go ToolStatus — a tool call's lifecycle
+// state. Absent means the wire didn't state one (yet).
+export type ToolStatus = "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+
+// mirrors providers/provider/event.go ToolLocation — one file position a
+// tool call touched (absolute path when known; line is 1-based, absent
+// means the whole file).
+export interface ToolLocation {
+  path: string;
+  line?: number;
+}
+
 // mirrors providers/provider/event.go ToolUse
 export interface ToolUse {
   id?: string;
   name: string;
   input?: unknown; // json.RawMessage
   path?: string;
+  // Enriched rendering fields (all optional — records persisted before
+  // enrichment simply lack them; treat absence as unknown).
+  kind?: ToolKind;
+  // Server-built one-line human summary of the call — supersedes the UI's
+  // own summarize() derivation when present.
+  title?: string;
+  status?: ToolStatus;
+  locations?: ToolLocation[];
+  // MCP server name, set only when kind is "mcp".
+  server?: string;
   // result is attached client-side (toolPairing.ts's foldToolResults) by
   // correlating a "tool_result" TranscriptMessage back to this tool_use by
   // ID — never present on the wire shape itself.
@@ -367,16 +407,100 @@ export interface CompactStatus {
   error?: string;
 }
 
-// mirrors providers/provider/event.go Event (normalized data-plane stream)
-export type StreamEvent =
-  | { kind: "text"; text: string }
-  | { kind: "tool_use"; tool: ToolUse }
-  | { kind: "turn_end"; usage?: Usage; interrupted?: boolean }
-  | { kind: "error"; text: string }
-  | { kind: "pty_output"; text: string }
-  | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean }
-  | { kind: "permission_request"; permission: PermissionRequest }
-  | { kind: "compact"; compact: CompactStatus };
+// mirrors providers/provider/event.go TaskStatus (payload of the "task"
+// stream event) and pkg/contracts/conversation.go SubagentTask (payload of
+// persisted "session.subagent_task" envelopes — identical shape, plus
+// parent_tool_use_id for a nested spawn's lifecycle line, depth >= 2).
+// Which fields are present depends on phase; absent means the wire line
+// didn't carry the field.
+export interface SubagentTask {
+  phase: "started" | "progress" | "updated" | "notification";
+  task_id: string;
+  // The spawning Agent tool_use's ID — correlation key to the subagent's
+  // own parent-tagged stream. Absent on "updated" lines.
+  tool_use_id?: string;
+  description?: string;
+  subagent_type?: string;
+  prompt?: string; // "started" only
+  is_backgrounded?: boolean; // "started" only
+  spawn_depth?: number; // "started" only; 1 = spawned by the main agent
+  // Running counters ("progress") or final totals ("notification").
+  total_tokens?: number;
+  tool_uses?: number;
+  duration_ms?: number;
+  last_tool_name?: string; // "progress" only
+  status?: string; // "updated" and "notification", e.g. "completed"
+  summary?: string; // "notification" only — the subagent's final report
+  output_file?: string; // "notification" only
+  parent_tool_use_id?: string; // contracts payload only: nested spawn's tag
+}
+
+// mirrors providers/provider/event.go Event's subagent tagging fields —
+// present on any stream event a subagent's sidechain produced. Absent (all
+// three) means the main agent produced the event; consumers must route
+// tagged events to the spawning tool call's own stream, never interleave
+// them into the main transcript.
+export interface SubagentTag {
+  parent_tool_use_id?: string;
+  subagent_type?: string;
+  task_description?: string;
+}
+
+// mirrors providers/provider/event.go Event (normalized data-plane stream).
+// Every variant may additionally carry the SubagentTag fields.
+export type StreamEvent = SubagentTag &
+  (
+    | { kind: "text"; text: string }
+    | { kind: "tool_use"; tool: ToolUse }
+    | { kind: "turn_end"; usage?: Usage; interrupted?: boolean }
+    | { kind: "error"; text: string }
+    | { kind: "pty_output"; text: string }
+    | { kind: "tool_result"; tool?: ToolUse; text?: string; is_error?: boolean }
+    | { kind: "permission_request"; permission: PermissionRequest }
+    | { kind: "compact"; compact: CompactStatus }
+    // A spawned subagent task's lifecycle update (the harness's own
+    // bookkeeping — spawn, progress counters, final status + summary).
+    | { kind: "task"; task: SubagentTask }
+    // Extended thinking: text set = a whole thinking block;
+    // thinking_tokens alone = a live estimated-token progress tick for the
+    // "Thinking…" indicator title.
+    | { kind: "thinking"; text?: string; thinking_tokens?: number }
+  );
+
+// mirrors pkg/contracts/conversation.go SubagentEvent — the payload of a
+// persisted "session.subagent_event" Envelope: one conversation event a
+// subagent sidechain produced. The event log is the ONLY historical source
+// for these (claude-code's transcript omits sidechains); fetch a subagent's
+// stream with GET /events?session_id=…&types=session.subagent_event and
+// filter by parent_tool_use_id.
+export interface SubagentEvent {
+  parent_tool_use_id: string;
+  subagent_type?: string;
+  task_description?: string;
+  kind: "text" | "tool_use" | "tool_result" | "thinking";
+  text?: string;
+  tool?: ToolUse;
+  is_error?: boolean;
+}
+
+// mirrors pkg/contracts/conversation.go ThinkingBlock — the payload of a
+// persisted "session.thinking" Envelope: one whole main-agent thinking
+// block (token ticks are never persisted).
+export interface ThinkingBlock {
+  text: string;
+  thinking_tokens?: number;
+}
+
+// mirrors pkg/contracts/conversation.go ToolStatusChange — the payload of a
+// persisted "session.tool_status_changed" Envelope: the runner's status
+// synthesis (pkg/toolstatus) moved a tool call to a state no wire event
+// carries ("interrupted" on a resultless turn end, "pending" while
+// permission-parked, "in_progress" on allow). Merge by tool_use_id.
+export interface ToolStatusChange {
+  tool_use_id: string;
+  status: ToolStatus;
+  parent_tool_use_id?: string;
+}
 
 // mirrors pkg/contracts/session.go Session (fields this tab reads)
 
@@ -553,6 +677,22 @@ export interface FileDiff {
   language?: string;
   original: string;
   modified: string;
+}
+
+// mirrors services/router/internal/api/tool_diff.go toolDiff — one mutating
+// tool call's historically-accurate before/after content from the shadow
+// store (GET /sessions/{id}/tool-diff?tool_use_id=…). A 404 on that route
+// means "no capture recorded — keep the input-derived diff" and is surfaced
+// as null by RouterClient.getToolDiff, never as an error.
+export interface ToolDiff {
+  path: string;
+  original: string;
+  modified: string;
+  // The pre-image exceeded the ~10 MB capture guard — original is empty and
+  // the UI must say so rather than render an empty-old-side lie.
+  original_too_large?: boolean;
+  // The after side was itself a too-large marker.
+  modified_too_large?: boolean;
 }
 
 /**

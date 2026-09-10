@@ -1,0 +1,57 @@
+/* In-place-updating TodoWrite checklist (mockup v3 plan widget). */
+
+.plan {
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid #8fd9c0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  max-width: 62ch;
+}
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font: 13px var(--mono);
+  color: var(--text2);
+  margin-bottom: var(--space-2);
+}
+
+.count {
+  margin-left: auto;
+  color: var(--text3);
+  font-size: 12px;
+}
+
+.item {
+  display: flex;
+  gap: 10px;
+  font: 13.5px var(--sans);
+  padding: 3px 0;
+  align-items: baseline;
+}
+.item[data-status="completed"] {
+  color: var(--text3);
+}
+.item[data-status="completed"] .text {
+  text-decoration: line-through;
+  text-decoration-color: var(--line);
+}
+.item[data-status="in_progress"] {
+  color: var(--text);
+}
+.item[data-status="pending"] {
+  color: var(--text2);
+}
+
+.mark {
+  font: 13px var(--mono);
+  width: 15px;
+  flex-shrink: 0;
+}
+.item[data-status="completed"] .mark {
+  color: var(--ok-fg);
+}
+.item[data-status="in_progress"] .mark {
+  color: var(--accent);
+}

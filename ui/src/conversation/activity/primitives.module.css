@@ -1,0 +1,126 @@
+/*
+ * Vocabulary primitives (conversation-redesign mockup v3 §0), translated
+ * into the app's token system: semantic hues reuse tokens (--info/--ok/
+ * --bad/--warn/--accent/--text3); kinds with no token equivalent (search/
+ * mcp purples, fetch teal, plan mint, move blue, agent amber) keep the
+ * mockup's approved values, working in both themes as tinted tiles.
+ */
+
+.ki {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  align-items: center;
+  justify-content: center;
+  font: 13px var(--mono);
+  flex-shrink: 0;
+  color: var(--ki-color, var(--text2));
+  background: color-mix(in srgb, var(--ki-color, var(--text2)) 14%, transparent);
+}
+
+.sm {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+  border-radius: 5px;
+}
+
+.read {
+  --ki-color: var(--info);
+}
+.search {
+  --ki-color: #b49bd9;
+}
+.execute {
+  --ki-color: var(--accent);
+}
+.edit {
+  --ki-color: var(--ok);
+}
+.delete {
+  --ki-color: var(--bad);
+}
+.move {
+  --ki-color: #6c9dd9;
+}
+.fetch {
+  --ki-color: #6cc5c9;
+}
+.think {
+  --ki-color: var(--text3);
+}
+.agent {
+  --ki-color: #d9a06c;
+}
+.mcp {
+  --ki-color: #a98fd9;
+}
+.skill {
+  --ki-color: var(--warn);
+}
+.plan {
+  --ki-color: #8fd9c0;
+}
+.other {
+  --ki-color: var(--text2);
+}
+
+/* status glyphs */
+.st {
+  font: 13px var(--mono);
+  flex-shrink: 0;
+  line-height: 1;
+}
+.stOk {
+  color: var(--ok-fg);
+}
+.stBad {
+  color: var(--bad-fg);
+}
+.stPend {
+  color: var(--warn-fg);
+}
+.stInt {
+  color: var(--text3);
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--line-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  display: inline-block;
+  flex-shrink: 0;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* diffstat chip */
+.diffstat {
+  display: inline-flex;
+  gap: 6px;
+  font: 600 12px var(--mono);
+  flex-shrink: 0;
+}
+.diffstatAdd {
+  color: var(--ok-fg);
+}
+.diffstatDel {
+  color: var(--bad-fg);
+}
+
+/* MCP server badge */
+.badge {
+  font: 11px var(--mono);
+  color: #a98fd9;
+  border: 1px solid color-mix(in srgb, #a98fd9 35%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
