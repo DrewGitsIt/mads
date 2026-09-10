@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -165,6 +167,93 @@ func (s *server) handleSetSessionTrust(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, sess)
+}
+
+// handleSetSessionModel changes a session's model after creation — the
+// header model pill and the composer's "/model" command. Like trust, the
+// model is a spawn-time provider flag (providers/claudecode/session.go's
+// --model), so it is persisted on the record first (that's what the next
+// cold start reads) and then applied to the live child if there is one.
+//
+// Unlike trust, applying it is NOT a bounce. The child cycles its provider
+// process in place, resuming the same ref, so the conversation survives —
+// and if a turn is in flight the child queues the switch behind it rather
+// than interrupting the agent (runner.SetModel). Queued comes back in the
+// response so the UI can say the change lands at the end of the current turn
+// instead of claiming it already took effect.
+//
+// A child that fails the switch is reported as a 502, but the record is
+// already updated by then — the message says so rather than lying about
+// which model is running.
+func (s *server) handleSetSessionModel(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Model string `json:"model"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	model := strings.TrimSpace(body.Model)
+	if model == "" {
+		writeErrMsg(w, http.StatusBadRequest, "set session model: ",
+			errors.New("model must not be empty"))
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess.Model = model
+	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	addr, running := s.sup.SessionAddr(id)
+	if !running {
+		// Nothing live to reconfigure; the updated record is what the next
+		// spawn reads. Not queued — there is no turn to queue behind.
+		writeJSON(w, http.StatusOK, contracts.SetSessionModelResponse{Session: sess})
+		return
+	}
+	queued, err := s.setChildModel(r.Context(), addr, model)
+	if err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "set session model: saved, but applying it to the running agent failed: ", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, contracts.SetSessionModelResponse{Session: sess, Queued: queued})
+}
+
+// setChildModel forwards the new model to a running session child's own
+// POST /model and reports back whether the child queued the switch behind an
+// in-flight turn. Not proxyTo: the Router has to merge the child's answer
+// with the session record it just updated, which a byte-transparent proxy
+// can't do.
+func (s *server) setChildModel(ctx context.Context, addr, model string) (queued bool, err error) {
+	raw, err := json.Marshal(map[string]string{"model": model})
+	if err != nil {
+		return false, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/model", bytes.NewReader(raw))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("child set model: status %d", resp.StatusCode)
+	}
+	var out struct {
+		Queued bool `json:"queued"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return false, fmt.Errorf("child set model: decode response: %w", err)
+	}
+	return out.Queued, nil
 }
 
 func (s *server) handleTerminateSession(w http.ResponseWriter, r *http.Request) {

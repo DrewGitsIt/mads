@@ -243,7 +243,8 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 	if desired != nil {
 		mcp = []provider.MCPServerRef{*desired}
 	}
-	if _, err := r.swapTransport(ctx, mode, mcp, true); err != nil {
+	_, model := r.currentSwapBasis()
+	if _, err := r.swapTransport(ctx, mode, mcp, model, true); err != nil {
 		if errors.Is(err, ErrNoResumeRef) || errors.Is(err, ErrSwitchBusy) {
 			// Leave whatever status the store already holds — pending_restart
 			// (the store default) is still an honest, non-blank answer, and a

@@ -17,7 +17,15 @@ export interface ConversationHeaderProps {
   /** Active display modality. When set, the Chat/Terminal switch renders here. */
   mode?: "chat" | "terminal";
   onModeChange?: (mode: "chat" | "terminal") => void;
-  onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => void;
+  onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent">>) => void;
+  /**
+   * Changes the session's model live (POST /sessions/{id}/model). Separate
+   * from onUpdateSession for the same reason onChangeTrust is: this one
+   * actually persists and reconfigures the running agent, rather than just
+   * relabelling the pill. Absent → the pill still opens but selecting does
+   * nothing (e.g. gallery renders).
+   */
+  onChangeModel?: (model: string) => void;
   /**
    * Changes the session's trust level live (POST /sessions/{id}/trust) —
    * the actionable half of the blocked-permission banner's "raise trust".
@@ -41,12 +49,16 @@ export function ConversationHeader({
   mode,
   onModeChange,
   onUpdateSession,
+  onChangeModel,
   onChangeTrust,
 }: ConversationHeaderProps) {
   const [openPill, setOpenPill] = useState<PillField | null>(null);
   const modelsByProvider = useProviderModels();
 
-  function commitPill(field: PillField, value: string) {
+  // Narrowed to the free-text pills onUpdateSession still owns. Model and
+  // trust are not among them: both persist through their own endpoint
+  // (onChangeModel / onChangeTrust) rather than patching local state.
+  function commitPill(field: "name" | "agent", value: string) {
     setOpenPill(null);
     const trimmed = value.trim();
     if (trimmed && trimmed !== session[field]) {
@@ -78,7 +90,7 @@ export function ConversationHeader({
             onClose={() => setOpenPill(null)}
             onSelect={(id) => {
               setOpenPill(null);
-              if (id !== session.model) onUpdateSession?.({ model: id });
+              if (id !== session.model) onChangeModel?.(id);
             }}
           />
         )}

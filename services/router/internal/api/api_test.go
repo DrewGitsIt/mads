@@ -471,6 +471,113 @@ func TestSetSessionTrust(t *testing.T) {
 	}
 }
 
+// TestSetSessionModel covers the endpoint that was missing entirely: the UI
+// had no way to change a session's model after creation, so the header pill
+// and "/model" only ever updated local React state. Asserts both halves —
+// the record is persisted AND the live child is reconfigured — since either
+// one alone reproduces the original "switching models does nothing" bug.
+func TestSetSessionModel(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "switch me", "provider": "fake"})
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+		Addr string `json:"addr"`
+	}](t, resp)
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/model", map[string]string{"model": "claude-opus-5"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set model status = %d, want 200", resp.StatusCode)
+	}
+	out := decodeJSON[contracts.SetSessionModelResponse](t, resp)
+	if out.Session.Model != "claude-opus-5" {
+		t.Fatalf("response model = %q, want %q", out.Session.Model, "claude-opus-5")
+	}
+	if out.Queued {
+		t.Fatal("queued = true, want false — the child reported an immediate switch")
+	}
+
+	// Persisted: this is what the next spawn reads.
+	getResp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := decodeJSON[contracts.Session](t, getResp)
+	if fetched.Model != "claude-opus-5" {
+		t.Fatalf("fetched model = %q, want %q", fetched.Model, "claude-opus-5")
+	}
+
+	// Applied to the running child too — a persisted-only change would leave
+	// the agent answering on the old model for the rest of the session.
+	childResp, err := http.Get("http://" + created.Addr + "/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := decodeJSON[struct {
+		Model string `json:"model"`
+	}](t, childResp)
+	if child.Model != "claude-opus-5" {
+		t.Fatalf("child model = %q, want %q — the switch never reached the agent", child.Model, "claude-opus-5")
+	}
+}
+
+// TestSetSessionModelQueuedMidTurn: the child defers a switch requested while
+// a turn is in flight rather than interrupting the agent, and the Router
+// passes that through so the UI can say the change lands at the turn's end
+// instead of claiming it already took effect. ("queued" is testchild's cue to
+// take that branch — see services/router/internal/testchild.)
+func TestSetSessionModelQueuedMidTurn(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "busy", "provider": "fake"})
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/model", map[string]string{"model": "queued"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("set model status = %d, want 200", resp.StatusCode)
+	}
+	out := decodeJSON[contracts.SetSessionModelResponse](t, resp)
+	if !out.Queued {
+		t.Fatal("queued = false, want true — a mid-turn switch must be reported as deferred")
+	}
+	// Still persisted: deferral is about the running process, not the record.
+	if out.Session.Model != "queued" {
+		t.Fatalf("response model = %q, want %q", out.Session.Model, "queued")
+	}
+}
+
+// TestSetSessionModelRejectsEmpty and the child-failure case: an empty model
+// would otherwise persist a blank binding and spawn the provider with no
+// --model at all, silently falling back to its default.
+func TestSetSessionModelRejectsEmpty(t *testing.T) {
+	srv := newTestServer(t)
+
+	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "empty", "provider": "fake", "model": "claude-sonnet-5"})
+	created := decodeJSON[struct {
+		Session struct {
+			ID string `json:"id"`
+		} `json:"session"`
+	}](t, resp)
+
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/model", map[string]string{"model": "   "})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty model status = %d, want 400", resp.StatusCode)
+	}
+
+	// A child that refuses the switch is a 502 — the record is already
+	// updated by then, which the message says rather than hiding.
+	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/model", map[string]string{"model": "not_ready"})
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("child-refused status = %d, want 502", resp.StatusCode)
+	}
+}
+
 func TestStartCancelPipeline(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	data := dataclient.New(base, "test")

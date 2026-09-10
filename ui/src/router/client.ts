@@ -37,6 +37,7 @@ import type {
   Session,
   SessionDefaults,
   SessionTrust,
+  SetSessionModelResponse,
   Task,
   TaskOutcomes,
   TaskStatus,
@@ -115,6 +116,7 @@ export interface RouterClient {
   resumeSession(sessionId: string): Promise<{ addr: string }>;
   renameSession(id: string, name: string): Promise<Session>;
   setSessionTrust(id: string, trust: SessionTrust): Promise<Session>;
+  setSessionModel(id: string, model: string): Promise<SetSessionModelResponse>;
   deleteSession(id: string): Promise<void>;
   getMentionables(query: string): Promise<Mentionable[]>;
   getSkillCapabilities(agentId?: string): Promise<CapabilitySummary[]>;
@@ -557,6 +559,14 @@ export class FetchRouterClient implements RouterClient {
     // Trust is spawn-time-only in the runner, so the Router bounces a live
     // child as part of this call — an in-flight turn is interrupted.
     return routerPost(this.baseUrl, `/sessions/${id}/trust`, { trust });
+  }
+
+  async setSessionModel(id: string, model: string): Promise<SetSessionModelResponse> {
+    // Unlike trust this never bounces the session: the Router persists the
+    // model, then the child cycles its provider process in place (same ref,
+    // conversation intact) — or queues the cycle behind an in-flight turn and
+    // reports queued: true.
+    return routerPost(this.baseUrl, `/sessions/${id}/model`, { model });
   }
 
   async deleteSession(id: string): Promise<void> {

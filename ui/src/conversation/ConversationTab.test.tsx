@@ -1303,4 +1303,83 @@ describe("ConversationTab", () => {
       expect(screen.getByText("the reply that arrived while backgrounded")).toBeTruthy();
     });
   });
+  // The header model pill and "/model" used to be pure local state: the pill
+  // relabelled, a toast claimed success, and nothing left the browser — the
+  // session record still held the old model and the agent kept running it.
+  // These cover the wiring that replaced that (POST /sessions/{id}/model).
+  describe("model switching", () => {
+    function stubProviderModels() {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((input: URL) => {
+          const url = input.toString();
+          if (url.endsWith("/providers")) {
+            return Promise.resolve(
+              new Response(JSON.stringify([{ name: "claudecode", matrix: {} }]), { status: 200 }),
+            );
+          }
+          if (url.endsWith("/models")) {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  models: [
+                    { id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true },
+                    { id: "claude-opus-5", name: "Claude Opus 5" },
+                  ],
+                }),
+                { status: 200 },
+              ),
+            );
+          }
+          return Promise.resolve(new Response("{}", { status: 200 }));
+        }),
+      );
+    }
+
+    async function pickOpus(client: FakeRouterClient) {
+      stubProviderModels();
+      render(<ConversationTab sessionId="session-active" routerClient={client} />);
+      // Discovery has to land first or the pill is a static chip, not a menu.
+      await waitFor(() => expect(screen.getByText("Claude Sonnet 5")).toBeTruthy());
+      fireEvent.click(screen.getByText("Claude Sonnet 5"));
+      fireEvent.click(screen.getByText("Claude Opus 5"));
+    }
+
+    it("persists a header model switch on the session record instead of only relabelling the pill", async () => {
+      const client = new FakeRouterClient();
+      const setSessionModel = vi.spyOn(client, "setSessionModel");
+      await pickOpus(client);
+
+      await waitFor(() =>
+        expect(setSessionModel).toHaveBeenCalledWith("session-active", "claude-opus-5"),
+      );
+      const persisted = await client.getSession("session-active");
+      expect(persisted.model).toBe("claude-opus-5");
+      expect(screen.getByText("Model set to claude-opus-5.")).toBeTruthy();
+    });
+
+    it("says the switch lands at the end of the turn when the agent was mid-turn", async () => {
+      const client = new FakeRouterClient();
+      // The child queues rather than interrupting a running agent; the toast
+      // must not claim the model already changed.
+      client.queueModelSwitches = true;
+      await pickOpus(client);
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("Model set to claude-opus-5 — applies when the current turn finishes."),
+        ).toBeTruthy(),
+      );
+    });
+
+    it("surfaces a failed switch instead of leaving the pill showing the new model", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "setSessionModel").mockRejectedValue(new Error("agent is not running"));
+      await pickOpus(client);
+
+      await waitFor(() => expect(screen.getByText("Command failed")).toBeTruthy());
+      expect(screen.getByText("agent is not running")).toBeTruthy();
+      expect(screen.getByText("Claude Sonnet 5")).toBeTruthy();
+    });
+  });
 });

@@ -36,6 +36,7 @@ import type {
   Session,
   SessionDefaults,
   SessionTrust,
+  SetSessionModelResponse,
   StreamEvent,
   Task,
   TaskOutcomes,
@@ -784,6 +785,8 @@ export class FakeRouterClient implements RouterClient {
   readonly sessionEventSources: FakeSessionEventSource[] = [];
   /** Paths passed to openInEditor, in call order — lets tests assert the button fired without a real editor to open. */
   readonly openedPaths: string[] = [];
+  /** When true, setSessionModel answers queued: true — the "a turn was in flight, the switch lands at turn end" branch. */
+  queueModelSwitches = false;
   /** Per-session live transport mode, mutated by switchTransport and read back by getTransportMode — mirrors the real child's runner-held mode being the single source of truth (no live child = no entry = defaults "chat"). */
   private readonly transportModes = new Map<string, "chat" | "terminal">();
 
@@ -907,6 +910,19 @@ export class FakeRouterClient implements RouterClient {
     if (!session) throw new Error(`fixture session not found: ${id}`);
     session.trust = trust;
     return session;
+  }
+
+  /**
+   * Mirrors the real endpoint: the record always takes the new model, and
+   * `queued` reflects whether a turn was in flight. Tests drive that with
+   * `queueModelSwitches` rather than a live turn, since the fake has no
+   * provider process to be busy.
+   */
+  async setSessionModel(id: string, model: string): Promise<SetSessionModelResponse> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`fixture session not found: ${id}`);
+    session.model = model;
+    return { session, queued: this.queueModelSwitches };
   }
 
   async deleteSession(id: string): Promise<void> {

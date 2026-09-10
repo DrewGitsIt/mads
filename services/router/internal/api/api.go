@@ -99,6 +99,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)
 	mux.HandleFunc("POST /sessions/{id}/rename", s.handleRenameSession)
 	mux.HandleFunc("POST /sessions/{id}/trust", s.handleSetSessionTrust)
+	mux.HandleFunc("POST /sessions/{id}/model", s.handleSetSessionModel)
 	mux.HandleFunc("DELETE /sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /sessions/{id}/messages", s.handleSessionMessages)
 	mux.HandleFunc("POST /sessions/{id}/interrupt", s.handleSessionInterrupt)

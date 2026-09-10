@@ -211,6 +211,16 @@ type Runner struct {
 	// already uses. Guarded by mu.
 	orchestrateRefreshPending bool
 
+	// pendingModel holds a model change requested while a turn was in
+	// flight — same deferred-at-turn-boundary pattern as
+	// orchestrateRefreshPending, for the same reason: applying a model
+	// means cycling the provider process (--model is spawn-time for every
+	// provider that takes one, e.g. providers/claudecode/session.go), and
+	// swapTransport refuses to cycle mid-turn. Empty means nothing queued;
+	// a second request while one is already queued replaces it, since only
+	// the last model asked for is the one the user wants. Guarded by mu.
+	pendingModel string
+
 	// sentTurns counts every turn sent so far (Send and Inject alike),
 	// 1-indexed — the ordinal Transcript correlates against turnAttributions
 	// to attach the right Attribution to the right user-role message.
@@ -713,21 +723,37 @@ func (r *Runner) onTurnEnd() {
 			r.busy = false
 			r.mu.Unlock()
 		}
-		// orchestrateRefreshPending, if set, is left untouched here — it's
-		// only drained once the queue is truly empty (below), so a refresh
-		// requested mid-queue-drain retries at the next real turn boundary
-		// instead of racing this queued injection's own in-flight turn.
+		// orchestrateRefreshPending and pendingModel, if set, are left
+		// untouched here — both are only drained once the queue is truly
+		// empty (below), so a refresh or model switch requested
+		// mid-queue-drain retries at the next real turn boundary instead of
+		// cycling the provider process out from under this queued
+		// injection's own in-flight turn.
 		return
 	}
 	refreshPending := r.orchestrateRefreshPending
 	r.orchestrateRefreshPending = false
+	pendingModel := r.pendingModel
+	r.pendingModel = ""
 	closing := r.closing
 	r.mu.Unlock()
 
-	if refreshPending && !closing {
+	// Both deferred actions cycle the provider process, so they run in one
+	// goroutine sequentially rather than two racing ones: opMu would
+	// serialize them anyway, but ordering them here means the refresh cycles
+	// with the model the switch just installed instead of the stale one it
+	// would have captured before the switch landed.
+	if !closing && (pendingModel != "" || refreshPending) {
 		go func() {
-			if err := r.RefreshOrchestrate(context.Background()); err != nil {
-				log.Printf("runner: deferred orchestrate refresh: %v", err)
+			if pendingModel != "" {
+				if _, err := r.SetModel(context.Background(), pendingModel); err != nil {
+					log.Printf("runner: deferred model switch: %v", err)
+				}
+			}
+			if refreshPending {
+				if err := r.RefreshOrchestrate(context.Background()); err != nil {
+					log.Printf("runner: deferred orchestrate refresh: %v", err)
+				}
 			}
 		}()
 	}
@@ -817,15 +843,61 @@ func (r *Runner) Interrupt(ctx context.Context) error {
 // swapTransport, carrying forward the MCP server set already in effect so a
 // plain transport switch never perturbs it.
 func (r *Runner) SwitchTransport(ctx context.Context, mode provider.Mode) (string, error) {
-	return r.swapTransport(ctx, mode, r.currentMCPServers(), false)
+	mcp, model := r.currentSwapBasis()
+	return r.swapTransport(ctx, mode, mcp, model, false)
 }
 
-// currentMCPServers reads the MCP server set the currently-running provider
-// process was last started (or cycled) with.
-func (r *Runner) currentMCPServers() []provider.MCPServerRef {
+// currentSwapBasis reads the MCP server set and model the currently-running
+// provider process was last started (or cycled) with — the "leave this
+// alone" arguments for a swapTransport call that only means to change one
+// of the other dimensions. Read under a single lock hold so a concurrent
+// SetModel can't tear the pair apart.
+func (r *Runner) currentSwapBasis() ([]provider.MCPServerRef, string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.baseOpts.MCPServers
+	return r.baseOpts.MCPServers, r.baseOpts.Model
+}
+
+// SetModel changes the model this session's provider process runs. --model
+// is a spawn-time flag (providers/claudecode/session.go), so applying it
+// live means cycling the process via swapTransport — resumed by ref, so the
+// conversation continues rather than restarting. Callers are expected to
+// have already persisted the new model on the session record, which is what
+// a later cold start reads; this is only about the process running now.
+//
+// It never interrupts an in-flight turn. While busy the request is parked in
+// pendingModel and onTurnEnd applies it once the session goes idle, and
+// queued=true tells the caller to say "applies when this turn finishes"
+// instead of claiming the switch already happened.
+func (r *Runner) SetModel(ctx context.Context, model string) (queued bool, err error) {
+	r.mu.Lock()
+	if r.prov == nil {
+		r.mu.Unlock()
+		return false, ErrNotReady
+	}
+	if r.baseOpts.Model == model {
+		// Already live. Clear any queued change too: switching A→B and back
+		// to A mid-turn is a no-op overall, and leaving pendingModel set
+		// would otherwise fire a pointless cycle to B at turn end.
+		r.pendingModel = ""
+		r.mu.Unlock()
+		return false, nil
+	}
+	if r.busy {
+		r.pendingModel = model
+		r.mu.Unlock()
+		return true, nil
+	}
+	mode, mcp := r.mode, r.baseOpts.MCPServers
+	r.mu.Unlock()
+
+	// requireResumable: cycling without a ref would start an unrelated fresh
+	// provider session and silently drop the conversation — far worse than
+	// reporting that the model lands on the next start.
+	if _, err := r.swapTransport(ctx, mode, mcp, model, true); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // mcpServersEqual reports whether a and b describe the same MCP server set,
@@ -852,11 +924,13 @@ func mcpServersEqual(a, b []provider.MCPServerRef) bool {
 }
 
 // swapTransport is the shared "close old process, resume with the same ref,
-// start a new one" cycle behind both SwitchTransport (mode changes) and
+// start a new one" cycle behind SwitchTransport (mode changes),
 // RefreshOrchestrate (materializing/tearing down the orchestrate MCP server
-// on a running session without a user-visible restart, capability.go) — same
-// primitive, parameterized by mode and the MCP server set the new process
-// should advertise.
+// on a running session without a user-visible restart, capability.go) and
+// SetModel (mid-conversation model switches) — same primitive, parameterized
+// by mode, the MCP server set the new process should advertise, and the
+// model it should run. Callers changing one of those pass the live values
+// for the other two (currentSwapBasis).
 //
 // Refused with ErrSwitchBusy while a turn is in flight. When
 // requireResumable is set (RefreshOrchestrate only — SwitchTransport passes
@@ -866,9 +940,10 @@ func mcpServersEqual(a, b []provider.MCPServerRef) bool {
 // cycling here would silently start an unrelated fresh provider session
 // instead of resuming, discarding conversation history; RefreshOrchestrate
 // treats that as "leave pending_restart, retry later" rather than a hard
-// failure. Idempotent: mode and mcp both already matching what's live is a
-// no-op that returns the current ref without touching the provider process.
-func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []provider.MCPServerRef, requireResumable bool) (string, error) {
+// failure. Idempotent: mode, mcp and model all already matching what's live
+// is a no-op that returns the current ref without touching the provider
+// process.
+func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []provider.MCPServerRef, model string, requireResumable bool) (string, error) {
 	r.opMu.Lock()
 	defer r.opMu.Unlock()
 
@@ -881,7 +956,7 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 		r.mu.Unlock()
 		return "", ErrSwitchBusy
 	}
-	if r.sess != nil && r.sess.Mode() == mode && mcpServersEqual(r.baseOpts.MCPServers, mcp) {
+	if r.sess != nil && r.sess.Mode() == mode && mcpServersEqual(r.baseOpts.MCPServers, mcp) && r.baseOpts.Model == model {
 		ref := r.sess.Ref()
 		r.mu.Unlock()
 		return ref, nil
@@ -912,6 +987,7 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 	opts.Mode = mode
 	opts.Resume = resumeRef
 	opts.MCPServers = mcp
+	opts.Model = model
 
 	newSess, err := prov.Start(ctx, opts)
 	if err != nil {
@@ -926,6 +1002,7 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 	r.mode = mode
 	r.lastRef = newSess.Ref()
 	r.baseOpts.MCPServers = mcp
+	r.baseOpts.Model = model
 	r.mu.Unlock()
 
 	r.watchRefAnnounce(ctx, newSess)

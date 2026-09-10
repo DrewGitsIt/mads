@@ -1024,3 +1024,19 @@ export interface UpdateCheckResult {
   notes?: string;
   detail?: string;
 }
+
+/**
+ * POST /sessions/{id}/model's response (contracts.SetSessionModelResponse).
+ * The model is persisted on `session` whatever happens to the live agent, so
+ * a later restart always picks up the choice.
+ *
+ * `queued` is about the process running right now: false means it was cycled
+ * onto the new model immediately, true means a turn was in flight and the
+ * switch is parked until that turn ends — a model change never interrupts an
+ * agent mid-turn. The UI says which of the two happened instead of claiming
+ * the switch always took effect.
+ */
+export type SetSessionModelResponse = {
+  session: Session;
+  queued: boolean;
+};

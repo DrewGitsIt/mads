@@ -247,3 +247,18 @@ type Commit struct {
 	Orphan    bool      `json:"orphan,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
 }
+
+// SetSessionModelResponse is POST /sessions/{id}/model's wire shape. Session
+// is the updated record — the model is persisted whatever happens to the
+// live process, so a later cold start always reads the user's choice.
+//
+// Queued reports what happened to the process running right now: false means
+// it was cycled onto the new model immediately, true means a turn was in
+// flight and the switch is parked until that turn ends (a model change never
+// interrupts an agent mid-turn — see runner.SetModel). It is the UI's cue to
+// say "applies when this turn finishes" rather than claiming the model
+// already changed.
+type SetSessionModelResponse struct {
+	Session Session `json:"session"`
+	Queued  bool    `json:"queued"`
+}

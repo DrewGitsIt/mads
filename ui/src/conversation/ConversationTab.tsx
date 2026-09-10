@@ -349,11 +349,54 @@ export function ConversationTab({
   // "/agent"/"/model" commands — there's no Router PATCH /sessions/:id yet,
   // so this is a local-state commit exactly like the pills already did
   // before the Composer had any use for it.
+  // Persists a model change and reconfigures the running agent
+  // (POST /sessions/{id}/model). Resolves the child's queued flag: true means
+  // a turn was in flight and the switch lands at the end of it — the agent is
+  // never interrupted to change models. Throws on failure so both callers can
+  // say so; the record is already saved by the time the Router reports a
+  // child failure, hence the Router's own "saved, but..." wording.
+  const applyModel = useCallback(
+    async (model: string): Promise<boolean> => {
+      const { session: updated, queued } = await routerClient.setSessionModel(sessionId, model);
+      setSession((s) => (s ? { ...s, model: updated.model } : s));
+      return queued;
+    },
+    [routerClient, sessionId],
+  );
+
+  // Header model pill. The composer's "/model" goes through
+  // handleUpdateSession instead, which reuses applyModel and lets the
+  // composer render the confirmation with the model's display name.
+  const handleChangeModel = useCallback(
+    (model: string) => {
+      void applyModel(model)
+        .then((queued) => {
+          setCommandToast({
+            tone: "ok",
+            message: queued
+              ? `Model set to ${model} — applies when the current turn finishes.`
+              : `Model set to ${model}.`,
+          });
+        })
+        .catch((err) => {
+          setCommandToast({
+            tone: "bad",
+            message: err instanceof Error ? err.message : "Failed to change model.",
+          });
+        });
+    },
+    [applyModel],
+  );
+
+  // Agent and name stay local-only: unlike model and trust, neither has a
+  // live-apply endpoint yet (the agent's system prompt is spawn-time too, so
+  // the pill is cosmetic until one exists — see HANDOFF.md).
   const handleUpdateSession = useCallback(
-    (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => {
+    async (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => {
+      if (patch.model !== undefined) return applyModel(patch.model);
       setSession((s) => (s ? { ...s, ...patch } : s));
     },
-    [],
+    [applyModel],
   );
 
   // Header trust pill → POST /sessions/{id}/trust. Unlike the local-only
@@ -999,6 +1042,7 @@ export function ConversationTab({
         mode={activeMode}
         onModeChange={(m) => void handleToggle(m)}
         onUpdateSession={handleUpdateSession}
+        onChangeModel={handleChangeModel}
         onChangeTrust={handleChangeTrust}
       />
 

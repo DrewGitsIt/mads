@@ -44,15 +44,22 @@ describe("ConversationHeader", () => {
     expect(screen.getByText(/mads\/tsk_retry-backoff/)).toBeTruthy();
   });
 
-  it("switches models from the provider dropdown via onUpdateSession", async () => {
+  // onChangeModel, not onUpdateSession: a model switch persists and
+  // reconfigures the running agent (POST /sessions/{id}/model), so it has its
+  // own prop like onChangeTrust does. It used to ride onUpdateSession, which
+  // ConversationTab handled as local state only — the pill relabelled and
+  // nothing else happened.
+  it("switches models from the provider dropdown via onChangeModel", async () => {
     stubProviderModels([
       { id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true },
       { id: "claude-opus-5", name: "Claude Opus 5" },
     ]);
+    const onChangeModel = vi.fn();
     const onUpdateSession = vi.fn();
     render(
       <ConversationHeader
         session={fixtureSessions["session-active"]}
+        onChangeModel={onChangeModel}
         onUpdateSession={onUpdateSession}
       />,
     );
@@ -62,7 +69,8 @@ describe("ConversationHeader", () => {
     fireEvent.click(screen.getByText("Claude Sonnet 5"));
     fireEvent.click(screen.getByText("Claude Opus 5"));
 
-    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" });
+    expect(onChangeModel).toHaveBeenCalledWith("claude-opus-5");
+    expect(onUpdateSession).not.toHaveBeenCalled();
   });
 
   it("shows the session's trust level, defaulting the display to limited when unset", () => {

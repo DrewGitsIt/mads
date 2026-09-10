@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -31,6 +32,7 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /compact", s.handleCompact)
 	mux.HandleFunc("POST /merge", s.handleMerge)
 	mux.HandleFunc("GET /output", s.handleStream)
+	mux.HandleFunc("POST /model", s.handleSetModel)
 	mux.HandleFunc("POST /transport", s.handleTransport)
 	mux.HandleFunc("GET /transport", s.handleTransportStatus)
 	mux.HandleFunc("POST /input", s.handleTerminalInput)
@@ -182,6 +184,34 @@ func (s *server) handleStream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// handleSetModel changes the model the live provider process runs. The
+// Router has already persisted the new model on the session record before
+// forwarding here (services/router/internal/api/sessions.go) — this handler
+// is only responsible for the process that is running right now.
+//
+// queued=true means a turn was in flight and the switch was parked until it
+// ends, which is the deliberate contract: a model change never interrupts an
+// agent mid-turn. The Router passes that flag straight through so the UI can
+// say so rather than claiming the model already changed.
+func (s *server) handleSetModel(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model string `json:"model"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if strings.TrimSpace(body.Model) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model must not be empty"})
+		return
+	}
+	queued, err := s.runner.SetModel(r.Context(), body.Model)
+	if err != nil {
+		writeSwitchError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"model": body.Model, "queued": queued})
 }
 
 // handleTransport switches the session's single transport between chat

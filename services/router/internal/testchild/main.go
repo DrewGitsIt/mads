@@ -30,6 +30,12 @@ var (
 	// "chat" like a freshly started runner.
 	transportMu   sync.Mutex
 	transportMode = "chat"
+
+	// modelMu/lastModel back GET /model — the read side router-level tests
+	// use to confirm a POST /sessions/{id}/model actually reached the child,
+	// not just the session record.
+	modelMu   sync.Mutex
+	lastModel string
 )
 
 func main() {
@@ -113,6 +119,40 @@ func main() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = fmt.Fprintf(w, `{"mode":%q,"ref":"test-ref"}`, req.Mode)
 		}
+	})
+	// Mirrors the real Session Service's POST /model. The model value
+	// doubles as a switch for the branches router tests need to reach
+	// without a real runner: "queued" reports the mid-turn deferral
+	// (queued: true), "not_ready" the child's failure response.
+	mux.HandleFunc("POST /model", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch req.Model {
+		case "not_ready":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = fmt.Fprint(w, `{"error":"session not ready","code":"not_ready","retryable":true}`)
+		default:
+			modelMu.Lock()
+			lastModel = req.Model
+			modelMu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, `{"model":%q,"queued":%t}`, req.Model, req.Model == "queued")
+		}
+	})
+	// Test-only read-back, same rationale as GET /injections.
+	mux.HandleFunc("GET /model", func(w http.ResponseWriter, r *http.Request) {
+		modelMu.Lock()
+		model := lastModel
+		modelMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{"model":%q}`, model)
 	})
 	mux.HandleFunc("GET /transport", func(w http.ResponseWriter, r *http.Request) {
 		transportMu.Lock()

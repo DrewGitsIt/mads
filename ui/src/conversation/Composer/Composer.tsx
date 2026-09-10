@@ -46,7 +46,14 @@ export interface ComposerProps {
   /** Fires synchronously at the start of every send (manual or auto) — lets the caller show an in-flight indicator before the request resolves. */
   onSendStart?: () => void;
   /** Same commit path ConversationHeader's agent/model pills use — a "/agent"/"/model" command dispatches through here rather than sending a chat message. */
-  onUpdateSession?: (patch: Partial<Pick<Session, "agent" | "model">>) => void | Promise<void>;
+  /**
+   * Applies a "/agent" or "/model" command. Resolves true when the change was
+   * accepted but queued behind an in-flight turn — a model switch never
+   * interrupts a running agent, so the confirmation has to say "applies when
+   * the current turn finishes" rather than claiming it already took effect.
+   * Rejects on failure, surfaced through onCommandError.
+   */
+  onUpdateSession?: (patch: Partial<Pick<Session, "agent" | "model">>) => void | Promise<boolean | void>;
   /** Fires once a "/agent"/"/model" command has been applied — surface as a toast, not a transcript message. */
   onCommandExecuted?: (message: string) => void;
   /** Fires when onUpdateSession throws for a "/agent"/"/model" command. */
@@ -163,11 +170,12 @@ export function Composer({
       textareaRef.current?.focus();
     });
     try {
-      await onUpdateSession?.(
+      const queued = await onUpdateSession?.(
         candidate.group === "agent" ? { agent: candidate.id } : { model: candidate.id },
       );
       onCommandExecuted?.(
-        `${candidate.group === "agent" ? "Agent" : "Model"} set to ${candidate.label}`,
+        `${candidate.group === "agent" ? "Agent" : "Model"} set to ${candidate.label}` +
+          (queued ? " — applies when the current turn finishes." : ""),
       );
     } catch (err) {
       onCommandError?.(err instanceof Error ? err.message : String(err));
