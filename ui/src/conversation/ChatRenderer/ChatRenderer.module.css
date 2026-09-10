@@ -8,6 +8,11 @@
 .user,
 .agent {
   display: flex;
+  /* Flex items default to min-width:auto, so one unbreakable token (a long
+     path, an inline-code run) would set the row's minimum width to the
+     token's full length and give the whole pane a horizontal scrollbar —
+     everything right of the prose column rendering as dead whitespace. */
+  min-width: 0;
 }
 .user {
   justify-content: flex-end;
@@ -15,6 +20,11 @@
 
 .prose {
   max-width: var(--measure-prose);
+  min-width: 0;
+  /* Pairs with min-width:0 above: once the row can shrink, tokens wider
+     than the measure wrap instead of overflowing, and fenced pre blocks
+     fall back to their own overflow-x scrollbar. */
+  overflow-wrap: break-word;
   font: var(--fs-chat) var(--sans);
   color: var(--text);
   line-height: 1.6;
