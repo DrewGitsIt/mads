@@ -1,4 +1,4 @@
-# acprpc knob-fit captures — three real ACP agents, 2026-09-09
+# acprpc knob-fit captures — three real ACP agents, 2026-09-09 (extended 2026-09-21)
 
 Sanitized ACP stdio transcripts from three agents *other than* goose,
 captured to validate the acprpc engine's knob set before it ossifies
@@ -24,7 +24,10 @@ prompt cancelled mid-turn via session/cancel → session/close.
 | `claude-agent-acp-full.jsonl` | 28 / 36628 | `@agentclientprotocol/claude-agent-acp` 0.75.1 wrapping claude 2.1.266 | `claude-agent-acp` |
 | `claude-agent-acp-load.jsonl` | 14 / 20220 | same, fresh process | `claude-agent-acp` — initialize → session/load of the full run's session → replayed updates |
 | `codex-acp-full.jsonl` | 158 / 65340 | `@agentclientprotocol/codex-acp` 1.10.0 wrapping codex-cli 0.153.4 (ChatGPT-authed) | `codex-acp` |
+| `codex-acp-load.jsonl` | 20 / 16794 | same, fresh process, 2026-09-21 | `codex-acp` — initialize → session/load of the full run's (then 12-day-old) session → replayed updates |
+| `codex-acp-readonly.jsonl` | 13 / 13009 | same, 2026-09-21 | `codex-acp` — initialize → session/new → session/set_mode `read-only` → prompt; turn resolved by a usage-limit **error**, model never ran (see facts) |
 | `hermes-acp-full.jsonl` | 249 / 69516 | Hermes Agent 0.21.1 (native ACP) | `hermes acp` |
+| `hermes-acp-load.jsonl` | 14 / 16369 | same, fresh process, 2026-09-21 | `hermes acp` — initialize → session/load of the full run's (then 12-day-old) session → replayed updates |
 | `*.stderr.txt` | — | adapter/agent stderr for each run | |
 
 The claude runs were spawned with every `CLAUDE*` env var removed
@@ -47,8 +50,10 @@ knob's live evidence.
 - **Mode vocabularies are pure vendor invention**: claude
   `default`/`acceptEdits`/`plan`/`auto`/`bypassPermissions`; codex
   `read-only`/`agent`/`agent-full-access` (default `agent` — which
-  auto-approved a shell exec, so no permission request appears in the
-  codex capture); hermes `default`/`accept_edits`/`dont_ask` (no
+  auto-approved a shell exec, so no permission request appears in any
+  codex capture; the 2026-09-21 `read-only` attempt hit the account
+  usage limit before the model ran, so codex's permission-request shape
+  is still unpinned); hermes `default`/`accept_edits`/`dont_ask` (no
   full-bypass mode at all). The trust→mode-id map must be a descriptor
   knob. Both ACP-org adapters additionally tag modes with a shared
   `_meta.kind` taxonomy (`standard`/`auto_review`/`full_access`/`plan`);
@@ -69,10 +74,36 @@ knob's live evidence.
   `outputTokens`/`totalTokens`, plus `cachedRead/Write` on claude,
   `thoughtTokens` on codex/hermes), and all three emit `usage_update`
   `{used,size}` (claude adds `cost{amount,currency}`).
-- **session/load works on claude-agent-acp** (`loadSession:true`;
-  replayed `session/update` notifications precede the response —
-  goose-compatible lifecycle). codex and hermes also advertise
-  `loadSession:true` (not exercised here).
+- **session/load works on all three** (`loadSession:true`), even against
+  12-day-old sessions (codex/hermes loads captured 2026-09-21). claude
+  and codex replay all `session/update` notifications *before* the
+  response — goose-compatible lifecycle — and codex's load result
+  re-states `modes`/`models`/`configOptions` like session/new. hermes
+  replays before the response too, but then emits
+  `available_commands_update` and a `usage_update` *after* it — the load
+  response is not end-of-replay-stream, and its result carries
+  `_meta.hermes.sessionProvenance` plus modes/models (still no
+  configOptions).
+- **Replayed history diverges on cancelled turns and chunking**: codex
+  replays both turns — including the cancelled one, whose full 1–50
+  output appears (matching its live behavior: it streamed to 50 after
+  session/cancel and resolved `end_turn`) — with each turn's streamed
+  chunks coalesced into one whole-message chunk. hermes omits the
+  cancelled turn from replay entirely: only the completed first turn
+  comes back.
+- **A prompt turn can resolve as a JSON-RPC *error*, not a result**:
+  codex over its account usage limit answers `session/prompt` with error
+  `-32603`, `data.codexErrorInfo: "usageLimitExceeded"` — after first
+  emitting the limit text as an ordinary `agent_message_chunk` and a
+  `session_info_update` with `_meta.codex.threadStatus
+  {type:"systemError"}` (`codex-acp-readonly.jsonl`). There is no
+  stopReason at all on such a turn; decoders must not assume prompt ⇒
+  result. (`session/set_mode` to `read-only` itself succeeded with `{}`.)
+- codex emits an unsolicited `_auth/status_update` notification
+  (extension method, `authStatus{kind,label,account{email,plan}}`) right
+  after session/new and session/load — skippable like the other
+  unsolicited updates, and a sanitization target (it carries the account
+  email).
 - **codex tool output uses `content:[{type:"terminal"}]`** — the
   ToolCallContent variant goose-as-client explicitly ignores; decoders
   must tolerate it.
@@ -89,9 +120,11 @@ Rules (goosecli captures convention): `/home/<user>` → `/home/user`,
 hostname → `capture-host`, account emails → `user@example.com`, secrets
 redacted; session ids / timestamps / token counts / `/tmp` paths kept.
 Applied: the account email appeared in claude/codex `_meta` auth blobs
+and (2026-09-21) in codex's `_auth/status_update` notifications
 (replaced); stderr logs carried home paths (replaced). The literal
-`api-key` in codex is an authMethod *id*, not a secret — kept. Sweep
-(`grep -rE '/home/drew|<hostname>|<email>|api[_-]?key|sk-ant|Bearer '`)
+`api-key` occurrences in the codex captures are an authMethod *id*, not
+a secret — kept. Sweep
+(`grep -rE '/home/<user>|<hostname>|<email>|api[_-]?key|sk-ant|Bearer '`)
 is clean of identifying values. Wire JSONL files are otherwise
 byte-for-byte as captured; permission-request rawInput contains only the
 probe file contents.
@@ -102,6 +135,8 @@ See `tools/capture_acp_agent.py --help`. The claude/codex adapters were
 installed via `npm i -g @agentclientprotocol/claude-agent-acp
 @agentclientprotocol/codex-acp`; hermes speaks ACP natively. Each full
 run costs one small model turn on the respective account (~$0.08 on
-claude opus at capture time). Not yet captured (extend here, same
-conventions): a codex run in `read-only` mode to pin its
-permission-request shape, and session/load on codex/hermes.
+claude opus at capture time). Still not captured (extend here, same
+conventions): codex's `session/request_permission` shape — the
+2026-09-21 `read-only` attempt (`codex-acp-readonly.jsonl`) hit the
+ChatGPT Free usage limit before the model ran; retry after 2026-10-09
+or on an upgraded account.

@@ -1,0 +1,8 @@
+[SYSTEM_ERROR] Prompt for session 01a0c267-8434-7b71-9f74-371f58535cb1 failed: RequestError: Internal error
+RequestError: Internal error
+    at _RequestError.internalError (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:20802:12)
+    at _CodexEventHandler.createErrorEvent (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:24988:35)
+    at _CodexEventHandler.createUpdateEvent (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:24410:27)
+    at _CodexEventHandler.handleNotification (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:24349:58)
+    at async file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:34347:11
+    at async run (file:///home/user/.nvm/versions/node/v26.7.0/lib/node_modules/@agentclientprotocol/codex-acp/dist/index.js:28641:9)
