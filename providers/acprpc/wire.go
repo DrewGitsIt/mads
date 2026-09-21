@@ -159,9 +159,25 @@ type modeInfo struct {
 	ID string `json:"id"`
 }
 
+// configOption is one session-result config option. Beyond ID and Category
+// (the mode-transport detection), the model option's CurrentValue and
+// Options are what DiscoverModels reads — shape pinned by
+// providers/goosecli/testdata/captures/acp-transcript.jsonl line 4
+// ({"id":"model","name":"Model","type":"select","currentValue":"qwen3.8",
+// "options":[{"value":…,"name":…},…]}). Additive decode: agents that omit
+// the fields simply leave them zero.
 type configOption struct {
-	ID       string `json:"id"`
-	Category string `json:"category,omitempty"`
+	ID           string               `json:"id"`
+	Name         string               `json:"name,omitempty"`
+	Category     string               `json:"category,omitempty"`
+	CurrentValue string               `json:"currentValue,omitempty"`
+	Options      []configOptionChoice `json:"options,omitempty"`
+}
+
+// configOptionChoice is one selectable value of a select-typed configOption.
+type configOptionChoice struct {
+	Value string `json:"value"`
+	Name  string `json:"name"`
 }
 
 // modeConfigOptionID returns the id of the configOption carrying the

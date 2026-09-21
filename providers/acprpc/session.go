@@ -103,6 +103,9 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 			return fail("session/load", err)
 		}
 		_ = json.Unmarshal(resp.Result, &sessRes)
+		s.mu.Lock()
+		s.configOptions = sessRes.ConfigOptions
+		s.mu.Unlock()
 	} else {
 		resp, err := s.request(ctx, "session/new", newSessionParams{Cwd: opts.Cwd, MCPServers: mcp})
 		if err != nil {
@@ -113,6 +116,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		}
 		s.mu.Lock()
 		s.ref = sessRes.SessionID
+		s.configOptions = sessRes.ConfigOptions
 		s.mu.Unlock()
 	}
 
@@ -291,8 +295,11 @@ type streamSession struct {
 	replaying    bool // session/load is in flight: buffer updates, don't stream them
 	replay       []provider.Message
 	promptPrefix string // system prompt awaiting the first Send (FirstSendPrefix / -32601 fallback)
-	toolCalls    map[string]toolCallInfo
-	closed       bool
+	// configOptions is the session/new-or-load result's configOptions list,
+	// retained for DiscoverModels (the model entry's options/currentValue).
+	configOptions []configOption
+	toolCalls     map[string]toolCallInfo
+	closed        bool
 	// Latest usage_update snapshot (absolute occupancy + real window size),
 	// attached to the next turn end's Usage. Agents push these throughout a
 	// turn (and a post-compaction one can legitimately DROP below the prior

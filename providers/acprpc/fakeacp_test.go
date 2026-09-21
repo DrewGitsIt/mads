@@ -232,7 +232,14 @@ func faServe(pr faProfile) {
 		for _, m := range pr.availableModes {
 			modes = append(modes, map[string]any{"id": m, "name": m})
 		}
-		opts := []map[string]any{{"id": "model", "name": "Model", "category": "model"}}
+		opts := []map[string]any{{
+			"id": "model", "name": "Model", "category": "model", "type": "select",
+			"currentValue": model,
+			"options": []map[string]any{
+				{"value": "fake-default", "name": "Fake Default"},
+				{"value": "fake-alt", "name": "Fake Alt"},
+			},
+		}}
 		if pr.modeConfigID != "" {
 			opts = append(opts, map[string]any{"id": pr.modeConfigID, "name": "Permission mode", "category": "mode"})
 		}
