@@ -54,7 +54,10 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			if l.SubjectSessionID != sessionID || !l.HasGrant(contracts.GrantRead) {
 				continue
 			}
-			if l.Cadence == contracts.CadenceManualOnly {
+			// Positive filter: per-turn digests go to per_turn links only.
+			// on_signal links are woken by DeliverSignal instead;
+			// manual_only links get nothing pushed.
+			if l.Cadence != contracts.CadencePerTurn {
 				continue
 			}
 			targets = append(targets, l)

@@ -51,6 +51,10 @@ const CADENCE_COPY: Record<LinkCadence, { title: string; description: string }> 
     title: "Follow intently",
     description: "Digest after each burst of activity.",
   },
+  on_signal: {
+    title: "Wake on signals",
+    description: "Digest only when it needs attention — a permission request, a crash, a task done or blocked.",
+  },
   manual_only: {
     title: "Catch up on request",
     description: "No automatic digests; the agent can ask for a summary.",
@@ -74,7 +78,7 @@ export function LinkChooserDialog({
   initialCadence,
 }: LinkChooserDialogProps) {
   const [preset, setPreset] = useState<UserPreset>(initialPreset ?? "leader");
-  const [cadence, setCadence] = useState<LinkCadence>(initialCadence ?? "per_turn");
+  const [cadence, setCadence] = useState<LinkCadence>(initialCadence ?? "on_signal");
   const [holderId, setHolderId] = useState<string>(
     stagedHolder ? NEW_SESSION_PLACEHOLDER : (sessionIds[0] ?? ""),
   );

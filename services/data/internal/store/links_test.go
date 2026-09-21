@@ -88,7 +88,7 @@ func TestLinkRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLinkCreateDefaultsCadenceToPerTurn(t *testing.T) {
+func TestLinkCreateDefaultsCadenceToOnSignal(t *testing.T) {
 	links, sessions, _ := newLinkStore(t)
 	ctx := context.Background()
 	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
@@ -101,16 +101,16 @@ func TestLinkCreateDefaultsCadenceToPerTurn(t *testing.T) {
 	if err := links.Create(ctx, &link, "user"); err != nil {
 		t.Fatal(err)
 	}
-	if link.Cadence != contracts.CadencePerTurn {
-		t.Errorf("cadence = %q, want per_turn", link.Cadence)
+	if link.Cadence != contracts.CadenceOnSignal {
+		t.Errorf("cadence = %q, want on_signal", link.Cadence)
 	}
 
 	got, err := links.Get(ctx, link.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Cadence != contracts.CadencePerTurn {
-		t.Errorf("stored cadence = %q, want per_turn", got.Cadence)
+	if got.Cadence != contracts.CadenceOnSignal {
+		t.Errorf("stored cadence = %q, want on_signal", got.Cadence)
 	}
 }
 

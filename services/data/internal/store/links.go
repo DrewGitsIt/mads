@@ -54,11 +54,12 @@ func validateGrants(grants []contracts.Grant) *contracts.ValidationError {
 	return &v
 }
 
-// validateCadence defaults an unset cadence to per_turn (the spec default)
-// and rejects anything unrecognized.
+// validateCadence defaults an unset cadence to on_signal (the spec default:
+// wake the monitor only when the subject needs attention) and rejects
+// anything unrecognized.
 func validateCadence(link *contracts.Link) *contracts.ValidationError {
 	if link.Cadence == "" {
-		link.Cadence = contracts.CadencePerTurn
+		link.Cadence = contracts.CadenceOnSignal
 	}
 	if !link.Cadence.Valid() {
 		var v contracts.ValidationError

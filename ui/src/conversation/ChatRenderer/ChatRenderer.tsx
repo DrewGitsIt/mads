@@ -51,6 +51,7 @@ export interface ChatRendererProps {
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
   per_turn: "cadence: digest after each burst of activity",
+  on_signal: "cadence: wakes only when the session needs attention",
   manual_only: "cadence: manual — no automatic digests",
 };
 

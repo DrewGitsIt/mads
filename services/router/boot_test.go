@@ -328,6 +328,7 @@ func TestDigestwatchSubscribesAtBootAndDeliversDigest(t *testing.T) {
 		GrantingSessionID: monitor.Session.ID,
 		SubjectSessionID:  watched.Session.ID,
 		Grants:            []contracts.Grant{contracts.GrantRead},
+		Cadence:           contracts.CadencePerTurn,
 	}); err != nil {
 		t.Fatalf("CreateLink: %v", err)
 	}

@@ -138,7 +138,7 @@ func TestWatcherSpawnsDigestJobForTurnEnded(t *testing.T) {
 	monitor := mustCreateSession(t, data, contracts.Session{Name: "monitor session"})
 	if _, err := data.CreateLink(context.Background(), contracts.LinkRequest{
 		GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
-		Grants: []contracts.Grant{contracts.GrantRead},
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
 	}); err != nil {
 		t.Fatalf("CreateLink: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestWatcherDebouncesTurnEndedBurstIntoOneDigest(t *testing.T) {
 	monitor := mustCreateSession(t, data, contracts.Session{Name: "monitor session"})
 	if _, err := data.CreateLink(context.Background(), contracts.LinkRequest{
 		GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
-		Grants: []contracts.Grant{contracts.GrantRead},
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
 	}); err != nil {
 		t.Fatalf("CreateLink: %v", err)
 	}

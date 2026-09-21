@@ -72,17 +72,17 @@ describe("LinkChooserDialog", () => {
       granting_session_id: "a",
       subject_session_id: "b",
       preset: "leader",
-      cadence: "per_turn",
+      cadence: "on_signal",
     });
     expect(createLinkSpy).toHaveBeenCalledWith({
       granting_session_id: "a",
       subject_session_id: "c",
       preset: "leader",
-      cadence: "per_turn",
+      cadence: "on_signal",
     });
   });
 
-  it("defaults to the Follow intently (per_turn) cadence", () => {
+  it("defaults to the Wake on signals (on_signal) cadence", () => {
     render(
       <LinkChooserDialog
         sessionIds={["a", "b"]}
@@ -93,7 +93,7 @@ describe("LinkChooserDialog", () => {
       />,
     );
     expect(
-      screen.getByText("Follow intently").closest("button")?.getAttribute("aria-selected"),
+      screen.getByText("Wake on signals").closest("button")?.getAttribute("aria-selected"),
     ).toBe("true");
   });
 
@@ -142,7 +142,7 @@ describe("LinkChooserDialog", () => {
         granting_session_id: "b",
         subject_session_id: "a",
         preset: "leader",
-        cadence: "per_turn",
+        cadence: "on_signal",
       }),
     );
   });
@@ -229,8 +229,8 @@ describe("LinkChooserDialog", () => {
       fireEvent.click(screen.getByText("Stage 2 links"));
 
       expect(onStage).toHaveBeenCalledWith([
-        { granting_session_id: "$new", subject_session_id: "a", preset: "monitor", cadence: "per_turn" },
-        { granting_session_id: "$new", subject_session_id: "b", preset: "monitor", cadence: "per_turn" },
+        { granting_session_id: "$new", subject_session_id: "a", preset: "monitor", cadence: "on_signal" },
+        { granting_session_id: "$new", subject_session_id: "b", preset: "monitor", cadence: "on_signal" },
       ]);
       expect(createLinkSpy).not.toHaveBeenCalled();
     });

@@ -386,7 +386,7 @@ export const PRESET_GRANTS: Record<LinkPreset, Grant[]> = {
 };
 
 // mirrors pkg/contracts/link.go LinkCadence
-export type LinkCadence = "per_turn" | "manual_only";
+export type LinkCadence = "per_turn" | "on_signal" | "manual_only";
 
 // mirrors pkg/contracts/link.go OrchestrateStatus. Server-computed only —
 // never sent in a LinkRequest. Empty ("" — omitted from Link.orchestrate_status

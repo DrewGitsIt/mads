@@ -55,13 +55,27 @@ Links are directed edges; nothing is 1:1 by design:
    reach, never permissions: the subject's agent acts on leader requests within
    its OWN trust setting. Hard prerequisite: trust must be actually enforced by
    providers (today it is decorative — see trust-enforcement task).
-4. **Monitor cadence: per-turn compressed digest.** When a watched agent's turn
-   completes, a marginally compressed digest of that turn (fast-model
-   compression — the synthesis/fastmodel runner is the natural engine) is pushed
-   (queued) to the monitor. No continuous token streaming: LLMs consume
-   messages, not streams. Iterate toward finer granularity only if digests prove
-   insufficient. On-demand "catch me up" reads stay available and cost nothing
-   until asked.
+4. **Monitor cadence: three-valued, defaulting to signals-only.** The cadence
+   knob on a `read` link picks how the push half behaves; on-demand "catch me
+   up" reads stay available under all three and cost nothing until asked.
+   - `per_turn`: when a watched agent's turn completes, a marginally
+     compressed digest of that turn (fast-model compression — the
+     synthesis/fastmodel runner is the natural engine) is pushed (queued) to
+     the monitor. No continuous token streaming: LLMs consume messages, not
+     streams. Iterate toward finer granularity only if digests prove
+     insufficient.
+   - `on_signal` (default): nothing per turn. The monitor is woken only by
+     attention signals from the subject — a permission request parking a tool
+     call, a session crash, a task reaching done or blocked. Signals are
+     composed deterministically (no fast-model call) and delivered to every
+     non-manual explicit read link, per_turn included: a permission pause
+     parks the subject mid-turn, so the turn digest that would report it may
+     never fire. Rationale: a monitor is an LLM — every pushed digest forces a
+     full-inference turn over its whole context, and on a healthy subject
+     almost every such turn concludes "nothing to do". The wake filter
+     belongs in deterministic code, not in the most expensive component of
+     the system.
+   - `manual_only`: nothing pushed at all; pull-only.
 5. **Pipeline runs are monitorable, not leadable.** §1.12's interactive-only
    restriction is relaxed for `read` (+`inject` where the subject is the
    pipeline's session — see 6). Pipeline runs keep their single orchestrator:
@@ -153,7 +167,9 @@ Links are directed edges; nothing is 1:1 by design:
 3. **L2a Inject path**: queued, attributed delivery into a subject session;
    attribution rendering in the conversation UI.
 4. **L2b Digest path**: turn-completion → fast-model digest → queued delivery
-   to monitor sessions; cadence knob on the link.
+   to monitor sessions; cadence knob on the link (`per_turn` / `on_signal` /
+   `manual_only`, decision 4). Shipped: `on_signal`'s push half is
+   digestwatch.SignalWatcher → job.DeliverSignal.
 5. **L2c Leader capability**: agent tool (message subject / fetch summary /
    list links), async replies as events. Shipped: Router endpoints
    (`GET /sessions/{id}/orchestrate/subjects`, `GET .../orchestrate/summary`,

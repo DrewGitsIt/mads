@@ -58,15 +58,20 @@ type LinkCadence string
 
 const (
 	// CadencePerTurn pushes a compressed digest to the monitor on every
-	// completed turn of the subject's agent. Default.
+	// completed turn of the subject's agent.
 	CadencePerTurn LinkCadence = "per_turn"
+	// CadenceOnSignal pushes nothing per turn; the monitor is woken only by
+	// attention signals from the subject — a permission request, a crash, a
+	// task reaching done or blocked. Default: a monitor should pay for a
+	// turn only when the subject actually needs attention.
+	CadenceOnSignal LinkCadence = "on_signal"
 	// CadenceManualOnly pushes nothing; the monitor's user pulls via the
 	// subject's existing transcript/summary reads instead.
 	CadenceManualOnly LinkCadence = "manual_only"
 )
 
 // LinkCadences is the full registry, for validation and enumeration.
-var LinkCadences = []LinkCadence{CadencePerTurn, CadenceManualOnly}
+var LinkCadences = []LinkCadence{CadencePerTurn, CadenceOnSignal, CadenceManualOnly}
 
 // Valid reports whether c is a registered cadence.
 func (c LinkCadence) Valid() bool {

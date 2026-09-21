@@ -1495,7 +1495,7 @@ export class FakeRouterClient implements RouterClient {
       granting_session_id: req.granting_session_id,
       subject_session_id: req.subject_session_id,
       grants: req.grants ?? (req.preset ? PRESET_GRANTS[req.preset] : []),
-      cadence: req.cadence ?? "per_turn",
+      cadence: req.cadence ?? "on_signal",
       created_at: now,
       updated_at: now,
     };
@@ -1518,7 +1518,7 @@ export class FakeRouterClient implements RouterClient {
       orchestrate_status: cur?.orchestrate_status,
       ...cur,
       grants,
-      cadence: req.cadence ?? cur?.cadence ?? "per_turn",
+      cadence: req.cadence ?? cur?.cadence ?? "on_signal",
       updated_at: now,
     };
     this.links.set(id, link);

@@ -252,6 +252,9 @@ func main() {
 	runWatcher := digestwatch.NewRunWatcher(data, jobs)
 	go runWatcher.Run(ctx)
 
+	signalWatcher := digestwatch.NewSignalWatcher(data, jobs)
+	go signalWatcher.Run(ctx)
+
 	synthWatcher := synthwatch.NewWatcher(data, jobs, resolveFastModel)
 	go synthWatcher.Run(ctx)
 

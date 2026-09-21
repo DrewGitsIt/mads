@@ -11,6 +11,11 @@ const CADENCE_OPTIONS: { value: LinkCadence; label: string; description: string 
     description: "Digest after each burst of activity.",
   },
   {
+    value: "on_signal",
+    label: "Wake on signals",
+    description: "Digest only when it needs attention — a permission request, a crash, a task done or blocked.",
+  },
+  {
     value: "manual_only",
     label: "Catch up on request",
     description: "No automatic digests; the agent can ask for a summary.",
@@ -20,6 +25,7 @@ const CADENCE_OPTIONS: { value: LinkCadence; label: string; description: string 
 /** Honest, debounce-aware badge text — "per turn" would overstate the digestwatch batching. */
 const CADENCE_BADGE: Record<LinkCadence, string> = {
   per_turn: "DEBOUNCED DIGESTS",
+  on_signal: "ON SIGNAL",
   manual_only: "MANUAL ONLY",
 };
 

@@ -18,6 +18,11 @@
 //     session holding the implicit hand-raiser over its own pipeline run
 //     (decision 6) — subscribes globally and spawns a GenerateRunDigest job
 //     per envelope.
+//   - SignalWatcher: attention signals (session.permission_requested,
+//     session.crashed, task.status_changed reaching done or blocked) for a
+//     session watched by explicit read links — subscribes globally and
+//     spawns a DeliverSignal job per envelope. The on_signal cadence's
+//     entire push half: no per-turn digests, only these wakes.
 package digestwatch
 
 import (
@@ -200,4 +205,83 @@ func (w *RunWatcher) Run(ctx context.Context) {
 			log.Printf("digestwatch: spawn run digest job for %s: %v", env.SessionID, err)
 		}
 	}
+}
+
+// SignalWatcher subscribes to the attention-signal envelopes and spawns a
+// DeliverSignal job per envelope — the push half of the on_signal cadence
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4). Filtering to sessions that
+// actually hold signal-receiving links happens inside the job, exactly as
+// Watcher/RunWatcher defer their link checks to the job body.
+type SignalWatcher struct {
+	data *dataclient.Client
+	jobs *job.Runner
+}
+
+func NewSignalWatcher(data *dataclient.Client, jobs *job.Runner) *SignalWatcher {
+	return &SignalWatcher{data: data, jobs: jobs}
+}
+
+// Run blocks, subscribing to the signal envelopes across every session and
+// spawning a DeliverSignal job for each. Retries the subscribe with backoff
+// on failure; returns only once ctx is done. Callers run it on its own
+// goroutine for the life of the process.
+func (w *SignalWatcher) Run(ctx context.Context) {
+	ch := subscribeRetry(ctx, "attention signals", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
+		return w.data.Stream(ctx, 0, "", []string{
+			string(contracts.SessionPermissionRequested),
+			string(contracts.SessionCrashed),
+			string(contracts.TaskStatusChanged),
+		})
+	})
+	if ch == nil {
+		return
+	}
+	for env := range ch {
+		sig, ok := signalFor(env)
+		if !ok {
+			continue
+		}
+		if _, err := w.jobs.Spawn(ctx, job.SignalKind, env.SessionID, job.DeliverSignal(env.SessionID, sig)); err != nil {
+			log.Printf("digestwatch: spawn signal job for %s: %v", env.SessionID, err)
+		}
+	}
+}
+
+// signalFor normalizes one subscribed envelope into a job.Signal. ok=false
+// means the envelope carries no signal (a non-terminal task transition, or
+// an undecodable payload).
+func signalFor(env contracts.Envelope) (job.Signal, bool) {
+	switch env.Type {
+	case contracts.SessionPermissionRequested:
+		var p struct {
+			Tool string `json:"tool"`
+		}
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			log.Printf("digestwatch: decode permission_requested payload for %s: %v", env.SessionID, err)
+			return job.Signal{}, false
+		}
+		return job.Signal{Kind: job.SignalPermission, Tool: p.Tool}, true
+	case contracts.SessionCrashed:
+		var p struct {
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			log.Printf("digestwatch: decode crashed payload for %s: %v", env.SessionID, err)
+			return job.Signal{}, false
+		}
+		return job.Signal{Kind: job.SignalCrash, Reason: p.Reason}, true
+	case contracts.TaskStatusChanged:
+		var p struct {
+			To string `json:"to"`
+		}
+		if err := json.Unmarshal(env.Payload, &p); err != nil {
+			log.Printf("digestwatch: decode task.status_changed payload for %s: %v", env.SessionID, err)
+			return job.Signal{}, false
+		}
+		if p.To != string(contracts.StatusDone) && p.To != string(contracts.StatusBlocked) {
+			return job.Signal{}, false
+		}
+		return job.Signal{Kind: job.SignalTaskTerminal, TaskID: env.TaskID, ToStatus: p.To}, true
+	}
+	return job.Signal{}, false
 }

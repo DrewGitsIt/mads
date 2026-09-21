@@ -487,6 +487,7 @@ func TestOrchestrateSetAttentionFlipsCadence(t *testing.T) {
 		GrantingSessionID: monitor.ID,
 		SubjectSessionID:  subject.ID,
 		Preset:            contracts.PresetMonitor,
+		Cadence:           contracts.CadencePerTurn,
 	})
 	if createResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create monitor link: status %d", createResp.StatusCode)
@@ -537,6 +538,7 @@ func TestOrchestrateSetAttentionRejectsNonOwnedLink(t *testing.T) {
 		GrantingSessionID: monitor.ID,
 		SubjectSessionID:  subject.ID,
 		Preset:            contracts.PresetMonitor,
+		Cadence:           contracts.CadencePerTurn,
 	})
 	if createResp.StatusCode != http.StatusCreated {
 		t.Fatalf("create monitor link: status %d", createResp.StatusCode)

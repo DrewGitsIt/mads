@@ -54,6 +54,11 @@ test.describe("linked sessions: link UI behind the flag", () => {
     // preset card explicitly rather than relying on default state.
     await dialog.getByText("Leader", { exact: true }).click();
 
+    // The cadence default is Wake on signals (on_signal), which pushes no
+    // per-turn digests — this journey drives the per-turn digest pipeline,
+    // so pick Follow intently explicitly.
+    await dialog.getByText("Follow intently", { exact: true }).click();
+
     // Each radio's accessible name is "{own name} ⟶ {others}" (from the
     // label's full text content) — anchor on the prefix so the row whose own
     // name is leaderName isn't confused with the other row, whose fan-out

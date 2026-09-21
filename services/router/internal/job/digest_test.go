@@ -128,7 +128,7 @@ func TestGenerateDigestDeliversToPerTurnReadersOnly(t *testing.T) {
 
 	linkPerTurn := mustCreateLink(t, data, contracts.LinkRequest{
 		GrantingSessionID: monitorPerTurn.ID, SubjectSessionID: watched.ID,
-		Grants: []contracts.Grant{contracts.GrantRead},
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
 	})
 	mustCreateLink(t, data, contracts.LinkRequest{
 		GrantingSessionID: monitorManual.ID, SubjectSessionID: watched.ID,
@@ -248,11 +248,11 @@ func TestGenerateDigestObserverFailureDoesNotAffectOthers(t *testing.T) {
 
 	mustCreateLink(t, data, contracts.LinkRequest{
 		GrantingSessionID: goodMonitor.ID, SubjectSessionID: watched.ID,
-		Grants: []contracts.Grant{contracts.GrantRead},
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
 	})
 	mustCreateLink(t, data, contracts.LinkRequest{
 		GrantingSessionID: badMonitor.ID, SubjectSessionID: watched.ID,
-		Grants: []contracts.Grant{contracts.GrantRead},
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadencePerTurn,
 	})
 
 	goodServer := newCaptureServer(t, http.StatusAccepted)
