@@ -250,6 +250,11 @@ func (l *Links) Delete(ctx context.Context, id, actor string) error {
 		if _, err := tx.Exec("DELETE FROM links WHERE id = ?", id); err != nil {
 			return err
 		}
+		// The mailbox has no reason to outlive its link — unlike sessions,
+		// where deletion deliberately leaves links dangling.
+		if _, err := tx.Exec("DELETE FROM link_digests WHERE link_id = ?", id); err != nil {
+			return err
+		}
 		payload, _ := json.Marshal(map[string]string{
 			"granting_session_id": old.GrantingSessionID,
 			"subject_session_id":  old.SubjectSessionID,
@@ -527,6 +532,72 @@ func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {
 		grantingID, subjectID,
 	).Scan(&n)
 	return n > 0, err
+}
+
+// linkDigestCap bounds one link's mailbox: appending past it drops the
+// oldest entries first. The kept rows' FromTurn anchors still tell a reader
+// where coverage begins, so no explicit "dropped" marker is needed.
+const linkDigestCap = 32
+
+// AppendDigest queues one compressed digest on link id's mailbox
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4, the on_signal accumulation
+// half), enforcing linkDigestCap by dropping oldest-first. No event is
+// emitted — mailbox traffic is internal plumbing between the Router's
+// digest job and the next signal wake, not activity-feed material.
+func (l *Links) AppendDigest(ctx context.Context, id string, d *contracts.LinkDigest) error {
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = time.Now().UTC()
+	}
+	return l.log.WithTx(ctx, func(tx *Tx) error {
+		if _, err := getLinkInTx(tx, id); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(
+			`INSERT INTO link_digests (link_id, text, from_turn, to_turn, created_at) VALUES (?, ?, ?, ?, ?)`,
+			id, d.Text, d.FromTurn, d.ToTurn, d.CreatedAt.Format(time.RFC3339Nano),
+		); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			`DELETE FROM link_digests WHERE link_id = ? AND id NOT IN
+			 (SELECT id FROM link_digests WHERE link_id = ? ORDER BY id DESC LIMIT ?)`,
+			id, id, linkDigestCap,
+		)
+		return err
+	})
+}
+
+// DrainDigests atomically returns and clears link id's mailbox, oldest
+// first. An unknown link drains empty rather than erroring — the caller is
+// always on a best-effort delivery path where the link may have been
+// deleted mid-flight.
+func (l *Links) DrainDigests(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
+	var out []contracts.LinkDigest
+	err := l.log.WithTx(ctx, func(tx *Tx) error {
+		rows, err := tx.Query(
+			`SELECT text, from_turn, to_turn, created_at FROM link_digests WHERE link_id = ? ORDER BY id`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var (
+				d         contracts.LinkDigest
+				createdAt string
+			)
+			if err := rows.Scan(&d.Text, &d.FromTurn, &d.ToTurn, &createdAt); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+			out = append(out, d)
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM link_digests WHERE link_id = ?`, id)
+		return err
+	})
+	return out, err
 }
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {

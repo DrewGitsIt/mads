@@ -49,21 +49,27 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			return fmt.Errorf("digest: load links: %w", err)
 		}
 
-		var targets []contracts.Link
+		// Positive split: per_turn links get the digest delivered as a forced
+		// turn; on_signal links get it queued on their mailbox instead, to
+		// flush as context on the next signal wake (DeliverSignal) or
+		// on-demand drain; manual_only links get nothing pushed.
+		var deliver, mailbox []contracts.Link
 		for _, l := range links {
 			if l.SubjectSessionID != sessionID || !l.HasGrant(contracts.GrantRead) {
 				continue
 			}
-			// Positive filter: per-turn digests go to per_turn links only.
-			// on_signal links are woken by DeliverSignal instead;
-			// manual_only links get nothing pushed.
-			if l.Cadence != contracts.CadencePerTurn {
-				continue
+			switch l.Cadence {
+			case contracts.CadencePerTurn:
+				deliver = append(deliver, l)
+			case contracts.CadenceOnSignal:
+				mailbox = append(mailbox, l)
 			}
-			targets = append(targets, l)
 		}
-		if len(targets) == 0 || deps.Resolver == nil {
-			return nil // no live per_turn readers; skip the fast-model call entirely
+		if deps.Resolver == nil {
+			deliver = nil
+		}
+		if len(deliver) == 0 && len(mailbox) == 0 {
+			return nil // no readers at all; skip the fast-model call entirely
 		}
 
 		turns := make([]turndigest.Turn, len(deltas))
@@ -85,7 +91,7 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 		}
 		text := res.Text
 
-		for _, l := range targets {
+		for _, l := range deliver {
 			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
 			if !ok {
 				continue // monitor not running: best-effort skip, not a failure
@@ -95,6 +101,14 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			}); err != nil {
 				log.Printf("digest: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
 				continue // one monitor's failure must not affect the others
+			}
+		}
+		for _, l := range mailbox {
+			if err := deps.Data.AppendLinkDigest(ctx, l.ID, contracts.LinkDigest{
+				Text: text, FromTurn: res.FromTurn, ToTurn: res.ToTurn,
+			}); err != nil {
+				log.Printf("digest: mailbox append for link %s: %v", l.ID, err)
+				continue // one mailbox's failure must not affect the others
 			}
 		}
 		return nil

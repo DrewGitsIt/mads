@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -96,15 +97,54 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			if !ok {
 				continue // monitor not running: best-effort skip, not a failure
 			}
-			if err := deliverDigest(ctx, addr, text, contracts.Attribution{
+			// A wake carries the link's whole mailbox backlog as context —
+			// the monitor catches up on what accumulated between signals in
+			// the same forced turn the signal itself pays for. Drained only
+			// once delivery is possible (address resolved); on delivery
+			// failure the backlog is re-queued so it isn't lost, at the cost
+			// of a possible interleave with digests appended meanwhile.
+			body := text
+			backlog, err := deps.Data.DrainLinkDigests(ctx, l.ID)
+			if err != nil {
+				log.Printf("signal: drain mailbox for link %s: %v", l.ID, err)
+				backlog = nil
+			}
+			if len(backlog) > 0 {
+				body = text + "\n\n" + renderBacklog(backlog)
+			}
+			if err := deliverDigest(ctx, addr, body, contracts.Attribution{
 				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
 			}); err != nil {
 				log.Printf("signal: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
+				for _, d := range backlog {
+					if err := deps.Data.AppendLinkDigest(ctx, l.ID, d); err != nil {
+						log.Printf("signal: requeue mailbox digest for link %s: %v", l.ID, err)
+					}
+				}
 				continue // one monitor's failure must not affect the others
 			}
 		}
 		return nil
 	}
+}
+
+// renderBacklog renders a drained mailbox as the catch-up section of a
+// signal wake, oldest first, each entry prefixed with its turn anchors
+// when known.
+func renderBacklog(digests []contracts.LinkDigest) string {
+	var b strings.Builder
+	b.WriteString("Activity since your last update:")
+	for _, d := range digests {
+		b.WriteString("\n\n")
+		switch {
+		case d.FromTurn > 0 && d.ToTurn > d.FromTurn:
+			fmt.Fprintf(&b, "[turns %d-%d] ", d.FromTurn, d.ToTurn)
+		case d.FromTurn > 0:
+			fmt.Fprintf(&b, "[turn %d] ", d.FromTurn)
+		}
+		b.WriteString(d.Text)
+	}
+	return b.String()
 }
 
 // signalNotice renders sig as the one-line (plus optional blocker line)

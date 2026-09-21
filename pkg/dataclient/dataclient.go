@@ -701,6 +701,21 @@ func (c *Client) LinksForSession(ctx context.Context, sessionID string) ([]contr
 	return out, err
 }
 
+// AppendLinkDigest queues one compressed digest on an on_signal link's
+// mailbox (docs/LINKED-SESSIONS-DESIGN.md decision 4). Capped server-side;
+// oldest entries drop first.
+func (c *Client) AppendLinkDigest(ctx context.Context, id string, d contracts.LinkDigest) error {
+	return c.do(ctx, http.MethodPost, "/links/"+url.PathEscape(id)+"/digests", d, nil)
+}
+
+// DrainLinkDigests atomically returns and clears a link's mailbox, oldest
+// first. An unknown link drains empty.
+func (c *Client) DrainLinkDigests(ctx context.Context, id string) ([]contracts.LinkDigest, error) {
+	var out []contracts.LinkDigest
+	err := c.do(ctx, http.MethodPost, "/links/"+url.PathEscape(id)+"/digests/drain", nil, &out)
+	return out, err
+}
+
 // CreateHandRaiser creates (or returns the existing) implicit self-referential
 // hand-raiser link for sessionID (docs/LINKED-SESSIONS-DESIGN.md decision 6).
 // System-only: meant to be called by the Router's Supervisor.

@@ -273,6 +273,43 @@ func (s *server) handleOrchestrateGetTurns(w http.ResponseWriter, r *http.Reques
 // rather than a one-way, unrecoverable dead end. Scoped strictly to links
 // {id} itself holds the granting side of; a link_id for a link {id} doesn't
 // hold is rejected, never silently resolved to someone else's link.
+// handleOrchestrateDrainMailbox is the agent-facing check_mailbox tool:
+// atomically return and clear the caller's own link's queued digest backlog
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4, the on_signal pull half).
+// Ownership check mirrors set_attention: only the granting session may
+// drain, and only over a read-granting link.
+func (s *server) handleOrchestrateDrainMailbox(w http.ResponseWriter, r *http.Request) {
+	callerID := r.PathValue("id")
+	var body struct {
+		LinkID string `json:"link_id"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	link, err := s.data.Link(r.Context(), body.LinkID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if link.GrantingSessionID != callerID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "session does not hold that link"})
+		return
+	}
+	if !link.HasGrant(contracts.GrantRead) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "link carries no read grant"})
+		return
+	}
+	digests, err := s.data.DrainLinkDigests(r.Context(), link.ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if digests == nil {
+		digests = []contracts.LinkDigest{}
+	}
+	writeJSON(w, http.StatusOK, digests)
+}
+
 func (s *server) handleOrchestrateSetAttention(w http.ResponseWriter, r *http.Request) {
 	callerID := r.PathValue("id")
 	var body struct {

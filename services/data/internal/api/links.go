@@ -114,6 +114,33 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, list)
 	})
 
+	// Both mailbox routes are Router-internal plumbing (the digest job
+	// appends, the signal job and the leader's on-demand pull drain) —
+	// never called by the UI directly.
+	mux.HandleFunc("POST /links/{id}/digests", func(w http.ResponseWriter, r *http.Request) {
+		var d contracts.LinkDigest
+		if !decode(w, r, &d) {
+			return
+		}
+		if err := links.AppendDigest(r.Context(), r.PathValue("id"), &d); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, d)
+	})
+
+	mux.HandleFunc("POST /links/{id}/digests/drain", func(w http.ResponseWriter, r *http.Request) {
+		list, err := links.DrainDigests(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if list == nil {
+			list = []contracts.LinkDigest{}
+		}
+		writeJSON(w, http.StatusOK, list)
+	})
+
 	// Both hand-raiser routes are meant to be called by the Router's
 	// Supervisor only (docs/LINKED-SESSIONS-DESIGN.md decision 6) — there's
 	// no user-facing UI action that should ever hit these. The actor is

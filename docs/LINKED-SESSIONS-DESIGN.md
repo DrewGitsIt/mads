@@ -64,17 +64,20 @@ Links are directed edges; nothing is 1:1 by design:
      the monitor. No continuous token streaming: LLMs consume messages, not
      streams. Iterate toward finer granularity only if digests prove
      insufficient.
-   - `on_signal` (default): nothing per turn. The monitor is woken only by
-     attention signals from the subject — a permission request parking a tool
-     call, a session crash, a task reaching done or blocked. Signals are
-     composed deterministically (no fast-model call) and delivered to every
-     non-manual explicit read link, per_turn included: a permission pause
-     parks the subject mid-turn, so the turn digest that would report it may
-     never fire. Rationale: a monitor is an LLM — every pushed digest forces a
-     full-inference turn over its whole context, and on a healthy subject
-     almost every such turn concludes "nothing to do". The wake filter
-     belongs in deterministic code, not in the most expensive component of
-     the system.
+   - `on_signal` (default): nothing pushed per turn. The monitor is woken
+     only by attention signals from the subject — a permission request
+     parking a tool call, a session crash, a task reaching done or blocked.
+     Signals are composed deterministically (no fast-model call) and
+     delivered to every non-manual explicit read link, per_turn included: a
+     permission pause parks the subject mid-turn, so the turn digest that
+     would report it may never fire. Turn digests still accumulate on the
+     link's capped mailbox (oldest dropped first) and flush as context in
+     the next wake's forced turn, or on demand via the agent-facing
+     check_mailbox tool. Rationale: a monitor is an LLM — every pushed
+     digest forces a full-inference turn over its whole context, and on a
+     healthy subject almost every such turn concludes "nothing to do". The
+     wake filter belongs in deterministic code, not in the most expensive
+     component of the system.
    - `manual_only`: nothing pushed at all; pull-only.
 5. **Pipeline runs are monitorable, not leadable.** §1.12's interactive-only
    restriction is relaxed for `read` (+`inject` where the subject is the

@@ -42,6 +42,11 @@ func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
 	return t.tx.QueryRow(query, args...)
 }
 
+// Query reads multiple rows inside the transaction.
+func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
+	return t.tx.Query(query, args...)
+}
+
 // Append writes an event into the log within this transaction, assigning
 // env.Seq and stamping env.Timestamp (UTC) if unset. The event is invisible
 // to subscribers until the transaction commits.

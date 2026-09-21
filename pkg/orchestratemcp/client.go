@@ -85,6 +85,11 @@ func (c *client) sendMessage(ctx context.Context, linkID, text string, waitMS in
 	return c.do(ctx, http.MethodPost, "/links/"+url.PathEscape(linkID)+"/orchestrate/message", body)
 }
 
+func (c *client) checkMailbox(ctx context.Context, linkID string) (int, []byte, error) {
+	body := map[string]any{"link_id": linkID}
+	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(c.sessionID)+"/orchestrate/mailbox", body)
+}
+
 func (c *client) setAttention(ctx context.Context, linkID, cadence string) (int, []byte, error) {
 	body := map[string]any{"link_id": linkID, "cadence": cadence}
 	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(c.sessionID)+"/orchestrate/attention", body)

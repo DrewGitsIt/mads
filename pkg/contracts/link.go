@@ -150,6 +150,19 @@ func (l Link) HasGrant(g Grant) bool {
 	return false
 }
 
+// LinkDigest is one queued mailbox entry on an on_signal link
+// (docs/LINKED-SESSIONS-DESIGN.md decision 4): a compressed turn digest
+// that accumulates instead of forcing a monitor turn, flushing as context
+// on the link's next signal wake or on-demand drain. FromTurn/ToTurn are
+// the digest's turn anchors (0 = unknown), so a reader can drill into the
+// range it covers.
+type LinkDigest struct {
+	Text      string    `json:"text"`
+	FromTurn  int       `json:"from_turn,omitempty"`
+	ToTurn    int       `json:"to_turn,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // NewSessionPlaceholder marks the to-be-created session's slot in a staged
 // LinkRequest on POST /sessions (either endpoint). Never persisted — the
 // Router substitutes the real ID before the link reaches the Data Service.

@@ -176,6 +176,14 @@ func (s *Server) handleToolCall(ctx context.Context, req rpcRequest) *rpcRespons
 			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
 		}
 		status, body, err = s.client.sendMessage(ctx, args.LinkID, args.Text, args.WaitMS)
+	case "check_mailbox":
+		var args struct {
+			LinkID string `json:"link_id"`
+		}
+		if unmarshalErr := json.Unmarshal(params.Arguments, &args); unmarshalErr != nil {
+			return &rpcResponse{JSONRPC: "2.0", ID: req.ID, Error: &rpcError{Code: -32602, Message: "invalid arguments: " + unmarshalErr.Error()}}
+		}
+		status, body, err = s.client.checkMailbox(ctx, args.LinkID)
 	case "set_attention":
 		var args struct {
 			LinkID  string `json:"link_id"`

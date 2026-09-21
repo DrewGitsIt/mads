@@ -58,6 +58,18 @@ var toolDefs = []map[string]any{
 		},
 	},
 	{
+		"name":        "check_mailbox",
+		"description": "Drain a link's queued digest backlog: an on_signal link accumulates the subject's turn digests instead of pushing them; this returns everything queued since your last wake or check, oldest first, and clears it.",
+		"inputSchema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"link_id": map[string]any{"type": "string"},
+			},
+			"required":             []string{"link_id"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		"name":        "set_attention",
 		"description": "Flip your own attention level on a link you hold: per_turn to receive pushed digests as the subject's turns complete, on_signal to be woken only when the subject needs attention (permission request, crash, task done/blocked), or manual_only to stop all pushes and catch up on demand via get_summary/get_turns instead.",
 		"inputSchema": map[string]any{

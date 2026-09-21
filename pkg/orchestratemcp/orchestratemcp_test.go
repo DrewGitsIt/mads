@@ -67,8 +67,8 @@ func TestInitializeAndToolsList(t *testing.T) {
 		t.Fatalf("tools/list result = %+v", resps[1].Result)
 	}
 	tools, ok := listResult["tools"].([]any)
-	if !ok || len(tools) != 5 {
-		t.Fatalf("tools = %+v, want 5 entries", listResult["tools"])
+	if !ok || len(tools) != 6 {
+		t.Fatalf("tools = %+v, want 6 entries", listResult["tools"])
 	}
 	names := map[string]bool{}
 	for _, tool := range tools {
