@@ -97,6 +97,14 @@ type MCPServerRef struct {
 	Name    string
 	Command string
 	Env     []string
+	// Type is the server's transport: "" or "stdio" (Command carries the
+	// launch string), "http", or "sse" (URL carries the endpoint). The zero
+	// value means stdio, so every existing caller is unchanged. Providers
+	// that can only materialize a subset (e.g. an ACP agent that doesn't
+	// advertise mcpCapabilities.http) drop what they can't send.
+	Type string
+	// URL is the endpoint for Type "http"/"sse". Unused for stdio.
+	URL string
 }
 
 // OneShotRequest is a single non-interactive invocation — the Fast Model
