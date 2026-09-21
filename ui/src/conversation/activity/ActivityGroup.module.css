@@ -61,6 +61,14 @@
   position: relative;
   border-radius: 7px;
 }
+/* Lift the hovered row above its siblings: a sibling row that is a stacking
+   context (e.g. mid-entry animation) would otherwise paint its text over
+   this row's peek regardless of the peek's own z-index. 50 keeps the whole
+   hovered row — peek included — above the pinned bottom cluster (z 40) and
+   below the dock (z 60), matching the peek's stated place in that order. */
+.row:hover {
+  z-index: 50;
+}
 
 .rowLine {
   display: flex;
@@ -129,8 +137,12 @@ button.rowLine:hover {
 
 /* Live rows ease in instead of blipping — same discipline as ToolCard's
    cardEnter; global.css's prefers-reduced-motion rule disables wholesale. */
+/* No fill mode: the animation ends at the row's natural state, and a filled
+   (`both`/`forwards`) opacity/transform animation stays applied forever —
+   leaving every live row a permanent stacking context that traps its hover
+   peek's z-index beneath later siblings' text. */
 .rowEnter {
-  animation: row-in 0.18s ease-out both;
+  animation: row-in 0.18s ease-out;
 }
 @keyframes row-in {
   from {
