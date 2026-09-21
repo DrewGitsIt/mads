@@ -58,7 +58,11 @@ func TestPTYOnlyStub(t *testing.T) {
 	p := newStub(map[provider.Behavior]provider.Support{
 		provider.BehaviorACP: provider.Unsupported,
 	}, lies{})
-	results := Check(context.Background(), p, stubScript())
+	// The trust probe runs over the structured transport; without one the
+	// attempt prompts can't be driven, so a PTY-only run omits them.
+	s := stubScript()
+	s.AttemptWrite, s.AttemptCommand = nil, nil
+	results := Check(context.Background(), p, s)
 	for _, r := range results {
 		if r.Err != nil {
 			t.Errorf("%s (declared %s): %v", r.Behavior, r.Declared, r.Err)
@@ -122,6 +126,13 @@ func TestMismatchesAreCaught(t *testing.T) {
 				provider.BehaviorResume: provider.Unsupported,
 			}, lies{acceptAnyResume: true}),
 			provider.BehaviorResume, "declared unsupported but Start with Resume succeeded",
+		},
+		{
+			// Self-proves the relaxed trust rule: announcing a disallowed
+			// tool is tolerated, but a non-error result is still caught.
+			"disallowed tool completes below full trust",
+			newStub(nil, lies{completesDisallowed: true}),
+			provider.BehaviorTrustLimited, "disallowed tool completed successfully",
 		},
 	}
 	for _, c := range cases {

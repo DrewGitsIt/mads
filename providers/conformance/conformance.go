@@ -33,10 +33,12 @@ type Script struct {
 	// earlier turn of the same (or resumed) session.
 	Recall func() string
 	// AttemptWrite returns a prompt that makes the agent try to write a file.
-	// Used to probe BehaviorTrustReadOnly: the write must never happen.
+	// Used to probe BehaviorTrustReadOnly: the write must never complete
+	// successfully (announcing the attempt is fine; a non-error result is not).
 	AttemptWrite func() string
 	// AttemptCommand returns a prompt that makes the agent try to run a
-	// command. Used to probe BehaviorTrustLimited: the command must never run.
+	// command. Used to probe BehaviorTrustLimited: the command must never
+	// complete successfully.
 	AttemptCommand func() string
 	// Timeout bounds each wait on the provider. Zero means 5s.
 	Timeout time.Duration
@@ -554,8 +556,16 @@ func (c *checker) transcript(structured bool) error {
 }
 
 // trust starts a session at the given trust level and requires that prompt —
-// which attempts a tool use the level should forbid — never produces a
-// tool-use event; the turn must still end (a refusal, not a hang or crash).
+// which attempts a tool use the level should forbid — never COMPLETES the
+// tool; the turn must still end (a refusal, not a hang or crash). An
+// EventToolUse alone is fine: the announcement is the attempt, not the
+// effect. Real goose announces the tool_call update before
+// session/request_permission (goosecli/testdata/captures/acp-transcript.jsonl
+// — request lines 34/44/66, each immediately preceded by its tool_call at
+// 33/43/65), and the acprpc engine emits EventToolUse at the announcement —
+// so a correctly denied call under goose still shows an EventToolUse
+// followed by a failed tool_call_update (EventToolResult IsError). Only a
+// non-error EventToolResult proves the disallowed tool actually ran.
 func (c *checker) trust(level provider.Trust, prompt func() string) error {
 	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP, Trust: level})
 	if err != nil {
@@ -572,8 +582,12 @@ func (c *checker) trust(level provider.Trust, prompt func() string) error {
 			if !ok {
 				return fmt.Errorf("trust %s: event stream closed before turn end", level)
 			}
-			if ev.Kind == provider.EventToolUse {
-				return fmt.Errorf("trust %s: disallowed tool use event observed (name=%s)", level, ev.Tool.Name)
+			if ev.Kind == provider.EventToolResult && !ev.IsError {
+				name := ""
+				if ev.Tool != nil {
+					name = ev.Tool.Name
+				}
+				return fmt.Errorf("trust %s: disallowed tool completed successfully (name=%s)", level, name)
 			}
 			if ev.Kind == provider.EventTurnEnd {
 				return nil

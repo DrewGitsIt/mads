@@ -162,15 +162,16 @@ func (p *Provider) engineConfig() acprpc.Config {
 
 func (p *Provider) engine() *acprpc.Engine { return acprpc.New(p.engineConfig()) }
 
-// Matrix is the honest §11 capability declaration for what is wired TODAY:
-// the design doc's "Proposed capability matrix" amended for the acprpc
-// instantiation — rows whose implementation lands in later chained tasks
-// are declared Unsupported here and flipped by those tasks (the
-// conformance task finalizes the matrix).
+// Matrix is the honest §11 capability declaration — final: every row is
+// proven by the conformance run against the scripted stand-in
+// (TestConformanceAgainstScriptedBinary, no goose binary needed), with the
+// per-row evidence catalogued in this package's README. Registration
+// remains its own chained task.
 func (p *Provider) Matrix() provider.Matrix {
 	return provider.Matrix{
 		// Pure engine behavior, capture-verified; MCPServers ride
-		// session/new's mcpServers[].
+		// session/new's mcpServers[] (ACP) and --with-extension (PTY,
+		// pty.go ptyArgs).
 		provider.BehaviorInteractive: provider.Native,
 		provider.BehaviorInterrupt:   provider.Native,
 		provider.BehaviorResume:      provider.Native,

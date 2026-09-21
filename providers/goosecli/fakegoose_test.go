@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -159,6 +160,47 @@ func fgReplayFile(path string) {
 	_, _ = os.Stdout.Write(raw)
 }
 
+// fgConvEntry / fgConvContent are the persisted conversation shape — one
+// export-format `conversation[]` entry as transcript.go parses it
+// (testdata/captures/oneshot-export.json convention: role, unix `created`,
+// text content blocks).
+type fgConvEntry struct {
+	Role    string          `json:"role"`
+	Created int64           `json:"created"`
+	Content []fgConvContent `json:"content"`
+}
+
+type fgConvContent struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+// fgWriteExport rewrites the session's export file — the single store that
+// serves resume (session/load rebuilds history from it), recall, AND the
+// transcript probe (`goose session export` replays it via fgSessionQuery).
+// Callers invoke it synchronously inside the session/prompt handler before
+// the response resolves, so a probe reading the file after its turn ends
+// can never race the write.
+func fgWriteExport(dir, id, cwd, mode string, conv []fgConvEntry) {
+	if dir == "" || id == "" {
+		return
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"id": id, "working_dir": cwd, "goose_mode": mode, "conversation": conv,
+	})
+	_ = os.WriteFile(filepath.Join(dir, id+".json"), raw, 0o644)
+}
+
+// fgModes is the captured availableModes set (acp-transcript.jsonl line 4),
+// served on both session/new and session/load results.
+func fgModes() []map[string]any {
+	modes := []map[string]any{}
+	for _, mo := range []string{"auto", "approve", "smart_approve", "chat"} {
+		modes = append(modes, map[string]any{"id": mo, "name": mo})
+	}
+	return modes
+}
+
 // fgAttempt is one gated-tool scenario, goose-shaped: bare _meta toolName
 // with the extension in the separate extensionName field, humanized title.
 type fgAttempt struct {
@@ -196,9 +238,15 @@ type fgError struct {
 }
 
 func fgServe() {
-	var id, mode, sysPrompt string
+	var id, cwd, mode, sysPrompt string
 	model := "qwen3.8"
 	mode = "auto"
+	// Cross-process persistence (resume/recall/transcript): the in-memory
+	// conversation is rewritten to $MADS_FAKE_EXPORT_DIR/<id>.json inside
+	// each prompt handler; session/load rebuilds both from the file.
+	exportDir := os.Getenv("MADS_FAKE_EXPORT_DIR")
+	var conv []fgConvEntry
+	var userHistory []string
 
 	msgs := make(chan fgMessage)
 	go func() {
@@ -320,6 +368,10 @@ func fgServe() {
 		return "denied via " + outcome
 	}
 
+	record := func(role, text string) {
+		conv = append(conv, fgConvEntry{Role: role, Created: time.Now().Unix(), Content: []fgConvContent{{Type: "text", Text: text}}})
+	}
+
 	hasMCPServers := func(params json.RawMessage) bool {
 		var probe map[string]json.RawMessage
 		_ = json.Unmarshal(params, &probe)
@@ -348,14 +400,72 @@ func fgServe() {
 				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "missing field `mcpServers`"})
 				continue
 			}
-			id = fmt.Sprintf("20260921_%d", os.Getpid()%1000)
-			modes := []map[string]any{}
-			for _, mo := range []string{"auto", "approve", "smart_approve", "chat"} {
-				modes = append(modes, map[string]any{"id": mo, "name": mo})
+			var p struct {
+				Cwd string `json:"cwd"`
 			}
+			_ = json.Unmarshal(m.Params, &p)
+			cwd = p.Cwd
+			// Full pid: conformance shares one export dir across processes,
+			// and a %1000 truncation risks cross-process id collisions. The
+			// id shape is only ever matched as \d{8}_\d+.
+			id = fmt.Sprintf("20260921_%d", os.Getpid())
 			respond(m.ID, map[string]any{
 				"sessionId":     id,
-				"modes":         map[string]any{"currentModeId": mode, "availableModes": modes},
+				"modes":         map[string]any{"currentModeId": mode, "availableModes": fgModes()},
+				"configOptions": configOptions(),
+			})
+
+		case "session/load":
+			// 1.48.0 rejects a missing mcpServers field on load exactly as on
+			// session/new (acp-load-replay.jsonl lines 3-4).
+			if !hasMCPServers(m.Params) {
+				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "missing field `mcpServers`"})
+				continue
+			}
+			var p struct {
+				SessionID string `json:"sessionId"`
+				Cwd       string `json:"cwd"`
+			}
+			_ = json.Unmarshal(m.Params, &p)
+			id, cwd = p.SessionID, p.Cwd
+			raw, err := os.ReadFile(filepath.Join(exportDir, id+".json"))
+			if err != nil {
+				respondErr(m.ID, -32603, "Session not found: "+id, nil)
+				continue
+			}
+			var doc struct {
+				GooseMode    string        `json:"goose_mode"`
+				Conversation []fgConvEntry `json:"conversation"`
+			}
+			_ = json.Unmarshal(raw, &doc)
+			if doc.GooseMode != "" {
+				mode = doc.GooseMode
+			}
+			conv = doc.Conversation
+			userHistory = nil
+			// Replay coalesced per message, BEFORE the response resolves —
+			// the capture's replay convention (acp-load-replay.jsonl; the
+			// engine's replaying window is only open during the request).
+			for _, e := range conv {
+				var text strings.Builder
+				for _, c := range e.Content {
+					text.WriteString(c.Text)
+				}
+				switch e.Role {
+				case "user":
+					userHistory = append(userHistory, text.String())
+					notifyUpdate(map[string]any{"sessionUpdate": "user_message_chunk", "content": map[string]any{"type": "text", "text": text.String()}})
+				case "assistant":
+					chunk(text.String())
+				}
+			}
+			// The load response carries BOTH modes (the persisted
+			// currentModeId) and configOptions (acp-load-replay.jsonl; the
+			// engine reads configOptions off the load result,
+			// acprpc/session.go).
+			respond(m.ID, map[string]any{
+				"sessionId":     id,
+				"modes":         map[string]any{"currentModeId": mode, "availableModes": fgModes()},
 				"configOptions": configOptions(),
 			})
 
@@ -405,10 +515,52 @@ func fgServe() {
 				prompt += b.Text
 			}
 
+			// The capture's usage shape and numbers (acp-transcript.jsonl
+			// line 85) ride every prompt result.
+			endTurn := func() {
+				raw, _ := json.Marshal(map[string]any{
+					"stopReason": "end_turn",
+					"usage":      map[string]any{"totalTokens": 8436, "inputTokens": 8415, "outputTokens": 21},
+				})
+				fgSend(fgMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
+			}
+
+			if prompt == "slow" {
+				// kirocli's bounded loop shape (a mid-turn session/cancel
+				// breaks it, so it never swallows a later request) — but the
+				// result is end_turn EVEN WHEN CANCELLED. Capture-pinned
+				// deviation from fakekiro's "cancelled": real goose resolved
+				// end_turn in 3/3 cancel attempts (acp-transcript.jsonl lines
+				// 86-105 + captures README "Turn 2 + cancel"); the engine's
+				// own interrupted flag does the detection. This deviation is
+				// the fake's whole reason to differ here.
+				for i := 0; i < 400; i++ {
+					chunk(fmt.Sprintf("tick %d ", i))
+					stop := false
+					select {
+					case mm, ok := <-msgs:
+						if !ok || mm.Method == "session/cancel" {
+							stop = true
+						}
+					case <-time.After(5 * time.Millisecond):
+					}
+					if stop {
+						break
+					}
+				}
+				endTurn()
+				continue
+			}
+
 			reply := "ok"
 			switch {
 			case strings.HasPrefix(prompt, "echo "):
 				reply = "you said " + strings.TrimPrefix(prompt, "echo ")
+			case prompt == "recall":
+				// Earlier user turns must come back — accumulated per prompt
+				// and rebuilt from the export on session/load, so the
+				// conformance resume probe's post-resume recall works.
+				reply = "earlier you said: " + strings.Join(userHistory, "; ")
 			case strings.HasSuffix(prompt, "sysprompt"):
 				reply = "sysprompt: " + sysPrompt
 			case strings.HasSuffix(prompt, "ratelimit"):
@@ -428,14 +580,15 @@ func fgServe() {
 				}
 			}
 
+			userHistory = append(userHistory, prompt)
+			record("user", prompt)
+			record("assistant", reply)
+			// Synchronous, before the response resolves — the transcript
+			// probe reads the file right after its turn ends.
+			fgWriteExport(exportDir, id, cwd, mode, conv)
+
 			chunk(reply)
-			// The capture's usage shape and numbers (acp-transcript.jsonl
-			// line 85) ride the prompt result.
-			raw, _ := json.Marshal(map[string]any{
-				"stopReason": "end_turn",
-				"usage":      map[string]any{"totalTokens": 8436, "inputTokens": 8415, "outputTokens": 21},
-			})
-			fgSend(fgMessage{JSONRPC: "2.0", ID: m.ID, Result: raw})
+			endTurn()
 
 		case "session/cancel":
 			// notification; nothing in flight to stop in these scenarios
@@ -469,4 +622,14 @@ func testProvider(t *testing.T, extraEnv ...string) *Provider {
 		t.Fatal(err)
 	}
 	return New(Config{Bin: exe, Env: append([]string{"MADS_FAKE_GOOSE=1"}, extraEnv...)})
+}
+
+// conformanceProvider is testProvider plus a shared export dir — the one
+// store serving the suite's cross-process resume, recall, and transcript
+// probes. Deliberately not baked into testProvider: the transcript/locate
+// fixture tests pass their own dirs, and duplicate env keys would be
+// ambiguous.
+func conformanceProvider(t *testing.T) *Provider {
+	t.Helper()
+	return testProvider(t, "MADS_FAKE_EXPORT_DIR="+t.TempDir())
 }

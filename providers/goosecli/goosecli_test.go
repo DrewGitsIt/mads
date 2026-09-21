@@ -7,8 +7,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/providers/conformance"
 	"github.com/drewkidwell/mads/providers/provider"
 )
+
+// script maps the conformance probes onto the fake's goose-shaped dialect.
+// attempt-write drives developer/text_editor with a write command (edit
+// class — denied under read_only); attempt-shell drives developer/shell
+// (execute class — denied under limited).
+func script() conformance.Script {
+	return conformance.Script{
+		Echo:           func(marker string) string { return "echo " + marker },
+		Slow:           func() string { return "slow" },
+		Recall:         func() string { return "recall" },
+		AttemptWrite:   func() string { return "attempt-write" },
+		AttemptCommand: func() string { return "attempt-shell" },
+		Timeout:        10 * time.Second, // each probe spawns a real subprocess
+	}
+}
+
+// The whole conformance suite runs against the adapter driving the scripted
+// stand-in binary (kirocli precedent): ACP + PTY echo, mid-turn interrupt
+// with the fake's capture-pinned end_turn-after-cancel result, OneShot +
+// OneShotStream over the engine's ACP emulation, cross-process resume via
+// session/load, synchronous ref announce, transcript via a really-recorded
+// `session export`, model discovery, the scripted 8415/21 usage, both trust
+// rows under the generalized announce-tolerant probe, and MCPServers on
+// Start — every declared matrix row, with no goose binary installed.
+func TestConformanceAgainstScriptedBinary(t *testing.T) {
+	conformance.Run(t, conformanceProvider(t), script())
+}
 
 func startSession(t *testing.T, p *Provider, opts provider.StartOptions) provider.Session {
 	t.Helper()

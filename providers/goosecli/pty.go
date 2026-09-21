@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -27,16 +28,7 @@ import (
 // the PTY tier's generic-engine case has shrunk; a generic ptycli engine,
 // if ever built, absorbs it later.
 func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error) {
-	args := []string{"session"}
-	if opts.Resume != "" {
-		args = append(args, "--resume", "--session-id", opts.Resume)
-	}
-	args = append(args, p.cfg.ExtraArgs...)
-	// No trust flags: `goose session` has no capture-verified trust flag
-	// surface, and trust on the terminal transport is the human at the
-	// keyboard anyway (kirocli/pty.go precedent).
-
-	cmd := exec.Command(p.cfg.Bin, args...)
+	cmd := exec.Command(p.cfg.Bin, p.ptyArgs(opts)...)
 	cmd.Dir = opts.Cwd
 	// The direct composition the engineConfig comment documents as the
 	// byte-identical non-engine form of its BaseEnv/Env split.
@@ -63,6 +55,53 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	s.term = tee
 	go s.pumpBanner(tee)
 	return s, nil
+}
+
+// ptyArgs builds the `goose session` argv. StartOptions.MCPServers ride
+// `--with-extension`: goose v1.48.0 crates/goose-cli/src/cli.rs:174-210
+// (ExtensionOptions, shared between the Session and Run commands) — the
+// flag is repeatable (ArgAction::Append), format
+// '[name:]ENV1=val1 ENV2=val2 command args...'; `--with-builtin` is
+// comma-delimited; `--no-profile` (cli.rs:205-209) proves CLI-specified
+// extensions are *additive* to config.yaml at 1.48. Only stdio refs ride
+// this path (skip rules mirror the engine's mcpEntries): http/sse refs are
+// silently dropped — goose has --with-streamable-http-extension, but no
+// capture exercises it. When any extension flag rides, the Builtins flag is
+// prepended first — the ≤1.46 config-suppression neutralization the ACP
+// spawn always applies (Config.Builtins doc comment). A bare spawn (no
+// MCPServers) stays flag-free, matching the committed pty-banner.raw
+// capture spawn.
+//
+// No trust flags: `goose session` has no capture-verified trust flag
+// surface, and trust on the terminal transport is the human at the
+// keyboard anyway (kirocli/pty.go precedent).
+func (p *Provider) ptyArgs(opts provider.StartOptions) []string {
+	args := []string{"session"}
+	if opts.Resume != "" {
+		args = append(args, "--resume", "--session-id", opts.Resume)
+	}
+	var specs []string
+	for _, srv := range opts.MCPServers {
+		if srv.Type != "" && srv.Type != "stdio" {
+			continue
+		}
+		if len(strings.Fields(srv.Command)) == 0 {
+			continue
+		}
+		spec := strings.Join(append(append([]string{}, srv.Env...), srv.Command), " ")
+		if srv.Name != "" {
+			spec = srv.Name + ":" + spec
+		}
+		specs = append(specs, spec)
+	}
+	if len(specs) > 0 && len(p.cfg.Builtins) > 0 {
+		args = append(args, "--with-builtin", strings.Join(p.cfg.Builtins, ","))
+	}
+	for _, spec := range specs {
+		args = append(args, "--with-extension", spec)
+	}
+	args = append(args, p.cfg.ExtraArgs...)
+	return args
 }
 
 // bannerScanBudget bounds the raw bytes the banner pump accumulates before

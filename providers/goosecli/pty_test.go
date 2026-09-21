@@ -55,6 +55,53 @@ func TestBannerRefFromCapture(t *testing.T) {
 	}
 }
 
+// TestPTYArgs pins the `goose session` argv construction as a pure
+// function — the ACP-side spawn argv gets the fake's strict assertion, and
+// the PTY conformance probes never pass MCPServers, so this is where the
+// --with-extension shape (goose v1.48.0 cli.rs:174-210) is proven.
+func TestPTYArgs(t *testing.T) {
+	p := New(Config{})
+	eq := func(name string, got, want []string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s: args = %q, want %q", name, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%s: args = %q, want %q", name, got, want)
+			}
+		}
+	}
+
+	// Bare spawn stays flag-free (the committed pty-banner.raw capture
+	// spawn; the fake's session argv assertion depends on it).
+	eq("bare", p.ptyArgs(provider.StartOptions{}), []string{"session"})
+	eq("resume", p.ptyArgs(provider.StartOptions{Resume: "20260829_20"}),
+		[]string{"session", "--resume", "--session-id", "20260829_20"})
+
+	// A stdio ref: builtin flag first (the ≤1.46 config-suppression
+	// neutralization), then the name-prefixed env-joined spec.
+	eq("stdio named", p.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
+		{Name: "probe", Command: "npx some-mcp --flag", Env: []string{"A=1", "B=2"}},
+	}}), []string{"session", "--with-builtin", "developer", "--with-extension", "probe:A=1 B=2 npx some-mcp --flag"})
+
+	// No name → no prefix; empty-command and http refs are skipped, and an
+	// http ref alone leaves the spawn bare (no dangling builtin flag).
+	eq("unnamed", p.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
+		{Command: "uvx mcp-server-fetch"},
+		{Name: "blank", Command: "  "},
+	}}), []string{"session", "--with-builtin", "developer", "--with-extension", "uvx mcp-server-fetch"})
+	eq("http only", p.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
+		{Name: "web", Type: "http", URL: "http://127.0.0.1:1/mcp"},
+	}}), []string{"session"})
+
+	// An explicit empty Builtins slice loads none — extensions still ride.
+	none := New(Config{Builtins: []string{}})
+	eq("no builtins", none.ptyArgs(provider.StartOptions{MCPServers: []provider.MCPServerRef{
+		{Command: "true"},
+	}}), []string{"session", "--with-extension", "true"})
+}
+
 // startPTYSession starts a ModePTY session through Start's switch and hands
 // back the PTYSession surface.
 func startPTYSession(t *testing.T, p *Provider, opts provider.StartOptions) provider.PTYSession {
