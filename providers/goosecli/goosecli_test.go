@@ -11,6 +11,12 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
+func TestRegistersCleanly(t *testing.T) {
+	if err := provider.NewRegistry().Register(New(Config{})); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // script maps the conformance probes onto the fake's goose-shaped dialect.
 // attempt-write drives developer/text_editor with a write command (edit
 // class — denied under read_only); attempt-shell drives developer/shell

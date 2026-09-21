@@ -25,6 +25,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -66,7 +67,9 @@ func defaultMadsHome() string {
 // what OS environment the spawned claude/kiro-cli binaries see (env_mode,
 // distinct from the --dangerously-skip-permissions/--trust-all-tools trust
 // bypass above — trust governs what an agent can DO, env_mode governs what
-// it can SEE).
+// it can SEE). Last hand-registration site of its kind: W7.9's
+// providers/load collapses these blocks into descriptor loading — new
+// providers go there, not here.
 func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, credEnv []string) (*provider.Registry, error) {
 	reg := provider.NewRegistry()
 	if err := reg.Register(claudecode.New(claudecode.Config{
@@ -84,6 +87,21 @@ func buildProviderRegistry(madsHome string, mode agentenv.Mode, passthrough, cre
 		Env:            credEnv,
 	})); err != nil {
 		return nil, fmt.Errorf("register kiro-cli provider: %w", err)
+	}
+	// No trust ExtraArgs for goose: full trust rides ACP session mode
+	// "auto", which the engine's TrustModes table sets itself — there is no
+	// goose CLI trust flag to pass. goose reads
+	// $XDG_CONFIG_HOME/goose/config.yaml (fallback ~/.config/goose): HOME
+	// is on agentenv's base allowlist but XDG_CONFIG_HOME is not, so
+	// isolated mode must pass it through. Fresh slice —
+	// append(passthrough, ...) could alias the caller's backing array.
+	goosePassthrough := append([]string{"HOME", "XDG_CONFIG_HOME"}, passthrough...)
+	if err := reg.Register(goosecli.New(goosecli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: goosePassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register goose provider: %w", err)
 	}
 	if err := reg.Register(fake.New(fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts")))); err != nil {
 		return nil, fmt.Errorf("register fake provider: %w", err)

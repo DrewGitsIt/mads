@@ -36,6 +36,26 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+// TestBuildProviderRegistryIncludesGoose pins the registration set main()
+// boots with — goose alongside the pre-existing three — and that building
+// goose's HOME/XDG_CONFIG_HOME passthrough never mutates the caller's
+// passthrough slice.
+func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
+	passthrough := []string{"CUSTOM_VAR"}
+	reg, err := buildProviderRegistry(agentenv.ModeIsolated, passthrough, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude-code", "kiro-cli", "goose", "fake"} {
+		if _, err := reg.Get(name); err != nil {
+			t.Fatalf("Get(%q): %v", name, err)
+		}
+	}
+	if !reflect.DeepEqual(passthrough, []string{"CUSTOM_VAR"}) {
+		t.Fatalf("caller's passthrough slice mutated: %v", passthrough)
+	}
+}
+
 func TestResolveAgentEnv_InheritOmitsCredEnvToStayByteIdentical(t *testing.T) {
 	parent := []string{"PATH=/bin", "MADS_CRED_A=secret-value"}
 	cfg := contracts.Config{CredentialBindings: []string{"MADS_CRED_A"}}

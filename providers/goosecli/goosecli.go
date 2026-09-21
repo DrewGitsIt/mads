@@ -41,8 +41,10 @@ type Config struct {
 	Env []string
 	// EnvMode controls how much of the process environment the spawned
 	// goose binary sees (pkg/agentenv). Empty behaves as inherit. goose
-	// needs HOME/XDG to find ~/.config/goose/config.yaml — both are on the
-	// isolated-mode base allowlist.
+	// needs HOME/XDG_CONFIG_HOME to find ~/.config/goose/config.yaml —
+	// HOME is on the isolated-mode base allowlist, but XDG_CONFIG_HOME is
+	// not and must ride EnvPassthrough (the service registration sites do
+	// this).
 	EnvMode agentenv.Mode
 	// EnvPassthrough is the list of parent env var NAMES let through in
 	// EnvMode isolated, on top of the base allowlist. Ignored otherwise.

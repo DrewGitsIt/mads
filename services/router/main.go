@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
@@ -121,6 +123,32 @@ func fastModelDynamicConfig(cfg contracts.Config, flagBaseURL, flagAPIKeyEnv, fl
 	}
 }
 
+// buildProviderRegistry registers every provider the Router serves (API
+// listing + model-discovery spawns, inherit-mode env). Last
+// hand-registration site of its kind: W7.9's providers/load collapses
+// these blocks into descriptor loading — new providers go there, not here.
+func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
+	providers := provider.NewRegistry()
+	if err := providers.Register(claudecode.New(claudecode.Config{})); err != nil {
+		return nil, fmt.Errorf("register claudecode provider: %w", err)
+	}
+	if err := providers.Register(kirocli.New(kirocli.Config{})); err != nil {
+		return nil, fmt.Errorf("register kiro-cli provider: %w", err)
+	}
+	if err := providers.Register(goosecli.New(goosecli.Config{})); err != nil {
+		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	// WithTranscriptDir points this Router-local fake instance at the same
+	// $MADS_HOME/fake-transcripts a `mads run` child (cmd/mads/run.go) with
+	// -provider fake writes to — the two are always separate Fake
+	// instances (different processes), so an announced OneShot ref's
+	// history is otherwise invisible here (pipeline_turns.go's turnsFor).
+	if err := providers.Register(fake.New(fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts")))); err != nil {
+		return nil, fmt.Errorf("register fake provider: %w", err)
+	}
+	return providers, nil
+}
+
 func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string) http.Handler {
 	return api.New(api.Options{
 		Data:                 data,
@@ -160,20 +188,9 @@ func main() {
 
 	data := dataclient.New(*dataURL, "router")
 
-	providers := provider.NewRegistry()
-	if err := providers.Register(claudecode.New(claudecode.Config{})); err != nil {
-		log.Fatalf("router: register claudecode provider: %v", err)
-	}
-	if err := providers.Register(kirocli.New(kirocli.Config{})); err != nil {
-		log.Fatalf("router: register kiro-cli provider: %v", err)
-	}
-	// WithTranscriptDir points this Router-local fake instance at the same
-	// $MADS_HOME/fake-transcripts a `mads run` child (cmd/mads/run.go) with
-	// -provider fake writes to — the two are always separate Fake
-	// instances (different processes), so an announced OneShot ref's
-	// history is otherwise invisible here (pipeline_turns.go's turnsFor).
-	if err := providers.Register(fake.New(fake.WithTranscriptDir(filepath.Join(*madsHome, "fake-transcripts")))); err != nil {
-		log.Fatalf("router: register fake provider: %v", err)
+	providers, err := buildProviderRegistry(*madsHome)
+	if err != nil {
+		log.Fatalf("router: %v", err)
 	}
 
 	// resolveFastModel runs on every Fast Model call (job.go's Deps.FastModel

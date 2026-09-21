@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/fastmodel"
+	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/api"
@@ -51,7 +53,7 @@ func defaultMadsHome() string {
 }
 
 // resolveAgentEnv turns this process's env_mode config into what the
-// claudecode/kirocli provider Configs need to hand agentenv.Build at every
+// claudecode/kirocli/goosecli provider Configs need to hand agentenv.Build at every
 // agent spawn: the mode itself, the passthrough name list, and — isolated
 // mode only — this process's own bound-credential values. Those values are
 // extracted from parentEnv (this process's already-populated os.Environ(),
@@ -67,6 +69,45 @@ func resolveAgentEnv(cfg contracts.Config, parentEnv []string) (mode agentenv.Mo
 		return mode, nil, nil
 	}
 	return mode, cfg.EnvPassthrough, agentenv.Select(parentEnv, cfg.CredentialBindings)
+}
+
+// buildProviderRegistry registers every provider an interactive session can
+// host; mode/passthrough/credEnv come from resolveAgentEnv. Last
+// hand-registration site of its kind: W7.9's providers/load collapses
+// these blocks into descriptor loading — new providers go there, not here.
+func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*provider.Registry, error) {
+	registry := provider.NewRegistry()
+	if err := registry.Register(claudecode.New(claudecode.Config{
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register claudecode provider: %w", err)
+	}
+	if err := registry.Register(kirocli.New(kirocli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: passthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register kiro-cli provider: %w", err)
+	}
+	// goose reads $XDG_CONFIG_HOME/goose/config.yaml (fallback
+	// ~/.config/goose): HOME is on agentenv's base allowlist but
+	// XDG_CONFIG_HOME is not, so isolated mode must pass it through. Fresh
+	// slice — append(passthrough, ...) could alias the caller's backing
+	// array.
+	goosePassthrough := append([]string{"HOME", "XDG_CONFIG_HOME"}, passthrough...)
+	if err := registry.Register(goosecli.New(goosecli.Config{
+		EnvMode:        mode,
+		EnvPassthrough: goosePassthrough,
+		Env:            credEnv,
+	})); err != nil {
+		return nil, fmt.Errorf("register goose provider: %w", err)
+	}
+	if err := registry.Register(fake.New()); err != nil {
+		return nil, fmt.Errorf("register fake provider: %w", err)
+	}
+	return registry, nil
 }
 
 func main() {
@@ -97,23 +138,9 @@ func main() {
 	}
 	mode, passthrough, credEnv := resolveAgentEnv(cfg, os.Environ())
 
-	registry := provider.NewRegistry()
-	if err := registry.Register(claudecode.New(claudecode.Config{
-		EnvMode:        mode,
-		EnvPassthrough: passthrough,
-		Env:            credEnv,
-	})); err != nil {
-		log.Fatalf("session: register claudecode provider: %v", err)
-	}
-	if err := registry.Register(kirocli.New(kirocli.Config{
-		EnvMode:        mode,
-		EnvPassthrough: passthrough,
-		Env:            credEnv,
-	})); err != nil {
-		log.Fatalf("session: register kiro-cli provider: %v", err)
-	}
-	if err := registry.Register(fake.New()); err != nil {
-		log.Fatalf("session: register fake provider: %v", err)
+	registry, err := buildProviderRegistry(mode, passthrough, credEnv)
+	if err != nil {
+		log.Fatalf("session: %v", err)
 	}
 
 	fmProvider, err := registry.Get(*fastModelProvider)

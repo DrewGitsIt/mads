@@ -51,6 +51,70 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+// TestBuildProviderRegistryIncludesGoose pins the registration set main()
+// boots with: goose alongside the pre-existing three, proving the
+// extraction out of main() was lossless.
+func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
+	reg, err := buildProviderRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude-code", "kiro-cli", "goose", "fake"} {
+		p, err := reg.Get(name)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", name, err)
+		}
+		if p.Name() != name {
+			t.Errorf("Get(%q).Name() = %q, want %q", name, p.Name(), name)
+		}
+	}
+}
+
+// TestProvidersEndpointListsGoose confirms GET /providers serves a goose
+// row with its behavior matrix straight from the registry — the goose
+// registration needed no handler changes (reads.go iterates the registry).
+func TestProvidersEndpointListsGoose(t *testing.T) {
+	providers, err := buildProviderRegistry(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := dataclient.New("http://localhost:0", "router")
+	sup := supervisor.New(data, nil, nil, nil)
+	reg := registryclient.New("")
+	jobs := job.New(data, fastmodel.New(fake.New(), fastmodel.Config{}), reg)
+	creds, err := credstore.Open(t.TempDir() + "/credentials.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(newMux(data, sup, jobs, providers, creds, nil, nil, nil, nil, reg, t.TempDir(), ""))
+	defer srv.Close()
+
+	resp, err := srv.Client().Get(srv.URL + "/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("GET /providers = %d, want 200", resp.StatusCode)
+	}
+	var rows []struct {
+		Name   string          `json:"name"`
+		Matrix json.RawMessage `json:"matrix"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Name == "goose" {
+			if len(row.Matrix) == 0 || string(row.Matrix) == "null" {
+				t.Fatalf("goose row has no behavior matrix: %s", row.Matrix)
+			}
+			return
+		}
+	}
+	t.Fatalf("GET /providers has no goose row: %+v", rows)
+}
+
 func testRegistry(t *testing.T) *provider.Registry {
 	t.Helper()
 	reg := provider.NewRegistry()

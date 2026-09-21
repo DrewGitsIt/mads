@@ -64,7 +64,7 @@ func usage() {
       no names given validates every stored template; exits non-zero if any
       named or stored template is invalid
   mads run         -session ID -workspace DIR      [-data URL]
-      [-template default-implementation] [-provider claude-code|fake]
+      [-template default-implementation] [-provider claude-code|kiro-cli|goose|fake]
       [-model M] [-concurrency 5] [-isolated=true] [-worktree-root DIR]
       [-claude-args "--dangerously-skip-permissions"] [-stage-timeout 30m]
   mads uninstall   [-keep-data] [-yes]
