@@ -416,12 +416,16 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 }
 
 // handlePermission gates a session/request_permission on the session's
-// trust level and the tool's recorded class, replying by selecting from
-// the request's offered options by kind — optionIds are agent-chosen
-// opaque strings per spec, never hardcoded. The identity comes from the
-// recorded tool_call update with the same toolCallId (goose's request
-// params carry none of their own); below full trust an unmatched id
-// denies — never silently under-enforce.
+// trust level and the tool's class, replying by selecting from the
+// request's offered options by kind — optionIds are agent-chosen opaque
+// strings per spec, never hardcoded. The identity preferably comes from
+// the recorded tool_call update with the same toolCallId (goose's request
+// params carry none of their own); when no announced call matches, the
+// request's own embedded toolCall — a spec ToolCallUpdate that may carry
+// kind/_meta of its own (kiro-cli asks before announcing) — is classified
+// through the same ToolIdentity knob. Either path without identity
+// classifies unknown, which denies below full trust — never silently
+// under-enforce.
 func (s *streamSession) handlePermission(id json.RawMessage, params json.RawMessage) {
 	var p requestPermissionParams
 	_ = json.Unmarshal(params, &p)
@@ -431,7 +435,16 @@ func (s *streamSession) handlePermission(id json.RawMessage, params json.RawMess
 	trust := s.trust
 	s.mu.Unlock()
 
-	allow := trust == provider.TrustFull || (known && classAllowed(trust, info.class))
+	class := info.class
+	if !known {
+		class, _ = s.classify(&sessionUpdate{
+			Title:    p.ToolCall.Title,
+			Kind:     p.ToolCall.Kind,
+			RawInput: p.ToolCall.RawInput,
+			Meta:     p.ToolCall.Meta,
+		})
+	}
+	allow := trust == provider.TrustFull || classAllowed(trust, class)
 
 	outcome := permissionOutcome{Outcome: "cancelled"}
 	if optionID, ok := selectOption(p.Options, allow); ok {

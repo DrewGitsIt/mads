@@ -365,10 +365,17 @@ type requestPermissionParams struct {
 	Options   []permissionOption `json:"options"`
 }
 
+// permissionToolCall is the spec ToolCallUpdate embedded in the request:
+// every field but toolCallId is optional, and an agent that asks BEFORE
+// announcing the tool_call (kiro-cli's shape) carries the identity here
+// instead — Kind/Meta feed handlePermission's fallback classification when
+// no announced call matches the id.
 type permissionToolCall struct {
 	ToolCallID string          `json:"toolCallId"`
 	Title      string          `json:"title"`
+	Kind       string          `json:"kind,omitempty"`
 	RawInput   json.RawMessage `json:"rawInput,omitempty"`
+	Meta       json.RawMessage `json:"_meta,omitempty"`
 }
 
 // permissionOption is one offered reply. OptionID is an agent-chosen

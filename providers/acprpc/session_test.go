@@ -322,6 +322,13 @@ func TestPermissionSelectionByKind(t *testing.T) {
 		// No option of the needed polarity → outcome cancelled, observed
 		// agent-side.
 		{"no reject polarity cancels", "synthetic", syntheticConfig(), provider.TrustLimited, "attempt-shell-allowonly", "denied via cancelled"},
+		// Ask-before-announce (kiro-cli's shape): no tool_call update
+		// precedes the request, so the gate classifies the identity embedded
+		// in the request's own toolCall — the spec kind field or the _meta
+		// namespace, per the same ToolIdentity knob.
+		{"ask-first allow edit under limited (embedded kind)", "synthetic", syntheticConfig(), provider.TrustLimited, "attempt-write-askfirst", "used text_editor write"},
+		{"ask-first deny execute under limited (embedded kind)", "synthetic", syntheticConfig(), provider.TrustLimited, "attempt-shell-askfirst", "denied via syn-no"},
+		{"ask-first allow edit under limited (embedded meta)", "goose", gooseConfig(), provider.TrustLimited, "attempt-write-askfirst", "used text_editor write"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

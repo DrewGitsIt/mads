@@ -4,15 +4,22 @@ package kirocli
 // re-execs as a mock kiro-cli speaking the real acp JSON-RPC wire protocol
 // (the standard os/exec testing trick). Every adapter path — process spawn,
 // request/response correlation, session/load replay, resume, interrupt —
-// gets real subprocess coverage in CI with no kiro-cli installed.
+// gets real subprocess coverage in CI with no kiro-cli installed. The ACP
+// client under test is the generic providers/acprpc engine driven through
+// this package's knob values, so the fake carries its own minimal wire
+// shapes (fkMessage plus inline maps): the adapter has no JSON-RPC
+// plumbing left to borrow, which is the point of the migration.
 //
 // The reply dialect (echo/recall/crash/slow) mirrors provider-fake's and
 // claude-code's scripted stand-in exactly, per HANDOFF §6's shared-contract
 // instruction. attempt-write/attempt-command are the one addition beyond
 // that shared dialect: they drive a real session/request_permission round
-// trip against the production session.go code under test, the only way to
-// exercise kirocli's kind-based trust gate (as opposed to wire-type-only
-// coverage).
+// trip against the engine's trust gate. The fake asks BEFORE announcing a
+// tool_call — the request's own toolCall carries the ACP kind, and the
+// call is announced only after approval — and its permission menu offers
+// opaque optionIds ("fk-yes"/"fk-no"…, deliberately NOT "allow"/"reject"):
+// a client that hardcodes ids the way this package's superseded session.go
+// did fails the round trip instead of silently passing.
 
 import (
 	"bufio"
@@ -31,6 +38,19 @@ func TestMain(m *testing.M) {
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
+}
+
+// fkMessage is the fake's own JSON-RPC 2.0 line shape. ID is raw JSON:
+// client requests use int ids, while the fake's own agent→client requests
+// (session/request_permission) use string ids the reply echoes verbatim —
+// the id shape the committed real-agent captures pin
+// (providers/acprpc/testdata/captures/).
+type fkMessage struct {
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
 }
 
 // fkArgs is a loose parse of the kiro-cli flags the adapter uses.
@@ -193,70 +213,97 @@ func fkACP() {
 	var id, transcript string
 	var history []string
 
-	msgs := make(chan rpcMessage)
+	msgs := make(chan fkMessage)
 	go func() {
 		defer close(msgs)
 		sc := bufio.NewScanner(os.Stdin)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
-			var m rpcMessage
+			var m fkMessage
 			if json.Unmarshal(sc.Bytes(), &m) == nil {
 				msgs <- m
 			}
 		}
 	}()
 
-	respond := func(reqID *int, result any) {
+	respond := func(reqID json.RawMessage, result any) {
 		raw, _ := json.Marshal(result)
-		fkSend(rpcMessage{JSONRPC: "2.0", ID: reqID, Result: raw})
+		fkSend(fkMessage{JSONRPC: "2.0", ID: reqID, Result: raw})
 	}
-	notify := func(method string, params any) {
-		raw, _ := json.Marshal(params)
-		fkSend(rpcMessage{JSONRPC: "2.0", Method: method, Params: raw})
+	notifyUpdate := func(update map[string]any) {
+		raw, _ := json.Marshal(map[string]any{"sessionId": id, "update": update})
+		fkSend(fkMessage{JSONRPC: "2.0", Method: "session/update", Params: raw})
 	}
-	update := func(kind, text string) {
-		raw, _ := json.Marshal(sessionUpdate{SessionUpdate: kind, Content: &updateContent{Type: "text", Text: text}})
-		notify("session/update", sessionUpdateParams{SessionID: id, Update: raw})
+	chunk := func(variant, text string) {
+		notifyUpdate(map[string]any{"sessionUpdate": variant, "content": map[string]any{"type": "text", "text": text}})
 	}
-	toolCall := func(title, kind string) {
-		raw, _ := json.Marshal(sessionUpdate{SessionUpdate: "tool_call", ToolCall: &toolCallUpdate{Title: title, Kind: kind}})
-		notify("session/update", sessionUpdateParams{SessionID: id, Update: raw})
+	toolCall := func(callID, title, kind string) {
+		notifyUpdate(map[string]any{"sessionUpdate": "tool_call", "toolCallId": callID, "title": title, "kind": kind})
 	}
-	permReqID := 0
+	permSeq := 0
 	// requestPermission sends a real session/request_permission request and
-	// blocks for the client's response — exercising session.go's production
-	// toolKindAllowed/autoApprove/denyPermission path, not just the wire
-	// types. Safe to block on the next msgs receive: the client's read loop
-	// answers synchronously from within handleLine before reading its next
-	// line, so nothing else can arrive first.
-	requestPermission := func(title, kind string) bool {
-		permReqID--
-		reqID := permReqID
-		raw, _ := json.Marshal(requestPermissionParams{ToolCall: toolCallUpdate{Title: title, Kind: kind}})
-		fkSend(rpcMessage{JSONRPC: "2.0", ID: &reqID, Method: "session/request_permission", Params: raw})
+	// blocks for the client's reply — exercising the engine's production
+	// trust gate, not just wire shapes. Safe to block on the next msgs
+	// receive: the client's read loop answers synchronously from within
+	// handleLine before reading its next line, so nothing else can arrive
+	// first. The request's toolCall carries the kind (the fake asks before
+	// announcing, so there is no prior tool_call to correlate with), and
+	// only the fake's own opaque allow ids count as approval.
+	requestPermission := func(callID, title, kind string) bool {
+		permSeq++
+		reqID := json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("perm-%d", permSeq)))
+		params, _ := json.Marshal(map[string]any{
+			"sessionId": id,
+			"toolCall":  map[string]any{"toolCallId": callID, "status": "pending", "title": title, "kind": kind},
+			"options": []map[string]any{
+				{"optionId": "fk-yes", "name": "Allow", "kind": "allow_once"},
+				{"optionId": "fk-yes-4ever", "name": "Always allow", "kind": "allow_always"},
+				{"optionId": "fk-no", "name": "Reject", "kind": "reject_once"},
+			},
+		})
+		fkSend(fkMessage{JSONRPC: "2.0", ID: reqID, Method: "session/request_permission", Params: params})
 		resp, ok := <-msgs
 		if !ok {
 			return false
 		}
-		var pr permissionResult
+		var pr struct {
+			Outcome struct {
+				Outcome  string `json:"outcome"`
+				OptionID string `json:"optionId"`
+			} `json:"outcome"`
+		}
 		_ = json.Unmarshal(resp.Result, &pr)
-		return pr.Outcome.OptionID == "allow"
+		return pr.Outcome.Outcome == "selected" &&
+			(pr.Outcome.OptionID == "fk-yes" || pr.Outcome.OptionID == "fk-yes-4ever")
 	}
 
 	for m := range msgs {
 		switch m.Method {
 		case "initialize":
-			respond(m.ID, map[string]any{"protocolVersion": 1})
+			respond(m.ID, map[string]any{
+				"protocolVersion": 1,
+				"agentCapabilities": map[string]any{
+					// kiro's real agent advertises loadSession: true and an
+					// empty sessionCapabilities (README.md Transcript and
+					// Branching rows) — the engine gates session/load on the
+					// former, so the fake must advertise what it serves.
+					"loadSession":         true,
+					"mcpCapabilities":     map[string]any{"http": false, "sse": false},
+					"sessionCapabilities": map[string]any{},
+				},
+			})
 
 		case "session/new":
 			id = fmt.Sprintf("fk-%d", os.Getpid())
 			if dir != "" {
 				transcript = filepath.Join(dir, id+".jsonl")
 			}
-			respond(m.ID, newSessionResult{SessionID: id})
+			respond(m.ID, map[string]any{"sessionId": id})
 
 		case "session/load":
-			var p loadSessionParams
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
 			_ = json.Unmarshal(m.Params, &p)
 			id = p.SessionID
 			if dir != "" {
@@ -265,16 +312,20 @@ func fkACP() {
 					switch e.Role {
 					case "user":
 						history = append(history, e.Text)
-						update("user_message_chunk", e.Text)
+						chunk("user_message_chunk", e.Text)
 					case "agent":
-						update("agent_message_chunk", e.Text)
+						chunk("agent_message_chunk", e.Text)
 					}
 				}
 			}
 			respond(m.ID, map[string]any{})
 
 		case "session/prompt":
-			var p promptParams
+			var p struct {
+				Prompt []struct {
+					Text string `json:"text"`
+				} `json:"prompt"`
+			}
 			_ = json.Unmarshal(m.Params, &p)
 			var prompt string
 			for _, b := range p.Prompt {
@@ -288,23 +339,25 @@ func fkACP() {
 				if prompt == "attempt-command" {
 					title, kind = "Bash", "execute"
 				}
+				permSeq++
+				callID := fmt.Sprintf("call_%d", permSeq)
 				var reply string
-				if requestPermission(title, kind) {
-					toolCall(title, kind)
+				if requestPermission(callID, title, kind) {
+					toolCall(callID, title, kind)
 					reply = "used " + title
 				} else {
 					reply = fmt.Sprintf("cannot use %s: permission denied", title)
 				}
-				update("agent_message_chunk", reply)
+				chunk("agent_message_chunk", reply)
 				fkAppendTranscript(transcript, "agent", reply)
-				respond(m.ID, promptResult{StopReason: "end_turn"})
+				respond(m.ID, map[string]any{"stopReason": "end_turn"})
 				continue
 			}
 
 			if prompt == "slow" {
 				interrupted := false
 				for i := 0; i < 400 && !interrupted; i++ {
-					update("agent_message_chunk", fmt.Sprintf("tick %d ", i))
+					chunk("agent_message_chunk", fmt.Sprintf("tick %d ", i))
 					select {
 					case mm, ok := <-msgs:
 						if ok && mm.Method == "session/cancel" {
@@ -317,18 +370,18 @@ func fkACP() {
 				if interrupted {
 					stopReason = "cancelled"
 				}
-				respond(m.ID, promptResult{StopReason: stopReason})
+				respond(m.ID, map[string]any{"stopReason": stopReason})
 				continue
 			}
 
 			reply, crash := fkReply(prompt, history[:len(history)-1])
 			if crash {
-				update("agent_message_chunk", "uh o")
+				chunk("agent_message_chunk", "uh o")
 				os.Exit(1) // dies mid-turn, no response
 			}
-			update("agent_message_chunk", reply)
+			chunk("agent_message_chunk", reply)
 			fkAppendTranscript(transcript, "agent", reply)
-			respond(m.ID, promptResult{StopReason: "end_turn"})
+			respond(m.ID, map[string]any{"stopReason": "end_turn"})
 
 		case "session/cancel":
 			// No turn in flight to interrupt outside the slow branch above.
@@ -336,7 +389,7 @@ func fkACP() {
 	}
 }
 
-func fkSend(m rpcMessage) {
+func fkSend(m fkMessage) {
 	raw, _ := json.Marshal(m)
 	fmt.Println(string(raw))
 }

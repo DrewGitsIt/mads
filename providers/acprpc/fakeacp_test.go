@@ -106,11 +106,16 @@ var faProfiles = map[string]faProfile{
 }
 
 // faAttempt is one gated-tool scenario: identity for both emission styles
-// plus the permission-option kinds offered (nil = all four).
+// plus the permission-option kinds offered (nil = all four). askFirst
+// requests permission BEFORE any tool_call announcement, carrying the
+// identity inside the request's own toolCall (kiro-cli's shape) — the
+// engine must gate on that embedded identity, since there is no announced
+// call to correlate with.
 type faAttempt struct {
 	ext, name, kind, title string
 	input                  map[string]any
 	offer                  []string
+	askFirst               bool
 }
 
 var faAttempts = map[string]faAttempt{
@@ -124,6 +129,11 @@ var faAttempts = map[string]faAttempt{
 	"attempt-view-always":     {ext: "developer", name: "text_editor", kind: "read", title: "text_editor view", input: map[string]any{"command": "view", "path": "/tmp/fake.txt"}, offer: []string{"allow_always", "reject_always"}},
 	"attempt-shell-always":    {ext: "developer", name: "shell", kind: "execute", title: "shell", input: map[string]any{"command": "echo hi"}, offer: []string{"allow_always", "reject_always"}},
 	"attempt-shell-allowonly": {ext: "developer", name: "shell", kind: "execute", title: "shell", input: map[string]any{"command": "echo hi"}, offer: []string{"allow_once", "allow_always"}},
+	// Ask-before-announce (kiro-cli's shape): permission is requested with
+	// the identity embedded in the request's toolCall, no prior tool_call
+	// update to correlate with.
+	"attempt-write-askfirst": {ext: "developer", name: "text_editor", kind: "edit", title: "text_editor write", input: map[string]any{"command": "write", "path": "/tmp/fake.txt", "file_text": "x"}, askFirst: true},
+	"attempt-shell-askfirst": {ext: "developer", name: "shell", kind: "execute", title: "shell", input: map[string]any{"command": "echo hi"}, askFirst: true},
 }
 
 func faSend(m rpcMessage) {
@@ -272,9 +282,19 @@ func faServe(pr faProfile) {
 		for _, kind := range offer {
 			options = append(options, map[string]any{"optionId": pr.optionID[kind], "name": "Option " + pr.optionID[kind], "kind": kind})
 		}
+		tc := map[string]any{"toolCallId": callID, "status": "pending", "title": a.title, "rawInput": a.input}
+		if a.askFirst {
+			// Unannounced call: the request itself carries the identity, in
+			// the profile's emission style.
+			if pr.metaNS != "" {
+				tc["_meta"] = map[string]any{pr.metaNS: map[string]any{"toolCall": map[string]any{"toolName": a.name, "extensionName": a.ext}}}
+			} else if a.kind != "" {
+				tc["kind"] = a.kind
+			}
+		}
 		params, _ := json.Marshal(map[string]any{
 			"sessionId": id,
-			"toolCall":  map[string]any{"toolCallId": callID, "status": "pending", "title": a.title, "rawInput": a.input},
+			"toolCall":  tc,
 			"options":   options,
 		})
 		faSend(rpcMessage{JSONRPC: "2.0", ID: reqID, Method: "session/request_permission", Params: params})
@@ -293,20 +313,29 @@ func faServe(pr faProfile) {
 
 	// attemptTool runs the shared gated-tool dance: announce the tool_call
 	// (agents emit it before the permission request), ask permission when in
-	// the profile's ask mode, then either complete or fail the call.
+	// the profile's ask mode, then either complete or fail the call. An
+	// askFirst attempt inverts the order — permission first, and the call is
+	// only ever announced (then completed) when the reply allowed it.
 	attemptTool := func(a faAttempt) string {
 		permSeq++
 		callID := fmt.Sprintf("call_%d", permSeq)
-		toolCall(callID, a)
+		if !a.askFirst {
+			toolCall(callID, a)
+		}
 		allowed, outcome := true, "unasked"
 		if mode == pr.askMode {
 			allowed, outcome = requestPermission(callID, a)
 		}
 		if allowed {
+			if a.askFirst {
+				toolCall(callID, a)
+			}
 			toolDone(callID, "completed", "ran "+a.title)
 			return "used " + a.title
 		}
-		toolDone(callID, "failed", "permission denied")
+		if !a.askFirst {
+			toolDone(callID, "failed", "permission denied")
+		}
 		return "denied via " + outcome
 	}
 
