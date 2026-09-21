@@ -1,10 +1,11 @@
-# goose adapter — design (proposed W7.8)
+# goose adapter — design (W7.8)
 
 A third provider adapter (spec §11): Block's open-source **goose** agent,
 driven through its first-class ACP server (`goose acp`, JSON-RPC 2.0 over
-newline-delimited stdio) for interactive sessions, `goose run` for one-shots,
-`goose session` under a PTY for the terminal transport, and
-`goose session export --format json` for normalized transcripts.
+newline-delimited stdio) for interactive sessions and one-shots (OneShot
+rides the engine's ACP emulation — see "OneShot"), `goose session` under a
+PTY for the terminal transport, and `goose session export --format json`
+for normalized transcripts.
 
 **Unlike kirocli, every claim here is verified against a live binary**:
 goose **1.48.0** is installed at `~/.local/bin/goose` on this machine (the
@@ -40,6 +41,10 @@ is therefore tagged with its upstream-fixable seam. The three known ones:
    full 303-line tool-using run). Upstream fix: a session-id line in
    `--output-format stream-json` output would be trivially additive. Until
    then the `--name` fallback carries attribution (see "OneShot").
+   **Moot for mads since the re-plan**: shipped OneShot rides ACP, where
+   `session/new` returns the id synchronously. The seam remains real only
+   for CLI `goose run` users — which is why
+   docs/goose-upstream-proposals.md deliberately drafts only seams 1–2.
 
 The adapter should still ship against stock 1.46.0 (mads users install
 goose from release channels), but the workarounds are bridges, not
@@ -131,28 +136,37 @@ the goose adapter; the goose adapter should *not* copy them.
 
 ## Shape of the work
 
-New package `providers/goosecli` (registry name `"goose"`), mirroring
-`providers/kirocli`'s layout: `goosecli.go` (Provider, Matrix, OneShot,
-Models), `session.go` (ACP streamSession), `wire.go` (RPC types +
-normalization), `pty.go`, `transcript.go`, `fakegoose_test.go` (scripted
-stand-in), `README.md` (row-by-row matrix justification, kirocli
-conventions), conformance run in `goosecli_test.go`.
+New package `providers/goosecli` (registry name `"goose"`). As built:
+`goosecli.go` (Provider, Matrix, engineConfig knob values, OneShot
+delegation, Models), `pty.go`, `transcript.go`, `locate.go`,
+`fakegoose_test.go` (scripted stand-in), conformance run in
+`goosecli_test.go`, `README.md` (row-by-row matrix justification, kirocli
+conventions). No `session.go`/`wire.go` — that layer lives in the engine
+(next paragraph).
 
-**Decision: self-contained adapter, no shared ACP package in v1.** kirocli's
+~~**Decision: self-contained adapter, no shared ACP package in v1.** kirocli's
 ACP code is ~430 lines and research-grade (doc-sourced, unverified); goose's
 update variants, config-option surface, and permission shapes diverge enough
 that extraction now would couple two harnesses' quirks and risk destabilizing
 kirocli. Copy the JSON-RPC plumbing pattern (pending-request table, single
 read loop, `beginRequest`/`request`/`notify`, `closeWait`) and adapt.
 "Extract shared `providers/acprpc` transport" is a candidate follow-up task
-once both adapters have real-binary smoke coverage.
+once both adapters have real-binary smoke coverage.~~
+**Superseded** (re-plan, docs/goose-adapter-tasks.yaml header; recorded here
+2026-09-21): the adapter shipped on the generic ACP engine
+`providers/acprpc` (docs/DECLARATIVE-PROVIDERS-DESIGN.md
+§"providers/acprpc", proposed W7.9) — every ACP wire behavior lives once in
+the engine; goosecli contributes only the capture-verified knob values, the
+trust table, and its non-ACP CLI surfaces. The "extract shared transport"
+follow-up happened *before* v1 rather than after, and kirocli was left
+untouched.
 
 ## Verified binary surface
 
 | Need | Mechanism (verified) |
 |---|---|
 | Interactive | `goose acp` — stdio JSON-RPC. `initialize` echoes the client's `protocolVersion` (send `1`); result: `agentCapabilities{loadSession:true, promptCapabilities{image,embeddedContext}, mcpCapabilities{http:true}, sessionCapabilities{list,close}}`. |
-| One-shot | `goose run -q --output-format stream-json -t <prompt> [--system S] [--provider P] [--model M] [--name N]` — JSONL of `{"type":"message","message":{role,content:[{type:text\|thinking\|…}]}}`. `-q` suppresses the banner. |
+| One-shot | `goose run -q --output-format stream-json -t <prompt> [--system S] [--provider P] [--model M] [--name N]` — JSONL of `{"type":"message","message":{role,content:[{type:text\|thinking\|…}]}}`. `-q` suppresses the banner. (Reference — shipped OneShot rides ACP; see the OneShot section.) |
 | Resume | ACP `session/load {sessionId, cwd, mcpServers}` (replays history as `session/update` notifications *before* the response resolves; `mcpServers` mandatory at 1.48 — see the lifecycle section); CLI `goose run --resume --session-id <id>`. |
 | Transcript | `goose session export --session-id <ref> --format json` — `conversation[]` with roles, content blocks, unix `created` timestamps, plus top-level `usage`/`accumulated_usage`/`accumulated_cost`/`working_dir`. No ACP spawn needed. |
 | Session index | `goose session list --format json` — id, `working_dir`, name, `created_at`/`updated_at`, type. Backs SessionLocator. |
@@ -168,8 +182,8 @@ once both adapters have real-binary smoke coverage.
 |---|---|---|
 | Interactive | **Native** | `goose acp` verified live: initialize → session/new → session/prompt with streamed `session/update` notifications. |
 | Interrupt | **Native** | `session/cancel` notification terminates the run promptly (`_meta.goose.activeRunId` → null), **but do not rely on the stop reason**: in 3/3 captured cancels the in-flight `session/prompt` response resolved `stopReason:"end_turn"`, not `"cancelled"` (pinned: `testdata/captures/acp-transcript.jsonl` turn 2 — goose's `prompt_stop_reason` only sets `was_cancelled` if another stream event arrives *after* the token trips, and the token usually kills the stream first). The adapter's own interrupted flag is the source of truth; still parse `"cancelled"` defensively (it remains one of source's three stop reasons: `end_turn`, `cancelled`, `max_tokens`). Session survives. |
-| OneShot | **Native** | `goose run -q -t …` verified: clean text on stdout, exit 0. |
-| OneShotStream | **Native** | `--output-format stream-json` verified: per-chunk JSONL → `OnEvent`. Filter `content[].type=="thinking"` chunks; forward `text` chunks as EventText, tool calls as EventToolUse. |
+| OneShot | **Emulated** | Rides the engine's ACP emulation (`acprpc.Engine.OneShot`) — honest because it is not the CLI's native one-shot; supersedes the `goose run` plan. Ref is Native-strength: session/new returns it synchronously. See "OneShot". |
+| OneShotStream | **Emulated** | Same path: `OnEvent` streams the ACP session/update events genuinely incrementally. |
 | Resume | **Native** | `loadSession:true` in initialize; `session/load` replay-then-respond confirmed live (pinned: `testdata/captures/acp-load-replay.jsonl`). Ref = goose sessionId (`20260829_2` format). |
 | Transcript | **Native** | `session export --format json` verified — richer than kirocli's session/load-replay approach (timestamps, usage, no process spawn). Filter entries with `metadata.userVisible == false` (injected `<turn-context>` blocks) and `metadata.turnContext == true`. |
 | ModelDiscovery | **Native** | Probe: spawn `goose acp`, initialize, `session/new` (cwd = temp dir), read the `model` configOption's options + `currentValue` (→ `Default`), `session/close`, exit. No LLM call involved. v1 returns the *active provider's* models (bare IDs); cross-provider composite IDs (`provider/model`) are a noted extension. |
@@ -249,7 +263,7 @@ covers it; add passthrough if not).
 | `user_message_chunk` | ignored live (echo of our own prompt); replay → `Message{Role:"user"}` |
 | `tool_call` | `EventToolUse{Tool{ID: toolCallId, Name: _meta.goose.toolCall.toolName (fallback: title), Input: rawInput, Path: toolPath(rawInput)}}` |
 | `tool_call_update` (status `completed`/`failed`) | `EventToolResult{Tool.ID: toolCallId, IsError: status=="failed", Text: joined content}` |
-| `usage_update` | not an Event in v1; note `size` is goose's real per-session context window (better than the static `ContextWindowForModel` table — see Future work) |
+| `usage_update` | not an Event of its own; the latest `{used, size}` snapshot rides the turn-end `Usage` as `ContextTokens`/`ContextWindow` (`size` is goose's REAL per-session context window — authoritative over the static `ContextWindowForModel` table, same contract as claude-code's `iterations`/`modelUsage` parse) |
 | `available_commands_update`, `current_mode_update`, `config_option_update`, `session_info_update` | ignored in v1 |
 | `plan`, `plan_removed`, any unrecognized variant | ignored in v1 — goose never emits these today, but they're official v1 variants; the decoder must skip, not error |
 
@@ -305,6 +319,30 @@ so kirocli's kind-based gating cannot work here. Instead:
   reads, and feeds the model "tool skipped" — too restrictive.
 
 ## OneShot (goosecli.go)
+
+**Decision (re-plan, recorded 2026-09-21): OneShot rides the engine's ACP
+emulation, not `goose run`.** `goosecli.go`'s OneShot delegates to
+`acprpc.Engine.OneShot` (spawn → initialize → session/new → full-trust mode
+→ optional system prompt → one streamed prompt → session/close):
+
+- **Ref**: `session/new` returns the sessionId synchronously →
+  `EventSessionRef` emitted up front + `OneShotResult.Ref` filled —
+  Native-strength attribution, no `--name` fallback needed.
+- **Usage**: from the `session/prompt` result plus the latest
+  `usage_update` snapshot on the turn end, same as interactive.
+- `req.System`/`req.Model` ride the same session setup an interactive
+  Start uses; `OnEvent` streams genuinely incrementally.
+- The Matrix declares OneShot/OneShotStream **Emulated** — honest because
+  this is not the CLI's native one-shot surface.
+- The broken-pipe trap (error-surfaces table) is moot on this path —
+  nothing shells `goose run`.
+
+### Reference: captured `goose run` wire facts (not the shipped path)
+
+The plan below predates the re-plan and is kept as reference: the captures
+(`oneshot-stream.jsonl`, `oneshot-export.json`, `oneshot-name-list.json`)
+stay authoritative for the wire shapes they pin, and this is the basis if a
+true CLI one-shot path is ever wanted.
 
 `goose run -q --output-format stream-json -t <prompt> [--system S]
 [--model M] [--name mads-<random>]`, `cmd.Dir = req.Cwd`, agentenv.Build.
@@ -409,7 +447,7 @@ Golden-pin the normalization against a captured real export
 | Bad cwd | `invalid_params` on session/new (must be absolute + exist) | fail Start |
 | Unknown resume ref | `resource_not_found` "Session not found: <id>" | fail Start |
 | Concurrent prompt | `invalid_params` "session already has active run `<id>`…" | EventError + TurnEnd |
-| Early-closing stdout consumer (one-shot) | goose panics mid-run: `failed printing to stdout: Broken pipe` | OneShot's stream reader must drain stdout to EOF — never close early on "enough output" |
+| Early-closing stdout consumer (`goose run` reference path only — shipped OneShot rides ACP and never hits this) | goose panics mid-run: `failed printing to stdout: Broken pipe` | any future `goose run` stream reader must drain stdout to EOF — never close early on "enough output" |
 
 ## Registration & plumbing (executor checklist)
 
@@ -435,9 +473,19 @@ Golden-pin the normalization against a captured real export
    (ref format, turn end, usage present, export parses), never model
    output content.
 6. UI: nothing goose-specific — `/providers`, `/providers/behaviors`,
-   `/providers/{name}/models` render from the registry. Check
-   `ui/src/router/modelDisplay.ts` context-window table if goose models
-   should show non-200k meters (qwen3.8 reported `size:128000`).
+   `/providers/{name}/models` render from the registry. Context-window
+   **decision (2026-09-21): no static table entries added.** goose reports
+   the real window at runtime (`usage_update.size` → turn-end
+   `Usage.ContextWindow`, providers/acprpc/session.go — confirmed live by
+   the smoke: 6101/128000 for qwen3.8), and both consumers already prefer
+   it over the static tables (`ui/src/conversation/Header/ContextMeter.tsx`
+   `usage?.context_window ||` and `services/session/internal/runner/
+   compact.go` `contextOccupancy`). Static entries were rejected because
+   goose model IDs are bare and open-ended (any `ollama pull`, per-user
+   config) — a `"qwen3.8" → 128000` row in `providers/provider/
+   contextwindow.go` + `ui/src/router/modelDisplay.ts` would be a
+   point-in-time guess keyed on an unstable id. Residual pre-first-turn
+   gap: see Future work (ContextWindowReporter).
 
 ## Risks / open questions
 
@@ -451,7 +499,9 @@ Golden-pin the normalization against a captured real export
 - ~~OneShot ref line~~ **resolved**: stream-json announces no session id —
   confirmed gap (pinned: `testdata/captures/oneshot-stream.jsonl`); the
   `--name` + `session list` fallback is committed to and confirmed working
-  (pinned: `testdata/captures/oneshot-name-list.json`).
+  (pinned: `testdata/captures/oneshot-name-list.json`). Since the re-plan
+  the fallback is moot — shipped OneShot takes the ref synchronously from
+  `session/new` (see "OneShot").
 - ~~Tool-block shapes in stream-json/export~~ **resolved**:
   `toolRequest`/`toolResponse` shapes pinned on both surfaces, results on
   `role:"user"` messages (pinned: `testdata/captures/oneshot-stream.jsonl`,
@@ -461,10 +511,15 @@ Golden-pin the normalization against a captured real export
   wants cross-provider selection (`ollama/qwen3.8` vs `anthropic/…`),
   that's a composite-ID convention change touching ModelDiscovery + the
   model popover — deliberately out of scope.
-- **contextwindow**: goose reports the *real* window per session
+- ~~**contextwindow**: goose reports the *real* window per session
   (`usage_update.size`); mads' static table would misreport local models.
   Candidate follow-up: a `ContextWindowReporter` session strategy, or at
-  minimum add goose model entries to both static tables.
+  minimum add goose model entries to both static tables.~~ **resolved**
+  (2026-09-21) by runtime reporting: the `usage_update` snapshot rides the
+  turn-end `Usage.ContextWindow` and both consumers prefer it over the
+  static tables (see registration checklist item 6 for the citations and
+  why static entries were rejected). Residual pre-first-turn gap moved to
+  Future work.
 
 ## Future work (explicitly not v1)
 
@@ -476,3 +531,9 @@ Golden-pin the normalization against a captured real export
 - `_goose/unstable/session/steer` (mid-turn message injection) — no mads
   surface exists for it today.
 - Shared `providers/acprpc` transport extraction (goosecli + kirocli).
+- **ContextWindowReporter**: before the first turn end, the context meter
+  and resume-compaction fall back to the 200k static default for a 128k
+  local model. goose emits a `used=0` `usage_update` at session start that
+  the engine already snapshots but only surfaces on the next turn end — a
+  ContextWindowReporter-style session strategy (or surfacing the snapshot
+  at Start) would close the pre-first-turn gap.

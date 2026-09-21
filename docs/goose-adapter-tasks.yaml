@@ -1,142 +1,170 @@
-# goose adapter (proposed W7.8) — seed with:
-#   SES=$(bin/mads new-session -name "goose adapter")
+# goose adapter via the generic ACP engine (W7.8, re-planned 2026-09-09) — seed with:
+#   SES=$(bin/mads new-session -name "goose via acprpc")
 #   bin/mads seed -session $SES -file docs/goose-adapter-tasks.yaml
 #
-# Design doc: docs/GOOSE-ADAPTER-DESIGN.md — every task references its
-# sections; read it before starting any task. goose 1.46.0 is installed at
-# ~/.local/bin/goose with a working local ollama provider (qwen3.8), so
-# empirical probes and smokes are free — no cloud LLM needed. The goose
-# source is checked out at ~/repo/goose for cross-checking wire behavior
-# (see the design doc's "Stance: goose is malleable" section).
+# RE-PLAN NOTE: the original decomposition's first two independent tasks have
+# LANDED and are removed from this seed list — captures (4fab4e2 + gate fixes
+# 2d576c1/cec7151) and preflight/compat rows (e4dfbd4). The remaining tasks
+# are re-scoped per docs/DECLARATIVE-PROVIDERS-DESIGN.md (proposed W7.9):
+# goose grows NO bespoke ACP wire code. The session/wire layer is born as the
+# generic engine `providers/acprpc`, parameterized by a knob struct, with
+# providers/goosecli shrinking to goose's non-ACP CLI surfaces (transcript
+# export, session locator, PTY) plus its knob values and trust table. The
+# knob set is evidence-based twice over: mads' committed goose 1.48.0
+# captures (providers/goosecli/testdata/captures/), and goose's OWN generic
+# ACP client (~/repo/goose crates/goose/src/acp/provider.rs), which drives
+# five different agents (claude/codex/copilot/amp/pi adapters) through one
+# engine with zero per-agent branching — its AcpProviderConfig
+# (provider.rs:61-76) is a nine-knob struct and the per-agent files are
+# ~100-line config constructors. Where a task below cites "goose-as-client",
+# that is the reference.
 #
-# Package tasks (wire → session → oneshot → pty → transcript → conformance)
-# are deliberately CHAINED, not parallel: they touch the same files in
-# providers/goosecli/ and the pipeline's serialized merges block loudly on
-# conflicts. Parallelism comes from the preflight and upstream-proposal
-# tracks.
+# Design docs: docs/GOOSE-ADAPTER-DESIGN.md (goose wire facts — still
+# authoritative for every goose-specific claim; its "Shape of the work"
+# self-contained-adapter decision is superseded by this re-plan) and
+# docs/DECLARATIVE-PROVIDERS-DESIGN.md (engine architecture + knob set).
+# goose 1.48.0 is installed at ~/.local/bin/goose with a free local ollama
+# provider; goose source at ~/repo/goose.
+#
+# Chaining: engine → goose binding → PTY → transcript → conformance →
+# registration → smoke are CHAINED (same packages, serialized merges).
+# Parallel tracks: the kirocli migration, the claude-agent-acp validation
+# captures, and the upstream proposals — each depends only on the engine (or
+# nothing) and touches disjoint files.
 
 tasks:
-  - title: "Pin remaining goose wire facts; commit sanitized captures as testdata"
+  - title: "acprpc engine: spec-normative ACP client parameterized by knobs"
     description: >
-      Resolve the design doc's two open wire questions and turn every claim
-      the adapter will rely on into a committed capture. Using the installed
-      goose binary (local ollama provider — free), capture: (1) a full
-      `goose run -q --output-format stream-json` run with a tool-using prompt
-      (e.g. "create a file /tmp/x and tell me you did") — determine whether a
-      session-id line appears anywhere in the stream, and pin the tool
-      request/result content-block shapes; (2) `goose session export
-      --session-id <ref> --format json` for that same session — pin the tool
-      block shapes in `conversation[]` and the top-level usage fields; (3) an
-      ACP stdio transcript covering initialize → session/new →
-      session/set_mode → session/set_config_option(model) →
-      _goose/unstable/session/system-prompt/set → session/prompt with a tool
-      call in "approve" mode (capturing the session/request_permission
-      request and a valid reply) → session/cancel mid-turn → session/load
-      replay; (4) the `goose session` PTY startup banner bytes. Sanitize
-      (hostnames, absolute homedirs) and commit under
-      providers/goosecli/testdata/captures/ with a README describing how each
-      was produced. Update docs/GOOSE-ADAPTER-DESIGN.md where a capture
-      contradicts or completes the design (especially the "OneShot" ref
-      strategy and both "executor: pin" notes), and record whether the
-      one-shot ref seam needs the --name fallback.
+      Create providers/acprpc — the generic ACP v1 client engine every ACP
+      descriptor rides. Copy the JSON-RPC stdio plumbing pattern from
+      providers/kirocli (pending-request table, single read loop,
+      beginRequest/request/notify, closeWait) but derive wire.go types from
+      the ACP v1 schema (agentclientprotocol.com; the spec is normative —
+      captures are evidence of one agent's behavior within it). Engine
+      invariants (never knobs): initialize with protocolVersion 1 and EMPTY
+      client capabilities (no fs/terminal — advertising them reroutes agent
+      tools through client callbacks; goose-as-client does the same,
+      provider.rs:1536-1560); runtime capability gating off the initialize
+      result (loadSession, sessionCapabilities.close, mcpCapabilities.http —
+      resume without loadSession fails loudly, SSE MCP servers dropped, http
+      ones dropped when unadvertised); always include mcpServers on
+      session/new AND session/load (1.48 rejects load without it — pinned,
+      acp-load-replay.jsonl); one in-flight prompt per session; handle all
+      five spec stopReasons (cancelled → Interrupted; refusal → EventError
+      then TurnEnd; max_* / unknown → plain TurnEnd) with the adapter-side
+      interrupted flag as the real interruption signal (captured goose
+      cancels resolve end_turn); tolerate all 12 sessionUpdate variants,
+      skipping unknown ones silently; skip non-terminal tool_call_update
+      (in_progress) variants; permission replies ALWAYS select from the
+      offered options[] by kind (allow_once/reject_once, falling back to the
+      _always variant of the same polarity, else outcome cancelled) — never
+      by optionId (goose-as-client does exactly this, acp/common.rs:70-107);
+      session/cancel notification + flag for Interrupt; best-effort
+      session/close then stdin-EOF closeWait for Close. The knob struct
+      (acprpc.Config) — every field carries a doc comment citing the
+      evidence that made it a knob: Bin/SpawnArgs; Env additions; EnvRemove
+      (claude-agent-acp needs CLAUDECODE removed or it thinks it's nested —
+      goose claude_acp.rs:87); TrustModes map[provider.Trust]string of
+      vendor mode ids (pure vendor vocabulary: goose auto/approve,
+      claude-agent-acp bypassPermissions/default/acceptEdits/plan, codex-acp
+      agent-full-access/read-only, copilot URL-shaped ids — goose-as-client
+      mode_mapping tables) plus SendModeAtSessionNew bool; mode transport
+      auto-detected at runtime: set_config_option when a configOption with
+      category mode exists, else session/set_mode (goose-as-client
+      provider.rs:718-747); ModelConfigOptionID (default "model", empty =
+      model switching unsupported — amp has no picker); PreseedConfigOptions
+      [](id,value) applied at session start; SystemPrompt strategy — None |
+      FirstSendPrefix | ExtensionMethod{method,paramsShape} with
+      method_not_found falling back to FirstSendPrefix (most ACP agents
+      have NO system-prompt surface; goose-as-client ignores system prompts
+      entirely, provider.rs:820-826 — ours must not silently drop agent
+      personas); ToolIdentity strategy for trust gating — KindBased (agent
+      sets ACP kind), MetaNamespace{ns} (tool name from _meta.<ns>.toolCall,
+      goose's case), or TitleOnly (no stable identity → limited/read_only
+      trust degrade to deny-all); ToolClassTable for MetaNamespace/KindBased
+      classification with unknown-deny. Quarantine all _meta parsing behind
+      the namespace knob in one greppable type. Decision to implement here:
+      engine-level OneShot emulation — OneShot(req) = spawn, initialize,
+      session/new (ref = sessionId, known synchronously → OneShotResult.Ref
+      and EventSessionRef solved for every ACP agent), set TrustFull mode,
+      optional system prompt, one prompt streaming OnEvent, Usage from the
+      prompt result, session/close, exit. This supersedes the goose design
+      doc's `goose run` stream-json OneShot plan and its --name/session-list
+      ref fallback entirely — note the design-doc edit in the docs-wrap
+      task. Tests: a scripted fake-ACP-agent framework (fakekiro pattern,
+      but agent scripts as data) exercising (a) replays of the committed
+      goose captures, (b) a synthetic conforming agent whose optionIds do
+      NOT mirror kind names, whose mode ids differ, and which lacks
+      loadSession/close capabilities, (c) the error surfaces
+      (auth_required -32000, credits_exhausted data, concurrent prompt,
+      resource_not_found on load). No goose binary required; no
+      registration anywhere yet. STARTING MATERIAL: the working tree
+      carries uncommitted, stalled WIP from the superseded self-contained
+      plan — providers/goosecli/{goosecli,session,wire,fakegoose_test}.go
+      (~1600 lines, capture-verified, spec-normative per its own comments).
+      Consume it: hoist wire.go/session.go into providers/acprpc with the
+      goose-specifics re-expressed as knobs, keep its fakegoose scripting
+      as the goose replay scripts, and leave providers/goosecli holding
+      only what the next task needs. Prefer editing that code over
+      rewriting it; delete what the engine obsoletes.
     acceptance_criteria: >
-      providers/goosecli/testdata/captures/ exists with the four capture sets
-      and a provenance README. The design doc's "Risks / open questions"
-      section no longer lists the one-shot ref line or tool-block shapes as
-      unpinned — each is either resolved with a cited capture or documented
-      as a confirmed gap with the fallback committed to. No Go code in this
-      task. make check passes (docs/testdata only).
-    labels: [goose, provider, research]
+      go test -race ./providers/acprpc/... passes with no real binary.
+      Tests prove: permission replies picked by kind against adversarial
+      optionIds; unknown sessionUpdate variants and stopReasons tolerated;
+      interrupted flag drives TurnEnd.Interrupted despite end_turn;
+      capability gating (load unsupported → loud error; SSE MCP dropped);
+      OneShot-over-ACP returns Ref from sessionId, streams OnEvent, fills
+      Usage; system-prompt ExtensionMethod falls back to FirstSendPrefix on
+      method_not_found; EnvRemove strips the named vars from the child env.
+      Every Config field's doc comment cites a capture file or
+      goose-as-client file:line. make check passes.
+    labels: [acprpc, provider, engine]
 
-  - title: "goosecli core: ACP wire types + interactive session"
+  - title: "goose binding: descriptor knobs, trust table, matrix, ModelDiscoverer"
     description: >
-      Create providers/goosecli: Config/New/Name/env/closeWait in
-      goosecli.go (mirror providers/kirocli/kirocli.go, binary "goose",
-      registry name "goose", agentenv.Build for all spawns, Config.Builtins
-      defaulting to ["developer"] appended as --with-builtin), wire.go with
-      RPC types derived from the official ACP v1 schema
-      (agentclientprotocol.com / agent-client-protocol-schema 1.5.0 crate —
-      the spec is normative; the committed captures are evidence of goose's
-      behavior within it, and any capture/spec disagreement is an upstream
-      goose bug for T10) and verified against the captures: parse all five
-      spec stopReasons even though goose emits three (cancelled →
-      Interrupted; refusal → EventError then turn end;
-      max_tokens/max_turn_requests/unknown → plain turn end), skip
-      unrecognized sessionUpdate variants silently (plan/plan_removed are
-      official v1 variants goose never emits today), and quarantine
-      extensions — _meta.goose.* parsing in one gooseMeta type,
-      _goose/unstable/* calls in named helpers — so extension use stays
-      greppable (goose-specific shapes:
-      _meta.goose.toolCall{toolName,extensionName}, four-option permission
-      requests, usage on the session/prompt result, usage_update/
-      session_info_update/available_commands_update variants), and session.go
-      implementing the ACP session per the design doc's "ACP session
-      lifecycle" and "session/update → Event mapping" sections: initialize
-      with fs capabilities false, session/new vs session/load (replaying
-      flag), set_mode from Trust (auto for full; approve + toolName
-      allowlist gating with unknown-deny for limited/read_only, replying
-      by selecting from the request's offered options array the option
-      whose kind is allow_once/reject_once — per spec optionIds are
-      agent-chosen opaque strings, so never hardcode them (goose's ids
-      merely mirror the kind names); fall back to the _always option of
-      the same polarity, else outcome cancelled),
-      set_config_option for StartOptions.Model,
-      the unstable system-prompt append with first-Send-prefix fallback,
-      async session/prompt turn end with stopReason/usage mapping,
-      session/cancel interrupt, best-effort session/close then closeWait.
-      Start returns ErrUnsupported for ModePTY for now (later task).
-      Include a scripted fakegoose stand-in (pattern:
-      providers/kirocli/fakekiro_test.go) speaking the captured shapes, and
-      unit tests for the session lifecycle, trust gating (including
-      unknown-tool deny and the text_editor view-vs-write split), error
-      surfaces (auth_required -32000, credits_exhausted data, concurrent
-      prompt), and the system-prompt fallback. Do NOT add the conformance
-      suite yet — that lands with the finished matrix.
+      providers/goosecli becomes an acprpc instantiation plus goose's
+      CLI-side strategies (later tasks). This task: goosecli.go with
+      Config/New/Name (registry name "goose", binary "goose", agentenv.Build
+      for all spawns) constructing the acprpc.Config knob values —
+      SpawnArgs ["acp","--with-builtin","developer"] (Config.Builtins knob
+      defaulting to ["developer"]; explicit builtins are force-loaded on
+      both 1.46 and 1.48, covering the ≤1.46 mcpServers suppression),
+      TrustModes {full:"auto", limited:"approve", read_only:"approve"},
+      SystemPrompt ExtensionMethod
+      "_goose/unstable/session/system-prompt/set" mode append key
+      mads-agent, ToolIdentity MetaNamespace "goose", ToolClassTable
+      enumerated from goose source (developer/shell = execute; text_editor
+      split by rawInput command: view = read, write/str_replace/insert =
+      edit; analyze/fetch/todo = read/fetch/think; ACP names are bare per
+      _meta — "shell" not developer__shell) with unknown-deny.
+      ModelConfigOptionID "model" (flat string value — pinned,
+      acp-transcript.jsonl lines 10-12). Start(ModeACP) through the engine;
+      Start(ModePTY) ErrUnsupported until the PTY task. Implement
+      ModelDiscoverer as an engine helper usable by any descriptor: spawn,
+      initialize, session/new in temp dir, read the model configOption's
+      options + currentValue (→ Default), session/close; failures wrap
+      provider.ErrDiscoveryUnavailable, never a silent static fallback.
+      OneShot delegates to the engine's ACP emulation (--system/--model
+      knobs ride the same session setup). Declare the honest matrix (design
+      doc "Proposed capability matrix", amended: OneShot/OneShotStream now
+      Emulated-via-ACP with ref Native-strength; verify CostReporting
+      against the captured prompt-result usage) and the all-Unsupported
+      IntentMatrix. Rate limits: what escapes goose is a generic -32603
+      stream-error string — conservative phrase heuristic returning
+      *provider.RateLimitError, marked guess-grade.
     acceptance_criteria: >
       go test -race ./providers/goosecli/... passes with no goose binary
-      required. Session unit tests prove: ref set at Start-return; text and
-      tool_call updates normalize to EventText/EventToolUse with toolName as
-      Name; tool_call_update failed → EventToolResult IsError; turn end
-      carries Usage and Interrupted on cancelled; limited trust denies
-      developer__shell and unknown tools but allows text_editor view;
-      read_only additionally denies text_editor write. Wire decoding
-      tolerates a plan sessionUpdate and an unrecognized stopReason without
-      erroring, and permission replies pick optionId from the offered
-      options by kind (proved with a fakegoose script whose optionIds do
-      NOT mirror the kind names). make check passes.
+      (fake-agent scripts speak the captured goose shapes). Tests prove:
+      ref set at Start-return; text/tool_call updates normalize to
+      EventText/EventToolUse with _meta toolName as Name; tool_call_update
+      failed → EventToolResult IsError; limited trust denies shell and
+      unknown tools but allows text_editor view; read_only additionally
+      denies text_editor write; OneShot returns text + Ref + Usage;
+      Models() returns the scripted list with Default flagged and wraps
+      ErrDiscoveryUnavailable on exec failure; Matrix().Validate() passes.
+      make check passes.
     depends_on:
-      - "Pin remaining goose wire facts; commit sanitized captures as testdata"
-    labels: [goose, provider]
-
-  - title: "goosecli OneShot, OneShotStream, and model discovery"
-    description: >
-      Implement Provider.OneShot per the design doc's "OneShot" section:
-      goose run -q --output-format stream-json -t <prompt> with --system /
-      --model when set, cwd, agentenv.Build. Parse the stream per the
-      committed captures: text blocks → accumulated result text +
-      OnEvent(EventText); thinking blocks skipped; tool blocks →
-      OnEvent(EventToolUse). Ref attribution per whichever strategy task 1
-      pinned (stream line, or --name mads-<random> resolved via `goose
-      session list --format json`) — emit EventSessionRef when known and set
-      OneShotResult.Ref. Fill OneShotResult.Usage from the stream if present,
-      else from `goose session export` (design doc "OneShot" bullet). Rate
-      limits: conservative stderr/stdout phrase heuristic returning
-      *provider.RateLimitError, marked guess-grade in comments. Implement
-      ModelDiscoverer per the design doc's ModelDiscovery row: spawn goose
-      acp, initialize, session/new in a temp dir, read the model
-      configOption (currentValue → Default), session/close; exec/parse
-      failures wrap provider.ErrDiscoveryUnavailable, never a silent static
-      fallback (kirocli Models() precedent). Extend fakegoose to script the
-      run and discovery paths.
-    acceptance_criteria: >
-      Unit tests against fakegoose prove: OneShot returns final text with
-      OnEvent firing incrementally (text + tool events, thinking dropped);
-      Ref lands on the result and EventSessionRef fires; Usage populated;
-      rate-limit output returns the typed error; Models() returns the
-      scripted list with the default flagged and wraps
-      ErrDiscoveryUnavailable on exec failure. make check passes.
-    depends_on:
-      - "goosecli core: ACP wire types + interactive session"
+      - "acprpc engine: spec-normative ACP client parameterized by knobs"
     labels: [goose, provider]
 
   - title: "goosecli PTY transport with banner ref announce"
@@ -146,19 +174,22 @@ tasks:
       mirroring providers/kirocli/pty.go — Events() nil, Terminal(), Resize,
       Send injects a line, Interrupt writes 0x03, Close via closeWait. Ref
       discovery: match the session id in the startup banner using the
-      committed banner capture (pin the regex against those exact bytes) and
+      committed banner capture (unanchored (\d{8}_\d+)\s+· against
+      ANSI-stripped output — pin the regex against those exact bytes) and
       deliver it via the RefAnnouncer channel contract (exactly one
-      non-empty ref then close, or close empty if the banner never matched —
-      see providers/provider/provider.go RefAnnouncer doc). Wire ModePTY
-      into Start's switch. Extend fakegoose with a PTY-mode script that
-      prints a real captured banner.
+      non-empty ref then close, or close empty — see provider.go
+      RefAnnouncer doc). Wire ModePTY into Start's switch. This stays
+      goose-specific code in goosecli (the 2026-09 landscape survey found
+      the PTY tier's generic-engine case has shrunk; a generic ptycli
+      engine, if ever built, absorbs this later).
     acceptance_criteria: >
       Unit tests prove: a PTY session's RefAnnounced delivers the banner's
-      session id and closes; a banner-less script closes the channel without
-      a value (never blocks); Send/Interrupt bytes reach the child;
-      Start(ModePTY) returns a working PTYSession. make check passes.
+      session id and closes; a banner-less script closes the channel
+      without a value (never blocks); Send/Interrupt bytes reach the
+      child; Start(ModePTY) returns a working PTYSession. make check
+      passes.
     depends_on:
-      - "goosecli OneShot, OneShotStream, and model discovery"
+      - "goose binding: descriptor knobs, trust table, matrix, ModelDiscoverer"
     labels: [goose, provider]
 
   - title: "goosecli Transcript and SessionLocator via session export/list"
@@ -166,155 +197,184 @@ tasks:
       Implement TranscriptReader per the design doc's "Transcript
       normalization" section: `goose session export --session-id <ref>
       --format json` → []provider.Message — skip metadata.userVisible==false
-      entries and thinking blocks, map text/tool request/tool result blocks
-      per the committed capture, unix `created` → Timestamp. Golden-pin the
-      normalization against the committed capture (pkg/golden, claudecode
-      transcript convention). Implement SessionLocator per the design doc:
-      `goose session list --format json` filtered by working_dir == cwd and
+      entries and thinking blocks, map text/toolRequest/toolResponse blocks
+      per the committed capture (tool results ride role:"user" entries),
+      unix `created` → Timestamp. Golden-pin the normalization against the
+      committed export capture (pkg/golden, claudecode transcript
+      convention). Implement SessionLocator per the design doc: `goose
+      session list --format json` filtered by working_dir == cwd and
       created_at >= spawnedAfter, candidate verified by first visible user
       message via export; 0 or 2+ candidates, timeout, or cancellation ⇒
-      ok=false — never guess (provider.go contract). Implement RefSetter on
-      the PTY session so a located ref becomes visible on the live session.
+      ok=false — never guess. Implement RefSetter on the PTY session so a
+      located ref becomes visible on the live session. (The locator's other
+      old consumer — one-shot ref attribution — is gone: OneShot rides ACP
+      and gets its ref from session/new.)
     acceptance_criteria: >
       Golden test pins the normalized transcript from the committed export
       capture (turn-context entries absent, timestamps populated, tool
-      result IsError mapping covered). Locator unit tests cover: exactly-one
-      match verified and returned; ambiguous (two candidates) declines;
+      result IsError mapping covered). Locator unit tests cover:
+      exactly-one match verified and returned; ambiguous declines;
       wrong-first-message declines; SetRef propagates to Ref(). make check
       passes.
     depends_on:
       - "goosecli PTY transport with banner ref announce"
     labels: [goose, provider]
 
-  - title: "goosecli conformance suite, capability matrix finalization, README"
+  - title: "Conformance for engine + goose, capability matrix finalization, READMEs"
     description: >
-      Land the honest §11 matrix from the design doc's "Proposed capability
-      matrix" (verify CostReporting's Native claim against what the
-      session/prompt capture actually showed — downgrade to Emulated with
-      the export-delta mechanism if usage was absent) plus the all-
-      Unsupported IntentMatrix, and wire conformance.Run(t, …) against the
-      fakegoose stand-in so CI proves every row with no binary installed
-      (pattern: providers/kirocli/kirocli_test.go). Add MCPServers wiring if
-      not already present: StartOptions.MCPServers → session/new mcpServers
-      stdio entries (ACP) and --with-extension (one-shot), with the
-      config-suppression caveat (mcpServers suppresses config.yaml
-      extensions on <=1.46 only; 1.48 unions them -- see the design doc's
-      1.48 re-verification note) handled by the always-on --with-builtin
-      developer, which is correct on both versions. Write providers/goosecli/README.md in the kirocli
-      convention — matrix row by row, but citing committed captures and
-      goose source files instead of docs research — including the trust
-      tool-name table with provenance, the mcpServers/extension-suppression
-      caveat, the unstable system-prompt dependency, and the upstream-seam
-      list from the design doc's malleability section. Update
-      providers/README.md with the goosecli bullet.
+      Wire conformance.Run(t, …) against the fake-agent goose scripts so CI
+      proves every declared matrix row with no binary installed (pattern:
+      providers/kirocli/kirocli_test.go). Add MCPServers wiring if not
+      already present: StartOptions.MCPServers → session/new mcpServers
+      stdio entries (engine) and --with-extension for the PTY spawn
+      (goosecli), with the ≤1.46 config-suppression caveat documented and
+      neutralized by the always-on --with-builtin developer. Write
+      providers/acprpc/README.md — the engine invariants, the knob table
+      with per-knob provenance (captures + goose-as-client citations), and
+      the "enumerated knobs or native adapter" rule (a harness needing a
+      knob outside the set is the signal it needs its own adapter, not a
+      new knob — each addition requires a capture citation). Write
+      providers/goosecli/README.md in the kirocli row-by-row convention
+      citing committed captures and goose source — including the trust
+      tool-name table with provenance, the OneShot-over-ACP decision, the
+      unstable system-prompt dependency, and the upstream-seam list.
+      Update providers/README.md with acprpc + goosecli bullets.
     acceptance_criteria: >
       go test -race ./providers/... passes; conformance.Run exercises the
-      full declared matrix against fakegoose with zero real-binary
-      dependency; Matrix().Validate() passes; README justifies all 16 rows
-      with capture/source citations. make check passes.
-    depends_on:
-      - "goosecli Transcript and SessionLocator via session export/list"
-    labels: [goose, provider]
-
-  - title: "Preflight and compat rows for goose"
-    description: >
-      Add goose to pkg/preflight/providers.go (binary "goose", version probe
-      `goose --version` — note the output has a leading space before the
-      version: " 1.46.0") and pkg/preflight/compat.go (proven range
-      1.46-1.48: binary-verified at 1.46.0, source-verified at 1.48.0 —
-      the 1.46->1.48 deltas are listed in the design doc's re-verification
-      note; the version-sensitive surfaces are the _goose/unstable
-      system-prompt method, --output-format stream-json, and the ACP
-      configOptions shape — cite docs/GOOSE-ADAPTER-DESIGN.md). Follow the existing claude-code /
-      kiro-cli row conventions in both files and their tests. This task
-      touches pkg/preflight only — it deliberately does not depend on the
-      adapter package and can run in parallel with it.
-    acceptance_criteria: >
-      Preflight detects an installed goose binary and parses its version
-      (unit test with a scripted stand-in covering the leading-space
-      output); compat declares the proven 1.46-1.48 range with rationale
-      comments citing the design doc's re-verification note. make check
+      full declared goose matrix against scripted agents with zero
+      real-binary dependency; Matrix().Validate() passes; both READMEs
+      justify their claims with capture/source citations. make check
       passes.
     depends_on:
-      - "Pin remaining goose wire facts; commit sanitized captures as testdata"
-    labels: [goose, preflight]
+      - "goosecli Transcript and SessionLocator via session export/list"
+    labels: [goose, acprpc, provider]
 
   - title: "Register goose across services and the mads run CLI"
     description: >
-      Register the goosecli provider everywhere the design doc's
-      "Registration & plumbing" checklist names: services/router/main.go,
+      Register the goosecli provider in services/router/main.go,
       services/session/main.go, services/pipeline/main.go (mirror the
-      kirocli registration blocks exactly — Config with Env/EnvMode/
-      EnvPassthrough threading), and cmd/mads/run.go's -provider switch
-      (accept "goose", add -goose-args following the -claude-args/-kiro-args
-      convention; pick a sensible default and document why — goose has no
-      skip-permissions flag; full trust rides mode "auto" which the adapter
-      sets itself, so the default is likely empty). Confirm /providers,
+      kirocli registration blocks — Config with Env/EnvMode/EnvPassthrough
+      threading; goose needs HOME/XDG_CONFIG_HOME passthrough to find
+      ~/.config/goose/config.yaml) and cmd/mads/run.go's -provider switch
+      (accept "goose", add -goose-args; default empty — full trust rides
+      mode "auto" which the engine sets itself). These are the last
+      hand-registration sites this repo should ever grow: W7.9's
+      providers/load collapses them — note that in a comment at each site
+      rather than expanding scope here. Confirm /providers,
       /providers/behaviors, and /providers/{name}/models serve goose rows
       via the registry with no handler changes.
     acceptance_criteria: >
-      All three services register goose at startup and their existing
-      registration tests (or new ones matching the kirocli pattern) cover
-      it; `mads run -provider goose` resolves the adapter; router API lists
-      goose with its behavior matrix. make check passes.
+      All three services register goose at startup with registration tests
+      matching the kirocli pattern; `mads run -provider goose` resolves the
+      adapter; router API lists goose with its behavior matrix. make check
+      passes.
     depends_on:
-      - "goosecli conformance suite, capability matrix finalization, README"
-      - "Preflight and compat rows for goose"
+      - "Conformance for engine + goose, capability matrix finalization, READMEs"
     labels: [goose, services, cli]
 
   - title: "Real-binary goose smoke test and docs wrap"
     description: >
       Add the MADS_GOOSE_SMOKE=1 opt-in smoke (convention:
-      MADS_CLAUDE_SMOKE/MADS_KIRO_SMOKE) — unlike kiro, the binary IS
-      installed here with a free local ollama model, so actually run it:
-      assert protocol mechanics only, never model output content (ref format
-      matches ^\d{8}_\d+$, turn ends, usage present per the declared
-      CostReporting row, export parses through the transcript normalizer,
-      interrupt leaves the session serving another turn). Record smoke
-      results in providers/goosecli/README.md (replacing any "unverified"
-      hedges — this adapter's claims are capture-backed, keep it that way).
-      Add a goose row to the README.md provider table at repo root if one
-      exists, and a W7.8 entry to docs/MADS-WORK-ITEMS.md pointing at
-      docs/GOOSE-ADAPTER-DESIGN.md. Check ui/src/router/modelDisplay.ts
-      context-window handling for goose's local models (the ACP usage_update
-      capture reported size 128000 for qwen3.8) and either add entries to
-      both static tables (contextwindow.go + modelDisplay.ts, kept in sync
-      by hand per their comments) or file the ContextWindowReporter
-      follow-up in the design doc's Future work.
+      MADS_CLAUDE_SMOKE/MADS_KIRO_SMOKE) — the binary IS installed here
+      with a free local ollama model, so actually run it: assert protocol
+      mechanics only, never model output content (ref format ^\d{8}_\d+$;
+      turn ends; usage present per the declared CostReporting row;
+      OneShot-over-ACP returns ref + usage; export parses through the
+      transcript normalizer; interrupt leaves the session serving another
+      turn). Docs wrap: update docs/GOOSE-ADAPTER-DESIGN.md — strike the
+      "Shape of the work" self-contained decision (superseded by
+      providers/acprpc, cite this re-plan), replace the OneShot section's
+      `goose run`/--name plan with the OneShot-over-ACP decision (keep the
+      captured `goose run` facts as reference — the captures stay
+      authoritative for the wire shapes they pin), and note the one-shot
+      session-id upstream seam is moot for mads. Add W7.8 to
+      docs/MADS-WORK-ITEMS.md pointing at both design docs. Check
+      ui/src/router/modelDisplay.ts context-window handling for goose's
+      local models (usage_update reported size 128000 for qwen3.8) and
+      either add entries to both static tables or file the
+      ContextWindowReporter follow-up in the design doc's Future work.
     acceptance_criteria: >
-      MADS_GOOSE_SMOKE=1 go test ./providers/goosecli/... passes against the
-      real binary on this machine; without the env var the suite is
-      unchanged. Work-items doc carries W7.8. Context-window decision is
-      recorded (entries added or follow-up filed). make check passes.
+      MADS_GOOSE_SMOKE=1 go test ./providers/goosecli/... passes against
+      the real binary on this machine; without the env var the suite is
+      unchanged. Design-doc supersessions recorded; work-items doc carries
+      W7.8. Context-window decision recorded. make check passes.
     depends_on:
       - "Register goose across services and the mads run CLI"
     labels: [goose, provider, docs]
 
+  - title: "Migrate kirocli onto the acprpc engine (parallel track)"
+    description: >
+      kiro-cli is ACP-native (kiro.dev/docs/cli/acp) and its hand-rolled
+      ~430-line ACP layer deviates from the spec on exactly the points the
+      engine gets right: it replies with guessed hardcoded optionIds
+      "allow"/"reject" instead of selecting offered options by kind, and
+      sends a non-spec modelId param on session/new (flagged in
+      GOOSE-ADAPTER-DESIGN.md "ACP v1 spec is normative"). Re-express
+      kirocli as acprpc knob values (TrustModes from its current mode
+      mapping; ToolIdentity KindBased since kiro sets ACP kinds per its
+      docs; keep its PTY and any CLI strategies as-is), delete the
+      superseded wire/session code, and fix both deviations in the process
+      — behavior change is expected and correct; document it in
+      providers/kirocli/README.md. kirocli remains doc-sourced: where its
+      old code encoded a guess the engine contradicts, prefer the
+      spec/engine and note it.
+    acceptance_criteria: >
+      providers/kirocli contains no JSON-RPC plumbing of its own; the
+      existing kirocli conformance suite passes unchanged against its
+      declared matrix (fakekiro rescripted only where the old shapes were
+      spec-nonconforming, each rescript justified in the commit); the
+      optionId and modelId deviations are gone; MADS_KIRO_SMOKE path
+      untouched. make check passes.
+    depends_on:
+      - "acprpc engine: spec-normative ACP client parameterized by knobs"
+    labels: [kiro, acprpc, provider]
+
+  - title: "Multi-agent validation captures: review, extend, commit (parallel track)"
+    description: >
+      MOSTLY DONE 2026-09-09 (interactive session, Drew-authorized): the
+      knob set was validated against THREE live agents — claude-agent-acp
+      0.75.1 (CLAUDECODE env_remove verified empirically), codex-acp
+      1.10.0, and Hermes Agent 0.21.1 (native ACP). Sanitized captures +
+      provenance README + the generic driver sit uncommitted under
+      providers/acprpc/testdata/captures/, and the knob-fit verdict (all
+      knobs covered, no gaps) is recorded in
+      docs/DECLARATIVE-PROVIDERS-DESIGN.md §"providers/acprpc". Remaining
+      work: re-run the leak sweep and verify the README's line/byte
+      counts, extend with the two gaps the README names — a codex-acp run
+      in read-only mode to pin its permission-request shape, and
+      session/load on codex/hermes — and commit the set. Keep the
+      README's fact list in sync with anything the new captures pin.
+    acceptance_criteria: >
+      Capture set committed with provenance README (leak sweep clean,
+      counts verified); the read-only codex permission capture and the
+      codex/hermes load captures are present with their facts recorded;
+      no production code changes. make check passes.
+    labels: [acprpc, research]
+
   - title: "Draft upstream goose proposals for the awkward seams"
     description: >
       goose is open source and locally checked out (~/repo/goose) — the
-      design doc's "Stance: goose is malleable" section names three seams
-      the adapter currently bridges with workarounds. Using the committed
-      captures and the adapter session code as evidence, write
-      docs/goose-upstream-proposals.md: one section per seam — (1) populate
-      ACP tool-call `kind` for goose builtins in
+      design doc's "Stance: goose is malleable" section names the seams the
+      adapter bridges. Using the committed captures and the engine/binding
+      code as evidence, write docs/goose-upstream-proposals.md: (1)
+      populate ACP tool-call `kind` for goose builtins in
       crates/goose/src/acp/server/tool_calls/conversion.rs (goose already
       knows toolName/extensionName; include the concrete kind mapping the
-      trust gate wants); (2) a stable per-session system-prompt surface
-      (promote _goose/unstable/session/system-prompt/set or a session/new
-      param); (3) a session-id announcement in `goose run --output-format
-      stream-json` if task 1 confirmed none exists (drop this section if it
-      does). Each section: current behavior with capture citation, what mads
-      does today as the workaround, the proposed upstream change with
-      pointers into the goose source, and which adapter code becomes
-      deletable if accepted. These are issue/PR-ready drafts committed to
-      mads docs — actually filing or patching goose happens outside this
-      pipeline.
+      trust gate wants — with kind set, the goose descriptor's ToolIdentity
+      could move from MetaNamespace to KindBased and the tool table
+      shrinks); (2) a stable per-session system-prompt surface (promote
+      _goose/unstable/session/system-prompt/set or a session/new param).
+      The old third seam (one-shot session-id announcement) is moot for
+      mads now that OneShot rides ACP — mention it only as context. Each
+      section: current behavior with capture citation, mads' workaround,
+      the proposed upstream change with source pointers, and which mads
+      code becomes deletable if accepted. Issue/PR-ready drafts committed
+      to mads docs; actually filing happens outside this pipeline.
     acceptance_criteria: >
       docs/goose-upstream-proposals.md exists with a capture-cited,
-      source-pointed, issue-ready section per confirmed seam, each naming
-      the adapter workaround it would delete. No changes outside docs/.
-      make check passes.
+      source-pointed, issue-ready section per seam, each naming the
+      workaround it would delete. No changes outside docs/. make check
+      passes.
     depends_on:
-      - "goosecli core: ACP wire types + interactive session"
+      - "goose binding: descriptor knobs, trust table, matrix, ModelDiscoverer"
     labels: [goose, research, docs]

@@ -3,6 +3,9 @@ package goosecli
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -61,11 +64,20 @@ func startSession(t *testing.T, p *Provider, opts provider.StartOptions) provide
 }
 
 // drainTurn collects events until (and including) EventTurnEnd. It fails
-// the test if the channel closes or 15s pass first.
+// the test if the channel closes or 15s pass first — the scripted fake is
+// instant, so the tight bound stays load-bearing for every non-smoke test.
 func drainTurn(t *testing.T, sess provider.Session) []provider.Event {
 	t.Helper()
+	return drainTurnWithin(t, sess, 15*time.Second)
+}
+
+// drainTurnWithin is drainTurn with a caller-chosen deadline — the
+// real-binary smoke needs minutes per turn (cold ollama model load is the
+// worst case), which would be a bug-masking bound against the fake.
+func drainTurnWithin(t *testing.T, sess provider.Session, timeout time.Duration) []provider.Event {
+	t.Helper()
 	var events []provider.Event
-	deadline := time.After(15 * time.Second)
+	deadline := time.After(timeout)
 	for {
 		select {
 		case ev, ok := <-sess.Events():
@@ -294,5 +306,136 @@ func TestMatrixValidates(t *testing.T) {
 	}
 	if p.Name() != "goose" {
 		t.Fatalf("Name = %q", p.Name())
+	}
+}
+
+// gooseRefPattern is the goose session-id shape, e.g. "20260829_2" (design
+// doc Resume row; pty.go's banner parse pins the same shape).
+var gooseRefPattern = regexp.MustCompile(`^\d{8}_\d+$`)
+
+// skipUnlessRealGooseSmoke gates the real-binary smokes (claudecode/kirocli
+// convention). Once opted in, a non-serving ollama FAILS the run rather
+// than skipping — the env var is an explicit claim that the stack is up.
+func skipUnlessRealGooseSmoke(t *testing.T) {
+	t.Helper()
+	if os.Getenv("MADS_GOOSE_SMOKE") != "1" {
+		t.Skip("set MADS_GOOSE_SMOKE=1 to run against the real goose binary (needs a serving local ollama — free tokens, but slow; ollama down fails the run, it does not skip)")
+	}
+	if _, err := exec.LookPath("goose"); err != nil {
+		t.Skip("no goose binary on PATH")
+	}
+}
+
+// TestRealGooseSmoke drives one real `goose acp` session end to end
+// (registration checklist item 5, docs/GOOSE-ADAPTER-DESIGN.md): protocol
+// mechanics only — ref shape at Start-return, turn ends, usage presence,
+// interrupt semantics, the transcript normalizer — never model output
+// content. qwen3.8 is a local model; instruction-following is not a
+// protocol claim, and a turn could legally be tool-only, so nothing here
+// asserts on EventText.
+// MADS_GOOSE_SMOKE=1 go test ./providers/goosecli -run RealGoose
+func TestRealGooseSmoke(t *testing.T) {
+	skipUnlessRealGooseSmoke(t)
+
+	// Zero config: EnvMode inherit, so HOME/XDG reach the user's
+	// ~/.config/goose/config.yaml (provider + model come from there).
+	p := New(Config{})
+	sess := startSession(t, p, provider.StartOptions{Trust: provider.TrustFull})
+	ref := sess.Ref()
+	if !gooseRefPattern.MatchString(ref) {
+		t.Fatalf("Ref() = %q at Start-return, want ^\\d{8}_\\d+$ (RefAnnounce's Native-strength ACP claim)", ref)
+	}
+
+	// Turn 1: usage rides the turn end — the declared CostReporting Native
+	// row. ContextWindow is logged, not asserted: it's config-dependent.
+	if err := sess.Send(context.Background(), "Reply with one short sentence."); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	events := drainTurnWithin(t, sess, 240*time.Second)
+	end := events[len(events)-1]
+	if end.Usage == nil || end.Usage.OutputTokens == 0 {
+		t.Fatalf("turn-end Usage = %+v, want OutputTokens > 0 (CostReporting Native row)", end.Usage)
+	}
+	t.Logf("turn 1 usage: input=%d output=%d context=%d/%d",
+		end.Usage.InputTokens, end.Usage.OutputTokens, end.Usage.ContextTokens, end.Usage.ContextWindow)
+
+	// Turn 2: interrupt mid-turn. Wait for the turn's first event before
+	// cancelling — Interrupt straight after Send would race the turn's
+	// start, and the engine's interrupted flag only marks a turn it lands
+	// inside of.
+	if err := sess.Send(context.Background(), "Count from 1 to 2000, one number per line."); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	select {
+	case ev, ok := <-sess.Events():
+		if !ok {
+			t.Fatal("events channel closed before the interrupt turn produced anything")
+		}
+		if ev.Kind == provider.EventTurnEnd {
+			t.Fatal("counting turn ended before Interrupt could land — lengthen the counting prompt")
+		}
+	case <-time.After(240 * time.Second):
+		t.Fatal("no event within 240s of Send on the interrupt turn")
+	}
+	if err := sess.Interrupt(context.Background()); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	events = drainTurnWithin(t, sess, 60*time.Second)
+	if end := events[len(events)-1]; !end.Interrupted {
+		t.Fatalf("turn end after Interrupt: Interrupted = false, want true (%+v)", end)
+	}
+
+	// Turn 3: the session survives the interrupt and serves another turn —
+	// the turn ending is the assertion.
+	if err := sess.Send(context.Background(), "Reply with one short sentence."); err != nil {
+		t.Fatalf("Send after interrupt: %v", err)
+	}
+	drainTurnWithin(t, sess, 240*time.Second)
+
+	// Transcript: close first so goose persists the session (startSession's
+	// cleanup would close too late, after the export), then normalize.
+	// Mechanics only: both roles present, no content inspection.
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	msgs, err := p.Transcript(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Transcript(%q): %v", ref, err)
+	}
+	var haveUser, haveAgent bool
+	for _, m := range msgs {
+		switch m.Role {
+		case "user":
+			haveUser = true
+		case "agent":
+			haveAgent = true
+		}
+	}
+	if len(msgs) == 0 || !haveUser || !haveAgent {
+		t.Fatalf("transcript: %d messages, user=%v agent=%v — want both roles present", len(msgs), haveUser, haveAgent)
+	}
+}
+
+// TestRealGooseOneShotSmoke exercises OneShot-over-ACP against the real
+// binary: the ref arrives synchronously from session/new and usage from
+// the prompt result — mechanics only, res.Text is deliberately untouched
+// (local-model output is not contract).
+// MADS_GOOSE_SMOKE=1 go test ./providers/goosecli -run RealGoose
+func TestRealGooseOneShotSmoke(t *testing.T) {
+	skipUnlessRealGooseSmoke(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	res, err := New(Config{}).OneShot(ctx, provider.OneShotRequest{
+		Prompt: "Reply with one short sentence.", Cwd: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gooseRefPattern.MatchString(res.Ref) {
+		t.Fatalf("OneShot Ref = %q, want ^\\d{8}_\\d+$", res.Ref)
+	}
+	if res.Usage.OutputTokens == 0 {
+		t.Fatalf("OneShot Usage = %+v, want OutputTokens > 0", res.Usage)
 	}
 }

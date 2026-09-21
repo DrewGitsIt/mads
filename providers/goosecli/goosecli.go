@@ -1,5 +1,5 @@
-// Package goosecli is the goose provider adapter (spec §11, proposed
-// W7.8): Block's open-source goose agent, driven through the generic ACP
+// Package goosecli is the goose provider adapter (spec §11, W7.8):
+// Block's open-source goose agent, driven through the generic ACP
 // engine at providers/acprpc. This binding is the engine's first
 // instantiation (docs/DECLARATIVE-PROVIDERS-DESIGN.md §"providers/acprpc"):
 // it supplies the capture-verified goose knob values — spawn args, the

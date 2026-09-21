@@ -158,3 +158,18 @@ mechanism and must not be implied here (goosecli.go `IntentMatrix`).
   `providers/acprpc/replay_test.go`, which is stronger than a smoke test:
   the engine is proven against recorded goose output, and reruns don't
   spend tokens or drift with model output.
+
+## Real-binary smoke (opt-in)
+
+```
+MADS_GOOSE_SMOKE=1 go test ./providers/goosecli -run RealGoose
+```
+
+Needs the goose binary on PATH and a **serving local ollama** (free
+tokens, but slow — minutes per turn on a cold model; once opted in, ollama
+being down fails the run rather than skipping). The smoke asserts protocol
+mechanics only — ref shape at Start-return, turn ends, usage presence,
+interrupt semantics, transcript normalizer roles — never model output
+content: a local model's instruction-following is not a protocol claim,
+and a turn could legally be tool-only. `TestRealGooseOneShotSmoke` covers
+the OneShot-over-ACP path the same way (ref + usage, `Text` untouched).
