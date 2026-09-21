@@ -58,6 +58,14 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			if l.SubjectSessionID != sessionID || !l.HasGrant(contracts.GrantRead) {
 				continue
 			}
+			// A self-link (the implicit hand-raiser) never gets turn
+			// digests: a session re-reading a summary of its own turn is a
+			// forced turn of pure noise — observed live as a 12-injection
+			// echo on a pipeline leader session. Task terminals still reach
+			// it via GenerateRunDigest.
+			if l.GrantingSessionID == l.SubjectSessionID {
+				continue
+			}
 			switch l.Cadence {
 			case contracts.CadencePerTurn:
 				deliver = append(deliver, l)

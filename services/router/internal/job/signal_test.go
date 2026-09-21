@@ -122,6 +122,47 @@ func TestDeliverSignalWakesNonManualReaders(t *testing.T) {
 	}
 }
 
+// A session's implicit hand-raiser never receives turn digests of the
+// session's own activity — the self-echo burns a forced turn re-reading a
+// summary of what the session itself just did. With no other reader, the
+// fast model isn't even called.
+func TestGenerateDigestSkipsSelfLink(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "pipeline leader"})
+	if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
+		t.Fatalf("CreateHandRaiser: %v", err)
+	}
+
+	server := newCaptureServer(t, http.StatusAccepted)
+	backend := &countingBackend{reply: "should not be called"}
+	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
+	runner := job.New(data, fm, registryclient.New(""))
+	runner.SetResolver(stubResolver{sess.ID: server.addr()})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := runner.Spawn(ctx, job.DigestKind, sess.ID,
+		job.GenerateDigest(sess.ID, []string{"user: hi\nassistant: did stuff\n"})); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	verify := dataclient.New(base, "test-verify")
+	eventually(t, 5*time.Second, func() bool {
+		evs, err := verify.Events(ctx, 0, sess.ID, []string{"job.completed"})
+		return err == nil && len(evs) > 0
+	})
+
+	if got := server.count(); got != 0 {
+		t.Fatalf("self-link received %d turn-digest deliveries, want 0", got)
+	}
+	if got := backend.count(); got != 0 {
+		t.Fatalf("fast model called %d times, want 0 (no non-self readers)", got)
+	}
+}
+
 // A task-terminal signal names the task and, when blocked, carries the most
 // recent blocker note.
 func TestDeliverSignalTaskTerminalCarriesBlocker(t *testing.T) {
