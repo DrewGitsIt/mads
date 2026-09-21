@@ -93,39 +93,47 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 		}
 
 		for _, l := range targets {
-			addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
-			if !ok {
-				continue // monitor not running: best-effort skip, not a failure
-			}
-			// A wake carries the link's whole mailbox backlog as context —
-			// the monitor catches up on what accumulated between signals in
-			// the same forced turn the signal itself pays for. Drained only
-			// once delivery is possible (address resolved); on delivery
-			// failure the backlog is re-queued so it isn't lost, at the cost
-			// of a possible interleave with digests appended meanwhile.
-			body := text
-			backlog, err := deps.Data.DrainLinkDigests(ctx, l.ID)
-			if err != nil {
-				log.Printf("signal: drain mailbox for link %s: %v", l.ID, err)
-				backlog = nil
-			}
-			if len(backlog) > 0 {
-				body = text + "\n\n" + renderBacklog(backlog)
-			}
-			if err := deliverDigest(ctx, addr, body, contracts.Attribution{
-				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
-			}); err != nil {
-				log.Printf("signal: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
-				for _, d := range backlog {
-					if err := deps.Data.AppendLinkDigest(ctx, l.ID, d); err != nil {
-						log.Printf("signal: requeue mailbox digest for link %s: %v", l.ID, err)
-					}
-				}
-				continue // one monitor's failure must not affect the others
-			}
+			wakeMonitor(ctx, deps, l, sess.Name, text)
 		}
 		return nil
 	}
+}
+
+// wakeMonitor delivers text to link l's granting session as a forced,
+// digest-attributed turn. A wake carries the link's whole mailbox backlog
+// as context — the monitor catches up on what accumulated between wakes in
+// the same forced turn the wake itself pays for. The backlog is drained
+// only once delivery is possible (address resolved); on delivery failure it
+// is re-queued so it isn't lost, at the cost of a possible interleave with
+// digests appended meanwhile. Returns whether delivery happened, so a
+// caller with somewhere better to put text (the digest job's mailbox) can
+// fall back. Best-effort: one monitor's failure must not affect the others.
+func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text string) bool {
+	addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
+	if !ok {
+		return false // monitor not running: best-effort skip, not a failure
+	}
+	body := text
+	backlog, err := deps.Data.DrainLinkDigests(ctx, l.ID)
+	if err != nil {
+		log.Printf("wake: drain mailbox for link %s: %v", l.ID, err)
+		backlog = nil
+	}
+	if len(backlog) > 0 {
+		body = text + "\n\n" + renderBacklog(backlog)
+	}
+	if err := deliverDigest(ctx, addr, body, contracts.Attribution{
+		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
+	}); err != nil {
+		log.Printf("wake: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)
+		for _, d := range backlog {
+			if err := deps.Data.AppendLinkDigest(ctx, l.ID, d); err != nil {
+				log.Printf("wake: requeue mailbox digest for link %s: %v", l.ID, err)
+			}
+		}
+		return false
+	}
+	return true
 }
 
 // renderBacklog renders a drained mailbox as the catch-up section of a

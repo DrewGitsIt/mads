@@ -82,3 +82,62 @@ func TestDigestQueuesToOnSignalMailboxAndSignalFlushesIt(t *testing.T) {
 		t.Fatalf("mailbox still holds %d digests after a delivered wake, want 0", len(backlog))
 	}
 }
+
+// A digest the fast model marks actionable wakes the on_signal monitor
+// immediately — verdict reason leading, verdict line stripped, and the
+// queued backlog flushed in the same forced turn — instead of queueing.
+func TestActionableDigestWakesOnSignalMonitor(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	watched := mustCreateSession(t, data, contracts.Session{Name: "watched session"})
+	monitor := mustCreateSession(t, data, contracts.Session{Name: "on-signal monitor"})
+	link := mustCreateLink(t, data, contracts.LinkRequest{
+		GrantingSessionID: monitor.ID, SubjectSessionID: watched.ID,
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceOnSignal,
+	})
+	if err := data.AppendLinkDigest(context.Background(), link.ID, contracts.LinkDigest{Text: "older queued digest"}); err != nil {
+		t.Fatalf("AppendLinkDigest: %v", err)
+	}
+
+	server := newCaptureServer(t, http.StatusAccepted)
+	backend := &countingBackend{reply: "ACTIONABLE: yes — waiting on a Bash approval\nThe agent parked a tool call."}
+	fm := fastmodel.NewWithBackend(backend, fastmodel.Config{})
+
+	runner := job.New(data, fm, registryclient.New(""))
+	runner.SetResolver(stubResolver{monitor.ID: server.addr()})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := runner.Spawn(ctx, job.DigestKind, watched.ID,
+		job.GenerateDigest(watched.ID, []string{"user: hi\nassistant: parked\n"})); err != nil {
+		t.Fatalf("Spawn digest: %v", err)
+	}
+	eventually(t, 5*time.Second, func() bool {
+		return server.count() == 1
+	})
+
+	text := server.requests()[0].Text
+	if !strings.Contains(text, "Needs attention: waiting on a Bash approval") {
+		t.Errorf("wake %q missing the verdict reason lead", text)
+	}
+	if !strings.Contains(text, "The agent parked a tool call.") {
+		t.Errorf("wake %q missing the digest body", text)
+	}
+	if strings.Contains(text, "ACTIONABLE:") {
+		t.Errorf("wake %q leaks the raw verdict line", text)
+	}
+	if !strings.Contains(text, "older queued digest") {
+		t.Errorf("wake %q missing the flushed backlog", text)
+	}
+
+	backlog, err := data.DrainLinkDigests(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backlog) != 0 {
+		t.Fatalf("mailbox holds %d digests after an actionable wake, want 0", len(backlog))
+	}
+}

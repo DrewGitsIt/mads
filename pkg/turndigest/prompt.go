@@ -43,5 +43,12 @@ func systemPrompt(req Request) string {
 	if req.BudgetTokens > 0 {
 		fmt.Fprintf(&sb, " Reply in at most ~%d tokens.", req.BudgetTokens)
 	}
+	if req.Classify {
+		sb.WriteString(" Start your reply with its own first line, exactly" +
+			" \"ACTIONABLE: yes — <why>\" if this activity needs the" +
+			" monitor's attention right now (blocked, crashed, waiting on" +
+			" input or permission, or clearly drifting from its goal), or" +
+			" \"ACTIONABLE: no\" otherwise; then the digest.")
+	}
 	return sb.String()
 }

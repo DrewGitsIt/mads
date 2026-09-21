@@ -18,6 +18,7 @@ package turndigest
 
 import (
 	"context"
+	"strings"
 
 	"github.com/drewkidwell/mads/providers/fastmodel"
 )
@@ -71,6 +72,12 @@ type Request struct {
 	// Subject is optional prompt context ("session build-fix",
 	// "task tsk_x"); empty = omitted from the prompt.
 	Subject string
+	// Classify asks the model to lead its reply with an actionability
+	// verdict line, parsed off into Result.Actionable/Reason. Opt-in so
+	// non-triaging callers keep their prompt (and replies) byte-identical.
+	// Only meaningful on the compressed path — a verbatim or degraded
+	// result is never actionable, because no model ever looked at it.
+	Classify bool
 }
 
 // Source reports which path produced Result.Text.
@@ -88,6 +95,14 @@ type Result struct {
 	Source   Source
 	FromTurn int // Turns[0].Number (0 when no turns)
 	ToTurn   int // Turns[len-1].Number (0 when no turns)
+	// Actionable/Reason carry Request.Classify's verdict: whether the
+	// digested activity needs a monitor's attention right now. Always false
+	// when Classify was off, on verbatim/degraded paths, or when the model
+	// omitted the verdict line — unparseable defaults to quiet, since
+	// deterministic signals (job.DeliverSignal) still guarantee terminal
+	// events wake the monitor regardless.
+	Actionable bool
+	Reason     string
 }
 
 // Digester compresses turns via a Fast Model runner.
@@ -139,6 +154,11 @@ func (d *Digester) Digest(ctx context.Context, req Request) (Result, error) {
 		}
 		return Result{}, err
 	}
+	if req.Classify {
+		// Parse before the length backstop, so the verdict line never
+		// counts against the caller's budget.
+		res.Actionable, res.Reason, reply = parseVerdict(reply)
+	}
 	// Backstop for a model that ignored the prompt-side length target; a
 	// zero budget passes the reply through untouched.
 	if req.BudgetTokens > 0 && estimateTokens(reply) > 2*req.BudgetTokens {
@@ -147,6 +167,27 @@ func (d *Digester) Digest(ctx context.Context, req Request) (Result, error) {
 	res.Text = reply
 	res.Source = SourceCompressed
 	return res, nil
+}
+
+// parseVerdict splits a Classify reply into (actionable, reason, digest).
+// The expected first line is "ACTIONABLE: yes — <why>" or "ACTIONABLE: no";
+// a reply without it parses as not actionable with the text untouched.
+func parseVerdict(reply string) (bool, string, string) {
+	trimmed := strings.TrimLeft(reply, " \t\n")
+	line, rest, _ := strings.Cut(trimmed, "\n")
+	const marker = "actionable:"
+	if !strings.HasPrefix(strings.ToLower(line), marker) {
+		return false, "", reply
+	}
+	verdict := strings.TrimSpace(line[len(marker):])
+	rest = strings.TrimSpace(rest)
+	lower := strings.ToLower(verdict)
+	if !strings.HasPrefix(lower, "yes") {
+		return false, "", rest
+	}
+	reason := strings.TrimSpace(verdict[len("yes"):])
+	reason = strings.TrimSpace(strings.TrimLeft(reason, "—–-:,"))
+	return true, reason, rest
 }
 
 // truncate cuts s rune-safe at ~budgetTokens*4 bytes, appending "…" when it

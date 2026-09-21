@@ -73,7 +73,11 @@ Links are directed edges; nothing is 1:1 by design:
      would report it may never fire. Turn digests still accumulate on the
      link's capped mailbox (oldest dropped first) and flush as context in
      the next wake's forced turn, or on demand via the agent-facing
-     check_mailbox tool. Rationale: a monitor is an LLM — every pushed
+     check_mailbox tool. The fast model triages while it compresses: a
+     digest it marks actionable (blocked, failing, waiting on input,
+     drifting) wakes the monitor immediately instead of queueing, so
+     on_signal isn't limited to the deterministic terminal events.
+     Rationale: a monitor is an LLM — every pushed
      digest forces a full-inference turn over its whole context, and on a
      healthy subject almost every such turn concludes "nothing to do". The
      wake filter belongs in deterministic code, not in the most expensive

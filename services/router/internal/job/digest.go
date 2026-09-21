@@ -82,6 +82,10 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			// BudgetTokens deliberately 0: monitors always get a compressed
 			// digest, and a skippable backend degrades to empty ⇒ no push
 			// (both today's behavior).
+			// Classify only when an on_signal reader exists: the verdict
+			// decides wake-vs-mailbox for them, and costs per_turn-only
+			// fan-outs nothing.
+			Classify: len(mailbox) > 0,
 		})
 		if err != nil {
 			return fmt.Errorf("digest: compress: %w", err)
@@ -104,6 +108,20 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			}
 		}
 		for _, l := range mailbox {
+			// The fast model triages while it compresses: an actionable
+			// digest (blocked, failing, waiting on input, drifting) wakes
+			// the on_signal monitor immediately, backlog included; a quiet
+			// one just queues. Wake failure (monitor not running, delivery
+			// error) falls back to the mailbox so nothing is lost.
+			if res.Actionable && deps.Resolver != nil {
+				wakeText := text
+				if res.Reason != "" {
+					wakeText = "Needs attention: " + res.Reason + "\n\n" + text
+				}
+				if wakeMonitor(ctx, deps, l, sess.Name, wakeText) {
+					continue
+				}
+			}
 			if err := deps.Data.AppendLinkDigest(ctx, l.ID, contracts.LinkDigest{
 				Text: text, FromTurn: res.FromTurn, ToTurn: res.ToTurn,
 			}); err != nil {
