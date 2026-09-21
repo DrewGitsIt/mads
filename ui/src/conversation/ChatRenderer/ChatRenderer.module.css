@@ -67,6 +67,12 @@
   padding: var(--space-2) var(--space-3);
 }
 
+.quiet {
+  display: flex;
+  justify-content: center;
+  opacity: 0.75;
+}
+
 .digest {
   align-self: stretch;
   border: 1px solid var(--line-soft);

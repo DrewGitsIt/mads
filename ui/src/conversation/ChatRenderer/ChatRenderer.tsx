@@ -55,6 +55,24 @@ const CADENCE_LABEL: Record<Link["cadence"], string> = {
   manual_only: "cadence: manual — no automatic digests",
 };
 
+/** A digest push the monitor answered with exactly NOOP (the framing every
+ * monitor-facing push carries) collapses to a quiet-check chip; consecutive
+ * quiet checks aggregate into one. */
+type QuietItem = { key: string; type: "quiet"; count: number; sources: string[] };
+
+/** Would this message render as a digest card (vs. an inject chip)? The
+ * viewed session being the attributed link's granting side is what makes it
+ * the monitor's copy (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
+function isDigestCard(
+  message: TranscriptMessage,
+  linksById: Map<string, Link>,
+  viewedSessionId?: string,
+): boolean {
+  if (!message.attribution || !FLAGS.linkedSessions) return false;
+  const link = linksById.get(message.attribution.link_id);
+  return Boolean(link && viewedSessionId === link.granting_session_id);
+}
+
 /**
  * Maps a transcript to prose + always-grouped activity (T12): consecutive
  * tool/thinking events render as one collapsible group of rows, TodoWrite
@@ -91,9 +109,49 @@ export function ChatRenderer({
   }
   const items = buildItems(entries);
 
+  // Collapse digest→NOOP pairs into quiet-check chips before rendering. A
+  // completed (non-live) agent reply of exactly NOOP directly after a digest
+  // card is the monitor saying "nothing to do" — showing both in full would
+  // pay the transcript cost the noop protocol exists to avoid.
+  const rendered: (ReturnType<typeof buildItems>[number] | QuietItem)[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const next = items[i + 1];
+    if (
+      item.type === "message" &&
+      isDigestCard(item.message, linksById, viewedSessionId) &&
+      next?.type === "message" &&
+      !next.live &&
+      next.message.role === "agent" &&
+      (next.message.text ?? "").trim() === "NOOP"
+    ) {
+      const source = item.message.attribution!.source_name;
+      const last = rendered[rendered.length - 1];
+      if (last?.type === "quiet") {
+        last.count++;
+        if (!last.sources.includes(source)) last.sources.push(source);
+      } else {
+        rendered.push({ key: item.key, type: "quiet", count: 1, sources: [source] });
+      }
+      i++; // the NOOP reply is consumed by the chip
+      continue;
+    }
+    rendered.push(item);
+  }
+
   return (
     <div className={styles.stream}>
-      {items.map((item) => {
+      {rendered.map((item) => {
+        if (item.type === "quiet") {
+          return (
+            <div key={item.key} className={styles.quiet}>
+              <Chip tone="neutral">
+                {item.count === 1 ? "1 quiet check" : `${item.count} quiet checks`} ·{" "}
+                {item.sources.join(", ")} · nothing needed
+              </Chip>
+            </div>
+          );
+        }
         if (item.type === "activity") {
           return (
             <ActivityGroup

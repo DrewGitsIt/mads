@@ -83,6 +83,14 @@ Links are directed edges; nothing is 1:1 by design:
      wake filter belongs in deterministic code, not in the most expensive
      component of the system.
    - `manual_only`: nothing pushed at all; pull-only.
+
+   Every monitor-facing push closes with a one-line noop protocol ("reply
+   with exactly NOOP" when nothing needs doing): the monitor's cheapest
+   possible answer, which the conversation UI collapses — consecutive
+   digest→NOOP pairs render as one aggregated quiet-check chip. Note the
+   collapse trims MADS transcript/UI weight only; a stateful provider keeps
+   its own NOOP turns in context, which is why not waking at all (the two
+   cadences above) carries most of the value.
 5. **Pipeline runs are monitorable, not leadable.** §1.12's interactive-only
    restriction is relaxed for `read` (+`inject` where the subject is the
    pipeline's session — see 6). Pipeline runs keep their single orchestrator:

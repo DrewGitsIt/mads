@@ -188,4 +188,77 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
     expect(wrapper?.className).toMatch(/injected/);
   });
+
+  it("collapses a digest answered with exactly NOOP into a quiet-check chip", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "routine progress digest",
+        attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+      },
+      { role: "agent", text: "NOOP" },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ cadence: "on_signal" })]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText(/1 quiet check · payments refactor/)).toBeTruthy();
+    expect(screen.queryByText("routine progress digest")).toBeNull();
+    expect(screen.queryByText("NOOP")).toBeNull();
+  });
+
+  it("aggregates consecutive quiet checks into one chip, and leaves a real reply alone", () => {
+    FLAGS.linkedSessions = true;
+    const digest = (text: string): TranscriptMessage => ({
+      role: "user",
+      text,
+      attribution: { link_id: "lnk_1", source_name: "payments refactor" },
+    });
+    const messages: TranscriptMessage[] = [
+      digest("digest one"),
+      { role: "agent", text: "NOOP" },
+      digest("digest two"),
+      { role: "agent", text: "NOOP" },
+      digest("digest three"),
+      { role: "agent", text: "I'll step in and unblock the task." },
+    ];
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({ cadence: "on_signal" })]}
+        viewedSessionId="leader-id"
+      />,
+    );
+    expect(screen.getByText(/2 quiet checks · payments refactor/)).toBeTruthy();
+    // The third digest got a real reply — both render in full.
+    expect(screen.getByText("digest three")).toBeTruthy();
+    expect(screen.getByText("I'll step in and unblock the task.")).toBeTruthy();
+  });
+
+  it("never collapses a NOOP-shaped reply to the subject's own inject chip", () => {
+    FLAGS.linkedSessions = true;
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "kick off the refactor",
+        attribution: { link_id: "lnk_1", source_name: "Leader Session" },
+      },
+      { role: "agent", text: "NOOP" },
+    ];
+    // Viewed from the subject side, the attributed message is an inject
+    // chip, not a digest card — the reply stays visible.
+    render(
+      <ChatRenderer
+        messages={messages}
+        links={[makeLink({})]}
+        viewedSessionId="subject-id"
+      />,
+    );
+    expect(screen.getByText("kick off the refactor")).toBeTruthy();
+    expect(screen.getByText("NOOP")).toBeTruthy();
+  });
 });

@@ -180,8 +180,11 @@ func TestGenerateDigestDeliversToPerTurnReadersOnly(t *testing.T) {
 	}
 
 	reqs := perTurnServer.requests()
-	if reqs[0].Text != "compressed digest" {
-		t.Errorf("delivered text = %q, want the compressed digest", reqs[0].Text)
+	if !strings.HasPrefix(reqs[0].Text, "compressed digest") {
+		t.Errorf("delivered text = %q, want it to open with the compressed digest", reqs[0].Text)
+	}
+	if !strings.Contains(reqs[0].Text, "reply with exactly NOOP") {
+		t.Errorf("delivered text = %q, want the noop instruction framing", reqs[0].Text)
 	}
 	if reqs[0].Attribution.LinkID != linkPerTurn.ID {
 		t.Errorf("attribution link id = %q, want %q", reqs[0].Attribution.LinkID, linkPerTurn.ID)

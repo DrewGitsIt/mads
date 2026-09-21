@@ -99,6 +99,12 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 	}
 }
 
+// noopInstruction closes every monitor-facing push (per-turn digests and
+// wakes alike) so a monitor with nothing to do can answer in one cheap,
+// recognizable token — the UI collapses digest-attributed turns answered
+// with exactly NOOP into a quiet-check chip instead of transcript clutter.
+const noopInstruction = "\n\n(If nothing here needs your action, reply with exactly NOOP.)"
+
 // wakeMonitor delivers text to link l's granting session as a forced,
 // digest-attributed turn. A wake carries the link's whole mailbox backlog
 // as context — the monitor catches up on what accumulated between wakes in
@@ -122,6 +128,7 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 	if len(backlog) > 0 {
 		body = text + "\n\n" + renderBacklog(backlog)
 	}
+	body += noopInstruction
 	if err := deliverDigest(ctx, addr, body, contracts.Attribution{
 		LinkID: l.ID, SourceName: sourceName, DigestAttributed: true,
 	}); err != nil {

@@ -100,7 +100,7 @@ func GenerateDigest(sessionID string, deltas []string) Func {
 			if !ok {
 				continue // monitor not running: best-effort skip, not a failure
 			}
-			if err := deliverDigest(ctx, addr, text, contracts.Attribution{
+			if err := deliverDigest(ctx, addr, text+noopInstruction, contracts.Attribution{
 				LinkID: l.ID, SourceName: sess.Name, DigestAttributed: true,
 			}); err != nil {
 				log.Printf("digest: deliver to %s via link %s: %v", l.GrantingSessionID, l.ID, err)

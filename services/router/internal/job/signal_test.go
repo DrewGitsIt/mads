@@ -105,8 +105,11 @@ func TestDeliverSignalWakesNonManualReaders(t *testing.T) {
 	}
 
 	req := onSignalServer.requests()[0]
-	if want := "Waiting on permission to use Bash."; req.Text != want {
-		t.Errorf("notice = %q, want %q", req.Text, want)
+	if want := "Waiting on permission to use Bash."; !strings.HasPrefix(req.Text, want) {
+		t.Errorf("notice = %q, want it to open with %q", req.Text, want)
+	}
+	if !strings.Contains(req.Text, "reply with exactly NOOP") {
+		t.Errorf("notice = %q, want the noop instruction framing", req.Text)
 	}
 	if req.Attribution.LinkID != linkOnSignal.ID {
 		t.Errorf("attribution link = %q, want %q", req.Attribution.LinkID, linkOnSignal.ID)
