@@ -9,8 +9,9 @@
 // provenance) and also feeds the engine's replay tests.
 //
 // The PTY transport (`goose session` with banner ref discovery) lives in
-// pty.go. Not yet wired, each its own chained task: registration and
-// TranscriptReader (`session export`).
+// pty.go, TranscriptReader (`session export`) in transcript.go, and the
+// SessionLocator backstop (`session list` + export verification) in
+// locate.go. Not yet wired, its own chained task: registration.
 package goosecli
 
 import (
@@ -30,7 +31,9 @@ type Config struct {
 	// Bin is the goose executable (default "goose"). Tests point this at a
 	// scripted stand-in.
 	Bin string
-	// ExtraArgs are appended to every invocation.
+	// ExtraArgs are appended to every agent-spawn invocation (`acp`,
+	// `session` REPL). Bookkeeping subcommands (session export/list) omit
+	// them — they are spawn flags and would break those invocations.
 	ExtraArgs []string
 	// Env carries mads-injected KEY=VALUE pairs — resolved bound mads
 	// credentials plus any other config-time values — added on top of the
@@ -196,8 +199,10 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorRefAnnounce: provider.Emulated,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
-		// Its own chained task: `session export` as TranscriptReader.
-		provider.BehaviorTranscript: provider.Unsupported,
+		// `session export --format json` (transcript.go) — richer than
+		// kirocli's session/load-replay approach: timestamps, no ACP spawn
+		// (design doc matrix row).
+		provider.BehaviorTranscript: provider.Native,
 		// No provider-layer branching surface exists yet (goose's
 		// session/fork is real — flip when mads grows the surface); no cwd
 		// reroot mechanism at all.

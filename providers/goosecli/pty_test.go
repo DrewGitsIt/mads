@@ -234,6 +234,31 @@ func TestPTYResume(t *testing.T) {
 
 // TestStartPTYReturnsPTYSession: the full "working PTYSession" surface off
 // Start(ModePTY) — type, mode, nil Events, Resize, idempotent Close.
+// SetRef is the write side the Runner's SessionLocator backstop uses on the
+// exact session shape it exists for: a live PTY session whose banner never
+// announced. The located ref must become visible through Ref() on the
+// session object itself, and a ref that is already known must win over a
+// later SetRef.
+func TestSetRefPropagatesToRef(t *testing.T) {
+	p := testProvider(t, "MADS_FAKE_PTY_EXIT=1")
+	sess := startPTYSession(t, p, provider.StartOptions{})
+	if sess.Ref() != "" {
+		t.Fatalf("Ref = %q before any announcement, want empty", sess.Ref())
+	}
+	setter, ok := provider.Session(sess).(provider.RefSetter)
+	if !ok {
+		t.Fatal("PTY session does not implement provider.RefSetter")
+	}
+	setter.SetRef("20260829_20")
+	if sess.Ref() != "20260829_20" {
+		t.Fatalf("Ref = %q after SetRef, want the located ref", sess.Ref())
+	}
+	setter.SetRef("20260829_99")
+	if sess.Ref() != "20260829_20" {
+		t.Fatalf("Ref = %q, want SetRef to never overwrite a known ref", sess.Ref())
+	}
+}
+
 func TestStartPTYReturnsPTYSession(t *testing.T) {
 	p := testProvider(t, "MADS_FAKE_PTY_BANNER="+bannerPath(t))
 	sess := startPTYSession(t, p, provider.StartOptions{})

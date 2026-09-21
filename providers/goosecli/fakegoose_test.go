@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -64,6 +65,10 @@ func fgMain() {
 // 0x03 arrives as a byte instead of a line-discipline SIGINT): a line
 // ending \r → `pong:<line>`, byte 0x03 → `INTERRUPT-MARK`, EOF → exit 0.
 func fgSessionMain(args []string) {
+	if len(args) > 0 && (args[0] == "list" || args[0] == "export") {
+		fgSessionQuery(args)
+		return
+	}
 	resumeShape := len(args) == 3 && args[0] == "--resume" && args[1] == "--session-id"
 	if len(args) != 0 && !resumeShape {
 		fmt.Fprintf(os.Stderr, "fakegoose: session argv = %v, want [] or [--resume --session-id <ref>]\n", args)
@@ -110,6 +115,48 @@ func fgSessionMain(args []string) {
 			return
 		}
 	}
+}
+
+// fgSessionQuery serves the CLI query subcommands the TranscriptReader and
+// SessionLocator exec, asserting their exact argv (the design-doc command
+// shapes): `session list --format json` replays the fixture file named by
+// MADS_FAKE_SESSION_LIST, `session export --session-id <id> --format json`
+// replays MADS_FAKE_EXPORT_DIR/<id>.json — a missing export fixture
+// exits 1 with goose's "Session not found" stderr shape.
+func fgSessionQuery(args []string) {
+	switch {
+	case len(args) == 3 && args[0] == "list" && args[1] == "--format" && args[2] == "json":
+		path := os.Getenv("MADS_FAKE_SESSION_LIST")
+		if path == "" {
+			fmt.Fprintln(os.Stderr, "fakegoose: MADS_FAKE_SESSION_LIST unset")
+			os.Exit(1)
+		}
+		fgReplayFile(path)
+	case len(args) == 5 && args[0] == "export" && args[1] == "--session-id" && args[3] == "--format" && args[4] == "json":
+		dir := os.Getenv("MADS_FAKE_EXPORT_DIR")
+		if dir == "" {
+			fmt.Fprintln(os.Stderr, "fakegoose: MADS_FAKE_EXPORT_DIR unset")
+			os.Exit(1)
+		}
+		path := filepath.Join(dir, args[2]+".json")
+		if _, err := os.Stat(path); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: Session not found: %s\n", args[2])
+			os.Exit(1)
+		}
+		fgReplayFile(path)
+	default:
+		fmt.Fprintf(os.Stderr, "fakegoose: session query argv = %v, want [list --format json] or [export --session-id <id> --format json]\n", args)
+		os.Exit(1)
+	}
+}
+
+func fgReplayFile(path string) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fakegoose:", err)
+		os.Exit(1)
+	}
+	_, _ = os.Stdout.Write(raw)
 }
 
 // fgAttempt is one gated-tool scenario, goose-shaped: bare _meta toolName
