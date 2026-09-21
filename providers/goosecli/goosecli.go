@@ -8,8 +8,9 @@
 // evidence base lives under testdata/captures/ (see its README for
 // provenance) and also feeds the engine's replay tests.
 //
-// Not yet wired, each its own chained task: registration, the PTY
-// transport (`goose session`), and TranscriptReader (`session export`).
+// The PTY transport (`goose session` with banner ref discovery) lives in
+// pty.go. Not yet wired, each its own chained task: registration and
+// TranscriptReader (`session export`).
 package goosecli
 
 import (
@@ -188,13 +189,14 @@ func (p *Provider) Matrix() provider.Matrix {
 		// "Trust enforcement") — not a harness-level block.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
-		// On the only transport this commit ships, the ref is synchronous
-		// at Start-return. The PTY task downgrades this row to Emulated as
-		// the honest one-row summary across both transports (design doc).
-		provider.BehaviorRefAnnounce: provider.Native,
-		// Each its own chained task: `goose session` under a pty, and
-		// `session export` as TranscriptReader.
-		provider.BehaviorPTY:        provider.Unsupported,
+		// ACP's ref is synchronous at Start-return (Native-strength); the
+		// PTY's rides a banner parse (pty.go) that a cosmetic goose change
+		// could break. Emulated is the honest one-row summary across both
+		// transports (design doc).
+		provider.BehaviorRefAnnounce: provider.Emulated,
+		// `goose session` under a pty (pty.go).
+		provider.BehaviorPTY: provider.Native,
+		// Its own chained task: `session export` as TranscriptReader.
 		provider.BehaviorTranscript: provider.Unsupported,
 		// No provider-layer branching surface exists yet (goose's
 		// session/fork is real — flip when mads grows the surface); no cwd
@@ -227,9 +229,7 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	case provider.ModeACP:
 		return p.engine().Start(ctx, opts)
 	case provider.ModePTY:
-		// Honestly unsupported until the PTY task wires `goose session`
-		// under a pty.
-		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
+		return p.startPTY(opts)
 	default:
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}

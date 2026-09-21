@@ -262,10 +262,3 @@ func TestMatrixValidates(t *testing.T) {
 		t.Fatalf("Name = %q", p.Name())
 	}
 }
-
-func TestStartPTYUnsupported(t *testing.T) {
-	_, err := testProvider(t).Start(context.Background(), provider.StartOptions{Mode: provider.ModePTY})
-	if !errors.Is(err, provider.ErrUnsupported) {
-		t.Fatalf("err = %v, want ErrUnsupported", err)
-	}
-}

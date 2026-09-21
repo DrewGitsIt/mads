@@ -26,6 +26,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestMain(m *testing.M) {
@@ -37,6 +39,10 @@ func TestMain(m *testing.M) {
 }
 
 func fgMain() {
+	if len(os.Args) > 1 && os.Args[1] == "session" {
+		fgSessionMain(os.Args[2:])
+		return
+	}
 	// The argv assertion: the binding must spawn `goose acp --with-builtin
 	// developer` (the captured spawn shape) — this is what proves the
 	// Builtins knob reaches the child.
@@ -45,6 +51,65 @@ func fgMain() {
 		os.Exit(1)
 	}
 	fgServe()
+}
+
+// fgSessionMain mimics the interactive `goose session` REPL for PTY probes,
+// asserting the spawn shape (bare `session`, or exactly the resume triple).
+// Knobs ride env vars since the real argv is fixed: MADS_FAKE_PTY_BANNER
+// names a file whose bytes are replayed verbatim as the startup banner —
+// tests point it at the committed goose 1.48.0 capture, spinner redraws,
+// OSC title and all — and MADS_FAKE_PTY_EXIT=1 prints one plain no-banner
+// line and exits immediately (the stream-ends-without-a-banner path). Then
+// a tiny REPL on raw stdin bytes (the tty is put in raw mode so Interrupt's
+// 0x03 arrives as a byte instead of a line-discipline SIGINT): a line
+// ending \r → `pong:<line>`, byte 0x03 → `INTERRUPT-MARK`, EOF → exit 0.
+func fgSessionMain(args []string) {
+	resumeShape := len(args) == 3 && args[0] == "--resume" && args[1] == "--session-id"
+	if len(args) != 0 && !resumeShape {
+		fmt.Fprintf(os.Stderr, "fakegoose: session argv = %v, want [] or [--resume --session-id <ref>]\n", args)
+		os.Exit(1)
+	}
+	if path := os.Getenv("MADS_FAKE_PTY_BANNER"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fakegoose:", err)
+			os.Exit(1)
+		}
+		_, _ = os.Stdout.Write(raw)
+	}
+	if os.Getenv("MADS_FAKE_PTY_EXIT") == "1" {
+		fmt.Println("no banner here")
+		return
+	}
+	if tio, err := unix.IoctlGetTermios(0, unix.TCGETS); err == nil {
+		tio.Lflag &^= unix.ICANON | unix.ECHO | unix.ISIG
+		tio.Iflag &^= unix.ICRNL
+		_ = unix.IoctlSetTermios(0, unix.TCSETS, tio)
+	} else {
+		fmt.Fprintln(os.Stderr, "fakegoose: raw mode:", err)
+	}
+	// Bytes written before the ioctl above land translated (ICRNL) and
+	// echoed — tests wait for this marker before sending anything.
+	fmt.Print("FAKE-REPL-READY\n")
+	var line []byte
+	buf := make([]byte, 256)
+	for {
+		n, err := os.Stdin.Read(buf)
+		for _, b := range buf[:n] {
+			switch b {
+			case 0x03:
+				fmt.Print("INTERRUPT-MARK\n")
+			case '\r', '\n':
+				fmt.Printf("pong:%s\n", line)
+				line = nil
+			default:
+				line = append(line, b)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // fgAttempt is one gated-tool scenario, goose-shaped: bare _meta toolName
