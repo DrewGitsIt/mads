@@ -276,7 +276,14 @@ type sessionUpdate struct {
 	Kind          string          `json:"kind,omitempty"`
 	Status        string          `json:"status,omitempty"`
 	RawInput      json.RawMessage `json:"rawInput,omitempty"`
-	Meta          json.RawMessage `json:"_meta,omitempty"`
+	// MessageID groups streamed *_chunk updates into one logical message —
+	// goose (acp-transcript.jsonl lines 72-82, acp-load-replay.jsonl line
+	// 8) carries it on agent_message_chunk/agent_thought_chunk/user_
+	// message_chunk. Used to coalesce one assistant turn's many small text
+	// fragments into a single Transcript() entry rather than one line per
+	// streamed word.
+	MessageID string          `json:"messageId,omitempty"`
+	Meta      json.RawMessage `json:"_meta,omitempty"`
 	// usage_update-variant fields (goose: acp-transcript.jsonl line 84):
 	// Used is the agent's absolute context-occupancy snapshot, Size the
 	// session's REAL context window (e.g. 128000 for a local model a static

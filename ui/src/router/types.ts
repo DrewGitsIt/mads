@@ -41,9 +41,15 @@ export interface WorkspaceRepo {
 
 export interface WorkspaceDefaults {
   agent?: string;
+  /** Redesign §7: the workspace's default persona. Mirror of `agent` (the
+   * single source of truth is `agent`); the persona UI reads/writes this. */
+  persona?: string;
   model?: string;
   isolation?: string;
   template?: string;
+  /** Redesign §7: the workspace's preferred harness (falls back to the
+   * global DefaultProvider when absent). */
+  provider?: string;
 }
 
 export interface Workspace {
@@ -113,6 +119,32 @@ export interface AgentPreferences {
   model?: string;
 }
 
+// mirrors pkg/contracts/toolintent.go — the closed ToolIntent vocabulary the
+// persona's allowlist/denylist speak (agent-concept redesign §2). Harness-
+// free by construction: no concrete tool name belongs here.
+export type ToolIntent =
+  | "read"
+  | "write"
+  | "edit"
+  | "shell"
+  | "search"
+  | "fetch"
+  | "skill"
+  | "mcp";
+
+// The full v1 closed set (contracts.ToolIntents) — the enumeration the
+// persona editor's chip list iterates over.
+export const TOOL_INTENTS: readonly ToolIntent[] = [
+  "read",
+  "write",
+  "edit",
+  "shell",
+  "search",
+  "fetch",
+  "skill",
+  "mcp",
+] as const;
+
 export interface Agent {
   id: string;
   name: string;
@@ -123,6 +155,10 @@ export interface Agent {
   system?: boolean;
   created_at: string;
   updated_at: string;
+  /** Redesign §2: the persona's allowed tool intents (harness-free). */
+  allowlist?: ToolIntent[];
+  /** Redesign §2: the persona's denied tool intents (override allowlist). */
+  denylist?: ToolIntent[];
   capabilities?: AgentCapabilities;
   permissions?: AgentPermissions;
   preferences?: AgentPreferences;

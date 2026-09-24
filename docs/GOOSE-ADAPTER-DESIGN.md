@@ -425,6 +425,21 @@ never guess (provider.go contract).
 Golden-pin the normalization against a captured real export
 (claudecode/transcript convention).
 
+**Live-turn transcript (assistant-reply gap, closed).** The ACP transport has
+**no on-disk transcript** of its own the way claude-code's `.jsonl` does — the
+disk path above (`goose session export`) is a *resumed / retrospective* read
+that lags an in-flight turn. So the `acprpc` engine's `streamSession` now
+buffers its own running record: `Send` records the user message, and
+`handleUpdate` feeds every `agent_message_chunk` (coalesced by
+`_meta`/`messageId` so a reply arrives as one message, not one line per
+streamed fragment), `user_message_chunk`, `tool_call` and `tool_call_update`
+into a per-session `transcript` buffer, exposed via `Transcript()`. The Runner
+(`services/session/internal/runner/transcript.go`) prefers a live
+`provider.Session` that implements `Transcript() []provider.Message` over its
+own provider-level `TranscriptReader`, which is what makes a running goose
+ACP session's assistant reply readable from `GET /transcript` in real time
+(`AGENT-CONCEPT-REDESIGN.md` "known existing gap", now closed).
+
 ## Extensions & MCP servers
 
 - Always spawn ACP with `--with-builtin developer` (Config knob `Builtins

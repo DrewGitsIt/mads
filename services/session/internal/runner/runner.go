@@ -368,10 +368,35 @@ func (r *Runner) Start(ctx context.Context) error {
 		Mode:         provider.ModeACP,
 		Model:        sess.Model,
 		Cwd:          cwd,
-		SystemPrompt: agent.Prompt, // "" when agentOK is false — no mads preamble, ever
+		SystemPrompt: effectivePersonaPrompt(agent, agentOK), // "" when no persona — no mads preamble, ever
 		Resume:       sess.ProviderRef,
 		Env:          capEnv,
 		Trust:        provider.Trust(sess.Trust),
+	}
+	// Persona-level tool-intent policy (agent-concept redesign §2). The
+	// persona's Allowlist/Denylist fold through EffectiveToolIntents,
+	// which also handles the pre-redesign `capabilities.tools` +
+	// `denied_commands` shapes so legacy records keep their enforcement.
+	// agentOK is false (no persona) means the zero-value ToolIntents —
+	// "no stance" — and the adapter's trust layer is the whole story.
+	//
+	// HONESTY NOTE (the goose/kiro case): some adapters (goose, kiro)
+	// declare every permission intent Unsupported in their Matrix — they
+	// have no native tool-restriction surface of their own. For those,
+	// this ToolIntents policy can't be enforced natively (the resolver
+	// map still names the tools, so a future native mechanism can pick it
+	// up), so the persona's *allowance* is additionally spelled into the
+	// system prompt below: a prompt-level "you may not shell" is the only
+	// channel the harness has, and it's honest about being a prompt
+	// rather than a tool block. (claude-code's --disallowedTools is
+	// native — see providers/claudecode/personaTools.go.)
+	if agentOK {
+		allowed, denied := agent.EffectiveToolIntents()
+		opts.ToolIntents = provider.ToolIntents{
+			Allowed: toProviderIntents(allowed),
+			Denied:  toProviderIntents(denied),
+		}
+		opts.PersonaKey = "mads-persona:" + agent.ID
 	}
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}

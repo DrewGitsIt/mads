@@ -30,23 +30,35 @@ const similarityThreshold = 0.6
 // (spec §9.5: "the generation prompt is not user-visible... but the
 // resulting agent definition is fully viewable and editable"). Both
 // generation paths share it — only the user-supplied context differs.
+//
+// The drafted shape expresses the persona's tool allowance as the closed
+// ToolIntent vocabulary (allowlist/denylist — agent-concept redesign §2),
+// not as harness-specific concrete tool names or command strings. That was
+// the single biggest harness leak in the old draft shape
+// (`capabilities.tools: ["Bash"]`, `denied_commands: ["rm -rf *"]`); the
+// redesign removes it — a persona is harness-free by construction.
 const generationSystem = `You are the mads agent-builder assistant. Given a description of a task ` +
-	`or a natural-language request, draft a complete agent definition for the mads platform: a ` +
-	`persona prompt, a short description, the smallest sufficient set of capabilities, and matching ` +
-	`permissions. capabilities.tools may name any general-purpose provider tool freely (e.g. shell, ` +
-	`read, write). capabilities.skills and capabilities.mcp_servers MUST each be chosen only from the ` +
-	`"Available skills" / "Available MCP servers" lists given in the request below — never invent a ` +
-	`name that isn't listed; leave the list empty if nothing available fits. Reply with ONLY a JSON ` +
-	`object of this exact shape, no prose, no code fences:
+	`or a natural-language request, draft a complete persona definition for the mads platform: a ` +
+	`persona prompt, a short description, the smallest sufficient set of tool allowances, and matching ` +
+	`permissions. allowlist and denylist each name values from the closed ToolIntent set: ` +
+	`read, write, edit, shell, search, fetch, skill, mcp — never a concrete tool name or a ` +
+	`command string (those are harness vocabulary; the persona is harness-free). denylist ` +
+	`overrides allowlist: an intent named in both is denied. capabilities.skills and ` +
+	`capabilities.mcp_servers MUST each be chosen only from the "Available skills" / "Available ` +
+	`MCP servers" lists given in the request below — never invent a name that isn't listed; ` +
+	`leave the list empty if nothing available fits. Reply with ONLY a JSON object of this exact ` +
+	`shape, no prose, no code fences:
 
 {
   "name": "kebab-case-identifier",
   "description": "one-sentence summary",
-  "prompt": "the agent's full persona/system prompt",
+  "prompt": "the persona's full system prompt",
   "quadrant": "autonomous_executor" | "technical_partner" | "investigator" | "research_analyst",
   "tags": ["short", "keywords"],
-  "capabilities": {"tools": [], "mcp_servers": [], "skills": []},
-  "permissions": {"allowed_paths": [], "denied_commands": []}
+  "allowlist": ["shell", "read", "write"],
+  "denylist": [],
+  "capabilities": {"mcp_servers": [], "skills": []},
+  "permissions": {"allowed_paths": []}
 }`
 
 // Generator runs agent generation and enrichment against a live Data
@@ -74,13 +86,18 @@ type Result struct {
 }
 
 // generatedAgent is the Fast Model's structured reply shape for both
-// generation paths.
+// generation paths. Allowlist/Denylist is the persona's tool allowance in
+// the closed ToolIntent vocabulary (agent-concept redesign §2); the old
+// concrete-name `capabilities.tools` and `permissions.denied_commands` are
+// gone from the shape entirely — they were the harness leak.
 type generatedAgent struct {
 	Name         string                      `json:"name"`
 	Description  string                      `json:"description"`
 	Prompt       string                      `json:"prompt"`
 	Quadrant     string                      `json:"quadrant"`
 	Tags         []string                    `json:"tags"`
+	Allowlist    []contracts.ToolIntent      `json:"allowlist,omitempty"`
+	Denylist     []contracts.ToolIntent      `json:"denylist,omitempty"`
 	Capabilities contracts.AgentCapabilities `json:"capabilities"`
 	Permissions  contracts.AgentPermissions  `json:"permissions"`
 }
@@ -111,6 +128,30 @@ func (g *Generator) GenerateFromTask(ctx context.Context, req agentselect.Reques
 		return Result{}, err
 	}
 	draft.Capabilities = mergeRequired(draft.Capabilities, req)
+	// Task-level required-tools (the pipeline's concrete tool names, pre-
+	// redesign) fold into the persona-level allowlist as their ToolIntent
+	// equivalents — a required "shell" means the persona must allow shell.
+	// Unknown names (not in the closed vocabulary) are ignored: they were
+	// harness vocabulary and have no persona-level equivalent.
+	if len(req.RequiredTools) > 0 {
+		added := 0
+		for _, name := range req.RequiredTools {
+			if i := contracts.LegacyToolToIntent[name]; i != "" {
+				for _, have := range draft.Allowlist {
+					if have == i {
+						i = ""
+					}
+				}
+				if i != "" {
+					draft.Allowlist = append(draft.Allowlist, i)
+					added++
+				}
+			}
+		}
+		if added > 0 {
+			log.Printf("agentgen: folded %d required tool name(s) into the persona allowlist", added)
+		}
+	}
 	return g.withSimilar(ctx, draft, dropped)
 }
 
@@ -193,14 +234,35 @@ func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadran
 		Prompt:      out.Prompt,
 		Quadrant:    quadrant,
 		Tags:        out.Tags,
+		// Persona-level tool allowance (agent-concept redesign §2): the
+		// closed ToolIntent vocabulary, not harness-specific names. Unknown
+		// intent names a sloppy model emits are dropped (like the
+		// capability-ref drop above) — logged, not silently persisted.
+		Allowlist: validIntentsOnly(out.Allowlist),
+		Denylist:  validIntentsOnly(out.Denylist),
 		Capabilities: contracts.AgentCapabilities{
-			Tools:      out.Capabilities.Tools, // provider tool names, not registry entries — never validated
 			MCPServers: mcpServers,
 			Skills:     skills,
 		},
 		Permissions: out.Permissions,
 		System:      false, // a generated draft is never a system agent
 	}, dropped, nil
+}
+
+// validIntentsOnly keeps only values from the closed ToolIntent vocabulary —
+// a Fast Model emitting a concrete tool name ("Bash") or an invented value
+// is silently filtered here (and named in the log) rather than persisted as
+// fiction, matching the knownOnly discipline for capability refs.
+func validIntentsOnly(in []contracts.ToolIntent) []contracts.ToolIntent {
+	kept := make([]contracts.ToolIntent, 0, len(in))
+	for _, i := range in {
+		if i.Valid() {
+			kept = append(kept, i)
+		} else {
+			log.Printf("agentgen: dropped unknown tool intent %q (not in the closed set)", i)
+		}
+	}
+	return kept
 }
 
 // availableCapabilities fetches the live capability registry and splits it

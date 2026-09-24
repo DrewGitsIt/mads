@@ -128,6 +128,27 @@ func errorTexts(events []provider.Event) []string {
 	return out
 }
 
+// TestStartRelativeCwdIsAbsolutized — goose 1.51 (and ACP generally) rejects
+// a relative cwd in session/new with -32602 "cwd must be an absolute path";
+// claude-code tolerates one. The goose fake profile mirrors goose's rejection
+// (requireAbsCwd), so this pins the engine's absolutization: a caller passing
+// a relative cwd — the runner does, with "-cwd ." — must still start cleanly
+// on goose.
+// TestStartRelativeCwdIsAbsolutized — goose 1.51 (and ACP generally) rejects
+// a relative cwd in session/new with -32602 "cwd must be an absolute path";
+// claude-code tolerates one. The goose fake profile mirrors goose's rejection
+// (requireAbsCwd), so this pins the engine's absolutization: the runner sends
+// exactly Cwd="." (its "-cwd ." default), which must still start cleanly on
+// goose — before the fix, goose rejected it and the session child exited.
+func TestStartRelativeCwdIsAbsolutized(t *testing.T) {
+	e := testEngine(t, gooseConfig(), "goose", t.TempDir())
+	sess, err := e.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Cwd: "."})
+	if err != nil {
+		t.Fatalf("Cwd=%q: Start: %v (want success — the engine must send an absolute cwd, goose rejects relative)", ".", err)
+	}
+	_ = sess.Close()
+}
+
 func TestEchoTurnStreamsTextAndUsage(t *testing.T) {
 	e := testEngine(t, gooseConfig(), "goose", t.TempDir())
 	sess := startSession(t, e, provider.StartOptions{})
@@ -626,5 +647,40 @@ func TestNonACPModeUnsupported(t *testing.T) {
 		if _, err := e.Start(context.Background(), provider.StartOptions{Mode: mode}); !errors.Is(err, provider.ErrUnsupported) {
 			t.Fatalf("mode %q: err = %v, want ErrUnsupported", mode, err)
 		}
+	}
+}
+
+// TestACPLiveTranscriptCapturesAssistantReply pins the W7.8 fix
+// (docs/GOOSE-ADAPTER-DESIGN.md's "assistant reply gap"): an ACP session's
+// own running transcript — not just its one-shot, loss-prone events
+// channel — must carry the assistant's streamed reply, so a
+// TranscriptReader-backed harness (goose's ACP path, kiro) serves GET
+// /transcript even with no on-disk transcript file of its own (claude-code
+// doesn't need this; goose/kiro do).
+func TestACPLiveTranscriptCapturesAssistantReply(t *testing.T) {
+	e := testEngine(t, gooseConfig(), "goose", t.TempDir())
+	sess, err := e.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	if err := sess.Send(context.Background(), "echo alpha"); err != nil {
+		t.Fatal(err)
+	}
+	evs := drainTurn(t, sess)
+	if !strings.Contains(turnText(evs), "you said alpha") {
+		t.Fatalf("live events missing the reply: %q", turnText(evs))
+	}
+	type transcripter interface{ Transcript() []provider.Message }
+	msgs := sess.(transcripter).Transcript()
+	if len(msgs) != 2 {
+		t.Fatalf("transcript = %d messages, want 2 (user, agent): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo alpha" {
+		t.Fatalf("transcript[0] = %+v, want the user prompt", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said alpha" {
+		t.Fatalf("transcript[1] = %+v, want the assistant reply", msgs[1])
 	}
 }

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Review Flow mockup</title>
+<style>
+/* Tokens: clay (shipped default), from docs/palette-mockups.html. Layout/flow mock only. */
+:root, [data-theme="dark"] {
+  --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+  --line:#463e30; --line-soft:#322c23;
+  --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+  --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+  --shadow:0 12px 28px rgba(0,0,0,.45);
+}
+[data-theme="light"] {
+  --bg0:#faf7f1; --bg1:#f1ebe0; --bg2:#e9e1d2; --bg3:#dfd5c2; --bg4:#d2c6ae;
+  --line:#bfae8e; --line-soft:#d8ccb6;
+  --text:#241f18; --text2:#574e3e; --text3:#6b6048;
+  --accent:#b1743f; --accent-hover:#c08552; --accent-soft:rgba(192,133,82,.18); --accent-ink:#241305;
+  --ok:#7cb389; --ok-soft:rgba(124,179,137,.16); --ok-fg:#2e5a3c;
+  --warn:#d3af5e; --warn-soft:rgba(211,175,94,.15); --warn-fg:#7a5a1a;
+  --bad:#d2604a; --bad-soft:rgba(210,96,74,.15); --bad-fg:#8a3a2a;
+  --info:#96afc7; --info-soft:rgba(150,175,199,.15); --info-fg:#375069;
+  --shadow:0 12px 28px rgba(80,64,40,.18);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg0); color:var(--text); font:15px/1.55 system-ui,-apple-system,sans-serif; padding:28px 20px 80px; }
+.frame { max-width:1280px; margin:0 auto; }
+h1 { font-size:22px; margin:0; }
+h2 { font-size:16px; margin:34px 0 4px; }
+.note { color:var(--text2); max-width:78ch; margin:4px 0 14px; font-size:14px; }
+.note code, .opt code { background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; font-size:.88em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+.toolbar { position:fixed; top:16px; right:16px; z-index:5; }
+.toolbar button { background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 14px; cursor:pointer; font-size:13px; }
+.toolbar button:hover { background:var(--bg3); }
+.mono { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+
+/* option switchers above the window */
+.optbar { display:flex; gap:18px; flex-wrap:wrap; margin:14px 0 10px; }
+.opt { font-size:12.5px; color:var(--text3); }
+.opt .lbl { text-transform:uppercase; letter-spacing:.08em; font-size:10.5px; margin-right:8px; }
+.seg { display:inline-flex; background:var(--bg2); border:1px solid var(--line-soft); border-radius:8px; overflow:hidden; vertical-align:middle; }
+.seg button { background:none; border:0; color:var(--text2); font:inherit; font-size:12.5px; padding:5px 12px; cursor:pointer; }
+.seg button:hover { color:var(--text); }
+.seg button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.replay { background:var(--accent); color:var(--accent-ink); border:0; border-radius:8px; padding:6px 14px; font-weight:600; font-size:12.5px; cursor:pointer; }
+.replay:hover { background:var(--accent-hover); }
+.replay[disabled] { opacity:.5; cursor:default; }
+
+/* ---- the Files tab window ---- */
+.window { display:grid; grid-template-columns:270px 1fr 250px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:14px; overflow:hidden; box-shadow:var(--shadow); min-height:640px; }
+.wshead { grid-column:1 / -1; display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line-soft); }
+.wsname { font-weight:650; font-size:15px; }
+.chip { font-size:10.5px; letter-spacing:.06em; text-transform:uppercase; border-radius:5px; padding:2px 7px; background:var(--bg3); color:var(--text2); }
+.chip.live { background:var(--ok-soft); color:var(--ok-fg); }
+.tabs { display:flex; gap:2px; margin-left:18px; }
+.tab { position:relative; background:none; border:0; color:var(--text2); font:inherit; font-size:13.5px; padding:7px 14px 9px; border-radius:8px 8px 0 0; }
+.tab[aria-selected="true"] { color:var(--text); font-weight:600; }
+.tab[aria-selected="true"]::after { content:""; position:absolute; left:10px; right:10px; bottom:-1px; height:2px; background:var(--accent); border-radius:2px; }
+.tab .badge { display:inline-block; min-width:17px; text-align:center; font-size:11px; background:var(--accent-soft); color:var(--accent); border-radius:999px; padding:1px 5px; margin-left:6px; }
+@keyframes pulse { 50% { opacity:.35; } }
+@keyframes landin { from { background:var(--accent-soft); } to { background:none; } }
+@media (prefers-reduced-motion:reduce){ .pulse{animation:none !important;} }
+
+/* left rail: change navigator */
+.nav { border-right:1px solid var(--line-soft); padding:12px 10px; font-size:13px; overflow:auto; }
+.nav .h { display:flex; align-items:center; justify-content:space-between; font-size:11px; letter-spacing:.09em; color:var(--text3); text-transform:uppercase; padding:2px 6px 8px; }
+.scope { display:inline-flex; background:var(--bg2); border:1px solid var(--line-soft); border-radius:7px; overflow:hidden; margin:0 6px 10px; }
+.scope button { background:none; border:0; color:var(--text2); font-size:11.5px; padding:3px 10px; cursor:pointer; }
+.scope button.sel { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+.dir { color:var(--text3); font-size:11.5px; padding:8px 6px 3px; font-family:ui-monospace,Menlo,monospace; }
+.crith { color:var(--text2); font-size:12px; padding:9px 6px 3px; font-weight:600; }
+.crith .n { color:var(--accent); font-family:ui-monospace,Menlo,monospace; margin-right:5px; }
+.frow { display:flex; align-items:center; gap:7px; padding:5px 6px 5px 14px; border-radius:7px; cursor:pointer; font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--text); }
+.frow:hover { background:var(--bg2); }
+.frow.sel { background:var(--accent-soft); }
+.frow.dim { color:var(--text3); }
+.frow.landed { animation:landin 2.5s ease-out; }
+.b { flex:none; width:15px; text-align:center; font-size:10.5px; font-weight:700; border-radius:4px; }
+.b.a { color:var(--ok-fg); background:var(--ok-soft); }
+.b.m { color:var(--warn-fg); background:var(--warn-soft); }
+.b.d { color:var(--bad-fg); background:var(--bad-soft); }
+.b.none { visibility:hidden; }
+.fname { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.unseen { flex:none; font-size:10.5px; background:var(--accent); color:var(--accent-ink); border-radius:999px; padding:0 6px; font-weight:700; font-family:system-ui,sans-serif; }
+.unseen.pulse { animation:pulse 1.6s ease infinite; }
+.seen { flex:none; color:var(--ok-fg); font-size:12px; }
+.navfoot { margin-top:12px; padding:8px 6px 0; border-top:1px solid var(--line-soft); font-size:11.5px; color:var(--text3); }
+.navfoot label { display:flex; gap:7px; align-items:center; cursor:pointer; }
+
+/* center: diff viewer */
+.viewer { display:flex; flex-direction:column; min-width:0; }
+.vhead { display:flex; align-items:center; gap:10px; padding:9px 14px; border-bottom:1px solid var(--line-soft); }
+.vpath { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; color:var(--text); }
+.vhead .spacer { flex:1; }
+.mark { background:var(--ok-soft); color:var(--ok-fg); border:1px solid var(--ok); border-radius:7px; padding:4px 12px; font-size:12px; font-weight:600; cursor:pointer; }
+.vbody { display:grid; grid-template-columns:158px 1fr; flex:1; min-height:0; }
+.symrail { border-right:1px solid var(--line-soft); padding:10px 8px; font-size:12px; overflow:auto; }
+.symrail .h { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--text3); padding:0 6px 6px; }
+.sym { display:flex; align-items:center; gap:6px; padding:3px 6px; border-radius:6px; color:var(--text3); font-family:ui-monospace,Menlo,monospace; font-size:11.5px; cursor:pointer; }
+.sym:hover { background:var(--bg2); }
+.sym.chg { color:var(--text); }
+.sym.chg::before { content:"●"; color:var(--warn); font-size:8px; }
+.sym.add::before { content:"●"; color:var(--ok); font-size:8px; }
+.sym:not(.chg):not(.add)::before { content:"○"; color:var(--text3); font-size:8px; }
+.related { border-top:1px solid var(--line-soft); margin-top:10px; padding:8px 6px 0; }
+.related .h { padding-bottom:4px; }
+.rel { display:block; padding:2px 6px; color:var(--info-fg); font-family:ui-monospace,Menlo,monospace; font-size:11px; text-decoration:none; border-radius:5px; overflow-wrap:anywhere; }
+.rel:hover { background:var(--bg2); }
+.rel .why { color:var(--text3); font-family:system-ui,sans-serif; font-size:10.5px; margin-left:4px; }
+.diff { overflow:auto; font-family:ui-monospace,Menlo,monospace; font-size:12px; line-height:1.6; padding:8px 0 20px; }
+.hunk { color:var(--info-fg); background:var(--info-soft); padding:2px 16px; margin-top:10px; font-size:11.5px; }
+.dl { padding:0 16px; white-space:pre; color:var(--text2); }
+.dl.add { background:var(--ok-soft); color:var(--text); }
+.dl.del { background:var(--bad-soft); color:var(--text3); text-decoration:line-through; }
+.dl.add::before { content:"+ "; color:var(--ok-fg); }
+.dl.del::before { content:"− "; color:var(--bad-fg); }
+.dl.ctx::before { content:"  "; }
+.comment { margin:6px 16px; background:var(--bg2); border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:8px; padding:8px 12px; font-family:system-ui,sans-serif; font-size:13px; max-width:60ch; }
+.comment .who { font-size:11px; color:var(--text3); margin-bottom:2px; }
+.comment .act { margin-top:6px; display:flex; gap:8px; }
+.comment .act button { font-size:11.5px; border-radius:6px; padding:3px 10px; cursor:pointer; background:var(--bg3); color:var(--text2); border:1px solid var(--line-soft); }
+
+/* right rail: criteria */
+.crit { border-left:1px solid var(--line-soft); padding:12px; font-size:13px; display:flex; flex-direction:column; overflow:auto; }
+.crit .h { font-size:11px; letter-spacing:.09em; color:var(--text3); text-transform:uppercase; padding-bottom:2px; }
+.crit .task { font-size:12.5px; color:var(--text2); margin-bottom:10px; }
+.crow { display:flex; gap:8px; padding:7px 6px; border-radius:8px; cursor:pointer; align-items:baseline; }
+.crow:hover { background:var(--bg2); }
+.crow .cb { flex:none; width:15px; height:15px; border:1.5px solid var(--line); border-radius:4px; position:relative; top:2px; }
+.crow.done .cb { background:var(--ok-soft); border-color:var(--ok); }
+.crow.done .cb::after { content:"✓"; position:absolute; inset:0; text-align:center; line-height:14px; font-size:11px; color:var(--ok-fg); }
+.crow .t { flex:1; font-size:12.5px; }
+.crow.done .t { color:var(--text3); }
+.crow .files { font-size:10.5px; color:var(--text3); }
+.crow .files.zero { color:var(--warn-fg); }
+.maptag { font-size:9.5px; letter-spacing:.04em; text-transform:uppercase; border-radius:4px; padding:1px 5px; background:var(--info-soft); color:var(--info-fg); margin-left:5px; }
+.maptag.fix { background:var(--bg3); color:var(--text3); cursor:pointer; }
+.flag { margin:10px 0; background:var(--warn-soft); border:1px solid var(--warn); border-radius:9px; padding:9px 11px; font-size:12.5px; }
+.flag .fh { color:var(--warn-fg); font-weight:650; font-size:12px; }
+.flag .f { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; display:block; margin-top:3px; cursor:pointer; }
+.flag .f:hover { text-decoration:underline; }
+.addcrit { margin-top:8px; }
+.addcrit input { width:100%; background:var(--bg2); border:1px dashed var(--line); border-radius:8px; color:var(--text); padding:7px 10px; font:inherit; font-size:12.5px; }
+.addcrit input::placeholder { color:var(--text3); }
+.verdict { margin-top:auto; padding-top:14px; display:flex; flex-direction:column; gap:8px; }
+.verdict button { border-radius:9px; padding:8px 0; font-weight:650; font-size:13px; cursor:pointer; }
+.reqch { background:var(--bg2); color:var(--warn-fg); border:1px solid var(--warn); }
+.accept { background:var(--ok); color:#0e1f13; border:0; }
+.verdict .hint { font-size:11px; color:var(--text3); text-align:center; }
+
+/* secondary mounts row */
+.mounts { display:grid; grid-template-columns:300px 1fr; gap:18px; margin-top:14px; align-items:start; }
+.mini { background:var(--bg1); border:1px solid var(--line-soft); border-radius:12px; box-shadow:var(--shadow); overflow:hidden; }
+.mini .mh { padding:8px 12px; border-bottom:1px solid var(--line-soft); font-size:12px; color:var(--text2); font-weight:600; display:flex; align-items:center; gap:8px; }
+.mini .body { padding:10px 12px; font-size:12.5px; }
+.stage { display:flex; gap:6px; padding:6px 0 10px; flex-wrap:wrap; }
+.stg { font-size:10.5px; border-radius:5px; padding:2px 8px; background:var(--bg3); color:var(--text3); }
+.stg.done { background:var(--ok-soft); color:var(--ok-fg); }
+.stg.cur { background:var(--accent-soft); color:var(--accent); font-weight:650; }
+
+/* flow strip */
+.flow { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.step { flex:1; min-width:150px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:10px; padding:10px 12px; font-size:12px; color:var(--text2); }
+.step b { display:block; color:var(--text); font-size:12.5px; margin-bottom:2px; }
+.step .n { color:var(--accent); font-weight:700; margin-right:5px; }
+</style>
+</head>
+<body>
+<div class="toolbar"><button id="themeBtn">Light theme</button></div>
+<div class="frame">
+
+<h1>Review Flow — the Files tab as a review surface</h1>
+<p class="note">
+Mocks the redesigned review workflow: edits disclosed live over <code>file.changed</code>, a change navigator that shows
+files where they live, per-file <b>reviewed baselines</b> (diff = "since I last looked"), and the task's
+<code>acceptance_criteria</code> as a working rail wired to the pipeline's review loop-back. One component, mounted in the
+Files tab (primary, below), the Pipeline drill-in, and the context rail (mini-mocks at bottom).
+Example change set is the goose adapter task. Press <b>Replay agent edits</b> to feel pillar 1.
+</p>
+
+<div class="optbar">
+  <span class="opt"><span class="lbl">Navigator</span>
+    <span class="seg" id="navSeg">
+      <button data-nav="tree" aria-pressed="true">By directory</button>
+      <button data-nav="crit" aria-pressed="false">By criterion</button>
+      <button data-nav="inbox" aria-pressed="false">Inbox (unseen first)</button>
+    </span>
+  </span>
+  <span class="opt"><span class="lbl">Criteria mapping</span>
+    <span class="seg" id="mapSeg">
+      <button data-map="posthoc" aria-pressed="true">Post-hoc mapper</button>
+      <button data-map="exec" aria-pressed="false">Executor-declared</button>
+    </span>
+  </span>
+  <span class="opt"><button class="replay" id="replayBtn">▶ Replay agent edits</button></span>
+</div>
+
+<div class="window">
+  <div class="wshead">
+    <span class="wsname">goose adapter — wave 1</span>
+    <span class="chip live">agent running</span>
+    <div class="tabs">
+      <button class="tab">Conversation</button>
+      <button class="tab">Tasks</button>
+      <button class="tab" aria-selected="true">Files <span class="badge" id="tabBadge">3</span></button>
+      <button class="tab">Pipeline</button>
+    </div>
+  </div>
+
+  <!-- LEFT: change navigator -->
+  <div class="nav">
+    <div class="h"><span>Changes</span></div>
+    <div class="scope">
+      <button>Session</button><button class="sel">Task tsk_goose1</button>
+    </div>
+
+    <!-- variant: by directory -->
+    <div id="nav-tree">
+      <div class="dir">providers/goosecli/</div>
+      <div class="frow sel"><span class="b a">A</span><span class="fname">wire.go</span><span class="unseen pulse">2</span></div>
+      <div class="frow"><span class="b a">A</span><span class="fname">adapter.go</span><span class="unseen">5</span></div>
+      <div class="frow"><span class="b a">A</span><span class="fname">wire_test.go</span><span class="seen">✓</span></div>
+      <div class="frow dim sibling"><span class="b none">·</span><span class="fname">testdata/captures/…</span></div>
+      <div class="dir">providers/provider/</div>
+      <div class="frow"><span class="b m">M</span><span class="fname">event.go</span><span class="seen">✓</span></div>
+      <div class="frow dim sibling"><span class="b none">·</span><span class="fname">conformance.go</span></div>
+      <div class="dir">scripts/</div>
+      <div class="frow"><span class="b m">M</span><span class="fname">install.sh</span><span class="unseen">1</span></div>
+    </div>
+
+    <!-- variant: by criterion -->
+    <div id="nav-crit" hidden>
+      <div class="crith"><span class="n">AC1</span>stream events carry Mutates</div>
+      <div class="frow sel"><span class="b a">A</span><span class="fname">wire.go</span><span class="unseen pulse">2</span></div>
+      <div class="frow"><span class="b m">M</span><span class="fname">event.go</span><span class="seen">✓</span></div>
+      <div class="crith"><span class="n">AC2</span>one-shot ref via --name</div>
+      <div class="frow"><span class="b a">A</span><span class="fname">adapter.go</span><span class="unseen">5</span></div>
+      <div class="crith"><span class="n">AC4</span>conformance passes</div>
+      <div class="frow"><span class="b a">A</span><span class="fname">wire_test.go</span><span class="seen">✓</span></div>
+      <div class="crith" style="color:var(--warn-fg)"><span class="n">⚠</span>unmapped</div>
+      <div class="frow"><span class="b m">M</span><span class="fname">scripts/install.sh</span><span class="unseen">1</span></div>
+    </div>
+
+    <!-- variant: inbox -->
+    <div id="nav-inbox" hidden>
+      <div class="dir">unseen — newest first</div>
+      <div class="frow sel"><span class="b a">A</span><span class="fname">goosecli/wire.go</span><span class="unseen pulse">2</span></div>
+      <div class="frow"><span class="b a">A</span><span class="fname">goosecli/adapter.go</span><span class="unseen">5</span></div>
+      <div class="frow"><span class="b m">M</span><span class="fname">scripts/install.sh</span><span class="unseen">1</span></div>
+      <div class="dir">reviewed</div>
+      <div class="frow dim"><span class="b a">A</span><span class="fname">goosecli/wire_test.go</span><span class="seen">✓</span></div>
+      <div class="frow dim"><span class="b m">M</span><span class="fname">provider/event.go</span><span class="seen">✓</span></div>
+    </div>
+
+    <div class="navfoot">
+      <label><input type="checkbox" id="sibToggle" checked> show unchanged neighbors</label>
+    </div>
+  </div>
+
+  <!-- CENTER: diff viewer -->
+  <div class="viewer">
+    <div class="vhead">
+      <span class="vpath">providers/goosecli/wire.go</span>
+      <span class="chip">added · 2 unseen hunks</span>
+      <span class="spacer"></span>
+      <span class="seg">
+        <button aria-pressed="false">vs HEAD</button>
+        <button aria-pressed="true">since my review</button>
+        <button aria-pressed="false">last touch</button>
+      </span>
+      <button class="mark">✓ Mark reviewed</button>
+    </div>
+    <div class="vbody">
+      <div class="symrail">
+        <div class="h">Symbols</div>
+        <div class="sym">ParseStreamLine</div>
+        <div class="sym add">toolMutates</div>
+        <div class="sym add">locateSessionRef</div>
+        <div class="sym">decodeToolBlock</div>
+        <div class="related">
+          <div class="h">Related</div>
+          <a class="rel" href="#">wire_test.go<span class="why">test pair</span></a>
+          <a class="rel" href="#">provider/event.go<span class="why">imports</span></a>
+          <a class="rel" href="#">claudecode/wire.go<span class="why">sibling adapter</span></a>
+          <a class="rel" href="#">runner.go<span class="why">co-changed</span></a>
+        </div>
+      </div>
+      <div class="diff">
+        <div class="hunk">@@ toolMutates — since your review at 14:32 @@</div>
+        <div class="dl ctx">func toolMutates(name string) bool {</div>
+        <div class="dl del">	return name == "text_editor"</div>
+        <div class="dl add">	switch name {</div>
+        <div class="dl add">	case "text_editor", "shell", "developer__shell":</div>
+        <div class="dl add">		return true</div>
+        <div class="dl add">	}</div>
+        <div class="dl add">	return false</div>
+        <div class="dl ctx">}</div>
+        <div class="comment">
+          <div class="who">you · draft comment → becomes review.feedback on “Request changes”</div>
+          <code>shell</code> mutating unconditionally will flood file tracking on read-only commands —
+          gate on the command like claudecode’s <code>toolMutates</code> does.
+          <div class="act"><button>Save draft</button><button>Discard</button></div>
+        </div>
+        <div class="hunk">@@ locateSessionRef — new since your review @@</div>
+        <div class="dl add">// goose run emits no session id on the stream (capture:</div>
+        <div class="dl add">// oneshot-stream.jsonl); fall back to --name + session list.</div>
+        <div class="dl add">func locateSessionRef(name string) (string, error) {</div>
+        <div class="dl add">	entries, err := listSessions()</div>
+        <div class="dl ctx">	…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: criteria rail -->
+  <div class="crit">
+    <div class="h">Acceptance criteria</div>
+    <div class="task">tsk_goose1 — goose CLI adapter, stream seam</div>
+    <div class="crow done"><span class="cb"></span><span class="t">1. Stream events carry <code>Mutates</code> for write/shell tools <span class="maptag mapsrc">auto-mapped</span></span><span class="files">2 files</span></div>
+    <div class="crow"><span class="cb"></span><span class="t">2. One-shot session ref located via <code>--name</code> fallback <span class="maptag mapsrc">auto-mapped</span></span><span class="files">1 file</span></div>
+    <div class="crow"><span class="cb"></span><span class="t">3. Parser survives broken-pipe / never truncates</span><span class="files zero">no code yet</span></div>
+    <div class="crow done"><span class="cb"></span><span class="t">4. Conformance suite passes against captures <span class="maptag fix" title="correct the mapping">✎</span></span><span class="files">1 file</span></div>
+
+    <div class="flag">
+      <div class="fh">⚠ Changed, mapped to no criterion</div>
+      <span class="f">scripts/install.sh</span>
+      <span style="font-size:11px;color:var(--text3)">scope-creep radar — click to review or add a criterion</span>
+    </div>
+
+    <div class="addcrit"><input placeholder="+ add a criterion (lands on the task, feeds next loop)"></div>
+
+    <div class="verdict">
+      <button class="reqch">Request changes (1 comment)</button>
+      <button class="accept">Accept → done</button>
+      <div class="hint">Request changes loops your comments back to the executor as stage feedback</div>
+    </div>
+  </div>
+</div>
+
+<h2>Same component, other mounts</h2>
+<p class="note">The surface above is one <code>ReviewSurface</code> component. The context rail carries the glanceable
+signal while you're in Conversation; the Pipeline drill-in mounts the full surface per task.</p>
+
+<div class="mounts">
+  <div class="mini">
+    <div class="mh">Context rail — Changes tab</div>
+    <div class="body">
+      <div class="frow"><span class="b a">A</span><span class="fname mono">goosecli/wire.go</span><span class="unseen pulse">2</span></div>
+      <div class="frow"><span class="b a">A</span><span class="fname mono">goosecli/adapter.go</span><span class="unseen">5</span></div>
+      <div class="frow dim"><span class="b m">M</span><span class="fname mono">provider/event.go</span><span class="seen">✓</span></div>
+      <div style="font-size:11px;color:var(--text3);padding:8px 6px 0">8 unseen changes · click → Files tab, file focused</div>
+    </div>
+  </div>
+  <div class="mini">
+    <div class="mh">Pipeline drill-in — task tsk_goose1 <span class="chip">executor · turn 22</span></div>
+    <div class="body">
+      <div class="stage">
+        <span class="stg done">architect</span><span class="stg cur">executor</span><span class="stg">build</span>
+        <span class="stg">review</span><span class="stg">merge</span><span class="stg">verify</span>
+      </div>
+      Mounts the identical ReviewSurface scoped to this task's worktree. Your "Request changes" here is the human
+      analogue of the review stage's <code>STAGE: fail — reason</code>: comments become the feedback the executor
+      sees on its next loop, so mid-pipeline review needs no chat round-trip.
+    </div>
+  </div>
+</div>
+
+<h2>The loop, end to end</h2>
+<div class="flow">
+  <div class="step"><b><span class="n">1</span>Agent edits</b> mutating tool call → ledger row → <code>file.changed</code> SSE. Row pulses into the navigator in real time.</div>
+  <div class="step"><b><span class="n">2</span>You glance</b> unseen badges on the Files tab + context rail. No need to interrupt the agent or scroll tool calls.</div>
+  <div class="step"><b><span class="n">3</span>You read the delta</b> diff defaults to "since my review" — only what's new since your last ✓, labeled by symbol.</div>
+  <div class="step"><b><span class="n">4</span>You judge vs criteria</b> rail shows coverage; unmapped changes = YAGNI flag; missing code = gap flag.</div>
+  <div class="step"><b><span class="n">5</span>You steer</b> add a criterion or comment inline → "Request changes" → pipeline loop-back → agent iterates. Accept → task done.</div>
+</div>
+
+<p class="note" style="margin-top:18px">
+Open decisions this mockup is for: <b>navigator metaphor</b> (directory keeps spatial truth; criterion turns review into
+requirement-verification; inbox optimizes pure triage — could ship two as a toggle),
+<b>mapping source</b> (post-hoc mapper stage tags criteria <code>auto-mapped</code> and stays correctable/advisory;
+executor-declared drops the tag and the ✎ but burdens the executor prompt), and whether the criteria rail earns its
+250px at session scope where no single task is focused (proposal: rail collapses to the ⚠ unmapped flag only).
+</p>
+
+</div>
+<script>
+const themeBtn = document.getElementById("themeBtn");
+themeBtn.addEventListener("click", () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme === "dark";
+  root.dataset.theme = dark ? "light" : "dark";
+  themeBtn.textContent = dark ? "Dark theme" : "Light theme";
+});
+
+document.getElementById("navSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  document.querySelectorAll("#navSeg button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  ["tree","crit","inbox"].forEach(k => document.getElementById("nav-" + k).hidden = k !== btn.dataset.nav);
+});
+
+document.getElementById("mapSeg").addEventListener("click", (e) => {
+  const btn = e.target.closest("button"); if (!btn) return;
+  document.querySelectorAll("#mapSeg button").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+  const posthoc = btn.dataset.map === "posthoc";
+  document.querySelectorAll(".maptag.mapsrc").forEach(t => t.textContent = posthoc ? "auto-mapped" : "declared");
+  document.querySelectorAll(".maptag.fix").forEach(t => t.style.display = posthoc ? "" : "none");
+});
+
+document.getElementById("sibToggle").addEventListener("change", (e) => {
+  document.querySelectorAll(".sibling").forEach(r => r.style.display = e.target.checked ? "" : "none");
+});
+
+// Replay: simulate three file.changed events landing
+const replayBtn = document.getElementById("replayBtn");
+replayBtn.addEventListener("click", () => {
+  replayBtn.disabled = true;
+  const tree = document.getElementById("nav-tree");
+  const badge = document.getElementById("tabBadge");
+  const events = [
+    { after: 2, dir: "providers/goosecli/", file: "oneshot.go", b: "a", hunks: 3 },
+    { after: 4, dir: "providers/goosecli/", file: "oneshot_test.go", b: "a", hunks: 2 },
+    { after: 6, dir: "services/session/…/runner/", file: "runner.go", b: "m", hunks: 1 },
+  ];
+  let landed = 0;
+  events.forEach((ev, i) => setTimeout(() => {
+    const row = document.createElement("div");
+    row.className = "frow landed";
+    row.innerHTML = '<span class="b ' + ev.b + '">' + ev.b.toUpperCase() +
+      '</span><span class="fname">' + ev.file + '</span><span class="unseen pulse">' + ev.hunks + "</span>";
+    let anchor = [...tree.querySelectorAll(".dir")].find(d => d.textContent === ev.dir);
+    if (!anchor) {
+      anchor = document.createElement("div");
+      anchor.className = "dir"; anchor.textContent = ev.dir;
+      tree.appendChild(anchor);
+    }
+    anchor.after(row);
+    badge.textContent = String(Number(badge.textContent) + 1);
+    if (++landed === events.length) { replayBtn.disabled = false; replayBtn.textContent = "▶ Replay again"; }
+  }, ev.after * 900));
+});
+</script>
+</body>
+</html>

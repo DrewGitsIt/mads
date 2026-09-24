@@ -10,7 +10,7 @@ import {
   SideSheetHeader,
 } from "../../components/SideSheet/SideSheet";
 import { useCapabilities } from "../capabilities/useCapabilities";
-import type { Agent, AgentCapabilities, AgentPermissions, Quadrant } from "../../router/types";
+import type { Agent, AgentCapabilities, AgentPermissions, Quadrant, ToolIntent } from "../../router/types";
 import { PERMISSION_INTENT_DESCRIPTIONS, PERMISSION_INTENT_LABELS } from "../../permissions/intents";
 import { EnrichmentActions } from "./EnrichmentActions";
 import { ImportFromProviderDialog } from "./ImportFromProviderDialog";
@@ -18,6 +18,7 @@ import { ModelField } from "./ModelField";
 import { NLGenerateBox } from "./NLGenerateBox";
 import { PromptScaffold } from "./PromptScaffold";
 import { QuadrantField } from "./QuadrantField";
+import { ToolIntentChips } from "./ToolIntentChips";
 import styles from "./AgentEditor.module.css";
 
 function csv(list?: string[]): string {
@@ -67,6 +68,10 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
   const [allowedPaths, setAllowedPaths] = useState<string[]>(
     agent?.permissions?.allowed_paths ?? [],
   );
+  // Persona-level tool allowances (agent-concept redesign §2/§6): the
+  // closed ToolIntent vocabulary, not concrete harness tool names.
+  const [allowlist, setAllowlist] = useState<ToolIntent[]>(agent?.allowlist ?? []);
+  const [denylist, setDenylist] = useState<ToolIntent[]>(agent?.denylist ?? []);
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -80,6 +85,8 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
     setTools(csv(draft.capabilities?.tools));
     setMcpServers(draft.capabilities?.mcp_servers ?? []);
     setSkills(draft.capabilities?.skills ?? []);
+    if (draft.allowlist) setAllowlist(draft.allowlist);
+    if (draft.denylist) setDenylist(draft.denylist);
   }
 
   function applySuggestedCapabilities(suggested: AgentCapabilities) {
@@ -109,6 +116,11 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
       capabilities: capabilitiesPayload,
       permissions: permissionsPayload,
       preferences: model ? { model } : undefined,
+      // Persona-level tool allowances (redesign §2): the harness-free
+      // allowlist/denylist. Denylist wins on overlap (the Go side
+      // EffectiveToolIntents enforces the same rule).
+      allowlist: allowlist.length ? allowlist : undefined,
+      denylist: denylist.length ? denylist : undefined,
     };
     try {
       if (agent) {
@@ -203,6 +215,24 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
               capabilities={capabilities}
               value={mcpServers}
               onChange={setMcpServers}
+            />
+          </Section>
+
+          <Section heading="Tool allowances">
+            <p className={styles.sectionNote}>
+              Which <em>abstract</em> tool intents this persona may use — harness-
+              free by construction. Deny wins on overlap; every intent maps to
+              a concrete tool at the harness (see the provider's ToolIntentMap).
+              Leave all unset for a persona that defers entirely to the session&rsquo;s
+              trust level.
+            </p>
+            <ToolIntentChips
+              allowlist={allowlist}
+              denylist={denylist}
+              onChange={(allow, deny) => {
+                setAllowlist(allow);
+                setDenylist(deny);
+              }}
             />
           </Section>
 

@@ -7,3 +7,8 @@ dist/
 dist-electron/
 coverage.out
 /ui/test-results/
+
+# local artifacts / tooling state (not part of the repo)
+/mads
+/.claude/
+/HANDOFF.md

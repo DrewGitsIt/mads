@@ -78,7 +78,11 @@ type faProfile struct {
 	sysPromptMethod string // extension method served; "" = none (always -32601)
 	cancelStop      string // stopReason a cancelled turn resolves with
 	requireMCP      bool   // -32602 when session/new-or-load lacks mcpServers
-	optionID        map[string]string
+	// requireAbsCwd → -32602 when session/new-or-load's cwd is not an
+	// absolute path. goose 1.51 enforces this in the real binary; the fake
+	// mirrors it so the engine's absolutization stays covered.
+	requireAbsCwd bool
+	optionID      map[string]string
 }
 
 var faProfiles = map[string]faProfile{
@@ -87,7 +91,7 @@ var faProfiles = map[string]faProfile{
 		metaNS:         "goose",
 		availableModes: []string{"auto", "approve"}, askMode: "approve",
 		sysPromptMethod: "_goose/unstable/session/system-prompt/set",
-		cancelStop:      "end_turn", requireMCP: true,
+		cancelStop:      "end_turn", requireMCP: true, requireAbsCwd: true,
 		optionID: map[string]string{
 			"allow_once": "opt-o", "allow_always": "opt-a",
 			"reject_once": "opt-r", "reject_always": "opt-x",
@@ -220,7 +224,11 @@ func faServe(pr faProfile) {
 		faSend(rpcMessage{JSONRPC: "2.0", Method: "session/update", Params: params})
 	}
 	chunk := func(variant, text string) {
-		notifyUpdate(map[string]any{"sessionUpdate": variant, "content": map[string]any{"type": "text", "text": text}})
+		u := map[string]any{"sessionUpdate": variant, "content": map[string]any{"type": "text", "text": text}}
+		if variant == "agent_message_chunk" || variant == "user_message_chunk" {
+			u["messageId"] = fmt.Sprintf("fa-msg-%s-%d", variant, time.Now().UnixNano())
+		}
+		notifyUpdate(u)
 	}
 	toolCall := func(callID string, a faAttempt) {
 		u := map[string]any{"sessionUpdate": "tool_call", "toolCallId": callID, "title": a.title, "rawInput": a.input}
@@ -345,6 +353,18 @@ func faServe(pr faProfile) {
 		_, ok := probe["mcpServers"]
 		return ok
 	}
+	// cwdIsAbsolute mirrors goose 1.51's session/new/load check: the cwd
+	// param must be present and an absolute path (goose rejects a relative
+	// one with -32602 "cwd must be an absolute path").
+	cwdIsAbsolute := func(params json.RawMessage) bool {
+		var probe struct {
+			Cwd string `json:"cwd"`
+		}
+		if json.Unmarshal(params, &probe) != nil || probe.Cwd == "" {
+			return false
+		}
+		return filepath.IsAbs(probe.Cwd)
+	}
 	recordMCP := func(params json.RawMessage) {
 		var p struct {
 			MCPServers []struct {
@@ -385,6 +405,10 @@ func faServe(pr faProfile) {
 				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "missing field `mcpServers`"})
 				continue
 			}
+			if pr.requireAbsCwd && !cwdIsAbsolute(m.Params) {
+				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "cwd must be an absolute path"})
+				continue
+			}
 			recordMCP(m.Params)
 			id = fmt.Sprintf("sess_%d", os.Getpid())
 			if dir != "" {
@@ -399,6 +423,10 @@ func faServe(pr faProfile) {
 			}
 			if pr.requireMCP && !hasMCPServers(m.Params) {
 				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "missing field `mcpServers`"})
+				continue
+			}
+			if pr.requireAbsCwd && !cwdIsAbsolute(m.Params) {
+				respondErr(m.ID, -32602, "Invalid params", map[string]any{"error": "cwd must be an absolute path"})
 				continue
 			}
 			recordMCP(m.Params)

@@ -26,6 +26,14 @@ func main() {
 	switch os.Args[1] {
 	case "new-session":
 		err = cmdNewSession(os.Args[2:])
+	case "providers":
+		err = cmdProviders(os.Args[2:])
+	case "personas":
+		switch cmdPersonas(os.Args[2:]) {
+		case 0:
+		default:
+			os.Exit(1)
+		}
 	case "seed":
 		err = cmdSeed(os.Args[2:])
 	case "tasks":
@@ -57,7 +65,8 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `mads — drive the pipeline without the app (bootstrap runner)
 
-  mads new-session -name NAME [-workspace LABEL] [-data URL]
+  mads new-session -name NAME [-workspace LABEL] [-provider NAME] [-model ID] [-agent ID] [-data URL]
+  mads providers [-router URL] [-name NAME]          # list harnesses (and one's models)
   mads seed        -session ID -file tasks.yaml    [-data URL]
   mads tasks       -session ID                     [-data URL]
   mads template validate [name...]                 [-data URL]

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,8 +25,20 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	if opts.Mode != provider.ModeACP {
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
+	// goose (and ACP in general) require an absolute cwd in session/new
+	// (goose 1.51: -32602 "cwd must be an absolute path"); claude-code and
+	// kiro tolerate a relative one. Absolutize here so every caller gets a
+	// spec-valid cwd regardless of the harness — a relative cwd is a
+	// client-side concern, not the agent's. A cwd of "" or "." means "the
+	// process's own dir", which is absolute by construction once resolved.
+	cwd := opts.Cwd
+	if cwd == "" || !filepath.IsAbs(cwd) {
+		if abs, err := filepath.Abs(cwd); err == nil {
+			cwd = abs
+		}
+	}
 	cmd := exec.Command(e.cfg.Bin, e.cfg.SpawnArgs...)
-	cmd.Dir = opts.Cwd
+	cmd.Dir = cwd
 	cmd.Env = e.env(opts.Env)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -92,7 +105,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		s.mu.Lock()
 		s.replaying = true
 		s.mu.Unlock()
-		resp, err := s.request(ctx, "session/load", loadSessionParams{SessionID: opts.Resume, Cwd: opts.Cwd, MCPServers: mcp})
+		resp, err := s.request(ctx, "session/load", loadSessionParams{SessionID: opts.Resume, Cwd: cwd, MCPServers: mcp})
 		s.mu.Lock()
 		s.replaying = false
 		s.ref = opts.Resume
@@ -107,7 +120,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		s.configOptions = sessRes.ConfigOptions
 		s.mu.Unlock()
 	} else {
-		resp, err := s.request(ctx, "session/new", newSessionParams{Cwd: opts.Cwd, MCPServers: mcp})
+		resp, err := s.request(ctx, "session/new", newSessionParams{Cwd: cwd, MCPServers: mcp})
 		if err != nil {
 			return fail("session/new", err)
 		}
@@ -283,18 +296,26 @@ type streamSession struct {
 	cmd    *exec.Cmd
 	events chan provider.Event
 
-	mu           sync.Mutex
-	stdin        io.WriteCloser
-	nextID       int
-	pending      map[int]chan rpcMessage
-	turnID       int // the in-flight session/prompt's request id; 0 = idle
-	ref          string
-	trust        provider.Trust
-	closeOK      bool // agent advertised sessionCapabilities.close
-	interrupted  bool // an interrupt was requested this turn
-	replaying    bool // session/load is in flight: buffer updates, don't stream them
-	replay       []provider.Message
-	promptPrefix string // system prompt awaiting the first Send (FirstSendPrefix / -32601 fallback)
+	mu          sync.Mutex
+	stdin       io.WriteCloser
+	nextID      int
+	pending     map[int]chan rpcMessage
+	turnID      int // the in-flight session/prompt's request id; 0 = idle
+	ref         string
+	trust       provider.Trust
+	closeOK     bool // agent advertised sessionCapabilities.close
+	interrupted bool // an interrupt was requested this turn
+	replaying   bool // session/load is in flight: buffer updates, don't stream them
+	replay      []provider.Message
+	// transcript + lastAgentMsgID — the session's own record of its
+	// conversation, in wire order (session/load's replayed history first,
+	// then every live turn). agent_message_chunk fragments sharing one
+	// messageId are coalesced into a single transcript entry (see
+	// recordAgentChunk) so Transcript() renders a reply as one message, not
+	// one line per streamed fragment.
+	transcript     []provider.Message
+	lastAgentMsgID string
+	promptPrefix   string // system prompt awaiting the first Send (FirstSendPrefix / -32601 fallback)
 	// configOptions is the session/new-or-load result's configOptions list,
 	// retained for DiscoverModels (the model entry's options/currentValue).
 	configOptions []configOption
@@ -557,15 +578,30 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 
 	switch u.SessionUpdate {
 	case "agent_message_chunk":
-		text := u.chunkText()
-		if text == "" {
-			return
+		if text := u.chunkText(); text != "" {
+			// Buffer every streamed assistant-text fragment — regardless of
+			// whether this is a session/load replay or a live turn — into s.transcript,
+			// the session's own running record of its conversation (see
+			// Transcript() below), coalescing fragments that share one messageId
+			// into one entry. Without this, a live turn's reply text only ever
+			// reaches the one-shot events channel: a subscriber not attached at
+			// the moment the chunks stream loses it permanently (the hub's
+			// non-PTY frames have no replay, by design), and providers with no
+			// on-disk transcript of their own (goose's ACP path, kiro) have no
+			// TranscriptReader fallback either — the W7.8 gap
+			// docs/GOOSE-ADAPTER-DESIGN.md flags. claude-code is unaffected:
+			// its TranscriptReader already reads a persisted .jsonl, but
+			// buffering here is harmless and keeps the engine self-consistent
+			// for any agent that rides it.
+			s.recordAgentChunk(text, u.MessageID)
+			if replaying {
+				return
+			}
+			select {
+			case s.events <- provider.Event{Kind: provider.EventText, Text: text}:
+			default:
+			}
 		}
-		if replaying {
-			s.appendReplay(provider.Message{Role: "agent", Text: text})
-			return
-		}
-		s.events <- provider.Event{Kind: provider.EventText, Text: text}
 	case "agent_thought_chunk":
 		if replaying {
 			return // Message has no thinking role; replay keeps the reply only
@@ -574,11 +610,11 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			s.events <- provider.Event{Kind: provider.EventThinking, Text: text}
 		}
 	case "user_message_chunk":
-		if !replaying {
-			return // live echoes of our own prompt aren't surfaced as events
-		}
 		if text := u.chunkText(); text != "" {
 			s.appendReplay(provider.Message{Role: "user", Text: text})
+		}
+		if !replaying {
+			return // live echoes of our own prompt aren't surfaced as events
 		}
 	case "tool_call":
 		class, name := s.classify(&u)
@@ -596,8 +632,8 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			Kind:    toolKindFor(class),
 			Title:   u.Title,
 		}
+		s.appendReplay(provider.Message{Role: "tool", Tool: tool})
 		if replaying {
-			s.appendReplay(provider.Message{Role: "tool", Tool: tool})
 			return
 		}
 		s.events <- provider.Event{Kind: provider.EventToolUse, Tool: tool}
@@ -610,8 +646,8 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 		}
 		isError := u.Status == "failed"
 		text := u.toolResultText()
+		s.appendReplay(provider.Message{Role: "tool_result", Text: text, IsError: isError})
 		if replaying {
-			s.appendReplay(provider.Message{Role: "tool_result", Text: text, IsError: isError})
 			return
 		}
 		s.events <- provider.Event{
@@ -641,17 +677,58 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 func (s *streamSession) appendReplay(msg provider.Message) {
 	s.mu.Lock()
 	s.replay = append(s.replay, msg)
+	s.transcript = append(s.transcript, msg)
+	if msg.Role == "agent" {
+		s.lastAgentMsgID = "" // a non-chunk-sourced agent entry resets the coalescing window
+	}
 	s.mu.Unlock()
 }
 
-// ReplayMessages returns the messages buffered by a session/load replay —
-// the live-session data source a binding's TranscriptReader reaches via
-// an interface assertion on its own `interface{ ReplayMessages()
-// []provider.Message }` (the concrete session type is unexported).
+// recordAgentChunk appends text to s.transcript as one entry per messageId —
+// a session/update variant's "messageId" field (see sessionUpdate.MessageID)
+// is a logical message id an agent stamps on every streamed fragment of one
+// reply (goose's agent_message_chunk updates in
+// providers/goosecli/testdata/captures/acp-transcript.jsonl lines 72-82 all
+// share messageId "chatcmpl-773"), so chunks that agree on one are coalesced
+// into the entry started by the first one rather than appended as separate
+// lines. Chunks with no/empty messageId (or a changing one) open a fresh
+// entry, same as appendReplay below. Guarded by s.mu like appendReplay.
+func (s *streamSession) recordAgentChunk(text, msgID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if msgID != "" && len(s.transcript) > 0 && s.transcript[len(s.transcript)-1].Role == "agent" && s.lastAgentMsgID == msgID {
+		s.transcript[len(s.transcript)-1].Text += text
+	} else {
+		s.transcript = append(s.transcript, provider.Message{Role: "agent", Text: text})
+		s.lastAgentMsgID = msgID
+	}
+}
+
+// ReplayMessages returns the messages observed so far (the session/load
+// replay, if this session resumed an existing ref, plus any live turns
+// since) — the live-session data source a binding's TranscriptReader
+// reaches via an interface assertion on its own `interface{
+// ReplayMessages() []provider.Message }` (the concrete session type is
+// unexported).
 func (s *streamSession) ReplayMessages() []provider.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.replay
+	return append([]provider.Message{}, s.transcript...)
+}
+
+// Transcript returns this session's full conversation — the replayed history
+// (if this session resumed an existing ref) plus every live turn's user
+// prompt and assistant text//tool traffic observed since, in wire order.
+// This is the ACP-specific half of the fix for the goose-assistant-reply
+// gap docs/GOOSE-ADAPTER-DESIGN.md (W7.8) flags: providers built on this
+// engine (goose's ACP path, kiro) have no on-disk transcript file of their
+// own the way claude-code's TranscriptReader reads, so a binding that
+// serves GET /transcript needs exactly this — the session's own record —
+// not just its one-shot, loss-prone events channel.
+func (s *streamSession) Transcript() []provider.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]provider.Message{}, s.transcript...)
 }
 
 // beginRequest allocates a request id, registers its response channel, and
@@ -758,6 +835,7 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 	id := s.nextID
 	s.turnID = id
 	ref := s.ref
+	s.transcript = append(s.transcript, provider.Message{Role: "user", Text: text, Timestamp: time.Now().UTC()})
 	s.mu.Unlock()
 
 	clearTurn := func() {

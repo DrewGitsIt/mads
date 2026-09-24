@@ -87,6 +87,39 @@ type StartOptions struct {
 	// transport that isn't chat. claudecode materializes this as a
 	// `--settings` PreToolUse hook (see providers/claudecode/permission.go).
 	PermissionPromptURL string
+	// ToolIntents is the persona-level allow/deny policy expressed as a
+	// closed-set intent vocabulary (agent-concept redesign §2). Allowed
+	// is the persona's Allowlist (empty == allow-all, the harness's
+	// default palette). Denied is the persona's Denylist; it always wins
+	// over Allowed. A provider that implements ToolIntentResolver
+	// enforces these at its native surface (claudecode adds them to
+	// --disallowedTools; goose honors them in its system prompt); a
+	// provider without a resolver takes this as "no stance" and the
+	// session runs on whatever its trust level already enforces.
+	//
+	// This field is OPTIONAL and additive: zero value == no persona-level
+	// policy, and any adapter that doesn't know this field must still
+	// compile. The runner's EffectiveToolIntents (pkg/contracts)
+	// computes both slices from a persona before setting them.
+	ToolIntents ToolIntents
+	// PersonaKey names the idempotency scope for SystemPrompt when a
+	// mid-session SetModel re-invokes Start (redesign §5): the adapter
+	// is expected to overwrite a prior persona with the same key rather
+	// than appending a duplicate. goose already does this (key
+	// "mads-agent"); claudecode's --append-system-prompt is idempotent
+	// by construction. Empty when no identity is required (e.g. a
+	// provider whose own session state makes re-injection harmless).
+	PersonaKey string
+}
+
+// ToolIntents is the runner-facing allow/deny pair for the persona-level
+// policy (agent-concept redesign §2). Both slices are ToolIntent — the
+// closed v1 vocabulary, provider-agnostic. Denied always wins over
+// Allowed on any shared intent; EmptyAllowed means "allow the harness's
+// default palette" (i.e. no persona-level allow restriction).
+type ToolIntents struct {
+	Allowed []ToolIntent
+	Denied  []ToolIntent
 }
 
 // MCPServerRef describes one MCP server the provider's launch could point an

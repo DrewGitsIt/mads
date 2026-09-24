@@ -60,6 +60,16 @@ func NewAgents(log *Log) *Registry[contracts.Agent] {
 			if a.Quadrant != "" && !a.Quadrant.Valid() {
 				v.Add("quadrant", fmt.Sprintf("unknown quadrant %q", a.Quadrant))
 			}
+			// Persona-level allow/deny (agent-concept redesign §2): every
+			// entry must be a value from the closed ToolIntent vocabulary —
+			// a harness-specific tool name here is exactly the leak the
+			// redesign removes, so it's a shape error, not a silent accept.
+			for _, want := range append(append([]contracts.ToolIntent(nil), a.Allowlist...), a.Denylist...) {
+				if !want.Valid() {
+					v.Add("toolintents", fmt.Sprintf("unknown tool intent %q (closed set: read, write, edit, shell, search, fetch, skill, mcp)", want))
+					break
+				}
+			}
 			if v.Empty() {
 				return nil
 			}
