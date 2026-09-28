@@ -75,7 +75,14 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
 
   return (
     <div className={styles.surface}>
-      <aside className={styles.rail}>
+      {/* data-rail-scroll marks the rail's scroll viewport — this aside owns the
+          overflow-y:auto, not the SessionRail div inside it, which is unbounded
+          and simply as tall as its content. SessionRow reads the marked box's
+          rect to decide whether its hover action cluster (painted fixed,
+          outside the card) still has a visible row to hang off; measuring the
+          inner div instead would compare a scrolled row against the full
+          content height and never dismiss anything. */}
+      <aside className={styles.rail} data-rail-scroll="">
         <Button
           variant="ghost"
           size="sm"

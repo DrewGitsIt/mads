@@ -458,7 +458,8 @@
    that is the status line, the context labels and the stamps. Outside, they
    cost the card neither width nor height.
 
-   It cannot be position:absolute: .rail is overflow-y:auto and a scroll
+   It cannot be position:absolute: the rail scrolls (SessionsSurface's
+   aside.rail is the overflow-y:auto box, marked data-rail-scroll) and a scroll
    container clips both axes, so top/left are computed from the row's rect and
    handed in as inline style, the way LinkOptionsMenu already places its
    flyout. Until they are (data-anchored absent) the cluster stays hidden —
@@ -469,7 +470,15 @@
    and the cluster flickers out from under it. */
 .actionCluster {
   position: fixed;
-  z-index: 5;
+  /* Above the conversation pane's own chrome, which it now overhangs: the
+     sticky composer cluster is z-index 40 (ConversationTab .pinned) and the
+     activity dock is 60 (ActivityDock .dock). Neither the rail nor the pane
+     opens a stacking context between them and the root, so those numbers
+     compete with this one directly, and a lower value buried the column's
+     buttons under whichever of the two the row happened to sit beside. Still
+     below the command palette (100) and the dialogs and settings surface
+     (200/300), which are meant to cover it. */
+  z-index: 70;
   display: flex;
   flex-direction: column;
   align-items: center;

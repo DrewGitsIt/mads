@@ -341,7 +341,6 @@ export function SessionRail({
     <div
       ref={railRef}
       className={[styles.rail, className].filter(Boolean).join(" ")}
-      data-rail-scroll=""
       aria-label="Session list"
       onKeyDown={walkResults}
       {...railHandlers}
@@ -746,7 +745,10 @@ function SessionRow({
   // Fixed coordinates go stale the moment anything scrolls or the window
   // resizes. Follow the row rather than dismiss, and let go only once the row
   // has left the rail's scroll viewport — a cluster beside a clipped card is
-  // the one thing worse than no cluster.
+  // the one thing worse than no cluster. The viewport is the box carrying
+  // data-rail-scroll (SessionsSurface's aside), not the rail div in this file:
+  // that one has no height of its own and is always exactly as tall as the
+  // list, so measuring it would put every row permanently "inside".
   useEffect(() => {
     if (!clusterAnchored) return;
     function follow() {

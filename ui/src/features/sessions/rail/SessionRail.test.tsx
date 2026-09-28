@@ -307,20 +307,27 @@ describe("SessionRail", () => {
       } as DOMRect;
     }
 
+    // The row looks its scroll viewport up as the nearest [data-rail-scroll]
+    // ancestor, so the wrapper here stands in for SessionsSurface's aside —
+    // which is the box that actually scrolls. The rail div SessionRail renders
+    // inside it is unbounded and is never the viewport; see the SessionsSurface
+    // test that pins the marker to the element owning overflow-y.
     function renderOneRow() {
       render(
-        <SessionRail
-          sessions={[makeSession({ id: "r1", name: "anchor me", activity: "inactive" })]}
-          openTaskCounts={{}}
-          onResume={vi.fn()}
-        />,
+        <div data-rail-scroll="">
+          <SessionRail
+            sessions={[makeSession({ id: "r1", name: "anchor me", activity: "inactive" })]}
+            openTaskCounts={{}}
+            onResume={vi.fn()}
+          />
+        </div>,
       );
       const row = screen.getByText("anchor me").closest('[role="button"]') as HTMLElement;
-      const rail = screen.getByLabelText("Session list") as HTMLElement;
+      const viewport = document.querySelector("[data-rail-scroll]") as HTMLElement;
       const cluster = screen.getByRole("group", { name: "anchor me actions" });
-      // The rail's own scroll viewport, against which a scrolled row is judged.
-      rail.getBoundingClientRect = () => fakeRect({ top: 0, bottom: 400, left: 0, right: 312 });
-      return { row, rail, cluster };
+      // The viewport a scrolled row is judged against: 400px of visible rail.
+      viewport.getBoundingClientRect = () => fakeRect({ top: 0, bottom: 400, left: 0, right: 312 });
+      return { row, viewport, cluster };
     }
 
     it("places the cluster past the card's right edge, centred on the row", () => {
@@ -355,7 +362,7 @@ describe("SessionRail", () => {
     });
 
     it("follows its row as the rail scrolls, and lets go once the row leaves the viewport", () => {
-      const { row, rail, cluster } = renderOneRow();
+      const { row, viewport, cluster } = renderOneRow();
       let box = { top: 100, bottom: 200, height: 100, left: 12, right: 300, width: 288 };
       row.getBoundingClientRect = () => fakeRect(box);
 
@@ -365,21 +372,22 @@ describe("SessionRail", () => {
       // Scrolled up by 80: the cluster moves with the card, never stranding
       // itself beside whichever row took its place.
       box = { ...box, top: 20, bottom: 120 };
-      fireEvent.scroll(rail);
+      fireEvent.scroll(viewport);
       expect(cluster.style.top).toBe("70px");
       expect(cluster.getAttribute("data-anchored")).toBe("");
 
       // Scrolled clean out of the rail's viewport: dismissed rather than left
       // floating over the search field above it.
       box = { ...box, top: -300, bottom: -200 };
-      fireEvent.scroll(rail);
+      fireEvent.scroll(viewport);
       expect(cluster.getAttribute("data-anchored")).toBeNull();
     });
 
     it("paints outside the card without taking any of its width or height", () => {
       const css = readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
       const rest = css.match(/\.actionCluster \{([^}]*)\}/)![1];
-      // Fixed, not absolute: .rail is overflow-y:auto and clips both axes.
+      // Fixed, not absolute: the rail scrolls, and a scroll container clips
+      // both axes, so an absolutely positioned child cannot escape sideways.
       expect(rest).toMatch(/position:\s*fixed/);
       // A column, not a strip across the card, and no scrim over its text.
       expect(rest).toMatch(/flex-direction:\s*column/);
@@ -391,6 +399,39 @@ describe("SessionRail", () => {
       // Hidden until the row's rect has been measured into an inline style.
       expect(css).toMatch(/\.row:hover \.actionCluster\[data-anchored\]/);
       expect(css).toMatch(/\.row:focus-within \.actionCluster\[data-anchored\]/);
+    });
+
+    // Hanging outside the rail means overlapping the conversation pane, whose
+    // own chrome is z-indexed well above anything the rail needed before.
+    // Neither the rail nor the pane opens a stacking context between those
+    // rules and the root, so they compete directly and the column loses unless
+    // it outranks them.
+    it("stacks above the conversation pane's composer and activity dock", () => {
+      function zIndexIn(file: string, rule: string): number {
+        const css = readFileSync(file, "utf8");
+        const body = css.match(new RegExp(`\\${rule} \\{([^}]*)\\}`))![1];
+        return Number(body.match(/z-index:\s*(\d+)/)![1]);
+      }
+
+      const cluster = zIndexIn(
+        "src/features/sessions/rail/SessionRail.module.css",
+        ".actionCluster",
+      );
+      const composer = zIndexIn("src/conversation/ConversationTab.module.css", ".pinned");
+      const dock = zIndexIn("src/conversation/activity/ActivityDock.module.css", ".dock");
+
+      expect(composer).toBeGreaterThan(0);
+      expect(dock).toBeGreaterThan(0);
+      expect(cluster).toBeGreaterThan(composer);
+      expect(cluster).toBeGreaterThan(dock);
+      // But still under the command palette and the modal dialogs, which are
+      // meant to cover the rail rather than be poked through by it.
+      expect(cluster).toBeLessThan(
+        zIndexIn("src/features/command-palette/CommandPalette.module.css", ".scrim"),
+      );
+      expect(cluster).toBeLessThan(
+        zIndexIn("src/components/ConfirmDialog/ConfirmDialog.module.css", ".backdrop"),
+      );
     });
   });
 

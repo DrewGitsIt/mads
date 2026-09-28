@@ -4,6 +4,8 @@ import { SessionsSurface } from "./SessionsSurface";
 import { FakePipelineClient } from "../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { Session } from "../../router/types";
+import styles from "./SessionsSurface.module.css";
+import { readFileSync } from "node:fs";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -64,6 +66,37 @@ describe("SessionsSurface", () => {
 
     await waitFor(() => expect(screen.getByText("No sessions yet")).toBeTruthy());
     expect(screen.getByText("What can I help you with?")).toBeTruthy();
+  });
+
+  // A rail card's hover action cluster paints position:fixed outside the card,
+  // so SessionRow has to know which ancestor is the scroll viewport to tell a
+  // visible row from one scrolled out of sight. It finds that box by the
+  // data-rail-scroll marker, and the marker has to sit on the element that
+  // actually owns the overflow — the aside here, not the SessionRail div nested
+  // inside it, which has no height of its own and is always exactly as tall as
+  // the list. On the wrong element the dismissal guard compares every row
+  // against the full content height and silently never fires.
+  it("marks the rail's scrolling box, not the unbounded list inside it, as the scroll viewport", async () => {
+    stubSessionsAndConversationFetch([makeSession({ id: "a", name: "Alpha" })]);
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    const marked = document.querySelectorAll("[data-rail-scroll]");
+    expect(marked).toHaveLength(1);
+    const viewport = marked[0] as HTMLElement;
+
+    // It is the aside, and the rail list lives inside it rather than being it.
+    expect(viewport.tagName).toBe("ASIDE");
+    const list = screen.getByLabelText("Session list");
+    expect(viewport.contains(list)).toBe(true);
+    expect(viewport).not.toBe(list);
+
+    // And that aside is the box the stylesheet gives the scrollbar to.
+    const surfaceCss = readFileSync("src/features/sessions/SessionsSurface.module.css", "utf8");
+    const railRule = surfaceCss.match(/\.rail \{([^}]*)\}/)![1];
+    expect(railRule).toMatch(/overflow-y:\s*auto/);
+    expect(viewport.className).toBe(styles.rail);
   });
 
   it("shows a new session in the rail once the SSE subscription reports it", async () => {
