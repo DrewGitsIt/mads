@@ -360,23 +360,95 @@ func TestDescribe(t *testing.T) {
 	}
 }
 
+// Suggestions are grounded the same way generation is: only registry names
+// survive, invented ones are reported in Dropped, and tool allowance comes
+// back as ToolIntents rather than concrete tool names.
 func TestSuggestCapabilities(t *testing.T) {
-	g, _ := setup(t, fake.Scenario{Name: "suggest-capabilities", Rules: []fake.Rule{{
-		Match: "database migration specialist",
-		Reply: `{"tools":["shell","read","write"],"mcp_servers":["postgres"],"skills":["migrations"]}`,
+	g, c := setup(t, fake.Scenario{Name: "suggest-capabilities", Rules: []fake.Rule{{
+		// The registry descriptions must reach the model for grounding.
+		Match: "postgres: Query and migrate PostgreSQL",
+		Reply: `{"allowlist":["shell","read","Bash"],"mcp_servers":["postgres","jira"],"skills":["migrations","made-up"]}`,
 	}}})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "postgres", Type: contracts.CapabilityMCP, Description: "Query and migrate PostgreSQL",
+		Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-postgres"},
+	})
+	mustCreateCapability(t, c, contracts.Capability{
+		Name: "migrations", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/migrations"},
+	})
 
 	got, err := g.SuggestCapabilities(context.Background(), "a database migration specialist who knows PostgreSQL")
 	if err != nil {
 		t.Fatalf("SuggestCapabilities: %v", err)
 	}
-	want := contracts.AgentCapabilities{
-		Tools: []string{"shell", "read", "write"}, MCPServers: []string{"postgres"}, Skills: []string{"migrations"},
+	want := agentgen.Suggestion{
+		Allowlist:  []contracts.ToolIntent{"shell", "read"},
+		MCPServers: []string{"postgres"},
+		Skills:     []string{"migrations"},
+		Dropped:    []string{"made-up", "jira", "Bash"},
 	}
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("SuggestCapabilities: got %s, want %s", gotJSON, wantJSON)
+	}
+}
+
+// Names the registry doesn't hold never come back as suggestions, however
+// plausible they sound.
+func TestSuggestCapabilitiesDropsInventedNames(t *testing.T) {
+	g, _ := setup(t, fake.Scenario{Name: "suggest-invented", Rules: []fake.Rule{{
+		Match: "reviews pull requests",
+		Reply: `{"allowlist":["read"],"mcp_servers":["github"],"skills":["code-review"]}`,
+	}}})
+
+	got, err := g.SuggestCapabilities(context.Background(), "reviews pull requests")
+	if err != nil {
+		t.Fatalf("SuggestCapabilities: %v", err)
+	}
+	if len(got.Skills) != 0 || len(got.MCPServers) != 0 {
+		t.Fatalf("got skills=%v mcp=%v, want both empty", got.Skills, got.MCPServers)
+	}
+	if len(got.Dropped) != 2 {
+		t.Fatalf("Dropped = %v, want the two invented names", got.Dropped)
+	}
+}
+
+// A structured prompt_sections reply is assembled under the scaffold
+// headings shown in the Library editor, in scaffold order.
+func TestGenerateAssemblesScaffoldedPrompt(t *testing.T) {
+	g, _ := setup(t, fake.Scenario{Name: "generate-scaffold", Rules: []fake.Rule{{
+		Match: "reviews Go pull requests",
+		Reply: `{"name":"go-reviewer","description":"Reviews Go PRs",` +
+			`"prompt_sections":{"output":"A list of findings, most severe first.",` +
+			`"role":"You review Go pull requests for correctness.",` +
+			`"boundaries":"Never push commits.","approach":"Read the diff, then the callers."},` +
+			`"quadrant":"investigator"}`,
+	}}})
+
+	result, err := g.GenerateFromDescription(context.Background(), "an agent that reviews Go pull requests")
+	if err != nil {
+		t.Fatalf("GenerateFromDescription: %v", err)
+	}
+	want := "Role: You review Go pull requests for correctness.\n\n" +
+		"Approach: Read the diff, then the callers.\n\n" +
+		"Boundaries: Never push commits.\n\n" +
+		"Output: A list of findings, most severe first."
+	if result.Draft.Prompt != want {
+		t.Fatalf("Prompt =\n%s\nwant\n%s", result.Draft.Prompt, want)
+	}
+}
+
+// A reply with neither prompt_sections nor a flat prompt fails validation
+// (and so feeds the Fast Model retry loop).
+func TestGenerateRequiresAPrompt(t *testing.T) {
+	g, _ := setup(t, fake.Scenario{Name: "generate-no-prompt", Rules: []fake.Rule{{
+		Match: "an agent with no prompt",
+		Reply: `{"name":"empty","quadrant":"investigator"}`,
+	}}})
+
+	if _, err := g.GenerateFromDescription(context.Background(), "an agent with no prompt"); err == nil {
+		t.Fatal("GenerateFromDescription: want a validation error, got nil")
 	}
 }
 

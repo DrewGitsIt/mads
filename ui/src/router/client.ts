@@ -1,6 +1,6 @@
 import type {
   Agent,
-  AgentCapabilities,
+  CapabilitySuggestion,
   AgentLeaderboardEntry,
   BehaviorInfo,
   Capability,
@@ -246,7 +246,7 @@ export interface RouterClient {
   deleteAgent(id: string): Promise<void>;
   generateAgent(body: GenerateAgentBody): Promise<{ job_id: string }>;
   describeAgent(prompt: string): Promise<{ result: string }>;
-  suggestAgentCapabilities(prompt: string): Promise<AgentCapabilities>;
+  suggestAgentCapabilities(prompt: string): Promise<CapabilitySuggestion>;
   refineAgent(prompt: string, instruction: string): Promise<{ result: string }>;
 
   // --- Capabilities (Library) ---
@@ -956,7 +956,7 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, "/agents/describe", { prompt });
   }
 
-  async suggestAgentCapabilities(prompt: string): Promise<AgentCapabilities> {
+  async suggestAgentCapabilities(prompt: string): Promise<CapabilitySuggestion> {
     return routerPost(this.baseUrl, "/agents/suggest-capabilities", { prompt });
   }
 

@@ -27,11 +27,11 @@ describe("EnrichmentActions", () => {
     await waitFor(() => expect(onDescribe).toHaveBeenCalledWith("Stabilizes flaky tests."));
   });
 
-  it("calls onSuggestCapabilities with the raw AgentCapabilities result", async () => {
+  it("calls onSuggestCapabilities with the raw suggestion", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ tools: ["shell"] }), { status: 200 }),
+        new Response(JSON.stringify({ allowlist: ["shell"] }), { status: 200 }),
       ),
     );
     const onSuggestCapabilities = vi.fn();
@@ -44,7 +44,7 @@ describe("EnrichmentActions", () => {
       />,
     );
     fireEvent.click(screen.getByText("Suggest capabilities"));
-    await waitFor(() => expect(onSuggestCapabilities).toHaveBeenCalledWith({ tools: ["shell"] }));
+    await waitFor(() => expect(onSuggestCapabilities).toHaveBeenCalledWith({ allowlist: ["shell"] }));
   });
 
   it("calls onRefine with the refine result once an instruction is given", async () => {

@@ -24,7 +24,7 @@ describe("useAgentEnrichment", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ tools: ["shell"], skills: ["migrations"] }), {
+        new Response(JSON.stringify({ allowlist: ["shell"], skills: ["migrations"] }), {
           status: 200,
         }),
       ),
@@ -32,7 +32,7 @@ describe("useAgentEnrichment", () => {
 
     const { result } = renderHook(() => useAgentEnrichment());
     const capabilities = await result.current.suggestCapabilities("x");
-    expect(capabilities).toEqual({ tools: ["shell"], skills: ["migrations"] });
+    expect(capabilities).toEqual({ allowlist: ["shell"], skills: ["migrations"] });
   });
 
   it("refine POSTs /agents/refine with prompt and instruction", async () => {

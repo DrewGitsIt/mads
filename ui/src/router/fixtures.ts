@@ -2,7 +2,7 @@ import type { RouterClient, SessionEventSource } from "./client";
 import { RouterValidationError } from "./client";
 import type {
   Agent,
-  AgentCapabilities,
+  CapabilitySuggestion,
   AgentLeaderboardEntry,
   BehaviorInfo,
   Capability,
@@ -1374,7 +1374,7 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: describeAgent");
   }
 
-  async suggestAgentCapabilities(): Promise<AgentCapabilities> {
+  async suggestAgentCapabilities(): Promise<CapabilitySuggestion> {
     throw new Error("not fixtured: suggestAgentCapabilities");
   }
 

@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
-import type { AgentCapabilities } from "../../router/types";
+import type { CapabilitySuggestion } from "../../router/types";
 import { useAgentEnrichment } from "./useAgentEnrichment";
 import styles from "./EnrichmentActions.module.css";
 
 export interface EnrichmentActionsProps {
   prompt: string;
   onDescribe: (description: string) => void;
-  onSuggestCapabilities: (capabilities: AgentCapabilities) => void;
+  onSuggestCapabilities: (suggestion: CapabilitySuggestion) => void;
   onRefine: (prompt: string) => void;
 }
 

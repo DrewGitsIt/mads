@@ -1,10 +1,10 @@
 import { useCallback } from "react";
 import { router } from "../../router/client";
-import type { AgentCapabilities } from "../../router/types";
+import type { CapabilitySuggestion } from "../../router/types";
 
 export interface UseAgentEnrichment {
   describe: (prompt: string) => Promise<string>;
-  suggestCapabilities: (prompt: string) => Promise<AgentCapabilities>;
+  suggestCapabilities: (prompt: string) => Promise<CapabilitySuggestion>;
   refine: (prompt: string, instruction: string) => Promise<string>;
 }
 

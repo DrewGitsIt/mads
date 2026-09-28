@@ -10,7 +10,15 @@ import {
   SideSheetHeader,
 } from "../../components/SideSheet/SideSheet";
 import { useCapabilities } from "../capabilities/useCapabilities";
-import type { Agent, AgentCapabilities, AgentPermissions, Quadrant, ToolIntent } from "../../router/types";
+import type {
+  Agent,
+  AgentCapabilities,
+  AgentPermissions,
+  Capability,
+  CapabilitySuggestion,
+  Quadrant,
+  ToolIntent,
+} from "../../router/types";
 import { PERMISSION_INTENT_DESCRIPTIONS, PERMISSION_INTENT_LABELS } from "../../permissions/intents";
 import { EnrichmentActions } from "./EnrichmentActions";
 import { ImportFromProviderDialog } from "./ImportFromProviderDialog";
@@ -26,6 +34,24 @@ import styles from "./AgentEditor.module.css";
 // is now managed entirely by the ToolIntentChips boolean surface below, and
 // the legacy string array lives in state so an existing record's value isn't
 // clobbered on save without a UI for it.
+
+/**
+ * Splits skill / MCP server names into those the capability registry holds
+ * and those it doesn't. The data service rejects a save that references an
+ * unregistered name, so nothing proposed by a model may reach the form
+ * without passing through here.
+ */
+export function partitionRegistered(
+  names: string[] | undefined,
+  type: Capability["type"],
+  registry: Capability[],
+): { kept: string[]; missing: string[] } {
+  const known = new Set(registry.filter((c) => c.type === type).map((c) => c.name));
+  const kept: string[] = [];
+  const missing: string[] = [];
+  for (const name of names ?? []) (known.has(name) ? kept : missing).push(name);
+  return { kept, missing };
+}
 
 function Section({ heading, children }: { heading: string; children: ReactNode }) {
   return (
@@ -46,7 +72,7 @@ export interface AgentEditorProps {
 
 /** SideSheet-hosted create/edit form for a single persona (agent-concept redesign §6). */
 export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: AgentEditorProps) {
-  const { capabilities } = useCapabilities();
+  const { capabilities, loading: capabilitiesLoading } = useCapabilities();
   const [name, setName] = useState(agent?.name ?? "");
   const [description, setDescription] = useState(agent?.description ?? "");
   const [prompt, setPrompt] = useState(agent?.prompt ?? "");
@@ -72,10 +98,31 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
   const [denylist, setDenylist] = useState<ToolIntent[]>(agent?.denylist ?? []);
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [skipped, setSkipped] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  // EnrichmentActions may propose a legacy tools list — we still honor it so
-  // the "suggest capabilities" flow doesn't silently drop the user's intent.
+  // Applies model-proposed skills / MCP servers, keeping only registered
+  // names. The server grounds these too; this catches a registry that changed
+  // since, and names what was skipped instead of failing later on save.
+  function applyRegistered(
+    proposedSkills: string[] | undefined,
+    proposedMcp: string[] | undefined,
+    alreadyDropped: string[] = [],
+  ) {
+    // Until the registry has loaded there's nothing to check against; the
+    // server-side grounding is the guard in that window.
+    const registry = capabilitiesLoading ? null : capabilities;
+    const s = registry
+      ? partitionRegistered(proposedSkills, "skill", registry)
+      : { kept: proposedSkills ?? [], missing: [] };
+    const m = registry
+      ? partitionRegistered(proposedMcp, "mcp", registry)
+      : { kept: proposedMcp ?? [], missing: [] };
+    setSkills(s.kept);
+    setMcpServers(m.kept);
+    setSkipped([...alreadyDropped, ...s.missing, ...m.missing]);
+  }
+
   function applyDraft(draft: Agent) {
     setName(draft.name);
     setDescription(draft.description ?? "");
@@ -83,19 +130,29 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
     setQuadrant(draft.quadrant);
     setTags(draft.tags ?? []);
     setTools(draft.capabilities?.tools ?? []);
-    setMcpServers(draft.capabilities?.mcp_servers ?? []);
-    setSkills(draft.capabilities?.skills ?? []);
+    applyRegistered(draft.capabilities?.skills, draft.capabilities?.mcp_servers);
     if (draft.allowlist) setAllowlist(draft.allowlist);
     if (draft.denylist) setDenylist(draft.denylist);
   }
 
-  function applySuggestedCapabilities(suggested: AgentCapabilities) {
-    setTools(suggested.tools ?? []);
-    setMcpServers(suggested.mcp_servers ?? []);
-    setSkills(suggested.skills ?? []);
+  // Suggestions carry tool allowance as ToolIntents, never the deprecated
+  // concrete-name `tools` (which has no UI here and would ride along hidden).
+  function applySuggestedCapabilities(suggested: CapabilitySuggestion) {
+    applyRegistered(suggested.skills, suggested.mcp_servers, suggested.dropped);
+    if (suggested.allowlist?.length) setAllowlist(suggested.allowlist);
   }
 
   async function handleSave() {
+    if (!capabilitiesLoading) {
+      const missing = [
+        ...partitionRegistered(skills, "skill", capabilities).missing,
+        ...partitionRegistered(mcpServers, "mcp", capabilities).missing,
+      ];
+      if (missing.length > 0) {
+        setError(`Not in the capability registry: ${missing.join(", ")}. Remove them or register them first.`);
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     const capabilitiesPayload: AgentCapabilities = {
@@ -200,6 +257,11 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
               on the persona as concrete names. (Concrete tool <em>names</em>
               don't belong here; use Allow / Deny intents below for that.)
             </p>
+            {skipped.length > 0 && (
+              <p className={styles.sectionNote} role="status">
+                Skipped suggestions not in the capability registry: {skipped.join(", ")}
+              </p>
+            )}
             <CapabilityPickerField
               label="Skills"
               type="skill"
