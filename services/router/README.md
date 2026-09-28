@@ -121,11 +121,17 @@ never called peer-to-peer.
   by this handler. 409 if the session is already active or still has a tracked child.
 - `POST /sessions/{id}/bounce` — terminate and respawn under the same session ID/lease
   holder; 200 with the new `{"addr": ...}`.
-- `DELETE /sessions/{id}` — hard-delete an inactive session record and its orchestration
+- `DELETE /sessions/{id}` — hard-delete a session record and its orchestration
   artifacts (tasks and their deps/handoffs/notes, file-change history, commit records —
   see `store.Sessions.Delete`'s doc comment for the exact cascade; provider transcripts and
-  the event log are not session-scoped and survive). 204. 409 if the session is still active
-  or has a tracked child — close it first.
+  the event log are not session-scoped and survive). 204. Never refused for being active:
+  the handler terminates first via `Supervisor.TerminateSessionForDelete`, which is correct
+  in every state — it stops a tracked child with the standard grace, and with no child
+  tracked it reconciles a record still stuck at `active`, the case that used to be
+  undeletable. Still failable, though: a terminate that errors is a 502 with the record
+  intact, since its child may well still be alive. The `active -> inactive` flip's
+  session-summary job is suppressed on this path, so no summary outlives the session it
+  summarises — see "Critical paths" below.
 - `POST /pipelines` — body `{"session_id", "template_id"}`, mints a `run_<hex>` ID, spawns
   a Pipeline Engine child; 201 with `{"run_id", "addr"}`.
 - `POST /pipelines/{id}/cancel` — stop the child and append `pipeline.cancelled`; 204.
@@ -464,9 +470,11 @@ the Router picks up a new build without a restart.
   `TerminateSession`'s no-child branch and the boot sweep). Since every session-child exit —
   expected or crash — leaves `Activity == Inactive` by the time `onSessionExit` runs, that
   callback is the trigger point (spec §16: "generated on session deactivation"): it
-  unconditionally spawns a `job.SessionSummaryKind` job via
-  `job.GenerateSessionSummary`, whose body (`pkg/sessionsummary`) derives the three-section
-  narrative from the session's task data — titles, statuses, handoffs, and confirmed
+  spawns a `job.SessionSummaryKind` job via `spawnSessionSummary` — the one exception being
+  a delete in flight for that session (`TerminateSessionForDelete`), which suppresses the
+  spawn at both sites so a summary can't be written back onto a row the delete just removed.
+  The job runs `job.GenerateSessionSummary`, whose body (`pkg/sessionsummary`) derives the
+  three-section narrative from the session's task data — titles, statuses, handoffs, and confirmed
   `decision`-type notes, never transcripts — and overwrites `session.summary` via
   `dataclient.UpdateSession`. Watching `session.activity_changed` over SSE instead would
   need a replay/cursor strategy across Router restarts; the exit hook sidesteps that for
