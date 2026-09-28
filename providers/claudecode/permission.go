@@ -68,26 +68,26 @@ func shellSingleQuote(s string) string {
 // writePermissionSettings materializes a --settings file carrying up to
 // two PreToolUse hook entries:
 //
-//   1. the ask-first hook (matcher "*" — every tool) — fired on every
-//      tool call *while trust leaves the tool asking*
-//      (TrustLimited/ReadOnly) and a callback URL is supplied. It pipes
-//      each call's JSON to the session service's permission endpoint and
-//      prints the response verbatim — the handler is what pre-formats the
-//      exact {"hookSpecificOutput": ...} JSON claude expects, so the
-//      shell command itself never parses or builds JSON. If curl fails
-//      outright (connection refused, its own --max-time expiry), the
-//      fallback denies rather than leaving claude to interpret empty or
-//      malformed stdout.
+//  1. the ask-first hook (matcher "*" — every tool) — fired on every
+//     tool call *while trust leaves the tool asking*
+//     (TrustLimited/ReadOnly) and a callback URL is supplied. It pipes
+//     each call's JSON to the session service's permission endpoint and
+//     prints the response verbatim — the handler is what pre-formats the
+//     exact {"hookSpecificOutput": ...} JSON claude expects, so the
+//     shell command itself never parses or builds JSON. If curl fails
+//     outright (connection refused, its own --max-time expiry), the
+//     fallback denies rather than leaving claude to interpret empty or
+//     malformed stdout.
 //
-//   2. the path-scope hook (matcher "Write|Edit|MultiEdit|NotebookEdit")
-//      — fired whenever PersonaAllowedPaths is non-empty, *independent of
-//      trust*. A local POSIX sh containment check (no network) that
-//      denies a file-tool call whose target path is outside the
-//      allowlist, with a reason the model can act on. This is
-//      claude-code's native enforcement surface for the portable
-//      "path_scope" permission intent (agent-concept redesign §2, Option
-//      A) — the reason IntentMatrix() now declares IntentPathScope:
-//      Native.
+//  2. the path-scope hook (matcher "Write|Edit|MultiEdit|NotebookEdit")
+//     — fired whenever PersonaAllowedPaths is non-empty, *independent of
+//     trust*. A local POSIX sh containment check (no network) that
+//     denies a file-tool call whose target path is outside the
+//     allowlist, with a reason the model can act on. This is
+//     claude-code's native enforcement surface for the portable
+//     "path_scope" permission intent (agent-concept redesign §2, Option
+//     A) — the reason IntentMatrix() now declares IntentPathScope:
+//     Native.
 //
 // Either entry may be absent; the file is written only when at least one
 // is present (see permissionArgs, which gates the call).

@@ -272,8 +272,8 @@ func runPathScopeHook(t *testing.T, cworkDir string, stdinJSON string) (out stri
 func TestPathScopeHookSemantics(t *testing.T) {
 	dir := t.TempDir()
 	cases := []struct {
-		name    string
-		stdin   string
+		name     string
+		stdin    string
 		wantDeny bool
 	}{
 		{"in-scope absolute", `{"tool_name":"Write","tool_input":{"file_path":"` + dir + `/src/a.go"}}"`, false},
