@@ -1162,36 +1162,43 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 	}()
 }
 
-// persistUsage writes usage as the session record's LastUsage — the context
-// meter's data source at wake time (ui/src/conversation/Header/
+// persistTurnEnd stamps the session record at the end of one turn:
+// LastTurnAt always, and LastUsage whenever the provider reported any —
+// the context meter's data source at wake time (ui/src/conversation/Header/
 // ContextMeter.tsx, before this process has seen a turn_end of its own) and
 // the resume-compaction trigger's input (compact.go's shouldCompactOnResume).
-// Called on every EventTurnEnd that carries usage, unlike persistProviderRef's
-// dedup-on-unchanged-value: usage legitimately changes turn to turn, so there
-// is nothing to skip. Best-effort: a failure here only means the meter/trigger
-// are stale for the next resume, never surfaced to the caller.
-func (r *Runner) persistUsage(ctx context.Context, usage *provider.Usage) {
-	if usage == nil {
-		return
+// Called on every EventTurnEnd, unlike persistProviderRef's
+// dedup-on-unchanged-value: both fields legitimately change turn to turn, so
+// there is nothing to skip. LastTurnAt is stamped even on a turn that carried
+// no usage, because it means "the last turn ended here" — a provider that
+// reports no token accounting still ends turns.
+//
+// One scoped write, not the load-modify-write round trip this replaced: that
+// pair carried a whole snapshot of the record across two calls and could drop
+// whatever landed in the gap (this runner's own agent state, several
+// transitions a turn). recordMu is still held, since the ref round trips it
+// guards are still round trips.
+//
+// Best-effort: a failure here only means the meter, the trigger and the
+// rail's last-reply stamp are stale until the next turn, never surfaced to
+// the caller.
+func (r *Runner) persistTurnEnd(ctx context.Context, usage *provider.Usage) {
+	var last *contracts.Usage
+	if usage != nil {
+		last = &contracts.Usage{
+			InputTokens:              usage.InputTokens,
+			OutputTokens:             usage.OutputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+			Model:                    usage.Model,
+			ContextTokens:            usage.ContextTokens,
+			ContextWindow:            usage.ContextWindow,
+		}
 	}
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
-	cur, err := r.data.Session(ctx, r.sessionID)
-	if err != nil {
-		log.Printf("runner: load session to persist usage: %v", err)
-		return
-	}
-	cur.LastUsage = &contracts.Usage{
-		InputTokens:              usage.InputTokens,
-		OutputTokens:             usage.OutputTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
-		CacheReadInputTokens:     usage.CacheReadInputTokens,
-		Model:                    usage.Model,
-		ContextTokens:            usage.ContextTokens,
-		ContextWindow:            usage.ContextWindow,
-	}
-	if err := r.data.UpdateSession(ctx, &cur); err != nil {
-		log.Printf("runner: persist usage: %v", err)
+	if err := r.data.RecordSessionTurnEnd(ctx, r.sessionID, last, time.Now().UTC()); err != nil {
+		log.Printf("runner: persist turn end: %v", err)
 	}
 }
 
@@ -1377,7 +1384,7 @@ func (r *Runner) pump(sess provider.Session) {
 			r.shadowStore.CommitTurnAsync()
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
-			r.persistUsage(context.Background(), ev.Usage)
+			r.persistTurnEnd(context.Background(), ev.Usage)
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 			// Pre-image capture first: on providers that announce tool_use
@@ -1455,7 +1462,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 					r.shadowStore.CommitTurnAsync()
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
-					r.persistUsage(context.Background(), ev.Usage)
+					r.persistTurnEnd(context.Background(), ev.Usage)
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 					r.shadowCapture(ev.Tool)

@@ -273,3 +273,78 @@ func TestAgentToolLabel(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentStateMirroredOnRecord: the cold-load path. A session listed while
+// a turn is in flight must report the live state from its record alone — a
+// page load or an SSE reconnect mid-turn has no event replay to fall back
+// on, and would otherwise render every card idle until the next transition.
+// The turn-end stamp is checked here too, on the same real turn.
+func TestAgentStateMirroredOnRecord(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	if cur, err := data.Session(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	} else if cur.LastTurnAt != nil {
+		t.Errorf("LastTurnAt = %v before any turn, want nil", cur.LastTurnAt)
+	}
+
+	// Mid-turn: read the record, not the log. Send returns once the turn is
+	// in flight and markAgentWorking has appended, both synchronous.
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "hello"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	inflight, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inflight.AgentState == nil {
+		t.Fatal("session record carries no agent state mid-turn")
+	}
+	if inflight.AgentState.State != contracts.AgentWorking {
+		t.Errorf("mid-turn record state = %+v, want working", *inflight.AgentState)
+	}
+	if inflight.AgentState.Label == "" || inflight.AgentState.Since.IsZero() {
+		t.Errorf("mid-turn record state = %+v, want a label and a since", *inflight.AgentState)
+	}
+
+	drainText(t, ch)
+	waitAgentStates(t, data, sess.ID, 2)
+
+	// persistTurnEnd runs after onTurnEnd in the pump, so the idle event can
+	// land a hair before the stamp.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cur, err := data.Session(ctx, sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cur.LastTurnAt != nil {
+			if cur.LastTurnAt.Before(inflight.AgentState.Since) {
+				t.Errorf("LastTurnAt %v predates the turn's start %v", cur.LastTurnAt, inflight.AgentState.Since)
+			}
+			if cur.AgentState == nil || cur.AgentState.State != contracts.AgentIdle {
+				t.Errorf("record state after the turn = %+v, want idle", cur.AgentState)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for LastTurnAt to be stamped at turn end")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

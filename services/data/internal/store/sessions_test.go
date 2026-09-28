@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
@@ -254,5 +255,162 @@ func TestCommitLinkageChain(t *testing.T) {
 	}
 	if len(all) != 4 {
 		t.Errorf("stored %d commits, want 4", len(all))
+	}
+}
+
+// TestSetAgentStateMirrorsAndAnnounces: the record and the event have to
+// land together — a cold GET /sessions is the only thing a page load
+// mid-turn has to go on, and it must agree with the stream.
+func TestSetAgentStateMirrorsAndAnnounces(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Add auth"})
+	before, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	working := contracts.AgentState{
+		State: contracts.AgentWorking,
+		Label: "Running bash · make check",
+		Since: time.Date(2026, 9, 28, 14, 5, 0, 0, time.UTC),
+	}
+	if err := s.SetAgentState(ctx, sess.ID, working, "session"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AgentState == nil {
+		t.Fatal("agent state not mirrored onto the record")
+	}
+	if got.AgentState.State != working.State || got.AgentState.Label != working.Label ||
+		!got.AgentState.Since.Equal(working.Since) {
+		t.Errorf("mirrored state = %+v, want %+v", *got.AgentState, working)
+	}
+	// A tool-label transition is not a change to the session's user-visible
+	// state: bumping UpdatedAt would reshuffle the list several times a turn
+	// and restart the archive clock SweepExpiredShadows reads off it.
+	if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("UpdatedAt moved: %v, want %v", got.UpdatedAt, before.UpdatedAt)
+	}
+
+	types := eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"session.agent_state"}})
+	if len(types) != 1 {
+		t.Fatalf("agent_state events = %v, want exactly one", types)
+	}
+
+	if err := s.SetAgentState(ctx, sess.ID, contracts.AgentState{State: "bogus"}, "session"); err == nil {
+		t.Error("expected a validation error for an unknown agent state")
+	}
+}
+
+// TestRecordTurnEndStampsLastTurnAt: last_turn_at advances on turn end and
+// on nothing else — the whole reason it exists beside UpdatedAt, which every
+// rename and summary write bumps.
+func TestRecordTurnEndStampsLastTurnAt(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Add auth"})
+
+	if cur, err := s.Get(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	} else if cur.LastTurnAt != nil {
+		t.Errorf("LastTurnAt = %v on a session with no turns yet, want nil", cur.LastTurnAt)
+	}
+
+	turnEnd := time.Date(2026, 9, 28, 14, 6, 12, 0, time.UTC)
+	usage := &contracts.Usage{InputTokens: 1200, ContextTokens: 48_000}
+	if err := s.RecordTurnEnd(ctx, sess.ID, usage, turnEnd, "session"); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.LastTurnAt == nil || !cur.LastTurnAt.Equal(turnEnd) {
+		t.Fatalf("LastTurnAt = %v, want %v", cur.LastTurnAt, turnEnd)
+	}
+	if cur.LastUsage == nil || cur.LastUsage.ContextTokens != 48_000 {
+		t.Errorf("LastUsage = %+v, want the turn's accounting", cur.LastUsage)
+	}
+
+	// Rename, summary and activity writes: none of them is a turn.
+	cur.Name = "Add OAuth"
+	cur.Summary = "Implemented the OAuth flow."
+	if err := s.Update(ctx, cur, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetActivity(ctx, sess.ID, contracts.SessionInactive, "system"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.LastTurnAt == nil || !after.LastTurnAt.Equal(turnEnd) {
+		t.Errorf("LastTurnAt = %v after rename/summary/activity writes, want %v", after.LastTurnAt, turnEnd)
+	}
+	if !after.UpdatedAt.After(*after.LastTurnAt) {
+		t.Errorf("UpdatedAt %v should have moved past the turn, LastTurnAt %v", after.UpdatedAt, after.LastTurnAt)
+	}
+
+	// A turn that reported no usage still ended: the stamp advances, the
+	// previous accounting survives.
+	later := turnEnd.Add(time.Minute)
+	if err := s.RecordTurnEnd(ctx, sess.ID, nil, later, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if cur, err := s.Get(ctx, sess.ID); err != nil {
+		t.Fatal(err)
+	} else if cur.LastTurnAt == nil || !cur.LastTurnAt.Equal(later) {
+		t.Errorf("LastTurnAt = %v after a usage-less turn, want %v", cur.LastTurnAt, later)
+	} else if cur.LastUsage == nil || cur.LastUsage.ContextTokens != 48_000 {
+		t.Errorf("LastUsage = %+v, want the earlier turn's accounting preserved", cur.LastUsage)
+	}
+}
+
+// TestSessionUpdateKeepsRunnerFields is the lost-update case the scoped
+// writers exist for: a client PUTs a whole record it read before the runner
+// wrote its turn state. The stale snapshot must not stamp a finished turn
+// back over a live one.
+func TestSessionUpdateKeepsRunnerFields(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Add auth"})
+
+	stale, err := s.Get(ctx, sess.ID) // read before the runner writes
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	turnEnd := time.Date(2026, 9, 28, 14, 6, 12, 0, time.UTC)
+	if err := s.RecordTurnEnd(ctx, sess.ID, nil, turnEnd, "session"); err != nil {
+		t.Fatal(err)
+	}
+	working := contracts.AgentState{State: contracts.AgentWorking, Label: "Thinking…", Since: turnEnd}
+	if err := s.SetAgentState(ctx, sess.ID, working, "session"); err != nil {
+		t.Fatal(err)
+	}
+
+	stale.Name = "Add OAuth" // ...and only now writes back
+	if err := s.Update(ctx, stale, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Add OAuth" {
+		t.Errorf("name = %q, want the rename to have landed", got.Name)
+	}
+	if got.LastTurnAt == nil || !got.LastTurnAt.Equal(turnEnd) {
+		t.Errorf("LastTurnAt = %v, want %v — a stale PUT cleared it", got.LastTurnAt, turnEnd)
+	}
+	if got.AgentState == nil || got.AgentState.State != contracts.AgentWorking {
+		t.Errorf("AgentState = %+v, want the live working state", got.AgentState)
 	}
 }

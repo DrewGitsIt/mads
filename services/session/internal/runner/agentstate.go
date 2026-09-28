@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"context"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -149,19 +151,24 @@ func (r *Runner) flushAgentState() {
 	r.emitAgentStateLocked(time.Now())
 }
 
-// emitAgentStateLocked appends the current state and records it as sent.
-// Called with st.mu held — including across the append, so two racing
-// callers can never invert working and idle on the wire. A nil Data Service
-// is a no-op inside appendConversation, matching every other pump-side
-// append.
+// emitAgentStateLocked publishes the current state and records it as sent.
+// One call both appends the session.agent_state event and mirrors the state
+// onto the session record (store.Sessions.SetAgentState), because a cold
+// reader — a page load or an SSE reconnect mid-turn — has only the record to
+// go on, and a record that lagged the stream would report a live turn idle.
+// Called with st.mu held, including across the call, so two racing callers
+// can never invert working and idle. A nil Data Service is a no-op, matching
+// every other pump-side append.
 func (r *Runner) emitAgentStateLocked(now time.Time) {
 	st := &r.agent
 	st.sentState, st.sentLabel, st.sentAt = st.state, st.label, now
-	r.appendConversation(contracts.SessionAgentState, contracts.AgentState{
-		State: st.state,
-		Label: st.label,
-		Since: st.since,
-	})
+	if r.data == nil {
+		return
+	}
+	state := contracts.AgentState{State: st.state, Label: st.label, Since: st.since}
+	if err := r.data.SetSessionAgentState(context.Background(), r.sessionID, state); err != nil {
+		log.Printf("runner: set agent state %s: %v", state.State, err)
+	}
 }
 
 func (st *agentState) stopTimerLocked() {
