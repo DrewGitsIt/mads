@@ -375,19 +375,27 @@ func writeWakeError(w http.ResponseWriter, err error) {
 	}
 }
 
+// handleDeleteSession deletes a session by terminating it first, never by
+// refusing it. It does not gate on Activity or on a tracked child:
+// TerminateSessionForDelete is correct in every state — it stops a tracked
+// child with the standard grace, and with no child tracked it reconciles a
+// record still stuck at active (Supervisor state is in-memory only, so
+// Activity drifts from child liveness across a Router restart). Gating on
+// the record was what made exactly that drifted session undeletable.
+// Terminate-for-delete also suppresses the session-summary job the
+// active -> inactive flip would otherwise spawn, so no summary job outlives
+// the session it summarises — see Supervisor.TerminateSessionForDelete.
+//
+// Still failable, just not refusable: a terminate that errors leaves the
+// child alive, so the session must not be deleted out from under it.
 func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	sess, err := s.data.Session(r.Context(), id)
-	if err != nil {
-		writeError(w, err)
+	if _, err := s.data.Session(r.Context(), id); err != nil {
+		writeError(w, err) // 404 for an unknown id, before terminating anything
 		return
 	}
-	if sess.Activity == contracts.SessionActive {
-		writeErrMsg(w, http.StatusConflict, "delete session: ", errors.New("session is active; close it before deleting"))
-		return
-	}
-	if _, tracked := s.sup.SessionAddr(id); tracked {
-		writeErrMsg(w, http.StatusConflict, "delete session: ", errors.New("session has a running child; close it before deleting"))
+	if err := s.sup.TerminateSessionForDelete(r.Context(), id); err != nil {
+		writeErrMsg(w, http.StatusBadGateway, "delete session: terminate: ", err)
 		return
 	}
 	if err := s.data.DeleteSession(r.Context(), id); err != nil {

@@ -673,6 +673,94 @@ func TestTerminateSessionTriggersSessionSummary(t *testing.T) {
 	})
 }
 
+// TerminateSessionForDelete is the delete path's terminate: same
+// termination, but no session-summary job — a session about to stop
+// existing must not leave a job behind that would write a summary back
+// onto the deleted row. Asserted on both spawn sites: a tracked child
+// (onSessionExit) and an untracked active record (reconcileInactiveSession).
+func TestTerminateForDeleteSuppressesSessionSummary(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+
+	f, err := fake.NewWithScenario(fake.Scenario{Name: "delete-no-summary", Rules: []fake.Rule{{
+		Match: "seed task",
+		Reply: `{"accomplished":"Did the seed task.","decisions":"","remaining":""}`,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fm := fastmodel.New(f, fastmodel.Config{Model: "fake-fast"})
+	jobs := job.New(data, fm, registryclient.New(""))
+
+	sup := newSupervisor(t, data, jobs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for _, tc := range []struct {
+		name  string
+		spawn bool
+	}{
+		{name: "tracked child", spawn: true},
+		{name: "orphaned active record", spawn: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sess := contracts.Session{Name: "delete " + tc.name}
+			if err := data.CreateSession(ctx, &sess); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			if err := data.CreateTask(ctx, &contracts.Task{
+				SessionID: sess.ID, Title: "seed task", Source: "test", Status: contracts.StatusDone,
+			}); err != nil {
+				t.Fatalf("CreateTask: %v", err)
+			}
+			if tc.spawn {
+				if _, err := sup.SpawnSession(ctx, sess.ID); err != nil {
+					t.Fatalf("SpawnSession: %v", err)
+				}
+			}
+
+			if err := sup.TerminateSessionForDelete(ctx, sess.ID); err != nil {
+				t.Fatalf("TerminateSessionForDelete: %v", err)
+			}
+
+			// The summary job appends job.queued synchronously in Spawn, so
+			// by the time the terminate has returned a spawned job would
+			// already be on the log. Give it room anyway before asserting
+			// the absence.
+			time.Sleep(200 * time.Millisecond)
+			events, err := data.Events(ctx, 0, sess.ID, []string{"job.queued"})
+			if err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			for _, e := range events {
+				var payload struct {
+					Kind string `json:"kind"`
+				}
+				if err := json.Unmarshal(e.Payload, &payload); err != nil {
+					t.Fatalf("decode job.queued payload: %v", err)
+				}
+				if payload.Kind == job.SessionSummaryKind {
+					t.Fatal("terminate-for-delete spawned a session-summary job; it would outlive the session")
+				}
+			}
+
+			if !tc.spawn {
+				// Only the untracked case reconciles the record here:
+				// testchild never flips Activity itself the way the real
+				// Session Service's Shutdown does (see
+				// TestCreateTerminateSession), and the record is about to
+				// be deleted anyway.
+				if got, err := data.Session(ctx, sess.ID); err != nil {
+					t.Fatalf("Session: %v", err)
+				} else if got.Activity != contracts.SessionInactive {
+					t.Fatalf("Activity after TerminateSessionForDelete = %q, want inactive", got.Activity)
+				}
+			}
+		})
+	}
+}
+
 // TerminateSession must reconcile a session that says active but has no
 // tracked child — the post-Router-restart orphan case (Supervisor state is
 // in-memory only). Truth-enforcement, not a no-op: flips Activity and

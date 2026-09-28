@@ -3,12 +3,18 @@ package api_test
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 func TestGetSession(t *testing.T) {
@@ -353,5 +359,79 @@ func TestCreateSessionAgentAutoFallsBackToWorkspaceDefault(t *testing.T) {
 	}](t, resp)
 	if createdSess.Session.Agent != "default-persona" {
 		t.Fatalf("agent = %q, want default-persona (fallback)", createdSess.Session.Agent)
+	}
+}
+
+// A session orphaned by a prior Router restart (Activity says active,
+// nothing tracked — Supervisor state is in-memory only) must be deletable.
+// It was the one session that could never be deleted: the old handler's
+// first guard read the record, which nothing was ever going to flip on its
+// own. Delete now terminates first, and terminate reconciles the record.
+func TestDeleteOrphanedActiveSession(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "router")
+
+	sess := contracts.Session{Name: "orphaned, to delete", Provider: "fake"}
+	if err := data.CreateSession(context.Background(), &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	// Never spawned through the Router — no child is tracked, yet the
+	// record still says active.
+
+	resp := httpDelete(t, srv.URL+"/sessions/"+sess.ID)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete orphaned-active session status = %d, want 204", resp.StatusCode)
+	}
+
+	got, err := http.Get(srv.URL + "/sessions/" + sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.StatusCode != http.StatusNotFound {
+		t.Fatalf("get session after delete status = %d, want 404", got.StatusCode)
+	}
+}
+
+// Delete stays failable even though it is no longer refusable: if the
+// terminate itself fails, the session must survive rather than be deleted
+// out from under a child that may still be alive. The failure is injected
+// by breaking the session-record write that terminate's reconcile path
+// needs — the Router sees an error from TerminateSessionForDelete exactly
+// as it would from a child that refused to die.
+func TestDeleteSessionFailsWhenTerminateFails(t *testing.T) {
+	realBase := datatest.Start(t)
+	realData := dataclient.New(realBase, "router")
+
+	sess := contracts.Session{Name: "terminate will fail", Provider: "fake"}
+	if err := realData.CreateSession(context.Background(), &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	target, err := url.Parse(realBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && r.URL.Path == "/sessions/"+sess.ID {
+			http.Error(w, "injected: session write refused", http.StatusInternalServerError)
+			return
+		}
+		httputil.NewSingleHostReverseProxy(target).ServeHTTP(w, r)
+	}))
+	t.Cleanup(proxy.Close)
+
+	data := dataclient.New(proxy.URL, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
+
+	resp := httpDelete(t, srv.URL+"/sessions/"+sess.ID)
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("delete status with a failing terminate = %d, want 502", resp.StatusCode)
+	}
+
+	if _, err := realData.Session(context.Background(), sess.ID); err != nil {
+		t.Fatalf("session must survive a failed terminate, got: %v", err)
 	}
 }

@@ -185,6 +185,19 @@ func postJSON(t *testing.T, url string, body any) *http.Response {
 	return resp
 }
 
+func httpDelete(t *testing.T, url string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil) //nolint:noctx // test helper, url is local httptest server
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func decodeJSON[T any](t *testing.T, resp *http.Response) T {
 	t.Helper()
 	defer func() { _ = resp.Body.Close() }()
@@ -316,13 +329,17 @@ func TestResumeSession(t *testing.T) {
 	}
 }
 
-// TestDeleteSession spawns via testchild (see TestResumeSession) and flips
-// Activity directly through the Data Service after terminate to simulate
-// what the real Session Service's Shutdown does (proven separately in
-// TestCreateTerminateSession).
+// TestDeleteSession proves delete terminates rather than refuses: a session
+// with a live tracked child (spawned via testchild, see TestResumeSession)
+// is deletable in a single call, with the child stopped before the record
+// goes. Delete used to 409 on both counts.
 func TestDeleteSession(t *testing.T) {
-	srv, base := newTestServerWithData(t)
+	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	srv := httptest.NewServer(api.New(testOptions(t, data, sup)))
+	t.Cleanup(srv.Close)
 
 	resp := postJSON(t, srv.URL+"/sessions", map[string]string{"name": "delete test", "provider": "fake"})
 	if resp.StatusCode != http.StatusCreated {
@@ -334,46 +351,19 @@ func TestDeleteSession(t *testing.T) {
 		} `json:"session"`
 	}](t, resp)
 
-	// Deleting a still-active session is a conflict.
-	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/sessions/"+created.Session.ID, nil) //nolint:noctx // test helper, url is local httptest server
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("delete-while-active status = %d, want 409", resp.StatusCode)
+	if _, tracked := sup.SessionAddr(created.Session.ID); !tracked {
+		t.Fatal("create session: no child tracked; this test needs a live one to terminate")
 	}
 
-	resp = postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/terminate", nil)
+	resp = httpDelete(t, srv.URL+"/sessions/"+created.Session.ID)
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("terminate status = %d, want 204", resp.StatusCode)
+		t.Fatalf("delete-while-active status = %d, want 204 (terminate, don't refuse)", resp.StatusCode)
+	}
+	if addr, tracked := sup.SessionAddr(created.Session.ID); tracked {
+		t.Fatalf("child still tracked at %s after delete: the child was not terminated first", addr)
 	}
 
-	sess, err := data.Session(context.Background(), created.Session.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sess.Activity = contracts.SessionInactive
-	if err := data.UpdateSession(context.Background(), &sess); err != nil {
-		t.Fatal(err)
-	}
-
-	req, err = http.NewRequest(http.MethodDelete, srv.URL+"/sessions/"+created.Session.ID, nil) //nolint:noctx // test helper, url is local httptest server
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete status = %d, want 204", resp.StatusCode)
-	}
-
-	resp, err = http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	resp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,14 +371,7 @@ func TestDeleteSession(t *testing.T) {
 		t.Fatalf("get session after delete status = %d, want 404", resp.StatusCode)
 	}
 
-	req, err = http.NewRequest(http.MethodDelete, srv.URL+"/sessions/unknown-id", nil) //nolint:noctx // test helper, url is local httptest server
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err = http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp = httpDelete(t, srv.URL+"/sessions/unknown-id")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("delete unknown id status = %d, want 404", resp.StatusCode)
 	}

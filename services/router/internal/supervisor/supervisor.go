@@ -42,6 +42,7 @@ type Supervisor struct {
 	mu        sync.Mutex
 	sessions  map[string]*child.Process
 	pipelines map[string]*pipelineEntry
+	deleting  map[string]int // sessions with a delete in flight — see TerminateSessionForDelete
 }
 
 // New builds a Supervisor. data must be a dataclient.Client using the
@@ -59,6 +60,7 @@ func New(data *dataclient.Client, sessionArgv, pipelineArgv []string, jobs *job.
 		jobs:         jobs,
 		sessions:     map[string]*child.Process{},
 		pipelines:    map[string]*pipelineEntry{},
+		deleting:     map[string]int{},
 	}
 }
 
@@ -194,14 +196,65 @@ func (s *Supervisor) TerminateSession(ctx context.Context, sessionID string) err
 	return p.Terminate(ctx, terminateGrace)
 }
 
+// TerminateSessionForDelete is TerminateSession for the delete path: the
+// same termination in every state, minus the session-summary job the
+// active -> inactive transition normally spawns. Suppression at the source,
+// rather than ordering the delete so a spawned job can't land late: the job
+// is asynchronous and Fast-Model-bound, so no ordering the caller can
+// choose bounds when its final UpdateSession runs — it would write a
+// summary back onto a row the delete just removed, and pin job.* events to
+// a session that no longer exists. A session about to stop existing has
+// nothing worth summarising, so the job is simply never spawned.
+//
+// The suppression is a refcount rather than a flag because it must cover
+// both spawn sites (onSessionExit for a tracked child, reconcileInactiveSession
+// for an untracked one) and because concurrent deletes of the same session
+// must not un-suppress each other. It is safe to read from onSessionExit:
+// child.Process.Terminate returns only after the exit callback has run, so
+// the mark is still held when that callback reaches the summary spawn.
+func (s *Supervisor) TerminateSessionForDelete(ctx context.Context, sessionID string) error {
+	s.mu.Lock()
+	s.deleting[sessionID]++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if s.deleting[sessionID] <= 1 {
+			delete(s.deleting, sessionID)
+		} else {
+			s.deleting[sessionID]--
+		}
+		s.mu.Unlock()
+	}()
+	return s.TerminateSession(ctx, sessionID)
+}
+
+// spawnSessionSummary spawns the session-summary job for an active ->
+// inactive transition (spec §16), unless a delete of sessionID is in flight
+// (TerminateSessionForDelete) or no job runner is wired. Best-effort: logs
+// a spawn failure rather than failing the exit path that called it.
+func (s *Supervisor) spawnSessionSummary(ctx context.Context, sessionID string) {
+	if s.jobs == nil {
+		return
+	}
+	s.mu.Lock()
+	deleting := s.deleting[sessionID] > 0
+	s.mu.Unlock()
+	if deleting {
+		return
+	}
+	if _, err := s.jobs.Spawn(ctx, job.SessionSummaryKind, sessionID, job.GenerateSessionSummary(sessionID)); err != nil {
+		log.Printf("supervisor: spawn session summary for %s: %v", sessionID, err)
+	}
+}
+
 // reconcileInactiveSession enforces the truth that no child is tracked
 // under sessionID: if the record still says active, flips it to inactive.
 // dataclient.UpdateSession itself emits session.activity_changed when
 // Activity changes (services/data/internal/store/sessions.go Update) — no
 // manual Append needed here, same as onSessionExit's crash-path flip
 // below. Also spawns the same session-summary job a real exit would (spec
-// §16: every active→inactive transition triggers one), matching
-// onSessionExit's unconditional spawn. No-op if the session is already
+// §16: every active→inactive transition triggers one), through the same
+// spawnSessionSummary onSessionExit uses. No-op if the session is already
 // inactive, or doesn't exist.
 func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID string) error {
 	sess, err := s.data.Session(ctx, sessionID)
@@ -215,11 +268,7 @@ func (s *Supervisor) reconcileInactiveSession(ctx context.Context, sessionID str
 	if err := s.data.UpdateSession(ctx, &sess); err != nil {
 		return err
 	}
-	if s.jobs != nil {
-		if _, err := s.jobs.Spawn(ctx, job.SessionSummaryKind, sessionID, job.GenerateSessionSummary(sessionID)); err != nil {
-			log.Printf("supervisor: spawn session summary for %s: %v", sessionID, err)
-		}
-	}
+	s.spawnSessionSummary(ctx, sessionID)
 	return nil
 }
 
@@ -436,11 +485,7 @@ func (s *Supervisor) onSessionExit(sessionID string, expected bool, exitErr erro
 	// Every session-child exit, expected or crash, is an active → inactive
 	// transition by construction (spec §16) — the right hook to trigger
 	// summary generation, no separate event subscription needed.
-	if s.jobs != nil {
-		if _, err := s.jobs.Spawn(ctx, job.SessionSummaryKind, sessionID, job.GenerateSessionSummary(sessionID)); err != nil {
-			log.Printf("supervisor: spawn session summary for %s: %v", sessionID, err)
-		}
-	}
+	s.spawnSessionSummary(ctx, sessionID)
 }
 
 func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exitErr error) {
