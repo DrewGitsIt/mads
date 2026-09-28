@@ -3,9 +3,24 @@ import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialo
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
-import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf, totalOpenTasks } from "./railGroups";
-import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
+import {
+  EMPTY_AGENT_STATE,
+  EMPTY_OPEN_TASK_BREAKDOWN,
+  RAIL_FILTERS,
+  filterBucketOf,
+  isEarlier,
+  mostUrgentBucket,
+  statusOf,
+  totalOpenTasks,
+} from "./railGroups";
+import type {
+  OpenTaskBreakdown,
+  RailFilter,
+  RailFilterBucket,
+  SessionAgentState,
+} from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
+import type { RailRow } from "./railLinks";
 import { useSettledRailOrder } from "./railOrder";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
@@ -36,9 +51,10 @@ export interface SessionRailProps {
   links?: Link[];
   routerClient?: RouterClient;
   /**
-   * Opaque stamp of the active search/filter. Any change to it is a quiet
+   * Opaque stamp of the active search query. Any change to it is a quiet
    * boundary: the pending order applies at once, because a list the user just
-   * asked for has nothing to hold still.
+   * asked for has nothing to hold still. (The filter chips below are NOT a
+   * boundary — they narrow the order in place, they never re-rank it.)
    */
   filterKey?: string;
   className?: string;
@@ -66,11 +82,14 @@ export function SessionRail({
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
   // Order is settled, never live: see useSettledRailOrder for the contract.
-  const { active, recent, pendingMoves, settle, railHandlers } = useSettledRailOrder(
+  const { sessions: ordered, pendingMoves, settle, railHandlers } = useSettledRailOrder(
     sessions,
     selectedId,
     filterKey,
   );
+  const now = useRelativeNow();
+  const [filter, setFilter] = useState<RailFilter>("all");
+  const [earlierOpen, setEarlierOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -78,9 +97,42 @@ export function SessionRail({
 
   const allSessionsById = new Map(sessions.map((s) => [s.id, s]));
   const graph = computeRailLinks(linkedSessionsEnabled ? links : []);
-  const activeRows = buildRailRows(active, allSessionsById, graph);
-  const recentRows = buildRailRows(recent, allSessionsById, graph);
+  const rows = buildRailRows(ordered, allSessionsById, graph);
   const anchorWorkspace = linkMode ? allSessionsById.get(linkMode.anchorId)?.workspace : undefined;
+
+  function bucketOf(session: Session): RailFilterBucket {
+    return filterBucketOf(
+      statusOf(
+        session,
+        agentStates[session.id] ?? EMPTY_AGENT_STATE,
+        openTaskCounts[session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN,
+      ),
+    );
+  }
+
+  // A holder answers for the subjects nested under it: they ride along when it
+  // survives a filter, so counting it as merely "idle" while a nested card is
+  // parked would make "Needs you 1" click through to a list without it.
+  const bucketByRowId = new Map<string, RailFilterBucket>(
+    rows.map((row) => [
+      row.session.id,
+      mostUrgentBucket([row.session, ...row.subjects.map((s) => s.session)].map(bucketOf)),
+    ]),
+  );
+  const counts: Record<RailFilter, number> = { all: rows.length, working: 0, needs: 0, idle: 0 };
+  for (const bucket of bucketByRowId.values()) counts[bucket] += 1;
+
+  // Narrowing only — the survivors keep the order they already had, which is
+  // the whole reason a chip can do triage without a group's side effects.
+  const visible =
+    filter === "all" ? rows : rows.filter((row) => bucketByRowId.get(row.session.id) === filter);
+  const head: RailRow[] = [];
+  const earlier: RailRow[] = [];
+  for (const row of visible) (isEarlier(row.session, now) ? earlier : head).push(row);
+  // A tail needs a head. With nothing recent above it, the fold would hide the
+  // entire rail behind one line, so the whole list just renders.
+  const listRows = head.length > 0 ? head : earlier;
+  const tailRows = head.length > 0 ? earlier : [];
 
   function startLinkMode(id: string) {
     setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
@@ -99,6 +151,25 @@ export function SessionRail({
   function cancelLinkMode() {
     setLinkMode(undefined);
   }
+
+  // Shared by the main list and the "Earlier" tail — the two render identical
+  // cards, they only differ in whether the fold is hiding them.
+  const rowProps = {
+    openTaskCounts,
+    agentStates,
+    selectedId,
+    onSelect,
+    onResume,
+    onClose,
+    onDeleteRequest: setConfirmDeleteId,
+    onUnlinkRequest: setUnlinkTarget,
+    linkedSessionsEnabled,
+    linkMode,
+    anchorWorkspace,
+    onStartLinkMode: startLinkMode,
+    onToggleLinkSelection: toggleLinkSelection,
+    routerClient,
+  };
 
   return (
     <div
@@ -131,56 +202,40 @@ export function SessionRail({
           </button>
         </div>
       )}
-      {active.length > 0 && (
-        <div className={styles.group}>
-          <div className={styles.groupHeader}>
-            Active <span className={styles.count}>· {active.length}</span>
-          </div>
-          {activeRows.map((row) => (
-            <RailRowGroup
-              key={row.session.id}
-              row={row}
-              openTaskCounts={openTaskCounts}
-              agentStates={agentStates}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onResume={onResume}
-              onClose={onClose}
-              onDeleteRequest={setConfirmDeleteId}
-              onUnlinkRequest={setUnlinkTarget}
-              linkedSessionsEnabled={linkedSessionsEnabled}
-              linkMode={linkMode}
-              anchorWorkspace={anchorWorkspace}
-              onStartLinkMode={startLinkMode}
-              onToggleLinkSelection={toggleLinkSelection}
-              routerClient={routerClient}
-            />
-          ))}
-        </div>
-      )}
-      {recent.length > 0 && (
-        <div className={styles.group}>
-          <div className={styles.groupHeader}>Recent</div>
-          {recentRows.map((row) => (
-            <RailRowGroup
-              key={row.session.id}
-              row={row}
-              openTaskCounts={openTaskCounts}
-              agentStates={agentStates}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onResume={onResume}
-              onClose={onClose}
-              onDeleteRequest={setConfirmDeleteId}
-              onUnlinkRequest={setUnlinkTarget}
-              linkedSessionsEnabled={linkedSessionsEnabled}
-              linkMode={linkMode}
-              anchorWorkspace={anchorWorkspace}
-              onStartLinkMode={startLinkMode}
-              onToggleLinkSelection={toggleLinkSelection}
-              routerClient={routerClient}
-            />
-          ))}
+      <div className={styles.filterBar} role="group" aria-label="Filter sessions">
+        {RAIL_FILTERS.map(({ id, label }) => (
+          <button
+            key={id}
+            type="button"
+            className={[styles.chip, filter === id ? styles.chipOn : ""].filter(Boolean).join(" ")}
+            aria-pressed={filter === id}
+            onClick={() => setFilter(id)}
+          >
+            {label}
+            <span className={styles.chipCount}>{counts[id]}</span>
+          </button>
+        ))}
+      </div>
+      <div className={styles.list}>
+        {listRows.map((row) => (
+          <RailRowGroup key={row.session.id} row={row} {...rowProps} />
+        ))}
+        {visible.length === 0 && <div className={styles.emptyNote}>No sessions match this filter.</div>}
+      </div>
+      {tailRows.length > 0 && (
+        <div className={styles.list}>
+          <button
+            type="button"
+            className={styles.earlierToggle}
+            aria-expanded={earlierOpen}
+            onClick={() => setEarlierOpen((open) => !open)}
+          >
+            <span aria-hidden="true">{earlierOpen ? "▾" : "▸"}</span>
+            Earlier
+            <span className={styles.earlierCount}>· {tailRows.length}</span>
+          </button>
+          {earlierOpen &&
+            tailRows.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
         </div>
       )}
       <SessionDeleteConfirmDialog

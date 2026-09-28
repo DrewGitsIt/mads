@@ -34,25 +34,23 @@ function makeLink(overrides: Partial<Link>): Link {
 }
 
 describe("SessionRail", () => {
-  it("renders an Active group with a count and a Recent group without one", () => {
+  it("renders one list with no Active/Recent headers at all", () => {
     render(
       <SessionRail
         sessions={[
-          makeSession({ id: "a1", activity: "active" }),
-          makeSession({ id: "r1", activity: "inactive" }),
+          makeSession({ id: "a1", name: "live one", activity: "active" }),
+          makeSession({ id: "r1", name: "sleepy one", activity: "inactive" }),
         ]}
         openTaskCounts={{}}
       />,
     );
-    expect(screen.getByText("· 1")).toBeTruthy();
-    expect(screen.getByText("Recent")).toBeTruthy();
-  });
-
-  it("omits the Recent group entirely when there are no recent sessions", () => {
-    render(
-      <SessionRail sessions={[makeSession({ id: "a1", activity: "active" })]} openTaskCounts={{}} />,
-    );
+    expect(screen.queryByText("Active")).toBeNull();
     expect(screen.queryByText("Recent")).toBeNull();
+    const cards = [...screen.getByLabelText("Session list").querySelectorAll('div[role="button"]')];
+    expect(cards.map((c) => c.querySelector('[class*="name"]')!.textContent)).toEqual([
+      "live one",
+      "sleepy one",
+    ]);
   });
 
   it("shows an amber attention dot for a recent session with blocked work", () => {
@@ -579,6 +577,9 @@ describe("SessionRail timestamps", () => {
     expect(stampOf("sub-minute").textContent).toBe("now");
     expect(stampOf("minutes").textContent).toBe("14m");
     expect(stampOf("today").textContent).toBe("08:40");
+
+    // The last two are a day cold, so they sit in the collapsed "Earlier" tail.
+    fireEvent.click(screen.getByRole("button", { name: /Earlier/ }));
     expect(stampOf("this week").textContent).toMatch(/^\w{3,} 13:40$/);
     expect(stampOf("older").textContent).toMatch(/^18 \w{3,}$/);
   });
@@ -619,7 +620,12 @@ describe("SessionRail timestamps", () => {
             created_at: isoAgo(10 * DAY),
             updated_at: isoAgo(14 * MINUTE),
           }),
-          makeSession({ id: "b", name: "chosen", created_at: isoAgo(5 * HOUR) }),
+          makeSession({
+            id: "b",
+            name: "chosen",
+            created_at: isoAgo(5 * HOUR),
+            updated_at: isoAgo(2 * HOUR),
+          }),
         ]}
         selectedId="b"
         openTaskCounts={{}}
@@ -943,5 +949,193 @@ describe("SessionRail status subscription", () => {
     await waitFor(() => expect(statusOf("session 7").textContent).toBe("✓Done · your turn"));
     expect(statusOf("session 3").textContent).toBe("◦Ready");
     expect(FakeEventSource.instances.filter((i) => !i.closed)).toHaveLength(1);
+  });
+});
+
+/** The rail's rendered card order, top to bottom. */
+function cardNames(): string[] {
+  return [...screen.getByLabelText("Session list").querySelectorAll('div[role="button"]')].map(
+    (c) => c.querySelector('[class*="name"]')!.textContent!,
+  );
+}
+
+function chip(label: string): HTMLElement {
+  const bar = screen.getByRole("group", { name: "Filter sessions" });
+  return [...bar.querySelectorAll("button")].find((b) => b.textContent!.startsWith(label))!;
+}
+
+describe("SessionRail filter chips", () => {
+  // One of each bucket, most recent first, all inside the last day.
+  const working = makeSession({ id: "w", name: "working one", updated_at: isoAgo(1 * MINUTE) });
+  const parked = makeSession({ id: "p", name: "parked one", updated_at: isoAgo(2 * MINUTE) });
+  const crashed = makeSession({ id: "x", name: "crashed one", updated_at: isoAgo(3 * MINUTE) });
+  const ready = makeSession({ id: "r", name: "ready one", updated_at: isoAgo(4 * MINUTE) });
+  const sleeping = makeSession({
+    id: "s",
+    name: "sleeping one",
+    activity: "inactive",
+    updated_at: isoAgo(5 * MINUTE),
+  });
+  const agentStates: Record<string, SessionAgentState> = {
+    w: { subagents: 0, workingSince: isoAgo(30_000) },
+    p: { subagents: 0, awaitingSince: isoAgo(30_000), awaitingTool: "Bash" },
+    x: { subagents: 0, crashed: true },
+  };
+
+  function renderRail() {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[working, parked, crashed, ready, sleeping]}
+        openTaskCounts={{}}
+        agentStates={agentStates}
+      />,
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("carries a count per chip, matching the status vocabulary the cards paint", () => {
+    renderRail();
+    expect(chip("All").textContent).toBe("All5");
+    expect(chip("Working").textContent).toBe("Working1");
+    // A crash and a parked approval are both "needs you".
+    expect(chip("Needs you").textContent).toBe("Needs you2");
+    // Ready and sleeping alike — neither is mid-turn.
+    expect(chip("Idle").textContent).toBe("Idle2");
+  });
+
+  it("counts a quiet session's blocked work as needs-you, like the amber dot does", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[sleeping]}
+        openTaskCounts={{ s: { running: 0, ready: 0, blocked: 1 } }}
+      />,
+    );
+    expect(chip("Needs you").textContent).toBe("Needs you1");
+    expect(chip("Idle").textContent).toBe("Idle0");
+  });
+
+  it("narrows the list to a chip's bucket without re-sorting the survivors", () => {
+    renderRail();
+    expect(cardNames()).toEqual([
+      "working one",
+      "parked one",
+      "crashed one",
+      "ready one",
+      "sleeping one",
+    ]);
+
+    fireEvent.click(chip("Needs you"));
+    expect(cardNames()).toEqual(["parked one", "crashed one"]);
+    expect(chip("Needs you").getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(chip("Idle"));
+    expect(cardNames()).toEqual(["ready one", "sleeping one"]);
+
+    fireEvent.click(chip("All"));
+    expect(cardNames()).toEqual([
+      "working one",
+      "parked one",
+      "crashed one",
+      "ready one",
+      "sleeping one",
+    ]);
+  });
+
+  it("leaves a pending reorder pending — a chip narrows the order, it never applies one", () => {
+    vi.useFakeTimers({ now: NOW });
+    const a = makeSession({ id: "a", name: "alpha", updated_at: isoAgo(10 * MINUTE) });
+    const b = makeSession({ id: "b", name: "bravo", updated_at: isoAgo(20 * MINUTE) });
+    const c = makeSession({ id: "c", name: "charlie", updated_at: isoAgo(30 * MINUTE) });
+    const { rerender } = render(<SessionRail sessions={[a, b, c]} openTaskCounts={{}} />);
+    fireEvent.mouseEnter(screen.getByLabelText("Session list"));
+
+    const risen = { ...c, updated_at: isoAgo(1 * MINUTE) };
+    rerender(<SessionRail sessions={[a, b, risen]} openTaskCounts={{}} />);
+    expect(cardNames()).toEqual(["alpha", "bravo", "charlie"]);
+    expect(screen.getByRole("button", { name: /session moved/ })).toBeTruthy();
+
+    // Filtering is a view, not a settle: the survivors keep the held order and
+    // the ghost is still the only thing offering to reorder them.
+    fireEvent.click(chip("Idle"));
+    expect(cardNames()).toEqual(["alpha", "bravo", "charlie"]);
+    expect(screen.getByRole("button", { name: /session moved/ })).toBeTruthy();
+  });
+
+  it("holds the chosen chip — clicking it again is not a toggle back to All", () => {
+    renderRail();
+    fireEvent.click(chip("Working"));
+    expect(cardNames()).toEqual(["working one"]);
+    fireEvent.click(chip("Working"));
+    expect(cardNames()).toEqual(["working one"]);
+    expect(chip("All").getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("says so rather than showing an empty rail when a chip matches nothing", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[ready]} openTaskCounts={{}} />);
+    fireEvent.click(chip("Working"));
+    expect(cardNames()).toEqual([]);
+    expect(screen.getByText("No sessions match this filter.")).toBeTruthy();
+  });
+});
+
+describe("SessionRail — the Earlier tail", () => {
+  const fresh = makeSession({ id: "f", name: "fresh one", updated_at: isoAgo(5 * MINUTE) });
+  const yesterday = makeSession({ id: "y", name: "old one", updated_at: isoAgo(2 * DAY) });
+  const lastWeek = makeSession({ id: "l", name: "ancient one", updated_at: isoAgo(9 * DAY) });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("folds everything a day cold behind a collapsed 'Earlier' toggle, and expands it", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[fresh, yesterday, lastWeek]} openTaskCounts={{}} />);
+
+    expect(cardNames()).toEqual(["fresh one"]);
+    const toggle = screen.getByRole("button", { name: /Earlier/ });
+    expect(toggle.textContent).toContain("· 2");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(cardNames()).toEqual(["fresh one", "old one", "ancient one"]);
+
+    fireEvent.click(toggle);
+    expect(cardNames()).toEqual(["fresh one"]);
+  });
+
+  it("renders no tail at all when nothing is recent — a fold with no head would hide the rail", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[yesterday, lastWeek]} openTaskCounts={{}} />);
+
+    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
+    expect(cardNames()).toEqual(["old one", "ancient one"]);
+  });
+
+  it("folds the tail out of the active filter, not out of the session list", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[fresh, yesterday, lastWeek]}
+        openTaskCounts={{}}
+        agentStates={{ f: { subagents: 0, workingSince: isoAgo(30_000) } }}
+      />,
+    );
+
+    // The tail's cards are still counted by the chips that describe them.
+    expect(chip("All").textContent).toBe("All3");
+    expect(chip("Idle").textContent).toBe("Idle2");
+
+    // Filter to Idle and the working card — the only recent one — drops out, so
+    // the tail becomes the whole list and unfolds itself.
+    fireEvent.click(chip("Idle"));
+    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
+    expect(cardNames()).toEqual(["old one", "ancient one"]);
   });
 });

@@ -22,18 +22,9 @@ function cardName(row: Element): string {
   return row.querySelector('[class*="name"]')!.textContent!;
 }
 
-/** The rail's rendered card order, top to bottom, across both groups — a card's index. */
+/** The rail's rendered card order, top to bottom — a card's index. */
 function railOrder(): string[] {
   return [...rail().querySelectorAll('div[role="button"]')].map(cardName);
-}
-
-/** The cards rendered under one group header, so a heal is visible and not just implied. */
-function group(name: "Active" | "Recent"): string[] {
-  const header = [...rail().querySelectorAll('[class*="groupHeader"]')].find((h) =>
-    h.textContent!.startsWith(name),
-  );
-  if (!header) return [];
-  return [...header.parentElement!.querySelectorAll('div[role="button"]')].map(cardName);
 }
 
 function ghost() {
@@ -56,16 +47,15 @@ const paused = makeSession({
 });
 
 describe("settled rail order", () => {
-  it("repaints a live-state flip in place and heals its group, even when the ranking is unchanged", () => {
+  it("repaints a live-state flip in place — one list means there is nowhere for it to move to", () => {
     const { rerender } = render(
       <SessionRail sessions={[alpha, bravo, paused]} openTaskCounts={{}} />,
     );
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(group("Active")).toEqual(["alpha", "bravo"]);
 
-    // Only `activity` moves — the ranking (recency, id) cannot see it, so the
-    // flat order is identical and the card must not budge. Its group still has
-    // to heal: bravo under "Active" with a dead dot would be a lie.
+    // Only `activity` moves. The ranking (recency, id) cannot see it, and with
+    // the Active/Recent split retired there is no group membership left for it
+    // to change either — so the card repaints exactly where it is.
     rerender(
       <SessionRail
         sessions={[alpha, { ...bravo, activity: "inactive" }, paused]}
@@ -74,20 +64,18 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(group("Active")).toEqual(["alpha"]);
-    expect(group("Recent")).toEqual(["bravo", "charlie"]);
     expect(hasDot("bravo", "off")).toBe(true);
     expect(ghost()).toBeNull();
   });
 
-  it("holds a live-state flip that would relocate the card while the rail is hovered", () => {
+  it("does not move the top card — or raise a ghost — when it goes to sleep, even mid-hover", () => {
     const { rerender } = render(
       <SessionRail sessions={[alpha, bravo, paused]} openTaskCounts={{}} />,
     );
     fireEvent.mouseEnter(rail());
 
-    // alpha leads the Active group, so healing it into Recent costs it a row.
-    // That is a move, and it waits behind the same boundary as any other move.
+    // Under Active/Recent this cost alpha two rows. Now it costs it nothing:
+    // there is no pending move to hold, so no ghost, and mouseleave is a no-op.
     rerender(
       <SessionRail
         sessions={[{ ...alpha, activity: "inactive" }, bravo, paused]}
@@ -96,16 +84,11 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(group("Active")).toEqual(["alpha", "bravo"]);
     expect(hasDot("alpha", "off")).toBe(true);
-    expect(ghost()?.textContent).toContain("1 session moved");
+    expect(ghost()).toBeNull();
 
     fireEvent.mouseLeave(rail());
-
-    expect(railOrder()).toEqual(["bravo", "alpha", "charlie"]);
-    expect(group("Active")).toEqual(["bravo"]);
-    expect(group("Recent")).toEqual(["alpha", "charlie"]);
-    expect(ghost()).toBeNull();
+    expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
   });
 
   it("holds a recency change while hovered, shows the ghost, and applies it on mouseleave", () => {
@@ -192,16 +175,14 @@ describe("settled rail order", () => {
     expect(ghost()).toBeNull();
   });
 
-  it("keeps the selected card's index when another session enters the Active group", () => {
+  it("keeps the selected card's index when a session below it becomes the most recent", () => {
     const { rerender } = render(
       <SessionRail sessions={[alpha, bravo, paused]} openTaskCounts={{}} selectedId="b" />,
     );
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(group("Active")).toEqual(["alpha", "bravo"]);
 
-    // charlie wakes up and is now the most recent, so it joins Active at the
-    // top. bravo is open: the new Active member reorders around it and bravo
-    // holds index 1 instead of being pushed to 2.
+    // charlie wakes and takes the top. bravo is open: everything reorders
+    // around it and it holds index 1 instead of being pushed to 2.
     rerender(
       <SessionRail
         sessions={[alpha, bravo, { ...charlie, updated_at: "2026-07-01T12:00:00Z" }]}
@@ -211,12 +192,10 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["charlie", "bravo", "alpha"]);
-    expect(group("Active")).toEqual(["charlie", "bravo", "alpha"]);
-    expect(group("Recent")).toEqual([]);
     expect(ghost()).toBeNull();
   });
 
-  it("holds a selected Recent card's row when the group above it grows", () => {
+  it("holds the selected card's row even when the sessions above it are the ones that churn", () => {
     const delta = makeSession({
       id: "d",
       name: "delta",
@@ -229,27 +208,24 @@ describe("settled rail order", () => {
       activity: "inactive",
       updated_at: "2026-07-01T07:00:00Z",
     });
-    // Active [alpha] · Recent [delta, charlie, echo] — charlie is open at index 2.
+    // alpha, delta, charlie, echo — charlie is open at index 2.
     const { rerender } = render(
       <SessionRail sessions={[alpha, delta, paused, echo]} openTaskCounts={{}} selectedId="c" />,
     );
     expect(railOrder()).toEqual(["alpha", "delta", "charlie", "echo"]);
-    expect(group("Recent")).toEqual(["delta", "charlie", "echo"]);
 
-    // echo wakes up and heals into Active *below* charlie, so the block above
-    // charlie gains a row that the block it is in does not give back. charlie is
-    // open: it gives up a rank inside Recent to stay on the row it held.
+    // echo replies and outranks everything but alpha, so by pure recency it
+    // would take index 1 and push charlie to 3. charlie is open: it keeps the
+    // row it held and echo settles directly above it instead.
     rerender(
       <SessionRail
-        sessions={[alpha, delta, paused, { ...echo, activity: "active" }]}
+        sessions={[alpha, delta, paused, { ...echo, updated_at: "2026-07-01T09:45:00Z" }]}
         openTaskCounts={{}}
         selectedId="c"
       />,
     );
 
     expect(railOrder()).toEqual(["alpha", "echo", "charlie", "delta"]);
-    expect(group("Active")).toEqual(["alpha", "echo"]);
-    expect(group("Recent")).toEqual(["charlie", "delta"]);
   });
 
   it("splices a new session in at its sorted position without shifting the rows above it", () => {
@@ -259,12 +235,9 @@ describe("settled rail order", () => {
 
     rerender(<SessionRail sessions={[alpha, bravo, paused]} openTaskCounts={{}} />);
 
-    // Appearing is not moving: it lands in sorted position at once — inside the
-    // group it belongs to — alpha does not budge, and charlie gives up exactly
-    // the one row bravo occupies.
+    // Appearing is not moving: it lands in sorted position at once — alpha does
+    // not budge, and charlie gives up exactly the one row bravo occupies.
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(group("Active")).toEqual(["alpha", "bravo"]);
-    expect(group("Recent")).toEqual(["charlie"]);
     expect(ghost()).toBeNull();
   });
 

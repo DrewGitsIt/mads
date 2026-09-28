@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dotState, groupSessions, statusOf, totalOpenTasks } from "./railGroups";
+import { dotState, filterBucketOf, isEarlier, mostUrgentBucket, statusOf, totalOpenTasks } from "./railGroups";
 import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
 import type { Session } from "../../../router/types";
 
@@ -162,19 +162,62 @@ describe("totalOpenTasks", () => {
   });
 });
 
-describe("groupSessions", () => {
-  it("splits active from everything else", () => {
-    const active1 = makeSession({ id: "a1", activity: "active" });
-    const recent1 = makeSession({ id: "r1", activity: "inactive" });
-    const { active, recent } = groupSessions([active1, recent1]);
-    expect(active.map((s) => s.id)).toEqual(["a1"]);
-    expect(recent.map((s) => s.id)).toEqual(["r1"]);
+describe("filterBucketOf", () => {
+  const idle = makeBreakdown({});
+  const live = makeSession({ activity: "active" });
+  const sleeping = makeSession({ activity: "inactive" });
+
+  function bucket(session: Session, state: Partial<SessionAgentState>, breakdown = idle) {
+    return filterBucketOf(statusOf(session, makeAgentState(state), breakdown));
+  }
+
+  it("counts a crash and a parked approval as 'needs you'", () => {
+    expect(bucket(live, { crashed: true })).toBe("needs");
+    expect(bucket(live, { awaitingSince: "2026-07-01T00:00:00Z" })).toBe("needs");
   });
 
-  it("sorts each group most-recently-updated first", () => {
-    const older = makeSession({ id: "old", activity: "active", updated_at: "2026-07-01T00:00:00Z" });
-    const newer = makeSession({ id: "new", activity: "active", updated_at: "2026-07-10T00:00:00Z" });
-    const { active } = groupSessions([older, newer]);
-    expect(active.map((s) => s.id)).toEqual(["new", "old"]);
+  it("counts an in-flight turn as 'working'", () => {
+    expect(bucket(live, { workingSince: "2026-07-01T00:00:00Z" })).toBe("working");
+  });
+
+  it("counts ready, done and sleeping as 'idle' — the turn they report is over", () => {
+    expect(bucket(live, {})).toBe("idle");
+    expect(bucket(live, { done: true })).toBe("idle");
+    expect(bucket(sleeping, {})).toBe("idle");
+  });
+
+  it("counts a quiet session carrying blocked work as 'needs you' — the amber puck", () => {
+    expect(bucket(sleeping, {}, makeBreakdown({ blocked: 1 }))).toBe("needs");
+    // Running/ready work is calm progress, not something needing eyes.
+    expect(bucket(sleeping, {}, makeBreakdown({ running: 2, ready: 3 }))).toBe("idle");
+  });
+});
+
+describe("mostUrgentBucket", () => {
+  it("is 'idle' for an empty set", () => {
+    expect(mostUrgentBucket([])).toBe("idle");
+  });
+
+  it("puts needs ahead of working ahead of idle", () => {
+    expect(mostUrgentBucket(["idle", "working"])).toBe("working");
+    expect(mostUrgentBucket(["working", "needs", "idle"])).toBe("needs");
+    expect(mostUrgentBucket(["idle", "idle"])).toBe("idle");
+  });
+});
+
+describe("isEarlier", () => {
+  const now = Date.parse("2026-07-02T12:00:00Z");
+
+  it("is false inside the last day", () => {
+    expect(isEarlier(makeSession({ updated_at: "2026-07-02T11:00:00Z" }), now)).toBe(false);
+  });
+
+  it("is true once last activity is a full day cold", () => {
+    expect(isEarlier(makeSession({ updated_at: "2026-07-01T11:00:00Z" }), now)).toBe(true);
+    expect(isEarlier(makeSession({ updated_at: "2026-07-01T12:00:00Z" }), now)).toBe(true);
+  });
+
+  it("is false for an unparseable stamp rather than folding the card away", () => {
+    expect(isEarlier(makeSession({ updated_at: "not a date" }), now)).toBe(false);
   });
 });
