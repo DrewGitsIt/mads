@@ -3,6 +3,7 @@ import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
+import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
 import { router } from "../../router/client";
 import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
@@ -28,6 +29,10 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const { sessions, loading, error, createSession } = useSessionsList();
   const openTaskCounts = useOpenTaskCounts();
   const links = useSessionLinks(sessions.map((s) => s.id));
+  // Only the rail's adaptive context labels need these: a workspace's
+  // primary repo and default persona are what decide whether a card's cwd
+  // and agent are worth printing.
+  const { workspaces } = useWorkspaces();
   const [selectedId, setSelectedId] = useState<string>();
   // One subscription for the whole rail, however many cards are listed —
   // opening a session is also what retires its sticky "Done · your turn".
@@ -87,6 +92,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             openTaskCounts={openTaskCounts}
             agentStates={agentStates}
             links={links}
+            workspaces={workspaces}
             routerClient={router}
             selectedId={selectedId}
             onSelect={(id) => {

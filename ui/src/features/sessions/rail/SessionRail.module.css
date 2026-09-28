@@ -607,3 +607,47 @@
 .linkOptionsDanger {
   color: var(--bad-fg);
 }
+
+/* Adaptive context labels. Always rendered, one line, never wrapped, with its
+   height reserved even when every label is adaptively absent: the visible
+   label set changes as filters narrow the list (a workspace name appears the
+   moment the list spans two), and that must repaint the line, never reflow
+   the rail. Same contract as .status above. */
+.context {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 13px;
+  padding-left: 16px;
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ctxItem {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The branch is the label most often worth checking, so it keeps its width
+   while the softer labels beside it truncate. */
+.ctxBranch {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  color: var(--text2);
+}
+
+.ctxRetro {
+  flex: none;
+}
+
+.ctxSep {
+  flex: none;
+  opacity: 0.5;
+}

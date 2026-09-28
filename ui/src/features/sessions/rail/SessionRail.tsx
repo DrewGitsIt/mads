@@ -22,6 +22,13 @@ import type {
 import { buildRailRows, computeRailLinks } from "./railLinks";
 import type { RailRow } from "./railLinks";
 import { useSettledRailOrder } from "./railOrder";
+import {
+  EMPTY_LABEL_CONTEXT,
+  railLabelsFor,
+  railTooltip,
+  workspaceFactsByName,
+} from "./railLabels";
+import type { RailLabelContext, RailLabels } from "./railLabels";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import {
@@ -33,7 +40,14 @@ import {
   useRelativeNow,
 } from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
-import type { Grant, Link, LinkCadence, OrchestrateStatus, Session } from "../../../router/types";
+import type {
+  Grant,
+  Link,
+  LinkCadence,
+  OrchestrateStatus,
+  Session,
+  Workspace,
+} from "../../../router/types";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -49,6 +63,13 @@ export interface SessionRailProps {
   onDelete?: (id: string) => void;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
+  /**
+   * Workspace records, for the adaptive context labels — a workspace's
+   * primary repo (which is what makes a cwd worth printing) and its default
+   * persona (which is what makes an agent NOT worth printing). Matched by
+   * name: Session.workspace is a name, not an id.
+   */
+  workspaces?: Workspace[];
   routerClient?: RouterClient;
   /**
    * Opaque stamp of the active search query. Any change to it is a quiet
@@ -76,6 +97,7 @@ export function SessionRail({
   onClose,
   onDelete,
   links = [],
+  workspaces = [],
   routerClient = router,
   filterKey,
   className,
@@ -126,6 +148,22 @@ export function SessionRail({
   // the whole reason a chip can do triage without a group's side effects.
   const visible =
     filter === "all" ? rows : rows.filter((row) => bucketByRowId.get(row.session.id) === filter);
+  // Labels read the *visible* list, not the whole rail: a workspace name
+  // every card repeats says nothing, so it only earns a card once the list
+  // is mixed. Deliberately computed before the Earlier fold, so expanding
+  // the tail cannot relabel the cards above it.
+  const visibleWorkspaces = new Set<string>();
+  for (const row of visible) {
+    const nested = linkedSessionsEnabled ? row.subjects.map((s) => s.session) : [];
+    for (const session of [row.session, ...nested]) {
+      if (session.workspace) visibleWorkspaces.add(session.workspace);
+    }
+  }
+  const labelContext: RailLabelContext = {
+    multiWorkspace: visibleWorkspaces.size > 1,
+    facts: workspaceFactsByName(workspaces),
+  };
+
   const head: RailRow[] = [];
   const earlier: RailRow[] = [];
   for (const row of visible) (isEarlier(row.session, now) ? earlier : head).push(row);
@@ -168,6 +206,7 @@ export function SessionRail({
     anchorWorkspace,
     onStartLinkMode: startLinkMode,
     onToggleLinkSelection: toggleLinkSelection,
+    labelContext,
     routerClient,
   };
 
@@ -288,6 +327,7 @@ function RailRowGroup({
   anchorWorkspace,
   onStartLinkMode,
   onToggleLinkSelection,
+  labelContext,
   routerClient,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
@@ -304,6 +344,7 @@ function RailRowGroup({
   anchorWorkspace?: string;
   onStartLinkMode: (id: string) => void;
   onToggleLinkSelection: (id: string) => void;
+  labelContext: RailLabelContext;
   routerClient: RouterClient;
 }) {
   const isAnchor = linkMode?.anchorId === row.session.id;
@@ -325,6 +366,7 @@ function RailRowGroup({
         isLinkAnchor={isAnchor}
         isLinkCrossWorkspace={isCrossWorkspace}
         isLinkSelected={linkMode?.selectedIds.has(row.session.id) ?? false}
+        labelContext={labelContext}
         onStartLinkMode={() => onStartLinkMode(row.session.id)}
         onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
       />
@@ -353,6 +395,7 @@ function RailRowGroup({
             isLinkSelected={false}
             onStartLinkMode={() => {}}
             onToggleLinkSelection={() => {}}
+            labelContext={labelContext}
             cadence={sub.cadence}
             grants={sub.grants}
             grantingSessionId={sub.grantingSessionId}
@@ -396,6 +439,7 @@ function SessionRow({
   isLinkSelected,
   onStartLinkMode,
   onToggleLinkSelection,
+  labelContext = EMPTY_LABEL_CONTEXT,
   cadence,
   grants,
   grantingSessionId,
@@ -422,6 +466,8 @@ function SessionRow({
   isLinkSelected: boolean;
   onStartLinkMode: () => void;
   onToggleLinkSelection: () => void;
+  /** Adaptive-label inputs, shared by every card in the list. */
+  labelContext?: RailLabelContext;
   /** Only set on nested subject rows — the underlying link's cadence, editable via LinkOptionsMenu. */
   cadence?: LinkCadence;
   grants?: Grant[];
@@ -439,6 +485,10 @@ function SessionRow({
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
+  const labels = railLabelsFor(session, labelContext);
+  // The rest of the record — model, provider, trust, isolation, context
+  // occupancy — plus the labels the line above adaptively dropped.
+  const tooltip = railTooltip(session);
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
   const showSummary = isPaused && Boolean(session.summary);
   // A nested subject row's link controls (update policy, unlink) live in one
@@ -479,6 +529,7 @@ function SessionRow({
   return (
     <div
       role="button"
+      title={tooltip || undefined}
       tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
       aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
       className={[
@@ -532,6 +583,7 @@ function SessionRow({
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
       </div>
+      <ContextLine labels={labels} />
       {hasMeta && (
         <div className={styles.rowMeta}>
           {openTaskCount > 0 && (
@@ -664,6 +716,41 @@ function SessionRow({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The adaptive context line (mockup docs/mockups/sessions-ux-v2.html §2).
+ * Always rendered, one line, never wrapped, with its height reserved in CSS
+ * even when every label is absent: which labels apply depends on the visible
+ * set (a workspace name appears the moment a filter leaves two in the list),
+ * and that has to repaint the line without ever reflowing the rail.
+ */
+function ContextLine({ labels }: { labels: RailLabels }) {
+  const parts = [
+    labels.branch ? { key: "branch", cls: styles.ctxBranch, text: labels.branch } : undefined,
+    labels.workspace ? { key: "workspace", cls: styles.ctxItem, text: labels.workspace } : undefined,
+    labels.cwd ? { key: "cwd", cls: styles.ctxItem, text: labels.cwd } : undefined,
+    labels.agent ? { key: "agent", cls: styles.ctxItem, text: labels.agent } : undefined,
+  ].filter((part): part is { key: string; cls: string; text: string } => part !== undefined);
+  return (
+    <div className={styles.context}>
+      {labels.retro && (
+        <span className={styles.ctxRetro} title="Retro session" data-label="retro">
+          ↺
+        </span>
+      )}
+      {parts.map((part, i) => [
+        i > 0 ? (
+          <span key={`${part.key}-sep`} className={styles.ctxSep} aria-hidden="true">
+            ·
+          </span>
+        ) : null,
+        <span key={part.key} className={part.cls} data-label={part.key}>
+          {part.text}
+        </span>,
+      ])}
     </div>
   );
 }
