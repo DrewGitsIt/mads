@@ -11,6 +11,7 @@ import {
   WORKSPACE_SESSION_EVENT_TYPES,
 } from "../router/sessionEventTypes";
 import type {
+  AgentState,
   CompactStatus,
   PermissionRequest,
   Session,
@@ -38,7 +39,10 @@ import {
   CONVERSATION_EVENT_TYPES,
   finishRunningTasks,
   foldHistoryEvents,
+  replayedCompactStatus,
+  resumeRunningTasks,
   tasksByToolUse,
+  type ConversationHistory,
   type SubStreamItem,
   type TaskModel,
 } from "./activity/conversationItems";
@@ -55,6 +59,27 @@ import { ShellDock } from "./ShellDock/ShellDock";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import styles from "./ConversationTab.module.css";
+
+// When the user last dismissed this session's compaction banner — lets a
+// replayed failure (see replayedCompactStatus) stay acknowledged across
+// remounts instead of reappearing every time the conversation is opened.
+const compactDismissedKey = (sessionId: string) => `mads.compactDismissedAt.${sessionId}`;
+
+function readCompactDismissedAt(sessionId: string): string | undefined {
+  try {
+    return localStorage.getItem(compactDismissedKey(sessionId)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeCompactDismissedAt(sessionId: string): void {
+  try {
+    localStorage.setItem(compactDismissedKey(sessionId), new Date().toISOString());
+  } catch {
+    // storage unavailable — the dismissal just lasts this mount
+  }
+}
 
 export interface ConversationTabProps {
   sessionId: string;
@@ -163,6 +188,16 @@ export function ConversationTab({
   // threshold); everything below that is this user choice, replicating the
   // resume options interactive claude-code offers that headless -p lacks.
   const [compactSuggestionDismissed, setCompactSuggestionDismissed] = useState(false);
+  // The in-flight turn's server-side start (Session.agent_state.since, then
+  // live session.agent_state events) — the working indicator's elapsed
+  // anchor, so a remount mid-turn doesn't restart the counter.
+  const [agentSince, setAgentSince] = useState<string>();
+  // The event-log replay's compaction entry, parked until the session record
+  // is also in: turning it (and replayed tasks) into live state needs both,
+  // and the two fetches race. null once applied for this mount.
+  const [pendingReplay, setPendingReplay] = useState<
+    { compact: ConversationHistory["compact"] } | null
+  >(null);
   // Interactive permission prompts (chat transport, TrustLimited/
   // TrustReadOnly — see providers/claudecode/README.md "Trust enforcement").
   // Keyed by request id so a live "permission_request" stream event
@@ -263,6 +298,8 @@ export function ConversationTab({
     setLastUsage(undefined);
     setCompactStatus(undefined);
     setCompactSuggestionDismissed(false);
+    setAgentSince(undefined);
+    setPendingReplay(null);
     setToolStatuses(new Map());
     setTasks(new Map());
     setSubagentStreams(new Map());
@@ -282,6 +319,16 @@ export function ConversationTab({
           // usage at wake time — before this mount has seen a turn_end of
           // its own (services/session/internal/runner's persistUsage).
           if (s.last_usage) setLastUsage(s.last_usage);
+          // Reopened mid-turn: the /output stream never replays the frames
+          // that would have flipped the turn live, so the record's mirrored
+          // agent state does it — otherwise the working indicator stays away
+          // until the turn's next frame. Only a live Runner clears the
+          // mirror, so an inactive session's "working" is a stale leftover.
+          if (s.activity === "active" && s.agent_state?.state === "working") {
+            setTurnPhase("live");
+            setAgentSince(s.agent_state.since);
+            if (s.agent_state.label) setCurrentActivity((a) => a ?? s.agent_state?.label);
+          }
         }
       })
       .catch(() => {
@@ -331,6 +378,7 @@ export function ConversationTab({
         setTasks((live) => new Map([...h.tasks, ...live]));
         setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
         setThinkingHistory(h.thinking);
+        setPendingReplay({ compact: h.compact });
       })
       .catch(() => {});
     void routerClient
@@ -345,6 +393,33 @@ export function ConversationTab({
       cancelled = true;
     };
   }, [routerClient, sessionId, retryToken, pacerReset]);
+
+  // Finishes the event-log replay once the session record is in too (see
+  // pendingReplay): subagents spawned inside a turn still in flight are
+  // running again, and a compaction still running — or failed and not yet
+  // dismissed — gets its banner back. Live state that landed meanwhile wins.
+  useEffect(() => {
+    if (!session || !pendingReplay) return;
+    const active = session.activity === "active";
+    if (active && session.agent_state?.state === "working") {
+      const since = session.agent_state.since;
+      setTasks((m) => resumeRunningTasks(m, since));
+    }
+    const replayed = replayedCompactStatus(
+      pendingReplay.compact,
+      active,
+      readCompactDismissedAt(sessionId),
+    );
+    if (replayed) setCompactStatus((cur) => cur ?? replayed);
+    setPendingReplay(null);
+  }, [session, pendingReplay, sessionId]);
+
+  // The indicator's anchor belongs to one turn — drop it once the turn is
+  // over, so the next send doesn't count from the previous turn's start
+  // until its own session.agent_state arrives.
+  useEffect(() => {
+    if (turnPhase === "idle") setAgentSince(undefined);
+  }, [turnPhase]);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -596,8 +671,26 @@ export function ConversationTab({
   // the stream's own turn_end frame failed to close, instead of leaving the
   // pane frozen on its last streamed item until a remount. Idempotent when
   // both signals arrive: an idle pane just re-checks the transcript.
+  //
+  // session.agent_state rides the same log: "working" marks a turn in flight
+  // even when this tab saw none of its /output frames (another client's send,
+  // a linked-session wake, a reconnect) and carries the turn's start for the
+  // elapsed counter; "idle" closes the turn exactly as turn_ended does — and
+  // unlike turn_ended, it fires for a turn with no digest delta too.
   useEffect(() => {
-    return subscribeToEvents({ sessionId, types: ["session.turn_ended"] }, () => {
+    return subscribeToEvents({ sessionId, types: ["session.turn_ended", "session.agent_state"] }, (envelope) => {
+      if (envelope.type === "session.agent_state") {
+        const state = envelope.payload as Partial<AgentState> | undefined;
+        if (state?.state === "working") {
+          setTurnPhase("live");
+          setAgentSince(state.since || envelope.timestamp);
+          // The stream's own tool/thinking frames keep the ticker current;
+          // the server label only fills it when none has arrived yet.
+          if (state.label) setCurrentActivity((a) => a ?? state.label);
+          return;
+        }
+        if (state?.state !== "idle") return;
+      }
       if (turnPhaseRef.current !== "idle") {
         setCurrentActivity(undefined);
         setTasks((m) => finishRunningTasks(m));
@@ -1161,7 +1254,13 @@ export function ConversationTab({
                   </div>
                 </div>
               )}
-              <CompactionStatus status={compactStatus} onDismiss={() => setCompactStatus(undefined)} />
+              <CompactionStatus
+                status={compactStatus}
+                onDismiss={() => {
+                  writeCompactDismissedAt(sessionId);
+                  setCompactStatus(undefined);
+                }}
+              />
               {/* Pinned bottom cluster (T16): running-subagent substrip +
                   turn-long working indicator + composer stick together at
                   the bottom of the scrollable stream — none can scroll off
@@ -1179,6 +1278,7 @@ export function ConversationTab({
                     tool={working.tool}
                     blocked={working.blocked}
                     activity={currentActivity}
+                    since={agentSince}
                   />
                 )}
                 <Composer

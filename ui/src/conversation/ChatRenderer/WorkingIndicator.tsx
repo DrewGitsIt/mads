@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import type { ToolUse } from "../../router/types";
 import { toolTitle } from "../activity/toolDisplay";
@@ -20,25 +20,33 @@ export function WorkingIndicator({
   tool,
   blocked,
   activity,
+  since,
 }: {
   tool?: ToolUse;
   blocked?: string;
   /** Streamed current-activity ticker — latest tool title or "Thinking…". */
   activity?: string;
+  /**
+   * The turn's server-side start (Session.agent_state.since). Anchors the
+   * counter to the real turn, so reopening a conversation mid-turn doesn't
+   * restart it at 0s; mount time stands in until it's known.
+   */
+  since?: string;
 }) {
-  // Seconds since this indicator mounted — i.e. since the turn went live,
-  // because the component stays mounted turn-long. Deliberately not reset
-  // when the pending tool changes: the user's question is "how long has the
-  // agent been at it", not per-tool timing (the rows carry that).
+  // Seconds since the turn went live — since `since` when known, else since
+  // this indicator mounted (it stays mounted turn-long). Deliberately not
+  // reset when the pending tool changes: the user's question is "how long
+  // has the agent been at it", not per-tool timing (the rows carry that).
+  const mountedAt = useRef(Date.now());
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
-    const started = Date.now();
-    const id = window.setInterval(
-      () => setElapsed(Math.floor((Date.now() - started) / 1000)),
-      1000,
-    );
+    const parsed = since ? Date.parse(since) : NaN;
+    const started = Number.isNaN(parsed) ? mountedAt.current : Math.min(parsed, Date.now());
+    const tick = () => setElapsed(Math.floor((Date.now() - started) / 1000));
+    tick();
+    const id = window.setInterval(tick, 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [since]);
 
   if (blocked) {
     return (

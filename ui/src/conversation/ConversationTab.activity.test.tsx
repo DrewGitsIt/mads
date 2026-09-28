@@ -9,7 +9,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient } from "../router/fixtures";
+import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope } from "../router/types";
 
@@ -437,5 +437,136 @@ describe("ConversationTab — durable turn_ended reconciliation", () => {
 
     // …and reconciles the pane: transcript refetched, final text visible.
     await waitFor(() => expect(screen.getByText("the final answer")).toBeTruthy());
+  });
+});
+
+// Everything the pinned bottom cluster shows is fed by live /output frames,
+// which the stream never replays — so a conversation reopened (navigating
+// away and back) mid-turn, mid-compaction or mid-subagent has to rebuild it
+// from the session record and the control-plane event log instead.
+describe("ConversationTab — reopened mid-turn", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    localStorage.clear();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
+  const env = (seq: number, timestamp: string, type: string, payload: unknown): Envelope => ({
+    seq,
+    timestamp,
+    type,
+    session_id: "session-active",
+    actor: "system",
+    payload,
+  });
+  const working = (client: FakeRouterClient, since: string, label?: string) =>
+    vi.spyOn(client, "getSession").mockResolvedValue({
+      ...fixtureSessions["session-active"],
+      agent_state: { state: "working", label, since },
+    });
+  let nextSeq = 50;
+  const controlEnvelope = (type: string, payload: unknown) => {
+    const source = FakeEventSource.instances.find((s) => s.url.includes(type));
+    expect(source).toBeTruthy();
+    act(() => {
+      source!.emit(type, JSON.stringify({ seq: nextSeq++, type, actor: "system", session_id: "session-active", payload }));
+    });
+  };
+
+  it("shows the working indicator from the record's agent state, counting from the turn's real start", async () => {
+    const client = new FakeRouterClient();
+    working(client, iso(42_000), "Running bash · make check");
+    await mountActive(client);
+
+    const indicator = await screen.findByRole("status", { name: "Working…" });
+    expect(screen.getByTestId("working-ticker").textContent).toBe("Running bash · make check");
+    expect(indicator.textContent).toMatch(/4[2-3]s/);
+  });
+
+  it("ignores a stale working mirror on an inactive session", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValue({
+      ...fixtureSessions["session-inactive"],
+      agent_state: { state: "working", label: "Running bash · make check", since: iso(60_000) },
+    });
+    render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    expect(screen.queryByRole("status", { name: "Working…" })).toBeNull();
+  });
+
+  it("revives a subagent spawned inside the in-flight turn, but not an earlier turn's abandoned one", async () => {
+    const client = new FakeRouterClient();
+    working(client, iso(30_000));
+    client.seedEvent(
+      env(1, iso(600_000), "session.subagent_task", {
+        phase: "started",
+        task_id: "old",
+        tool_use_id: "tu-old",
+        description: "Abandoned audit",
+      }),
+    );
+    client.seedEvent(
+      env(2, iso(10_000), "session.subagent_task", {
+        phase: "started",
+        task_id: "now",
+        tool_use_id: "tu-now",
+        description: "Verify retry backoff",
+      }),
+    );
+    await mountActive(client);
+
+    const strip = await screen.findByTestId("substrip");
+    expect(strip.textContent).toContain("Verify retry backoff");
+    expect(strip.textContent).not.toContain("Abandoned audit");
+  });
+
+  it("follows session.agent_state live: working raises the indicator, idle closes the turn", async () => {
+    const client = new FakeRouterClient();
+    await mountActive(client);
+    expect(screen.queryByRole("status", { name: "Working…" })).toBeNull();
+
+    controlEnvelope("session.agent_state", { state: "working", label: "Reading runner.go", since: iso(5_000) });
+    expect(await screen.findByRole("status", { name: "Working…" })).toBeTruthy();
+    expect(screen.getByTestId("working-ticker").textContent).toBe("Reading runner.go");
+
+    controlEnvelope("session.agent_state", { state: "idle", since: iso(0) });
+    await waitFor(() => expect(screen.queryByRole("status", { name: "Working…" })).toBeNull());
+  });
+
+  it("restores a compaction still running on an active session", async () => {
+    const client = new FakeRouterClient();
+    client.seedEvent(env(1, iso(3_000), "session.compact", { phase: "start" }));
+    await mountActive(client);
+    expect(await screen.findByText("Compacting conversation…")).toBeTruthy();
+  });
+
+  it("restores an unacknowledged compaction failure, and keeps a dismissed one dismissed", async () => {
+    const client = new FakeRouterClient();
+    client.seedEvent(env(1, iso(90_000), "session.compact", { phase: "start" }));
+    client.seedEvent(
+      env(2, iso(60_000), "session.compact", { phase: "done", error: "Not enough messages to compact." }),
+    );
+    const { unmount } = render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    expect(await screen.findByText("Compaction failed: Not enough messages to compact.")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    unmount();
+
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(1));
+    expect(screen.queryByText(/Compaction failed/)).toBeNull();
+  });
+
+  it("never replays a successful compaction's transient confirmation", async () => {
+    const client = new FakeRouterClient();
+    client.seedEvent(env(1, iso(60_000), "session.compact", { phase: "done", success: true }));
+    await mountActive(client);
+    await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
+    expect(screen.queryByText("Conversation compacted.")).toBeNull();
   });
 });

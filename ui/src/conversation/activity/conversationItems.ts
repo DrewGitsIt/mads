@@ -1,4 +1,5 @@
 import type {
+  CompactStatus,
   Envelope,
   SubagentEvent,
   SubagentTask,
@@ -209,6 +210,8 @@ export interface TaskModel {
   running: boolean;
   /** A task_notification arrived — the completed variant with inline summary. */
   completed: boolean;
+  /** When the task's first lifecycle event was logged — replay only (see resumeRunningTasks). */
+  startedAt?: string;
 }
 
 /** Folds one task lifecycle event into the map (immutably — safe as a state update). */
@@ -216,12 +219,13 @@ export function applyTaskEvent(
   tasks: ReadonlyMap<string, TaskModel>,
   task: SubagentTask,
   live: boolean,
+  at?: string,
 ): Map<string, TaskModel> {
   const next = new Map(tasks);
   const prev = next.get(task.task_id);
   const model: TaskModel = prev
     ? { ...prev }
-    : { taskId: task.task_id, running: false, completed: false };
+    : { taskId: task.task_id, running: false, completed: false, startedAt: at };
   if (task.tool_use_id) model.toolUseId = task.tool_use_id;
   if (task.description) model.description = task.description;
   if (task.subagent_type) model.subagentType = task.subagent_type;
@@ -246,6 +250,28 @@ export function applyTaskEvent(
       break;
   }
   return next.set(task.task_id, model);
+}
+
+/**
+ * Reopening a conversation mid-turn: replay marks every un-notified task not
+ * running (the no-fake-spinner rule above), but a task spawned inside the
+ * turn that is still in flight right now genuinely is running. `turnSince`
+ * is that turn's start (Session.agent_state.since) — only tasks whose first
+ * event is at or after it are revived, so an earlier turn's abandoned task
+ * stays interrupted-shaped.
+ */
+export function resumeRunningTasks(
+  tasks: ReadonlyMap<string, TaskModel>,
+  turnSince: string,
+): Map<string, TaskModel> {
+  const since = Date.parse(turnSince);
+  const next = new Map(tasks);
+  if (Number.isNaN(since)) return next;
+  for (const [id, t] of next) {
+    if (t.running || t.completed || !t.startedAt) continue;
+    if (Date.parse(t.startedAt) >= since) next.set(id, { ...t, running: true });
+  }
+  return next;
 }
 
 /** Turn end with no notification: every still-running task is interrupted, not running. */
@@ -341,6 +367,7 @@ export const CONVERSATION_EVENT_TYPES = [
   "session.subagent_task",
   "session.thinking",
   "session.tool_status_changed",
+  "session.compact",
 ];
 
 export interface ConversationHistory {
@@ -348,6 +375,8 @@ export interface ConversationHistory {
   tasks: Map<string, TaskModel>;
   subagentStreams: Map<string, SubStreamItem[]>;
   thinking: { text: string; timestamp?: string }[];
+  /** The latest compaction phase in the log, with when it was logged. */
+  compact?: { status: CompactStatus; timestamp: string };
 }
 
 export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
@@ -356,6 +385,7 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
   let tasks = new Map<string, TaskModel>();
   let subagentStreams = new Map<string, SubStreamItem[]>();
   const thinking: { text: string; timestamp?: string }[] = [];
+  let compact: ConversationHistory["compact"];
 
   for (const env of sorted) {
     switch (env.type) {
@@ -366,7 +396,7 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
       }
       case "session.subagent_task": {
         const p = env.payload as SubagentTask | undefined;
-        if (p?.task_id) tasks = applyTaskEvent(tasks, p, false);
+        if (p?.task_id) tasks = applyTaskEvent(tasks, p, false, env.timestamp);
         break;
       }
       case "session.subagent_event": {
@@ -384,7 +414,34 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
         if (p?.text) thinking.push({ text: p.text, timestamp: env.timestamp });
         break;
       }
+      case "session.compact": {
+        const p = env.payload as CompactStatus | undefined;
+        if (p?.phase === "start" || p?.phase === "done") compact = { status: p, timestamp: env.timestamp };
+        break;
+      }
     }
   }
-  return { statuses, tasks, subagentStreams, thinking };
+  return { statuses, tasks, subagentStreams, thinking, compact };
+}
+
+/**
+ * The compaction banner a freshly opened conversation should show, from the
+ * log's latest session.compact entry — the live "compact" frame that drove
+ * it is never replayed. A pass still running shows only while the session is
+ * active (a process that died mid-pass never logs its "done"). A failure
+ * stands until the user dismisses it, as it does live; `dismissedAt` is when
+ * they last did, so an acknowledged failure stays gone. A success is a
+ * transient confirmation, never replayed.
+ */
+export function replayedCompactStatus(
+  latest: ConversationHistory["compact"],
+  sessionActive: boolean,
+  dismissedAt?: string,
+): CompactStatus | undefined {
+  if (!latest) return undefined;
+  const { status, timestamp } = latest;
+  if (status.phase === "start") return sessionActive ? status : undefined;
+  if (status.success) return undefined;
+  if (dismissedAt && Date.parse(timestamp) <= Date.parse(dismissedAt)) return undefined;
+  return status;
 }

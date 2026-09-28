@@ -7,6 +7,8 @@ import {
   finishRunningTasks,
   foldHistoryEvents,
   mergeTranscript,
+  replayedCompactStatus,
+  resumeRunningTasks,
   type SourceEntry,
   type TaskModel,
 } from "./conversationItems";
@@ -220,5 +222,60 @@ describe("foldHistoryEvents (T17)", () => {
     expect(h.tasks.get("tk1")?.running).toBe(false);
     expect(h.subagentStreams.get("tu1")).toHaveLength(1);
     expect(h.thinking[0].text).toBe("pondering");
+  });
+});
+
+describe("resumeRunningTasks", () => {
+  it("revives only un-notified tasks that started inside the in-flight turn", () => {
+    let tasks = new Map<string, TaskModel>();
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "old" }, false, "2026-09-28T10:00:00Z");
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "now" }, false, "2026-09-28T10:05:00Z");
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "done" }, false, "2026-09-28T10:05:01Z");
+    tasks = applyTaskEvent(tasks, { phase: "notification", task_id: "done", status: "completed" }, false);
+
+    const resumed = resumeRunningTasks(tasks, "2026-09-28T10:04:00Z");
+    expect(resumed.get("old")?.running).toBe(false);
+    expect(resumed.get("now")?.running).toBe(true);
+    expect(resumed.get("done")?.running).toBe(false);
+    // The start stamp is the first event's, not a later phase's.
+    expect(resumed.get("done")?.startedAt).toBe("2026-09-28T10:05:01Z");
+  });
+
+  it("leaves everything alone on an unparseable turn start", () => {
+    const tasks = applyTaskEvent(new Map(), { phase: "started", task_id: "t" }, false, "2026-09-28T10:05:00Z");
+    expect(resumeRunningTasks(tasks, "").get("t")?.running).toBe(false);
+  });
+});
+
+describe("replayedCompactStatus", () => {
+  const at = "2026-09-28T10:00:00Z";
+
+  it("shows a running pass only while the session is active", () => {
+    const latest = { status: { phase: "start" as const }, timestamp: at };
+    expect(replayedCompactStatus(latest, true)).toEqual({ phase: "start" });
+    expect(replayedCompactStatus(latest, false)).toBeUndefined();
+  });
+
+  it("shows a failure until it is dismissed, and never a success", () => {
+    const failed = { status: { phase: "done" as const, error: "nope" }, timestamp: at };
+    expect(replayedCompactStatus(failed, false)).toEqual({ phase: "done", error: "nope" });
+    expect(replayedCompactStatus(failed, true, "2026-09-28T10:01:00Z")).toBeUndefined();
+    expect(replayedCompactStatus(failed, true, "2026-09-28T09:59:00Z")).toEqual({ phase: "done", error: "nope" });
+    expect(
+      replayedCompactStatus({ status: { phase: "done", success: true }, timestamp: at }, true),
+    ).toBeUndefined();
+  });
+
+  it("folds the latest session.compact entry out of the log", () => {
+    const env = (seq: number, payload: unknown): Envelope => ({
+      seq,
+      timestamp: `2026-09-28T10:00:0${seq}Z`,
+      type: "session.compact",
+      session_id: "s",
+      actor: "system",
+      payload,
+    });
+    const h = foldHistoryEvents([env(2, { phase: "done", success: true }), env(1, { phase: "start" })]);
+    expect(h.compact).toEqual({ status: { phase: "done", success: true }, timestamp: "2026-09-28T10:00:02Z" });
   });
 });
