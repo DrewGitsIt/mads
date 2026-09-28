@@ -134,6 +134,18 @@ Links are directed edges; nothing is 1:1 by design:
    after a restart never got its hand-raiser. When a task went blocked, the
    run digest found no reader and nobody heard about it.
 
+   **Amendment (2026-09-28): task terminals reach the hand-raiser as
+   signals.** `job.DeliverSignal` now targets the implicit link for task
+   terminals (never for permission or crash signals, which a session can't
+   usefully be told about itself). If the session's child isn't running, it
+   is woken through `Deps.Waker`, the same wake a composer send uses. The
+   notice is deterministic (title, status, latest blocker note) and stays
+   digest-attributed with the NOOP instruction. The Fast-Model run digest
+   (`GenerateRunDigest` / `RunWatcher`) is retired: its only targets were
+   implicit links, so keeping it would have pushed two forced turns per
+   task terminal. It also dropped the notice silently when the child was
+   dormant or no Fast Model backend was configured.
+
    **Scope note (L3, 2026-07-17).** The 2026-07-16 amendment above (agent may
    "act on the RUN as a system: task notes, blocker flags") is implemented
    only on its *read* half in this pass — the hand-raiser receives run

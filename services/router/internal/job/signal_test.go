@@ -2,8 +2,10 @@ package job_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +19,8 @@ import (
 
 // A signal wakes on_signal AND per_turn readers (a permission pause parks
 // the subject mid-turn, so a turn digest may never report it), skips
-// manual_only, inject-only, and implicit links, composes the notice
+// manual_only and inject-only links, skips the implicit hand-raiser for a
+// permission signal (it only receives task terminals), composes the notice
 // deterministically (no Fast Model call), and attributes it as a digest
 // push so the monitor's forced turn can't self-amplify.
 func TestDeliverSignalWakesNonManualReaders(t *testing.T) {
@@ -47,8 +50,10 @@ func TestDeliverSignalWakesNonManualReaders(t *testing.T) {
 		GrantingSessionID: injectOnly.ID, SubjectSessionID: watched.ID,
 		Grants: []contracts.Grant{contracts.GrantInject},
 	})
-	// The watched session's own implicit hand-raiser must not receive
-	// signals — task terminals already reach it via GenerateRunDigest.
+	// The watched session's own implicit hand-raiser must not receive a
+	// permission signal: a session can't usefully be told about its own
+	// parked permission. (Task terminals do reach it — see
+	// TestDeliverSignalTaskTerminalReachesImplicitHandRaiser.)
 	if _, err := data.CreateHandRaiser(context.Background(), watched.ID); err != nil {
 		t.Fatalf("CreateHandRaiser: %v", err)
 	}
@@ -217,5 +222,182 @@ func TestDeliverSignalTaskTerminalCarriesBlocker(t *testing.T) {
 	}
 	if !strings.Contains(text, "missing credentials") {
 		t.Errorf("notice %q missing blocker note", text)
+	}
+}
+
+// stubWaker stands in for the api layer's wake path: it records which
+// sessions were woken and "starts" each at a fixed address.
+type stubWaker struct {
+	mu    sync.Mutex
+	addrs map[string]string
+	woken []string
+}
+
+func (w *stubWaker) WakeSession(_ context.Context, sessionID string) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.woken = append(w.woken, sessionID)
+	addr, ok := w.addrs[sessionID]
+	if !ok {
+		return "", errors.New("stub waker: unknown session")
+	}
+	return addr, nil
+}
+
+func (w *stubWaker) wokenIDs() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]string(nil), w.woken...)
+}
+
+// seedBlockedTask creates a task on sessionID carrying a blocker note.
+func seedBlockedTask(t *testing.T, data *dataclient.Client, sessionID, title, blocker string) contracts.Task {
+	t.Helper()
+	task := contracts.Task{SessionID: sessionID, Title: title, Source: "test", Status: contracts.StatusInProgress}
+	if err := data.CreateTask(context.Background(), &task); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	note := contracts.Note{Type: contracts.NoteBlocker, Content: blocker}
+	if err := data.AddNote(context.Background(), task.ID, &note); err != nil {
+		t.Fatalf("AddNote: %v", err)
+	}
+	return task
+}
+
+func runSignal(t *testing.T, base string, runner *job.Runner, sessionID string, sig job.Signal) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := runner.Spawn(ctx, job.SignalKind, sessionID, job.DeliverSignal(sessionID, sig)); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	verify := dataclient.New(base, "test-verify")
+	eventually(t, 5*time.Second, func() bool {
+		evs, err := verify.Events(ctx, 0, sessionID, []string{"job.completed"})
+		return err == nil && len(evs) > 0
+	})
+}
+
+// A blocked task on a session holding the implicit hand-raiser over its own
+// pipeline run reaches that session's live child: the notice names the task
+// and carries the blocker note, attributed to "your pipeline run", and stays
+// digest-attributed with the noop instruction so the forced turn can't
+// self-amplify. A live child is never re-woken.
+func TestDeliverSignalTaskTerminalReachesImplicitHandRaiser(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "pipeline leader"})
+	link, err := data.CreateHandRaiser(context.Background(), sess.ID)
+	if err != nil {
+		t.Fatalf("CreateHandRaiser: %v", err)
+	}
+	task := seedBlockedTask(t, data, sess.ID, "wire the adapter", "missing credentials")
+
+	server := newCaptureServer(t, http.StatusAccepted)
+	waker := &stubWaker{}
+	runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+	runner.SetResolver(stubResolver{sess.ID: server.addr()})
+	runner.SetWaker(waker)
+
+	runSignal(t, base, runner, sess.ID, job.Signal{
+		Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(contracts.StatusBlocked),
+	})
+
+	if got := server.count(); got != 1 {
+		t.Fatalf("implicit hand-raiser received %d deliveries, want 1", got)
+	}
+	if woken := waker.wokenIDs(); len(woken) != 0 {
+		t.Errorf("woke %v, want no wake for a live child", woken)
+	}
+	req := server.requests()[0]
+	if !strings.Contains(req.Text, `"wire the adapter"`) || !strings.Contains(req.Text, "blocked") {
+		t.Errorf("notice %q missing task title or status", req.Text)
+	}
+	if !strings.Contains(req.Text, "Blocker: missing credentials") {
+		t.Errorf("notice %q missing blocker note", req.Text)
+	}
+	if !strings.Contains(req.Text, "reply with exactly NOOP") {
+		t.Errorf("notice %q missing the noop instruction", req.Text)
+	}
+	if req.Attribution.LinkID != link.ID {
+		t.Errorf("attribution link = %q, want %q", req.Attribution.LinkID, link.ID)
+	}
+	if req.Attribution.SourceName != "your pipeline run" {
+		t.Errorf("attribution source = %q, want your pipeline run", req.Attribution.SourceName)
+	}
+	if !req.Attribution.DigestAttributed {
+		t.Error("implicit task-terminal delivery not digest-attributed; the forced turn could self-amplify")
+	}
+}
+
+// When the run's own session has no live child (e.g. the Router restarted
+// under a running pipeline), a task terminal wakes it through the waker and
+// delivers to the woken child rather than being dropped.
+func TestDeliverSignalTaskTerminalWakesDormantImplicitHandRaiser(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "dormant leader"})
+	if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
+		t.Fatalf("CreateHandRaiser: %v", err)
+	}
+	task := seedBlockedTask(t, data, sess.ID, "migrate the store", "schema conflict")
+
+	server := newCaptureServer(t, http.StatusAccepted)
+	waker := &stubWaker{addrs: map[string]string{sess.ID: server.addr()}}
+	runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+	runner.SetResolver(stubResolver{}) // nothing is running
+	runner.SetWaker(waker)
+
+	runSignal(t, base, runner, sess.ID, job.Signal{
+		Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(contracts.StatusBlocked),
+	})
+
+	if woken := waker.wokenIDs(); len(woken) != 1 || woken[0] != sess.ID {
+		t.Fatalf("woken = %v, want exactly [%s]", woken, sess.ID)
+	}
+	if got := server.count(); got != 1 {
+		t.Fatalf("woken session received %d deliveries, want 1", got)
+	}
+	if text := server.requests()[0].Text; !strings.Contains(text, "Blocker: schema conflict") {
+		t.Errorf("notice %q missing blocker note", text)
+	}
+}
+
+// The implicit hand-raiser stays excluded from permission and crash signals
+// even when its child is dormant: nothing is delivered and nothing is woken.
+// An ordinary monitor that isn't running is never woken either.
+func TestDeliverSignalImplicitExcludedForPermissionAndCrash(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "pipeline leader"})
+	monitor := mustCreateSession(t, data, contracts.Session{Name: "dormant monitor"})
+	if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
+		t.Fatalf("CreateHandRaiser: %v", err)
+	}
+	mustCreateLink(t, data, contracts.LinkRequest{
+		GrantingSessionID: monitor.ID, SubjectSessionID: sess.ID,
+		Grants: []contracts.Grant{contracts.GrantRead}, Cadence: contracts.CadenceOnSignal,
+	})
+
+	server := newCaptureServer(t, http.StatusAccepted)
+	waker := &stubWaker{addrs: map[string]string{sess.ID: server.addr(), monitor.ID: server.addr()}}
+	runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+	runner.SetResolver(stubResolver{})
+	runner.SetWaker(waker)
+
+	runSignal(t, base, runner, sess.ID, job.Signal{Kind: job.SignalPermission, Tool: "Bash"})
+	runSignal(t, base, runner, sess.ID, job.Signal{Kind: job.SignalCrash, Reason: "exit 1"})
+
+	if woken := waker.wokenIDs(); len(woken) != 0 {
+		t.Errorf("woken = %v, want none (implicit is excluded; ordinary monitors are never woken)", woken)
+	}
+	if got := server.count(); got != 0 {
+		t.Errorf("received %d deliveries, want 0", got)
 	}
 }

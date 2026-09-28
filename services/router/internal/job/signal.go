@@ -42,11 +42,15 @@ type Signal struct {
 // non-manual read link's granting (monitor) session. per_turn links receive
 // signals too, not just on_signal ones: a permission request parks the
 // subject mid-turn, so the turn digest that would have reported it may
-// never fire. Implicit hand-raisers are excluded — their granting session
-// is the subject itself, and task terminals already reach them via
-// GenerateRunDigest. Best-effort throughout, mirroring GenerateDigest: a
-// session that no longer exists, a feature flag that's off, or one
-// monitor's delivery failing never fails the job.
+// never fire. A session's implicit hand-raiser over its own pipeline run
+// (decision 6) receives task terminals only: that is how the agent that
+// launched a run hears its tasks finish or block, and its child is woken if
+// dormant (see targetAddr), because a blocked task nobody hears about stalls
+// the run. It is excluded for permission and crash signals: its granting
+// session is the subject itself, and a session can't usefully be told about
+// its own parked permission or its own crash. Best-effort throughout,
+// mirroring GenerateDigest: a session that no longer exists, a feature flag
+// that's off, or one monitor's delivery failing never fails the job.
 func DeliverSignal(sessionID string, sig Signal) Func {
 	return func(ctx context.Context, deps Deps) error {
 		sess, err := deps.Data.Session(ctx, sessionID)
@@ -72,7 +76,10 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 
 		var targets []contracts.Link
 		for _, l := range links {
-			if l.SubjectSessionID != sessionID || !l.HasGrant(contracts.GrantRead) || l.Implicit {
+			if l.SubjectSessionID != sessionID || !l.HasGrant(contracts.GrantRead) {
+				continue
+			}
+			if l.Implicit && sig.Kind != SignalTaskTerminal {
 				continue
 			}
 			if l.Cadence == contracts.CadenceManualOnly {
@@ -93,11 +100,22 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 		}
 
 		for _, l := range targets {
-			wakeMonitor(ctx, deps, l, sess.Name, text)
+			source := sess.Name
+			if l.Implicit {
+				// Granting == subject for an implicit hand-raiser, so the
+				// session's own name would read as a message from itself;
+				// name the source what it actually is.
+				source = implicitSourceName
+			}
+			wakeMonitor(ctx, deps, l, source, text)
 		}
 		return nil
 	}
 }
+
+// implicitSourceName is the attribution source for pushes over a session's
+// implicit hand-raiser: the run, not the session's own name.
+const implicitSourceName = "your pipeline run"
 
 // noopInstruction closes every monitor-facing push (per-turn digests and
 // wakes alike) so a monitor with nothing to do can answer in one cheap,
@@ -115,9 +133,9 @@ const noopInstruction = "\n\n(If nothing here needs your action, reply with exac
 // caller with somewhere better to put text (the digest job's mailbox) can
 // fall back. Best-effort: one monitor's failure must not affect the others.
 func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, text string) bool {
-	addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID)
+	addr, ok := targetAddr(ctx, deps, l)
 	if !ok {
-		return false // monitor not running: best-effort skip, not a failure
+		return false
 	}
 	body := text
 	backlog, err := deps.Data.DrainLinkDigests(ctx, l.ID)
@@ -141,6 +159,29 @@ func wakeMonitor(ctx context.Context, deps Deps, l contracts.Link, sourceName, t
 		return false
 	}
 	return true
+}
+
+// targetAddr resolves the live child address of link l's granting session.
+// An ordinary monitor that isn't running is a best-effort skip: its mailbox
+// keeps the backlog for later. An implicit hand-raiser is different. Its
+// granting session is the run's own session, the one agent that has to hear
+// about its own run, so a dormant child is woken through deps.Waker (the
+// same wake a composer send gets) instead of being skipped. The forced turn
+// stays digest-attributed with the noop instruction, so it can't
+// self-amplify.
+func targetAddr(ctx context.Context, deps Deps, l contracts.Link) (string, bool) {
+	if addr, ok := deps.Resolver.SessionAddr(l.GrantingSessionID); ok {
+		return addr, true
+	}
+	if !l.Implicit || deps.Waker == nil {
+		return "", false // monitor not running: best-effort skip, not a failure
+	}
+	addr, err := deps.Waker.WakeSession(ctx, l.GrantingSessionID)
+	if err != nil {
+		log.Printf("wake: start %s for its implicit hand-raiser link %s: %v", l.GrantingSessionID, l.ID, err)
+		return "", false
+	}
+	return addr, true
 }
 
 // renderBacklog renders a drained mailbox as the catch-up section of a

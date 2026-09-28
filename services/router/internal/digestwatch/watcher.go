@@ -14,15 +14,13 @@
 //     digest-attributed injections is excluded from the digest burst
 //     entirely — a monitor's own forced turn re-entering digestwatch must
 //     never spawn another digest, or monitor chains could self-amplify.
-//   - RunWatcher: task.status_changed reaching done or blocked, for a
-//     session holding the implicit hand-raiser over its own pipeline run
-//     (decision 6) — subscribes globally and spawns a GenerateRunDigest job
-//     per envelope.
 //   - SignalWatcher: attention signals (session.permission_requested,
 //     session.crashed, task.status_changed reaching done or blocked) for a
-//     session watched by explicit read links — subscribes globally and
-//     spawns a DeliverSignal job per envelope. The on_signal cadence's
-//     entire push half: no per-turn digests, only these wakes.
+//     session watched by read links — subscribes globally and spawns a
+//     DeliverSignal job per envelope. The on_signal cadence's entire push
+//     half (no per-turn digests, only these wakes), and also how a
+//     session's implicit hand-raiser (decision 6) hears about its own
+//     pipeline run's task terminals.
 package digestwatch
 
 import (
@@ -166,52 +164,11 @@ func (w *Watcher) fireDigest(sessionID string, buf *digestSessionBuffer) {
 	}
 }
 
-// RunWatcher subscribes to task.status_changed envelopes and spawns a run
-// digest job for each task reaching a terminal status (done or blocked).
-type RunWatcher struct {
-	data *dataclient.Client
-	jobs *job.Runner
-}
-
-func NewRunWatcher(data *dataclient.Client, jobs *job.Runner) *RunWatcher {
-	return &RunWatcher{data: data, jobs: jobs}
-}
-
-// Run blocks, subscribing to task.status_changed envelopes across every
-// session and spawning a run digest job for each task reaching done or
-// blocked. Retries the subscribe with backoff on failure; returns only once
-// ctx is done. Callers run it on its own goroutine for the life of the
-// process.
-func (w *RunWatcher) Run(ctx context.Context) {
-	ch := subscribeRetry(ctx, "task.status_changed", digestwatchInitialBackoff, digestwatchMaxBackoff, func() (<-chan contracts.Envelope, error) {
-		return w.data.Stream(ctx, 0, "", []string{string(contracts.TaskStatusChanged)})
-	})
-	if ch == nil {
-		return
-	}
-	for env := range ch {
-		var payload struct {
-			From string `json:"from"`
-			To   string `json:"to"`
-		}
-		if err := json.Unmarshal(env.Payload, &payload); err != nil {
-			log.Printf("digestwatch: decode task.status_changed payload for %s: %v", env.SessionID, err)
-			continue
-		}
-		if payload.To != string(contracts.StatusDone) && payload.To != string(contracts.StatusBlocked) {
-			continue
-		}
-		if _, err := w.jobs.Spawn(ctx, job.RunDigestKind, env.SessionID, job.GenerateRunDigest(env.SessionID, env.TaskID, payload.To)); err != nil {
-			log.Printf("digestwatch: spawn run digest job for %s: %v", env.SessionID, err)
-		}
-	}
-}
-
 // SignalWatcher subscribes to the attention-signal envelopes and spawns a
 // DeliverSignal job per envelope — the push half of the on_signal cadence
 // (docs/LINKED-SESSIONS-DESIGN.md decision 4). Filtering to sessions that
 // actually hold signal-receiving links happens inside the job, exactly as
-// Watcher/RunWatcher defer their link checks to the job body.
+// Watcher defers its link checks to the job body.
 type SignalWatcher struct {
 	data *dataclient.Client
 	jobs *job.Runner

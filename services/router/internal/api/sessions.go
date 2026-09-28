@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
@@ -313,7 +314,8 @@ func (e *wakeError) Error() string { return e.err.Error() }
 // calls; provider continuity (ProviderRef, empty for a session that never
 // conversed) is handled entirely inside the child on startup, same as an
 // explicit resume. Callers must already have confirmed no child is tracked
-// (SessionAddr false) before calling this.
+// (SessionAddr false) before calling this — go through ensureSession, which
+// makes that check under the session's wake lock.
 func (s *server) wakeSession(ctx context.Context, id string) (string, error) {
 	sess, err := s.data.Session(ctx, id)
 	if err != nil {
@@ -336,6 +338,27 @@ func (s *server) wakeSession(ctx context.Context, id string) (string, error) {
 		return "", &wakeError{code: "spawn_failed", err: fmt.Errorf("wake session: %w", err)}
 	}
 	return addr, nil
+}
+
+// ensureSession returns id's live child address, waking the session first if
+// no child is tracked. The check and the spawn run under a per-session lock:
+// wakeSession's contract (the caller has confirmed no child is tracked) only
+// holds if nobody else can spawn between the check and the spawn.
+func (s *server) ensureSession(ctx context.Context, id string) (string, error) {
+	mu, _ := s.wakeLocks.LoadOrStore(id, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+	if addr, ok := s.sup.SessionAddr(id); ok {
+		return addr, nil
+	}
+	return s.wakeSession(ctx, id)
+}
+
+// WakeSession implements job.SessionWaker, letting job bodies (a
+// task-terminal signal to a dormant pipeline session) wake a session exactly
+// as a composer send does.
+func (s *server) WakeSession(ctx context.Context, id string) (string, error) {
+	return s.ensureSession(ctx, id)
 }
 
 func writeWakeError(w http.ResponseWriter, err error) {

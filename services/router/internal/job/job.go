@@ -34,6 +34,11 @@ type Deps struct {
 	// (e.g. digest fan-out) that must reach a session other than the one
 	// they're scoped to. Nil unless SetResolver was called.
 	Resolver SessionResolver
+	// Waker starts a session's child when it isn't running and returns its
+	// address, for job bodies whose delivery must not be skipped just
+	// because the target is dormant (e.g. a task-terminal signal to the
+	// run's own session). Nil unless SetWaker was called.
+	Waker SessionWaker
 }
 
 // SessionResolver resolves a running session child's address. Defined here
@@ -42,6 +47,15 @@ type Deps struct {
 // *supervisor.Supervisor satisfies this interface structurally.
 type SessionResolver interface {
 	SessionAddr(sessionID string) (string, bool)
+}
+
+// SessionWaker returns a session's live child address, spawning the child
+// first if none is running: the same wake a composer send to a dormant
+// session gets. Defined here for the same import-cycle reason as
+// SessionResolver; the Router's api layer provides the implementation, since
+// it owns the provider registry that wake checks against.
+type SessionWaker interface {
+	WakeSession(ctx context.Context, sessionID string) (string, error)
 }
 
 // Func is a job body. It receives a background context (independent of
@@ -61,6 +75,7 @@ type Runner struct {
 	mu       sync.Mutex
 	cancels  map[string]context.CancelFunc
 	resolver SessionResolver
+	waker    SessionWaker
 }
 
 func New(data *dataclient.Client, fm *fastmodel.Runner, registry *registryclient.Client) *Runner {
@@ -73,6 +88,15 @@ func New(data *dataclient.Client, fm *fastmodel.Runner, registry *registryclient
 func (r *Runner) SetResolver(res SessionResolver) {
 	r.mu.Lock()
 	r.resolver = res
+	r.mu.Unlock()
+}
+
+// SetWaker installs the wake hook used by job bodies that must reach a
+// dormant session (see Deps.Waker). Optional: without it, those bodies fall
+// back to skipping a target whose child isn't running.
+func (r *Runner) SetWaker(w SessionWaker) {
+	r.mu.Lock()
+	r.waker = w
 	r.mu.Unlock()
 }
 
@@ -181,9 +205,9 @@ func (r *Runner) invoke(ctx context.Context, fn Func) (err error) {
 		}
 	}()
 	r.mu.Lock()
-	resolver := r.resolver
+	resolver, waker := r.resolver, r.waker
 	r.mu.Unlock()
-	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry, Resolver: resolver})
+	return fn(ctx, Deps{Data: r.data, FastModel: r.fm, Registry: r.registry, Resolver: resolver, Waker: waker})
 }
 
 // Shutdown waits for in-flight jobs to finish, bounded by ctx.

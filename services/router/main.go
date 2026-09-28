@@ -279,9 +279,6 @@ func main() {
 	watcher := digestwatch.NewWatcher(data, jobs)
 	go watcher.Run(ctx)
 
-	runWatcher := digestwatch.NewRunWatcher(data, jobs)
-	go runWatcher.Run(ctx)
-
 	signalWatcher := digestwatch.NewSignalWatcher(data, jobs)
 	go signalWatcher.Run(ctx)
 

@@ -111,39 +111,6 @@ func TestAllJobKindsSkipSilentlyWithoutFastModelBackend(t *testing.T) {
 		}
 	})
 
-	t.Run("run_digest", func(t *testing.T) {
-		base := datatest.Start(t)
-		data := dataclient.New(base, "router")
-		enableLinkedSessions(t, data)
-
-		sess := mustCreateSession(t, data, contracts.Session{Name: "leader session"})
-		if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
-			t.Fatalf("CreateHandRaiser: %v", err)
-		}
-		task := contracts.Task{SessionID: sess.ID, Title: "seed task", Source: "test", Status: contracts.StatusInProgress}
-		if err := data.CreateTask(context.Background(), &task); err != nil {
-			t.Fatalf("CreateTask: %v", err)
-		}
-		task.Status = contracts.StatusDone
-		if err := data.UpdateTask(context.Background(), &task); err != nil {
-			t.Fatalf("UpdateTask: %v", err)
-		}
-		server := newCaptureServer(t, http.StatusAccepted)
-
-		runner := job.New(data, unconfiguredFastModel(), registryclient.New(""))
-		runner.SetResolver(stubResolver{sess.ID: server.addr()})
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cancel()
-		if _, err := runner.Spawn(ctx, job.RunDigestKind, sess.ID,
-			job.GenerateRunDigest(sess.ID, task.ID, string(contracts.StatusDone))); err != nil {
-			t.Fatalf("Spawn: %v", err)
-		}
-		assertNoJobFailed(t, base, sess.ID)
-		if got := server.count(); got != 0 {
-			t.Fatalf("hand-raiser session received %d deliveries, want 0", got)
-		}
-	})
-
 	t.Run("synthesis", func(t *testing.T) {
 		base := datatest.Start(t)
 		data := dataclient.New(base, "router")

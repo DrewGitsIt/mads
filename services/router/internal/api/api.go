@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
@@ -37,6 +38,11 @@ type server struct {
 	runsDir              string
 	fastModelFlagBaseURL string
 	models               *modelcatalog.Catalog
+	// wakeLocks holds one *sync.Mutex per session ID, serializing
+	// ensureSession's check-then-spawn so concurrent wakers (a composer send
+	// racing a job's WakeSession, or several signal jobs for one dormant
+	// session) start at most one child.
+	wakeLocks sync.Map
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -94,6 +100,11 @@ func NewMux(opts Options) *http.ServeMux {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
 	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models}
+	if opts.Jobs != nil && opts.Sup != nil {
+		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
+		// it through the same path a composer send uses.
+		opts.Jobs.SetWaker(s)
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)

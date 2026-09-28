@@ -41,19 +41,15 @@ func (s *server) handlePipelineOutput(w http.ResponseWriter, r *http.Request) {
 // a child is addressed — the child owns turn semantics (busy/409,
 // not-ready/503), the Router is just the address lookup in front of it.
 // handleSessionMessages differs from handleSessionInterrupt in one respect:
-// if no child is tracked, it first wakes the session (see wakeSession,
+// if no child is tracked, it first wakes the session (see ensureSession,
 // sessions.go) rather than 404ing — a composer send should never surface
 // "session not running" to the UI.
 func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	addr, ok := s.sup.SessionAddr(id)
-	if !ok {
-		var err error
-		addr, err = s.wakeSession(r.Context(), id)
-		if err != nil {
-			writeWakeError(w, err)
-			return
-		}
+	addr, err := s.ensureSession(r.Context(), id)
+	if err != nil {
+		writeWakeError(w, err)
+		return
 	}
 	s.proxyTo(w, r, addr, "/messages")
 }
@@ -65,14 +61,10 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 // applies at least as much to a session that isn't currently running.
 func (s *server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	addr, ok := s.sup.SessionAddr(id)
-	if !ok {
-		var err error
-		addr, err = s.wakeSession(r.Context(), id)
-		if err != nil {
-			writeWakeError(w, err)
-			return
-		}
+	addr, err := s.ensureSession(r.Context(), id)
+	if err != nil {
+		writeWakeError(w, err)
+		return
 	}
 	s.proxyTo(w, r, addr, "/compact")
 }
