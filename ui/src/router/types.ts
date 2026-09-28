@@ -292,6 +292,21 @@ export interface Model {
   default?: boolean;
 }
 
+// mirrors contracts.ModelsResponse's state field. An empty model list means
+// three different things and the picker renders each differently:
+// "refreshing" — discovery is still running, so say so rather than showing
+// an empty menu; "unavailable" — the harness could not be asked (binary
+// missing, not logged in), paired with a human-readable detail; "ready" —
+// the provider genuinely offers nothing.
+export type ModelCatalogState = "pending" | "refreshing" | "ready" | "unavailable";
+
+export interface ModelCatalog {
+  models: Model[];
+  state?: ModelCatalogState;
+  detail?: string;
+  fetchedAt?: string;
+}
+
 export interface Envelope {
   seq: number;
   timestamp: string;

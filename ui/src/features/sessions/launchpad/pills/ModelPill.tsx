@@ -1,9 +1,25 @@
 import { useState } from "react";
 import { Popover } from "../../../../components/Popover/Popover";
-import { useProviderModels } from "../../../../router/useProviderModels";
+import { useProviderCatalogs } from "../../../../router/useProviderModels";
 import { modelDisplayName } from "../../../../router/modelDisplay";
-import type { Model, ResolvedSessionField } from "../../../../router/types";
+import type { Model, ModelCatalog, ResolvedSessionField } from "../../../../router/types";
 import pillStyles from "./pills.module.css";
+
+// emptyNote explains an empty group. "Couldn't ask the harness" and "the
+// harness has nothing" are different problems for the user — the first is
+// usually a missing binary or a logged-out CLI and is worth surfacing
+// verbatim, the second is just a fact.
+function emptyNote(catalog: ModelCatalog): string {
+  switch (catalog.state) {
+    case "refreshing":
+    case "pending":
+      return "discovering models…";
+    case "unavailable":
+      return catalog.detail || "model discovery unavailable";
+    default:
+      return "no models";
+  }
+}
 
 export interface ModelPillProps {
   provider?: string;
@@ -21,15 +37,15 @@ export function ModelPill({
   onChange,
 }: ModelPillProps) {
   const [open, setOpen] = useState(false);
-  const modelsByProvider = useProviderModels();
+  const catalogs = useProviderCatalogs();
 
-  const models = modelsByProvider[provider ?? ""] ?? [];
+  const models = catalogs[provider ?? ""]?.models ?? [];
 
   let label: string;
   if (model) {
     label = `${modelDisplayName(model, models) ?? model} · ${provider}`;
   } else if (resolved?.value) {
-    const resolvedModels = modelsByProvider[resolvedProvider ?? ""] ?? [];
+    const resolvedModels = catalogs[resolvedProvider ?? ""]?.models ?? [];
     label = `${modelDisplayName(resolved.value, resolvedModels) ?? resolved.value} · ${resolvedProvider} (default)`;
   } else {
     label = "Select model";
@@ -50,10 +66,15 @@ export function ModelPill({
       }
     >
       <div className={pillStyles.menu}>
-        {Object.entries(modelsByProvider).map(([providerName, models]) => (
+        {Object.entries(catalogs).map(([providerName, catalog]) => (
           <div key={providerName}>
             <div className={pillStyles.groupLabel}>{providerName}</div>
-            {models.map((m) => (
+            {catalog.models.length === 0 && (
+              // An empty list means three different things and the old
+              // menu collapsed all of them into a blank group.
+              <div className={pillStyles.groupNote}>{emptyNote(catalog)}</div>
+            )}
+            {catalog.models.map((m) => (
               <button
                 key={m.id}
                 type="button"

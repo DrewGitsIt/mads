@@ -80,6 +80,15 @@
   letter-spacing: 0.04em;
 }
 
+/* Why a provider's group is empty: discovering, unavailable (with the
+   harness's own reason), or genuinely no models. */
+.groupNote {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--text3);
+  font: 400 var(--fs-chip) var(--sans);
+  font-style: italic;
+}
+
 .agentIntents {
   display: flex;
   flex-direction: column;

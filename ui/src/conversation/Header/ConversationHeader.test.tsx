@@ -1,7 +1,8 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
+import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationHeader } from "./ConversationHeader";
 import { fixtureSessions } from "../../router/fixtures";
+import { resetProviderModelCache } from "../../router/useProviderModels";
 
 function stubProviderModels(models: { id: string; name: string; default?: boolean }[]) {
   const fetchMock = vi.fn().mockImplementation((input: URL) => {
@@ -15,6 +16,13 @@ function stubProviderModels(models: { id: string; name: string; default?: boolea
 }
 
 describe("ConversationHeader", () => {
+  // useProviderModels dedupes concurrent mounts behind a module-level
+  // in-flight request; without this a case can join the PREVIOUS case's
+  // still-unresolved fetch and see its stubbed models.
+  beforeEach(() => {
+    resetProviderModelCache();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });
