@@ -44,12 +44,25 @@ describe("ConversationHeader", () => {
   });
 
   it("renders the workspace/branch line but not a duplicate name or status chip", () => {
-    render(<ConversationHeader session={fixtureSessions["session-active"]} />);
+    render(<ConversationHeader session={fixtureSessions["session-active"]} workspaceName="mads" />);
 
     // Name + activity now live only in the SessionWorkspace bar above.
     expect(screen.queryByText("Add retry backoff to the ingest worker")).toBeNull();
     expect(screen.queryByText("active")).toBeNull();
-    expect(screen.getByText(/mads\/tsk_retry-backoff/)).toBeTruthy();
+    expect(screen.getByText("mads · mads/tsk_retry-backoff")).toBeTruthy();
+  });
+
+  // session.workspace is an id-or-name reference the caller resolves; the
+  // subline prints the resolved name or nothing, never `wsp_...`.
+  it("never prints the session's raw workspace reference", () => {
+    render(
+      <ConversationHeader
+        session={{ ...fixtureSessions["session-active"], workspace: "wsp_b8439a998b38a07f" }}
+      />,
+    );
+
+    expect(screen.queryByText(/wsp_/)).toBeNull();
+    expect(screen.getByText("mads/tsk_retry-backoff")).toBeTruthy();
   });
 
   // onChangeModel, not onUpdateSession: a model switch persists and

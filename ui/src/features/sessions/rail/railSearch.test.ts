@@ -6,7 +6,8 @@ import {
   parseSearchQuery,
   scopeSuggestions,
 } from "./railSearch";
-import type { Session } from "../../../router/types";
+import { workspaceIndex } from "../../../router/workspaceRef";
+import type { Session, Workspace } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -27,6 +28,18 @@ const railReadability = makeSession({
   workspace: "Main work",
   cwd: "~/repo/mads-ui",
 });
+
+// The live shape of the records: Session.workspace holds the workspace id the
+// router wrote (sessiondefaults.go), so the searchable name only exists once
+// the index has resolved it.
+const MADS: Workspace = {
+  id: "wsp_b8439a998b38a07f",
+  name: "mads",
+  defaults: {},
+  created_at: "2026-07-01T00:00:00Z",
+  updated_at: "2026-07-01T00:00:00Z",
+};
+const WS_INDEX = workspaceIndex([MADS]);
 
 describe("parseSearchQuery", () => {
   it("splits on whitespace and lowercases", () => {
@@ -105,6 +118,27 @@ describe("matchSession", () => {
     const named = makeSession({ name: "mads rail", workspace: "mads" });
     expect(matchSession(named, parseSearchQuery("mads"))?.rank).toBe(0);
     expect(matchSession(named, parseSearchQuery("workspace:mads"))?.rank).toBe(2);
+  });
+});
+
+describe("workspace references", () => {
+  const byId = makeSession({ id: "a", workspace: "wsp_b8439a998b38a07f", cwd: "." });
+
+  it("matches the workspace's name, not the id on the record", () => {
+    expect(matchSession(byId, parseSearchQuery("workspace:mads"), WS_INDEX)).toBeTruthy();
+    expect(matchSession(byId, parseSearchQuery("workspace:wsp_b84"), WS_INDEX)).toBeUndefined();
+  });
+
+  it("prints the name as the reason a card was found", () => {
+    const match = matchSession(byId, parseSearchQuery("mads"), WS_INDEX);
+    expect(matchReason(byId, match!, WS_INDEX)).toEqual({ field: "workspace", value: "mads" });
+  });
+
+  it("offers the name as the scope chip, and counts every reference form as one", () => {
+    const sessions = [byId, makeSession({ id: "b", workspace: "mads" })];
+    expect(scopeSuggestions(sessions, "mads", WS_INDEX)).toEqual([
+      { field: "workspace", value: "mads", token: "workspace:mads", count: 2 },
+    ]);
   });
 });
 

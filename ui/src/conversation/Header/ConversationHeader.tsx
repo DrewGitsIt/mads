@@ -12,6 +12,13 @@ import styles from "./ConversationHeader.module.css";
 
 export interface ConversationHeaderProps {
   session: Session;
+  /**
+   * The session's workspace *name*, resolved by the caller (useSessionWorkspace
+   * -> router/workspaceRef.ts). Session.workspace itself is an id-or-name
+   * reference, so it is not printable: unresolved, the subline shows no
+   * workspace rather than a `wsp_...` id.
+   */
+  workspaceName?: string;
   usage?: Usage;
   contextWindow?: number;
   /** Active display modality. When set, the Chat/Terminal switch renders here. */
@@ -44,6 +51,7 @@ type PillField = "agent" | "model" | "trust";
  */
 export function ConversationHeader({
   session,
+  workspaceName,
   usage,
   contextWindow,
   mode,
@@ -125,9 +133,9 @@ export function ConversationHeader({
         )}
       </div>
 
-      {(session.workspace || session.worktree_branch) && (
+      {(workspaceName || session.worktree_branch) && (
         <div className={styles.subline}>
-          {[session.workspace, session.worktree_branch].filter(Boolean).join(" · ")}
+          {[workspaceName, session.worktree_branch].filter(Boolean).join(" · ")}
         </div>
       )}
     </div>

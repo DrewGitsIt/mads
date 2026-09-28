@@ -35,9 +35,15 @@ import {
   EMPTY_LABEL_CONTEXT,
   railLabelsFor,
   railTooltip,
-  workspaceFactsByName,
+  workspaceFacts,
 } from "./railLabels";
 import type { RailLabelContext, RailLabels } from "./railLabels";
+import {
+  EMPTY_WORKSPACE_INDEX,
+  workspaceIndex,
+  workspaceNameForRef,
+} from "../../../router/workspaceRef";
+import type { WorkspaceIndex } from "../../../router/workspaceRef";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import {
@@ -137,6 +143,10 @@ export function SessionRail({
   const graph = computeRailLinks(linkedSessionsEnabled ? links : []);
   const allRows = buildRailRows(ordered, allSessionsById, graph);
 
+  // Session.workspace is an id-or-name reference; one index resolves it for
+  // every surface below it (search, labels, tooltip) rather than each guessing.
+  const wsIndex = workspaceIndex(workspaces);
+
   // Search bypasses the view entirely: it runs over every row the rail holds,
   // including the ones folded into the collapsed "Earlier" tail and everything
   // below the fold. A search that only searched what was rendered would be
@@ -150,7 +160,7 @@ export function SessionRail({
     // A holder answers for its nested subjects here too — a subject can only
     // be shown underneath the holder that owns it.
     for (const session of [row.session, ...row.subjects.map((sub) => sub.session)]) {
-      const match = matchSession(session, terms);
+      const match = matchSession(session, terms, wsIndex);
       if (!match) continue;
       matchById.set(session.id, match);
       rank = rank === undefined ? match.rank : Math.min(rank, match.rank);
@@ -164,7 +174,7 @@ export function SessionRail({
   const rows = searching
     ? [...ranked].sort((a, b) => a.rank - b.rank || a.resting - b.resting).map((r) => r.row)
     : allRows;
-  const suggestions = scopeSuggestions(sessions, query);
+  const suggestions = scopeSuggestions(sessions, query, wsIndex);
   const anchorWorkspace = linkMode ? allSessionsById.get(linkMode.anchorId)?.workspace : undefined;
 
   function bucketOf(session: Session): RailFilterBucket {
@@ -201,12 +211,15 @@ export function SessionRail({
   for (const row of visible) {
     const nested = linkedSessionsEnabled ? row.subjects.map((s) => s.session) : [];
     for (const session of [row.session, ...nested]) {
-      if (session.workspace) visibleWorkspaces.add(session.workspace);
+      // Counted by resolved name: two records referring to one workspace, one
+      // by id and one by name, are not two workspaces.
+      const name = workspaceNameForRef(session.workspace, wsIndex);
+      if (name) visibleWorkspaces.add(name);
     }
   }
   const labelContext: RailLabelContext = {
     multiWorkspace: visibleWorkspaces.size > 1,
-    facts: workspaceFactsByName(workspaces),
+    facts: workspaceFacts(workspaces),
   };
 
   const head: RailRow[] = [];
@@ -308,6 +321,7 @@ export function SessionRail({
     openTaskCounts,
     agentStates,
     matchById,
+    wsIndex,
     selectedId,
     onSelect,
     onResume,
@@ -490,6 +504,7 @@ function RailRowGroup({
   openTaskCounts,
   agentStates,
   matchById,
+  wsIndex,
   selectedId,
   onSelect,
   onResume,
@@ -509,6 +524,8 @@ function RailRowGroup({
   agentStates: Record<string, SessionAgentState>;
   /** Only populated while a query is live — a card's own hit, for its reason line. */
   matchById: Map<string, SearchMatch>;
+  /** Resolves a session's workspace reference to its workspace (router/workspaceRef.ts). */
+  wsIndex: WorkspaceIndex;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -531,7 +548,7 @@ function RailRowGroup({
         session={row.session}
         openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
         agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
-        matchReason={reasonFor(row.session, matchById)}
+        matchReason={reasonFor(row.session, matchById, wsIndex)}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
@@ -554,7 +571,7 @@ function RailRowGroup({
             session={sub.session}
             openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
             agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
-            matchReason={reasonFor(sub.session, matchById)}
+            matchReason={reasonFor(sub.session, matchById, wsIndex)}
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
@@ -585,9 +602,13 @@ function RailRowGroup({
   );
 }
 
-function reasonFor(session: Session, matchById: Map<string, SearchMatch>) {
+function reasonFor(
+  session: Session,
+  matchById: Map<string, SearchMatch>,
+  wsIndex: WorkspaceIndex = EMPTY_WORKSPACE_INDEX,
+) {
   const match = matchById.get(session.id);
-  return match ? matchReason(session, match) : undefined;
+  return match ? matchReason(session, match, wsIndex) : undefined;
 }
 
 /** Active renders nothing extra beyond the existing LINKED badge — only the non-terminal/degraded states need a pill. */
@@ -690,7 +711,7 @@ function SessionRow({
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
   // occupancy — plus the labels the line above adaptively dropped.
-  const tooltip = railTooltip(session);
+  const tooltip = railTooltip(session, labelContext);
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
   const showSummary = isPaused && Boolean(session.summary);
   // A nested subject row's link controls (update policy, unlink) live in one

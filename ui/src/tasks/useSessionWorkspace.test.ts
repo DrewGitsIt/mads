@@ -23,6 +23,24 @@ describe("useSessionWorkspace", () => {
     expect(result.current?.name).toBe(fixtureWorkspaces[0].name);
   });
 
+  // The live records reference their workspace by id (the router canonicalises
+  // Session.workspace on create), which a name-keyed lookup never finds.
+  it("resolves the session's workspace by id", async () => {
+    const session: Session = {
+      id: "session-by-id",
+      name: "By id",
+      activity: "active",
+      workspace: fixtureWorkspaces[0].id,
+      created_at: "t",
+      updated_at: "t",
+    };
+    const client = new FakeRouterClient({ "session-by-id": session });
+    const { result } = renderHook(() => useSessionWorkspace(client, "session-by-id"));
+
+    await waitFor(() => expect(result.current).not.toBeNull());
+    expect(result.current?.name).toBe(fixtureWorkspaces[0].name);
+  });
+
   it("resolves to null when the session has no workspace", async () => {
     const session: Session = {
       id: "session-no-workspace",

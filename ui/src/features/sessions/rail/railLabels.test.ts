@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { railLabelsFor, railTooltip, workspaceFactsByName } from "./railLabels";
+import { railLabelsFor, railTooltip, workspaceFacts } from "./railLabels";
 import type { RailLabelContext } from "./railLabels";
 import type { Session, Workspace } from "../../../router/types";
 
@@ -32,21 +32,30 @@ const MADS = makeWorkspace({
 });
 
 function context(overrides: Partial<RailLabelContext> = {}): RailLabelContext {
-  return { multiWorkspace: false, facts: workspaceFactsByName([MADS]), ...overrides };
+  return { multiWorkspace: false, facts: workspaceFacts([MADS]), ...overrides };
 }
 
-describe("workspaceFactsByName", () => {
+describe("workspaceFacts", () => {
+  // The live case: the router canonicalises Session.workspace to the workspace
+  // *id* (sessiondefaults.go), so a facts map keyed only by name never hits.
+  it("answers for a session that references its workspace by id", () => {
+    const facts = workspaceFacts([MADS]);
+    expect(facts.get("ws")?.primaryRepo).toBe("/home/drew/repo/mads");
+    expect(facts.get("ws")?.defaultAgent).toBe("builder");
+    expect(facts.get("ws")?.name).toBe("mads");
+  });
+
   it("prefers the repo marked primary", () => {
-    expect(workspaceFactsByName([MADS]).get("mads")?.primaryRepo).toBe("/home/drew/repo/mads");
+    expect(workspaceFacts([MADS]).get("mads")?.primaryRepo).toBe("/home/drew/repo/mads");
   });
 
   it("falls back to the only repo when none is marked primary", () => {
     const ws = makeWorkspace({ name: "solo", repos: [{ path: "/home/drew/repo/solo" }] });
-    expect(workspaceFactsByName([ws]).get("solo")?.primaryRepo).toBe("/home/drew/repo/solo");
+    expect(workspaceFacts([ws]).get("solo")?.primaryRepo).toBe("/home/drew/repo/solo");
   });
 
   it("reads the default persona from either defaults.agent or defaults.persona", () => {
-    const facts = workspaceFactsByName([
+    const facts = workspaceFacts([
       makeWorkspace({ name: "a", defaults: { agent: "builder" } }),
       makeWorkspace({ id: "ws-b", name: "b", defaults: { persona: "reviewer" } }),
     ]);
@@ -82,6 +91,51 @@ describe("railLabelsFor", () => {
     const session = makeSession({ workspace: "mads" });
     expect(railLabelsFor(session, context()).workspace).toBeUndefined();
     expect(railLabelsFor(session, context({ multiWorkspace: true })).workspace).toBe("mads");
+  });
+
+  it("labels an id-referenced workspace with its name, never the id", () => {
+    const session = makeSession({ workspace: "ws" });
+    expect(railLabelsFor(session, context({ multiWorkspace: true })).workspace).toBe("mads");
+  });
+
+  // The whole defect, in the shape the running instance has it: an
+  // id-referenced current_dir session in a single-workspace instance. Nothing
+  // it carries is worth a label, so the context line carries nothing.
+  it("gives a current_dir session on its workspace's default agent no labels at all", () => {
+    const labels = railLabelsFor(
+      makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" }),
+      context(),
+    );
+    expect(labels).toEqual({
+      branch: undefined,
+      workspace: undefined,
+      cwd: undefined,
+      agent: undefined,
+      retro: false,
+    });
+  });
+
+  it("never labels a cwd that is not a location", () => {
+    for (const cwd of [".", "./", "", " "]) {
+      expect(railLabelsFor(makeSession({ workspace: "ws", cwd }), context()).cwd).toBeUndefined();
+    }
+  });
+
+  it("still labels a cwd that differs from the primary repo of an id-referenced workspace", () => {
+    const labels = railLabelsFor(
+      makeSession({ workspace: "ws", cwd: "/home/drew/repo/mads-ui" }),
+      context(),
+    );
+    expect(labels.cwd).toBe("~/repo/mads-ui");
+  });
+
+  it("drops the agent label for the default agent of an id-referenced workspace", () => {
+    expect(
+      railLabelsFor(makeSession({ workspace: "ws", agent: "builder" }), context()).agent,
+    ).toBeUndefined();
+    expect(railLabelsFor(makeSession({ workspace: "ws", agent: "reviewer" }), context()).agent).toBe(
+      "reviewer",
+    );
   });
 
   it("hides the cwd when it is the workspace's primary repo", () => {
@@ -180,6 +234,16 @@ describe("railTooltip", () => {
       "Isolation: worktree",
       "Context: 45% of 200k",
     ]);
+  });
+
+  it("names the workspace an id reference points at", () => {
+    expect(railTooltip(makeSession({ workspace: "ws" }), context())).toBe("Workspace: mads");
+  });
+
+  it("falls back to the reference when it resolves to no workspace", () => {
+    expect(railTooltip(makeSession({ workspace: "wsp_gone" }), context())).toBe(
+      "Workspace: wsp_gone",
+    );
   });
 
   it("prefers the provider-reported window over the static table", () => {

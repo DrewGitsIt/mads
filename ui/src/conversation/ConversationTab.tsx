@@ -23,6 +23,7 @@ import type {
 } from "../router/types";
 import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
+import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
@@ -130,6 +131,10 @@ export function ConversationTab({
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
+  // session.workspace is a reference (id or name), not the name the header's
+  // subline prints — resolved here, off the session this tab already holds, and
+  // kept live by the hook's workspace.* subscription.
+  const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
   // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
   // the ordered items; enqueue/finish/reset are stable across renders.
   const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed(routerClient)));
@@ -1037,6 +1042,7 @@ export function ConversationTab({
     <div className={styles.tab}>
       <ConversationHeader
         session={session}
+        workspaceName={sessionWorkspace?.name ?? undefined}
         usage={lastUsage}
         contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
         mode={activeMode}

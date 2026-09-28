@@ -1,4 +1,9 @@
 import type { Session } from "../../../router/types";
+import {
+  EMPTY_WORKSPACE_INDEX,
+  workspaceNameForRef,
+  type WorkspaceIndex,
+} from "../../../router/workspaceRef";
 
 /**
  * The four fields the rail's own records already carry (mockup
@@ -6,6 +11,12 @@ import type { Session } from "../../../router/types";
  * workspace may hold several repos, so the workspace name is NOT derivable
  * from the directory — indexing both is what lets "mads" find a session whose
  * workspace is called "Main work" but whose cwd is ~/repo/mads.
+ *
+ * The workspace field indexes the *name*: Session.workspace is an id-or-name
+ * reference (router/workspaceRef.ts), and nobody searches for
+ * `wsp_b8439a998b38a07f`. Every entry point therefore takes the workspace
+ * index; without one the reference stands in for itself, which is all an
+ * un-loaded workspace list can offer.
  *
  * `dir` and `branch` are the query-facing names for `cwd` and
  * `worktree_branch`: they are what the user types, not what the record calls
@@ -60,12 +71,16 @@ export function parseSearchQuery(query: string): SearchTerm[] {
 }
 
 /** The record field a query-facing field name reads. */
-export function searchFieldValue(session: Session, field: SearchField): string {
+export function searchFieldValue(
+  session: Session,
+  field: SearchField,
+  workspaces: WorkspaceIndex = EMPTY_WORKSPACE_INDEX,
+): string {
   switch (field) {
     case "name":
       return session.name ?? "";
     case "workspace":
-      return session.workspace ?? "";
+      return workspaceNameForRef(session.workspace, workspaces) ?? "";
     case "dir":
       return session.cwd ?? "";
     case "branch":
@@ -84,14 +99,18 @@ export interface SearchMatch {
  * Whether a session answers the whole query, and how relevantly. Undefined
  * means at least one term hit none of the fields it was allowed to look at.
  */
-export function matchSession(session: Session, terms: SearchTerm[]): SearchMatch | undefined {
+export function matchSession(
+  session: Session,
+  terms: SearchTerm[],
+  workspaces: WorkspaceIndex = EMPTY_WORKSPACE_INDEX,
+): SearchMatch | undefined {
   const where: SearchField[] = [];
   let rank = 3;
   const name = (session.name ?? "").toLowerCase();
   for (const term of terms) {
     const allowed = term.field ? [term.field] : SEARCH_FIELDS;
     const hit = allowed.filter((f) =>
-      searchFieldValue(session, f).toLowerCase().includes(term.needle),
+      searchFieldValue(session, f, workspaces).toLowerCase().includes(term.needle),
     );
     if (hit.length === 0) return undefined;
     for (const f of hit) if (!where.includes(f)) where.push(f);
@@ -114,10 +133,14 @@ export interface MatchReason {
  * it, typing "ui" and getting a session called "persona split" reads as a bug.
  * A card the name matched explains itself and prints nothing.
  */
-export function matchReason(session: Session, match: SearchMatch): MatchReason | undefined {
+export function matchReason(
+  session: Session,
+  match: SearchMatch,
+  workspaces: WorkspaceIndex = EMPTY_WORKSPACE_INDEX,
+): MatchReason | undefined {
   if (match.where.includes("name")) return undefined;
   const field = REASON_PRIORITY.find((f) => match.where.includes(f));
-  return field ? { field, value: searchFieldValue(session, field) } : undefined;
+  return field ? { field, value: searchFieldValue(session, field, workspaces) } : undefined;
 }
 
 export interface ScopeSuggestion {
@@ -141,7 +164,11 @@ function scopeToken(field: SearchField, value: string): string {
  * a 280px rail it would cover the results it is suggesting — so this chip row
  * is the whole autosuggest surface and the list itself is the rest of it.
  */
-export function scopeSuggestions(sessions: Session[], query: string): ScopeSuggestion[] {
+export function scopeSuggestions(
+  sessions: Session[],
+  query: string,
+  workspaces: WorkspaceIndex = EMPTY_WORKSPACE_INDEX,
+): ScopeSuggestion[] {
   const raw = query.trim().toLowerCase();
   // Nothing typed, or a scope already committed — don't offer to scope a scope.
   if (!raw || raw.includes(":")) return [];
@@ -149,7 +176,7 @@ export function scopeSuggestions(sessions: Session[], query: string): ScopeSugge
   const seen = new Set<string>();
   for (const field of SCOPE_FIELDS) {
     for (const session of sessions) {
-      const value = searchFieldValue(session, field);
+      const value = searchFieldValue(session, field, workspaces);
       if (!value || !value.toLowerCase().includes(raw)) continue;
       const token = scopeToken(field, value);
       if (seen.has(token)) continue;
@@ -158,7 +185,7 @@ export function scopeSuggestions(sessions: Session[], query: string): ScopeSugge
         field,
         value,
         token,
-        count: sessions.filter((s) => searchFieldValue(s, field) === value).length,
+        count: sessions.filter((s) => searchFieldValue(s, field, workspaces) === value).length,
       });
     }
   }

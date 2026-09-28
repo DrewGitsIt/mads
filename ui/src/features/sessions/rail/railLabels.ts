@@ -1,32 +1,37 @@
 import { displayPath } from "../../../files/displayPath";
 import { contextOccupancy, contextWindowForModel } from "../../../router/modelDisplay";
 import type { Session, Workspace } from "../../../router/types";
+import { workspaceIndex } from "../../../router/workspaceRef";
 
 /**
- * What the rail knows about a workspace, keyed by NAME — Session.workspace is
- * a free-text name, not an id (router/types.ts), and a workspace holds a list
- * of repos with at most one marked primary.
+ * What the rail knows about a workspace, keyed by every reference a session may
+ * carry — Session.workspace is an id-or-name reference (router/workspaceRef.ts,
+ * the one place that resolves one), and a workspace holds a list of repos with
+ * at most one marked primary.
  */
 export interface WorkspaceFacts {
+  /** The workspace's own name — what a card prints, never the `wsp_...` reference. */
+  name: string;
   /** The repo that anchors worktree isolation (contracts/registry.go) — the path a cwd is judged redundant against. */
   primaryRepo?: string;
   /** The workspace's default persona; a session bound to it is running the default, which is not worth a label. */
   defaultAgent?: string;
 }
 
-export function workspaceFactsByName(workspaces: Workspace[]): Map<string, WorkspaceFacts> {
-  return new Map(
-    workspaces.map((ws) => {
-      // A single-repo workspace may leave `primary` unset — with one repo
-      // there is nothing to disambiguate, and it is still the anchor.
-      const repos = ws.repos ?? [];
-      const primary = repos.find((r) => r.primary) ?? repos[0];
-      return [
-        ws.name,
-        { primaryRepo: primary?.path, defaultAgent: ws.defaults.agent ?? ws.defaults.persona },
-      ];
-    }),
-  );
+export function workspaceFacts(workspaces: Workspace[]): Map<string, WorkspaceFacts> {
+  const facts = new Map<string, WorkspaceFacts>();
+  for (const [ref, ws] of workspaceIndex(workspaces)) {
+    // A single-repo workspace may leave `primary` unset — with one repo
+    // there is nothing to disambiguate, and it is still the anchor.
+    const repos = ws.repos ?? [];
+    const primary = repos.find((r) => r.primary) ?? repos[0];
+    facts.set(ref, {
+      name: ws.name,
+      primaryRepo: primary?.path,
+      defaultAgent: ws.defaults.agent ?? ws.defaults.persona,
+    });
+  }
+  return facts;
 }
 
 export interface RailLabelContext {
@@ -52,6 +57,17 @@ export interface RailLabels {
   agent?: string;
   /** Retro sessions read differently; they get a prefix glyph rather than a word. */
   retro: boolean;
+}
+
+/**
+ * Whether a cwd names a place at all. An isolation:current_dir session stores
+ * cwd "." — the absence of a chosen directory, which displayPath passes
+ * through unchanged — and a bare "." on the context line is junk, not a
+ * location.
+ */
+function isLocation(cwd: string | undefined): boolean {
+  const trimmed = cwd?.trim();
+  return Boolean(trimmed) && trimmed !== "." && trimmed !== "./";
 }
 
 function samePath(a: string | undefined, b: string | undefined): boolean {
@@ -87,14 +103,22 @@ export function railLabelsFor(session: Session, ctx: RailLabelContext): RailLabe
   // repeat.
   const cwdIsWorktree = samePath(session.cwd, session.worktree_dir);
   const showCwd =
-    Boolean(session.cwd) && !samePath(session.cwd, facts?.primaryRepo) && !(branch && cwdIsWorktree);
+    isLocation(session.cwd) &&
+    !samePath(session.cwd, facts?.primaryRepo) &&
+    !(branch && cwdIsWorktree);
   return {
     branch,
-    workspace: ctx.multiWorkspace ? session.workspace || undefined : undefined,
+    workspace: ctx.multiWorkspace ? workspaceLabel(session, ctx.facts) : undefined,
     cwd: showCwd ? displayPath(session.cwd!) : undefined,
     agent: session.agent && session.agent !== facts?.defaultAgent ? session.agent : undefined,
     retro: Boolean(session.retro_id) || (session.tags ?? []).includes("retro"),
   };
+}
+
+/** The workspace name for a session's reference, never the raw reference alone. */
+function workspaceLabel(session: Session, facts: Map<string, WorkspaceFacts>): string | undefined {
+  if (!session.workspace) return undefined;
+  return facts.get(session.workspace)?.name || session.workspace;
 }
 
 function line(key: string, value: string | undefined): string[] {
@@ -106,10 +130,10 @@ function line(key: string, value: string | undefined): string[] {
  * the resting card adaptively drops — a card that stopped showing its
  * workspace because the list narrowed must still be able to answer for it.
  */
-export function railTooltip(session: Session): string {
+export function railTooltip(session: Session, ctx: RailLabelContext = EMPTY_LABEL_CONTEXT): string {
   const occupancy = contextOccupancy(session.last_usage, contextWindowForModel(session.model));
   return [
-    ...line("Workspace", session.workspace),
+    ...line("Workspace", workspaceLabel(session, ctx.facts)),
     ...line("Directory", session.cwd ? displayPath(session.cwd) : undefined),
     ...line("Branch", session.worktree_branch),
     ...line("Agent", session.agent),

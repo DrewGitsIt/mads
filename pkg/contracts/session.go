@@ -115,9 +115,13 @@ type Session struct {
 	// empty defaults to Derived on Create (see store.Sessions.Create).
 	NameSource SessionNameSource `json:"name_source,omitempty"`
 	Activity   SessionActivity   `json:"activity"`
-	Workspace  string            `json:"workspace,omitempty"`
-	Provider   string            `json:"provider,omitempty"`
-	Model      string            `json:"model,omitempty"`
+	// Workspace references a registry Workspace by id *or* name: Create
+	// canonicalises it to the id (resolveSessionDefaultsSourced), while the
+	// registry lookup accepts either (dataclient.Workspace(ctx, idOrName)).
+	// It is a reference, not a label — resolve it before showing it.
+	Workspace string `json:"workspace,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
 	// Agent binds this session to a registry Agent (spec §9), the source of
 	// its declared capabilities (spec §12) for capability-runtime wiring.
 	// Empty means no agent binding — no capability wiring occurs.

@@ -82,6 +82,47 @@ describe("SessionRail adaptive context labels", () => {
     expect(labelsOn(cardFor("plain one"))).toEqual({});
   });
 
+  // The shape the running instance actually has: the router writes the
+  // workspace *id* onto the session (sessiondefaults.go), and an
+  // isolation:current_dir session stores cwd ".". Neither is a label, and the
+  // whole line — separators included — has to come out empty.
+  it("puts nothing on the context line of an id-referenced current_dir session", () => {
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({
+            id: "a",
+            name: "current dir one",
+            workspace: "ws-mads",
+            isolation: "current_dir",
+            cwd: ".",
+            agent: "builder",
+          }),
+        ]}
+        workspaces={WORKSPACES}
+        openTaskCounts={{}}
+      />,
+    );
+    const card = cardFor("current dir one");
+    expect(labelsOn(card)).toEqual({});
+    expect(card.querySelector('[class*="context"]')!.textContent).toBe("");
+  });
+
+  it("labels an id-referenced workspace with its name across a mixed list", () => {
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "by id", workspace: "ws-mads", cwd: "." }),
+          makeSession({ id: "b", name: "by name", workspace: "sidecar", cwd: "." }),
+        ]}
+        workspaces={WORKSPACES}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(labelsOn(cardFor("by id"))).toEqual({ workspace: "mads" });
+    expect(labelsOn(cardFor("by name"))).toEqual({ workspace: "sidecar" });
+  });
+
   it("shows the cwd only when it differs from the workspace's primary repo", () => {
     render(
       <SessionRail
