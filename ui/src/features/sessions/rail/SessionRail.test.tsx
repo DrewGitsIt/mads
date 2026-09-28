@@ -345,9 +345,10 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
     expect(screen.getByText("LEADER")).toBeTruthy();
     expect(screen.getByText("LINKED")).toBeTruthy();
-    // Holder row gets a link-toggle button; nested subject row gets Unlink instead.
+    // Holder row gets a link-toggle button; the nested subject row's badge
+    // opens its link options instead.
     expect(screen.getByRole("button", { name: "Add investigator to link selection" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Unlink payments refactor" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
   });
 
   it("shows a pending-restart pill on a leader link whose orchestrate grant hasn't materialized yet", () => {
@@ -475,7 +476,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.queryByText(/selected$/)).toBeNull();
   });
 
-  it("offers Unlink only on the nested subject row, and confirming deletes the link via the router client", async () => {
+  it("offers Unlink only from the nested subject row's link options, and confirming deletes the link", async () => {
     FLAGS.linkedSessions = true;
     const client = new FakeRouterClient();
     const deleteLinkSpy = vi.spyOn(client, "deleteLink");
@@ -488,9 +489,10 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: "Unlink investigator" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Link options for investigator" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Unlink payments refactor" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link options for payments refactor" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unlink…" }));
 
     const dialog = screen.getByRole("alertdialog");
     expect(dialog.textContent).toContain("payments refactor");
@@ -499,7 +501,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
   });
 
-  it("shows the honest debounced-digest cadence badge on a nested subject row and allows editing it", async () => {
+  it("edits a nested subject row's update policy from its link options", async () => {
     FLAGS.linkedSessions = true;
     const client = new FakeRouterClient();
     const updateLinkSpy = vi.spyOn(client, "updateLink");
@@ -507,8 +509,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
     );
 
-    expect(screen.getByText("DEBOUNCED DIGESTS")).toBeTruthy();
-    fireEvent.click(screen.getByText("DEBOUNCED DIGESTS"));
+    fireEvent.click(screen.getByRole("button", { name: "Link options for payments refactor" }));
     fireEvent.click(screen.getByText("Catch up on request"));
 
     await waitFor(() =>
@@ -521,11 +522,12 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
   });
 
-  it("shows the manual-only cadence badge for a manual_only link", () => {
+  it("flags a manual_only link on the nested row's badge", () => {
     FLAGS.linkedSessions = true;
     const manualLink = makeLink({ ...link, cadence: "manual_only" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
-    expect(screen.getByText("MANUAL ONLY")).toBeTruthy();
-    expect(screen.queryByText("DEBOUNCED DIGESTS")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Link options for payments refactor" }).textContent,
+    ).toContain("MANUAL");
   });
 });
