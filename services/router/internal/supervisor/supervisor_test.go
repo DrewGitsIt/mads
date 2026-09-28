@@ -454,7 +454,8 @@ func enableLinkedSessions(t *testing.T, data *dataclient.Client) {
 
 // Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): a pipeline run starting
 // for a session whose interactive child is already live grants the implicit
-// hand-raiser immediately.
+// hand-raiser immediately (and, with Edge B's grant in SpawnSession, never
+// ends up with more than the one link).
 func TestSpawnPipelineGrantsImplicitHandRaiserWhenSessionLive(t *testing.T) {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
@@ -511,9 +512,12 @@ func TestSpawnSessionGrantsImplicitHandRaiserWhenPipelineLive(t *testing.T) {
 	})
 }
 
-// A pipeline run starting for a session with no live interactive child must
-// not grant anything — there's no one to raise a hand to.
-func TestSpawnPipelineNoImplicitHandRaiserWithoutLiveChild(t *testing.T) {
+// Edge A is level-triggered: a pipeline run starting for a session with NO
+// live interactive child (e.g. the Router restarted and the child hasn't
+// been respawned) still grants the implicit hand-raiser, so the run's task
+// terminals have a reader — and the link is still revoked when the run
+// exits.
+func TestSpawnPipelineGrantsImplicitHandRaiserWithoutLiveChild(t *testing.T) {
 	base := datatest.Start(t)
 	data := dataclient.New(base, "router")
 	enableLinkedSessions(t, data)
@@ -522,21 +526,32 @@ func TestSpawnPipelineNoImplicitHandRaiserWithoutLiveChild(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	sessionID := "ses_no_child"
-	if _, err := sup.SpawnPipeline(ctx, "run_no_child", sessionID, "tpl_test"); err != nil {
+	sess := contracts.Session{Name: "no child session"}
+	if err := data.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessionID := sess.ID
+	runID := "run_no_child"
+	if _, err := sup.SpawnPipeline(ctx, runID, sessionID, "tpl_test"); err != nil {
 		t.Fatalf("SpawnPipeline: %v", err)
 	}
+	if _, ok := sup.SessionAddr(sessionID); ok {
+		t.Fatal("session has a live child; this test needs one that doesn't")
+	}
 
-	// Give any (incorrect) implicit grant a beat to land before asserting its
-	// absence.
-	time.Sleep(200 * time.Millisecond)
-	links, err := data.LinksForSession(ctx, sessionID)
-	if err != nil {
-		t.Fatalf("LinksForSession: %v", err)
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 1 && links[0].Implicit
+	})
+
+	if err := sup.TerminatePipeline(ctx, runID); err != nil {
+		t.Fatalf("TerminatePipeline: %v", err)
 	}
-	if len(links) != 0 {
-		t.Fatalf("links for session with no live child: %v, want none", links)
-	}
+
+	eventually(t, 5*time.Second, func() bool {
+		links, err := data.LinksForSession(ctx, sessionID)
+		return err == nil && len(links) == 0
+	})
 }
 
 // When the pipeline run that granted the implicit hand-raiser completes and

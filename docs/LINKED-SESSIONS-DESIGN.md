@@ -116,8 +116,8 @@ Links are directed edges; nothing is 1:1 by design:
    (`pkg/contracts/link.go`) so existing L1/L2 machinery (digest fan-out,
    event emission, UI reads) treats it like any other link record without
    special-casing. **Auto-remove is final, not "or kept as history"**: the
-   Router's Supervisor grants on both edges (pipeline start with a live
-   child; child activation with a run in flight) and revokes the moment the
+   Router's Supervisor grants on both edges (pipeline start; child
+   activation with a run in flight) and revokes the moment the
    run's process exits (normal completion, cancellation, or crash alike) —
    the link never outlives the run it was granted over. The grant call
    itself is detached from the spawn that triggers it (a background
@@ -126,6 +126,13 @@ Links are directed edges; nothing is 1:1 by design:
    `grantImplicitHandRaiser` re-checks the run's liveness immediately after
    its own write completes and self-revokes if the run is already gone,
    closing that window regardless of which call actually lands last.
+
+   **Amendment (2026-09-28): Edge A is level-triggered.** Pipeline start
+   grants the link unconditionally, not only when the session's interactive
+   child is live. The live-child check read the Supervisor's in-memory map,
+   which a Router restart empties, so a 10-task run launched three minutes
+   after a restart never got its hand-raiser. When a task went blocked, the
+   run digest found no reader and nobody heard about it.
 
    **Scope note (L3, 2026-07-17).** The 2026-07-16 amendment above (agent may
    "act on the RUN as a system: task notes, blocker flags") is implemented

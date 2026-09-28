@@ -161,14 +161,16 @@ func (s *Supervisor) SpawnPipeline(ctx context.Context, runID, sessionID, templa
 	}
 	s.mu.Lock()
 	s.pipelines[runID] = &pipelineEntry{proc: p, sessionID: sessionID}
-	_, hasChild := s.sessions[sessionID]
 	s.mu.Unlock()
-	if hasChild {
-		// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): a pipeline run
-		// is starting for a session whose interactive child is already
-		// live — grant the implicit hand-raiser now.
-		go s.grantImplicitHandRaiser(context.Background(), sessionID)
-	}
+	// Edge A (docs/LINKED-SESSIONS-DESIGN.md decision 6): grant the implicit
+	// hand-raiser at pipeline start, level-triggered, whether or not the
+	// session's interactive child is live right now. Gating on a live child
+	// read the Supervisor's in-memory map, which a Router restart empties:
+	// a run launched for a session whose child hadn't been respawned yet
+	// never got the link, so its task terminals reached no one. Delivery
+	// tolerates a non-running child (the signal path wakes it), and the
+	// link is still revoked when the run exits.
+	go s.grantImplicitHandRaiser(context.Background(), sessionID)
 	return p.Addr, nil
 }
 
