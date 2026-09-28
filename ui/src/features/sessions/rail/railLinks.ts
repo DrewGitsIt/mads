@@ -126,18 +126,17 @@ export interface RailRow {
 }
 
 /**
- * Applies a `RailLinkGraph` to one rail group's session list (e.g. `active`
- * or `recent` from `groupSessions`): subject sessions are dropped from the
- * flat list (they render nested under their holder instead, even if the
- * holder falls in a different group) and holder rows gain their badge +
- * resolved subject rows.
+ * Applies a `RailLinkGraph` to the rail's ordered session list: subject
+ * sessions are dropped from the flat list (they render nested under their
+ * holder instead, wherever in the list that holder sits) and holder rows gain
+ * their badge + resolved subject rows.
  */
 export function buildRailRows(
-  groupSessions: Session[],
+  orderedSessions: Session[],
   allSessionsById: Map<string, Session>,
   graph: RailLinkGraph,
 ): RailRow[] {
-  return groupSessions
+  return orderedSessions
     .filter((s) => !graph.nestedSubjectIds.has(s.id))
     .map((session) => {
       const holder = graph.holders.get(session.id);

@@ -16,8 +16,8 @@ export function totalOpenTasks(breakdown: OpenTaskBreakdown): number {
 }
 
 /**
- * Active sessions always show a live dot regardless of open task count;
- * Recent sessions show amber ("attn") only when they carry *blocked* work —
+ * Live sessions always show a live dot regardless of open task count;
+ * sleeping sessions show amber ("attn") only when they carry *blocked* work —
  * running/ready work is expected, calm progress, not something needing eyes.
  * Mirrors docs/ux-prototype.html's `.dot on|attn|off` markup (session rail).
  */
@@ -133,17 +133,51 @@ export function statusOf(
   return { kind: "sleeping", tone: "idle", dot, glyph: "◦", label: "Sleeping · wakes on send" };
 }
 
-export interface RailGroups {
-  active: Session[];
-  recent: Session[];
+/**
+ * The rail's filter chips (mockup docs/mockups/sessions-ux-v2.html §2, option
+ * B). They replace the old Active/Recent grouping: a chip is a *badge you can
+ * click*, so triage stops costing the list its stability — nothing moves when
+ * a session's state changes, the counts just tick.
+ */
+export type RailFilter = "all" | "working" | "needs" | "idle";
+
+/** Every filter but "all" — the bucket a single card falls in. */
+export type RailFilterBucket = Exclude<RailFilter, "all">;
+
+export const RAIL_FILTERS: { id: RailFilter; label: string }[] = [
+  { id: "all", label: "All" },
+  { id: "working", label: "Working" },
+  { id: "needs", label: "Needs you" },
+  { id: "idle", label: "Idle" },
+];
+
+/** Most urgent first — how a holder row folds in the subjects nested under it. */
+const BUCKET_SEVERITY: Record<RailFilterBucket, number> = { needs: 0, working: 1, idle: 2 };
+
+export function mostUrgentBucket(buckets: RailFilterBucket[]): RailFilterBucket {
+  return buckets.reduce((a, b) => (BUCKET_SEVERITY[b] < BUCKET_SEVERITY[a] ? b : a), "idle");
 }
 
-export function groupSessions(sessions: Session[]): RailGroups {
-  const active = sessions
-    .filter((s) => s.activity === "active")
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  const recent = sessions
-    .filter((s) => s.activity !== "active")
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  return { active, recent };
+/**
+ * Which chip a card answers to, read off the very status line the card paints
+ * — so a count can never disagree with the cards it claims to count.
+ *
+ * "Needs you" is the whole attention set: a parked approval, a crash, and also
+ * a quiet session carrying blocked work (the amber puck dotState() already
+ * draws, which is what the command palette's attention badge counts too).
+ * Everything else that isn't mid-turn is Idle, live or sleeping alike —
+ * "Done · your turn" included, since the turn it is reporting is over.
+ */
+export function filterBucketOf(status: RailStatus): RailFilterBucket {
+  if (status.kind === "crashed" || status.kind === "needs") return "needs";
+  if (status.kind === "working") return "working";
+  return status.dot === "attn" ? "needs" : "idle";
+}
+
+/** A session falls into the collapsed "Earlier" tail once its last activity is a day old. */
+export const EARLIER_AFTER_MS = 24 * 60 * 60 * 1000;
+
+export function isEarlier(session: Session, now: number): boolean {
+  const t = Date.parse(session.updated_at);
+  return !Number.isNaN(t) && now - t >= EARLIER_AFTER_MS;
 }

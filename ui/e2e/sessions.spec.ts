@@ -91,6 +91,7 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   // this stays unambiguous even once the row also gains a "Resume" button —
   // rail.getByRole("button", { name: goal }) would match both.
   const sessionRow = rail.getByText(goal, { exact: true });
+  const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
   const resumeAffordance = rail.getByLabel(`Resume ${goal}`);
   // Already open — creating from the hero auto-opens the conversation.
   await expect(page.getByLabel("Workspace actions")).toBeVisible();
@@ -121,21 +122,11 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
   await expect(resumeAffordance).toBeVisible();
-  // Rail regroups live, no reload: "Active"/"Recent" are two stacked
-  // sections with no DOM hook beyond their header text (see
-  // railGroups.ts/SessionRail.tsx), and other e2e tests running in parallel
-  // against the same backend may keep an Active section on-screen too — so
-  // proving this row left Active means checking its position against the
-  // Recent header, not just that the header exists.
-  const recentHeader = rail.getByText("Recent", { exact: true });
-  await expect(recentHeader).toBeVisible();
-  await expect(async () => {
-    const rowBox = await sessionRow.boundingBox();
-    const recentHeaderBox = await recentHeader.boundingBox();
-    expect(rowBox).not.toBeNull();
-    expect(recentHeaderBox).not.toBeNull();
-    expect(rowBox!.y).toBeGreaterThan(recentHeaderBox!.y);
-  }).toPass();
+  // Rail repaints live, no reload. The Active/Recent sections are gone (one
+  // flat list, mockup §2 option B), so the card's own status line is the
+  // signal — and unlike a group header it is scoped to THIS row, which other
+  // e2e tests running in parallel against the same backend cannot disturb.
+  await expect(sessionCard.getByRole("status")).toContainText("Sleeping");
   await page.getByLabel("Workspace actions").click();
   await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
   // Close stays enabled even while inactive ("honest Close", 495afa4): the
@@ -269,27 +260,16 @@ test("sessions journey: close survives an out-of-order rail refetch", async ({ p
 
   // Release batch B (later-issued, correct) first...
   for (let i = batchABoundary; i < batchBBoundary; i++) await held[i].fulfill();
-  const recentHeader = rail.getByText("Recent", { exact: true });
-  await expect(recentHeader).toBeVisible();
-  await expect(async () => {
-    const rowBox = await sessionRow.boundingBox();
-    const recentHeaderBox = await recentHeader.boundingBox();
-    expect(rowBox).not.toBeNull();
-    expect(recentHeaderBox).not.toBeNull();
-    expect(rowBox!.y).toBeGreaterThan(recentHeaderBox!.y);
-  }).toPass();
+  // The rail is one flat list now, so "went inactive" is read off this card's
+  // own status line rather than which group header it sits under.
+  const sessionStatus = sessionRow.locator('xpath=ancestor::div[@role="button"][1]').getByRole("status");
+  await expect(sessionStatus).toContainText("Sleeping");
 
   // ...then release batch A (earlier-issued, stale) after. Without the
   // request-ordering guard in useSessionsList.ts, this overwrites the rail
   // back to showing the session active — reproducing the reported bug.
   for (let i = 0; i < batchABoundary; i++) await held[i].fulfill();
-  await expect(async () => {
-    const rowBox = await sessionRow.boundingBox();
-    const recentHeaderBox = await recentHeader.boundingBox();
-    expect(rowBox).not.toBeNull();
-    expect(recentHeaderBox).not.toBeNull();
-    expect(rowBox!.y).toBeGreaterThan(recentHeaderBox!.y);
-  }).toPass();
+  await expect(sessionStatus).toContainText("Sleeping");
 });
 
 test("sessions journey: sending a message wakes a dormant session", async ({ page, routerURL }) => {
