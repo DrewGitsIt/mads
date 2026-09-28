@@ -126,7 +126,7 @@ describe("Launchpad", () => {
     const createSession = vi.fn().mockResolvedValue(session);
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
     fireEvent.click(screen.getByText("Auto"));
     expect(screen.getByText("Auto")).toBeTruthy();
 
@@ -173,7 +173,7 @@ describe("Launchpad", () => {
     );
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
     await waitFor(() => expect(screen.getByText("backend-architect")).toBeTruthy());
     fireEvent.click(screen.getByText("backend-architect"));
 

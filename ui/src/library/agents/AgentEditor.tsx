@@ -21,17 +21,11 @@ import { QuadrantField } from "./QuadrantField";
 import { ToolIntentChips } from "./ToolIntentChips";
 import styles from "./AgentEditor.module.css";
 
-function csv(list?: string[]): string {
-  return (list ?? []).join(", ");
-}
-
-function parseCsv(value: string): string[] | undefined {
-  const items = value
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-}
+// parseCsv / csv are no longer needed: the only free-text tool list this
+// editor used to render (the deprecated concrete-name `capabilities.tools`)
+// is now managed entirely by the ToolIntentChips boolean surface below, and
+// the legacy string array lives in state so an existing record's value isn't
+// clobbered on save without a UI for it.
 
 function Section({ heading, children }: { heading: string; children: ReactNode }) {
   return (
@@ -50,7 +44,7 @@ export interface AgentEditorProps {
   onDelete: (id: string) => Promise<void>;
 }
 
-/** SideSheet-hosted create/edit form for a single agent (MADS-UX §3.5). */
+/** SideSheet-hosted create/edit form for a single persona (agent-concept redesign §6). */
 export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: AgentEditorProps) {
   const { capabilities } = useCapabilities();
   const [name, setName] = useState(agent?.name ?? "");
@@ -58,31 +52,37 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
   const [prompt, setPrompt] = useState(agent?.prompt ?? "");
   const [quadrant, setQuadrant] = useState<Quadrant | undefined>(agent?.quadrant);
   const [tags, setTags] = useState<string[]>(agent?.tags ?? []);
-  const [tools, setTools] = useState(csv(agent?.capabilities?.tools));
+  // tools: legacy free-text concrete tool names, retained so an existing record
+  // doesn't lose that field on save; the text UI for it is gone (replace via
+  // the Allow / Deny intent chips below — deny beats allow on every intent, and
+  // empty is "allow all").
+  const [tools, setTools] = useState<string[]>(agent?.capabilities?.tools ?? []);
   const [mcpServers, setMcpServers] = useState<string[]>(agent?.capabilities?.mcp_servers ?? []);
   const [skills, setSkills] = useState<string[]>(agent?.capabilities?.skills ?? []);
   const [model, setModel] = useState(agent?.preferences?.model ?? "");
-  const [deniedCommands, setDeniedCommands] = useState<string[]>(
-    agent?.permissions?.denied_commands ?? [],
-  );
   const [allowedPaths, setAllowedPaths] = useState<string[]>(
     agent?.permissions?.allowed_paths ?? [],
   );
-  // Persona-level tool allowances (agent-concept redesign §2/§6): the
-  // closed ToolIntent vocabulary, not concrete harness tool names.
+  // Persona-level allow / deny over the closed ToolIntent vocabulary (redesign §2):
+  // the boolean surface the user asked for. "Allow" = the persona may use that
+  // intent; "Deny" = the persona may not, overriding any allow on the same
+  // intent; the chips default to allow-all (empty allowlist/denylist) so a
+  // persona that says nothing inherits the session's trust level.
   const [allowlist, setAllowlist] = useState<ToolIntent[]>(agent?.allowlist ?? []);
   const [denylist, setDenylist] = useState<ToolIntent[]>(agent?.denylist ?? []);
   const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // EnrichmentActions may propose a legacy tools list — we still honor it so
+  // the "suggest capabilities" flow doesn't silently drop the user's intent.
   function applyDraft(draft: Agent) {
     setName(draft.name);
     setDescription(draft.description ?? "");
     setPrompt(draft.prompt);
     setQuadrant(draft.quadrant);
     setTags(draft.tags ?? []);
-    setTools(csv(draft.capabilities?.tools));
+    setTools(draft.capabilities?.tools ?? []);
     setMcpServers(draft.capabilities?.mcp_servers ?? []);
     setSkills(draft.capabilities?.skills ?? []);
     if (draft.allowlist) setAllowlist(draft.allowlist);
@@ -90,7 +90,7 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
   }
 
   function applySuggestedCapabilities(suggested: AgentCapabilities) {
-    setTools(csv(suggested.tools));
+    setTools(suggested.tools ?? []);
     setMcpServers(suggested.mcp_servers ?? []);
     setSkills(suggested.skills ?? []);
   }
@@ -99,12 +99,11 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
     setSaving(true);
     setError(null);
     const capabilitiesPayload: AgentCapabilities = {
-      tools: parseCsv(tools),
+      tools: tools.length ? tools : undefined,
       mcp_servers: mcpServers.length ? mcpServers : undefined,
       skills: skills.length ? skills : undefined,
     };
     const permissionsPayload: AgentPermissions = {
-      denied_commands: deniedCommands.length ? deniedCommands : undefined,
       allowed_paths: allowedPaths.length ? allowedPaths : undefined,
     };
     const payload: Partial<Agent> = {
@@ -116,9 +115,10 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
       capabilities: capabilitiesPayload,
       permissions: permissionsPayload,
       preferences: model ? { model } : undefined,
-      // Persona-level tool allowances (redesign §2): the harness-free
-      // allowlist/denylist. Denylist wins on overlap (the Go side
-      // EffectiveToolIntents enforces the same rule).
+      // Persona-level allow / deny (redesign §2): the boolean surface.
+      // Empty allowlist == allow-all; empty denylist == no deny. Deny wins
+      // on overlap (Go EffectiveToolIntents enforces the same rule), so a
+      // record that sets both for the same intent is still safe.
       allowlist: allowlist.length ? allowlist : undefined,
       denylist: denylist.length ? denylist : undefined,
     };
@@ -150,7 +150,7 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
 
   return (
     <SideSheet width={480}>
-      <SideSheetHeader>{agent ? `Edit ${agent.name}` : "New agent"}</SideSheetHeader>
+      <SideSheetHeader>{agent ? `Edit ${agent.name}` : "New persona"}</SideSheetHeader>
       <SideSheetBody>
         <div className={styles.form}>
           {!agent && <NLGenerateBox onApply={applyDraft} />}
@@ -194,14 +194,12 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
           </Section>
 
           <Section heading="Capabilities">
-            <label className={styles.field}>
-              Tools
-              <input
-                value={tools}
-                onChange={(e) => setTools(e.target.value)}
-                placeholder="e.g. bash, grep, web_search"
-              />
-            </label>
+            <p className={styles.sectionNote}>
+              Named registry entries only — a skill is a document, an MCP server
+              is a process/URL. Both are already harness-agnostic, so they stay
+              on the persona as concrete names. (Concrete tool <em>names</em>
+              don't belong here; use Allow / Deny intents below for that.)
+            </p>
             <CapabilityPickerField
               label="Skills"
               type="skill"
@@ -220,11 +218,15 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
 
           <Section heading="Tool allowances">
             <p className={styles.sectionNote}>
-              Which <em>abstract</em> tool intents this persona may use — harness-
-              free by construction. Deny wins on overlap; every intent maps to
-              a concrete tool at the harness (see the provider's ToolIntentMap).
-              Leave all unset for a persona that defers entirely to the session&rsquo;s
-              trust level.
+              Boolean allow / deny over the closed set of <em>abstract</em>
+              tool intents (harness-free by construction). <strong>Allow</strong> —
+              the persona may use that intent. <strong>Deny</strong> — the persona
+              must not; overrides any allow on the same intent. Leave a chip unset
+              to <strong>allow</strong> (allow-all) so the persona inherits the
+              session&rsquo;s trust level. Every intent maps to the concrete tool
+              name(s) of whatever harness runs the session, so an intent is the
+              same concept regardless of which provider you pick — you&rsquo;re
+              describing <em>what</em>, not <em>how</em>.
             </p>
             <ToolIntentChips
               allowlist={allowlist}
@@ -236,35 +238,20 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
             />
           </Section>
 
-          <Section heading="Permissions">
+          <Section heading="Constraints">
             <p className={styles.sectionNote}>
-              Constraints you place on this agent. At runtime they combine with the
-              session&rsquo;s trust choice — whichever is more restrictive applies.
+              Hard boundaries you place on this persona. At runtime they combine
+              with the session&rsquo;s trust choice — whichever is more
+              restrictive applies.
             </p>
-
-            <div className={styles.intentHeading}>
-              <strong>{PERMISSION_INTENT_LABELS.deny_commands}</strong>
-              <span className={styles.fieldHint}>
-                {PERMISSION_INTENT_DESCRIPTIONS.deny_commands}
-              </span>
-            </div>
-            <ChipListField
-              label="Denied command patterns"
-              value={deniedCommands}
-              onChange={setDeniedCommands}
-              placeholder="e.g. rm, git push --force"
-            />
-            {deniedCommands.length > 0 && (
-              <p className={styles.enforcementNote}>
-                Enforcement depends on the provider chosen when starting a session — see
-                Settings → Providers.
-              </p>
-            )}
 
             <div className={styles.intentHeading}>
               <strong>{PERMISSION_INTENT_LABELS.path_scope}</strong>
               <span className={styles.fieldHint}>
-                {PERMISSION_INTENT_DESCRIPTIONS.path_scope}
+                {PERMISSION_INTENT_DESCRIPTIONS.path_scope} Paths the persona&rsquo;s
+                file reads and writes are limited to. Leave blank for no path
+                scoping (the persona may read and write anywhere the harness
+                permits).
               </span>
             </div>
             <ChipListField
@@ -273,26 +260,37 @@ export function AgentEditor({ agent, onClose, onCreate, onUpdate, onDelete }: Ag
               onChange={setAllowedPaths}
               placeholder="e.g. src/, docs/"
             />
-            {allowedPaths.length > 0 && (
-              <p className={styles.enforcementNote}>
-                Enforcement depends on the provider chosen when starting a session — see
-                Settings → Providers.
-              </p>
-            )}
+
+            {/* deny_commands is the legacy concrete-name shape, replaced by the
+             * `shell` intent chip: denying shell is a persona-level deny that
+             * maps to the concrete Bash/Shell/run_command name at the harness.
+             * read_only and require_approval remain session-trust-only today:
+             * they compile only from the session&rsquo;s Trust field, not from
+             * the persona, so we surface them as read-only notes here. */}
+            <div className={styles.disabledIntent}>
+              <strong>{PERMISSION_INTENT_LABELS.deny_commands}</strong>
+              <span className={styles.fieldHint}>
+                {PERMISSION_INTENT_DESCRIPTIONS.deny_commands} Expressed as a
+                denied intent above, not as a list of command strings —
+                the harness maps the intent to its own tool names.
+              </span>
+            </div>
 
             <div className={styles.disabledIntent}>
               <strong>{PERMISSION_INTENT_LABELS.read_only}</strong>
               <span className={styles.fieldHint}>
-                {PERMISSION_INTENT_DESCRIPTIONS.read_only} Not yet an agent-level setting —
-                set via the session&rsquo;s trust level when starting a session.
+                {PERMISSION_INTENT_DESCRIPTIONS.read_only} Not yet a persona-level
+                setting — set via the session&rsquo;s trust level when starting
+                a session.
               </span>
             </div>
 
             <div className={styles.disabledIntent}>
               <strong>{PERMISSION_INTENT_LABELS.require_approval}</strong>
               <span className={styles.fieldHint}>
-                {PERMISSION_INTENT_DESCRIPTIONS.require_approval} Not yet an agent-level
-                setting — set via the session&rsquo;s trust level when starting a session.
+                {PERMISSION_INTENT_DESCRIPTIONS.require_approval} Not yet a
+                persona-level setting — set via the session&rsquo;s trust level
+                when starting a session.
               </span>
             </div>
           </Section>

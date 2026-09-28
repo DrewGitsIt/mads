@@ -1,0 +1,289 @@
+# Session rail status-legibility pass (v2) — seed with:
+#   SES=$(bin/mads new-session -name "Session rail v2")
+#   bin/mads seed -session $SES -file docs/session-ux-v2-tasks.yaml
+#
+# Source: rail readability review (2026-09-27/28). Reference mockup:
+# docs/mockups/sessions-ux-v2.html — every task below points at a section of
+# it. Predecessor: docs/session-ux-tasks.yaml + docs/mockups/sessions-ux.html
+# (card chrome, Option A "quiet card"), which this pass does not revisit.
+#
+# Decisions already taken, so nothing below re-litigates them:
+#   * #2 is Option B — ONE flat recency list, no state-derived groups. Not A
+#     and not C: in both of those, group membership IS position, so a session
+#     you wake rises into Working and falls back out when the turn ends. The
+#     triage that C's pin was buying is recovered by counts on the filter
+#     chips instead.
+#   * The stability contract (mockup §2c) is a hard constraint on everything
+#     here: (1) status paints, never sorts; (2) order is settled, not live —
+#     a new ordering is computed but applied only at a quiet boundary; (3) the
+#     open session never moves.
+#   * Search indexes FOUR fields (name, workspace, cwd, worktree_branch)
+#     because a workspace's name is free text (ui/src/library/workspaces/
+#     WorkspaceEditor.tsx — the only validation is non-empty) and a workspace
+#     holds a LIST of repos, so its name is not reliably the directory
+#     basename and may match none of its dirs.
+#   * Phasing: tasks 1-6 are frontend-only against data the rail already has.
+#     Tasks 7-9 add the one missing signal. Do not block 1-6 on 7-9.
+tasks:
+  # ── Phase 0 · frontend only ────────────────────────────────────────────
+  - title: "Rail: initiated + last-activity timestamps with a shared relative-time helper (#3)"
+    description: >
+      Surface both timestamps the rail already receives on every Session.
+      Adopt mockup variant V3 - an always-visible relative stamp right-aligned
+      on the name row (mono, tabular-nums, so the column aligns), plus a
+      footer line spelling out "started <absolute>" that appears only on the
+      hovered or selected card. Reserve the footer's height at rest so the
+      reveal is opacity-only and the rail never reflows under the pointer.
+      Add one shared formatter (sub-minute "now"; under an hour "14m"; today
+      "13:02"; this week "Fri 09:14"; older "24 Sep") with the full absolute
+      value in the title attribute, and re-render relative labels from a
+      SINGLE shared 30s tick, not one timer per card. created_at is exactly
+      "initiated"; updated_at is only approximately "last response" - the
+      runner's persistUsage bumps it every turn end, but so do renames,
+      summary writes and activity flips - so the label must read "last
+      activity" until task 8 lands last_turn_at.
+    acceptance_criteria: >
+      Every card shows a relative stamp on the name row with an absolute
+      title; hovering or selecting a card reveals a started/last-activity
+      footer without shifting any other card. One interval drives all
+      relative labels. No card claims "last reply" while the value is still
+      updated_at. Rail tests cover the formatter boundaries and the
+      no-reflow reveal.
+    labels: [ui, sessions, rail]
+
+  - title: "Rail: order stability contract - settled order, status never sorts, open session pinned (#2c)"
+    description: >
+      Foundation for the rest of the pass, and worth landing first because
+      every later "surface X in the rail" idea otherwise re-introduces the
+      jumping. Today SessionRail re-derives its order from the session list on
+      every render, so any state change can relocate the card under the
+      pointer. Replace that with a settled order - a useRef holding
+      orderedIds plus a pendingOrder recomputed whenever the session list
+      changes but APPLIED only at a quiet boundary - pointer leaves the rail,
+      the rail loses focus, or the user changes the search/filter. While a
+      re-settle is pending, render a single clickable ghost row ("N sessions
+      moved") rather than reordering. Sessions that are genuinely new (or
+      newly matched by a search) splice in at their sorted position
+      immediately - appearing is not moving - and deleted sessions leave
+      immediately. The selected session's index is held even across a settle,
+      until the selection changes. Live status must never participate in the
+      ordering key at all; it only paints the card.
+    acceptance_criteria: >
+      A session whose live state changes mid-render keeps its index. A
+      session whose recency changes does not move while the rail is hovered
+      or focused; the pending-reorder ghost appears, and the move applies on
+      mouseleave/blur/filter-change or when the ghost is clicked. The
+      selected card never changes index while selected. New sessions appear
+      in sorted position without shifting anything above them by more than
+      one row. Tests cover all four cases.
+    labels: [ui, sessions, rail]
+
+  - title: "Rail: status line built from signals already on the control plane (#1 phase 0)"
+    description: >
+      Add the second line under the session name - spinner or glyph, one
+      ellipsis-truncated clause, optional elapsed - per mockup section #1.
+      Ship the states derivable from events the shared control-plane stream
+      already carries - crashed (session.crashed), needs approval
+      (session.permission_requested to _resolved), subagents running
+      (session.subagent_task), done/your turn (session.turn_ended while
+      activity is active), ready (active, no turn seen) and sleeping
+      (inactive). Precedence is crashed then needs-you then working then done
+      then idle. "Done · your turn" is STICKY - it holds until the session is
+      opened or the next turn starts - that stickiness is what makes the rail
+      readable as a "what came back while I was away" list. New hook
+      useSessionAgentState() shaped exactly like useOpenTaskCounts() (one map
+      keyed by session id) subscribing through ui/src/router/events.ts, whose
+      bus unions subscriber types by content so adding types costs no extra
+      connection. Add statusOf(session, agentState, breakdown) next to
+      dotState() in railGroups.ts. Known gap closed by task 9 - the two
+      states needing wire data the control plane lacks (live tool title,
+      thinking) render as a generic "Working…", and session.turn_ended is
+      skipped for a turn that produced no delta, so "Done · your turn" can be
+      missed on a no-op turn.
+    acceptance_criteria: >
+      Each state renders with the mockup's dot, tone and copy, with the
+      documented precedence. The status line is the card's role="status"
+      region and the spinner is aria-hidden and degrades to a static ring
+      under prefers-reduced-motion. Card height is identical in every state
+      (no wrapping). Status changes never alter card order. One SSE
+      connection is used regardless of how many sessions are listed.
+    labels: [ui, sessions, rail]
+    depends_on:
+      - "Rail: order stability contract - settled order, status never sorts, open session pinned (#2c)"
+
+  - title: "Rail: retire Active/Recent for one flat recency list with filter chips (#2 option B)"
+    description: >
+      groupSessions() splits on activity === "active", which means "a provider
+      child process exists" - meaningful with a live PTY, an invisible
+      lifecycle detail in chat mode, where a "Recent" session wakes
+      transparently on the next send and an "Active" one may have done nothing
+      for an hour. Replace the two groups with a single recency-sorted list
+      and a compact filter chip row carrying counts - All / Working / Needs
+      you / Idle. The chips are the triage surface that replaces grouping -
+      "Needs you 2" is glanceable and clickable, and unlike a group it moves
+      nothing. Sessions older than a day collapse into an "Earlier" tail that
+      search ignores (see next task). If any two-way split survives elsewhere
+      in the UI it should read Live / Sleeping, which is what activity has
+      always actually meant.
+    acceptance_criteria: >
+      The rail renders one list; no card changes position because its live
+      state changed. Chip counts match the status vocabulary and filtering by
+      a chip narrows the list without re-sorting the survivors. The "Earlier"
+      tail collapses and expands. groupSessions() and its tests are updated or
+      removed rather than left orphaned.
+    labels: [ui, sessions, rail]
+    depends_on:
+      - "Rail: status line built from signals already on the control plane (#1 phase 0)"
+
+  - title: "Rail: omni search over name, workspace, cwd and branch with scope tokens (#2b)"
+    description: >
+      A single search field above the list, replacing any notion of a
+      workspace picker. Case-insensitive substring per whitespace-separated
+      term, ANDed across terms, no fuzzy matching (fuzzy over short session
+      names produces confident nonsense). Index four fields - name, workspace,
+      cwd, worktree_branch - because workspace name is free text and a
+      workspace can hold several repo paths, so "mads" must find a session
+      whose workspace is called something else but whose cwd is ~/repo/mads.
+      The list is the autosuggest - no dropdown, which in a 280px rail would
+      cover the results it is suggesting. The only extra chrome is a scope
+      chip row offering committable tokens (workspace:<name>, dir:<path>) when
+      the typed text matches a workspace or directory; the matcher understands
+      those prefixes. A card matched on anything other than its name prints a
+      single match reason beneath it (priority workspace, then branch, then
+      dir) so an unexpected hit does not read as a bug. Search bypasses the
+      view entirely - the collapsed "Earlier" tail and everything below the
+      fold are searched. While a query is active the list is ordered by
+      relevance (name prefix, name substring, then other fields, ties by
+      recency) - the one sanctioned reorder, since the user asked for it by
+      typing - and clearing the field restores the resting order exactly.
+      Keyboard - Cmd/Ctrl-K focuses, up/down walk results, Enter opens the top
+      hit, Escape clears then blurs, and typing never steals focus from the
+      composer.
+    acceptance_criteria: >
+      Each of the four fields is matchable, including a session whose
+      workspace name shares no substring with its cwd. Scope tokens filter to
+      one field. Non-name matches show exactly one reason line; name matches
+      show none. Results include sessions hidden in the collapsed tail.
+      Clearing the query restores the pre-search order identically. The full
+      keyboard contract works and Cmd/Ctrl-K does not fire while the composer
+      has focus.
+    labels: [ui, sessions, rail, search]
+    depends_on:
+      - "Rail: retire Active/Recent for one flat recency list with filter chips (#2 option B)"
+
+  - title: "Rail: adaptive context labels - workspace, worktree branch, cwd"
+    description: >
+      The rail is handed eight labelling fields it never shows. A 280px card
+      carries about two before it stops being scannable, so show them
+      adaptively - worktree_branch whenever the session is isolated (it is
+      also the existing "has unmerged work" signal and the thing most often
+      worth checking), workspace only when the visible list spans more than
+      one, cwd only when it differs from the workspace's primary repo, agent
+      only when non-default, and a retro glyph for tagged sessions. Everything
+      else - model, provider, trust, isolation, context occupancy from
+      last_usage - belongs in the hover tooltip, not on the resting card. Labels
+      must never change a card's height as the visible set changes (the list
+      spanning one workspace vs two must not reflow the rail).
+    acceptance_criteria: >
+      Branch shows for isolated sessions; workspace appears only in
+      multi-workspace lists; cwd only when it differs from the primary repo.
+      Toggling a filter that changes the visible workspace set does not change
+      any card's height. Tooltip carries the remaining fields.
+    labels: [ui, sessions, rail]
+    depends_on:
+      - "Rail: retire Active/Recent for one flat recency list with filter chips (#2 option B)"
+
+  # ── Phase 1 · the one missing signal ───────────────────────────────────
+  - title: "contracts + runner: emit session.agent_state from the runner's in-flight flag"
+    description: >
+      The rail watches every session at once, so its signals must ride the
+      shared control-plane stream - the per-session data-plane /output stream
+      is one connection each and the roughly six-socket-per-origin cap is
+      exactly why the rail must never open one per card (see the comment in
+      ui/src/router/events.ts). Today that control plane carries no turn-start
+      event and no main-agent tool names (session.tool_status_changed carries
+      tool_use_id and status only), which is why phase 0's status line cannot
+      say what the agent is actually doing. The authoritative signal already
+      exists in-process and simply never leaves it - Runner.busy in
+      services/session/internal/runner/runner.go, set on Send and cleared in
+      onTurnEnd. Add a SessionAgentState event type to pkg/contracts/event.go
+      with payload {state, label, since}, appended by the runner on
+      transitions only via the existing appendConversation path. Build label
+      with the same enrichment that produces ToolUse.title so the rail line
+      and WorkingIndicator's ticker can never disagree. Coalesce with a floor
+      of roughly 500ms so a tool-heavy turn does not spam the event log, and
+      skip parent-tagged subagent events - those roll up as a count, not a
+      label.
+    acceptance_criteria: >
+      A turn emits a working state on send, label transitions as tools run,
+      and an idle state at turn end - including the interrupted and
+      stream-closed paths, so a state can never be left stuck working. Rapid
+      tool sequences coalesce. Subagent-tagged events produce no label churn.
+      A nil Data Service is a no-op, matching the other pump-side appends.
+      Golden fixtures pin the payload.
+    labels: [contracts, session-service, events]
+
+  - title: "data + session: mirror agent_state and add last_turn_at to the session record"
+    description: >
+      An event stream alone leaves a cold page load blind - a refresh mid-turn
+      would show every card idle until the next transition, and an SSE
+      reconnect has the same hole. Mirror the latest state onto the Session
+      record so GET /sessions hydrates the rail correctly without replaying
+      events. In the same change add last_turn_at, stamped where the runner
+      already persists LastUsage on every turn end, which makes "last
+      response" mean what it says and gives the rail a sort key a rename
+      cannot perturb - today updated_at is bumped by renames, summary writes
+      and activity flips alike. Mind the existing concurrency note in
+      services/data/internal/store/sessions.go - prefer a scoped write like
+      SetActivity's single-transaction read-modify-write over a Get-then-Update
+      round trip, which can lose a concurrent writer's field.
+    acceptance_criteria: >
+      A session listed while a turn is in flight reports its working state and
+      label from the record alone, with no event replay. last_turn_at advances
+      only on turn end and is untouched by rename, summary and activity
+      writes. A concurrent runner write does not clobber either field.
+      Migration and contract goldens updated.
+    labels: [contracts, data-service, session-service]
+    depends_on:
+      - "contracts + runner: emit session.agent_state from the runner's in-flight flag"
+
+  - title: "Rail: upgrade the status line to live tool detail and an honest last-reply stamp"
+    description: >
+      Fold the new signal into the phase 0 surfaces. useSessionAgentState()
+      switches from deriving states out of adjacent events to consuming
+      session.agent_state, hydrating initial state from the session record so
+      a reload mid-turn is correct. The generic "Working…" becomes the real
+      clause ("Running bash · make check", "Thinking…") with a turn-long
+      elapsed counter, matching WorkingIndicator's rule that the counter spans
+      the whole turn rather than resetting per tool. Relabel the timestamp
+      from "last activity" to "last reply" and re-point it at last_turn_at,
+      including the rail's recency ordering. The "Done · your turn" gap for
+      no-delta turns closes here, since agent_state reports turn end
+      regardless of whether a digest delta was produced.
+    acceptance_criteria: >
+      The rail line matches what the open conversation's working indicator
+      shows for the same session. A reload mid-turn renders the live state
+      immediately. Ordering and the timestamp both read from last_turn_at,
+      and a rename no longer moves a session in the list.
+    labels: [ui, sessions, rail]
+    depends_on:
+      - "data + session: mirror agent_state and add last_turn_at to the session record"
+      - "Rail: status line built from signals already on the control plane (#1 phase 0)"
+      - "Rail: initiated + last-activity timestamps with a shared relative-time helper (#3)"
+
+  - title: "e2e: rail status, search and no-jump journey"
+    description: >
+      One Playwright spec in ui/e2e covering the three behaviours that unit
+      tests cannot prove together - a session card's status line reflecting a
+      live turn, search finding a session by its directory when the workspace
+      name does not match, and the stability contract holding (a card does not
+      change index while the rail is hovered, and the selected card never
+      moves). Order-dependent steps need
+      test.describe.configure({ mode - "serial" }) so fullyParallel does not
+      split them across workers.
+    acceptance_criteria: >
+      The spec passes against the real app and fails if any of the three
+      behaviours regress - verified by temporarily reverting each.
+    labels: [ui, sessions, e2e, test]
+    depends_on:
+      - "Rail: omni search over name, workspace, cwd and branch with scope tokens (#2b)"

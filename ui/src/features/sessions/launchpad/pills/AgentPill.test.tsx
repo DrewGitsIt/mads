@@ -23,7 +23,7 @@ describe("AgentPill", () => {
     const onChange = vi.fn();
 
     render(<AgentPill onChange={onChange} onAuto={vi.fn()} />);
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
 
     await waitFor(() => expect(screen.getByText("backend-architect")).toBeTruthy());
     fireEvent.click(screen.getByText("backend-architect"));
@@ -48,7 +48,7 @@ describe("AgentPill", () => {
   it("shows the plain placeholder when nothing resolves", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     render(<AgentPill onChange={vi.fn()} onAuto={vi.fn()} />);
-    expect(screen.getByText("Select agent")).toBeTruthy();
+    expect(screen.getByText("Select persona")).toBeTruthy();
     vi.unstubAllGlobals();
   });
 
@@ -56,7 +56,7 @@ describe("AgentPill", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     const onAuto = vi.fn();
     render(<AgentPill onChange={vi.fn()} onAuto={onAuto} />);
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
     fireEvent.click(screen.getByText("Auto"));
     expect(onAuto).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();

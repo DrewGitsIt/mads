@@ -26,7 +26,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
   const triggerLabel =
     value === "auto"
       ? "Auto"
-      : (value ?? (resolved?.value ? `${resolved.value} (default)` : "Select agent"));
+      : (value ?? (resolved?.value ? `${resolved.value} (default)` : "Select persona"));
 
   return (
     <Popover
@@ -38,7 +38,11 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>agent</span> {triggerLabel}
+          {/* Redesign: the registry record is a persona (prompt +
+           * allow/deny tool intents), not an "agent" — the pill's label
+           * tracks the data model so the two pills (persona / model) read
+           * as the two concepts they set. */}
+          <span className={pillStyles.key}>persona</span> {triggerLabel}
         </button>
       }
     >
@@ -55,7 +59,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
         >
           Auto
         </button>
-        {agents.length === 0 && <div className={pillStyles.groupLabel}>No agents yet</div>}
+        {agents.length === 0 && <div className={pillStyles.groupLabel}>No personas yet</div>}
         {agents.map((agent) => (
           <button
             key={agent.id}
