@@ -83,8 +83,10 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	// bools (codex advertises "close": {}, hermes omits the key —
 	// claude/codex/hermes *-full.jsonl line 2).
 	_, closeOK := caps.SessionCapabilities["close"]
+	_, deleteOK := caps.SessionCapabilities["delete"]
 	s.mu.Lock()
 	s.closeOK = closeOK
+	s.deleteOK = deleteOK
 	s.mu.Unlock()
 
 	// mcpServers is required on both session/new and session/load even when
@@ -118,6 +120,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		_ = json.Unmarshal(resp.Result, &sessRes)
 		s.mu.Lock()
 		s.configOptions = sessRes.ConfigOptions
+		s.models = sessRes.Models
 		s.mu.Unlock()
 	} else {
 		resp, err := s.request(ctx, "session/new", newSessionParams{Cwd: cwd, MCPServers: mcp})
@@ -130,6 +133,7 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		s.mu.Lock()
 		s.ref = sessRes.SessionID
 		s.configOptions = sessRes.ConfigOptions
+		s.models = sessRes.Models
 		s.mu.Unlock()
 	}
 
@@ -148,14 +152,15 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	}
 
 	if opts.Model != "" {
-		if e.cfg.ModelConfigOptionID == "" {
+		method, params, err := s.modelSetter(e, opts.Model)
+		if err != nil {
 			_ = s.Close()
-			return nil, fmt.Errorf("agent has no model config option; cannot select model %q: %w", opts.Model, provider.ErrUnsupported)
+			return nil, err
 		}
 		// A bad model fails Start loudly rather than silently running the
 		// default.
-		if _, err := s.request(ctx, "session/set_config_option", setConfigOptionParams{SessionID: s.Ref(), ConfigID: e.cfg.ModelConfigOptionID, Value: opts.Model}); err != nil {
-			return fail("session/set_config_option "+e.cfg.ModelConfigOptionID, err)
+		if _, err := s.request(ctx, method, params); err != nil {
+			return fail(method, err)
 		}
 	}
 
@@ -166,6 +171,42 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	}
 
 	return s, nil
+}
+
+// discard deletes the session server-side, for a throwaway the user should
+// never see. Best-effort and capability-gated, like Close's session/close:
+// an agent without sessionCapabilities.delete simply keeps it. Only
+// DiscoverModels calls this — session/close alone leaves the session
+// persisted (goose keeps it in sessions.db and lists it in `goose session
+// list`), so a per-boot discovery pass would otherwise deposit one junk
+// session per startup, forever.
+func (s *streamSession) discard(ctx context.Context) {
+	s.mu.Lock()
+	ok, ref := s.deleteOK, s.ref
+	s.mu.Unlock()
+	if !ok || ref == "" {
+		return
+	}
+	_, _ = s.request(ctx, "session/delete", closeParams{SessionID: ref})
+}
+
+// modelSetter picks the call that can actually select id, and must stay in
+// lockstep with DiscoverModels: discovery reads the two model surfaces in
+// this same order, so an id the picker offered is always settable by the
+// setter chosen here. Sending an availableModels id to
+// session/set_config_option (or the reverse) is rejected by the agent —
+// codex, which ships both, shares no ids between them.
+func (s *streamSession) modelSetter(e *Engine, id string) (string, any, error) {
+	s.mu.Lock()
+	models := s.models
+	s.mu.Unlock()
+	if models != nil && len(models.AvailableModels) > 0 {
+		return "session/set_model", setModelParams{SessionID: s.Ref(), ModelID: id}, nil
+	}
+	if e.cfg.ModelConfigOptionID != "" {
+		return "session/set_config_option", setConfigOptionParams{SessionID: s.Ref(), ConfigID: e.cfg.ModelConfigOptionID, Value: id}, nil
+	}
+	return "", nil, fmt.Errorf("agent has no model surface; cannot select model %q: %w", id, provider.ErrUnsupported)
 }
 
 // applyTrustMode resolves TrustModes[trust] and sends it over the
@@ -296,14 +337,18 @@ type streamSession struct {
 	cmd    *exec.Cmd
 	events chan provider.Event
 
-	mu          sync.Mutex
-	stdin       io.WriteCloser
-	nextID      int
-	pending     map[int]chan rpcMessage
-	turnID      int // the in-flight session/prompt's request id; 0 = idle
-	ref         string
-	trust       provider.Trust
-	closeOK     bool // agent advertised sessionCapabilities.close
+	mu      sync.Mutex
+	stdin   io.WriteCloser
+	nextID  int
+	pending map[int]chan rpcMessage
+	turnID  int // the in-flight session/prompt's request id; 0 = idle
+	ref     string
+	trust   provider.Trust
+	closeOK bool // agent advertised sessionCapabilities.close
+	// deleteOK — agent advertised sessionCapabilities.delete. Only the
+	// DiscoverModels probe uses it: a real session is closed, never
+	// deleted, because its transcript is the user's.
+	deleteOK    bool
 	interrupted bool // an interrupt was requested this turn
 	replaying   bool // session/load is in flight: buffer updates, don't stream them
 	replay      []provider.Message
@@ -319,8 +364,14 @@ type streamSession struct {
 	// configOptions is the session/new-or-load result's configOptions list,
 	// retained for DiscoverModels (the model entry's options/currentValue).
 	configOptions []configOption
-	toolCalls     map[string]toolCallInfo
-	closed        bool
+	// models is the session/new-or-load result's ACP model selector, nil
+	// for an agent that offers only the configOption. Retained for the same
+	// reason as configOptions, and additionally to decide which setter
+	// selectModel may use — an id only this surface knows must go through
+	// session/set_model.
+	models    *sessionModels
+	toolCalls map[string]toolCallInfo
+	closed    bool
 	// Latest usage_update snapshot (absolute occupancy + real window size),
 	// attached to the next turn end's Usage. Agents push these throughout a
 	// turn (and a post-compaction one can legitimately DROP below the prior

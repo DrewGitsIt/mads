@@ -36,6 +36,7 @@ import (
 	"github.com/drewkidwell/mads/services/router/internal/api"
 	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
 	"github.com/drewkidwell/mads/services/router/internal/job"
+	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/static"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 	"github.com/drewkidwell/mads/services/router/internal/synthwatch"
@@ -149,7 +150,7 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog) http.Handler {
 	return api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
@@ -164,6 +165,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		Registry:             registry,
 		RunsDir:              runsDir,
 		FastModelFlagBaseURL: fastModelFlagBaseURL,
+		Models:               models,
 	})
 }
 
@@ -250,10 +252,21 @@ func main() {
 	}
 	defer func() { _ = os.Remove(pidPath) }()
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL)}
+	// The model catalog turns every harness's discovery call into a
+	// background read at boot. Warming here rather than on the request
+	// path is what keeps GET /sessions/defaults — the Launchpad's own
+	// open — from blocking on an agent spawn.
+	models := modelcatalog.New(providers, modelcatalog.Options{})
+
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Non-blocking: Serve starts on schedule whether or not a harness
+	// binary is slow, broken or absent. The warm overlaps the orphan sweep
+	// below, so it is typically done before the UI's first paint.
+	models.Start(ctx)
 
 	// Supervisor state is in-memory only, so a prior Router process's
 	// active sessions are orphaned by this restart: reconcile them to

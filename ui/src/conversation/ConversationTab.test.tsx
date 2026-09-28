@@ -4,6 +4,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
+import { resetProviderModelCache } from "../router/useProviderModels";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { requestStreamReattach } from "./streamReattachSignal";
@@ -90,6 +91,10 @@ describe("ConversationTab", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
+    // useProviderModels dedupes concurrent mounts behind a module-level
+    // in-flight request; without this a case can join the PREVIOUS case's
+    // still-unresolved fetch and see its stubbed models.
+    resetProviderModelCache();
   });
 
   afterEach(() => {

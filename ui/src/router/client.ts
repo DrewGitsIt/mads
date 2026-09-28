@@ -21,6 +21,7 @@ import type {
   Mentionable,
   MergeResult,
   Model,
+  ModelCatalog,
   Note,
   NoteType,
   PermissionRequest,
@@ -203,6 +204,11 @@ export interface RouterClient {
   listProviderNames(): Promise<Provider[]>;
   listProviderBehaviors(): Promise<BehaviorInfo[]>;
   listModels(provider: string): Promise<Model[]>;
+  // listModelCatalog is listModels plus the discovery state — what the
+  // picker needs to distinguish "still discovering" from "couldn't ask"
+  // from "genuinely no models".
+  listModelCatalog(provider: string): Promise<ModelCatalog>;
+  refreshModelCatalog(provider: string): Promise<ModelCatalog>;
 
   // --- Metrics (W6.9 Dashboard) ---
   metricsCost(): Promise<CostMetrics>;
@@ -390,6 +396,25 @@ async function routerGet<T>(
 ): Promise<T> {
   const res = await fetch(buildUrl(baseUrl, path, params));
   return readJSON<T>(res);
+}
+
+// ModelsResponseWire mirrors contracts.ModelsResponse. state/fetched_at are
+// absent when the Router answered without its catalog cache, which is why
+// both are optional here rather than defaulted.
+interface ModelsResponseWire {
+  models: Model[] | null;
+  detail?: string;
+  state?: ModelCatalog["state"];
+  fetched_at?: string;
+}
+
+function toCatalog(res: ModelsResponseWire): ModelCatalog {
+  return {
+    models: res.models ?? [],
+    state: res.state,
+    detail: res.detail,
+    fetchedAt: res.fetched_at,
+  };
 }
 
 async function routerPost<T>(baseUrl: string, path: string, body?: unknown): Promise<T> {
@@ -815,11 +840,23 @@ export class FetchRouterClient implements RouterClient {
   }
 
   async listModels(provider: string): Promise<Model[]> {
-    const res = await routerGet<{ models: Model[]; detail?: string }>(
-      this.baseUrl,
-      `/providers/${provider}/models`,
+    return (await this.listModelCatalog(provider)).models;
+  }
+
+  async listModelCatalog(provider: string): Promise<ModelCatalog> {
+    return toCatalog(
+      await routerGet<ModelsResponseWire>(this.baseUrl, `/providers/${provider}/models`),
     );
-    return res.models;
+  }
+
+  async refreshModelCatalog(provider: string): Promise<ModelCatalog> {
+    return toCatalog(
+      await routerPost<ModelsResponseWire>(
+        this.baseUrl,
+        `/providers/${provider}/models/refresh`,
+        {},
+      ),
+    );
   }
 
   // --- Metrics (W6.9 Dashboard) ---

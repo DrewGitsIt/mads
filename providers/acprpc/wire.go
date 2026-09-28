@@ -148,6 +148,36 @@ type sessionResult struct {
 	SessionID     string         `json:"sessionId"`
 	Modes         *sessionModes  `json:"modes,omitempty"`
 	ConfigOptions []configOption `json:"configOptions,omitempty"`
+	Models        *sessionModels `json:"models,omitempty"`
+}
+
+// sessionModels is ACP's own model selector, the standards-track sibling of
+// the `model` configOption: agents that offer it pair it with
+// session/set_model rather than session/set_config_option. The two surfaces
+// are independent and an agent may ship either, both, or neither —
+// hermes-acp-full.jsonl line 4 has only this one (70 models, no
+// configOptions at all), claude-agent-acp-full.jsonl line 6 and the goose
+// acp-transcript.jsonl line 4 have only the configOption, and
+// codex-acp-full.jsonl line 5 has both.
+//
+// Where both exist they do not agree, and this one is the finer-grained of
+// the two: codex lists 15 models here (the gpt-5.6-terra[low|medium|high]
+// reasoning-effort variants) against 3 coarse families in the configOption,
+// and only this surface can name the live selection — currentModelId is
+// "gpt-5.6-terra[medium]" where the configOption's currentValue flattens to
+// "gpt-5.6-terra".
+type sessionModels struct {
+	CurrentModelID  string      `json:"currentModelId,omitempty"`
+	AvailableModels []modelInfo `json:"availableModels,omitempty"`
+}
+
+// modelInfo is one entry of sessionModels. Note the key is `modelId`, not
+// the configOption's `value` — the two surfaces have separate shapes as
+// well as separate setters.
+type modelInfo struct {
+	ModelID     string `json:"modelId"`
+	Name        string `json:"name,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 type sessionModes struct {
@@ -208,6 +238,14 @@ type setConfigOptionParams struct {
 	SessionID string `json:"sessionId"`
 	ConfigID  string `json:"configId"`
 	Value     string `json:"value"`
+}
+
+// setModelParams — "session/set_model", the setter paired with the
+// sessionModels selector. An id discovered from availableModels must be set
+// through this call; the configOption setter would reject it.
+type setModelParams struct {
+	SessionID string `json:"sessionId"`
+	ModelID   string `json:"modelId"`
 }
 
 // promptParams / promptResult — "session/prompt". The response (not a

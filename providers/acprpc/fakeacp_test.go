@@ -64,6 +64,7 @@ func faMain() {
 type faProfile struct {
 	loadSession bool
 	closeCap    bool // advertise sessionCapabilities.close
+	deleteCap   bool // advertise sessionCapabilities.delete
 	httpMCP     bool // advertise mcpCapabilities.http
 	// metaNS non-empty → tool_call updates carry _meta.<ns>.toolCall
 	// identity and no kind (goose's style); empty → the spec kind field is
@@ -83,11 +84,18 @@ type faProfile struct {
 	// mirrors it so the engine's absolutization stays covered.
 	requireAbsCwd bool
 	optionID      map[string]string
+	// modelSelector → the session result carries ACP's own `models`
+	// selector (hermes/codex style) and model changes ride
+	// session/set_model. noModelOption → it carries no `model`
+	// configOption at all, the hermes shape that used to read as
+	// "model-less agent".
+	modelSelector bool
+	noModelOption bool
 }
 
 var faProfiles = map[string]faProfile{
 	"goose": {
-		loadSession: true, closeCap: true, httpMCP: true,
+		loadSession: true, closeCap: true, deleteCap: true, httpMCP: true,
 		metaNS:         "goose",
 		availableModes: []string{"auto", "approve"}, askMode: "approve",
 		sysPromptMethod: "_goose/unstable/session/system-prompt/set",
@@ -106,6 +114,27 @@ var faProfiles = map[string]faProfile{
 			"allow_once": "syn-yes", "allow_always": "syn-yes-4ever",
 			"reject_once": "syn-no", "reject_always": "syn-no-4ever",
 		},
+	},
+	// selector-only: the hermes shape — ACP's `models` selector and no
+	// configOptions carrying a model at all.
+	"selector": {
+		modelSelector: true, noModelOption: true,
+		availableModes: []string{"auto", "approve"}, askMode: "approve",
+		cancelStop: "end_turn",
+	},
+	// bare: neither surface — a genuinely model-less agent, the case that
+	// must stay distinguishable from "offered an empty list".
+	"bare": {
+		noModelOption:  true,
+		availableModes: []string{"auto", "approve"}, askMode: "approve",
+		cancelStop: "end_turn",
+	},
+	// dual: the codex shape — both surfaces, disjoint ids, so a test can
+	// prove which one discovery and selection actually use.
+	"dual": {
+		modelSelector:  true,
+		availableModes: []string{"auto", "approve"}, askMode: "approve",
+		cancelStop: "end_turn",
 	},
 }
 
@@ -192,6 +221,9 @@ func faServe(pr faProfile) {
 	var mcpNames []string
 	var history []string
 	model := "fake-default"
+	// selModel is the `models` selector's live selection, tracked apart
+	// from the configOption's so a test can prove the two never bleed.
+	selModel := "sel-b"
 	mode = pr.availableModes[0]
 
 	msgs := make(chan rpcMessage)
@@ -250,20 +282,37 @@ func faServe(pr faProfile) {
 		for _, m := range pr.availableModes {
 			modes = append(modes, map[string]any{"id": m, "name": m})
 		}
-		opts := []map[string]any{{
-			"id": "model", "name": "Model", "category": "model", "type": "select",
-			"currentValue": model,
-			"options": []map[string]any{
-				{"value": "fake-default", "name": "Fake Default"},
-				{"value": "fake-alt", "name": "Fake Alt"},
-			},
-		}}
+		var opts []map[string]any
+		if !pr.noModelOption {
+			opts = append(opts, map[string]any{
+				"id": "model", "name": "Model", "category": "model", "type": "select",
+				"currentValue": model,
+				"options": []map[string]any{
+					{"value": "fake-default", "name": "Fake Default"},
+					{"value": "fake-alt", "name": "Fake Alt"},
+				},
+			})
+		}
 		if pr.modeConfigID != "" {
 			opts = append(opts, map[string]any{"id": pr.modeConfigID, "name": "Permission mode", "category": "mode"})
 		}
 		body := map[string]any{
-			"modes":         map[string]any{"currentModeId": mode, "availableModes": modes},
-			"configOptions": opts,
+			"modes": map[string]any{"currentModeId": mode, "availableModes": modes},
+		}
+		if opts != nil {
+			body["configOptions"] = opts
+		}
+		if pr.modelSelector {
+			// Ids deliberately share nothing with the configOption's, so a
+			// test can tell which surface answered.
+			body["models"] = map[string]any{
+				"currentModelId": selModel,
+				"availableModels": []map[string]any{
+					{"modelId": "sel-a", "name": "Selector A", "description": "first"},
+					{"modelId": "sel-b", "name": "Selector B"},
+					{"modelId": "sel-c"},
+				},
+			}
 		}
 		if includeID {
 			body["sessionId"] = id
@@ -390,6 +439,9 @@ func faServe(pr faProfile) {
 			if pr.closeCap {
 				sessCaps["close"] = map[string]any{}
 			}
+			if pr.deleteCap {
+				sessCaps["delete"] = map[string]any{}
+			}
 			respond(m.ID, map[string]any{
 				"protocolVersion": 1,
 				"agentCapabilities": map[string]any{
@@ -478,6 +530,22 @@ func faServe(pr faProfile) {
 				}
 				model = p.Value
 			}
+			respond(m.ID, map[string]any{})
+
+		case "session/set_model":
+			var p setModelParams
+			_ = json.Unmarshal(m.Params, &p)
+			if !pr.modelSelector {
+				respondErr(m.ID, -32601, "method not found", nil)
+				continue
+			}
+			// Only ids from availableModels are settable — a configOption
+			// value arriving here is the bug this rejection catches.
+			if p.ModelID != "sel-a" && p.ModelID != "sel-b" && p.ModelID != "sel-c" {
+				respondErr(m.ID, -32602, "unknown model "+p.ModelID, nil)
+				continue
+			}
+			selModel = p.ModelID
 			respond(m.ID, map[string]any{})
 
 		case "session/prompt":
@@ -596,6 +664,18 @@ func faServe(pr faProfile) {
 
 		case "session/cancel":
 			// No turn in flight to interrupt outside the slow branch above.
+
+		case "session/delete":
+			// Same observable-marker trick as session/close: a test can
+			// assert the discovery probe cleaned up after itself.
+			if dir != "" {
+				_ = os.WriteFile(filepath.Join(dir, "delete-called"), []byte(id), 0o644)
+			}
+			if !pr.deleteCap {
+				respondErr(m.ID, -32601, "Method not found", nil)
+				continue
+			}
+			respond(m.ID, map[string]any{})
 
 		case "session/close":
 			// The marker file makes the capability gate observable from the
