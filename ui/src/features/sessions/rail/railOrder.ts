@@ -5,19 +5,24 @@ export type RailGroupName = "active" | "recent";
 
 /**
  * The order the rail is currently rendering from — a snapshot, not a live
- * derivation. `ids` is the flat sequence; `groups` records which group each id
- * was settled into, so a session flipping active/inactive repaints its card
- * without relocating it.
+ * derivation. The rail draws Active above Recent, so which group a card settled
+ * into is *part of its position*: both blocks are held together, and a card's
+ * index is its index in `renderSequence(order)`.
  */
 export interface SettledOrder {
-  ids: string[];
-  groups: Record<string, RailGroupName>;
+  active: string[];
+  recent: string[];
+}
+
+/** The rail's top-to-bottom card sequence. A card's "index" always means its index here. */
+export function renderSequence(order: SettledOrder): string[] {
+  return [...order.active, ...order.recent];
 }
 
 /**
  * The ordering key: recency, id as a tiebreak. Deliberately status-free —
- * `activity` decides how a card is painted and which group it settles into,
- * never where it sits.
+ * `activity` decides how a card is painted and which block it settles into,
+ * never its rank within a block.
  */
 export function recencyOrder(sessions: Session[]): string[] {
   return [...sessions]
@@ -29,9 +34,25 @@ export function groupOf(session: Session): RailGroupName {
   return session.activity === "active" ? "active" : "recent";
 }
 
+/** Which block each id sits in. A missing id is one the order has never seen. */
+export function groupIndex(order: SettledOrder): Map<string, RailGroupName> {
+  const index = new Map<string, RailGroupName>();
+  for (const id of order.active) index.set(id, "active");
+  for (const id of order.recent) index.set(id, "recent");
+  return index;
+}
+
+/** Split a ranked id list into the two blocks, each keeping its rank order. */
+export function partition(ids: string[], groupFor: (id: string) => RailGroupName): SettledOrder {
+  const active: string[] = [];
+  const recent: string[] = [];
+  for (const id of ids) (groupFor(id) === "active" ? active : recent).push(id);
+  return { active, recent };
+}
+
 /**
  * Hold `heldIds` still: drop the ids that are gone (a deleted session leaves at
- * once) and splice genuinely-new ids in at their sorted position (appearing is
+ * once) and splice genuinely-new ids in at their ranked position (appearing is
  * not moving). Every surviving id keeps the neighbour it already had.
  */
 export function reconcileOrder(heldIds: string[], targetIds: string[]): string[] {
@@ -56,26 +77,51 @@ export function reconcileOrder(heldIds: string[], targetIds: string[]): string[]
   return next;
 }
 
-/** Rule 3: the open session never moves. Whatever index it holds now it keeps, settle or no settle, until the selection changes. */
-export function pinSelected(ids: string[], heldIds: string[], selectedId?: string): string[] {
-  if (!selectedId) return ids;
-  const pinned = heldIds.indexOf(selectedId);
-  if (pinned < 0 || ids.indexOf(selectedId) === pinned) return ids;
-  const next = ids.filter((id) => id !== selectedId);
-  next.splice(Math.min(pinned, next.length), 0, selectedId);
-  return next;
+/** Reconcile both blocks. Each block is reconciled on its own, so the two can never interleave. */
+export function reconcileBlocks(previous: SettledOrder, target: SettledOrder): SettledOrder {
+  return {
+    active: reconcileOrder(previous.active, target.active),
+    recent: reconcileOrder(previous.recent, target.recent),
+  };
+}
+
+function clamp(value: number, max: number): number {
+  return Math.min(Math.max(value, 0), max);
 }
 
 /**
- * How many sessions the pending order would relocate — the ghost row's count.
- * The fewest cards that have to be picked up and re-dropped (length minus the
- * longest run that is already in the right relative order), not every index
- * that shifts: one session rising to the top is "1 session moved", not "8".
+ * Rule 3: the open session never moves. Whatever row the selected card holds
+ * now it keeps — every other card reorders around it, so nobody else's churn
+ * can displace it.
+ *
+ * Its own group still heals: leaving it under "Active" with a dead dot would be
+ * a lie about the session the user is looking at. It is re-placed in the block
+ * the settle puts it in, at the offset that preserves its absolute row — so the
+ * only thing that can cost it a row is the group boundary itself (it was the
+ * top card of a block and heals into the block below), and then only the rows
+ * that boundary forces.
  */
-export function countMoved(heldIds: string[], nextIds: string[]): number {
-  const held = new Map(heldIds.map((id, i) => [id, i]));
-  const ranks = nextIds.map((id) => held.get(id)).filter((rank) => rank !== undefined);
-  // Patience sort: tails[k] is the smallest rank ending an increasing run of k + 1.
+export function pinSelected(
+  pending: SettledOrder,
+  held: SettledOrder,
+  selectedId?: string,
+): SettledOrder {
+  if (!selectedId) return pending;
+  const at = renderSequence(held).indexOf(selectedId);
+  const group = groupIndex(pending).get(selectedId);
+  if (at < 0 || group === undefined) return pending;
+  const active = pending.active.filter((id) => id !== selectedId);
+  const recent = pending.recent.filter((id) => id !== selectedId);
+  const block = group === "active" ? active : recent;
+  // Rows above the selected card's own block: none for Active, the whole Active
+  // block for Recent.
+  const above = group === "active" ? 0 : active.length;
+  block.splice(clamp(at - above, block.length), 0, selectedId);
+  return { active, recent };
+}
+
+/** Length of the longest non-decreasing subsequence (patience sort over the tails). */
+function stableRunLength(ranks: number[]): number {
   const tails: number[] = [];
   for (const rank of ranks) {
     let lo = 0;
@@ -87,7 +133,31 @@ export function countMoved(heldIds: string[], nextIds: string[]): number {
     }
     tails[lo] = rank;
   }
-  return ranks.length - tails.length;
+  return tails.length;
+}
+
+/**
+ * How many sessions the pending order would relocate — the ghost row's count.
+ * A card counts once if it changes group (its block *is* its position) and
+ * otherwise only if it has to be picked up and re-dropped: the count is the
+ * fewest such cards, not every index that shifts, so one session rising to the
+ * top reads as "1 session moved", not "8". Newcomers are not counted —
+ * appearing is not moving.
+ */
+export function countMoved(held: SettledOrder, pending: SettledOrder): number {
+  const heldIndex = new Map(renderSequence(held).map((id, i) => [id, i]));
+  const heldGroup = groupIndex(held);
+  let regrouped = 0;
+  const ranks: number[] = [];
+  for (const group of ["active", "recent"] as const) {
+    for (const id of pending[group]) {
+      const rank = heldIndex.get(id);
+      if (rank === undefined) continue;
+      if (heldGroup.get(id) !== group) regrouped++;
+      else ranks.push(rank);
+    }
+  }
+  return regrouped + (ranks.length - stableRunLength(ranks));
 }
 
 export interface SettledRailOrder {
@@ -107,17 +177,25 @@ export interface SettledRailOrder {
 
 /**
  * Settled rail order. A new ordering is computed on every session-list change
- * but only APPLIED at a quiet boundary — the pointer leaves the rail, the rail
- * loses focus, the search/filter changes, or the user clicks the pending ghost.
- * While the rail is engaged the previous order is held and the caller renders
- * the ghost instead of yanking rows out from under the cursor.
+ * but only APPLIED at a quiet boundary — the rail is at rest, the pointer
+ * leaves it, it loses focus, the search/filter changes, or the user clicks the
+ * pending ghost. While the rail is engaged the previous order is held and the
+ * caller renders the ghost instead of yanking rows out from under the cursor.
+ *
+ * Status never sorts. It is not in the ordering key, and a flip cannot relocate
+ * a card while the rail is engaged — it only repaints the dot and puts the
+ * group heal in the pending order, where it waits its turn behind the same
+ * boundary as any other move. A heal *is* a move (the card changes block, and
+ * the block is where it sits), so it is gated like one — and, unlike a move, it
+ * also has to be applied even when the flat ranking is unchanged, or a card
+ * would sit under "Active" with a dead dot forever.
  */
 export function useSettledRailOrder(
   sessions: Session[],
   selectedId?: string,
   filterKey?: string,
 ): SettledRailOrder {
-  const orderRef = useRef<SettledOrder>({ ids: [], groups: {} });
+  const orderRef = useRef<SettledOrder>({ active: [], recent: [] });
   const hoveredRef = useRef(false);
   const focusedRef = useRef(false);
   const applyRef = useRef(false);
@@ -138,34 +216,31 @@ export function useSettledRailOrder(
   const filterChanged = filterRef.current !== filterKey;
   filterRef.current = filterKey;
 
-  const held = reconcileOrder(previous.ids, targetIds);
-  const pending = pinSelected(targetIds, held, selectedId);
+  // Held: every card the rail has already placed keeps the block it settled
+  // into, so no live status change can relocate it. Only cards the rail has
+  // never seen take their live group — they have no held position to keep.
+  const previousGroup = groupIndex(previous);
+  const held = reconcileBlocks(
+    previous,
+    partition(targetIds, (id) => previousGroup.get(id) ?? groupOf(byId.get(id)!)),
+  );
+  const pending = pinSelected(
+    partition(targetIds, (id) => groupOf(byId.get(id)!)),
+    held,
+    selectedId,
+  );
   const moved = countMoved(held, pending);
   const quiet =
     applyRef.current || filterChanged || !(hoveredRef.current || focusedRef.current);
   applyRef.current = false;
 
-  // Group membership is part of the order (it is where the card sits), so it is
-  // snapshotted with it: a settle refreshes every group, a held render keeps the
-  // ones it had and only assigns a group to sessions it has not seen before.
-  // Status alone therefore never relocates a card — and because the runner bumps
-  // updated_at on an activity flip, the group heals at that change's own settle.
-  const settling = quiet && moved > 0;
-  const ids = settling ? pending : held;
-  const groups: Record<string, RailGroupName> = {};
-  for (const id of ids) {
-    const previousGroup = previous.groups[id];
-    groups[id] = settling || previousGroup === undefined ? groupOf(byId.get(id)!) : previousGroup;
-  }
-  orderRef.current = { ids, groups };
-
-  const inGroup = (group: RailGroupName) =>
-    ids.filter((id) => groups[id] === group).map((id) => byId.get(id)!);
+  const order = quiet ? pending : held;
+  orderRef.current = order;
 
   return {
-    active: inGroup("active"),
-    recent: inGroup("recent"),
-    pendingMoves: settling ? 0 : moved,
+    active: order.active.map((id) => byId.get(id)!),
+    recent: order.recent.map((id) => byId.get(id)!),
+    pendingMoves: quiet ? 0 : moved,
     settle,
     railHandlers: {
       onMouseEnter: () => {
