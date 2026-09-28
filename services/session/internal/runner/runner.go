@@ -397,6 +397,16 @@ func (r *Runner) Start(ctx context.Context) error {
 			Denied:  toProviderIntents(denied),
 		}
 		opts.PersonaKey = "mads-persona:" + agent.ID
+		// Persona path-scope allowlist (agent-concept redesign §2): the
+		// portable form of the "path_scope" permission intent. A provider
+		// with a native path-scope surface (claude-code's PreToolUse hook —
+		// see providers/claudecode/permission.go) enforces it; a provider
+		// without one (goose, kiro) declares IntentPathScope: Unsupported
+		// and takes this as "no stance". Empty when the persona declared
+		// no path scope — the adapter then wires no hook at all.
+		if len(agent.Permissions.AllowedPaths) > 0 {
+			opts.PersonaAllowedPaths = agent.Permissions.AllowedPaths
+		}
 	}
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}

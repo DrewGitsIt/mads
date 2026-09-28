@@ -133,14 +133,18 @@ func (p *Provider) Matrix() provider.Matrix {
 
 // IntentMatrix declares this provider's enforcement of the portable
 // permission intents (pkg/contracts.PermissionIntent): deny_commands and
-// read_only are native via trustArgs' --disallowedTools sets, and
-// require_approval is native via the permission.go PreToolUse hook.
-// path_scope has no equivalent claude flag — writes are never confined to a
-// specific path allowlist — so it's declared unenforced rather than implied.
+// read_only are native via trustArgs' --disallowedTools sets,
+// require_approval is native via the permission.go PreToolUse ask-first
+// hook, and path_scope is native via the permission.go PreToolUse
+// *path-scope* hook (Option A, agent-concept redesign §2) — a local POSIX
+// sh containment check on Write|Edit|MultiEdit|NotebookEdit wired from
+// StartOptions.PersonaAllowedPaths, independent of trust. See
+// permission.go's writePermissionSettings for the two-hooks-in-one-file
+// shape.
 func (p *Provider) IntentMatrix() provider.IntentMatrix {
 	return provider.IntentMatrix{
 		provider.IntentDenyCommands:    provider.Native,
-		provider.IntentPathScope:       provider.Unsupported,
+		provider.IntentPathScope:       provider.Native,
 		provider.IntentReadOnly:        provider.Native,
 		provider.IntentRequireApproval: provider.Native,
 	}

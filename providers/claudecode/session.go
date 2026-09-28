@@ -47,7 +47,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		return nil, fmt.Errorf("mcp config: %w", err)
 	}
 	args = append(args, mcpArgVals...)
-	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL)
+	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL, opts.PersonaAllowedPaths)
 	if err != nil {
 		if mcpConfigPath != "" {
 			_ = os.Remove(mcpConfigPath)

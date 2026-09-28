@@ -102,6 +102,20 @@ type StartOptions struct {
 	// compile. The runner's EffectiveToolIntents (pkg/contracts)
 	// computes both slices from a persona before setting them.
 	ToolIntents ToolIntents
+	// PersonaAllowedPaths, when non-empty, is the persona's path-scope
+	// allowlist (pkg/contracts AgentPermissions.AllowedPaths, folded in by
+	// the runner exactly as ToolIntents is). It is the portable form of the
+	// "path_scope" permission intent: file reads and writes are confined to
+	// the listed paths. Each entry is a directory root expressed relative
+	// to Cwd (or absolute); a tool call touching a path outside every root
+	// must be denied by a provider that enforces it.
+	//
+	// A provider with a native path-scope surface (claude-code's PreToolUse
+	// hook) enforces it; a provider without one (goose, kiro) takes it as
+	// "no stance" and declines honestly in its IntentMatrix (IntentPathScope
+	// = Unsupported). Zero value == no persona-level path restriction — the
+	// session runs on whatever its trust level already confines.
+	PersonaAllowedPaths []string
 	// PersonaKey names the idempotency scope for SystemPrompt when a
 	// mid-session SetModel re-invokes Start (redesign §5): the adapter
 	// is expected to overwrite a prior persona with the same key rather
