@@ -42,6 +42,11 @@ test.describe("linked sessions: link UI behind the flag", () => {
     // other rows then toggle by clicking them, and the link bar's
     // "Choose mode" opens the chooser once ≥2 are selected. The holder radio
     // is still selected explicitly below so this doesn't rely on ordering.
+    // The 🔗 lives in the action cluster, which hangs outside the card and
+    // stays inert until the row is hovered — hover first, as a real pointer
+    // would, or the cluster never anchors and the click hit-tests through to
+    // the card underneath.
+    await rail.getByText(leaderName, { exact: true }).hover();
     await rail.getByLabel(`Add ${leaderName} to link selection`).click();
     await rail.getByText(workerName, { exact: true }).click();
     await expect(rail.getByLabel(`Remove ${workerName} from link selection`)).toBeChecked();

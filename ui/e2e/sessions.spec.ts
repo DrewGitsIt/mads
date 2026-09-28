@@ -158,10 +158,18 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
 
   // Delete-from-rail: back at the Launchpad ("+ New session" clears the open
   // workspace), the same shared confirm dialog is reachable from the rail
-  // row's always-visible 🗑 button (aria-label "Archive <name>").
+  // row's 🗑 button (aria-label "Archive <name>").
   await page.getByRole("button", { name: "+ New session" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 
+  // The action cluster hangs outside the card and is inert until the row is
+  // hovered (or focused) — that hover is what gives it its position:fixed
+  // coordinates, and until it has them the stylesheet keeps it transparent
+  // and pointer-events:none. Clicking it therefore has to start the way a
+  // real pointer does: on the card. Without this, Playwright's actionability
+  // check never moves the mouse, so the cluster never anchors and the click
+  // hit-tests straight through to the card's own status line.
+  await sessionCard.hover();
   await rail.getByLabel(`Archive ${goal}`).click();
 
   const railDialog = page.getByRole("alertdialog");
