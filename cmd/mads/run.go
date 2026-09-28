@@ -19,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
+	"github.com/drewkidwell/mads/providers/goosecli"
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -29,7 +30,7 @@ func cmdRun(args []string, out io.Writer) error {
 	session := fs.String("session", "", "session ID (required)")
 	workspace := fs.String("workspace", ".", "workspace repo the run works in")
 	tplName := fs.String("template", "default-implementation", "pipeline template (registry name)")
-	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, or fake")
+	providerName := fs.String("provider", "claude-code", "agent provider: claude-code, kiro-cli, goose, or fake")
 	model := fs.String("model", "", "model override for agent stages")
 	concurrency := fs.Int("concurrency", 5, "simultaneous tasks — agent stages run in parallel up to "+
 		"this cap; dependencies express prerequisites, not anti-collision. Integration is always "+
@@ -41,6 +42,8 @@ func cmdRun(args []string, out io.Writer) error {
 		"extra args for every claude invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
 	kiroArgs := fs.String("kiro-args", "--trust-all-tools",
 		"extra args for every kiro-cli invocation (pipeline agents run autonomously; §13 permission profiles are a later wave)")
+	gooseArgs := fs.String("goose-args", "",
+		"extra args for every goose invocation (default empty: full trust rides ACP session mode \"auto\", which the engine sets itself — no trust flag exists to pass)")
 	fakeScenario := fs.String("fake-scenario", "", "scenario YAML for -provider fake (rehearsal runs)")
 	// The flag default here is only a last-resort fallback (Data Service
 	// unreachable before we can load the real default below) — it is not
@@ -89,32 +92,9 @@ func cmdRun(args []string, out io.Writer) error {
 
 	madsHome := defaultMadsHome()
 
-	var prov provider.Provider
-	switch *providerName {
-	case "fake":
-		// WithTranscriptDir makes an announced ref's history durable to
-		// disk under $MADS_HOME, readable by the Router's own separate fake
-		// instance (services/router/main.go) once the drill-in feed asks
-		// for it — the same cross-process bridge claude-code gets for free
-		// from its transcript files living on disk already.
-		fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
-		if *fakeScenario != "" {
-			sc, err := fake.LoadScenario(*fakeScenario)
-			if err != nil {
-				return err
-			}
-			if prov, err = fake.NewWithScenario(sc, fakeOpt); err != nil {
-				return err
-			}
-		} else {
-			prov = fake.New(fakeOpt)
-		}
-	case "claude-code":
-		prov = claudecode.New(claudecode.Config{ExtraArgs: strings.Fields(*claudeArgs)})
-	case "kiro-cli":
-		prov = kirocli.New(kirocli.Config{ExtraArgs: strings.Fields(*kiroArgs)})
-	default:
-		return fmt.Errorf("unknown provider %q", *providerName)
+	prov, err := resolveProvider(*providerName, *claudeArgs, *kiroArgs, *gooseArgs, *fakeScenario, madsHome)
+	if err != nil {
+		return err
 	}
 
 	root := *worktreeRoot
@@ -181,6 +161,40 @@ func cmdRun(args []string, out io.Writer) error {
 		return fmt.Errorf("run finished incomplete")
 	}
 	return nil
+}
+
+// resolveProvider maps the -provider flag onto a constructed provider. Last
+// hand-registration site of its kind: W7.9's providers/load collapses this
+// switch into descriptor loading — new providers go there, not here.
+func resolveProvider(name, claudeArgs, kiroArgs, gooseArgs, fakeScenario, madsHome string) (provider.Provider, error) {
+	switch name {
+	case "fake":
+		// WithTranscriptDir makes an announced ref's history durable to
+		// disk under $MADS_HOME, readable by the Router's own separate fake
+		// instance (services/router/main.go) once the drill-in feed asks
+		// for it — the same cross-process bridge claude-code gets for free
+		// from its transcript files living on disk already.
+		fakeOpt := fake.WithTranscriptDir(filepath.Join(madsHome, "fake-transcripts"))
+		if fakeScenario != "" {
+			sc, err := fake.LoadScenario(fakeScenario)
+			if err != nil {
+				return nil, err
+			}
+			return fake.NewWithScenario(sc, fakeOpt)
+		}
+		return fake.New(fakeOpt), nil
+	case "claude-code":
+		return claudecode.New(claudecode.Config{ExtraArgs: strings.Fields(claudeArgs)}), nil
+	case "kiro-cli":
+		return kirocli.New(kirocli.Config{ExtraArgs: strings.Fields(kiroArgs)}), nil
+	case "goose":
+		// No trust ExtraArgs default: goose full trust rides ACP session
+		// mode "auto", which the engine sets itself — there is no goose
+		// CLI trust flag to pass.
+		return goosecli.New(goosecli.Config{ExtraArgs: strings.Fields(gooseArgs)}), nil
+	default:
+		return nil, fmt.Errorf("unknown provider %q", name)
+	}
 }
 
 // tail prints the session's pipeline/stage/task events as they land,

@@ -77,6 +77,20 @@ func TestResolveAgentEnv_IsolatedSelectsBoundCredentialsFromParentEnv(t *testing
 	}
 }
 
+// TestBuildProviderRegistryIncludesGoose pins the registration set the
+// pipeline child boots with: goose alongside the pre-existing three.
+func TestBuildProviderRegistryIncludesGoose(t *testing.T) {
+	reg, err := buildProviderRegistry(t.TempDir(), agentenv.ModeInherit, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude-code", "kiro-cli", "goose", "fake"} {
+		if _, err := reg.Get(name); err != nil {
+			t.Fatalf("Get(%q): %v", name, err)
+		}
+	}
+}
+
 func TestResolveStageTimeout_DefaultsWhenAbsentOrZero(t *testing.T) {
 	for _, minutes := range []int{0, -1} {
 		got := resolveStageTimeout(contracts.Config{PipelineStageTimeoutMinutes: minutes})

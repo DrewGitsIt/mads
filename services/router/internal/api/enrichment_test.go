@@ -28,7 +28,7 @@ func TestDescribeAgentOverRouter(t *testing.T) {
 func TestSuggestCapabilitiesOverRouter(t *testing.T) {
 	srv, _ := newTestServerWithScenario(t, fake.Scenario{Name: "suggest-capabilities", Rules: []fake.Rule{{
 		Match: "database migrations",
-		Reply: `{"tools": ["psql"], "mcp_servers": [], "skills": ["db-migrate"]}`,
+		Reply: `{"allowlist": ["shell"], "mcp_servers": [], "skills": ["db-migrate"]}`,
 	}}})
 
 	resp := postJSON(t, srv.URL+"/agents/suggest-capabilities", map[string]string{
@@ -38,12 +38,12 @@ func TestSuggestCapabilitiesOverRouter(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	body := decodeJSON[struct {
-		Tools   []string `json:"tools"`
-		Skills  []string `json:"skills"`
-		Dropped []string `json:"dropped"`
+		Allowlist []string `json:"allowlist"`
+		Skills    []string `json:"skills"`
+		Dropped   []string `json:"dropped"`
 	}](t, resp)
-	if len(body.Tools) != 1 || body.Tools[0] != "psql" {
-		t.Fatalf("tools = %+v", body.Tools)
+	if len(body.Allowlist) != 1 || body.Allowlist[0] != "shell" {
+		t.Fatalf("allowlist = %+v", body.Allowlist)
 	}
 	// "db-migrate" isn't registered: it must not come back as a suggestion.
 	if len(body.Skills) != 0 || len(body.Dropped) != 1 || body.Dropped[0] != "db-migrate" {

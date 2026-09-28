@@ -12,9 +12,10 @@ import (
 // project JSONL is documented, but its ACP agent advertises
 // loadSession: true, and the standard convention that capability implies is
 // that session/load replays prior turns as session/update notifications
-// before its own response resolves. startACP buffers exactly that replay
-// (see session.go's replaying flag) — this is the least-certain row in the
-// Matrix; see README.md.
+// before its own response resolves. The acprpc engine buffers exactly that
+// replay and exposes it through ReplayMessages (reached via the interface
+// assertion below — the engine's session type is unexported). This is the
+// least-certain row in the Matrix; see README.md.
 func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Message, error) {
 	if ref == "" {
 		return nil, fmt.Errorf("transcript: empty session ref")
@@ -24,5 +25,9 @@ func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Messa
 		return nil, err
 	}
 	defer func() { _ = sess.Close() }()
-	return sess.(*streamSession).drainReplay(), nil
+	replayer, ok := sess.(interface{ ReplayMessages() []provider.Message })
+	if !ok {
+		return nil, fmt.Errorf("transcript: engine session exposes no replay buffer")
+	}
+	return replayer.ReplayMessages(), nil
 }

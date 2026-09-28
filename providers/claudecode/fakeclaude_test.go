@@ -302,6 +302,39 @@ func fcEmitText(id, text string) {
 	fcEmit(fcAssistantText(id, text))
 }
 
+// fcLine is a stdin line as the fake reads it: the adapter's own wireLine
+// (which models the OUTPUT stream) plus the two control_request fields that
+// only ever appear on input, so the fake can answer a request by id.
+type fcLine struct {
+	wireLine
+	RequestID string `json:"request_id"`
+	Request   struct {
+		Subtype string `json:"subtype"`
+	} `json:"request"`
+}
+
+// fcEmitListModels answers the model-discovery probe (discover.go). The
+// shape mirrors the real catalog: floating aliases and concrete ids side by
+// side, a "default" entry, and displayName carrying the label. Names are
+// deliberately fake so a test asserting on them can never be satisfied by
+// an accidentally-real binary.
+func fcEmitListModels(requestID string) {
+	fcEmit(map[string]any{
+		"type": "control_response",
+		"response": map[string]any{
+			"subtype":    "success",
+			"request_id": requestID,
+			"response": map[string]any{
+				"models": []map[string]any{
+					{"value": "default", "resolvedModel": "fake-sonnet-9", "displayName": "Default (recommended)"},
+					{"value": "opus", "resolvedModel": "fake-opus-9", "displayName": "Fake Opus 9"},
+					{"value": "fake-sonnet-9", "resolvedModel": "fake-sonnet-9", "displayName": "Fake Sonnet 9"},
+				},
+			},
+		},
+	})
+}
+
 // fcStream mimics the persistent stream-json session: init line, then one
 // turn per user message, closed by a result line. A control_request
 // interrupt lands mid-"slow"-turn.
@@ -323,13 +356,13 @@ func fcStream(a fcArgs) {
 	})
 
 	// stdin lines feed a channel so interrupts can land mid-turn.
-	lines := make(chan wireLine)
+	lines := make(chan fcLine)
 	go func() {
 		defer close(lines)
 		sc := bufio.NewScanner(os.Stdin)
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
-			var l wireLine
+			var l fcLine
 			if json.Unmarshal(sc.Bytes(), &l) == nil {
 				lines <- l
 			}
@@ -346,6 +379,10 @@ func fcStream(a fcArgs) {
 	}
 
 	for l := range lines {
+		if l.Type == "control_request" && l.Request.Subtype == "list_models" {
+			fcEmitListModels(l.RequestID)
+			continue
+		}
 		if l.Type != "user" {
 			continue
 		}

@@ -14,7 +14,7 @@ history.
 | OneShot | **Native** | `claude -p "<prompt>" --output-format json` is the documented non-interactive invocation. |
 | Resume | **Native** | `--resume <session-id>` is a real, documented flag on both transports. |
 | Transcript | **Native** | Claude Code writes project transcripts to `~/.claude/projects/<project>/<session-id>.jsonl`; this adapter reads them directly. |
-| ModelDiscovery | **Emulated** | No discovery call exists; `DefaultModels` is a pinned list this adapter maintains. |
+| ModelDiscovery | **Native** | `list_models` over stream-json returns the harness's own catalog (`discover.go`): one control request, no turn, no LLM call, ~1s. Aliases (`opus`, `default`) are kept as the selectable id so the picker tracks the latest model without mads re-pinning. `Config.Models` pins the list instead when set; otherwise a failed probe wraps `ErrDiscoveryUnavailable` rather than falling back to a stale list. |
 | CostReporting | **Native** | Both `-p --output-format json` and the stream-json `result` line report `total_cost_usd` and a nested `usage` object with token counts. |
 | ACP | **Native** | The stream-json structured transport (this package's name for its ACP-equivalent event stream). |
 | PTY | **Native** | claude-code's own interactive terminal UI runs directly on a pseudo-terminal. |

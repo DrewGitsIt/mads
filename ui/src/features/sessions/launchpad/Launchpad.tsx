@@ -259,12 +259,16 @@ export function Launchpad({
               setStaged((prev) => ({ ...prev, workspace: ws.name }));
             }}
           />
+          {/* Redesign §4/§6: the persona is an *override*, not a *selection* —
+           *  default is Auto (server-side Fast Model pick over the persona
+           *  registry). A concrete persona override, selected from the
+           *  Library's Personas shelf, is honored and replaces the pick. */}
           <AgentPill
             value={staged.agent}
             resolved={resolved?.agent}
             onChange={(agent) => {
               setSelectedAgent(agent);
-              setStaged((prev) => ({ ...prev, agent: agent.name }));
+              setStaged((prev) => ({ ...prev, agent: agent.id }));
             }}
             onAuto={() => {
               setSelectedAgent(undefined);

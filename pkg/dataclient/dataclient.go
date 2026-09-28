@@ -263,6 +263,23 @@ func (c *Client) SetSessionActivity(ctx context.Context, id string, activity con
 		map[string]any{"activity": activity}, nil)
 }
 
+// SetSessionAgentState mirrors one main-agent transition onto the session
+// record AND appends its session.agent_state event, in one atomic round trip
+// — the pair has to land together or a cold reader and a live stream can
+// report different things about the same turn (store.Sessions.SetAgentState).
+func (c *Client) SetSessionAgentState(ctx context.Context, id string, state contracts.AgentState) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/agent-state", state, nil)
+}
+
+// RecordSessionTurnEnd stamps LastTurnAt — and LastUsage, when the provider
+// reported any — in one atomic round trip, unlike the Session-then-
+// UpdateSession pair it replaces: that one could drop a field written
+// concurrently by the same runner (its own agent state, its provider ref).
+func (c *Client) RecordSessionTurnEnd(ctx context.Context, id string, usage *contracts.Usage, at time.Time) error {
+	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/turn-end",
+		map[string]any{"usage": usage, "at": at}, nil)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
 }

@@ -542,6 +542,21 @@ cross-platform build matrix + install/first-run/update/uninstall smoke on macOS 
 **Done when:** both gates block a deliberately broken candidate build.
 **Depends:** W6.x (all), W7.2, W7.5
 
+### W7.8 goose adapter (via the generic ACP engine)
+**Goal:** third provider, and the first instantiation of the declarative direction — all ACP
+wire behavior lives once in `providers/acprpc` (proposed W7.9); goose contributes only
+capture-verified knob values, the trust table, and its non-ACP CLI surfaces (transcript export,
+session locator, PTY).
+**Includes:** honest matrix (OneShot/OneShotStream Emulated over ACP); conformance green
+against a scripted stand-in; opt-in real-binary smoke (`MADS_GOOSE_SMOKE=1`, free local
+ollama); registration across router/session/pipeline services + `mads run`; preflight +
+compat rows.
+**Design:** docs/GOOSE-ADAPTER-DESIGN.md (goose wire facts, capture provenance) +
+docs/DECLARATIVE-PROVIDERS-DESIGN.md (engine architecture).
+**Done when:** the claude-code conformance suite passes goose's declared matrix without core
+changes, and the real-binary smoke is green on a machine with goose + ollama installed.
+**Depends:** W2.1, W2.3, W7.1 (adapter conventions)
+
 ---
 
 ## Flagged functionality ledger

@@ -60,12 +60,16 @@ func marshalIndent(t *testing.T, v any) []byte {
 // contracts.Agent.
 func TestGenerateFromTaskGolden(t *testing.T) {
 	g, c := setup(t, fake.Scenario{Name: "generate-from-task", Rules: []fake.Rule{{
+		// The reply exercises the redesigned draft shape (agent-concept
+		// redesign §2): allowlist/denylist over the closed ToolIntent
+		// vocabulary, no concrete tool names, no command strings.
 		Match: "Fix the flaky login test",
 		Reply: `{"name":"login-test-fixer","description":"Fixes flaky login tests",` +
 			`"prompt":"You are a QA engineer who stabilizes flaky login tests.",` +
 			`"quadrant":"autonomous_executor","tags":["testing","login"],` +
-			`"capabilities":{"tools":["shell","read","write"],"mcp_servers":[],"skills":["testing"]},` +
-			`"permissions":{"allowed_paths":["tests/**"],"denied_commands":["rm -rf *"]}}`,
+			`"allowlist":["shell","read","write"],"denylist":[],` +
+			`"capabilities":{"mcp_servers":[],"skills":["testing"]},` +
+			`"permissions":{"allowed_paths":["tests/**"]}}`,
 	}}})
 	mustCreateCapability(t, c, contracts.Capability{
 		Name: "testing", Type: contracts.CapabilitySkill, Config: contracts.CapabilityConfig{Path: "~/skills/testing"},
@@ -88,12 +92,15 @@ func TestGenerateFromTaskGolden(t *testing.T) {
 // what you want" flow.
 func TestGenerateFromDescriptionGolden(t *testing.T) {
 	g, c := setup(t, fake.Scenario{Name: "generate-from-description", Rules: []fake.Rule{{
+		// Redesigned shape: the deny is now the closed-vocabulary "shell"
+		// intent (denylist), not a harness-leaky command string.
 		Match: "database migrations and knows PostgreSQL",
 		Reply: `{"name":"db-migrator","description":"Specializes in PostgreSQL schema migrations",` +
 			`"prompt":"You are a database migration specialist who knows PostgreSQL deeply.",` +
 			`"quadrant":"technical_partner","tags":["database","postgres","migrations"],` +
-			`"capabilities":{"tools":["shell","read","write"],"mcp_servers":["postgres"],"skills":[]},` +
-			`"permissions":{"allowed_paths":["migrations/**"],"denied_commands":["DROP DATABASE *"]}}`,
+			`"allowlist":["shell","read","write"],"denylist":["shell"],` +
+			`"capabilities":{"mcp_servers":["postgres"],"skills":[]},` +
+			`"permissions":{"allowed_paths":["migrations/**"]}}`,
 	}}})
 	mustCreateCapability(t, c, contracts.Capability{
 		Name: "postgres", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx @modelcontextprotocol/server-postgres"},
@@ -117,9 +124,11 @@ func TestGenerateFromDescriptionGolden(t *testing.T) {
 func TestGenerateKeepsOnlyRegisteredCapabilities(t *testing.T) {
 	g, c := setup(t, fake.Scenario{Name: "known-and-unknown-caps", Rules: []fake.Rule{{
 		Match: "Set up the reporting pipeline",
+		// Redesigned shape: allowlist is the closed ToolIntent vocabulary
+		// (the persona is harness-free), mcp/skills stay registry-refs.
 		Reply: `{"name":"reporting-agent","description":"Builds reports","prompt":"You build reports.",` +
 			`"quadrant":"autonomous_executor",` +
-			`"capabilities":{"tools":["shell"],"mcp_servers":["postgres","made-up-mcp"],"skills":["testing","made-up-skill"]},` +
+			`"allowlist":["shell"],"capabilities":{"mcp_servers":["postgres","made-up-mcp"],"skills":["testing","made-up-skill"]},` +
 			`"permissions":{}}`,
 	}}})
 	mustCreateCapability(t, c, contracts.Capability{
@@ -137,11 +146,18 @@ func TestGenerateKeepsOnlyRegisteredCapabilities(t *testing.T) {
 	}
 
 	gotCaps, _ := json.Marshal(result.Draft.Capabilities)
+	// Redesigned shape (agent-concept redesign §2): the persona's tool
+	// allowance is the closed ToolIntent vocabulary (Allowlist), not a
+	// concrete `capabilities.tools` name list — "shell" folds in as intent
+	// `shell`. Only registry-known skill/MCP names survive.
 	wantCaps, _ := json.Marshal(contracts.AgentCapabilities{
-		Tools: []string{"shell"}, MCPServers: []string{"postgres"}, Skills: []string{"testing"},
+		MCPServers: []string{"postgres"}, Skills: []string{"testing"},
 	})
 	if string(gotCaps) != string(wantCaps) {
 		t.Fatalf("Capabilities = %s, want only registered names kept: %s", gotCaps, wantCaps)
+	}
+	if len(result.Draft.Allowlist) == 0 {
+		t.Fatal("Allowlist = empty, want the persona to declare a tool allowance for its task")
 	}
 
 	wantDropped := map[string]bool{"made-up-mcp": true, "made-up-skill": true}
@@ -162,9 +178,16 @@ func TestGenerateKeepsOnlyRegisteredCapabilities(t *testing.T) {
 func TestGenerateFromTaskDeclaresRequiredCapabilities(t *testing.T) {
 	g, c := setup(t, fake.Scenario{Name: "requires-capability", Rules: []fake.Rule{{
 		Match: "Scrape the pricing page",
+		// Redesigned shape: the persona declares its tool allowance as the
+		// closed-vocabulary "shell" intent (an allowlist entry), not a
+		// concrete tool name. This test's point (a draft missing the
+		// task's effective required capabilities is *still* complete after
+		// the required-set merge) survives the redesign: the merge now
+		// adds "shell" to Allowlist when the task's RequiredTools name a
+		// concrete tool that maps to that intent.
 		Reply: `{"name":"scraper-agent","description":"Scrapes pricing pages","prompt":"You scrape pages.",` +
 			`"quadrant":"autonomous_executor",` +
-			`"capabilities":{"tools":["shell"],"mcp_servers":[],"skills":[]},"permissions":{}}`,
+			`"capabilities":{"mcp_servers":[],"skills":[]},"permissions":{}}`,
 	}}})
 	mustCreateCapability(t, c, contracts.Capability{
 		Name: "playwright", Type: contracts.CapabilityMCP, Config: contracts.CapabilityConfig{Command: "npx playwright-mcp"},
@@ -173,6 +196,7 @@ func TestGenerateFromTaskDeclaresRequiredCapabilities(t *testing.T) {
 	result, err := g.GenerateFromTask(context.Background(), agentselect.Request{
 		TaskID: "tsk_requires", Title: "Scrape the pricing page",
 		RequiredMCPServers: []string{"playwright"},
+		RequiredTools:      []string{"shell"}, // folded into the persona's Allowlist by the merge
 	})
 	if err != nil {
 		t.Fatalf("GenerateFromTask: %v", err)
@@ -187,18 +211,24 @@ func TestGenerateFromTaskDeclaresRequiredCapabilities(t *testing.T) {
 	if !found {
 		t.Fatalf("Capabilities.MCPServers = %v, want playwright present despite the model's reply omitting it", result.Draft.Capabilities.MCPServers)
 	}
+	if len(result.Draft.Allowlist) == 0 {
+		t.Fatal("Allowlist = empty, want shell folded in from the task's required tools")
+	}
 }
 
 // The empty-registry acceptance criteria: with no capabilities registered at
 // all, every skill/MCP name the model emits is dropped, regardless of how
-// plausible-looking it is — tools are untouched (provider tool names, not
-// registry entries).
+// plausible-looking it is. The persona's tool allowance (Allowlist) is a
+// closed-vocabulary list, untouched by the registry check — it isn't a
+// registry entry, so it isn't subject to the drop.
 func TestGenerateWithEmptyRegistryDropsAllSkillsAndMCP(t *testing.T) {
 	g, _ := setup(t, fake.Scenario{Name: "empty-registry", Rules: []fake.Rule{{
 		Match: "Set up the reporting pipeline",
+		// Redesigned shape: the allowance is allowlist/denylist over the
+		// closed ToolIntent vocabulary, not a concrete-name capabilities.tools.
 		Reply: `{"name":"reporting-agent","description":"Builds reports","prompt":"You build reports.",` +
 			`"quadrant":"autonomous_executor",` +
-			`"capabilities":{"tools":["shell","read"],"mcp_servers":["postgres"],"skills":["testing"]},` +
+			`"allowlist":["shell","read"],"capabilities":{"mcp_servers":["postgres"],"skills":["testing"]},` +
 			`"permissions":{}}`,
 	}}})
 
@@ -215,11 +245,11 @@ func TestGenerateWithEmptyRegistryDropsAllSkillsAndMCP(t *testing.T) {
 	if len(result.Draft.Capabilities.MCPServers) != 0 {
 		t.Errorf("Capabilities.MCPServers = %v, want none (empty registry)", result.Draft.Capabilities.MCPServers)
 	}
-	wantTools := []string{"shell", "read"}
-	gotTools, _ := json.Marshal(result.Draft.Capabilities.Tools)
-	wantToolsJSON, _ := json.Marshal(wantTools)
-	if string(gotTools) != string(wantToolsJSON) {
-		t.Errorf("Capabilities.Tools = %s, want untouched %s (tools aren't registry entries)", gotTools, wantToolsJSON)
+	wantAllow := []string{"shell", "read"}
+	gotAllow, _ := json.Marshal(result.Draft.Allowlist)
+	wantAllowJSON, _ := json.Marshal(wantAllow)
+	if string(gotAllow) != string(wantAllowJSON) {
+		t.Errorf("Allowlist = %s, want untouched %s (allowlist is closed-vocabulary, not a registry entry)", gotAllow, wantAllowJSON)
 	}
 	if len(result.Dropped) != 2 {
 		t.Fatalf("Dropped = %v, want both postgres and testing dropped", result.Dropped)
@@ -331,13 +361,13 @@ func TestDescribe(t *testing.T) {
 }
 
 // Suggestions are grounded the same way generation is: only registry names
-// survive and invented ones are reported in Dropped; provider tool names
-// pass through untouched.
+// survive, invented ones are reported in Dropped, and tool allowance comes
+// back as ToolIntents rather than concrete tool names.
 func TestSuggestCapabilities(t *testing.T) {
 	g, c := setup(t, fake.Scenario{Name: "suggest-capabilities", Rules: []fake.Rule{{
 		// The registry descriptions must reach the model for grounding.
 		Match: "postgres: Query and migrate PostgreSQL",
-		Reply: `{"tools":["shell","read"],"mcp_servers":["postgres","jira"],"skills":["migrations","made-up"]}`,
+		Reply: `{"allowlist":["shell","read","Bash"],"mcp_servers":["postgres","jira"],"skills":["migrations","made-up"]}`,
 	}}})
 	mustCreateCapability(t, c, contracts.Capability{
 		Name: "postgres", Type: contracts.CapabilityMCP, Description: "Query and migrate PostgreSQL",
@@ -352,10 +382,10 @@ func TestSuggestCapabilities(t *testing.T) {
 		t.Fatalf("SuggestCapabilities: %v", err)
 	}
 	want := agentgen.Suggestion{
-		Tools:      []string{"shell", "read"},
+		Allowlist:  []contracts.ToolIntent{"shell", "read"},
 		MCPServers: []string{"postgres"},
 		Skills:     []string{"migrations"},
-		Dropped:    []string{"made-up", "jira"},
+		Dropped:    []string{"made-up", "jira", "Bash"},
 	}
 	gotJSON, _ := json.Marshal(got)
 	wantJSON, _ := json.Marshal(want)
@@ -369,7 +399,7 @@ func TestSuggestCapabilities(t *testing.T) {
 func TestSuggestCapabilitiesDropsInventedNames(t *testing.T) {
 	g, _ := setup(t, fake.Scenario{Name: "suggest-invented", Rules: []fake.Rule{{
 		Match: "reviews pull requests",
-		Reply: `{"tools":["read"],"mcp_servers":["github"],"skills":["code-review"]}`,
+		Reply: `{"allowlist":["read"],"mcp_servers":["github"],"skills":["code-review"]}`,
 	}}})
 
 	got, err := g.SuggestCapabilities(context.Background(), "reviews pull requests")

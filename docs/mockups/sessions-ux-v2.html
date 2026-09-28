@@ -1,0 +1,992 @@
+<!doctype html>
+<!--
+  Session rail readability, pass 2 (2026-09-27). Self-contained: open in any
+  browser. Follow-up to docs/mockups/sessions-ux.html (which settled card
+  chrome — Option A "quiet card"); this pass is about *legibility of state*:
+
+    #1  A live status line under the session name ("Running bash…",
+        "Thinking…", "Done · your turn") with a spinner / status color, so a
+        card mid-turn never looks like a card sitting idle.
+    #2  Replacing the Active / Recent split, which in chat mode groups by
+        "does a child process exist" — an implementation detail — and offers
+        no filtering or context labels (workspace, cwd, branch).
+    #3  Surfacing datetime initiated and datetime of last response.
+
+  Clay/dark tokens copied verbatim from ui/src/tokens/tokens.css. The last
+  section records exactly which signals exist on the shared control-plane SSE
+  today and which need a (small) backend addition — the phasing depends on it.
+
+  Live surfaces this mocks: ui/src/features/sessions/rail/SessionRail.tsx
+  (+ .module.css) and rail/railGroups.ts (groupSessions / dotState).
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — session rail status legibility (v2)</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:80ch; margin-top:var(--space-2); }
+  header.intro ul { color:var(--text2); max-width:80ch; margin:var(--space-2) 0 0 var(--space-4); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:92ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); }
+  .rowlabel.good { color:var(--ok-fg); }
+  .rowlabel.bad { color:var(--bad-fg); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:92ch; }
+
+  .cols2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-5); align-items:start; }
+  .cols3 { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:var(--space-4); align-items:start; }
+  @media (max-width:980px) { .cols2, .cols3 { grid-template-columns:1fr; } }
+
+  /* ── rail panel + card, sized like the real 280px rail ───────────────── */
+  .railpanel { background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r); padding:var(--space-2); max-width:300px; }
+  .railpanel.wide { max-width:none; }
+  .grouphdr { display:flex; align-items:baseline; gap:var(--space-2); padding:var(--space-2) var(--space-3) var(--space-1); font:600 var(--fs-chip) var(--sans); letter-spacing:.04em; text-transform:uppercase; color:var(--text3); }
+  .grouphdr .n { color:var(--text3); font-weight:500; }
+  .grouphdr.attn { color:var(--warn-fg); }
+  .grouphdr.work { color:var(--accent); }
+
+  .scard { position:relative; display:flex; flex-direction:column; gap:3px; padding:var(--space-2) var(--space-3); margin-bottom:3px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); cursor:pointer; }
+  .scard:hover { background:var(--bg3); }
+  .scard.sel { background:var(--bg3); border-color:var(--accent); }
+  .scard .top { display:flex; align-items:center; gap:var(--space-2); }
+  .scard .nm { flex:1; min-width:0; font:600 var(--fs-sm) var(--sans); color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .scard .when { flex:none; color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; }
+  .scard .summ { padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .scard .metarow { display:flex; align-items:center; gap:var(--space-2); padding-left:16px; font:500 var(--fs-chip) var(--sans); }
+  .scard .open { color:var(--warn-fg); font:600 var(--fs-chip) var(--sans); }
+  .scard .ctx { color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .scard .ctx .sep { opacity:.5; margin:0 4px; }
+  .scard .ctx .branch { font-family:var(--mono); color:var(--text2); }
+
+  /* leading state dot — same 8px puck as today's .dot */
+  .dot { flex:none; width:8px; height:8px; border-radius:50%; background:var(--text3); }
+  .dot.on { background:var(--ok); }
+  .dot.attn { background:var(--warn); animation:breathe 1.6s ease-in-out infinite; }
+  .dot.off { background:transparent; box-shadow:inset 0 0 0 1.5px var(--text3); }
+  .dot.bad { background:var(--bad); }
+  .dot.work { background:var(--accent); }
+  @keyframes breathe { 50% { opacity:.35; } }
+
+  /* ── #1 the status line ───────────────────────────────────────────────── */
+  .status { display:flex; align-items:center; gap:6px; padding-left:16px; font:500 var(--fs-chip) var(--sans); color:var(--text3); min-height:15px; }
+  .status .lbl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status .el { flex:none; color:var(--text3); opacity:.8; font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  .status.working { color:var(--accent); }
+  .status.working .lbl { color:var(--accent); }
+  .status.needs { color:var(--warn-fg); }
+  .status.done { color:var(--ok-fg); }
+  .status.bad { color:var(--bad-fg); }
+  .status.idle { color:var(--text3); }
+
+  .spin { flex:none; width:9px; height:9px; border-radius:50%; border:1.5px solid var(--line); border-top-color:var(--accent); animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .glyph { flex:none; width:9px; text-align:center; font-size:9px; line-height:1; }
+  .bell { animation:breathe 1.6s ease-in-out infinite; }
+
+  /* status-line entrance so a state change is visible, not a silent swap */
+  .status[data-anim] .lbl { animation:lbl-in 180ms ease-out; }
+  @keyframes lbl-in { from { opacity:0; transform:translateY(2px); } to { opacity:1; transform:none; } }
+
+  /* ── tables ───────────────────────────────────────────────────────────── */
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td.c { white-space:nowrap; }
+  td code { white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  .yes { color:var(--ok-fg); font-weight:600; }
+  .no { color:var(--bad-fg); font-weight:600; }
+  .part { color:var(--warn-fg); font-weight:600; }
+
+  /* ── chrome bits for option panels ────────────────────────────────────── */
+  .filterbar { display:flex; align-items:center; gap:var(--space-1); padding:var(--space-2) var(--space-2) var(--space-2); flex-wrap:wrap; }
+  .chip { font:600 var(--fs-chip) var(--sans); color:var(--text3); background:transparent; border:1px solid var(--line-soft); border-radius:999px; padding:2px 9px; cursor:pointer; }
+  .chip:hover { color:var(--text2); border-color:var(--line); }
+  .chip.on { color:var(--accent); background:var(--accent-soft); border-color:transparent; }
+  .chip .n { opacity:.65; margin-left:3px; font-weight:500; }
+  .scopesel { margin-left:auto; font:500 var(--fs-chip) var(--sans); color:var(--text3); background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:2px 6px; }
+  .collapsed { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-3); color:var(--text3); font:600 var(--fs-chip) var(--sans); cursor:pointer; }
+  .collapsed:hover { color:var(--text2); }
+
+  .pin { border:1px solid var(--warn-soft); background:linear-gradient(0deg,var(--warn-soft),var(--warn-soft)),var(--bg1); border-radius:var(--r-sm); padding:var(--space-1); margin-bottom:var(--space-2); }
+
+  .desc { color:var(--text3); font-size:var(--fs-sm); margin:var(--space-1) 0 var(--space-3); min-height:72px; }
+  .desc b { color:var(--text2); font-weight:600; }
+
+  .btn { background:var(--accent); color:var(--accent-ink); border:none; border-radius:var(--r-sm); padding:5px 13px; font:600 var(--fs-sm) var(--sans); cursor:pointer; }
+  .btn.ghost { background:transparent; color:var(--text2); border:1px solid var(--line); }
+  .toolbar { display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-4); }
+  .toolbar .hint { color:var(--text3); font-size:var(--fs-sm); }
+
+  .tip { position:relative; border-bottom:1px dotted var(--line); }
+  .tipbox { position:absolute; left:0; top:calc(100% + 5px); z-index:5; background:var(--bg3); border:1px solid var(--line); border-radius:var(--r-sm); box-shadow:var(--shadow); padding:6px 9px; font:500 var(--fs-chip)/1.5 var(--sans); color:var(--text2); white-space:nowrap; display:none; }
+  .tipdemo:hover .tipbox, .tipdemo.open .tipbox { display:block; }
+
+  .pick { margin-top:var(--space-4); padding:var(--space-3) var(--space-4); border-left:2px solid var(--accent); background:var(--accent-soft); border-radius:0 var(--r-sm) var(--r-sm) 0; color:var(--text2); font-size:var(--fs-sm); max-width:92ch; }
+  .pick b { color:var(--text); }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation:none !important; transition:none !important; }
+    .spin { border-top-color:var(--accent); border-color:var(--accent-soft); }
+  }
+
+  /* ── #2b omni search ──────────────────────────────────────────────────── */
+  .searchwrap { padding:var(--space-2); }
+  .searchfield { display:flex; align-items:center; gap:var(--space-2); background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:4px var(--space-2); }
+  .searchfield:focus-within { border-color:var(--accent); }
+  .searchfield .mag { color:var(--text3); font-size:11px; }
+  .searchfield input { flex:1; min-width:0; background:transparent; border:none; outline:none; color:var(--text); font:500 var(--fs-sm) var(--sans); }
+  .searchfield input::placeholder { color:var(--text3); }
+  .searchfield .kbd { flex:none; color:var(--text3); font:500 9.5px var(--mono); border:1px solid var(--line-soft); border-radius:3px; padding:0 4px; }
+  .searchfield .clear { flex:none; background:none; border:none; color:var(--text3); cursor:pointer; font-size:12px; padding:0 2px; display:none; }
+  .searchfield.has .clear { display:block; }
+  .suggests { display:flex; flex-wrap:wrap; gap:var(--space-1); padding:var(--space-2) var(--space-2) 0; }
+  .suggests:empty { display:none; }
+  .sug { font:600 var(--fs-chip) var(--sans); color:var(--text2); background:var(--bg2); border:1px solid var(--line-soft); border-radius:999px; padding:2px 9px; cursor:pointer; }
+  .sug:hover { border-color:var(--accent); color:var(--accent); }
+  .sug .k { color:var(--text3); font-weight:500; }
+  .sug .n { color:var(--text3); font-weight:500; margin-left:4px; }
+  mark { background:var(--accent-soft); color:var(--accent); border-radius:2px; padding:0 1px; }
+  .why { padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .why .k { opacity:.7; }
+  .qempty { padding:var(--space-4) var(--space-3); color:var(--text3); font-size:var(--fs-sm); text-align:center; }
+  .qcount { padding:var(--space-2) var(--space-3) var(--space-1); color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.04em; text-transform:uppercase; }
+
+  /* ── stability demo ───────────────────────────────────────────────────── */
+  .stepper { display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-4); flex-wrap:wrap; }
+  .steplabel { color:var(--text2); font-size:var(--fs-sm); }
+  .steplabel b { color:var(--text); }
+  .moved { animation:moved-flash 1.2s ease-out; }
+  @keyframes moved-flash { 0% { box-shadow:0 0 0 2px var(--bad); } 70% { box-shadow:0 0 0 2px var(--bad); } 100% { box-shadow:0 0 0 0 transparent; } }
+  .settled { animation:settle-flash 1.2s ease-out; }
+  @keyframes settle-flash { 0% { box-shadow:0 0 0 2px var(--ok); } 70% { box-shadow:0 0 0 2px var(--ok); } 100% { box-shadow:0 0 0 0 transparent; } }
+  .movecount { font:600 var(--fs-chip) var(--sans); border-radius:999px; padding:2px 9px; }
+  .movecount.bad { color:var(--bad-fg); background:var(--bad-soft); }
+  .movecount.good { color:var(--ok-fg); background:var(--ok-soft); }
+  .pending { display:flex; align-items:center; gap:6px; padding:var(--space-1) var(--space-3); color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .pending .arrow { color:var(--accent); }
+  .track { outline:1px dashed var(--info); outline-offset:1px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="intro">
+    <h1>Session rail — status legibility (v2)</h1>
+    <p>Three asks, one surface: <code>ui/src/features/sessions/rail/SessionRail.tsx</code> + <code>railGroups.ts</code>. Card chrome itself was settled in <code>docs/mockups/sessions-ux.html</code> (Option A, quiet card) and is left alone here — everything below adds <i>information</i>, not controls.</p>
+    <ul>
+      <li><b>#1</b> A live status line under the name, so "the agent is working" is visible at a glance.</li>
+      <li><b>#2</b> Something better than Active / Recent, which groups by "a child process exists".</li>
+      <li><b>#3</b> Datetime initiated and datetime of last response.</li>
+    </ul>
+    <p style="margin-top:var(--space-3)">The last section is the one to read before estimating: part of #1 needs a small backend signal, the rest of all three is frontend-only with data the rail already has.</p>
+  </header>
+
+  <!-- ══════════════════════════════════════ #1 ══════════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">#1</span> Status line <span class="sub">a second line under the name: spinner + what the agent is doing + elapsed</span></h2>
+    <div class="body">
+      <p class="lead"><b>The problem today:</b> a card carries a name, a dot, open-work chips, and (paused only) a summary teaser. The dot is <code>dotState()</code> — green whenever <code>session.activity === "active"</code>, which means "a provider child process is alive", not "the agent is doing something". A session that has been sitting at an empty prompt for an hour and a session eight tool calls deep into a turn render <i>identically</i>. The only place "working" is visible is inside the open conversation (<code>WorkingIndicator</code>), i.e. for exactly one session at a time.</p>
+
+      <div class="toolbar">
+        <button class="btn" onclick="replay()">▶ Replay live turn</button>
+        <span class="hint">The right-hand rail runs a scripted turn: send → thinking → tools → permission park → done. Left shows what you'd see today.</span>
+      </div>
+
+      <div class="cols2">
+        <div>
+          <div class="rowlabel bad">Today — state-blind</div>
+          <div class="railpanel">
+            <div class="grouphdr">Active <span class="n">· 3</span></div>
+            <div class="scard sel">
+              <div class="top"><span class="dot on"></span><span class="nm">goose ACP transcript gap</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">electron self-heal reinstall</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span></div>
+            </div>
+            <div class="grouphdr">Recent</div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span></div>
+              <div class="summ">Split agent identity from tool intent; resolver…</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">retro: conversation UX</span></div>
+              <div class="metarow"><span class="open">2 blocked</span></div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">Three green dots. One is mid-turn, one is waiting on an approval it can't tell you about, one is idle. Same card.</p>
+        </div>
+
+        <div>
+          <div class="rowlabel good">Proposed — status line + state color</div>
+          <div class="railpanel" id="liverail">
+            <div class="grouphdr work">Working <span class="n">· 1</span></div>
+            <div class="scard sel" id="c1">
+              <div class="top"><span class="dot work" id="c1dot"></span><span class="nm">goose ACP transcript gap</span><span class="when" title="last response 2026-09-27 14:08:41">now</span></div>
+              <div class="status working" id="c1s"><span class="spin"></span><span class="lbl">Thinking…</span><span class="el">4s</span></div>
+            </div>
+            <div class="grouphdr attn">Needs you <span class="n">· 1</span></div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">electron self-heal reinstall</span><span class="when" title="last response 2026-09-27 14:02:10">6m</span></div>
+              <div class="status needs"><span class="glyph bell">▲</span><span class="lbl">Needs approval · Bash</span><span class="el">2m</span></div>
+            </div>
+            <div class="grouphdr">Idle <span class="n">· 3</span></div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when" title="last response 2026-09-27 13:54:02">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span><span class="when" title="last response 2026-09-26 18:31:55">19h</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping · wakes on send</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot bad"></span><span class="nm">retro: conversation UX</span><span class="when" title="last response 2026-09-27 11:20:44">3h</span></div>
+              <div class="status bad"><span class="glyph">✕</span><span class="lbl">Crashed · 2 blocked tasks</span></div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">One line, one clause, ellipsis-truncated — never wraps, so card height is fixed and the rail doesn't reflow as states change.</p>
+        </div>
+      </div>
+
+      <h3 style="margin:var(--space-5) 0 var(--space-2); font-size:var(--fs-ui); font-weight:650">State vocabulary</h3>
+      <p class="note" style="margin-bottom:var(--space-3)">Precedence top to bottom: the first state that applies wins, so an approval park always beats "working" and a crash always beats everything.</p>
+      <table>
+        <tr><th>State</th><th>Dot</th><th>Line</th><th>Tone</th><th>Signal it's derived from</th></tr>
+        <tr>
+          <td class="c">crashed</td>
+          <td class="c"><span class="dot bad" style="display:inline-block"></span></td>
+          <td><span class="status bad" style="padding:0"><span class="glyph">✕</span><span class="lbl">Crashed · reopen to restart</span></span></td>
+          <td class="c">bad</td>
+          <td><code>session.crashed</code> <span class="yes">have</span></td>
+        </tr>
+        <tr>
+          <td class="c">needs you</td>
+          <td class="c"><span class="dot attn" style="display:inline-block"></span></td>
+          <td><span class="status needs" style="padding:0"><span class="glyph">▲</span><span class="lbl">Needs approval · Bash</span></span></td>
+          <td class="c">warn</td>
+          <td><code>session.permission_requested</code> / <code>_resolved</code> <span class="yes">have</span></td>
+        </tr>
+        <tr>
+          <td class="c">working · thinking</td>
+          <td class="c"><span class="dot work" style="display:inline-block"></span></td>
+          <td><span class="status working" style="padding:0"><span class="spin"></span><span class="lbl">Thinking…</span><span class="el">12s</span></span></td>
+          <td class="c">accent</td>
+          <td><code>session.thinking</code> <span class="part">have (block-granular, lands after the block)</span></td>
+        </tr>
+        <tr>
+          <td class="c">working · tool</td>
+          <td class="c"><span class="dot work" style="display:inline-block"></span></td>
+          <td><span class="status working" style="padding:0"><span class="spin"></span><span class="lbl">Running bash · make check</span><span class="el">31s</span></span></td>
+          <td class="c">accent</td>
+          <td>tool title — <span class="no">needs a signal</span> (see plumbing)</td>
+        </tr>
+        <tr>
+          <td class="c">working · subagents</td>
+          <td class="c"><span class="dot work" style="display:inline-block"></span></td>
+          <td><span class="status working" style="padding:0"><span class="spin"></span><span class="lbl">3 subagents running</span><span class="el">2m</span></span></td>
+          <td class="c">accent</td>
+          <td><code>session.subagent_task</code> phases <span class="yes">have</span></td>
+        </tr>
+        <tr>
+          <td class="c">working · compacting</td>
+          <td class="c"><span class="dot work" style="display:inline-block"></span></td>
+          <td><span class="status working" style="padding:0"><span class="spin"></span><span class="lbl">Compacting context…</span></span></td>
+          <td class="c">accent</td>
+          <td><code>compact</code> stream event <span class="no">data-plane only today</span></td>
+        </tr>
+        <tr>
+          <td class="c">done · your turn</td>
+          <td class="c"><span class="dot on" style="display:inline-block"></span></td>
+          <td><span class="status done" style="padding:0"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></span></td>
+          <td class="c">ok</td>
+          <td><code>session.turn_ended</code> while activity = active <span class="yes">have</span></td>
+        </tr>
+        <tr>
+          <td class="c">idle · live</td>
+          <td class="c"><span class="dot on" style="display:inline-block"></span></td>
+          <td><span class="status idle" style="padding:0"><span class="glyph">◦</span><span class="lbl">Ready</span></span></td>
+          <td class="c">muted</td>
+          <td>activity = active, no turn seen <span class="yes">have</span></td>
+        </tr>
+        <tr>
+          <td class="c">sleeping</td>
+          <td class="c"><span class="dot off" style="display:inline-block"></span></td>
+          <td><span class="status idle" style="padding:0"><span class="glyph">◦</span><span class="lbl">Sleeping · wakes on send</span></span></td>
+          <td class="c">muted</td>
+          <td>activity = inactive <span class="yes">have</span></td>
+        </tr>
+      </table>
+      <p class="note" style="margin-top:var(--space-3)"><b>Accessibility / motion:</b> the status line is the card's <code>role="status"</code> region, so a state change is announced once rather than the name being re-read; the spinner is decorative (<code>aria-hidden</code>) and under <code>prefers-reduced-motion</code> degrades to a static accent ring — colour and text carry the state on their own, matching <code>WorkingIndicator</code>'s existing treatment. "Done · your turn" is a <b>sticky</b> state, not a flash: it holds until the session is opened or the next turn starts, which is what makes the rail usable as a "what came back while I was away" list.</p>
+      <p class="note"><b>Why a line and not just a colour:</b> the same ask ("is it still going?") was already answered inside the conversation pane by giving the indicator an elapsed counter and an activity ticker rather than a busier dot — see <code>ui/src/conversation/ChatRenderer/WorkingIndicator.tsx</code>. The rail line is that component's one-line sibling and should reuse its vocabulary (<code>toolTitle()</code>) verbatim so the two surfaces never disagree.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════ #2 ══════════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">#2</span> Grouping, filtering &amp; labels <span class="sub">Active / Recent means "a process exists" — useless in chat mode</span></h2>
+    <div class="body">
+      <p class="lead"><b>The problem today:</b> <code>groupSessions()</code> splits on <code>activity === "active"</code> and sorts each half by <code>updated_at</code>. With a live PTY that split is meaningful — a stream is either attached or it isn't. In chat mode it is an implementation detail: the child process is spun up and torn down by lifecycle rules the user never sees, a "Recent" session wakes transparently on the next send, and an "Active" session may have done nothing for an hour. Meanwhile the sort is right (recency), and none of the labels the rail <i>could</i> show — workspace, cwd, worktree branch, agent/persona, model — are shown at all. Three ways out, all keeping recency sort:</p>
+
+      <div class="cols3">
+        <!-- Option A -->
+        <div>
+          <div class="rowlabel">Option A · Attention buckets</div>
+          <div class="desc">Replace the two groups with three that answer "who needs me": <b>Needs you</b> (approval parked, crashed, blocked work), <b>Working</b> (turn in flight), <b>Idle</b> (everything else, live or sleeping, recency-sorted). Empty groups don't render. Status line does the per-card detail.</div>
+          <div class="railpanel">
+            <div class="grouphdr attn">Needs you <span class="n">· 2</span></div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">electron self-heal reinstall</span><span class="when">6m</span></div>
+              <div class="status needs"><span class="glyph bell">▲</span><span class="lbl">Needs approval · Bash</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot bad"></span><span class="nm">retro: conversation UX</span><span class="when">3h</span></div>
+              <div class="status bad"><span class="glyph">✕</span><span class="lbl">Crashed · 2 blocked tasks</span></div>
+            </div>
+            <div class="grouphdr work">Working <span class="n">· 1</span></div>
+            <div class="scard sel">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span><span class="when">now</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+            </div>
+            <div class="grouphdr">Idle <span class="n">· 2</span></div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span><span class="when">19h</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping</span></div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)"><b>+</b> zero new chrome, the grouping <i>is</i> the triage.<br><b>−</b> cards jump between groups mid-turn; a session you're reading can move under the cursor.</p>
+        </div>
+
+        <!-- Option B -->
+        <div>
+          <div class="rowlabel">Option B · Flat list + filter bar</div>
+          <div class="desc">One recency-sorted list, no groups at all. A compact filter bar on top (<b>All / Working / Needs you / Idle</b>, counts inline) plus a scope select for workspace. Every card gets a context line: <b>workspace · cwd basename</b>, or the worktree branch when the session is isolated.</div>
+          <div class="railpanel">
+            <div class="searchfield" style="margin:var(--space-1) var(--space-1) var(--space-2)">
+              <span class="mag">⌕</span><input placeholder="Search sessions…" readonly><span class="kbd">⌘K</span>
+            </div>
+            <div class="filterbar" style="padding-top:0">
+              <button class="chip on">All<span class="n">5</span></button>
+              <button class="chip">Working<span class="n">1</span></button>
+              <button class="chip">Needs you<span class="n">2</span></button>
+              <button class="chip">Idle<span class="n">2</span></button>
+            </div>
+            <div class="scard sel">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span><span class="when">now</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+              <div class="ctx" style="padding-left:16px">mads<span class="sep">·</span><span class="branch">wt/goose-acp</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot attn"></span><span class="nm">electron self-heal reinstall</span><span class="when">6m</span></div>
+              <div class="status needs"><span class="glyph bell">▲</span><span class="lbl">Needs approval · Bash</span></div>
+              <div class="ctx" style="padding-left:16px">mads<span class="sep">·</span>~/repo/mads</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+              <div class="ctx" style="padding-left:16px">mads<span class="sep">·</span>~/repo/mads</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot bad"></span><span class="nm">retro: conversation UX</span><span class="when">3h</span></div>
+              <div class="status bad"><span class="glyph">✕</span><span class="lbl">Crashed · 2 blocked tasks</span></div>
+              <div class="ctx" style="padding-left:16px">sidecar<span class="sep">·</span>~/repo/sidecar</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span><span class="when">19h</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping</span></div>
+              <div class="ctx" style="padding-left:16px">mads<span class="sep">·</span><span class="branch">wt/persona-split</span></div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)"><b>+</b> stable order, nothing moves; filtering scales past ~15 sessions.<br><b>−</b> new chrome in a 280px rail, and at rest (All) you're back to scanning for colour.</p>
+        </div>
+
+        <!-- Option C -->
+        <div>
+          <div class="rowlabel">Option C · Pin + flat tail <span style="color:var(--accent)">← lean</span></div>
+          <div class="desc">Only the group that earns its keep is a group: a <b>pinned "Needs you"</b> block at the top, rendered only when non-empty. Everything else is one recency list — a working session stays put and shows its spinner in place. Filters live behind the header chip row; context labels are <b>adaptive</b> (workspace shown only when the list spans more than one; branch only when isolated). Older than a day collapses into "Earlier".</div>
+          <div class="railpanel">
+            <div class="pin">
+              <div class="grouphdr attn" style="padding-bottom:2px">Needs you <span class="n">· 2</span></div>
+              <div class="scard" style="margin-bottom:2px">
+                <div class="top"><span class="dot attn"></span><span class="nm">electron self-heal reinstall</span><span class="when">6m</span></div>
+                <div class="status needs"><span class="glyph bell">▲</span><span class="lbl">Needs approval · Bash</span></div>
+              </div>
+              <div class="scard" style="margin-bottom:0">
+                <div class="top"><span class="dot bad"></span><span class="nm">retro: conversation UX</span><span class="when">3h</span></div>
+                <div class="status bad"><span class="glyph">✕</span><span class="lbl">Crashed · 2 blocked</span></div>
+              </div>
+            </div>
+            <div class="filterbar" style="padding-top:0">
+              <button class="chip on">All<span class="n">5</span></button>
+              <button class="chip">Working<span class="n">1</span></button>
+              <button class="chip">Idle<span class="n">2</span></button>
+            </div>
+            <div class="scard sel">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span><span class="when">now</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+              <div class="ctx" style="padding-left:16px"><span class="branch">wt/goose-acp</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="collapsed">▸ Earlier <span class="n" style="opacity:.6">· 1</span></div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)"><b>+</b> the one bucket worth interrupting for is pinned; nothing else reorders itself out from under you.<br><b>−</b> two list idioms in one rail (pinned block + flat tail).</p>
+        </div>
+      </div>
+
+      <h3 style="margin:var(--space-5) 0 var(--space-2); font-size:var(--fs-ui); font-weight:650">Labels we already have and don't use</h3>
+      <p class="note" style="margin-bottom:var(--space-3)">All of these are on the <code>Session</code> record the rail is already handed — no fetch, no backend work. The constraint isn't availability, it's that a 280px card can carry about <b>two</b> before it stops being scannable, so the rest belong in the hover tooltip.</p>
+      <table>
+        <tr><th>Field</th><th>Renders as</th><th>Worth a resting card?</th></tr>
+        <tr><td class="c"><code>workspace</code></td><td>"mads" — it's a name, not an id (no lookup needed)</td><td>Adaptive: only when the visible list spans &gt;1 workspace</td></tr>
+        <tr><td class="c"><code>cwd</code></td><td><code>~/repo/mads</code>, home-collapsed, basename-first on overflow</td><td>Only when it differs from the workspace's primary repo</td></tr>
+        <tr><td class="c"><code>worktree_branch</code></td><td><code>wt/goose-acp</code> in mono — also the existing "has unmerged work" flag</td><td><b>Yes</b> — isolation is the thing you most often mean to check</td></tr>
+        <tr><td class="c"><code>agent</code></td><td>persona name ("reviewer", "planner")</td><td>Only when non-default; otherwise noise on every card</td></tr>
+        <tr><td class="c"><code>model</code> / <code>provider</code></td><td>"opus 5", "goose"</td><td>Tooltip — matters when picking, not when scanning</td></tr>
+        <tr><td class="c"><code>trust</code> / <code>isolation</code></td><td>existing pill vocabulary</td><td>Tooltip (and it's already in the workspace header)</td></tr>
+        <tr><td class="c"><code>tags</code>, <code>retro_id</code></td><td>"retro" marker</td><td>Yes, as a prefix glyph — retro sessions read differently</td></tr>
+        <tr><td class="c"><code>last_usage</code></td><td>context occupancy % — a session near its ceiling is about to compact</td><td>Tooltip, or a hairline meter at the card's bottom edge</td></tr>
+      </table>
+
+      <div class="pick"><b>Lean: B — and the reason is the stability constraint below, not the chrome.</b> A is the best pure triage view, but its grouping <i>is</i> its ordering, so live state physically relocates cards: the session you just woke rises into Working and then drops into Idle when the turn ends. C's pin is a smaller dose of the same disease — a card enters the pin on an approval request and leaves it on resolve, i.e. it moves twice for reasons you didn't ask for. B is the only option where <b>status is painted on the card and never determines where the card is</b>. What C's pin was buying — "don't make me hunt for the session that needs me" — is recovered by the filter bar's counts (<code>Needs you 2</code>): the triage lives in a <i>badge you can click</i>, not in the list order. Either way <b>"Active / Recent" stops being the vocabulary</b>; if a two-way split survives at all it should read <b>Live / Sleeping</b>, which is what it has always actually meant.</div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════ #2b ═════════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">#2b</span> Omni search <span class="sub">one field instead of a workspace picker — try it, it really searches</span></h2>
+    <div class="body">
+      <p class="lead">A picker can only express the axis it was built for, and it costs a permanent control in a 280px rail to express it. A single field matches whatever you happen to remember — the session's name, the workspace, the directory, the branch — and disappears into a placeholder when you're not using it.</p>
+
+      <p class="note" style="margin-bottom:var(--space-3)"><b>One correction to the premise, because it changes the field list:</b> a workspace's name is <i>not</i> derived from its directory. It's a free-text field in <code>WorkspaceEditor.tsx</code> (the only validation is non-empty), and a workspace holds a <i>list</i> of repos with one marked primary — so it may have several directories, or a name like "Client work" that matches none of them. Convention makes name ≈ repo basename most of the time, but search can't rely on it. So the matcher indexes <b>four</b> fields per session — <code>name</code>, <code>workspace</code>, <code>cwd</code>, <code>worktree_branch</code> — and typing <code>mads</code> finds the session whether the workspace is called "mads" or "Main work". All four are already on the record the rail holds; this is a pure client-side filter, no endpoint.</p>
+
+      <div class="cols2">
+        <div>
+          <div class="rowlabel">Live demo — type anything</div>
+          <div class="railpanel">
+            <div class="searchwrap" style="padding-bottom:0">
+              <div class="searchfield" id="qfield">
+                <span class="mag" aria-hidden="true">⌕</span>
+                <input id="q" placeholder="Search sessions…" aria-label="Search sessions" autocomplete="off">
+                <button class="clear" id="qclear" title="Clear" aria-label="Clear search">✕</button>
+                <span class="kbd">⌘K</span>
+              </div>
+            </div>
+            <div class="suggests" id="qsug"></div>
+            <div id="qlist"></div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">Try <code>goose</code> (name), <code>sidecar</code> (workspace), <code>repo/mads</code> (cwd), <code>wt/</code> (branch), or <code>ui</code> — which hits a session whose workspace is called <b>Main work</b> but whose directory is <code>~/repo/mads-ui</code>. Suggestion chips commit a scope token; <code>workspace:mads</code> and <code>dir:~/repo</code> both work.</p>
+        </div>
+
+        <div>
+          <div class="rowlabel">Rules the demo is implementing</div>
+          <table>
+            <tr><th>Question</th><th>Answer</th></tr>
+            <tr><td class="c">Filter or jump-to?</td><td><b>Filter, in place.</b> The rail narrows; it doesn't get covered. A command-palette overlay is a second surface with its own selection model, and this list is already the result list.</td></tr>
+            <tr><td class="c">Where does autosuggest go?</td><td><b>The list is the autosuggest.</b> A dropdown in a 280px rail would obscure the very thing it's suggesting. The only overlay-ish affordance is the <b>scope chip row</b> — when your text matches a workspace or directory, it offers <code>workspace:mads</code> as a commitable token.</td></tr>
+            <tr><td class="c">Why did this match?</td><td>A match on anything other than the name prints its reason under the card (<span class="why"><span class="k">workspace</span> Main work</span>). Without it, typing <code>ui</code> and getting a session called "persona split" looks like a bug.</td></tr>
+            <tr><td class="c">Does it reach everything?</td><td><b>Yes — search bypasses the view.</b> Collapsed "Earlier", the idle tail, anything below the fold. A search that only searched what was already rendered would be worse than useless.</td></tr>
+            <tr><td class="c">Ranking</td><td>name prefix → name substring → workspace/dir/branch, ties broken by recency. <b>This is the one sanctioned reorder</b> (see below): you asked for relevance order by typing, and clearing the field restores the resting order exactly.</td></tr>
+            <tr><td class="c">Keyboard</td><td><code>⌘K</code> / <code>Ctrl-K</code> focuses, <code>↑</code><code>↓</code> walks results, <code>↵</code> opens the top hit, <code>Esc</code> clears then blurs. Typing never steals focus from the composer.</td></tr>
+            <tr><td class="c">Matching</td><td>Case-insensitive substring, per whitespace-separated term, AND across terms (<code>goose acp</code>). No fuzzy matching — fuzzy on short session names produces confident nonsense.</td></tr>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════ #2c ═════════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">#2c</span> The stability contract <span class="sub">"I don't want it to rise into Active and then fall out of sight"</span></h2>
+    <div class="body">
+      <p class="lead">This is the constraint that decides #2, so it's worth stating as a rule rather than leaving it implicit in an option. There are two separate forces that move a card, and only one of them is legitimate:</p>
+      <table style="margin-bottom:var(--space-4)">
+        <tr><th>Force</th><th>Moves a card because…</th><th>Verdict</th></tr>
+        <tr><td class="c">live state</td><td>the agent started a turn / parked on an approval / finished — i.e. the card changed <i>group</i></td><td><span class="no">never allowed to move a card</span> — it may only repaint it</td></tr>
+        <tr><td class="c">recency</td><td>you or the agent actually did something in that session</td><td><span class="part">allowed, but deferred</span> — and it only ever promotes</td></tr>
+      </table>
+
+      <p class="note" style="margin-bottom:var(--space-3)"><b>Three rules:</b> <b>(1) Status paints, never sorts.</b> Working / needs-you / done change the line, the dot and the tone in place — never the index. <b>(2) Order is settled, not live.</b> The rail renders from an order snapshot; a new ordering is computed but only <i>applied</i> at a quiet boundary — pointer leaves the rail, rail loses focus, or you change the search/filter. A pending re-settle shows as a one-line ghost ("2 sessions moved ↑") you can click, Gmail-style, rather than yanking rows out from under the cursor. <b>(3) The open session never moves</b>, full stop — even a settle leaves the selected card's index alone until you select something else.</p>
+
+      <div class="stepper">
+        <button class="btn" id="stepbtn">Next step ▸</button>
+        <button class="btn ghost" id="stepreset">Reset</button>
+        <span class="steplabel" id="steplabel"></span>
+      </div>
+      <p class="note" style="margin-bottom:var(--space-3)">Scenario: a normal-looking rail — two sessions parked on approvals, one mid-turn, three idle. You open <b>retro: conversation UX</b> — last touched three weeks ago, bottom of the list (dashed outline) — and send it a message. Watch that one card in both panels. Red flash = it moved on its own; green = a settle you invited.</p>
+
+      <div class="cols2">
+        <div>
+          <div class="rowlabel bad">Grouped by state (option A / C's pin) <span class="movecount bad" id="mcA">0 moves</span></div>
+          <div class="railpanel" id="stabA"></div>
+        </div>
+        <div>
+          <div class="rowlabel good">Flat + settled order (option B) <span class="movecount good" id="mcB">0 moves</span></div>
+          <div class="railpanel" id="stabB"></div>
+        </div>
+      </div>
+
+      <p class="note" style="margin-top:var(--space-4)"><b>What the panels show:</b> grouped, the card you are reading relocates <b>twice</b> for reasons you didn't initiate — up into Working the moment your message lands, then back down under the approval-parked and still-working sessions when the turn ends. That second move is exactly the "falls out of sight" failure, and it gets worse the busier the rail is: the drop is as deep as the groups above it are tall. Flat + settled, it moves <b>once</b>, to the top, and only after you've taken the pointer off the rail — and if it were the selected session, rule 3 would hold it even then, until you selected away.</p>
+
+      <p class="note"><b>Implementation note:</b> this is a <code>useRef</code> holding <code>orderedIds</code> plus a <code>pendingOrder</code>, recomputed on the session list changing and applied on <code>mouseleave</code>/<code>blur</code>/filter change. Sessions that are genuinely <i>new</i> (or newly matched by a search) splice in at their sorted position immediately — appearing isn't moving, and nothing above them shifts by more than one row. Deleted sessions leave immediately too. It's maybe 30 lines in <code>SessionRail</code>, and it's worth writing once because every future "surface X in the rail" idea will otherwise re-introduce the jumping.</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════ #3 ══════════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">#3</span> Initiated &amp; last response <span class="sub">both timestamps exist on the record today</span></h2>
+    <div class="body">
+      <p class="lead"><code>created_at</code> is exactly "datetime initiated". "Datetime of last response" is <i>approximately</i> <code>updated_at</code>: the runner persists <code>last_usage</code> on every turn end, which bumps it — but so does a rename, a summary write, or an activity flip, so it drifts from "last reply" in ways a user will notice ("last reply 4s ago" on a session that only got auto-titled). Three placements, then the honest fix.</p>
+
+      <div class="cols3">
+        <div>
+          <div class="rowlabel">V1 · Relative, row-top right</div>
+          <div class="desc">One relative stamp per card, right-aligned on the name row, mono + tabular so the column lines up. Full detail on hover. <b>Always visible.</b></div>
+          <div class="railpanel">
+            <div class="scard sel tipdemo">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span><span class="when tip">now</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+              <div class="tipbox">Started Fri 26 Sep, 09:14<br>Last reply just now<br>47 turns · 62% context</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span><span class="when">19h</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping</span></div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">Cheapest, and it doubles as the sort key made visible. Hover the top card's stamp.</p>
+        </div>
+
+        <div>
+          <div class="rowlabel">V2 · Both, in a footer line</div>
+          <div class="desc">A third line spelling both out. Absolute for "started" (you look it up once), relative for "last reply" (you compare it constantly).</div>
+          <div class="railpanel">
+            <div class="scard sel">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+              <div class="ctx" style="padding-left:16px">started Fri 09:14<span class="sep">·</span>reply now</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+              <div class="ctx" style="padding-left:16px">started today 13:02<span class="sep">·</span>reply 14m ago</div>
+            </div>
+            <div class="scard">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping</span></div>
+              <div class="ctx" style="padding-left:16px">started 24 Sep<span class="sep">·</span>reply 19h ago</div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">Complete, but it's a 4-line card and the line competes with the context labels from #2 for the same slot.</p>
+        </div>
+
+        <div>
+          <div class="rowlabel">V3 · V1 + footer on hover/selected <span style="color:var(--accent)">← lean</span></div>
+          <div class="desc">V1's stamp always; V2's full footer appears on the <b>hovered or selected</b> card only. Resting cards stay 2 lines; the card you're actually considering tells you everything.</div>
+          <div class="railpanel" id="v3">
+            <div class="scard sel">
+              <div class="top"><span class="dot work"></span><span class="nm">goose ACP transcript gap</span><span class="when">now</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · go test ./…</span><span class="el">18s</span></div>
+              <div class="ctx" style="padding-left:16px">started Fri 09:14<span class="sep">·</span><span class="branch">wt/goose-acp</span></div>
+            </div>
+            <div class="scard v3h">
+              <div class="top"><span class="dot on"></span><span class="nm">ports 17373 triage</span><span class="when">14m</span></div>
+              <div class="status done"><span class="glyph">✓</span><span class="lbl">Done · your turn</span></div>
+              <div class="ctx v3only" style="padding-left:16px">started today 13:02<span class="sep">·</span>47 turns</div>
+            </div>
+            <div class="scard v3h">
+              <div class="top"><span class="dot off"></span><span class="nm">Launchpad persona split</span><span class="when">19h</span></div>
+              <div class="status idle"><span class="glyph">◦</span><span class="lbl">Sleeping</span></div>
+              <div class="ctx v3only" style="padding-left:16px">started 24 Sep<span class="sep">·</span>12 turns</div>
+            </div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)">Hover the lower two cards. The reveal is opacity-only — the line's height is reserved, so the rail never reflows under the pointer.</p>
+        </div>
+      </div>
+
+      <p class="note" style="margin-top:var(--space-4)"><b>Formatting rules</b> (one helper, shared with the rest of the app): &lt;60s → "now"; &lt;60m → "14m"; today → "13:02"; this week → "Fri 09:14"; older → "24 Sep". Absolute ISO-ish in the <code>title</code> so it's always recoverable. Relative labels re-render on a single shared 30s tick, not one timer per card.</p>
+      <p class="note"><b>The honest fix:</b> add <code>last_turn_at</code> to the session record, stamped where the runner already persists <code>last_usage</code> on turn end (<code>services/session/internal/runner/runner.go</code>'s <code>persistUsage</code>). It's a couple of lines, it makes "last response" mean what it says, and it gives the rail a correct sort key that a rename can't perturb. Until then <code>updated_at</code> is a fair v1 as long as the label reads <b>"last activity"</b>, not "last reply".</p>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════ plumbing ════════════════════ -->
+  <section class="block">
+    <h2><span class="tag">wiring</span> What the rail can know today <span class="sub">read this before estimating #1</span></h2>
+    <div class="body">
+      <p class="lead">The rail is <b>one</b> component watching <b>all</b> sessions, so every signal it uses must ride the shared control-plane stream. <code>ui/src/router/events.ts</code> multiplexes one <code>EventSource</code> for the whole window and filters server-side <b>by type only</b> — which is perfect here (a new type costs nothing, and no reconnect on session switch). The per-session data-plane <code>/output</code> stream is the opposite: one connection each, and the ~6-socket-per-origin cap is exactly why the rail must never open one per card (see that file's own comment). That single fact decides the phasing.</p>
+      <table>
+        <tr><th>Rail wants</th><th>Control-plane today</th><th>Verdict</th></tr>
+        <tr><td>a turn started</td><td>nothing — <code>session.turn_ended</code> has no counterpart</td><td class="c"><span class="no">missing</span></td></tr>
+        <tr><td>a turn ended</td><td><code>session.turn_ended</code> (skipped when the turn produced no delta)</td><td class="c"><span class="part">mostly</span></td></tr>
+        <tr><td>current tool + title</td><td><code>session.tool_status_changed</code> carries <code>tool_use_id</code> and status — <b>no name</b>; names only ride the data-plane stream</td><td class="c"><span class="no">missing</span></td></tr>
+        <tr><td>thinking</td><td><code>session.thinking</code> — whole blocks, appended after the block; token ticks are deliberately live-only</td><td class="c"><span class="part">laggy</span></td></tr>
+        <tr><td>awaiting approval</td><td><code>session.permission_requested</code> → <code>_resolved</code>, both persisted for exactly this reason</td><td class="c"><span class="yes">have</span></td></tr>
+        <tr><td>subagents running</td><td><code>session.subagent_task</code>, every phase incl. progress</td><td class="c"><span class="yes">have</span></td></tr>
+        <tr><td>process up/down, crash</td><td><code>session.activity_changed</code>, <code>session.crashed</code></td><td class="c"><span class="yes">have</span></td></tr>
+        <tr><td>blocked work</td><td><code>useOpenTaskCounts()</code> already feeds the rail</td><td class="c"><span class="yes">have</span></td></tr>
+        <tr><td>timestamps</td><td><code>created_at</code> exact; <code>updated_at</code> ≈ last turn end (plus rename/summary noise)</td><td class="c"><span class="part">good enough</span></td></tr>
+      </table>
+
+      <p class="note" style="margin-top:var(--space-4)"><b>The missing piece is small and already exists in-process.</b> <code>Runner.busy</code> (<code>services/session/internal/runner/runner.go</code>) is the authoritative "a turn is in flight" flag — set on <code>Send</code>, cleared in <code>onTurnEnd</code>. It simply never leaves the session process. Proposal:</p>
+      <ul class="note" style="margin:var(--space-2) 0 0 var(--space-4)">
+        <li>New event <code>session.agent_state</code>, payload <code>{state, label, since}</code> — state from the enum above, <code>label</code> built by the same enrichment that already produces <code>ToolUse.title</code> (so the rail line and <code>WorkingIndicator</code>'s ticker can't disagree). Emitted on transitions only, coalesced (~500ms floor) so a tool-heavy turn doesn't spam the log — and skipped for parent-tagged subagent events, which roll up as a count instead.</li>
+        <li>Mirror the latest onto the session record (<code>agent_state</code> + <code>last_turn_at</code>) so a cold page load and an SSE reconnect render correctly from <code>GET /sessions</code> without replaying events. Without the mirror, a refresh mid-turn shows every card idle.</li>
+        <li>Frontend: <code>useSessionAgentState()</code> alongside <code>useOpenTaskCounts()</code> (same shape — one map keyed by session id), plus <code>statusOf(session, agentState, breakdown)</code> in <code>railGroups.ts</code> next to <code>dotState()</code>. <code>SessionRail</code> renders one new <code>&lt;div class=status&gt;</code>; no change to its props contract beyond the new map.</li>
+      </ul>
+
+      <h3 style="margin:var(--space-5) 0 var(--space-2); font-size:var(--fs-ui); font-weight:650">Suggested phasing</h3>
+      <table>
+        <tr><th>Phase</th><th>Scope</th><th>Touches</th></tr>
+        <tr>
+          <td class="c"><b>0</b> — frontend only</td>
+          <td>#3 in full (V3, labelled "last activity"); #2's chosen grouping + filter chips + adaptive labels; #1's status line limited to the states already on the wire — needs-approval, crashed, subagents running, done · your turn, ready, sleeping. Notably this already fixes the complaint's sharp edge: the three identical green dots become "needs approval / done · your turn / ready".</td>
+          <td class="c"><code>SessionRail.tsx</code>, <code>railGroups.ts</code>, <code>SessionRail.module.css</code>, one new hook</td>
+        </tr>
+        <tr>
+          <td class="c"><b>1</b> — thin backend</td>
+          <td><code>session.agent_state</code> + record mirror + <code>last_turn_at</code>. Upgrades the line to true live detail ("Running bash · make check", "Thinking…", elapsed) and makes "last reply" honest.</td>
+          <td class="c"><code>pkg/contracts</code>, session runner, data store, the new hook</td>
+        </tr>
+        <tr>
+          <td class="c"><b>2</b> — optional</td>
+          <td>Context-occupancy hairline from <code>last_usage</code>; "Done · your turn" as an OS notification hook; per-workspace collapse memory.</td>
+          <td class="c">rail + settings</td>
+        </tr>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  // ── #1: scripted live turn on the right-hand rail ──────────────────────
+  // Each step swaps the status line's tone + label, mirroring what the real
+  // component would render as events land. Elapsed ticks from the send.
+  var steps = [
+    { at:    0, tone:"working", spin:true,  label:"Sending…",                        dot:"work" },
+    { at:  600, tone:"working", spin:true,  label:"Thinking…",                       dot:"work" },
+    { at: 3200, tone:"working", spin:true,  label:"Reading railGroups.ts",           dot:"work" },
+    { at: 5000, tone:"working", spin:true,  label:"Searching · dotState",            dot:"work" },
+    { at: 7000, tone:"working", spin:true,  label:"Editing SessionRail.module.css",  dot:"work" },
+    { at: 9200, tone:"needs",   glyph:"▲",  label:"Needs approval · Bash",           dot:"attn", freeze:true },
+    { at:13000, tone:"working", spin:true,  label:"Running bash · npm test",         dot:"work" },
+    { at:17000, tone:"working", spin:true,  label:"2 subagents running",             dot:"work" },
+    { at:20000, tone:"done",    glyph:"✓",  label:"Done · your turn",                dot:"on",   stop:true }
+  ];
+  var timers = [], tick = null, t0 = 0, frozenAt = null;
+
+  function paint(step) {
+    var line = document.getElementById("c1s");
+    var dot  = document.getElementById("c1dot");
+    line.className = "status " + step.tone;
+    line.setAttribute("data-anim", String(Date.now()));
+    var lead = step.spin
+      ? '<span class="spin" aria-hidden="true"></span>'
+      : '<span class="glyph' + (step.tone === "needs" ? " bell" : "") + '" aria-hidden="true">' + (step.glyph || "◦") + "</span>";
+    line.innerHTML = lead + '<span class="lbl">' + step.label + '</span><span class="el" id="c1el"></span>';
+    dot.className = "dot " + step.dot;
+    // A parked permission stops the clock on the agent and starts it on you —
+    // the elapsed figure that matters is how long it has been waiting.
+    frozenAt = step.freeze ? Date.now() : null;
+    if (step.stop) { clearInterval(tick); tick = null; var el = document.getElementById("c1el"); if (el) el.textContent = ""; }
+  }
+
+  function paintElapsed() {
+    var el = document.getElementById("c1el");
+    if (!el) return;
+    var from = frozenAt !== null ? frozenAt : t0;
+    var s = Math.floor((Date.now() - from) / 1000);
+    el.textContent = s > 0 ? (frozenAt !== null ? "waiting " + s + "s" : s + "s") : "";
+  }
+
+  function replay() {
+    timers.forEach(clearTimeout); timers = [];
+    clearInterval(tick);
+    t0 = Date.now(); frozenAt = null;
+    steps.forEach(function (step) { timers.push(setTimeout(function () { paint(step); }, step.at)); });
+    tick = setInterval(paintElapsed, 250);
+  }
+  replay();
+
+  // ── #3 V3: hover/selected reveals the footer, height always reserved ───
+  var v3 = document.getElementById("v3");
+  v3.querySelectorAll(".v3only").forEach(function (n) { n.style.opacity = "0"; n.style.transition = "opacity 120ms"; });
+  v3.querySelectorAll(".v3h").forEach(function (card) {
+    card.addEventListener("mouseenter", function () { card.querySelector(".v3only").style.opacity = "1"; });
+    card.addEventListener("mouseleave", function () { card.querySelector(".v3only").style.opacity = "0"; });
+  });
+
+  // ── option B/C filter chips: illustrative only, one selected per bar ────
+  document.querySelectorAll(".filterbar").forEach(function (bar) {
+    bar.querySelectorAll(".chip").forEach(function (chip) {
+      chip.addEventListener("click", function () {
+        bar.querySelectorAll(".chip").forEach(function (c) { c.classList.remove("on"); });
+        chip.classList.add("on");
+      });
+    });
+  });
+
+  // ══ #2b: omni search over the four fields the rail already holds ═══════
+  // name / workspace / cwd / worktree_branch. Workspace is free text (it is
+  // NOT derived from the repo dir), which is exactly why "Main work" below
+  // lives in ~/repo/mads-ui and must still be findable by typing "mads".
+  var SESSIONS = [
+    { name:"goose ACP transcript gap",     ws:"mads",      cwd:"~/repo/mads",     branch:"wt/goose-acp",     when:"now", st:{tone:"working",spin:true,label:"Running bash · go test ./…",el:"18s"}, dot:"work" },
+    { name:"electron self-heal reinstall", ws:"mads",      cwd:"~/repo/mads",     branch:"",                 when:"6m",  st:{tone:"needs",glyph:"▲",label:"Needs approval · Bash",el:"2m"},      dot:"attn" },
+    { name:"ports 17373 triage",           ws:"mads",      cwd:"~/repo/mads",     branch:"",                 when:"14m", st:{tone:"done",glyph:"✓",label:"Done · your turn"},                    dot:"on" },
+    { name:"token meter overcount",        ws:"mads",      cwd:"~/repo/mads",     branch:"",                 when:"2h",  st:{tone:"done",glyph:"✓",label:"Done · your turn"},                    dot:"on" },
+    { name:"rail readability pass",        ws:"Main work", cwd:"~/repo/mads-ui",  branch:"",                 when:"5h",  st:{tone:"idle",glyph:"◦",label:"Sleeping"},                            dot:"off" },
+    { name:"retro: conversation UX",       ws:"sidecar",   cwd:"~/repo/sidecar",  branch:"",                 when:"3h",  st:{tone:"bad",glyph:"✕",label:"Crashed · 2 blocked tasks"},            dot:"bad" },
+    { name:"digest watcher backlog",       ws:"sidecar",   cwd:"~/repo/sidecar",  branch:"wt/digest",        when:"1d",  st:{tone:"idle",glyph:"◦",label:"Sleeping"},                            dot:"off" },
+    { name:"Launchpad persona split",      ws:"mads",      cwd:"~/repo/mads",     branch:"wt/persona-split", when:"19h", st:{tone:"idle",glyph:"◦",label:"Sleeping · wakes on send"},            dot:"off" }
+  ];
+
+  function esc(t) { return t.replace(/[&<>"]/g, function (c) { return { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]; }); }
+  function rx(t) { return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+  function hl(text, terms) {
+    var out = esc(text);
+    terms.forEach(function (t) {
+      if (!t) return;
+      out = out.replace(new RegExp("(" + rx(esc(t)) + ")", "ig"), "<mark>$1</mark>");
+    });
+    return out;
+  }
+  function statusHTML(st) {
+    var lead = st.spin ? '<span class="spin" aria-hidden="true"></span>'
+                       : '<span class="glyph' + (st.tone === "needs" ? " bell" : "") + '" aria-hidden="true">' + st.glyph + "</span>";
+    return '<div class="status ' + st.tone + '">' + lead + '<span class="lbl">' + st.label + "</span>"
+      + (st.el ? '<span class="el">' + st.el + "</span>" : "") + "</div>";
+  }
+
+  // One term matches if it hits any indexed field; terms AND together. A
+  // "workspace:" / "dir:" prefix pins the term to one field.
+  function matchOne(sess, term) {
+    var f = { name:sess.name, workspace:sess.ws, dir:sess.cwd, branch:sess.branch };
+    var pin = term.match(/^(workspace|dir|branch|name):(.*)$/);
+    var needle = (pin ? pin[2] : term).toLowerCase();
+    if (!needle) return null;
+    var fields = pin ? [pin[1]] : ["name", "workspace", "dir", "branch"];
+    var where = fields.filter(function (k) { return (f[k] || "").toLowerCase().indexOf(needle) >= 0; });
+    return where.length ? { where:where, needle:needle } : null;
+  }
+
+  function searchRows(query) {
+    var terms = query.trim().split(/\s+/).filter(Boolean);
+    if (!terms.length) return SESSIONS.map(function (s, i) { return { s:s, i:i, where:[], needles:[], rank:3 }; });
+    var out = [];
+    SESSIONS.forEach(function (s, i) {
+      var where = [], needles = [], rank = 3, ok = true;
+      terms.forEach(function (t) {
+        var m = matchOne(s, t);
+        if (!m) { ok = false; return; }
+        m.where.forEach(function (w) { if (where.indexOf(w) < 0) where.push(w); });
+        needles.push(m.needle);
+        var nm = s.name.toLowerCase();
+        var r = nm.indexOf(m.needle) === 0 ? 0 : nm.indexOf(m.needle) > 0 ? 1 : 2;
+        if (r < rank) rank = r;
+      });
+      if (ok) out.push({ s:s, i:i, where:where, needles:needles, rank:rank });
+    });
+    // relevance, then the resting recency order — the one sanctioned reorder
+    out.sort(function (a, b) { return a.rank - b.rank || a.i - b.i; });
+    return out;
+  }
+
+  function renderSearch() {
+    var q = document.getElementById("q").value;
+    var list = document.getElementById("qlist");
+    var sug = document.getElementById("qsug");
+    document.getElementById("qfield").classList.toggle("has", q.trim() !== "");
+
+    // scope suggestions: workspaces / dirs the raw text hits
+    sug.innerHTML = "";
+    var raw = q.trim().toLowerCase();
+    if (raw && raw.indexOf(":") < 0) {
+      var seen = {}, chips = [];
+      SESSIONS.forEach(function (s) {
+        [["workspace", s.ws], ["dir", s.cwd]].forEach(function (pair) {
+          var k = pair[0] + ":" + pair[1];
+          if (seen[k] || pair[1].toLowerCase().indexOf(raw) < 0) return;
+          seen[k] = 1;
+          var n = SESSIONS.filter(function (x) { return (pair[0] === "workspace" ? x.ws : x.cwd) === pair[1]; }).length;
+          chips.push('<button class="sug" data-q="' + esc(pair[0] + ":" + pair[1]) + '"><span class="k">' + pair[0] + ':</span>' + esc(pair[1]) + '<span class="n">' + n + "</span></button>");
+        });
+      });
+      sug.innerHTML = chips.slice(0, 3).join("");
+      sug.querySelectorAll(".sug").forEach(function (b) {
+        b.addEventListener("click", function () {
+          document.getElementById("q").value = b.getAttribute("data-q");
+          renderSearch();
+          document.getElementById("q").focus();
+        });
+      });
+    }
+
+    var rows = searchRows(q);
+    if (!rows.length) {
+      list.innerHTML = '<div class="qempty">No session matches <b>' + esc(q.trim()) + "</b>.<br>Searched name, workspace, directory and branch.</div>";
+      return;
+    }
+    var html = q.trim() ? '<div class="qcount">' + rows.length + " of " + SESSIONS.length + "</div>" : "";
+    rows.forEach(function (r) {
+      // One reason, not an inventory: workspace beats branch beats dir. Two
+      // reasons on a 280px card is noise — the question is only "why is this
+      // here", and the most specific answer that isn't the name wins.
+      var why = ["workspace", "branch", "dir"].filter(function (w) { return r.where.indexOf(w) >= 0; })[0];
+      var whyHTML = "";
+      if (why && r.where.indexOf("name") < 0) {
+        var v = why === "workspace" ? r.s.ws : why === "dir" ? r.s.cwd : r.s.branch;
+        whyHTML = '<div class="why"><span class="k">' + why + "</span> " + hl(v, r.needles) + "</div>";
+      }
+      html += '<div class="scard">'
+        + '<div class="top"><span class="dot ' + r.s.dot + '"></span><span class="nm">' + hl(r.s.name, r.needles) + '</span><span class="when">' + r.s.when + "</span></div>"
+        + statusHTML(r.s.st) + whyHTML + "</div>";
+    });
+    list.innerHTML = html;
+  }
+  document.getElementById("q").addEventListener("input", renderSearch);
+  document.getElementById("qclear").addEventListener("click", function () {
+    document.getElementById("q").value = ""; renderSearch(); document.getElementById("q").focus();
+  });
+  document.getElementById("q").addEventListener("keydown", function (e) {
+    if (e.key === "Escape") { e.target.value = ""; renderSearch(); }
+  });
+  document.addEventListener("keydown", function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); document.getElementById("q").focus(); }
+  });
+  renderSearch();
+
+  // ══ #2c: does the card you're reading move on its own? ═════════════════
+  var TARGET = "retro: conversation UX";
+  var STEPS = [
+    { label: "<b>At rest.</b> The 3-week-old session sits last in both panels (dashed outline)." },
+    { label: "<b>You open it and send a message.</b> Its turn is now in flight." },
+    { label: "<b>The turn ends.</b> It's idle again — but where did it land?" },
+    { label: "<b>You move the pointer off the rail.</b> The settled list applies its pending reorder." }
+  ];
+  var step = 0, lastA = null, lastB = null, movesA = 0, movesB = 0;
+
+  function stabData() {
+    // `mins` = minutes since last activity; every panel sorts by it, which is
+    // what the rail does today. Option A additionally sorts *within* each
+    // group — so the tracked card doesn't just leave Working, it lands under
+    // however many sessions are parked in the groups above it.
+    var base = [
+      { name:"electron self-heal reinstall", when:"6m",  mins:6,     st:{tone:"needs",glyph:"▲",label:"Needs approval · Bash"}, dot:"attn", group:"needs" },
+      { name:"pipeline merge conflict",      when:"9m",  mins:9,     st:{tone:"needs",glyph:"▲",label:"Needs approval · Write"},dot:"attn", group:"needs" },
+      { name:"goose ACP transcript gap",     when:"now", mins:1,     st:{tone:"working",spin:true,label:"Running bash · go test ./…",el:"18s"}, dot:"work", group:"working" },
+      { name:"ports 17373 triage",           when:"14m", mins:14,    st:{tone:"done",glyph:"✓",label:"Done · your turn"},       dot:"on",   group:"idle" },
+      { name:"token meter overcount",        when:"2h",  mins:120,   st:{tone:"done",glyph:"✓",label:"Done · your turn"},       dot:"on",   group:"idle" },
+      { name:"Launchpad persona split",      when:"19h", mins:1140,  st:{tone:"idle",glyph:"◦",label:"Sleeping"},               dot:"off",  group:"idle" },
+      { name:TARGET,                         when:"19d", mins:27360, st:{tone:"idle",glyph:"◦",label:"Sleeping"},               dot:"off",  group:"idle" }
+    ];
+    var t = base[6];
+    if (step === 1) { t.when = "now"; t.mins = 0; t.st = { tone:"working", spin:true, label:"Thinking…", el:"6s" }; t.dot = "work"; t.group = "working"; }
+    if (step >= 2)  { t.when = "now"; t.mins = 0; t.st = { tone:"done", glyph:"✓", label:"Done · your turn" }; t.dot = "on"; t.group = "idle"; }
+    return base;
+  }
+
+  function cardHTML(s) {
+    return '<div class="scard' + (s.name === TARGET ? " track" : "") + '" data-n="' + esc(s.name) + '">'
+      + '<div class="top"><span class="dot ' + s.dot + '"></span><span class="nm">' + esc(s.name) + '</span><span class="when">' + s.when + "</span></div>"
+      + statusHTML(s.st) + "</div>";
+  }
+
+  function renderStability() {
+    var data = stabData();
+    // A — grouped by live state: membership *is* position
+    var order = { needs:0, working:1, idle:2 }, titles = { needs:"Needs you", working:"Working", idle:"Idle" };
+    var cls = { needs:"grouphdr attn", working:"grouphdr work", idle:"grouphdr" };
+    var htmlA = "", flatA = [];
+    ["needs", "working", "idle"].forEach(function (g) {
+      var inG = data.filter(function (s) { return s.group === g; })
+                    .sort(function (x, y) { return x.mins - y.mins; });
+      if (!inG.length) return;
+      htmlA += '<div class="' + cls[g] + '">' + titles[g] + ' <span class="n">· ' + inG.length + "</span></div>";
+      inG.forEach(function (s) { htmlA += cardHTML(s); flatA.push(s.name); });
+    });
+    document.getElementById("stabA").innerHTML = htmlA;
+
+    // B — flat, settled: the order snapshot only updates at a quiet boundary
+    var byRecency = data.slice().sort(function (x, y) { return x.mins - y.mins; }).map(function (s) { return s.name; });
+    // The snapshot is frozen while you're in the list; step 3 is the quiet
+    // boundary (pointer left the rail) where the pending order is applied.
+    var flatB = window._orderB || byRecency;
+    if (step === 3) flatB = byRecency;
+    window._orderB = flatB;
+    var htmlB = (step === 1 || step === 2)
+      ? '<div class="pending"><span class="arrow">↑</span> 1 session moved — click to reorder</div>' : "";
+    flatB.forEach(function (n) {
+      var s = data.filter(function (x) { return x.name === n; })[0];
+      if (s) htmlB += cardHTML(s);
+    });
+    document.getElementById("stabB").innerHTML = htmlB;
+
+    // flash + count the tracked card's involuntary moves
+    var iA = flatA.indexOf(TARGET), iB = flatB.indexOf(TARGET);
+    if (lastA !== null && iA !== lastA) {
+      movesA++;
+      document.querySelector('#stabA .scard[data-n="' + TARGET + '"]').classList.add("moved");
+    }
+    if (lastB !== null && iB !== lastB) {
+      movesB++;
+      document.querySelector('#stabB .scard[data-n="' + TARGET + '"]').classList.add("settled");
+    }
+    lastA = iA; lastB = iB;
+    document.getElementById("mcA").textContent = movesA + (movesA === 1 ? " move" : " moves");
+    document.getElementById("mcB").textContent = movesB + (movesB === 1 ? " move" : " moves") + (movesB ? " · after you looked away" : "");
+    document.getElementById("steplabel").innerHTML = STEPS[step].label;
+    document.getElementById("stepbtn").disabled = step === STEPS.length - 1;
+    document.getElementById("stepbtn").style.opacity = step === STEPS.length - 1 ? ".45" : "1";
+  }
+
+  document.getElementById("stepbtn").addEventListener("click", function () {
+    if (step < STEPS.length - 1) { step++; renderStability(); }
+  });
+  document.getElementById("stepreset").addEventListener("click", function () {
+    step = 0; lastA = null; lastB = null; movesA = 0; movesB = 0; window._orderB = null; renderStability();
+  });
+  renderStability();
+</script>
+</body>
+</html>

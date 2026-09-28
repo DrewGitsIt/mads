@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -65,6 +66,36 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 			return
 		}
 		if err := s.SetActivity(r.Context(), r.PathValue("id"), body.Activity, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// The Session runner's main-agent transitions: one call mirrors the
+	// state onto the record and appends its event, so the rail's cold read
+	// and its live stream can never disagree (store.Sessions.SetAgentState).
+	mux.HandleFunc("PUT /sessions/{id}/agent-state", func(w http.ResponseWriter, r *http.Request) {
+		var state contracts.AgentState
+		if !decode(w, r, &state) {
+			return
+		}
+		if err := s.SetAgentState(r.Context(), r.PathValue("id"), state, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	mux.HandleFunc("POST /sessions/{id}/turn-end", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Usage *contracts.Usage `json:"usage,omitempty"`
+			At    time.Time        `json:"at"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := s.RecordTurnEnd(r.Context(), r.PathValue("id"), body.Usage, body.At, actor(r)); err != nil {
 			writeStoreError(w, err)
 			return
 		}

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # ensure-electron.sh — make ui/node_modules/electron actually runnable.
 #
-# Sourced by scripts/app.sh (every launch) and scripts/install.sh (install
-# time). Also runnable standalone:  bash scripts/ensure-electron.sh
+# Sourced by scripts/app.sh (bash, every launch). scripts/install.sh is POSIX
+# sh (so `curl | sh` works on hosts with no bash) and cannot source this file
+# — its bashisms (BASH_SOURCE, set -euo pipefail) would run under dash/ash and
+# abort — so install.sh instead *executes* it as a subprocess via
+# `bash scripts/ensure-electron.sh` and reads the exit status (see the
+# standalone block below). Also runnable standalone directly the same way.
 #
 # Two host problems live here, both of which come back on their own:
 #
@@ -100,13 +104,22 @@ mads_electron_needs_no_sandbox() {
   ! "$MADS_ELECTRON_PKG/dist/electron" --version >/dev/null 2>&1
 }
 
-# Standalone: repair, then report the sandbox verdict.
+# Standalone: repair, then report the sandbox verdict — both as an echo (for
+# humans watching `bash scripts/ensure-electron.sh` run directly) and as the
+# exit status (for install.sh, which cannot source this bash file and instead
+# executes it as a subprocess):
+#   0 = repaired (or already OK) and the renderer sandbox works
+#   3 = repaired (or already OK) but the caller must set
+#       ELECTRON_DISABLE_SANDBOX=1
+#   *  = repair failed
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   set -euo pipefail
   mads_ensure_electron
   if mads_electron_needs_no_sandbox; then
     echo "ensure-electron: no usable sandbox — launch with ELECTRON_DISABLE_SANDBOX=1"
+    exit 3
   else
     echo "ensure-electron: renderer sandbox OK"
+    exit 0
   fi
 fi

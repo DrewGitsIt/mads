@@ -33,12 +33,21 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		args = append(args, "--resume", opts.Resume)
 	}
 	args = append(args, trustArgs(opts.Trust)...)
+	// Persona-level allow/deny (agent-concept redesign §2): merged on
+	// top of trustArgs's native set. personaDisallowedTools returns ""
+	// when the persona's policy doesn't add anything trustArgs didn't
+	// already block — so a zero-value TrustFull+no-persona session is
+	// byte-for-byte identical to today's behavior (no --disallowedTools
+	// at all).
+	if extra := personaDisallowedTools(opts); extra != "" {
+		args = append(args, "--disallowedTools", extra)
+	}
 	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
 	if err != nil {
 		return nil, fmt.Errorf("mcp config: %w", err)
 	}
 	args = append(args, mcpArgVals...)
-	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL)
+	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL, opts.PersonaAllowedPaths)
 	if err != nil {
 		if mcpConfigPath != "" {
 			_ = os.Remove(mcpConfigPath)

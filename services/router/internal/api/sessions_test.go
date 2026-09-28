@@ -256,81 +256,102 @@ func TestCreateSessionUnknownProviderNoOrphan(t *testing.T) {
 	}
 }
 
-// Interactive session-start's agent="auto" (owner decision, 2026-07-30) must
-// resolve to a concrete, registered agent — never persist the literal
-// "auto" — by routing through the same agentselect.BuildRequest +
-// autostaff.SelectOrGenerate machinery pipeline agent:auto stages use. Here
-// a shipped system agent (autonomous_executor quadrant) survives the
-// filters, so no generation is needed.
-func TestCreateSessionAgentAutoResolvesToRegisteredAgent(t *testing.T) {
-	srv := newTestServer(t)
+// Interactive session-start's agent="auto" (the agent-concept redesign §4)
+// now routes through pkg/personapick: a Fast Model one-shot over the persona
+// registry. The old capability-inference + on-demand-generation machinery is
+// gone from this path (a persona is *chosen*, not *generated*, at session
+// start).
+func TestCreateSessionAgentAutoPicksAFastModelPersona(t *testing.T) {
+	srv, _ := newTestServerWithScenario(t, fake.Scenario{Name: "auto-pick", Rules: []fake.Rule{{
+		// personapick's one-shot is a text job: DoText -> Complete -> the
+		// fake provider's turn, whose first rule match wins. Match ""
+		// (any prompt text) so the persona one-shot is what fires.
+		Match: "",
+		Reply: `{"persona":"reviewer"}`,
+	}}})
+	// Register the "reviewer" persona the Fast Model will return.
+	created := decodeJSON[contracts.Agent](t, postJSON(t, srv.URL+"/agents", map[string]any{
+		"id": "reviewer", "name": "Reviewer", "description": "Reviews code",
+		"prompt": "You review code.", "quadrant": "technical_partner",
+	}))
+	if created.ID != "reviewer" {
+		t.Fatalf("setup: persona id = %q, want reviewer", created.ID)
+	}
 	setDefaultProvider(t, srv.URL, "fake")
 
 	resp := postJSON(t, srv.URL+"/sessions", map[string]string{
-		"name": "auto-agent", "provider": "fake", "agent": "auto",
-		"opening_prompt": "fix the login bug",
+		"name": "auto-pick", "provider": "fake", "agent": "auto",
+		"opening_prompt": "review this PR",
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", resp.StatusCode)
 	}
-	created := decodeJSON[struct {
+	createdSess := decodeJSON[struct {
 		Session contracts.Session `json:"session"`
 	}](t, resp)
-	if created.Session.Agent == "" || created.Session.Agent == "auto" {
-		t.Fatalf("agent = %q, want a concrete registered agent name", created.Session.Agent)
-	}
-
-	agentResp, err := http.Get(srv.URL + "/agents/" + created.Session.Agent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agentResp.StatusCode != http.StatusOK {
-		t.Fatalf("resolved agent %q not found: status %d", created.Session.Agent, agentResp.StatusCode)
+	if createdSess.Session.Agent != "reviewer" {
+		t.Fatalf("agent = %q, want reviewer (fast-model pick)", createdSess.Session.Agent)
 	}
 
 	// Persisted, not just echoed.
-	getResp, err := http.Get(srv.URL + "/sessions/" + created.Session.ID)
+	getResp, err := http.Get(srv.URL + "/sessions/" + createdSess.Session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	persisted := decodeJSON[contracts.Session](t, getResp)
-	if persisted.Agent != created.Session.Agent {
-		t.Errorf("persisted agent = %q, want %q", persisted.Agent, created.Session.Agent)
+	if persisted.Agent != "reviewer" {
+		t.Errorf("persisted agent = %q, want reviewer", persisted.Agent)
 	}
 }
 
-// No shipped agent survives the filters for this quadrant (mirrors
-// engine_test.go's TestAutoGeneratesAgentWhenNoCandidate), so agent="auto"
-// must fall through to on-demand generation — the exact fallback pipeline
-// agent:auto stages already relied on, now shared via pkg/autostaff.
-func TestCreateSessionAgentAutoGeneratesWhenNoCandidate(t *testing.T) {
-	srv, _ := newTestServerWithScenario(t, fake.Scenario{Name: "session-auto-generate", Rules: []fake.Rule{{
-		Match: "Generate an agent definition for this task",
-		Reply: `{"name":"session-investigator","description":"Generated for this session",` +
-			`"prompt":"You investigate things.","quadrant":"investigator","tags":[],` +
-			`"capabilities":{"tools":[],"mcp_servers":[],"skills":[]},"permissions":{}}`,
+// If the Fast Model's pick is unusable (not a registered persona id), the
+// session still starts with the fallback: the workspace's default persona
+// (empty here → no persona, a legal outcome per the redesign §4).
+func TestCreateSessionAgentAutoFallsBackToWorkspaceDefault(t *testing.T) {
+	srv, _ := newTestServerWithScenario(t, fake.Scenario{Name: "auto-pick-fallback", Rules: []fake.Rule{{
+		Match: "",
+		Reply: `best: not-a-persona`, // halluinated id — not in the candidate set
 	}}})
+	// A registered persona the Fast Model *could* pick, so the candidate set
+	// is non-empty and the call is not skipped.
+	created := decodeJSON[contracts.Agent](t, postJSON(t, srv.URL+"/agents", map[string]any{
+		"id": "investigator", "name": "Investigator", "description": "Investigates",
+		"prompt": "You investigate.", "quadrant": "investigator",
+	}))
+	if created.ID != "investigator" {
+		t.Fatalf("setup: persona id = %q, want investigator", created.ID)
+	}
+
+	// Workspace default is a *different* persona id; the hallucinated id must
+	// fall back to it, not to "" and not to "not-a-persona".
+	alt := decodeJSON[contracts.Agent](t, postJSON(t, srv.URL+"/agents", map[string]any{
+		"id": "default-persona", "name": "Default", "description": "Default",
+		"prompt": "You are the default.", "quadrant": "technical_partner",
+	}))
+	if alt.ID != "default-persona" {
+		t.Fatalf("setup: persona id = %q, want default-persona", alt.ID)
+	}
+	wsResp := postJSON(t, srv.URL+"/workspaces", contracts.Workspace{
+		Name:     "ws",
+		Defaults: contracts.WorkspaceDefaults{Persona: "default-persona"},
+	})
+	if wsResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create workspace status = %d, want 201", wsResp.StatusCode)
+	}
+	ws := decodeJSON[contracts.Workspace](t, wsResp)
 	setDefaultProvider(t, srv.URL, "fake")
 
 	resp := postJSON(t, srv.URL+"/sessions", map[string]string{
-		"name": "auto-agent-generated", "provider": "fake", "agent": "auto",
-		"opening_prompt": "investigate something",
+		"name": "auto-pick-fallback", "provider": "fake", "agent": "auto",
+		"workspace": ws.ID, "opening_prompt": "whatever",
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201", resp.StatusCode)
 	}
-	created := decodeJSON[struct {
+	createdSess := decodeJSON[struct {
 		Session contracts.Session `json:"session"`
 	}](t, resp)
-	if created.Session.Agent != "session-investigator" {
-		t.Errorf("agent = %q, want generated session-investigator", created.Session.Agent)
-	}
-
-	agentResp, err := http.Get(srv.URL + "/agents/session-investigator")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if agentResp.StatusCode != http.StatusOK {
-		t.Fatalf("generated agent was never registered: status %d", agentResp.StatusCode)
+	if createdSess.Session.Agent != "default-persona" {
+		t.Fatalf("agent = %q, want default-persona (fallback)", createdSess.Session.Agent)
 	}
 }

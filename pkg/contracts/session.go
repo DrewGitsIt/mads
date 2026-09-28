@@ -171,9 +171,28 @@ type Session struct {
 	// seen any turn_end of its own, and the resume-compaction trigger's input
 	// (services/session/internal/runner/compact.go). Nil until the session's
 	// first turn ends.
-	LastUsage *Usage    `json:"last_usage,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	LastUsage *Usage `json:"last_usage,omitempty"`
+	// AgentState mirrors the latest SessionAgentState transition the Runner
+	// appended — the same payload, written by the same scoped store call
+	// that appends the event (store.Sessions.SetAgentState), so the record
+	// and the stream can never disagree. It exists because an event stream
+	// alone leaves a cold reader blind: a page load or an SSE reconnect
+	// mid-turn would show every session idle until its next transition.
+	// Nil before the session's first transition. A consumer should read it
+	// as idle on an inactive session: only the live Runner clears it, so a
+	// hard-killed process (the supervisor's boot sweep reconciles those to
+	// inactive, services/router/internal/supervisor) leaves its last
+	// working state behind.
+	AgentState *AgentState `json:"agent_state,omitempty"`
+	// LastTurnAt is when this session's most recent turn ended, stamped
+	// beside LastUsage by the Runner on every turn end. Deliberately not
+	// UpdatedAt, which renames, summary writes and activity flips all bump:
+	// this is the only field that means "last response", which makes it the
+	// rail's last-reply stamp and its recency sort key — one a rename
+	// cannot perturb. Nil until the session's first turn ends.
+	LastTurnAt *time.Time `json:"last_turn_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // MergeResult is the response to a session's merge-back request. A

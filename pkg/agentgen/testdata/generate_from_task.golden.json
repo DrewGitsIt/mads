@@ -10,12 +10,12 @@
   ],
   "created_at": "0001-01-01T00:00:00Z",
   "updated_at": "0001-01-01T00:00:00Z",
+  "allowlist": [
+    "shell",
+    "read",
+    "write"
+  ],
   "capabilities": {
-    "tools": [
-      "shell",
-      "read",
-      "write"
-    ],
     "skills": [
       "testing"
     ]
@@ -23,9 +23,6 @@
   "permissions": {
     "allowed_paths": [
       "tests/**"
-    ],
-    "denied_commands": [
-      "rm -rf *"
     ]
   },
   "preferences": {}

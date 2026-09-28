@@ -11,12 +11,15 @@
   ],
   "created_at": "0001-01-01T00:00:00Z",
   "updated_at": "0001-01-01T00:00:00Z",
+  "allowlist": [
+    "shell",
+    "read",
+    "write"
+  ],
+  "denylist": [
+    "shell"
+  ],
   "capabilities": {
-    "tools": [
-      "shell",
-      "read",
-      "write"
-    ],
     "mcp_servers": [
       "postgres"
     ]
@@ -24,9 +27,6 @@
   "permissions": {
     "allowed_paths": [
       "migrations/**"
-    ],
-    "denied_commands": [
-      "DROP DATABASE *"
     ]
   },
   "preferences": {}

@@ -3,6 +3,14 @@
 // sessions, `kiro-cli chat --no-interactive` for one-shots, `--resume-id`
 // for reattach, and ACP's session/load replay for normalized history.
 //
+// The ACP transport is the generic providers/acprpc engine, parameterized
+// by the knob values in startACP — this package carries no JSON-RPC
+// plumbing of its own (the hand-rolled wire/session layer it used to have
+// is superseded; README.md "Engine migration" records the two spec
+// deviations that died with it). The PTY and plain-CLI strategies
+// (one-shot, model discovery, rate-limit detection) remain this package's
+// own.
+//
 // Every claim behind the Matrix in this package is sourced from kiro-cli's
 // public docs and GitHub issues, not from running the binary — it is not
 // installed on this machine. See README.md for the honest justification
@@ -25,6 +33,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/providers/acprpc"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -91,17 +100,18 @@ func (p *Provider) Matrix() provider.Matrix {
 		// guarantee the way claude-code's --disallowedTools is. See README.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
-		// No documented flag or config mechanism threads an MCP server into
-		// kiro-cli's own launch — see README.md. Sessions simply start
-		// without the descriptor materialized.
+		// The acprpc engine now rides descriptors on session/new (a spec
+		// obligation), but no kiro doc confirms the agent actually connects
+		// them — the row stays declared-unsupported until MADS_KIRO_SMOKE
+		// against a real binary says otherwise. See README.md.
 		provider.BehaviorMCPServers: provider.Unsupported,
 		// No streaming JSON mode on `kiro-cli chat --no-interactive` — see
 		// README.md. OneShot never calls OnEvent; the engine falls back to
 		// a single end-of-run chunk.
 		provider.BehaviorOneShotStream: provider.Unsupported,
 		// ACP's session/new response carries the ref synchronously, before
-		// Start even returns (session.go) — no announcement subscription
-		// needed there. The terminal transport prints nothing and has no
+		// Start even returns (the acprpc engine's Start) — no announcement
+		// subscription needed there. The terminal transport prints nothing and has no
 		// on-disk transcript format to discover from (unlike claude-code),
 		// so a fresh PTY session's ref is never learned. Emulated as the
 		// one-row summary across both transports. See README.
@@ -112,7 +122,7 @@ func (p *Provider) Matrix() provider.Matrix {
 // IntentMatrix declares this provider's enforcement of the portable
 // permission intents (pkg/contracts.PermissionIntent). Unlike the
 // Behavior matrix's BehaviorTrustLimited/BehaviorTrustReadOnly rows
-// (Emulated — the ACP kind-based auto-deny in session.go, or a human's own
+// (Emulated — the acprpc engine's ACP kind-based auto-deny, or a human's own
 // PTY confirmation), no intent here has a harness-level enforcement
 // mechanism: kiro-cli never reads StartOptions.PermissionPromptURL (no
 // require_approval wiring exists at all), has no command blocklist flag, no
@@ -126,6 +136,15 @@ func (p *Provider) IntentMatrix() provider.IntentMatrix {
 		provider.IntentReadOnly:        provider.Unsupported,
 		provider.IntentRequireApproval: provider.Unsupported,
 	}
+}
+
+// wireModel is one entry of `kiro-cli chat --list-models --format json` —
+// plain CLI output, not part of the ACP wire (which lives entirely in
+// providers/acprpc).
+type wireModel struct {
+	ModelID   string `json:"model_id"`
+	ModelName string `json:"model_name"`
+	IsDefault bool   `json:"is_default"`
 }
 
 // Models runs `kiro-cli chat --list-models --format json` and parses the
@@ -164,6 +183,34 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	default:
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
+}
+
+// startACP launches kiro-cli's structured transport — `kiro-cli acp`, a
+// standards-compliant JSON-RPC 2.0 agent over stdio — through the generic
+// providers/acprpc engine. These knob values ARE kirocli's ACP surface;
+// each is doc-sourced (kiro.dev/docs/cli/acp), and where the old
+// hand-rolled layer encoded a guess the spec-normative engine contradicts,
+// the engine wins (README.md "Engine migration"):
+//   - SpawnArgs: the documented `acp` entry point, plus ExtraArgs.
+//   - BaseEnv: this package's own env() so inherit/isolated semantics stay
+//     defined once (pkg/agentenv); the engine appends opts.Env per session.
+//   - ToolIdentity KindBased: kiro sets the spec kind taxonomy on its tool
+//     calls, so the trust gate classifies the wire kind — including the
+//     identity embedded in a session/request_permission that arrives
+//     before any tool_call announcement.
+//   - No TrustModes, SendModeAtSessionNew false: kiro documents no session
+//     mode vocabulary, and the old layer sent none; enforcement rides the
+//     engine's permission-reply gate — the same Emulated stance as before.
+//   - ModelConfigOptionID empty: kiro documents no model configOption, so
+//     an ACP Start naming a model fails wrapping provider.ErrUnsupported
+//     instead of riding the old non-spec modelId param on session/new.
+func (p *Provider) startACP(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
+	return acprpc.New(acprpc.Config{
+		Bin:          p.cfg.Bin,
+		SpawnArgs:    append([]string{"acp"}, p.cfg.ExtraArgs...),
+		BaseEnv:      p.env(nil),
+		ToolIdentity: acprpc.ToolIdentity{Mode: acprpc.ToolIdentityKindBased},
+	}).Start(ctx, opts)
 }
 
 // OneShot runs a single non-interactive invocation. Unlike claude-code's

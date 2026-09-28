@@ -158,6 +158,13 @@ type Runner struct {
 	// lock — those two run on different goroutines.
 	toolStatus *toolstatus.Tracker
 
+	// agent tracks what this session's main agent is doing and appends
+	// session.agent_state on transitions (agentstate.go) — the control
+	// plane's only turn-start/turn-activity signal, which the session rail
+	// reads for every session at once. Own internal lock, like toolStatus:
+	// the pump, Send/Inject and a coalescing timer all drive it.
+	agent agentState
+
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
 	// active — unlike synthEngine it isn't mode-gated, since whether anyone
@@ -368,10 +375,45 @@ func (r *Runner) Start(ctx context.Context) error {
 		Mode:         provider.ModeACP,
 		Model:        sess.Model,
 		Cwd:          cwd,
-		SystemPrompt: agent.Prompt, // "" when agentOK is false — no mads preamble, ever
+		SystemPrompt: effectivePersonaPrompt(agent, agentOK), // "" when no persona — no mads preamble, ever
 		Resume:       sess.ProviderRef,
 		Env:          capEnv,
 		Trust:        provider.Trust(sess.Trust),
+	}
+	// Persona-level tool-intent policy (agent-concept redesign §2). The
+	// persona's Allowlist/Denylist fold through EffectiveToolIntents,
+	// which also handles the pre-redesign `capabilities.tools` +
+	// `denied_commands` shapes so legacy records keep their enforcement.
+	// agentOK is false (no persona) means the zero-value ToolIntents —
+	// "no stance" — and the adapter's trust layer is the whole story.
+	//
+	// HONESTY NOTE (the goose/kiro case): some adapters (goose, kiro)
+	// declare every permission intent Unsupported in their Matrix — they
+	// have no native tool-restriction surface of their own. For those,
+	// this ToolIntents policy can't be enforced natively (the resolver
+	// map still names the tools, so a future native mechanism can pick it
+	// up), so the persona's *allowance* is additionally spelled into the
+	// system prompt below: a prompt-level "you may not shell" is the only
+	// channel the harness has, and it's honest about being a prompt
+	// rather than a tool block. (claude-code's --disallowedTools is
+	// native — see providers/claudecode/personaTools.go.)
+	if agentOK {
+		allowed, denied := agent.EffectiveToolIntents()
+		opts.ToolIntents = provider.ToolIntents{
+			Allowed: toProviderIntents(allowed),
+			Denied:  toProviderIntents(denied),
+		}
+		opts.PersonaKey = "mads-persona:" + agent.ID
+		// Persona path-scope allowlist (agent-concept redesign §2): the
+		// portable form of the "path_scope" permission intent. A provider
+		// with a native path-scope surface (claude-code's PreToolUse hook —
+		// see providers/claudecode/permission.go) enforces it; a provider
+		// without one (goose, kiro) declares IntentPathScope: Unsupported
+		// and takes this as "no stance". Empty when the persona declared
+		// no path scope — the adapter then wires no hook at all.
+		if len(agent.Permissions.AllowedPaths) > 0 {
+			opts.PersonaAllowedPaths = agent.Permissions.AllowedPaths
+		}
 	}
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}
@@ -619,10 +661,12 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, false)
 
+	r.markAgentWorking()
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.markAgentIdle()
 		return err
 	}
 	return nil
@@ -655,10 +699,12 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.digest.recordUser(text, attribution.DigestAttributed)
 	r.recordInjectionAudit(ctx, attribution, text)
 
+	r.markAgentWorking()
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.markAgentIdle()
 		return err
 	}
 	return nil
@@ -702,6 +748,10 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // turn's buffer.
 func (r *Runner) onTurnEnd() {
 	r.pushTurnEnded()
+	// Ahead of the lock, so this lands before the queued-injection drain
+	// below reports the NEXT turn working: appended the other way round, a
+	// session would read idle for the whole of that live turn.
+	r.markAgentIdle()
 
 	r.mu.Lock()
 	r.busy = false
@@ -717,11 +767,13 @@ func (r *Runner) onTurnEnd() {
 		r.synthEngine.OnUserSend(text)
 		r.digest.recordUser(text, attribution.DigestAttributed)
 
+		r.markAgentWorking()
 		if err := sess.Send(context.Background(), text); err != nil {
 			log.Printf("runner: deliver queued injection: %v", err)
 			r.mu.Lock()
 			r.busy = false
 			r.mu.Unlock()
+			r.markAgentIdle()
 		}
 		// orchestrateRefreshPending and pendingModel, if set, are left
 		// untouched here — both are only drained once the queue is truly
@@ -1110,36 +1162,43 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 	}()
 }
 
-// persistUsage writes usage as the session record's LastUsage — the context
-// meter's data source at wake time (ui/src/conversation/Header/
+// persistTurnEnd stamps the session record at the end of one turn:
+// LastTurnAt always, and LastUsage whenever the provider reported any —
+// the context meter's data source at wake time (ui/src/conversation/Header/
 // ContextMeter.tsx, before this process has seen a turn_end of its own) and
 // the resume-compaction trigger's input (compact.go's shouldCompactOnResume).
-// Called on every EventTurnEnd that carries usage, unlike persistProviderRef's
-// dedup-on-unchanged-value: usage legitimately changes turn to turn, so there
-// is nothing to skip. Best-effort: a failure here only means the meter/trigger
-// are stale for the next resume, never surfaced to the caller.
-func (r *Runner) persistUsage(ctx context.Context, usage *provider.Usage) {
-	if usage == nil {
-		return
+// Called on every EventTurnEnd, unlike persistProviderRef's
+// dedup-on-unchanged-value: both fields legitimately change turn to turn, so
+// there is nothing to skip. LastTurnAt is stamped even on a turn that carried
+// no usage, because it means "the last turn ended here" — a provider that
+// reports no token accounting still ends turns.
+//
+// One scoped write, not the load-modify-write round trip this replaced: that
+// pair carried a whole snapshot of the record across two calls and could drop
+// whatever landed in the gap (this runner's own agent state, several
+// transitions a turn). recordMu is still held, since the ref round trips it
+// guards are still round trips.
+//
+// Best-effort: a failure here only means the meter, the trigger and the
+// rail's last-reply stamp are stale until the next turn, never surfaced to
+// the caller.
+func (r *Runner) persistTurnEnd(ctx context.Context, usage *provider.Usage) {
+	var last *contracts.Usage
+	if usage != nil {
+		last = &contracts.Usage{
+			InputTokens:              usage.InputTokens,
+			OutputTokens:             usage.OutputTokens,
+			CacheCreationInputTokens: usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     usage.CacheReadInputTokens,
+			Model:                    usage.Model,
+			ContextTokens:            usage.ContextTokens,
+			ContextWindow:            usage.ContextWindow,
+		}
 	}
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
-	cur, err := r.data.Session(ctx, r.sessionID)
-	if err != nil {
-		log.Printf("runner: load session to persist usage: %v", err)
-		return
-	}
-	cur.LastUsage = &contracts.Usage{
-		InputTokens:              usage.InputTokens,
-		OutputTokens:             usage.OutputTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
-		CacheReadInputTokens:     usage.CacheReadInputTokens,
-		Model:                    usage.Model,
-		ContextTokens:            usage.ContextTokens,
-		ContextWindow:            usage.ContextWindow,
-	}
-	if err := r.data.UpdateSession(ctx, &cur); err != nil {
-		log.Printf("runner: persist usage: %v", err)
+	if err := r.data.RecordSessionTurnEnd(ctx, r.sessionID, last, time.Now().UTC()); err != nil {
+		log.Printf("runner: persist turn end: %v", err)
 	}
 }
 
@@ -1325,7 +1384,7 @@ func (r *Runner) pump(sess provider.Session) {
 			r.shadowStore.CommitTurnAsync()
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
-			r.persistUsage(context.Background(), ev.Usage)
+			r.persistTurnEnd(context.Background(), ev.Usage)
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 			// Pre-image capture first: on providers that announce tool_use
@@ -1346,9 +1405,9 @@ func (r *Runner) pump(sess provider.Session) {
 	// The stream closed. Normally the turn-end sweep already ran and this
 	// is a no-op; a mid-turn close (Shutdown, or the provider dying) is the
 	// "session stops" case of the status policy — resolve every still-open
-	// tool call to interrupted so the event log never shows one running
-	// forever.
-	r.flushInterruptedTools()
+	// tool call to interrupted, and the agent state to idle, so the event
+	// log never shows either running forever.
+	r.flushTurnState()
 
 	r.mu.Lock()
 	// The identity check matters, not just busy: SwitchTransport nils
@@ -1403,7 +1462,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 					r.shadowStore.CommitTurnAsync()
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
-					r.persistUsage(context.Background(), ev.Usage)
+					r.persistTurnEnd(context.Background(), ev.Usage)
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 					r.shadowCapture(ev.Tool)
@@ -1415,7 +1474,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 				r.synthEngine.OnEvent(ev)
 				r.digest.recordEvent(ev)
 			}
-			r.flushInterruptedTools()
+			r.flushTurnState()
 		}()
 	}
 

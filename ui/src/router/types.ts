@@ -41,9 +41,15 @@ export interface WorkspaceRepo {
 
 export interface WorkspaceDefaults {
   agent?: string;
+  /** Redesign §7: the workspace's default persona. Mirror of `agent` (the
+   * single source of truth is `agent`); the persona UI reads/writes this. */
+  persona?: string;
   model?: string;
   isolation?: string;
   template?: string;
+  /** Redesign §7: the workspace's preferred harness (falls back to the
+   * global DefaultProvider when absent). */
+  provider?: string;
 }
 
 export interface Workspace {
@@ -91,12 +97,12 @@ export interface AgentCapabilities {
 }
 
 /**
- * POST /agents/suggest-capabilities reply: provider tool names plus
- * registry-grounded skill and MCP server names. `dropped` names anything the
+ * POST /agents/suggest-capabilities reply: registry-grounded skill and MCP
+ * server names plus a ToolIntent allowlist. `dropped` names anything the
  * Fast Model proposed that isn't registered — already removed server-side.
  */
 export interface CapabilitySuggestion {
-  tools?: string[];
+  allowlist?: ToolIntent[];
   mcp_servers?: string[];
   skills?: string[];
   dropped?: string[];
@@ -125,6 +131,32 @@ export interface AgentPreferences {
   model?: string;
 }
 
+// mirrors pkg/contracts/toolintent.go — the closed ToolIntent vocabulary the
+// persona's allowlist/denylist speak (agent-concept redesign §2). Harness-
+// free by construction: no concrete tool name belongs here.
+export type ToolIntent =
+  | "read"
+  | "write"
+  | "edit"
+  | "shell"
+  | "search"
+  | "fetch"
+  | "skill"
+  | "mcp";
+
+// The full v1 closed set (contracts.ToolIntents) — the enumeration the
+// persona editor's chip list iterates over.
+export const TOOL_INTENTS: readonly ToolIntent[] = [
+  "read",
+  "write",
+  "edit",
+  "shell",
+  "search",
+  "fetch",
+  "skill",
+  "mcp",
+] as const;
+
 export interface Agent {
   id: string;
   name: string;
@@ -135,6 +167,10 @@ export interface Agent {
   system?: boolean;
   created_at: string;
   updated_at: string;
+  /** Redesign §2: the persona's allowed tool intents (harness-free). */
+  allowlist?: ToolIntent[];
+  /** Redesign §2: the persona's denied tool intents (override allowlist). */
+  denylist?: ToolIntent[];
   capabilities?: AgentCapabilities;
   permissions?: AgentPermissions;
   preferences?: AgentPreferences;
@@ -266,6 +302,21 @@ export interface Model {
   id: string;
   name: string;
   default?: boolean;
+}
+
+// mirrors contracts.ModelsResponse's state field. An empty model list means
+// three different things and the picker renders each differently:
+// "refreshing" — discovery is still running, so say so rather than showing
+// an empty menu; "unavailable" — the harness could not be asked (binary
+// missing, not logged in), paired with a human-readable detail; "ready" —
+// the provider genuinely offers nothing.
+export type ModelCatalogState = "pending" | "refreshing" | "ready" | "unavailable";
+
+export interface ModelCatalog {
+  models: Model[];
+  state?: ModelCatalogState;
+  detail?: string;
+  fetchedAt?: string;
 }
 
 export interface Envelope {

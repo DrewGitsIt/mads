@@ -38,6 +38,32 @@ make release-gate  # cross-platform build matrix + install/update smokes
                    # — a multi-minute cross-compile
 ```
 
+### Rebuilding one piece while mads is running
+
+`make build` is the all-or-nothing gate. For the inner loop there is a target
+per component; all of them skip `npm ci` and are safe to run against a live
+instance (`go build` replaces the output file by unlink+write, so running
+processes keep the binary they started with).
+
+```sh
+make ui         # no restart at all — the Router serves ui/dist off disk and
+                # re-checks it per request; just reload the window (Ctrl+R)
+make session    # next session spawn picks it up (-session-cmd is exec'd
+                # fresh); to move a live session onto it:
+                #   curl -sX POST localhost:17373/sessions/<id>/bounce
+make pipeline   # next pipeline run picks it up, same mechanism
+make data       # needs a restart, but a survivable one: state is in
+                # ~/.mads/mads.db and the Router's watchers reconnect
+make router     # needs a restart, and it terminates every session and
+                # pipeline child. SIGTERM only:
+                #   kill "$(cat ~/.mads/router.pid)"
+                # then relaunch from the repo root (-ui-dist is cwd-relative)
+make services   # all five Go binaries, no UI (~2s warm)
+```
+
+Each service also has `make -C services/<name> build`, alongside its existing
+`run` and `test`.
+
 ## mads builds mads (the dogfood loop)
 
 From Wave 4 on, work items are executed as mads tasks by the pipeline itself.

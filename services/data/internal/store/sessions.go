@@ -101,6 +101,15 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 			return err
 		}
 		sess.CreatedAt = old.CreatedAt
+		// AgentState and LastTurnAt are runner-owned and reach the record
+		// only through their own scoped writers below. A full-record PUT
+		// carries whatever its client read a round trip earlier, which is
+		// exactly how the lost update SetActivity's doc describes bites —
+		// so carry both forward rather than letting a rename, a summary
+		// write or an activity flip stamp a stale turn state over a live
+		// one.
+		sess.AgentState = old.AgentState
+		sess.LastTurnAt = old.LastTurnAt
 		sess.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, sess); err != nil {
 			return err
@@ -165,6 +174,76 @@ func (s *Sessions) SetActivity(ctx context.Context, id string, activity contract
 		payload, _ := json.Marshal(map[string]string{"from": string(old), "to": string(activity)})
 		return tx.Append(&contracts.Envelope{
 			Type: contracts.SessionActivityChanged, SessionID: id, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// SetAgentState mirrors one main-agent transition onto the session record
+// and appends its session.agent_state event in the same transaction, so a
+// cold GET /sessions and the live stream can never report different things
+// about the same turn. Scoped for exactly the reason SetActivity is (see its
+// doc): the Runner writes this field several times a turn while it is also
+// writing ProviderRef and turn-end usage onto the same record, and a
+// Get-then-Update round trip would let either side drop the other's field.
+//
+// UpdatedAt is deliberately left untouched. A tool-label transition is not a
+// change to the session's user-visible state, and bumping it would reshuffle
+// the updated_at-ordered list several times a turn — and, worse, restart the
+// archive clock SweepExpiredShadows reads off it.
+func (s *Sessions) SetAgentState(ctx context.Context, id string, state contracts.AgentState, actor string) error {
+	if state.State != contracts.AgentWorking && state.State != contracts.AgentIdle {
+		var v contracts.ValidationError
+		v.Add("state", fmt.Sprintf("must be %q or %q", contracts.AgentWorking, contracts.AgentIdle))
+		return &v
+	}
+	if state.Since.IsZero() {
+		state.Since = time.Now().UTC()
+	}
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		sess.AgentState = &state
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
+		payload, _ := json.Marshal(state)
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionAgentState, SessionID: id, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// RecordTurnEnd stamps the end of one turn onto the session record:
+// LastTurnAt always, LastUsage too when the provider reported any. Scoped
+// like SetActivity rather than the Get-then-Update pair it replaces
+// (services/session/internal/runner's persistTurnEnd), whose two round trips
+// were open to losing the ProviderRef or agent state a concurrent writer of
+// the same record landed in the gap. Nothing else writes LastTurnAt, which
+// is the point: rename, summary and activity writes leave it exactly where
+// the last turn left it. Emits session.updated, the same announcement that
+// round trip produced.
+func (s *Sessions) RecordTurnEnd(ctx context.Context, id string, usage *contracts.Usage, at time.Time, actor string) error {
+	if at.IsZero() {
+		at = time.Now()
+	}
+	at = at.UTC()
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		sess.LastTurnAt = &at
+		if usage != nil {
+			sess.LastUsage = usage
+		}
+		sess.UpdatedAt = time.Now().UTC()
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})
 	})
 }

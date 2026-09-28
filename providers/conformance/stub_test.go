@@ -17,12 +17,13 @@ import (
 )
 
 type lies struct {
-	interruptStuck   bool // interrupt never ends the turn
-	oneShotWrong     bool // one-shot ignores the prompt
-	secretTranscript bool // returns transcripts despite declaring unsupported
-	forgetful        bool // resume reattaches with empty context
-	zeroUsage        bool // reports no tokens despite declaring cost_reporting
-	acceptAnyResume  bool // resumes despite declaring resume unsupported
+	interruptStuck      bool // interrupt never ends the turn
+	oneShotWrong        bool // one-shot ignores the prompt
+	secretTranscript    bool // returns transcripts despite declaring unsupported
+	forgetful           bool // resume reattaches with empty context
+	zeroUsage           bool // reports no tokens despite declaring cost_reporting
+	acceptAnyResume     bool // resumes despite declaring resume unsupported
+	completesDisallowed bool // a disallowed tool completes (non-error result) below full trust
 }
 
 type stub struct {
@@ -45,13 +46,18 @@ func newStub(overrides map[provider.Behavior]provider.Support, l lies) *stub {
 	return &stub{matrix: m, lies: l, sessions: map[string][]provider.Message{}}
 }
 
-// stubScript is the stub's prompt dialect.
+// stubScript is the stub's prompt dialect. The attempt prompts drive the
+// goose-shaped denial ordering (announce, then a failed result — see
+// stubSession.Send), so the honest stub exercises the trust probe's
+// "announcement is not the effect" rule, not just the suppression style.
 func stubScript() Script {
 	return Script{
-		Echo:    func(marker string) string { return "echo " + marker },
-		Slow:    func() string { return "slow" },
-		Recall:  func() string { return "recall" },
-		Timeout: 2 * time.Second,
+		Echo:           func(marker string) string { return "echo " + marker },
+		Slow:           func() string { return "slow" },
+		Recall:         func() string { return "recall" },
+		AttemptWrite:   func() string { return "attempt-write" },
+		AttemptCommand: func() string { return "attempt-command" },
+		Timeout:        2 * time.Second,
 	}
 }
 
@@ -205,6 +211,24 @@ func (ss *stubSession) Send(_ context.Context, text string) error {
 					}
 				}
 			}
+		}
+		if text == "attempt-write" || text == "attempt-command" {
+			name := "write_file"
+			if text == "attempt-command" {
+				name = "run_command"
+			}
+			// goose ordering: the attempt is announced before it is gated —
+			// the tool-use event alone must never fail the trust probe. Only
+			// a lying stub lets the disallowed call complete (non-error
+			// result); the honest one fails it.
+			ss.emit(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{Name: name}})
+			ss.emit(provider.Event{
+				Kind:    provider.EventToolResult,
+				Tool:    &provider.ToolUse{Name: name},
+				IsError: !ss.p.lies.completesDisallowed,
+			})
+			ss.emit(provider.Event{Kind: provider.EventTurnEnd})
+			return
 		}
 		reply := ss.p.reply(text, history)
 		ss.p.mu.Lock()

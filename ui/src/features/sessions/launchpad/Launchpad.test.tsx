@@ -126,7 +126,7 @@ describe("Launchpad", () => {
     const createSession = vi.fn().mockResolvedValue(session);
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
     fireEvent.click(screen.getByText("Auto"));
     expect(screen.getByText("Auto")).toBeTruthy();
 
@@ -173,7 +173,7 @@ describe("Launchpad", () => {
     );
     render(<Launchpad createSession={createSession} onSessionCreated={vi.fn()} />);
 
-    fireEvent.click(screen.getByText("Select agent"));
+    fireEvent.click(screen.getByText("Select persona"));
     await waitFor(() => expect(screen.getByText("backend-architect")).toBeTruthy());
     fireEvent.click(screen.getByText("backend-architect"));
 
@@ -182,9 +182,11 @@ describe("Launchpad", () => {
     });
     fireEvent.click(screen.getByText("Start session"));
 
+    // Redesign §1: Session.Agent is a persona *id* — the UI now stages the
+    // id (the record's id "ag1"), not the display name ("backend-architect").
     await waitFor(() =>
       expect(createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ agent: "backend-architect" }),
+        expect.objectContaining({ agent: "ag1" }),
       ),
     );
     expect(createSession.mock.calls[0][0].opening_prompt).toBeUndefined();

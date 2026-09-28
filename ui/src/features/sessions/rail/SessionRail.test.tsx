@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionRail } from "./SessionRail";
 import { FLAGS } from "../../../featureFlags";
 import { FakeRouterClient } from "../../../router/fixtures";
+import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { useSessionAgentState } from "../state/useSessionAgentState";
+import type { SessionAgentState } from "./railGroups";
 import type { Link, Session } from "../../../router/types";
+import { readFileSync } from "node:fs";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -529,5 +533,415 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(
       screen.getByRole("button", { name: "Link options for payments refactor" }).textContent,
     ).toContain("MANUAL");
+  });
+});
+
+/** Fixed local reference point: Monday 28 Sep 2026, 13:40:00. */
+const NOW = new Date(2026, 8, 28, 13, 40, 0).getTime();
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const isoAgo = (ms: number) => new Date(NOW - ms).toISOString();
+
+function stampOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[class*="when"]')!;
+}
+
+function footerOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[class*="stamps"]')!;
+}
+
+describe("SessionRail timestamps", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows a relative last-activity stamp on every name row, across the formatter's buckets", () => {
+    vi.useFakeTimers({ now: NOW });
+    const cards: [string, number][] = [
+      ["sub-minute", 30_000],
+      ["minutes", 14 * MINUTE],
+      ["today", 5 * HOUR],
+      ["this week", 3 * DAY],
+      ["older", 10 * DAY],
+    ];
+    render(
+      <SessionRail
+        sessions={cards.map(([name, age], i) =>
+          makeSession({ id: `t${i}`, name, updated_at: isoAgo(age) }),
+        )}
+        openTaskCounts={{}}
+      />,
+    );
+
+    expect(stampOf("sub-minute").textContent).toBe("now");
+    expect(stampOf("minutes").textContent).toBe("14m");
+    expect(stampOf("today").textContent).toBe("08:40");
+    expect(stampOf("this week").textContent).toMatch(/^\w{3,} 13:40$/);
+    expect(stampOf("older").textContent).toMatch(/^18 \w{3,}$/);
+  });
+
+  it("puts the full absolute value in the stamp's title", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[makeSession({ name: "titled", updated_at: isoAgo(14 * MINUTE) })]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(stampOf("titled").title).toBe("Last activity 2026-09-28 13:26:00");
+  });
+
+  it("calls the stamp last activity, never last reply, while it is still updated_at", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[makeSession({ name: "honest", updated_at: isoAgo(14 * MINUTE) })]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(footerOf("honest").textContent).toContain("last activity");
+    expect(stampOf("honest").title).toMatch(/^Last activity /);
+    expect(screen.queryByText(/last reply/i)).toBeNull();
+    expect(screen.queryByText(/last response/i)).toBeNull();
+  });
+
+  it("renders the started / last-activity footer on every card, hovered or not, so the reveal cannot reflow the rail", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({
+            id: "a",
+            name: "resting",
+            created_at: isoAgo(10 * DAY),
+            updated_at: isoAgo(14 * MINUTE),
+          }),
+          makeSession({ id: "b", name: "chosen", created_at: isoAgo(5 * HOUR) }),
+        ]}
+        selectedId="b"
+        openTaskCounts={{}}
+      />,
+    );
+
+    // Mounted for the unselected, un-hovered card too: nothing is added to the
+    // layout when the pointer arrives.
+    const resting = footerOf("resting");
+    expect(resting.textContent).toMatch(/^started 18 \w{3,}\s*·\s*last activity today 13:26$/);
+    const beforeHover = resting.outerHTML;
+    fireEvent.mouseEnter(screen.getByText("resting").closest('[role="button"]')!);
+    expect(footerOf("resting").outerHTML).toBe(beforeHover);
+
+    expect(footerOf("chosen").textContent).toContain("started today 08:40");
+  });
+
+  it("reveals that footer with opacity alone — no display or height change", () => {
+    // Read as text: the reveal is a CSS fact, and jsdom/happy-dom has no layout
+    // to measure. Path is relative to the vitest root (ui/).
+    const css = readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
+    const rest = css.match(/\.stamps \{([^}]*)\}/)![1];
+    expect(rest).toContain("opacity: 0");
+    expect(rest).toMatch(/transition:\s*opacity/);
+    // Hidden by opacity, not by removal: no display:none and no collapsed box.
+    expect(rest).not.toMatch(/display:\s*none|(max-)?height:\s*0/);
+
+    const reveal = css.match(/\.row:hover \.stamps,[^{]*\{([^}]*)\}/)![1];
+    expect(reveal.trim()).toBe("opacity: 1;");
+    expect(css).toMatch(/\.row:focus-within \.stamps/);
+    expect(css).toMatch(/\.selected \.stamps/);
+  });
+
+  it("drives every card's relative label from one shared interval", async () => {
+    vi.useFakeTimers({ now: NOW });
+    const { unmount } = render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "one", updated_at: isoAgo(50_000) }),
+          makeSession({ id: "b", name: "two", updated_at: isoAgo(50_000) }),
+          makeSession({ id: "c", name: "three", updated_at: isoAgo(50_000) }),
+        ]}
+        openTaskCounts={{}}
+      />,
+    );
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(stampOf("one").textContent).toBe("now");
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    for (const name of ["one", "two", "three"]) {
+      expect(stampOf(name).textContent).toBe("1m");
+    }
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/** The card's status line (mockup §1) — its role="status" region. */
+function statusOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[role="status"]')!;
+}
+
+/**
+ * The shape that drives card height: one base class per rendered line. Tone
+ * modifiers are stripped — colour is exactly what a state is allowed to change.
+ */
+function lineShape(name: string): string[] {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return [...row.children].map((child) => child.className.split(" ")[0].replace(/_[a-z0-9]+$/i, ""));
+}
+
+describe("SessionRail status line", () => {
+  const live = makeSession({ id: "s1", name: "the session", activity: "active" });
+
+  function renderWith(state: Partial<SessionAgentState>, session: Session = live, counts = {}) {
+    render(
+      <SessionRail
+        sessions={[session]}
+        openTaskCounts={counts}
+        agentStates={{ [session.id]: { subagents: 0, ...state } }}
+      />,
+    );
+  }
+
+  it("renders 'Ready' with a muted glyph for a live session that has said nothing", () => {
+    renderWith({});
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("◦Ready");
+    expect(status.className).toMatch(/status-idle/);
+  });
+
+  it("renders 'Sleeping · wakes on send' for an inactive session", () => {
+    renderWith({}, makeSession({ id: "s1", name: "the session", activity: "inactive" }));
+    expect(statusOf("the session").textContent).toBe("◦Sleeping · wakes on send");
+  });
+
+  it("renders 'Done · your turn' in the ok tone with a check", () => {
+    renderWith({ done: true });
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("✓Done · your turn");
+    expect(status.className).toMatch(/status-done/);
+    expect(statusOf("the session").querySelector('[class*="dot"]')).toBeNull();
+  });
+
+  it("spins — with no glyph — while a turn is in flight, and names its subagents", () => {
+    renderWith({ workingSince: "2026-07-01T00:00:00Z", subagents: 3 });
+    const status = statusOf("the session");
+    expect(status.textContent).toContain("3 subagents running");
+    expect(status.className).toMatch(/status-working/);
+    const spinner = status.querySelector('[class*="statusSpinner"]')!;
+    expect(spinner).toBeTruthy();
+    // Decorative: colour and copy carry the state, the motion doesn't.
+    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("renders a parked approval in the warn tone, naming the tool", () => {
+    renderWith({ awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" });
+    const status = statusOf("the session");
+    expect(status.textContent).toContain("Needs approval · Bash");
+    expect(status.className).toMatch(/status-needs/);
+    expect(status.querySelector('[class*="statusGlyph"]')!.textContent).toBe("▲");
+  });
+
+  it("renders a crash in the bad tone, counting the blocked work it left behind", () => {
+    renderWith({ crashed: true }, live, { s1: { running: 0, ready: 0, blocked: 2 } });
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("✕Crashed · 2 blocked tasks");
+    expect(status.className).toMatch(/status-bad/);
+  });
+
+  it("paints the leading dot from the status: bad for a crash, accent while working", () => {
+    const { unmount } = render(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { subagents: 0, crashed: true } }}
+      />,
+    );
+    expect(
+      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-bad"]'),
+    ).toBeTruthy();
+    unmount();
+
+    renderWith({ workingSince: "2026-07-01T00:00:00Z" });
+    expect(
+      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-work"]'),
+    ).toBeTruthy();
+  });
+
+  it("holds the documented precedence — crash over approval over working over done", () => {
+    const everything: SessionAgentState = {
+      crashed: true,
+      awaitingSince: "2026-07-01T00:00:00Z",
+      awaitingTool: "Bash",
+      workingSince: "2026-07-01T00:00:00Z",
+      subagents: 2,
+      done: true,
+    };
+    const { rerender } = render(
+      <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={{ s1: everything }} />,
+    );
+    expect(statusOf("the session").textContent).toContain("Crashed");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { ...everything, crashed: false } }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toContain("Needs approval");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { ...everything, crashed: false, awaitingSince: undefined } }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toContain("2 subagents running");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{
+          s1: { ...everything, crashed: false, awaitingSince: undefined, workingSince: undefined },
+        }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toBe("✓Done · your turn");
+  });
+
+  it("renders the same line shape in every state, so card height can't change with it", () => {
+    const states: SessionAgentState[] = [
+      { subagents: 0 },
+      { subagents: 0, done: true },
+      { subagents: 0, workingSince: "2026-07-01T00:00:00Z" },
+      { subagents: 3, workingSince: "2026-07-01T00:00:00Z" },
+      { subagents: 0, awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" },
+      { subagents: 0, crashed: true },
+    ];
+    const shapes = states.map((state) => {
+      const { unmount } = render(
+        <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={{ s1: state }} />,
+      );
+      const shape = lineShape("the session");
+      unmount();
+      return shape;
+    });
+    for (const shape of shapes) expect(shape).toEqual(shapes[0]);
+  });
+
+  it("never reorders a card when its status changes", () => {
+    const sessions = [
+      makeSession({ id: "a", name: "alpha", updated_at: "2026-07-01T10:00:00Z" }),
+      makeSession({ id: "b", name: "bravo", updated_at: "2026-07-01T09:00:00Z" }),
+      makeSession({ id: "c", name: "charlie", updated_at: "2026-07-01T08:00:00Z" }),
+    ];
+    const order = () =>
+      [...screen.getByLabelText("Session list").querySelectorAll('div[role="button"]')].map(
+        (row) => row.querySelector('[class*="name"]')!.textContent,
+      );
+    const { rerender } = render(<SessionRail sessions={sessions} openTaskCounts={{}} />);
+    expect(order()).toEqual(["alpha", "bravo", "charlie"]);
+
+    rerender(
+      <SessionRail
+        sessions={sessions}
+        openTaskCounts={{}}
+        agentStates={{
+          c: { subagents: 1, workingSince: "2026-07-01T00:00:00Z" },
+          a: { subagents: 0, done: true },
+        }}
+      />,
+    );
+    expect(order()).toEqual(["alpha", "bravo", "charlie"]);
+  });
+
+  it("counts a live state's elapsed time off the shared 1s tick", () => {
+    vi.useFakeTimers({ now: Date.parse("2026-07-01T00:00:04Z") });
+    try {
+      renderWith({ workingSince: "2026-07-01T00:00:00Z" });
+      expect(statusOf("the session").textContent).toBe("Working…4s");
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(statusOf("the session").textContent).toBe("Working…1m");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no counter for a state that isn't counting", () => {
+    renderWith({ done: true });
+    expect(statusOf("the session").querySelector('[class*="statusElapsed"]')).toBeNull();
+  });
+});
+
+describe("SessionRail status line motion and truncation", () => {
+  const css = () => readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
+
+  it("spins by default and degrades to a static accent ring under prefers-reduced-motion", () => {
+    const sheet = css();
+    expect(sheet.match(/\.statusSpinner \{([^}]*)\}/)![1]).toMatch(/animation:\s*railSpin/);
+    const reduced = sheet.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)![1];
+    expect(reduced).toContain(".statusSpinner");
+    // Still a ring, and still readable as one: the accent survives the motion.
+    expect(reduced).toMatch(/border-color:\s*var\(--accent\)/);
+  });
+
+  it("truncates its one clause instead of wrapping, so the line can never grow", () => {
+    const label = css().match(/\.statusLabel \{([^}]*)\}/)![1];
+    expect(label).toMatch(/white-space:\s*nowrap/);
+    expect(label).toMatch(/text-overflow:\s*ellipsis/);
+    expect(label).toMatch(/overflow:\s*hidden/);
+    // The line is reserved even when a state has nothing long to say.
+    expect(css().match(/\n\.status \{([^}]*)\}/)![1]).toMatch(/min-height/);
+  });
+});
+
+describe("SessionRail status subscription", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses one SSE connection however many sessions are listed", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const sessions = Array.from({ length: 12 }, (_, i) =>
+      makeSession({ id: `s${i}`, name: `session ${i}`, updated_at: `2026-07-01T00:00:${String(i).padStart(2, "0")}Z` }),
+    );
+
+    function Harness() {
+      const agentStates = useSessionAgentState();
+      return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
+    }
+    render(<Harness />);
+
+    const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
+    act(() => {
+      source.emit(
+        "session.turn_ended",
+        JSON.stringify({
+          seq: 1,
+          timestamp: "2026-09-28T10:00:00Z",
+          type: "session.turn_ended",
+          actor: "agent",
+          session_id: "s7",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(statusOf("session 7").textContent).toBe("✓Done · your turn"));
+    expect(statusOf("session 3").textContent).toBe("◦Ready");
+    expect(FakeEventSource.instances.filter((i) => !i.closed)).toHaveLength(1);
   });
 });

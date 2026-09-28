@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1614,5 +1615,159 @@ func TestSystemPromptPreservedAcrossSwitchTransport(t *testing.T) {
 	}
 	if got := starts[1].SystemPrompt; got != wantPrompt {
 		t.Fatalf("switched transport's SystemPrompt = %q, want unchanged %q", got, wantPrompt)
+	}
+}
+
+// gooseShapeProvider mimics a goose ACP binding: its live session keeps its
+// own in-session transcript buffer (implementing Transcript()), but the
+// provider-level TranscriptReader returns nothing — goose's ACP agent has no
+// on-disk transcript file to read. This is the W7.8 assistant-reply gap
+// shape, and it pins runner.Transcript's live-transcript preference: the
+// assistant reply must still be surfaced from the session buffer even though
+// the provider-level disk reader would hand back zero.
+type gooseShapeProvider struct{}
+
+func (g *gooseShapeProvider) Name() string { return "goose-shape" }
+
+// Matrix reuses the fake provider's already-valid full matrix so the registry
+// accepts the double. (The fake's Transcript behavior is declared, but the
+// goose-shape Transcript method deliberately returns nothing — modeling that
+// goose ACP has no on-disk transcript to read.)
+func (g *gooseShapeProvider) Matrix() provider.Matrix {
+	return fake.New().Matrix()
+}
+func (g *gooseShapeProvider) OneShot(context.Context, provider.OneShotRequest) (*provider.OneShotResult, error) {
+	return nil, provider.ErrUnsupported
+}
+func (g *gooseShapeProvider) Start(_ context.Context, _ provider.StartOptions) (provider.Session, error) {
+	ev := make(chan provider.Event, 64)
+	s := &gsSession{ref: "gs-1", events: ev, ready: make(chan struct{})}
+	// Serialize the scripted turn: the reply (agent) must only stream after the
+	// user prompt has been recorded — mirroring a real ACP turn where Send
+	// records the user msg before any streamed fragment arrives. The goroutine
+	// parks here until Send unblocks it, then streams the reply + turn-end.
+	go func() {
+		<-s.ready
+		s.emitText("you said hi")
+		s.finish()
+	}()
+	return s, nil
+}
+
+// Transcript deliberately returns empty — goose ACP has no on-disk transcript.
+func (g *gooseShapeProvider) Transcript(context.Context, string) ([]provider.Message, error) {
+	return nil, nil
+}
+
+type gsSession struct {
+	ref    string
+	events chan provider.Event
+	closed bool
+	buf    []provider.Message
+	ready  chan struct{}
+	mu     sync.Mutex
+}
+
+func (s *gsSession) Ref() string                   { return s.ref }
+func (s *gsSession) Mode() provider.Mode           { return provider.ModeACP }
+func (s *gsSession) Events() <-chan provider.Event { return s.events }
+func (s *gsSession) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	select {
+	case <-s.events:
+	default:
+	}
+	close(s.events)
+	s.mu.Unlock()
+	return nil
+}
+func (s *gsSession) Send(_ context.Context, text string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("gsSession is closed")
+	}
+	s.buf = append(s.buf, provider.Message{Role: "user", Text: text})
+	select {
+	case <-s.ready:
+	default:
+		close(s.ready)
+	}
+	s.mu.Unlock()
+	return nil
+}
+func (s *gsSession) Interrupt(context.Context) error { return nil }
+func (s *gsSession) Transcript() []provider.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]provider.Message{}, s.buf...)
+}
+func (s *gsSession) emitText(text string) {
+	select {
+	case s.events <- provider.Event{Kind: provider.EventText, Text: text}:
+	default:
+	}
+	s.mu.Lock()
+	s.buf = append(s.buf, provider.Message{Role: "agent", Text: text})
+	s.mu.Unlock()
+}
+func (s *gsSession) finish() {
+	select {
+	case s.events <- provider.Event{Kind: provider.EventTurnEnd}:
+	default:
+	}
+}
+
+// TestTranscriptPrefersLiveACPBuffer pins the goose ACP assistant-reply fix at
+// the runner boundary (spec §15): the session's own buffered transcript is
+// preferred over the provider's disk reader (which, for goose ACP, returns
+// nothing). Without this preference, a live ACP session's transcript pane
+// would be blank for the reply even though the UI streams the text in real
+// time — the W7.8 gap.
+func TestTranscriptPrefersLiveACPBuffer(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	bootstrap := dataclient.New(base, "test-bootstrap")
+	contractsess := contracts.Session{Name: "goose-shape", Provider: "goose-shape"}
+	if err := bootstrap.CreateSession(ctx, &contractsess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	data := dataclient.New(base, contractsess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(&gooseShapeProvider{}); err != nil {
+		t.Fatalf("register goose-shape: %v", err)
+	}
+
+	r := New(contractsess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	// The provider-level TranscriptReader returns nothing. If the runner did
+	// not prefer the live session's buffer, the transcript would be zero
+	// here — this is the regression the test pins.
+	msgs := r.Transcript(ctx)
+	if len(msgs) != 2 {
+		t.Fatalf("len(msgs) = %d, want 2 (live ACP buffer preferred over a returning-nothing disk reader): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Role != "user" || msgs[0].Text != "echo hi" {
+		t.Errorf("msgs[0] = %+v, want {role: user, text: echo hi}", msgs[0])
+	}
+	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
+		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
 	}
 }

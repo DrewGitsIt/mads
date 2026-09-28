@@ -79,3 +79,31 @@ func (p AgentPermissions) Intents() IntentSet {
 func EffectiveIntents(trust SessionTrust, perms AgentPermissions) IntentSet {
 	return trust.Intents().Union(perms.Intents())
 }
+
+// EffectiveIntentsWithDenials is the redesign-era policy: the same as
+// EffectiveIntents, plus the persona's Denylist (abstract tool intents
+// the user explicitly blocked). A persona Denylist entry for IntentShell
+// (or its legacy equivalent, a non-empty denied_commands list — which
+// already lands in IntentDenyCommands via AgentPermissions.Intents) is
+// compiled to the matching PermissionIntent restrictions.
+//
+// This is the canonical read path the runner's StartOptions.ToolIntents
+// and the conformance suite go through. It accepts a nil Persona to
+// mean "no persona in scope" and still returns the Trust + Permissions
+// baseline.
+func EffectiveIntentsWithDenials(p *Agent, trust SessionTrust, perms AgentPermissions) IntentSet {
+	out := EffectiveIntents(trust, perms)
+	if p == nil {
+		return out
+	}
+	_, denied := p.EffectiveToolIntents()
+	for _, d := range denied {
+		switch d {
+		case IntentShell:
+			out[IntentDenyCommands] = true
+		case IntentWrite, IntentEdit:
+			out[IntentReadOnly] = true
+		}
+	}
+	return out
+}

@@ -19,6 +19,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/job"
+	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
@@ -35,6 +36,7 @@ type server struct {
 	version              string
 	runsDir              string
 	fastModelFlagBaseURL string
+	models               *modelcatalog.Catalog
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -68,6 +70,10 @@ type Options struct {
 	// fastModelDynamicConfig applies, so a pre-mode-selector flag-only
 	// endpoint reports as "endpoint", not "provider".
 	FastModelFlagBaseURL string
+	// Models is the discovered-model cache. Nil is tolerated: the models
+	// endpoint falls back to calling the provider's discovery inline, the
+	// pre-cache behavior.
+	Models *modelcatalog.Catalog
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
@@ -87,7 +93,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /version", s.handleVersion)
@@ -190,6 +196,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /providers", s.handleListProviders)
 	mux.HandleFunc("GET /providers/behaviors", s.handleListProviderBehaviors)
 	mux.HandleFunc("GET /providers/{name}/models", s.handleListProviderModels)
+	mux.HandleFunc("POST /providers/{name}/models/refresh", s.handleRefreshProviderModels)
 	mux.HandleFunc("GET /config", s.handleGetConfig)
 	mux.HandleFunc("PUT /config", s.handleUpdateConfig)
 	mux.HandleFunc("GET /fast-model/status", s.handleFastModelStatus)

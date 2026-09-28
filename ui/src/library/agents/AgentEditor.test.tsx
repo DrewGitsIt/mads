@@ -14,7 +14,7 @@ describe("AgentEditor", () => {
     vi.unstubAllGlobals();
   });
 
-  it("creates a new agent from the form fields", async () => {
+  it("creates a new persona from the form fields", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     const onCreate = vi.fn().mockResolvedValue({} as Agent);
     const onClose = vi.fn();
@@ -67,7 +67,7 @@ describe("AgentEditor", () => {
     expect(screen.queryByText("Delete")).toBeNull();
   });
 
-  it("renders the Permissions section with the agent's declared intents", () => {
+  it("renders the Constraints section with the persona's allowed_paths and no denied-commands text box", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     const agent: Agent = {
       id: "a1",
@@ -75,7 +75,9 @@ describe("AgentEditor", () => {
       prompt: "p",
       created_at: "t",
       updated_at: "t",
-      permissions: { denied_commands: ["rm"], allowed_paths: ["src/"] },
+      allowlist: ["read", "search"],
+      denylist: ["shell"],
+      permissions: { allowed_paths: ["src/"] },
     };
     render(
       <AgentEditor
@@ -87,52 +89,61 @@ describe("AgentEditor", () => {
       />,
     );
 
-    expect(screen.getByText("Permissions")).toBeTruthy();
-    expect(screen.getByText("Block commands")).toBeTruthy();
+    // The boolean surface is present with the shell chip in its denied state.
+    expect(screen.getByText("Tool allowances")).toBeTruthy();
+    const shellChip = screen.getByTitle(/shell/);
+    expect(shellChip).toBeTruthy();
+    expect(shellChip.textContent).toContain("deny");
+
+    // Allowed paths still round-trip.
+    expect(screen.getByText("Constraints")).toBeTruthy();
     expect(screen.getByText("Restrict file paths")).toBeTruthy();
-    expect(screen.getByText("Read-only mode")).toBeTruthy();
-    expect(screen.getByText("Require approval")).toBeTruthy();
-    expect(screen.getByText("rm ×")).toBeTruthy();
     expect(screen.getByText("src/ ×")).toBeTruthy();
+
+    // The legacy denied-commands CSV input is gone (replaced by the shell chip).
+    expect(screen.queryByPlaceholderText("e.g. rm, git push --force")).toBeNull();
+
     // Never claims enforcement the editor has no provider context to back up.
     expect(screen.queryByText(/enforced by/)).toBeNull();
   });
 
-  it("edits denied_commands and allowed_paths and includes them in the save payload", async () => {
+  it("keeps a persona's legacy allowed_paths in the save payload when nothing changes", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
-    const onCreate = vi.fn().mockResolvedValue({} as Agent);
+    const agent: Agent = {
+      id: "a1",
+      name: "restricted-agent",
+      prompt: "You are careful.",
+      created_at: "t",
+      updated_at: "t",
+      allowlist: ["read"],
+      denylist: ["shell"],
+      permissions: { allowed_paths: ["src/"] },
+    };
+    const onUpdate = vi.fn().mockResolvedValue({} as Agent);
+    const onClose = vi.fn();
 
     render(
       <AgentEditor
-        agent={null}
-        onClose={vi.fn()}
-        onCreate={onCreate}
-        onUpdate={vi.fn()}
+        agent={agent}
+        onClose={onClose}
+        onCreate={vi.fn()}
+        onUpdate={onUpdate}
         onDelete={vi.fn()}
       />,
     );
 
-    fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
-      target: { value: "restricted-agent" },
-    });
-    fireEvent.change(screen.getByText("Prompt").closest("label")!.querySelector("textarea")!, {
-      target: { value: "You are careful." },
-    });
-
-    const denyInput = screen.getByPlaceholderText("e.g. rm, git push --force");
-    fireEvent.change(denyInput, { target: { value: "rm" } });
-    fireEvent.click(denyInput.parentElement!.querySelector("button")!);
-
-    const pathInput = screen.getByPlaceholderText("e.g. src/, docs/");
-    fireEvent.change(pathInput, { target: { value: "src/" } });
-    fireEvent.click(pathInput.parentElement!.querySelector("button")!);
-
     fireEvent.click(screen.getByText("Save"));
 
-    await waitFor(() => expect(onCreate).toHaveBeenCalled());
-    expect(onCreate.mock.calls[0][0]).toMatchObject({
-      permissions: { denied_commands: ["rm"], allowed_paths: ["src/"] },
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+    expect(onUpdate.mock.calls[0][0]).toMatchObject({
+      name: "restricted-agent",
+      permissions: { allowed_paths: ["src/"] },
+      allowlist: ["read"],
+      denylist: ["shell"],
     });
+    // denied_commands is no longer part of the save payload — the deny is
+    // expressed via the `shell` intent chip, not a free-text command string.
+    expect((onUpdate.mock.calls[0][0] as Agent).permissions?.denied_commands).toBeUndefined();
   });
   // Routes the editor's two fetches: the capability registry and the
   // suggest-capabilities enrichment call.

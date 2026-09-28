@@ -67,6 +67,15 @@
   margin: 0;
   color: var(--text3);
   font-size: var(--fs-sm);
+
+  ul {
+    margin: 0.5rem 0 0;
+    padding-left: 1.25rem;
+    list-style: disc;
+  }
+  li {
+    margin: 0.25rem 0;
+  }
 }
 
 .intentHeading {

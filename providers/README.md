@@ -41,6 +41,20 @@ agents — not services themselves.
   Every claim is sourced from public docs, not a live binary (kiro-cli isn't
   installed here); CI runs the full conformance suite against a scripted
   stand-in, `MADS_KIRO_SMOKE=1` opts into the real-binary smoke.
+- `acprpc/` — the generic ACP v1 client engine (not a provider): the spec is
+  normative, agent adaptation happens through a small enumerated knob set
+  where every knob carries a capture or goose-as-client citation, and the
+  engine invariants (kind-based permission selection, capability gating,
+  own-flag interrupt tracking, fail-closed tool identity) are deliberately
+  not knobs. kirocli and goosecli ride it; CI proves it with an adversarial
+  scripted fake plus byte-replay of the committed goose captures.
+- `goosecli/` — the goose adapter: an acprpc binding (knob values plus the
+  trust tool-class table), OneShot emulated over ACP (the `goose run` plan
+  superseded — its stream announces no session id), `goose session` PTY
+  with banner ref discovery and a SessionLocator backstop, and `session
+  export` transcripts. Every claim is capture/source-pinned against goose
+  1.48.0 (`goosecli/testdata/captures/`); CI runs the full conformance
+  suite against a scripted stand-in, no goose binary needed.
 
 ## Test it
 

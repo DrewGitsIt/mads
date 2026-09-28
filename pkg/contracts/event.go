@@ -95,6 +95,18 @@ const (
 	// tool_use, completed/failed on tool_result) are stamped onto the event
 	// itself, not duplicated here. Payload: contracts.ToolStatusChange.
 	SessionToolStatusChanged EventType = "session.tool_status_changed"
+	// SessionAgentState fires when a session's main agent crosses a state
+	// boundary — a turn going in flight, the activity label inside that turn
+	// changing, and the turn ending. Payload: contracts.AgentState. This is
+	// the ONLY turn-start/turn-activity signal on the control plane: the
+	// per-session data-plane /output stream carries the same information but
+	// costs one connection per session, and the session rail watches every
+	// session at once (ui/src/router/events.ts — the ~6-socket-per-origin
+	// cap is why it must never open one per card). Transitions only, floored
+	// to one append per ~500ms so a tool-heavy turn can't spam the log, and
+	// never fired for a subagent's parent-tagged events — a sidechain rolls
+	// up as a count, not as the main agent's label.
+	SessionAgentState EventType = "session.agent_state"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -375,7 +387,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
-	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionAgentState,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

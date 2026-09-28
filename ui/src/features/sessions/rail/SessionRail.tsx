@@ -3,11 +3,20 @@ import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialo
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
-import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, groupSessions, totalOpenTasks } from "./railGroups";
-import type { OpenTaskBreakdown } from "./railGroups";
+import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf, totalOpenTasks } from "./railGroups";
+import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
+import { useSettledRailOrder } from "./railOrder";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
+import {
+  formatAbsoluteStamp,
+  formatCalendarStamp,
+  formatElapsedStamp,
+  formatRelativeStamp,
+  useElapsedNow,
+  useRelativeNow,
+} from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
 import type { Grant, Link, LinkCadence, OrchestrateStatus, Session } from "../../../router/types";
 import styles from "./SessionRail.module.css";
@@ -15,6 +24,8 @@ import styles from "./SessionRail.module.css";
 export interface SessionRailProps {
   sessions: Session[];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
+  /** Live agent state per session (useSessionAgentState) — paints the status line, never the order. */
+  agentStates?: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -24,6 +35,12 @@ export interface SessionRailProps {
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
   routerClient?: RouterClient;
+  /**
+   * Opaque stamp of the active search/filter. Any change to it is a quiet
+   * boundary: the pending order applies at once, because a list the user just
+   * asked for has nothing to hold still.
+   */
+  filterKey?: string;
   className?: string;
 }
 
@@ -36,6 +53,7 @@ interface LinkModeState {
 export function SessionRail({
   sessions,
   openTaskCounts,
+  agentStates = {},
   selectedId,
   onSelect,
   onResume,
@@ -43,10 +61,16 @@ export function SessionRail({
   onDelete,
   links = [],
   routerClient = router,
+  filterKey,
   className,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
-  const { active, recent } = groupSessions(sessions);
+  // Order is settled, never live: see useSettledRailOrder for the contract.
+  const { active, recent, pendingMoves, settle, railHandlers } = useSettledRailOrder(
+    sessions,
+    selectedId,
+    filterKey,
+  );
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -77,7 +101,20 @@ export function SessionRail({
   }
 
   return (
-    <div className={[styles.rail, className].filter(Boolean).join(" ")} aria-label="Session list">
+    <div
+      className={[styles.rail, className].filter(Boolean).join(" ")}
+      aria-label="Session list"
+      {...railHandlers}
+    >
+      {pendingMoves > 0 && (
+        <button type="button" className={styles.pendingGhost} onClick={settle}>
+          <span className={styles.pendingArrow} aria-hidden="true">
+            ↑
+          </span>
+          {pendingMoves === 1 ? "1 session moved" : `${pendingMoves} sessions moved`}
+          <span className={styles.pendingHint}>— click to reorder</span>
+        </button>
+      )}
       {linkedSessionsEnabled && linkMode && (
         <div className={styles.linkBar}>
           <span className={styles.linkBarCount}>{linkMode.selectedIds.size} selected</span>
@@ -104,6 +141,7 @@ export function SessionRail({
               key={row.session.id}
               row={row}
               openTaskCounts={openTaskCounts}
+              agentStates={agentStates}
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
@@ -128,6 +166,7 @@ export function SessionRail({
               key={row.session.id}
               row={row}
               openTaskCounts={openTaskCounts}
+              agentStates={agentStates}
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
@@ -182,6 +221,7 @@ export function SessionRail({
 function RailRowGroup({
   row,
   openTaskCounts,
+  agentStates,
   selectedId,
   onSelect,
   onResume,
@@ -197,6 +237,7 @@ function RailRowGroup({
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
+  agentStates: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -217,6 +258,7 @@ function RailRowGroup({
       <SessionRow
         session={row.session}
         openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+        agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
@@ -237,6 +279,7 @@ function RailRowGroup({
             key={sub.session.id}
             session={sub.session}
             openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+            agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
@@ -281,6 +324,7 @@ function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined 
 function SessionRow({
   session,
   openTaskBreakdown,
+  agentState,
   selected,
   onSelect,
   onResume,
@@ -305,6 +349,7 @@ function SessionRow({
 }: {
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
+  agentState: SessionAgentState;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -329,8 +374,13 @@ function SessionRow({
   linkId?: string;
   routerClient?: RouterClient;
 }) {
-  const dot = dotState(session, openTaskBreakdown);
+  const now = useRelativeNow();
+  const status = statusOf(session, agentState, openTaskBreakdown);
   const name = session.name || "Untitled session";
+  // updated_at is "last activity", not "last reply": the runner bumps it on
+  // every turn end, but so do renames, summary writes and activity flips.
+  // It becomes an honest reply stamp only once last_turn_at lands.
+  const lastActivity = formatRelativeStamp(session.updated_at, now);
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
@@ -398,8 +448,34 @@ function SessionRow({
       }}
     >
       <div className={styles.rowTop}>
-        <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
+        <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
+        {lastActivity && (
+          <span
+            className={styles.when}
+            title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}
+          >
+            {lastActivity}
+          </span>
+        )}
+      </div>
+      {/* Always rendered, one clause, never wrapped: the card's height must be
+          identical in every state so a state change repaints and never reflows. */}
+      <div className={[styles.status, styles[`status-${status.tone}`]].join(" ")} role="status">
+        {status.glyph ? (
+          <span
+            className={[styles.statusGlyph, status.kind === "needs" ? styles.statusBell : ""]
+              .filter(Boolean)
+              .join(" ")}
+            aria-hidden="true"
+          >
+            {status.glyph}
+          </span>
+        ) : (
+          <span className={styles.statusSpinner} aria-hidden="true" />
+        )}
+        <span className={styles.statusLabel}>{status.label}</span>
+        {status.since && <StatusElapsed since={status.since} />}
       </div>
       {hasMeta && (
         <div className={styles.rowMeta}>
@@ -439,6 +515,19 @@ function SessionRow({
         </div>
       )}
       {showSummary && <div className={styles.summary}>{summaryTeaser(session.summary!)}</div>}
+      {/* Always rendered so its height is reserved at rest — the hover/selected
+          reveal is opacity-only and the rail never reflows under the pointer. */}
+      <div className={styles.stamps}>
+        <span title={`Initiated ${formatAbsoluteStamp(session.created_at)}`}>
+          started {formatCalendarStamp(session.created_at, now)}
+        </span>
+        <span className={styles.stampSep} aria-hidden="true">
+          ·
+        </span>
+        <span title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}>
+          last activity {formatCalendarStamp(session.updated_at, now)}
+        </span>
+      </div>
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}
@@ -522,4 +611,15 @@ function SessionRow({
       )}
     </div>
   );
+}
+
+/**
+ * A live state's elapsed counter. Its own component on purpose: the 1s clock
+ * is only subscribed while some card is mid-turn or parked, so a rail of
+ * resting sessions runs no seconds timer at all.
+ */
+function StatusElapsed({ since }: { since: string }) {
+  const elapsed = formatElapsedStamp(since, useElapsedNow());
+  if (!elapsed) return null;
+  return <span className={styles.statusElapsed}>{elapsed}</span>;
 }

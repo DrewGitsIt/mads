@@ -5,6 +5,13 @@ through its `acp` JSON-RPC agent for interactive sessions, `kiro-cli chat
 --no-interactive` for one-shots, `--resume-id` for reattach, and ACP's
 `session/load` replay for normalized transcript history.
 
+The ACP transport is the generic `providers/acprpc` engine — this package
+carries no JSON-RPC plumbing of its own, only the knob values in
+`startACP` (kind-based tool identity, no vendor mode calls, no model
+configOption) plus the PTY and plain-CLI strategies. See "Engine
+migration" below for the behavior that deliberately changed when the
+hand-rolled ACP layer was deleted.
+
 **Every claim below is sourced from kiro-cli's public docs
 (kiro.dev/docs/cli/*), its GitHub issues, and agentclientprotocol.com — not
 from running the binary.** kiro-cli is not installed on this machine. Until
@@ -28,7 +35,7 @@ best-effort research, not fact.
 | CwdReroot | **Unsupported** | No documented flag or command changes a live session's working directory mid-session. |
 | TrustLimited | **Emulated** | Enforced on the ACP transport by auto-denying `session/request_permission` requests for command-execution-kind tool calls (see below); on PTY, the corresponding restriction is a human declining kiro-cli's own interactive confirmation prompt, not an automated guarantee. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
 | TrustReadOnly | **Emulated** | Same mechanism, denying both command execution and file mutation kinds. Same ACP-vs-PTY asymmetry as TrustLimited. |
-| MCPServers | **Unsupported** | No documented flag or config mechanism threads an MCP server into kiro-cli's own launch was found in its public docs/GitHub issues (same citation bar as the rest of this table — kiro-cli is not installed in this environment). A session simply starts without the descriptor materialized; the L2c leader capability (`docs/LINKED-SESSIONS-DESIGN.md` item 5) never reaches a kiro-cli-backed agent. Revisit with `MADS_KIRO_SMOKE=1` against a real binary. |
+| MCPServers | **Unsupported** | No documented flag or config mechanism threads an MCP server into kiro-cli's own launch was found in its public docs/GitHub issues (same citation bar as the rest of this table — kiro-cli is not installed in this environment). The acprpc engine does now place descriptors on `session/new`'s spec-required `mcpServers` field, but no kiro doc confirms the agent actually connects them, so the declaration stays honest-unsupported: the L2c leader capability (`docs/LINKED-SESSIONS-DESIGN.md` item 5) is not promised to a kiro-cli-backed agent. Revisit with `MADS_KIRO_SMOKE=1` against a real binary. |
 | RefAnnounce | **Emulated** | ACP's `session/new` response carries the ref synchronously, before `Start` even returns — no announcement subscription is needed there (Native-strength). The PTY transport prints nothing and has no on-disk transcript format to discover from (unlike claude-code) — a fresh terminal session's ref is simply never learned. Emulated is the honest one-row summary across both. |
 
 Net shape vs. claude-code: kiro-cli is **more capable** on ModelDiscovery,
@@ -47,8 +54,8 @@ the matrix is not a copy of claude-code's.
 persist a session's provider-native ref the moment it's known, instead of
 only at turn end.
 
-- **ACP transport:** `startACP()` sets `s.ref` from `session/new`'s
-  synchronous JSON-RPC response before `Start` returns at all — so
+- **ACP transport:** the acprpc engine sets the session ref from
+  `session/new`'s synchronous JSON-RPC response before `Start` returns at all — so
   `Session.Ref()` is already non-empty by the time the caller has a
   session in hand. No `RefAnnouncer` implementation is needed; the runner's
   early-return `if ref := sess.Ref(); ref != ""` path covers this case for
@@ -68,8 +75,9 @@ only at turn end.
 ## Trust enforcement, transport by transport
 
 - **ACP transport (structured):** `session/request_permission` is a real
-  mid-turn request the agent sends before a tool call runs. `session.go`
-  classifies the accompanying tool call's ACP `kind`
+  mid-turn request the agent sends before a tool call runs. The acprpc
+  engine's trust gate (with this package's `ToolIdentity: KindBased` knob)
+  classifies the tool call's ACP `kind`
   (`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`other`,
   per agentclientprotocol.com) against the session's trust level:
   - `limited` approves `read`/`edit`/`search`/`think`/`fetch`; denies
@@ -78,8 +86,13 @@ only at turn end.
     everything else, including `edit`.
   - `full` (and the zero value) approves everything — unchanged from before
     this row existed.
-  An unrecognized kind denies under `limited`/`read_only` — this adapter
-  never silently under-enforces on a kind it doesn't recognize.
+  The kind comes from the announced `tool_call` update with the same
+  `toolCallId`, or — when the agent asks before announcing — from the
+  request's own embedded tool call. Either way an absent or unrecognized
+  kind denies under `limited`/`read_only` — never a silent under-enforce.
+  The reply is selected from the request's *offered options* by option
+  kind (`allow_once`/`reject_once`, with the `_always` same-polarity
+  fallback), since optionIds are agent-chosen opaque strings per spec.
 - **PTY transport (terminal):** `--trust-all-tools` is passed only for
   `full` trust (and the zero value). For `limited`/`read_only`, it is
   omitted entirely, so kiro-cli falls back to its own interactive
@@ -97,16 +110,15 @@ only at turn end.
   session ID and resume command on session exit") — the same limitation
   claude-code's PTY transport has. `ptySession.Ref()` returns
   `StartOptions.Resume` when resuming, empty otherwise.
-- **The permission-reject wire shape is an educated guess, not a confirmed
-  spec value.** `denyPermission` replies with
-  `{outcome: {outcome: "selected", optionId: "reject"}}`, by symmetry with
-  the existing `autoApprove`'s `optionId: "allow"`. Neither value has been
-  confirmed against a live kiro-cli binary or a captured real
-  `session/request_permission` exchange — if kiro-cli's actual reject
-  semantics use a different `optionId` (or a `"cancelled"` outcome instead
-  of `"selected"`), this adapter's whole `limited`/`read_only` ACP
-  enforcement silently degrades to always-allow. `MADS_KIRO_SMOKE=1` against
-  a real binary is the only way to confirm or refute this.
+- **Permission-request timing is still unconfirmed for kiro
+  specifically.** The old guessed optionIds are gone (see "Engine
+  migration"), but whether kiro announces the `tool_call` before
+  requesting permission — and, if it asks first, whether the request's
+  embedded tool call carries the `kind` — has not been observed against a
+  live binary. The engine handles both orders, and either way an absent
+  kind denies below full trust (fail-closed, the opposite of the old
+  layer's silent-always-allow failure mode). `MADS_KIRO_SMOKE=1` against a
+  real binary is the only way to pin the actual shape.
 - **Least-certain row: Transcript.** ACP's `loadSession: true` capability is
   generally understood to mean `session/load` replays a session's prior
   turns as `session/update` notifications before its own response resolves —
@@ -120,13 +132,52 @@ only at turn end.
   implementation has drifted from its own docs elsewhere, this design could
   be wrong in ways only a real binary would catch.
 
+## Engine migration (behavior that deliberately changed)
+
+The hand-rolled ~430-line ACP layer (`wire.go`/`session.go`) is deleted;
+the `providers/acprpc` engine speaks the wire now, driven by the knob
+values in `startACP`. The ACP v1 spec is normative
+(`docs/GOOSE-ADAPTER-DESIGN.md`), so where the old code encoded a guess
+the engine contradicts, the engine wins:
+
+- **Permission replies select offered options by kind, never by
+  optionId.** The old layer replied with hardcoded
+  `optionId: "allow"`/`"reject"` — pure guesses, flagged here as a risk
+  that could silently degrade `limited`/`read_only` to always-allow. The
+  engine picks from the request's `options[]` by option kind
+  (`allow_once`/`reject_once`, `_always` same-polarity fallback, outcome
+  `"cancelled"` when no option of the needed polarity exists), which is
+  what the spec means the ids to be: agent-chosen opaque strings.
+- **No `modelId` param on `session/new`.** The old layer sent
+  `{"modelId": …}` — a field the spec's `session/new` params do not have.
+  kiro documents no model configOption either, so `ModelConfigOptionID`
+  stays empty and an ACP `Start` naming a model now fails wrapping
+  `provider.ErrUnsupported` instead of sending a non-spec param and hoping.
+  `OneShot`'s and the PTY transport's `--model` flag are unchanged.
+- **`session/load` is gated on the advertised `loadSession` capability.**
+  The old layer called it unconditionally; the engine refuses a resume
+  loudly (typed `ErrUnsupported`) when the agent doesn't advertise it.
+  kiro's agent advertises `loadSession: true`, so nothing changes on a
+  conforming binary — only the failure mode against a non-conforming one.
+- **`mcpServers` is always present on `session/new`/`session/load`** (a
+  spec requirement the old layer omitted). The Matrix row stays
+  Unsupported — see the row's justification.
+- **`StartOptions.SystemPrompt` is no longer silently dropped.** The old
+  layer ignored it; the engine's default strategy prefixes it onto the
+  first send. kiro documents no system-prompt surface, so emulation is the
+  honest alternative to dropping an agent persona on the floor.
+
 ## Testing without kiro-cli installed
 
 `fakekiro_test.go` re-execs the test binary as a scripted ACP/chat stand-in
 (`MADS_FAKE_KIRO=1`, the standard `os/exec` TestMain trick) — real subprocess
 spawn, real JSON-RPC request/response correlation, real `session/cancel`
 mid-turn, real `session/load` replay across separate process spawns via a
-shared `MADS_FAKE_KIRO_DIR`. `providers/conformance`'s full suite
+shared `MADS_FAKE_KIRO_DIR`. Its permission menu offers deliberately
+opaque optionIds (`fk-yes`/`fk-no`, never `allow`/`reject`) so a client
+that hardcodes ids fails the round trip, and it asks before announcing
+the tool call, exercising the engine's embedded-identity gating path.
+`providers/conformance`'s full suite
 (`TestConformanceAgainstScriptedBinary`) runs against that stand-in in CI —
 no kiro-cli required, and no live LLM is ever called.
 

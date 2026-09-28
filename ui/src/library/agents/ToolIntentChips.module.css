@@ -1,0 +1,63 @@
+.wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@keyframes chipGlow {
+  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.3); }
+  70% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 9999px;
+  background: #ffffff;
+  font-family: inherit;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  cursor: pointer;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.chip:hover {
+  border-color: #9ca3af;
+}
+
+.chip:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+.state-allow {
+  border-color: #16a34a;
+  background: #f0fdf4;
+}
+.state-deny {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+.state-unset {
+  border-color: #d1d5db;
+  background: #f9fafb;
+}
+
+.name {
+  font-weight: 500;
+  color: #111827;
+}
+
+.state {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+}
+
+.state-allow .state { color: #15803d; }
+.state-deny .state { color: #b91c1c; }

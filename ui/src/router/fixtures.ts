@@ -22,6 +22,7 @@ import type {
   Mentionable,
   MergeResult,
   Model,
+  ModelCatalog,
   Note,
   NoteType,
   PermissionRequest,
@@ -1270,6 +1271,14 @@ export class FakeRouterClient implements RouterClient {
 
   async listModels(): Promise<Model[]> {
     throw new Error("not fixtured: listModels");
+  }
+
+  async listModelCatalog(): Promise<ModelCatalog> {
+    throw new Error("not fixtured: listModelCatalog");
+  }
+
+  async refreshModelCatalog(): Promise<ModelCatalog> {
+    throw new Error("not fixtured: refreshModelCatalog");
   }
 
   // --- Metrics ---

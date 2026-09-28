@@ -23,7 +23,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
       .catch(() => setAgents([]));
   }, []);
 
-  // The staged value is the agent id (agt_…); a workspace default may be
+  // The staged value is the persona id (agt_…); a workspace default may be
   // either an id or a name. Always show the name the menu shows.
   const displayName = (ref: string) =>
     agents.find((a) => a.id === ref || a.name === ref)?.name ?? ref;
@@ -36,7 +36,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
         ? displayName(value)
         : resolved?.value
           ? `${displayName(resolved.value)} (default)`
-          : "Select agent";
+          : "Select persona";
 
   return (
     <Popover
@@ -48,7 +48,11 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
           className={pillStyles.trigger}
           onClick={() => setOpen((o) => !o)}
         >
-          <span className={pillStyles.key}>agent</span> {triggerLabel}
+          {/* Redesign: the registry record is a persona (prompt +
+           * allow/deny tool intents), not an "agent" — the pill's label
+           * tracks the data model so the two pills (persona / model) read
+           * as the two concepts they set. */}
+          <span className={pillStyles.key}>persona</span> {triggerLabel}
         </button>
       }
     >
@@ -65,7 +69,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
         >
           Auto
         </button>
-        {agents.length === 0 && <div className={pillStyles.groupLabel}>No agents yet</div>}
+        {agents.length === 0 && <div className={pillStyles.groupLabel}>No personas yet</div>}
         {agents.map((agent) => (
           <button
             key={agent.id}
