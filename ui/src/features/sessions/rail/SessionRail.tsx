@@ -662,10 +662,14 @@ function SessionRow({
   const now = useRelativeNow();
   const status = statusOf(session, agentState, openTaskBreakdown);
   const name = session.name || "Untitled session";
-  // updated_at is "last activity", not "last reply": the runner bumps it on
-  // every turn end, but so do renames, summary writes and activity flips.
-  // It becomes an honest reply stamp only once last_turn_at lands.
-  const lastActivity = formatRelativeStamp(session.updated_at, now);
+  // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
+  // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
+  // rename or a summary write wearing a reply's clothes. Absent — and so
+  // printed as "no reply yet" below — until the session's first turn ends.
+  const lastReply = formatRelativeStamp(session.last_turn_at, now);
+  const lastReplyTitle = session.last_turn_at
+    ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
+    : undefined;
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
@@ -741,12 +745,9 @@ function SessionRow({
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
-        {lastActivity && (
-          <span
-            className={styles.when}
-            title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}
-          >
-            {lastActivity}
+        {lastReply && (
+          <span className={styles.when} title={lastReplyTitle}>
+            {lastReply}
           </span>
         )}
       </div>
@@ -823,8 +824,10 @@ function SessionRow({
         <span className={styles.stampSep} aria-hidden="true">
           ·
         </span>
-        <span title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}>
-          last activity {formatCalendarStamp(session.updated_at, now)}
+        <span title={lastReplyTitle}>
+          {session.last_turn_at
+            ? `last reply ${formatCalendarStamp(session.last_turn_at, now)}`
+            : "no reply yet"}
         </span>
       </div>
       {linkModeActive ? (

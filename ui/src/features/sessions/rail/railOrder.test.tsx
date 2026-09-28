@@ -10,6 +10,7 @@ function makeSession(overrides: Partial<Session>): Session {
     activity: "active",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
+    last_turn_at: "2026-07-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -36,14 +37,14 @@ function hasDot(name: string, state: "on" | "attn" | "off"): boolean {
   return Boolean(row.querySelector(`[class*="dot-${state}"]`));
 }
 
-const alpha = makeSession({ id: "a", name: "alpha", updated_at: "2026-07-01T10:00:00Z" });
-const bravo = makeSession({ id: "b", name: "bravo", updated_at: "2026-07-01T09:00:00Z" });
-const charlie = makeSession({ id: "c", name: "charlie", updated_at: "2026-07-01T08:00:00Z" });
+const alpha = makeSession({ id: "a", name: "alpha", last_turn_at: "2026-07-01T10:00:00Z" });
+const bravo = makeSession({ id: "b", name: "bravo", last_turn_at: "2026-07-01T09:00:00Z" });
+const charlie = makeSession({ id: "c", name: "charlie", last_turn_at: "2026-07-01T08:00:00Z" });
 const paused = makeSession({
   id: "c",
   name: "charlie",
   activity: "inactive",
-  updated_at: "2026-07-01T08:00:00Z",
+  last_turn_at: "2026-07-01T08:00:00Z",
 });
 
 describe("settled rail order", () => {
@@ -91,13 +92,33 @@ describe("settled rail order", () => {
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
   });
 
+  it("does not move a card that was merely renamed — the order reads last_turn_at", () => {
+    const { rerender } = render(
+      <SessionRail sessions={[alpha, bravo, charlie]} openTaskCounts={{}} />,
+    );
+    expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
+
+    // The auto-title job lands on the oldest card: a new name and a fresh
+    // updated_at, but no reply. Under updated_at this shot it to the top (and
+    // raised a ghost while hovered, for a move the user never caused).
+    rerender(
+      <SessionRail
+        sessions={[alpha, bravo, { ...charlie, name: "renamed", updated_at: "2026-07-01T11:00:00Z" }]}
+        openTaskCounts={{}}
+      />,
+    );
+
+    expect(railOrder()).toEqual(["alpha", "bravo", "renamed"]);
+    expect(ghost()).toBeNull();
+  });
+
   it("holds a recency change while hovered, shows the ghost, and applies it on mouseleave", () => {
     const { rerender } = render(<SessionRail sessions={[alpha, bravo]} openTaskCounts={{}} />);
     fireEvent.mouseEnter(rail());
 
     rerender(
       <SessionRail
-        sessions={[alpha, { ...bravo, updated_at: "2026-07-01T11:00:00Z" }]}
+        sessions={[alpha, { ...bravo, last_turn_at: "2026-07-01T11:00:00Z" }]}
         openTaskCounts={{}}
       />,
     );
@@ -115,7 +136,7 @@ describe("settled rail order", () => {
 
     rerender(
       <SessionRail
-        sessions={[alpha, { ...bravo, updated_at: "2026-07-01T11:00:00Z" }]}
+        sessions={[alpha, { ...bravo, last_turn_at: "2026-07-01T11:00:00Z" }]}
         openTaskCounts={{}}
       />,
     );
@@ -129,7 +150,7 @@ describe("settled rail order", () => {
   it("applies the pending order when the search/filter changes", () => {
     const { rerender } = render(<SessionRail sessions={[alpha, bravo]} openTaskCounts={{}} />);
     fireEvent.mouseEnter(rail());
-    const moved = { ...bravo, updated_at: "2026-07-01T11:00:00Z" };
+    const moved = { ...bravo, last_turn_at: "2026-07-01T11:00:00Z" };
 
     rerender(<SessionRail sessions={[alpha, moved]} openTaskCounts={{}} />);
     expect(railOrder()).toEqual(["alpha", "bravo"]);
@@ -145,7 +166,7 @@ describe("settled rail order", () => {
 
     rerender(
       <SessionRail
-        sessions={[alpha, { ...bravo, updated_at: "2026-07-01T11:00:00Z" }]}
+        sessions={[alpha, { ...bravo, last_turn_at: "2026-07-01T11:00:00Z" }]}
         openTaskCounts={{}}
       />,
     );
@@ -165,7 +186,7 @@ describe("settled rail order", () => {
     // session — keeps index 1 rather than being pushed down by it.
     rerender(
       <SessionRail
-        sessions={[alpha, bravo, { ...charlie, updated_at: "2026-07-01T12:00:00Z" }]}
+        sessions={[alpha, bravo, { ...charlie, last_turn_at: "2026-07-01T12:00:00Z" }]}
         openTaskCounts={{}}
         selectedId="b"
       />,
@@ -185,7 +206,7 @@ describe("settled rail order", () => {
     // around it and it holds index 1 instead of being pushed to 2.
     rerender(
       <SessionRail
-        sessions={[alpha, bravo, { ...charlie, updated_at: "2026-07-01T12:00:00Z" }]}
+        sessions={[alpha, bravo, { ...charlie, last_turn_at: "2026-07-01T12:00:00Z" }]}
         openTaskCounts={{}}
         selectedId="b"
       />,
@@ -200,13 +221,13 @@ describe("settled rail order", () => {
       id: "d",
       name: "delta",
       activity: "inactive",
-      updated_at: "2026-07-01T09:30:00Z",
+      last_turn_at: "2026-07-01T09:30:00Z",
     });
     const echo = makeSession({
       id: "e",
       name: "echo",
       activity: "inactive",
-      updated_at: "2026-07-01T07:00:00Z",
+      last_turn_at: "2026-07-01T07:00:00Z",
     });
     // alpha, delta, charlie, echo — charlie is open at index 2.
     const { rerender } = render(
@@ -219,7 +240,7 @@ describe("settled rail order", () => {
     // row it held and echo settles directly above it instead.
     rerender(
       <SessionRail
-        sessions={[alpha, delta, paused, { ...echo, updated_at: "2026-07-01T09:45:00Z" }]}
+        sessions={[alpha, delta, paused, { ...echo, last_turn_at: "2026-07-01T09:45:00Z" }]}
         openTaskCounts={{}}
         selectedId="c"
       />,

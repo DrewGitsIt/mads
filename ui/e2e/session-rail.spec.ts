@@ -106,6 +106,20 @@ test.describe("session rail", () => {
     return { rows, count: texts.length, mine };
   }
 
+  /**
+   * The card a test drives a real turn through — the lowest of this block's
+   * four, since a climber has to have somewhere to climb from. Never "delta":
+   * it was seeded straight into the Data Service with no spawn, so there is no
+   * runner to send to.
+   *
+   * A turn is what these journeys need because a turn END is now the only
+   * thing that changes a card's row: the order reads last_turn_at, so a rename
+   * (which moves updated_at alone) is deliberately not recency churn any more.
+   */
+  function pickClimber(snap: RailSnapshot): Key {
+    return [...snap.mine].reverse().find((key) => key !== "delta")!;
+  }
+
   /** Well clear of the 280px rail — the pointer leaving it is a settle boundary. */
   async function movePointerOffRail(page: Page): Promise<void> {
     await page.mouse.move(1200, 700);
@@ -131,9 +145,16 @@ test.describe("session rail", () => {
     // "echo slowly" paces the reply word by word (providers/fake/fake.go).
     await sendChatMessage(routerURL, ids.alpha, `echo slowly turn ${stamp}`);
 
-    // The turn lands on the card itself — no reload, no open conversation,
+    // Mid-turn first: the clause the runner itself reports for the main agent
+    // (session.agent_state, emitted on send, before the reply streams). The
+    // paced reply above is what keeps this window open long enough to read.
+    await expect(status).toContainText("Working");
+
+    // Then the turn lands on the card itself — no reload, no open conversation,
     // and no per-session /output socket behind it (useSessionAgentState folds
-    // this out of the one shared session.* stream).
+    // this out of the one shared session.* stream). The end of a turn is a
+    // state transition, so it arrives whether or not the turn produced a
+    // digest delta.
     await expect(status).toContainText("Done · your turn");
 
     await card.click();
@@ -191,27 +212,30 @@ test.describe("session rail", () => {
     await openRail(page, routerURL);
     // The pointer has never entered the rail, so this order is settled.
     const before = await snapshot(page);
-    const climber = before.mine[before.mine.length - 1];
+    const climber = pickClimber(before);
 
     // Engage the rail: pointer on a card, the way it is whenever anyone is
     // about to click one.
     await cardsOf(page).nth(before.rows[before.mine[0]]).hover();
 
-    // Recency churn arrives from the backend while the rail is engaged. A
-    // rename is what drives it here because a turn's own restamp
-    // (store.Sessions.RecordTurnEnd) can't be timed from outside, while a
-    // rename lands exactly when this test asks for it.
+    // A rename lands while the rail is engaged. It restamps UpdatedAt and
+    // nothing else, so it is a repaint and not a move: the card takes its new
+    // name in place, proving the refetch arrived, and there is no pending
+    // reorder to hold — no ghost, because nothing was going to move.
     await renameSession(routerURL, ids[climber], `${names[climber]} renamed`);
-
-    // The rail took the update — the card repaints in place with its new
-    // name, so the refetch demonstrably arrived...
     await expect(cardFor(page, climber)).toContainText("renamed");
-    // ...and the reorder it implies is offered rather than performed under
-    // the cursor.
-    const ghost = railOf(page).getByRole("button", { name: /1 session moved/ });
+    const ghost = railOf(page).getByRole("button", { name: /session[s]? moved/ });
+    await expect(ghost).toHaveCount(0);
+    expect(await snapshot(page)).toEqual(before);
+
+    // Real recency churn, then: a turn that ends, which is the one thing that
+    // restamps LastTurnAt. Now there IS a move, and it is offered rather than
+    // performed under the cursor.
+    await sendChatMessage(routerURL, ids[climber], `echo rail hold ${stamp}`);
     await expect(ghost).toBeVisible();
-    // Nothing moved: not the renamed card, not the cards it would have pushed
-    // down, and nothing appeared or vanished.
+    await expect(ghost).toHaveText(/1 session moved/);
+    // Nothing moved: not the card whose turn ended, not the cards it would
+    // have pushed down, and nothing appeared or vanished.
     expect(await snapshot(page)).toEqual(before);
 
     // The pointer leaves — that is the boundary, and the held order applies.
@@ -228,12 +252,14 @@ test.describe("session rail", () => {
   }) => {
     await openRail(page, routerURL);
     const before = await snapshot(page);
-    const climber = before.mine[before.mine.length - 1];
+    const climber = pickClimber(before);
     // The selected card needs cards on both sides: something above it, so the
     // climber can visibly pass it, and the climber below, so an unpinned rail
     // would push it down a row. "delta" is excluded — it is the dormant
     // search fixture, and opening it would 404 its live-output subscription.
-    const selected = before.mine.slice(1, -1).find((key) => key !== "delta")!;
+    const selected = before.mine.find(
+      (key, i) => i > 0 && key !== "delta" && before.rows[key] < before.rows[climber],
+    )!;
     expect(selected, "a middle, live card to open").toBeTruthy();
 
     await cardFor(page, selected).click();
@@ -248,8 +274,10 @@ test.describe("session rail", () => {
     const selectedRow = before.rows[selected];
     expect(await rowOf(page, selected)).toBe(selectedRow);
 
-    await renameSession(routerURL, ids[climber], `${names[climber]} promoted`);
-    await expect(cardFor(page, climber)).toContainText("promoted");
+    // A turn end on the card below — the only churn that reorders the rail now.
+    await sendChatMessage(routerURL, ids[climber], `echo rail pin ${stamp}`);
+    // The rail took the update: the climber's own status line repaints.
+    await expect(cardFor(page, climber).getByRole("status")).toContainText("Done · your turn");
 
     // The climber really did rise past the open session — the rail reordered,
     // it did not simply freeze...

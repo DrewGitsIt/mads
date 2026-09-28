@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { lastReplyKey } from "./railGroups";
 import type { Session } from "../../../router/types";
 
 /**
@@ -10,13 +11,14 @@ import type { Session } from "../../../router/types";
 export type SettledOrder = string[];
 
 /**
- * The ordering key: recency, id as a tiebreak. Deliberately status-free —
- * `activity` and the status line decide how a card is painted, never where it
- * sits.
+ * The ordering key: recency of the last REPLY (lastReplyKey — last_turn_at,
+ * not updated_at, so a rename or a summary write can't move a card), id as a
+ * tiebreak. Deliberately status-free — `activity` and the status line decide
+ * how a card is painted, never where it sits.
  */
 export function recencyOrder(sessions: Session[]): string[] {
   return [...sessions]
-    .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || a.id.localeCompare(b.id))
+    .sort((a, b) => lastReplyKey(b).localeCompare(lastReplyKey(a)) || a.id.localeCompare(b.id))
     .map((s) => s.id);
 }
 

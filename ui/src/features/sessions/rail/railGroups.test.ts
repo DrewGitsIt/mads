@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { dotState, filterBucketOf, isEarlier, mostUrgentBucket, statusOf, totalOpenTasks } from "./railGroups";
+import {
+  dotState,
+  filterBucketOf,
+  isEarlier,
+  lastReplyKey,
+  mostUrgentBucket,
+  statusOf,
+  totalOpenTasks,
+} from "./railGroups";
 import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
 import type { Session } from "../../../router/types";
 
@@ -93,7 +101,8 @@ describe("statusOf", () => {
       kind: "working",
       tone: "working",
       dot: "work",
-      // Phase 0 has no tool title or thinking signal on the control plane.
+      // The generic clause is now only the fallback: a turn whose first label
+      // hasn't reached this browser yet.
       label: "Working…",
       since: "2026-07-01T00:00:00Z",
     });
@@ -140,6 +149,31 @@ describe("statusOf", () => {
   it("keeps the rail's existing amber puck for a sleeping session with blocked work", () => {
     const sleeping = makeSession({ activity: "inactive" });
     expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 })).dot).toBe("attn");
+  });
+
+  it("says what the agent is actually doing, from the server-built clause", () => {
+    const at = "2026-07-01T00:00:00Z";
+    // The same string the open conversation's working-indicator ticker shows
+    // for the same call — one server-side enrichment feeds both.
+    for (const label of ["Running bash · make check", "Thinking…", "Reading · railGroups.ts"]) {
+      expect(statusOf(makeSession({}), makeAgentState({ workingSince: at, label }), idle)).toMatchObject({
+        kind: "working",
+        label,
+        since: at,
+      });
+    }
+  });
+
+  it("still rolls a sidechain up as a count, ahead of the main agent's own clause", () => {
+    // The runner deliberately skips parent-tagged events when it builds the
+    // label, so a busy subagent can't churn it — the count is the subagents'
+    // line, and it is the more useful one while they run.
+    const state = makeAgentState({
+      workingSince: "2026-07-01T00:00:00Z",
+      label: "Delegating · review the diff",
+      subagents: 2,
+    });
+    expect(statusOf(makeSession({}), state, idle).label).toBe("2 subagents running");
   });
 
   it("carries an elapsed origin for exactly the two states that count", () => {
@@ -205,19 +239,48 @@ describe("mostUrgentBucket", () => {
   });
 });
 
+describe("lastReplyKey", () => {
+  it("is last_turn_at — the only field that means the agent answered", () => {
+    const session = makeSession({
+      created_at: "2026-06-01T00:00:00Z",
+      // A rename bumped this seconds ago; nothing replied.
+      updated_at: "2026-07-02T11:59:00Z",
+      last_turn_at: "2026-07-01T09:00:00Z",
+    });
+    expect(lastReplyKey(session)).toBe("2026-07-01T09:00:00Z");
+  });
+
+  it("falls back to created_at for a session that has never replied", () => {
+    const session = makeSession({
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-07-02T11:59:00Z",
+    });
+    // Immutable, so no record write can move this card either.
+    expect(lastReplyKey(session)).toBe("2026-06-01T00:00:00Z");
+  });
+});
+
 describe("isEarlier", () => {
   const now = Date.parse("2026-07-02T12:00:00Z");
 
   it("is false inside the last day", () => {
-    expect(isEarlier(makeSession({ updated_at: "2026-07-02T11:00:00Z" }), now)).toBe(false);
+    expect(isEarlier(makeSession({ last_turn_at: "2026-07-02T11:00:00Z" }), now)).toBe(false);
   });
 
-  it("is true once last activity is a full day cold", () => {
-    expect(isEarlier(makeSession({ updated_at: "2026-07-01T11:00:00Z" }), now)).toBe(true);
-    expect(isEarlier(makeSession({ updated_at: "2026-07-01T12:00:00Z" }), now)).toBe(true);
+  it("is true once the last reply is a full day cold", () => {
+    expect(isEarlier(makeSession({ last_turn_at: "2026-07-01T11:00:00Z" }), now)).toBe(true);
+    expect(isEarlier(makeSession({ last_turn_at: "2026-07-01T12:00:00Z" }), now)).toBe(true);
+  });
+
+  it("reads the reply, not the activity — a rename cannot pull a cold card back out of the tail", () => {
+    const renamed = makeSession({
+      last_turn_at: "2026-07-01T09:00:00Z",
+      updated_at: "2026-07-02T11:59:00Z",
+    });
+    expect(isEarlier(renamed, now)).toBe(true);
   });
 
   it("is false for an unparseable stamp rather than folding the card away", () => {
-    expect(isEarlier(makeSession({ updated_at: "not a date" }), now)).toBe(false);
+    expect(isEarlier(makeSession({ last_turn_at: "not a date" }), now)).toBe(false);
   });
 });

@@ -16,6 +16,9 @@ function makeSession(overrides: Partial<Session>): Session {
     activity: "active",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
+    // Every card here models a session that has replied at least once: the
+    // rail's stamp and its order both read last_turn_at.
+    last_turn_at: "2026-07-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -546,6 +549,12 @@ function stampOf(name: string): HTMLElement {
   return row.querySelector<HTMLElement>('[class*="when"]')!;
 }
 
+/** The status line's clause alone, without whatever the elapsed counter reads. */
+function clauseOf(name: string): string {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[class*="statusLabel"]')!.textContent!;
+}
+
 function footerOf(name: string): HTMLElement {
   const row = screen.getByText(name).closest('[role="button"]')!;
   return row.querySelector<HTMLElement>('[class*="stamps"]')!;
@@ -556,7 +565,7 @@ describe("SessionRail timestamps", () => {
     vi.useRealTimers();
   });
 
-  it("shows a relative last-activity stamp on every name row, across the formatter's buckets", () => {
+  it("shows a relative last-reply stamp on every name row, across the formatter's buckets", () => {
     vi.useFakeTimers({ now: NOW });
     const cards: [string, number][] = [
       ["sub-minute", 30_000],
@@ -568,7 +577,7 @@ describe("SessionRail timestamps", () => {
     render(
       <SessionRail
         sessions={cards.map(([name, age], i) =>
-          makeSession({ id: `t${i}`, name, updated_at: isoAgo(age) }),
+          makeSession({ id: `t${i}`, name, last_turn_at: isoAgo(age) }),
         )}
         openTaskCounts={{}}
       />,
@@ -588,28 +597,56 @@ describe("SessionRail timestamps", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
-        sessions={[makeSession({ name: "titled", updated_at: isoAgo(14 * MINUTE) })]}
+        sessions={[makeSession({ name: "titled", last_turn_at: isoAgo(14 * MINUTE) })]}
         openTaskCounts={{}}
       />,
     );
-    expect(stampOf("titled").title).toBe("Last activity 2026-09-28 13:26:00");
+    expect(stampOf("titled").title).toBe("Last reply 2026-09-28 13:26:00");
   });
 
-  it("calls the stamp last activity, never last reply, while it is still updated_at", () => {
+  it("calls the stamp last reply, and reads it off last_turn_at — not updated_at", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
-        sessions={[makeSession({ name: "honest", updated_at: isoAgo(14 * MINUTE) })]}
+        sessions={[
+          makeSession({
+            name: "honest",
+            last_turn_at: isoAgo(14 * MINUTE),
+            // A rename landed a second ago. It is not a reply, and the card
+            // must not report it as one.
+            updated_at: isoAgo(1000),
+          }),
+        ]}
         openTaskCounts={{}}
       />,
     );
-    expect(footerOf("honest").textContent).toContain("last activity");
-    expect(stampOf("honest").title).toMatch(/^Last activity /);
-    expect(screen.queryByText(/last reply/i)).toBeNull();
-    expect(screen.queryByText(/last response/i)).toBeNull();
+    expect(stampOf("honest").textContent).toBe("14m");
+    expect(stampOf("honest").title).toBe("Last reply 2026-09-28 13:26:00");
+    expect(footerOf("honest").textContent).toContain("last reply today 13:26");
+    expect(screen.queryByText(/last activity/i)).toBeNull();
   });
 
-  it("renders the started / last-activity footer on every card, hovered or not, so the reveal cannot reflow the rail", () => {
+  it("says 'no reply yet' rather than dressing another stamp up as a reply", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({
+            name: "fresh",
+            created_at: isoAgo(30_000),
+            updated_at: isoAgo(1000),
+            last_turn_at: undefined,
+          }),
+        ]}
+        openTaskCounts={{}}
+      />,
+    );
+    // No stamp on the name row at all: there is nothing honest to put there.
+    expect(stampOf("fresh")).toBeNull();
+    expect(footerOf("fresh").textContent).toMatch(/^started today 13:39\s*·\s*no reply yet$/);
+  });
+
+  it("renders the started / last-reply footer on every card, hovered or not, so the reveal cannot reflow the rail", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
@@ -618,13 +655,13 @@ describe("SessionRail timestamps", () => {
             id: "a",
             name: "resting",
             created_at: isoAgo(10 * DAY),
-            updated_at: isoAgo(14 * MINUTE),
+            last_turn_at: isoAgo(14 * MINUTE),
           }),
           makeSession({
             id: "b",
             name: "chosen",
             created_at: isoAgo(5 * HOUR),
-            updated_at: isoAgo(2 * HOUR),
+            last_turn_at: isoAgo(2 * HOUR),
           }),
         ]}
         selectedId="b"
@@ -635,7 +672,7 @@ describe("SessionRail timestamps", () => {
     // Mounted for the unselected, un-hovered card too: nothing is added to the
     // layout when the pointer arrives.
     const resting = footerOf("resting");
-    expect(resting.textContent).toMatch(/^started 18 \w{3,}\s*·\s*last activity today 13:26$/);
+    expect(resting.textContent).toMatch(/^started 18 \w{3,}\s*·\s*last reply today 13:26$/);
     const beforeHover = resting.outerHTML;
     fireEvent.mouseEnter(screen.getByText("resting").closest('[role="button"]')!);
     expect(footerOf("resting").outerHTML).toBe(beforeHover);
@@ -664,9 +701,9 @@ describe("SessionRail timestamps", () => {
     const { unmount } = render(
       <SessionRail
         sessions={[
-          makeSession({ id: "a", name: "one", updated_at: isoAgo(50_000) }),
-          makeSession({ id: "b", name: "two", updated_at: isoAgo(50_000) }),
-          makeSession({ id: "c", name: "three", updated_at: isoAgo(50_000) }),
+          makeSession({ id: "a", name: "one", last_turn_at: isoAgo(50_000) }),
+          makeSession({ id: "b", name: "two", last_turn_at: isoAgo(50_000) }),
+          makeSession({ id: "c", name: "three", last_turn_at: isoAgo(50_000) }),
         ]}
         openTaskCounts={{}}
       />,
@@ -848,9 +885,9 @@ describe("SessionRail status line", () => {
 
   it("never reorders a card when its status changes", () => {
     const sessions = [
-      makeSession({ id: "a", name: "alpha", updated_at: "2026-07-01T10:00:00Z" }),
-      makeSession({ id: "b", name: "bravo", updated_at: "2026-07-01T09:00:00Z" }),
-      makeSession({ id: "c", name: "charlie", updated_at: "2026-07-01T08:00:00Z" }),
+      makeSession({ id: "a", name: "alpha", last_turn_at: "2026-07-01T10:00:00Z" }),
+      makeSession({ id: "b", name: "bravo", last_turn_at: "2026-07-01T09:00:00Z" }),
+      makeSession({ id: "c", name: "charlie", last_turn_at: "2026-07-01T08:00:00Z" }),
     ];
     const order = () =>
       [...screen.getByLabelText("Session list").querySelectorAll('div[role="button"]')].map(
@@ -917,38 +954,118 @@ describe("SessionRail status line motion and truncation", () => {
 describe("SessionRail status subscription", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
+
+  /** The rail wired to its own hook, exactly as SessionsSurface wires it. */
+  function Harness({ sessions }: { sessions: Session[] }) {
+    const agentStates = useSessionAgentState(sessions);
+    return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
+  }
+
+  function emitAgentState(sessionId: string, payload: unknown, seq = 1) {
+    const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
+    act(() => {
+      source.emit(
+        "session.agent_state",
+        JSON.stringify({
+          seq,
+          timestamp: "2026-09-28T13:40:00Z",
+          type: "session.agent_state",
+          actor: "agent",
+          session_id: sessionId,
+          payload,
+        }),
+      );
+    });
+  }
 
   it("uses one SSE connection however many sessions are listed", async () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     const sessions = Array.from({ length: 12 }, (_, i) =>
-      makeSession({ id: `s${i}`, name: `session ${i}`, updated_at: `2026-07-01T00:00:${String(i).padStart(2, "0")}Z` }),
+      makeSession({ id: `s${i}`, name: `session ${i}`, last_turn_at: `2026-07-01T00:00:${String(i).padStart(2, "0")}Z` }),
     );
+    render(<Harness sessions={sessions} />);
 
-    function Harness() {
-      const agentStates = useSessionAgentState();
-      return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
-    }
-    render(<Harness />);
-
-    const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
-    act(() => {
-      source.emit(
-        "session.turn_ended",
-        JSON.stringify({
-          seq: 1,
-          timestamp: "2026-09-28T10:00:00Z",
-          type: "session.turn_ended",
-          actor: "agent",
-          session_id: "s7",
-        }),
-      );
-    });
+    // The turn's end — reported whether or not the turn produced a digest
+    // delta, which is what session.turn_ended could not promise.
+    emitAgentState("s7", { state: "idle", since: "2026-09-28T13:40:00Z" });
 
     await waitFor(() => expect(statusOf("session 7").textContent).toBe("✓Done · your turn"));
     expect(statusOf("session 3").textContent).toBe("◦Ready");
     expect(FakeEventSource.instances.filter((i) => !i.closed)).toHaveLength(1);
+  });
+
+  it("paints the server-built clause a live turn reports, not a generic 'Working…'", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const sessions = [makeSession({ id: "s1", name: "live one" })];
+    render(<Harness sessions={sessions} />);
+
+    emitAgentState("s1", { state: "working", label: "Working…", since: "2026-09-28T13:40:00Z" });
+    // The elapsed counter rides the real clock here, so only the clause is read.
+    await waitFor(() => expect(clauseOf("live one")).toBe("Working…"));
+
+    // The same string the open conversation's working-indicator ticker shows
+    // for this call: one server-side enrichment feeds both surfaces.
+    emitAgentState(
+      "s1",
+      { state: "working", label: "Running bash · make check", since: "2026-09-28T13:40:00Z" },
+      2,
+    );
+    await waitFor(() => expect(clauseOf("live one")).toBe("Running bash · make check"));
+    emitAgentState("s1", { state: "working", label: "Thinking…", since: "2026-09-28T13:40:00Z" }, 3);
+    await waitFor(() => expect(clauseOf("live one")).toBe("Thinking…"));
+  });
+
+  it("renders a live turn straight from the session record — the reload-mid-turn case", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.useFakeTimers({ now: NOW });
+    // No events at all: this browser has just loaded and the turn started
+    // before it was listening. The record's mirror is all it has.
+    const mid = makeSession({
+      id: "s1",
+      name: "mid-turn one",
+      agent_state: {
+        state: "working",
+        label: "Running bash · make check",
+        since: new Date(NOW - 18_000).toISOString(),
+      },
+    });
+    const { rerender } = render(<Harness sessions={[mid]} />);
+
+    // No waiting and no event: the first paint already carries the live clause,
+    // counter included — the turn is 18s old and the card says so.
+    expect(statusOf("mid-turn one").textContent).toBe("Running bash · make check18s");
+
+    // The counter spans the TURN, not the tool — the label changes under it and
+    // it keeps counting up from the turn's own start (WorkingIndicator's rule).
+    rerender(
+      <Harness
+        sessions={[{ ...mid, agent_state: { ...mid.agent_state!, label: "Thinking…" } }]}
+      />,
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(statusOf("mid-turn one").textContent).toBe("Thinking…20s");
+  });
+
+  it("reads a sleeping session's leftover working mirror as idle, never as a live turn", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    // Only a live Runner clears agent_state, so a hard-killed process leaves
+    // its last working state on the record. That card must not spin forever.
+    const stale = makeSession({
+      id: "s1",
+      name: "killed one",
+      activity: "inactive",
+      agent_state: { state: "working", label: "Running bash · make check", since: "2026-09-28T09:00:00Z" },
+    });
+    render(<Harness sessions={[stale]} />);
+    await waitFor(() => expect(statusOf("killed one").textContent).toBe("◦Sleeping · wakes on send"));
   });
 });
 
@@ -966,15 +1083,15 @@ function chip(label: string): HTMLElement {
 
 describe("SessionRail filter chips", () => {
   // One of each bucket, most recent first, all inside the last day.
-  const working = makeSession({ id: "w", name: "working one", updated_at: isoAgo(1 * MINUTE) });
-  const parked = makeSession({ id: "p", name: "parked one", updated_at: isoAgo(2 * MINUTE) });
-  const crashed = makeSession({ id: "x", name: "crashed one", updated_at: isoAgo(3 * MINUTE) });
-  const ready = makeSession({ id: "r", name: "ready one", updated_at: isoAgo(4 * MINUTE) });
+  const working = makeSession({ id: "w", name: "working one", last_turn_at: isoAgo(1 * MINUTE) });
+  const parked = makeSession({ id: "p", name: "parked one", last_turn_at: isoAgo(2 * MINUTE) });
+  const crashed = makeSession({ id: "x", name: "crashed one", last_turn_at: isoAgo(3 * MINUTE) });
+  const ready = makeSession({ id: "r", name: "ready one", last_turn_at: isoAgo(4 * MINUTE) });
   const sleeping = makeSession({
     id: "s",
     name: "sleeping one",
     activity: "inactive",
-    updated_at: isoAgo(5 * MINUTE),
+    last_turn_at: isoAgo(5 * MINUTE),
   });
   const agentStates: Record<string, SessionAgentState> = {
     w: { subagents: 0, workingSince: isoAgo(30_000) },
@@ -1048,13 +1165,13 @@ describe("SessionRail filter chips", () => {
 
   it("leaves a pending reorder pending — a chip narrows the order, it never applies one", () => {
     vi.useFakeTimers({ now: NOW });
-    const a = makeSession({ id: "a", name: "alpha", updated_at: isoAgo(10 * MINUTE) });
-    const b = makeSession({ id: "b", name: "bravo", updated_at: isoAgo(20 * MINUTE) });
-    const c = makeSession({ id: "c", name: "charlie", updated_at: isoAgo(30 * MINUTE) });
+    const a = makeSession({ id: "a", name: "alpha", last_turn_at: isoAgo(10 * MINUTE) });
+    const b = makeSession({ id: "b", name: "bravo", last_turn_at: isoAgo(20 * MINUTE) });
+    const c = makeSession({ id: "c", name: "charlie", last_turn_at: isoAgo(30 * MINUTE) });
     const { rerender } = render(<SessionRail sessions={[a, b, c]} openTaskCounts={{}} />);
     fireEvent.mouseEnter(screen.getByLabelText("Session list"));
 
-    const risen = { ...c, updated_at: isoAgo(1 * MINUTE) };
+    const risen = { ...c, last_turn_at: isoAgo(1 * MINUTE) };
     rerender(<SessionRail sessions={[a, b, risen]} openTaskCounts={{}} />);
     expect(cardNames()).toEqual(["alpha", "bravo", "charlie"]);
     expect(screen.getByRole("button", { name: /session moved/ })).toBeTruthy();
@@ -1085,9 +1202,9 @@ describe("SessionRail filter chips", () => {
 });
 
 describe("SessionRail — the Earlier tail", () => {
-  const fresh = makeSession({ id: "f", name: "fresh one", updated_at: isoAgo(5 * MINUTE) });
-  const yesterday = makeSession({ id: "y", name: "old one", updated_at: isoAgo(2 * DAY) });
-  const lastWeek = makeSession({ id: "l", name: "ancient one", updated_at: isoAgo(9 * DAY) });
+  const fresh = makeSession({ id: "f", name: "fresh one", last_turn_at: isoAgo(5 * MINUTE) });
+  const yesterday = makeSession({ id: "y", name: "old one", last_turn_at: isoAgo(2 * DAY) });
+  const lastWeek = makeSession({ id: "l", name: "ancient one", last_turn_at: isoAgo(9 * DAY) });
 
   afterEach(() => {
     vi.useRealTimers();
@@ -1168,28 +1285,28 @@ describe("SessionRail omni search", () => {
     workspace: "mads",
     cwd: "~/repo/mads",
     worktree_branch: "wt/goose-acp",
-    updated_at: isoAgo(1 * MINUTE),
+    last_turn_at: isoAgo(1 * MINUTE),
   });
   const electron = makeSession({
     id: "e",
     name: "electron self-heal reinstall",
     workspace: "mads",
     cwd: "~/repo/mads",
-    updated_at: isoAgo(6 * MINUTE),
+    last_turn_at: isoAgo(6 * MINUTE),
   });
   const retro = makeSession({
     id: "s",
     name: "retro: conversation UX",
     workspace: "sidecar",
     cwd: "~/repo/sidecar",
-    updated_at: isoAgo(3 * HOUR),
+    last_turn_at: isoAgo(3 * HOUR),
   });
   const railUi = makeSession({
     id: "u",
     name: "rail readability pass",
     workspace: "Main work",
     cwd: "~/repo/mads-ui",
-    updated_at: isoAgo(5 * HOUR),
+    last_turn_at: isoAgo(5 * HOUR),
   });
   const digest = makeSession({
     id: "d",
@@ -1197,7 +1314,7 @@ describe("SessionRail omni search", () => {
     workspace: "sidecar",
     cwd: "~/repo/sidecar",
     worktree_branch: "wt/digest",
-    updated_at: isoAgo(2 * DAY),
+    last_turn_at: isoAgo(2 * DAY),
   });
   const all = [goose, electron, retro, railUi, digest];
 

@@ -30,8 +30,48 @@ export interface Session {
   provider_ref?: string;
   /** Most recent turn's token accounting, persisted by the Runner on every turn end — the context meter's data source at wake time, before this process has seen a turn_end of its own. */
   last_usage?: Usage;
+  /**
+   * The latest main-agent transition, mirrored onto the record by the same
+   * write that appends the session.agent_state event — so a cold reader (a
+   * page load or an SSE reconnect mid-turn) is correct without replaying the
+   * log. Absent before the session's first transition, and to be read as
+   * idle on an inactive session: only the live Runner clears it, so a
+   * hard-killed process leaves its last working state behind.
+   */
+  agent_state?: AgentState;
+  /**
+   * When the most recent turn ended. The rail's last-reply stamp and its
+   * recency key: unlike updated_at — which renames, summary writes and
+   * activity flips all bump — this is the only field that means "last
+   * response". Absent until the session's first turn ends.
+   */
+  last_turn_at?: string;
   created_at: string;
   updated_at: string;
+}
+
+/**
+ * mirrors pkg/contracts/conversation.go AgentState — the session main agent's
+ * in-flight state. The payload of a session.agent_state envelope, and the
+ * value mirrored onto Session.agent_state above.
+ */
+export interface AgentState {
+  state: "working" | "idle";
+  /**
+   * The server-built one-line clause naming what the agent is doing: a verb
+   * for the enriched tool kind plus the adapter-built title verbatim
+   * ("Running bash · make check"), the generic "Working…" before a turn's
+   * first activity, or "Thinking…". Built from the same enrichment
+   * ToolUse.title carries, so the rail line and the conversation's working
+   * indicator can never disagree. Empty on idle.
+   */
+  label?: string;
+  /**
+   * When the CURRENT state began — the turn's start for every working event
+   * in that turn, unchanged as the label transitions, so an elapsed counter
+   * driven off it spans the whole turn rather than resetting per tool.
+   */
+  since: string;
 }
 
 export interface WorkspaceRepo {

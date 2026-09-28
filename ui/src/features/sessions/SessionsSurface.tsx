@@ -34,9 +34,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   // and agent are worth printing.
   const { workspaces } = useWorkspaces();
   const [selectedId, setSelectedId] = useState<string>();
-  // One subscription for the whole rail, however many cards are listed —
-  // opening a session is also what retires its sticky "Done · your turn".
-  const agentStates = useSessionAgentState(selectedId);
+  // One subscription for the whole rail, however many cards are listed. The
+  // list is handed in too: each record mirrors its session's latest agent
+  // state, which is what makes a reload mid-turn correct before the next
+  // transition arrives. Opening a session retires its sticky "Done · your turn".
+  const agentStates = useSessionAgentState(sessions, selectedId);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();

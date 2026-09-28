@@ -28,8 +28,7 @@ export function dotState(session: Session, breakdown: OpenTaskBreakdown): DotSta
 
 /**
  * Per-session live agent state, folded from the control-plane session.*
- * stream by useSessionAgentState(). Phase 0 of the status line: every field
- * here is derivable from events that stream already carries.
+ * stream by useSessionAgentState() over the mirror on each session record.
  */
 export interface SessionAgentState {
   /** The session's child exited unexpectedly and nothing has been heard since. */
@@ -40,8 +39,16 @@ export interface SessionAgentState {
   awaitingTool?: string;
   /** Spawned subagents still running. */
   subagents: number;
-  /** Set while a turn is in flight — the instant it went in flight. */
+  /**
+   * Set while a turn is in flight — the instant the TURN went in flight, held
+   * across the turn's label changes, so the counter spans the whole turn.
+   */
   workingSince?: string;
+  /**
+   * The server-built clause for what the agent is doing right now ("Running
+   * bash · make check", "Thinking…"). Only ever set alongside workingSince.
+   */
+  label?: string;
   /** Sticky: a turn ended and the session hasn't been opened since. */
   done?: boolean;
 }
@@ -114,10 +121,15 @@ export function statusOf(
       // No glyph: this is the one state that spins.
       label:
         state.subagents > 0
-          ? `${plural(state.subagents, "subagent")} running`
-          : // Phase 0 has no tool title and no thinking signal on the control
-            // plane, so an in-flight turn says only that it is in flight.
-            "Working…",
+          ? // A sidechain's tools are the subagent's activity, not the main
+            // agent's: they roll up as a count, which is why the runner skips
+            // them when it builds the label below.
+            `${plural(state.subagents, "subagent")} running`
+          : // The server-built clause — the same enrichment the open
+            // conversation's working-indicator ticker shows for the same call,
+            // so the two surfaces cannot disagree. "Working…" is the fallback
+            // for a turn whose first label hasn't reached this browser yet.
+            (state.label ?? "Working…"),
       since: state.workingSince,
     };
   }
@@ -174,10 +186,26 @@ export function filterBucketOf(status: RailStatus): RailFilterBucket {
   return status.dot === "attn" ? "needs" : "idle";
 }
 
-/** A session falls into the collapsed "Earlier" tail once its last activity is a day old. */
+/**
+ * When this session last replied — the rail's one recency value, shared by the
+ * card's stamp, the order (railOrder.ts) and the "Earlier" fold below.
+ *
+ * last_turn_at is the only field that means "the agent answered": updated_at is
+ * bumped by renames, summary writes and activity flips too, which is what used
+ * to move a card in the list when it was merely auto-titled. created_at is the
+ * fallback for a session that has never replied — immutable, so nothing a
+ * record write does can move that card either. Deliberately NOT what the card
+ * prints: a created_at shown as "last reply" would be the same lie in reverse
+ * (SessionRow prints "no reply yet" instead).
+ */
+export function lastReplyKey(session: Session): string {
+  return session.last_turn_at ?? session.created_at;
+}
+
+/** A session falls into the collapsed "Earlier" tail once its last reply is a day old. */
 export const EARLIER_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export function isEarlier(session: Session, now: number): boolean {
-  const t = Date.parse(session.updated_at);
+  const t = Date.parse(lastReplyKey(session));
   return !Number.isNaN(t) && now - t >= EARLIER_AFTER_MS;
 }
