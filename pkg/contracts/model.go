@@ -16,7 +16,15 @@ type Model struct {
 // ErrDiscoveryUnavailable) and Models is consequently empty — its presence
 // is the UI's signal to render "no models" instead of treating an empty
 // list as a real, discoverable-but-empty provider.
+// State distinguishes the three ways Models can be empty, which the UI
+// renders differently: "refreshing" (discovery still running, show a
+// spinner), "unavailable" (paired with Detail — show the reason), and
+// "ready" (the provider genuinely has no models). Empty when the Router
+// answered without a catalog cache. FetchedAt is RFC3339, empty when never
+// fetched.
 type ModelsResponse struct {
-	Models []Model `json:"models"`
-	Detail string  `json:"detail,omitempty"`
+	Models    []Model `json:"models"`
+	Detail    string  `json:"detail,omitempty"`
+	State     string  `json:"state,omitempty"`
+	FetchedAt string  `json:"fetched_at,omitempty"`
 }

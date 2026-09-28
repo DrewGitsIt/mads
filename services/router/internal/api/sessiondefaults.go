@@ -114,22 +114,42 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 		}
 	}
 	if sess.Model == "" && sess.Provider != "" {
-		if p, err := s.providers.Get(sess.Provider); err == nil {
-			if md, ok := p.(provider.ModelDiscoverer); ok {
-				if models, err := md.Models(ctx); err == nil {
-					for _, m := range models {
-						if m.Default {
-							sess.Model = m.ID
-							src.Model = contracts.SessionDefaultSourceProviderDefault
-							break
-						}
-					}
-				}
+		for _, m := range s.discoveredModels(ctx, sess.Provider) {
+			if m.Default {
+				sess.Model = m.ID
+				src.Model = contracts.SessionDefaultSourceProviderDefault
+				break
 			}
 		}
 	}
 
 	return src, nil
+}
+
+// discoveredModels reads a provider's catalog WITHOUT spawning. Defaults
+// resolution runs on the Launchpad's create-session path, where a missing
+// default model is already a tolerated degradation (the caller simply
+// leaves Model empty) but a multi-second agent spawn is not — this used to
+// call Models directly and blocked the request on a full ACP handshake.
+// Lookup, deliberately, not Get: an un-warmed cache yields no default
+// rather than a stall.
+func (s *server) discoveredModels(ctx context.Context, name string) []provider.Model {
+	if s.models != nil {
+		return s.models.Lookup(name).Models
+	}
+	p, err := s.providers.Get(name)
+	if err != nil {
+		return nil
+	}
+	md, ok := p.(provider.ModelDiscoverer)
+	if !ok {
+		return nil
+	}
+	models, err := md.Models(ctx)
+	if err != nil {
+		return nil
+	}
+	return models
 }
 
 func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
