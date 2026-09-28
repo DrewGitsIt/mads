@@ -88,6 +88,7 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			targets = append(targets, l)
 		}
 		if len(targets) == 0 || deps.Resolver == nil {
+			warnUnheardTaskTerminal(ctx, deps, sessionID, sig, "no reader")
 			return nil // no live signal readers; skip composing entirely
 		}
 
@@ -99,6 +100,7 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 			return nil // e.g. the terminal task was deleted mid-flight
 		}
 
+		delivered := 0
 		for _, l := range targets {
 			source := sess.Name
 			if l.Implicit {
@@ -107,10 +109,45 @@ func DeliverSignal(sessionID string, sig Signal) Func {
 				// name the source what it actually is.
 				source = implicitSourceName
 			}
-			wakeMonitor(ctx, deps, l, source, text)
+			if wakeMonitor(ctx, deps, l, source, text) {
+				delivered++
+			}
+		}
+		if delivered == 0 {
+			warnUnheardTaskTerminal(ctx, deps, sessionID, sig,
+				fmt.Sprintf("%d reader(s), none reachable", len(targets)))
 		}
 		return nil
 	}
+}
+
+// warnUnheardTaskTerminal logs, loudly, a task terminal that reached no one
+// on a session with a pipeline run in flight. That combination is how a
+// blocked task stalls a run unnoticed, and before this log it completed as
+// an ordinary, silent job. A terminal on a session with no running pipeline
+// (an interactive session finishing its own task, nobody watching) is
+// normal and stays quiet.
+func warnUnheardTaskTerminal(ctx context.Context, deps Deps, sessionID string, sig Signal, why string) {
+	if sig.Kind != SignalTaskTerminal || !pipelineRunning(ctx, deps, sessionID) {
+		return
+	}
+	log.Printf("signal: no reader for terminal task %s (now %s) on session %s, which has an active pipeline run (%s) — %s task will go unnoticed",
+		sig.TaskID, sig.ToStatus, sessionID, why, sig.ToStatus)
+}
+
+// pipelineRunning reports whether sessionID has a pipeline run in flight:
+// one the Router supervises (deps.Resolver as a PipelineTracker), or an
+// external engine such as a CLI `mads run`, seen through a live task lease.
+func pipelineRunning(ctx context.Context, deps Deps, sessionID string) bool {
+	if pt, ok := deps.Resolver.(PipelineTracker); ok && pt.HasPipeline(sessionID) {
+		return true
+	}
+	live, err := deps.Data.SessionActiveLease(ctx, sessionID)
+	if err != nil {
+		log.Printf("signal: check active lease for %s: %v", sessionID, err)
+		return false
+	}
+	return live
 }
 
 // implicitSourceName is the attribution source for pushes over a session's

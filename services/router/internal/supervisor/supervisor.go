@@ -494,6 +494,16 @@ func (s *Supervisor) onPipelineExit(runID, sessionID string, expected bool, exit
 	}
 }
 
+var _ job.PipelineTracker = (*Supervisor)(nil)
+
+// HasPipeline reports whether a pipeline run scoped to sessionID is
+// currently tracked. Implements job.PipelineTracker.
+func (s *Supervisor) HasPipeline(sessionID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hasPipelineForSessionLocked(sessionID)
+}
+
 // hasPipelineForSessionLocked reports whether any tracked pipeline run is
 // scoped to sessionID. Callers must hold s.mu. Linear scan: s.pipelines is
 // tiny, no need for a secondary index.

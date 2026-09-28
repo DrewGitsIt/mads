@@ -49,6 +49,15 @@ type SessionResolver interface {
 	SessionAddr(sessionID string) (string, bool)
 }
 
+// PipelineTracker reports whether the Router is currently supervising a
+// pipeline run scoped to a session. Optional: a SessionResolver that also
+// implements it (the Supervisor does) lets job bodies tell "nobody is
+// listening to this session" apart from "nobody is listening to this
+// session's running pipeline", which is the one that stalls work.
+type PipelineTracker interface {
+	HasPipeline(sessionID string) bool
+}
+
 // SessionWaker returns a session's live child address, spawning the child
 // first if none is running: the same wake a composer send to a dormant
 // session gets. Defined here for the same import-cycle reason as

@@ -3,6 +3,7 @@ package job_test
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -399,5 +400,114 @@ func TestDeliverSignalImplicitExcludedForPermissionAndCrash(t *testing.T) {
 	}
 	if got := server.count(); got != 0 {
 		t.Errorf("received %d deliveries, want 0", got)
+	}
+}
+
+// trackingResolver is a stubResolver that also reports which sessions have
+// a supervised pipeline run (job.PipelineTracker), as the Supervisor does.
+type trackingResolver struct {
+	stubResolver
+	pipelines map[string]bool
+}
+
+func (r trackingResolver) HasPipeline(sessionID string) bool { return r.pipelines[sessionID] }
+
+// lockedBuffer is a log sink safe to read while job goroutines write to it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func captureLog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	buf := &lockedBuffer{}
+	prev, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prev)
+		log.SetFlags(prevFlags)
+	})
+	return buf
+}
+
+// A task terminal that reaches no one on a session with a pipeline run in
+// flight is logged, naming the session, task and status: the silent
+// blocked-task stall this guards against. Both flavors log: no reader at
+// all, and a reader whose child is dormant with no way to wake it.
+func TestDeliverSignalWarnsWhenTerminalGoesUnheardDuringRun(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		handRaiser bool
+		why        string
+	}{
+		{name: "no reader", handRaiser: false, why: "no reader"},
+		{name: "reader unreachable", handRaiser: true, why: "1 reader(s), none reachable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := datatest.Start(t)
+			data := dataclient.New(base, "router")
+			enableLinkedSessions(t, data)
+
+			sess := mustCreateSession(t, data, contracts.Session{Name: "stalled run"})
+			if tc.handRaiser {
+				if _, err := data.CreateHandRaiser(context.Background(), sess.ID); err != nil {
+					t.Fatalf("CreateHandRaiser: %v", err)
+				}
+			}
+			task := seedBlockedTask(t, data, sess.ID, "wire the adapter", "missing credentials")
+
+			logs := captureLog(t)
+			runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+			// No waker: the dormant hand-raiser can't be reached.
+			runner.SetResolver(trackingResolver{pipelines: map[string]bool{sess.ID: true}})
+
+			runSignal(t, base, runner, sess.ID, job.Signal{
+				Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(contracts.StatusBlocked),
+			})
+
+			out := logs.String()
+			for _, want := range []string{"no reader for terminal task " + task.ID, "now blocked", "session " + sess.ID, tc.why, "blocked task will go unnoticed"} {
+				if !strings.Contains(out, want) {
+					t.Errorf("log %q missing %q", out, want)
+				}
+			}
+		})
+	}
+}
+
+// With no pipeline run in flight, an unheard task terminal is ordinary (an
+// interactive session finishing its own task with nobody watching) and
+// stays quiet.
+func TestDeliverSignalQuietWhenNoPipelineRunning(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	enableLinkedSessions(t, data)
+
+	sess := mustCreateSession(t, data, contracts.Session{Name: "interactive only"})
+	task := seedBlockedTask(t, data, sess.ID, "tidy up", "waiting on review")
+
+	logs := captureLog(t)
+	runner := job.New(data, fastmodel.NewWithBackend(&countingBackend{}, fastmodel.Config{}), registryclient.New(""))
+	runner.SetResolver(trackingResolver{})
+
+	runSignal(t, base, runner, sess.ID, job.Signal{
+		Kind: job.SignalTaskTerminal, TaskID: task.ID, ToStatus: string(contracts.StatusBlocked),
+	})
+
+	if out := logs.String(); strings.Contains(out, "will go unnoticed") {
+		t.Errorf("unexpected unheard-terminal warning with no pipeline running: %q", out)
 	}
 }
