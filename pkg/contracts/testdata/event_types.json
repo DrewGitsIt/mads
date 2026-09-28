@@ -12,6 +12,7 @@
   "session.subagent_task",
   "session.thinking",
   "session.tool_status_changed",
+  "session.agent_state",
   "task.created",
   "task.updated",
   "task.status_changed",

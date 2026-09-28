@@ -1,5 +1,7 @@
 package contracts
 
+import "time"
+
 // SubagentEvent is the payload of SessionSubagentEvent: one conversation
 // event a spawned subagent's sidechain produced, persisted so the stream
 // replays after the fact (the harness transcript omits sidechains). The
@@ -105,4 +107,35 @@ type ToolStatusChange struct {
 	// ParentToolUseID routes the change to a subagent's stream when the
 	// call was a sidechain's; empty for the main agent's calls.
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+}
+
+// Agent states, the vocabulary of AgentState.State: whether a turn is in
+// flight at all. What the agent is doing inside a working turn lives in
+// Label, not in a wider state enum — a rail line is one clause, and every
+// finer distinction the UI draws (needs-approval, crashed, done · your turn)
+// already comes from its own event type.
+const (
+	AgentWorking = "working"
+	AgentIdle    = "idle"
+)
+
+// AgentState is the payload of SessionAgentState: the session main agent's
+// in-flight state, appended by the session runner on transitions only.
+type AgentState struct {
+	// State is AgentWorking or AgentIdle.
+	State string `json:"state"`
+	// Label is the server-built one-line clause naming what the agent is
+	// doing right now — a verb for the tool call's enriched Kind plus the
+	// adapter-built ToolUse.Title verbatim ("Running bash · make check"),
+	// the generic "Working…" before the first activity of a turn, or
+	// "Thinking…" while an extended-thinking block streams. Built from the
+	// same enrichment ToolUse.Title carries so a rail line and the open
+	// conversation's working indicator can never disagree. Empty on idle.
+	Label string `json:"label,omitempty"`
+	// Since is when the CURRENT State began — the turn's start for every
+	// working event in it, unchanged as Label transitions, so an elapsed
+	// counter driven off it spans the whole turn rather than resetting per
+	// tool (ui/src/conversation/ChatRenderer/WorkingIndicator.tsx's own
+	// rule). Turn-end time on idle.
+	Since time.Time `json:"since"`
 }

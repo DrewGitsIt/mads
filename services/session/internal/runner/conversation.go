@@ -21,15 +21,31 @@ import (
 //   - T6: persists what the harness transcript can never replay — subagent
 //     sidechain events (parent-tagged), task lifecycle updates, and
 //     thinking blocks — into the Data Service event log.
+//   - the session rail's agent-state label (agentstate.go): what the MAIN
+//     agent is doing right now, floored and transition-only. The state edges
+//     themselves ride the turn lifecycle instead (Send/onTurnEnd), not this
+//     hook, because onTurnEnd runs before the turn-end event reaches here
+//     and can already have started a queued next turn.
 //
 // Returns the (possibly re-stamped) event for the caller to pass on.
 func (r *Runner) observeConversation(ev provider.Event) provider.Event {
 	ev = r.stampToolStatus(ev)
+	r.observeAgentState(ev)
 	if ev.Kind == provider.EventTurnEnd {
 		r.flushInterruptedTools()
 	}
 	r.persistConversation(ev)
 	return ev
+}
+
+// flushTurnState closes out both signals a turn leaves dangling when the
+// provider stream closes underneath it (Shutdown, or the process dying):
+// every tool call still without a result, and the agent state — which must
+// never stay "working" just because no EventTurnEnd ever arrived. Both are
+// no-ops when the ordinary turn-end path already ran.
+func (r *Runner) flushTurnState() {
+	r.flushInterruptedTools()
+	r.markAgentIdle()
 }
 
 // stampToolStatus computes the status for a tool_use/tool_result event and

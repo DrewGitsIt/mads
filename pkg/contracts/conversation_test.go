@@ -3,6 +3,7 @@ package contracts_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/golden"
@@ -11,7 +12,8 @@ import (
 // sampleConversationPayloads exercises every payload the session runner
 // persists for subagent/task/thinking history replay (T6): a subagent's
 // enriched tool_use, its tool_result, a task lifecycle notification, a main
-// -agent thinking block, and a synthesized status change.
+// -agent thinking block, and a synthesized status change — plus the two
+// main-agent state transitions the session rail reads (session.agent_state).
 func sampleConversationPayloads() map[string]any {
 	return map[string]any{
 		"subagent_tool_use": contracts.SubagentEvent{
@@ -59,6 +61,15 @@ func sampleConversationPayloads() map[string]any {
 			Status:          "interrupted",
 			ParentToolUseID: "toolu_01agent",
 		},
+		"agent_state_working": contracts.AgentState{
+			State: contracts.AgentWorking,
+			Label: "Running bash · make check",
+			Since: time.Date(2026, 9, 28, 14, 5, 0, 0, time.UTC),
+		},
+		"agent_state_idle": contracts.AgentState{
+			State: contracts.AgentIdle,
+			Since: time.Date(2026, 9, 28, 14, 6, 12, 0, time.UTC),
+		},
 	}
 }
 
@@ -81,6 +92,8 @@ func TestConversationPayloadConsumerParsesGolden(t *testing.T) {
 		SubagentTask       contracts.SubagentTask     `json:"subagent_task"`
 		Thinking           contracts.ThinkingBlock    `json:"thinking"`
 		ToolStatusChange   contracts.ToolStatusChange `json:"tool_status_change"`
+		AgentStateWorking  contracts.AgentState       `json:"agent_state_working"`
+		AgentStateIdle     contracts.AgentState       `json:"agent_state_idle"`
 	}
 	if err := json.Unmarshal(golden.Read(t, "conversation_payloads.json"), &got); err != nil {
 		t.Fatalf("consumer failed to parse golden: %v", err)
@@ -100,6 +113,8 @@ func TestConversationPayloadConsumerParsesGolden(t *testing.T) {
 	check("subagent_task", got.SubagentTask)
 	check("thinking", got.Thinking)
 	check("tool_status_change", got.ToolStatusChange)
+	check("agent_state_working", got.AgentStateWorking)
+	check("agent_state_idle", got.AgentStateIdle)
 }
 
 func mustMarshal(t *testing.T, v any) json.RawMessage {

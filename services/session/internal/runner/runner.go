@@ -158,6 +158,13 @@ type Runner struct {
 	// lock — those two run on different goroutines.
 	toolStatus *toolstatus.Tracker
 
+	// agent tracks what this session's main agent is doing and appends
+	// session.agent_state on transitions (agentstate.go) — the control
+	// plane's only turn-start/turn-activity signal, which the session rail
+	// reads for every session at once. Own internal lock, like toolStatus:
+	// the pump, Send/Inject and a coalescing timer all drive it.
+	agent agentState
+
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
 	// active — unlike synthEngine it isn't mode-gated, since whether anyone
@@ -654,10 +661,12 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, false)
 
+	r.markAgentWorking()
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.markAgentIdle()
 		return err
 	}
 	return nil
@@ -690,10 +699,12 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.digest.recordUser(text, attribution.DigestAttributed)
 	r.recordInjectionAudit(ctx, attribution, text)
 
+	r.markAgentWorking()
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.markAgentIdle()
 		return err
 	}
 	return nil
@@ -737,6 +748,10 @@ func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts
 // turn's buffer.
 func (r *Runner) onTurnEnd() {
 	r.pushTurnEnded()
+	// Ahead of the lock, so this lands before the queued-injection drain
+	// below reports the NEXT turn working: appended the other way round, a
+	// session would read idle for the whole of that live turn.
+	r.markAgentIdle()
 
 	r.mu.Lock()
 	r.busy = false
@@ -752,11 +767,13 @@ func (r *Runner) onTurnEnd() {
 		r.synthEngine.OnUserSend(text)
 		r.digest.recordUser(text, attribution.DigestAttributed)
 
+		r.markAgentWorking()
 		if err := sess.Send(context.Background(), text); err != nil {
 			log.Printf("runner: deliver queued injection: %v", err)
 			r.mu.Lock()
 			r.busy = false
 			r.mu.Unlock()
+			r.markAgentIdle()
 		}
 		// orchestrateRefreshPending and pendingModel, if set, are left
 		// untouched here — both are only drained once the queue is truly
@@ -1381,9 +1398,9 @@ func (r *Runner) pump(sess provider.Session) {
 	// The stream closed. Normally the turn-end sweep already ran and this
 	// is a no-op; a mid-turn close (Shutdown, or the provider dying) is the
 	// "session stops" case of the status policy — resolve every still-open
-	// tool call to interrupted so the event log never shows one running
-	// forever.
-	r.flushInterruptedTools()
+	// tool call to interrupted, and the agent state to idle, so the event
+	// log never shows either running forever.
+	r.flushTurnState()
 
 	r.mu.Lock()
 	// The identity check matters, not just busy: SwitchTransport nils
@@ -1450,7 +1467,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 				r.synthEngine.OnEvent(ev)
 				r.digest.recordEvent(ev)
 			}
-			r.flushInterruptedTools()
+			r.flushTurnState()
 		}()
 	}
 

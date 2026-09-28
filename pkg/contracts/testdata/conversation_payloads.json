@@ -1,4 +1,13 @@
 {
+  "agent_state_idle": {
+    "state": "idle",
+    "since": "2026-09-28T14:06:12Z"
+  },
+  "agent_state_working": {
+    "state": "working",
+    "label": "Running bash · make check",
+    "since": "2026-09-28T14:05:00Z"
+  },
   "subagent_task": {
     "phase": "notification",
     "task_id": "task-1",
