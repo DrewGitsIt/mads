@@ -30,10 +30,17 @@ export async function createSession(
  * message wakes a dormant session" journey needs this starting state, which
  * the UI itself can't reach (Launchpad always auto-sends the goal on
  * create).
+ *
+ * It is also the only way to seed a `cwd`: on a spawned session the runner
+ * owns that field and overwrites whatever the create body asked for with the
+ * directory it actually resolved (Runner.Start, services/session/internal/
+ * runner/runner.go) — always "." here, since the e2e session-cmd passes
+ * neither -cwd nor -worktree-root. A journey that needs a session with a real
+ * directory on its record has to write one directly.
  */
 export async function createSessionNoSpawn(
   dataURL: string,
-  body: { name: string; provider: string; workspace?: string },
+  body: { name: string; provider: string; workspace?: string; cwd?: string },
 ): Promise<{ id: string; name: string }> {
   const res = await fetch(`${dataURL}/sessions`, {
     method: "POST",
@@ -49,6 +56,27 @@ export async function createSessionNoSpawn(
   if (!res.ok) throw new Error(`createSessionNoSpawn: status ${res.status}`);
   const data = (await res.json()) as { id: string; name: string };
   return { id: data.id, name: data.name };
+}
+
+/**
+ * POST /sessions/{id}/rename — the one cheap, deterministic way to make a
+ * session the most recently updated one. A chat turn deliberately does NOT
+ * bump UpdatedAt (store.Sessions.SetAgentState: "a tool-label transition is
+ * not a change to the session's user-visible state, and bumping it would
+ * reshuffle..."), which is exactly why the rail's ordering journeys drive
+ * recency churn through a rename instead of a message.
+ */
+export async function renameSession(
+  routerURL: string,
+  sessionID: string,
+  name: string,
+): Promise<void> {
+  const res = await fetch(`${routerURL}/sessions/${sessionID}/rename`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`renameSession: status ${res.status}`);
 }
 
 export async function importTasks(

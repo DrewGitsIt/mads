@@ -1,4 +1,4 @@
-import type { Model } from "./types";
+import type { Model, Usage } from "./types";
 
 // Unambiguous model identity for display: the discovered display name
 // (already version-qualified server-side, e.g. "Claude Sonnet 5"), or the
@@ -23,4 +23,36 @@ const CONTEXT_WINDOWS: Record<string, number> = {};
 export function contextWindowForModel(modelId: string | undefined): number {
   if (modelId && CONTEXT_WINDOWS[modelId]) return CONTEXT_WINDOWS[modelId];
   return DEFAULT_CONTEXT_WINDOW;
+}
+
+export interface ContextOccupancy {
+  /** Prompt-side tokens the next request will carry. */
+  used: number;
+  window: number;
+  /** used/window as a 0-100 integer, clamped. */
+  pct: number;
+}
+
+/**
+ * Context occupancy for a turn's usage record. Prefers usage.context_tokens —
+ * the prompt side of the turn's FINAL API call, which is what the next request
+ * actually carries. The summed token fields are only a fallback for providers
+ * that don't report per-call occupancy: on claude-code they are a per-turn
+ * billing aggregate (cache reads summed across every tool round-trip) that
+ * overstates occupancy by roughly the iteration count.
+ *
+ * Shared so the two places that show occupancy — the conversation header's
+ * ContextMeter and the session rail's tooltip — cannot disagree. Undefined
+ * when there is no usage or no window to judge it against.
+ */
+export function contextOccupancy(
+  usage: Usage | undefined,
+  fallbackWindow: number | undefined,
+): ContextOccupancy | undefined {
+  const window = usage?.context_window || fallbackWindow;
+  if (usage === undefined || window === undefined || window <= 0) return undefined;
+  const used =
+    usage.context_tokens ||
+    usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);
+  return { used, window, pct: Math.min(100, Math.round((used / window) * 100)) };
 }

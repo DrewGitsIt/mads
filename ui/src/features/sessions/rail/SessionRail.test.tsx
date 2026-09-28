@@ -1139,3 +1139,262 @@ describe("SessionRail — the Earlier tail", () => {
     expect(cardNames()).toEqual(["old one", "ancient one"]);
   });
 });
+
+// ── #2b omni search ──────────────────────────────────────────────────────
+
+function searchBox(): HTMLInputElement {
+  return screen.getByLabelText("Search sessions") as HTMLInputElement;
+}
+
+/** The reason lines a card is printing — the acceptance criterion counts them. */
+function reasonsOf(name: string): string[] {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return [...row.querySelectorAll("[data-match-reason]")].map((el) => el.textContent!);
+}
+
+function cards(): HTMLElement[] {
+  return [
+    ...screen.getByLabelText("Session list").querySelectorAll<HTMLElement>('div[role="button"]'),
+  ];
+}
+
+describe("SessionRail omni search", () => {
+  // The mockup's own fixture set. "rail readability pass" is the case that
+  // decides the field list: its workspace is "Main work", which shares no
+  // substring with ~/repo/mads-ui, so both have to be indexed.
+  const goose = makeSession({
+    id: "g",
+    name: "goose ACP transcript gap",
+    workspace: "mads",
+    cwd: "~/repo/mads",
+    worktree_branch: "wt/goose-acp",
+    updated_at: isoAgo(1 * MINUTE),
+  });
+  const electron = makeSession({
+    id: "e",
+    name: "electron self-heal reinstall",
+    workspace: "mads",
+    cwd: "~/repo/mads",
+    updated_at: isoAgo(6 * MINUTE),
+  });
+  const retro = makeSession({
+    id: "s",
+    name: "retro: conversation UX",
+    workspace: "sidecar",
+    cwd: "~/repo/sidecar",
+    updated_at: isoAgo(3 * HOUR),
+  });
+  const railUi = makeSession({
+    id: "u",
+    name: "rail readability pass",
+    workspace: "Main work",
+    cwd: "~/repo/mads-ui",
+    updated_at: isoAgo(5 * HOUR),
+  });
+  const digest = makeSession({
+    id: "d",
+    name: "digest watcher backlog",
+    workspace: "sidecar",
+    cwd: "~/repo/sidecar",
+    worktree_branch: "wt/digest",
+    updated_at: isoAgo(2 * DAY),
+  });
+  const all = [goose, electron, retro, railUi, digest];
+
+  function renderRail(props: Partial<React.ComponentProps<typeof SessionRail>> = {}) {
+    vi.useFakeTimers({ now: NOW });
+    return render(<SessionRail sessions={all} openTaskCounts={{}} {...props} />);
+  }
+
+  function type(text: string) {
+    fireEvent.change(searchBox(), { target: { value: text } });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("matches on each of the four indexed fields", () => {
+    renderRail();
+
+    type("readability");
+    expect(cardNames()).toEqual(["rail readability pass"]);
+
+    type("Main");
+    expect(cardNames()).toEqual(["rail readability pass"]);
+
+    type("mads-ui");
+    expect(cardNames()).toEqual(["rail readability pass"]);
+
+    type("wt/goose");
+    expect(cardNames()).toEqual(["goose ACP transcript gap"]);
+  });
+
+  it("finds a session whose workspace name shares no substring with its cwd", () => {
+    renderRail();
+    type("mads");
+    // "Main work" contains no "mads" — this card is here on its directory alone.
+    expect(cardNames()).toContain("rail readability pass");
+  });
+
+  it("ANDs whitespace-separated terms", () => {
+    renderRail();
+    type("goose acp");
+    expect(cardNames()).toEqual(["goose ACP transcript gap"]);
+    type("goose sidecar");
+    expect(cardNames()).toEqual([]);
+    expect(screen.getByText(/No session matches/)).toBeTruthy();
+  });
+
+  it("filters to one field when a scope token is used", () => {
+    renderRail();
+
+    type("mads");
+    expect(cardNames()).toContain("rail readability pass");
+
+    // dir: keeps it (its cwd is ~/repo/mads-ui), workspace: drops it ("Main work").
+    type("dir:mads");
+    expect(cardNames()).toContain("rail readability pass");
+    type("workspace:mads");
+    expect(cardNames()).not.toContain("rail readability pass");
+    expect(cardNames()).toEqual(["goose ACP transcript gap", "electron self-heal reinstall"]);
+  });
+
+  it("offers a committable scope token for a matching workspace or directory", () => {
+    renderRail();
+    type("sidecar");
+
+    const scope = screen.getByRole("group", { name: "Scope search" });
+    const chips = [...scope.querySelectorAll("button")];
+    expect(chips.map((c) => c.textContent)).toEqual([
+      "workspace:sidecar2",
+      "dir:~/repo/sidecar2",
+    ]);
+
+    fireEvent.click(chips[0]);
+    expect(searchBox().value).toBe("workspace:sidecar");
+    // A committed scope is not itself re-scopable, so the chip row retires.
+    expect(screen.queryByRole("group", { name: "Scope search" })).toBeNull();
+  });
+
+  it("prints exactly one reason under a non-name match and none under a name match", () => {
+    renderRail();
+
+    type("mads");
+    // On its directory — "Main work" and the name carry no "mads".
+    expect(reasonsOf("rail readability pass")).toEqual(["dir~/repo/mads-ui"]);
+    // On its workspace, which outranks its equally-matching directory.
+    expect(reasonsOf("goose ACP transcript gap")).toEqual(["workspacemads"]);
+
+    type("rail");
+    expect(reasonsOf("rail readability pass")).toEqual([]);
+  });
+
+  it("reaches sessions folded into the collapsed Earlier tail", () => {
+    renderRail();
+    // At rest the two-day-old card is behind the fold.
+    expect(cardNames()).not.toContain("digest watcher backlog");
+
+    type("digest");
+    expect(cardNames()).toEqual(["digest watcher backlog"]);
+    // Search bypasses the view: no fold is drawn over a result list.
+    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
+  });
+
+  it("orders hits by relevance and restores the resting order identically on clear", () => {
+    renderRail();
+    const resting = cardNames();
+    expect(resting).toEqual([
+      "goose ACP transcript gap",
+      "electron self-heal reinstall",
+      "retro: conversation UX",
+      "rail readability pass",
+    ]);
+
+    // "re" is a name prefix for "retro", a name substring for the other two
+    // "…re…" names, and only a ~/repo hit for goose and the folded-away
+    // digest card — which search reaches and relevance drops to the bottom.
+    type("re");
+    expect(cardNames()).toEqual([
+      "retro: conversation UX",
+      "electron self-heal reinstall",
+      "rail readability pass",
+      "goose ACP transcript gap",
+      "digest watcher backlog",
+    ]);
+
+    fireEvent.click(screen.getByLabelText("Clear search"));
+    expect(searchBox().value).toBe("");
+    expect(cardNames()).toEqual(resting);
+  });
+
+  it("focuses the field on Cmd/Ctrl-K", () => {
+    renderRail();
+    expect(document.activeElement).not.toBe(searchBox());
+
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    expect(document.activeElement).toBe(searchBox());
+
+    searchBox().blur();
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(document.activeElement).toBe(searchBox());
+  });
+
+  it("does not fire Cmd/Ctrl-K while the composer has focus", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <>
+        <textarea aria-label="composer" />
+        <SessionRail sessions={all} openTaskCounts={{}} />
+      </>,
+    );
+    const composer = screen.getByLabelText("composer");
+    composer.focus();
+
+    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    expect(document.activeElement).toBe(composer);
+    expect(document.activeElement).not.toBe(searchBox());
+  });
+
+  it("walks the results with the arrow keys and comes back to the field", () => {
+    renderRail();
+    const box = searchBox();
+    box.focus();
+    type("re");
+
+    fireEvent.keyDown(box, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(cards()[0]);
+
+    fireEvent.keyDown(cards()[0], { key: "ArrowDown" });
+    expect(document.activeElement).toBe(cards()[1]);
+
+    fireEvent.keyDown(cards()[1], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(cards()[0]);
+
+    fireEvent.keyDown(cards()[0], { key: "ArrowUp" });
+    expect(document.activeElement).toBe(box);
+  });
+
+  it("opens the top hit on Enter", () => {
+    const onSelect = vi.fn();
+    renderRail({ onSelect });
+
+    type("re");
+    fireEvent.keyDown(searchBox(), { key: "Enter" });
+    expect(onSelect).toHaveBeenCalledWith(retro.id);
+  });
+
+  it("clears on the first Escape and blurs on the second", () => {
+    renderRail();
+    const box = searchBox();
+    box.focus();
+    type("goose");
+
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(box.value).toBe("");
+    expect(document.activeElement).toBe(box);
+
+    fireEvent.keyDown(box, { key: "Escape" });
+    expect(document.activeElement).not.toBe(box);
+  });
+});

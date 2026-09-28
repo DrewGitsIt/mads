@@ -73,7 +73,9 @@ export function App() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+      // ⌘/Ctrl-⇧-P, not ⌘K: the sessions rail's omni search owns ⌘K (#2b),
+      // and it is the surface this chord was mostly used to reach.
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       } else if (e.ctrlKey && e.key === "`") {

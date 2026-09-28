@@ -11,7 +11,7 @@ export interface CommandPaletteProps {
 }
 
 /**
- * Presentational overlay only — the ⌘K hotkey listener lives in App.tsx, and
+ * Presentational overlay only — the ⌘⇧P hotkey listener lives in App.tsx, and
  * `commands` (built from already-subscribed caches) arrive as props, so
  * opening the palette issues no fetch of its own (HANDOFF.md §3).
  */
