@@ -95,6 +95,19 @@
   align-items: stretch;
 }
 
+/* Buttons in the composer footer keep their label on one line; the hint
+   text beside them is what gives way on a narrow composer. */
+.noWrap {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* The arrow sits inside Popover's inline-block root; make that root a flex
+   item that stretches so the arrow matches the main button's height. */
+.splitButton > :last-child {
+  display: flex;
+}
+
 .splitMain {
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;

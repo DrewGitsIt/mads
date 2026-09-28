@@ -68,4 +68,18 @@ describe("AgentPill", () => {
     expect(screen.getByText("Auto")).toBeTruthy();
     vi.unstubAllGlobals();
   });
+  it("shows the persona name, not its id, once a persona is selected", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify([makeAgent({ id: "agt_123e4567" })]), { status: 200 }),
+        ),
+    );
+    render(<AgentPill value="agt_123e4567" onChange={vi.fn()} onAuto={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("backend-architect")).toBeTruthy());
+    expect(screen.queryByText(/agt_123e4567/)).toBeNull();
+    vi.unstubAllGlobals();
+  });
 });
