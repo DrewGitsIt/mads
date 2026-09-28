@@ -174,6 +174,7 @@ export function Launchpad({
                 type="button"
                 variant="secondary"
                 size="sm"
+                className={styles.noWrap}
                 onClick={() => fileInputRef.current?.click()}
               >
                 <span aria-hidden="true">📎</span> Attach files
@@ -183,7 +184,7 @@ export function Launchpad({
             <div className={styles.sendGroup}>
               <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
               {FLAGS.linkedSessions ? (
-                <div className={styles.splitButton}>
+                <div className={[styles.splitButton, styles.noWrap].join(" ")}>
                   <Button
                     variant="primary"
                     className={styles.splitMain}
@@ -231,6 +232,7 @@ export function Launchpad({
               ) : (
                 <Button
                   variant="primary"
+                  className={styles.noWrap}
                   disabled={text.trim() === "" || submitting}
                   onClick={() => void submit()}
                 >
