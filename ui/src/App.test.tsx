@@ -146,17 +146,17 @@ describe("App command palette (W6.11)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("toggles the command palette open and closed on Cmd+K", async () => {
+  it("toggles the command palette open and closed on Cmd+Shift+P", async () => {
     stubRouterFetch();
     render(<App />);
     await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
 
     expect(screen.queryByPlaceholderText(/jump to a session/i)).toBeNull();
 
-    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
     expect(screen.getByPlaceholderText(/jump to a session/i)).toBeTruthy();
 
-    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
     expect(screen.queryByPlaceholderText(/jump to a session/i)).toBeNull();
   });
 
@@ -165,7 +165,7 @@ describe("App command palette (W6.11)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Investigate flaky metrics query test")).toBeTruthy());
 
-    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
     fireEvent.click(screen.getByTestId("jump:session-inactive"));
 
     await waitFor(() => {
@@ -186,7 +186,7 @@ describe("App command palette (W6.11)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
 
-    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
     fireEvent.click(screen.getByTestId("start-pipeline:session-active"));
 
     await waitFor(() => {
@@ -209,7 +209,7 @@ describe("App command palette (W6.11)", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
 
-    fireEvent.keyDown(document, { key: "k", metaKey: true });
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
     fireEvent.click(screen.getByTestId("jump:session-active"));
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: "Conversation" }).getAttribute("aria-selected")).toBe(

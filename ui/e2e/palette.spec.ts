@@ -9,7 +9,9 @@ test("palette journey: jump to a seeded session by name", async ({ page, routerU
 
   await page.goto(routerURL);
 
-  await page.keyboard.press("Control+k");
+  // ⌘K now belongs to the sessions rail's omni search (#2b); the palette
+  // answers to Control/Cmd-Shift-P.
+  await page.keyboard.press("Control+Shift+P");
   const input = page.getByPlaceholder("Jump to a session, start a pipeline, run retro…");
   await expect(input).toBeVisible();
 

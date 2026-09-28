@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
@@ -21,6 +21,14 @@ import type {
 } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
 import type { RailRow } from "./railLinks";
+import {
+  isEditableElement,
+  matchReason,
+  matchSession,
+  parseSearchQuery,
+  scopeSuggestions,
+} from "./railSearch";
+import type { MatchReason, SearchMatch } from "./railSearch";
 import { useSettledRailOrder } from "./railOrder";
 import {
   EMPTY_LABEL_CONTEXT,
@@ -72,10 +80,11 @@ export interface SessionRailProps {
   workspaces?: Workspace[];
   routerClient?: RouterClient;
   /**
-   * Opaque stamp of the active search query. Any change to it is a quiet
-   * boundary: the pending order applies at once, because a list the user just
-   * asked for has nothing to hold still. (The filter chips below are NOT a
-   * boundary — they narrow the order in place, they never re-rank it.)
+   * Opaque stamp of an externally-driven search query, folded together with
+   * the rail's own omni-search box. Any change to either is a quiet boundary:
+   * the pending order applies at once, because a list the user just asked for
+   * has nothing to hold still. (The filter chips below are NOT a boundary —
+   * they narrow the order in place, they never re-rank it.)
    */
   filterKey?: string;
   className?: string;
@@ -103,11 +112,17 @@ export function SessionRail({
   className,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
+  const [query, setQuery] = useState("");
+  const railRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   // Order is settled, never live: see useSettledRailOrder for the contract.
+  // The search box is a settle boundary in its own right, so its text rides
+  // in the same opaque stamp as the caller's (NUL-joined, which neither can
+  // contain, so two different pairs can never collide into one stamp).
   const { sessions: ordered, pendingMoves, settle, railHandlers } = useSettledRailOrder(
     sessions,
     selectedId,
-    filterKey,
+    `${filterKey ?? ""}\u0000${query}`,
   );
   const now = useRelativeNow();
   const [filter, setFilter] = useState<RailFilter>("all");
@@ -119,7 +134,36 @@ export function SessionRail({
 
   const allSessionsById = new Map(sessions.map((s) => [s.id, s]));
   const graph = computeRailLinks(linkedSessionsEnabled ? links : []);
-  const rows = buildRailRows(ordered, allSessionsById, graph);
+  const allRows = buildRailRows(ordered, allSessionsById, graph);
+
+  // Search bypasses the view entirely: it runs over every row the rail holds,
+  // including the ones folded into the collapsed "Earlier" tail and everything
+  // below the fold. A search that only searched what was rendered would be
+  // worse than useless.
+  const terms = parseSearchQuery(query);
+  const searching = terms.length > 0;
+  const matchById = new Map<string, SearchMatch>();
+  const ranked: { row: RailRow; rank: number; resting: number }[] = [];
+  allRows.forEach((row, resting) => {
+    let rank: number | undefined;
+    // A holder answers for its nested subjects here too — a subject can only
+    // be shown underneath the holder that owns it.
+    for (const session of [row.session, ...row.subjects.map((sub) => sub.session)]) {
+      const match = matchSession(session, terms);
+      if (!match) continue;
+      matchById.set(session.id, match);
+      rank = rank === undefined ? match.rank : Math.min(rank, match.rank);
+    }
+    if (rank !== undefined) ranked.push({ row, rank, resting });
+  });
+  // The one sanctioned reorder: relevance while a query is live, because the
+  // user asked for it by typing. `resting` is the settled index, so ties break
+  // by recency and clearing the field drops straight back to it — the settled
+  // order itself is never touched.
+  const rows = searching
+    ? [...ranked].sort((a, b) => a.rank - b.rank || a.resting - b.resting).map((r) => r.row)
+    : allRows;
+  const suggestions = scopeSuggestions(sessions, query);
   const anchorWorkspace = linkMode ? allSessionsById.get(linkMode.anchorId)?.workspace : undefined;
 
   function bucketOf(session: Session): RailFilterBucket {
@@ -168,9 +212,10 @@ export function SessionRail({
   const earlier: RailRow[] = [];
   for (const row of visible) (isEarlier(row.session, now) ? earlier : head).push(row);
   // A tail needs a head. With nothing recent above it, the fold would hide the
-  // entire rail behind one line, so the whole list just renders.
-  const listRows = head.length > 0 ? head : earlier;
-  const tailRows = head.length > 0 ? earlier : [];
+  // entire rail behind one line, so the whole list just renders. While a query
+  // is live there is no fold at all: every hit is a result.
+  const listRows = searching ? visible : head.length > 0 ? head : earlier;
+  const tailRows = searching || head.length === 0 ? [] : earlier;
 
   function startLinkMode(id: string) {
     setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
@@ -190,11 +235,78 @@ export function SessionRail({
     setLinkMode(undefined);
   }
 
+  // ⌘K / Ctrl-K focuses the field. Capture phase on the document so the rail
+  // claims the chord ahead of the command palette's own (bubble-phase)
+  // document listener, and only when nothing else is taking the user's
+  // typing: with the composer focused the rail keeps its hands off and the
+  // chord falls through untouched.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "k") return;
+      const active = document.activeElement;
+      if (active !== searchRef.current && isEditableElement(active)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    }
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, []);
+
+  function commitScope(token: string) {
+    setQuery(token);
+    searchRef.current?.focus();
+  }
+
+  function clearSearch() {
+    setQuery("");
+    searchRef.current?.focus();
+  }
+
+  // ↑/↓ walk the rendered results — the list IS the autosuggest, so the
+  // cards themselves are the options and there is no dropdown to walk.
+  function walkResults(event: React.KeyboardEvent<HTMLElement>) {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const target = event.target as HTMLElement;
+    const fromSearch = target === searchRef.current;
+    if (!fromSearch && target.dataset?.railCard === undefined) return;
+    const cards = [...(railRef.current?.querySelectorAll<HTMLElement>("[data-rail-card]") ?? [])];
+    if (cards.length === 0) return;
+    event.preventDefault();
+    if (fromSearch) {
+      if (event.key === "ArrowDown") cards[0].focus();
+      return;
+    }
+    const next = cards.indexOf(target) + (event.key === "ArrowDown" ? 1 : -1);
+    // Walking back off the top returns to the field the results came from.
+    if (next < 0) searchRef.current?.focus();
+    else if (next < cards.length) cards[next].focus();
+  }
+
+  function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      // Enter opens the top hit — the result the relevance order put first.
+      const top = listRows[0];
+      if (!top) return;
+      event.preventDefault();
+      onSelect?.(top.session.id);
+      return;
+    }
+    if (event.key !== "Escape") return;
+    // Escape clears, then blurs: a second press leaves the rail rather than
+    // making the first press do two things at once.
+    event.preventDefault();
+    if (query !== "") setQuery("");
+    else searchRef.current?.blur();
+  }
+
   // Shared by the main list and the "Earlier" tail — the two render identical
   // cards, they only differ in whether the fold is hiding them.
   const rowProps = {
     openTaskCounts,
     agentStates,
+    matchById,
     selectedId,
     onSelect,
     onResume,
@@ -212,8 +324,10 @@ export function SessionRail({
 
   return (
     <div
+      ref={railRef}
       className={[styles.rail, className].filter(Boolean).join(" ")}
       aria-label="Session list"
+      onKeyDown={walkResults}
       {...railHandlers}
     >
       {pendingMoves > 0 && (
@@ -241,6 +355,57 @@ export function SessionRail({
           </button>
         </div>
       )}
+      {/* One field, no workspace picker: it matches whatever you happen to
+          remember — name, workspace, directory or branch. */}
+      <div className={styles.searchWrap}>
+        <div className={styles.searchField}>
+          <span className={styles.searchIcon} aria-hidden="true">
+            ⌕
+          </span>
+          <input
+            ref={searchRef}
+            type="text"
+            className={styles.searchInput}
+            value={query}
+            placeholder="Search sessions…"
+            aria-label="Search sessions"
+            aria-keyshortcuts="Meta+k Control+k"
+            autoComplete="off"
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+          />
+          {query !== "" && (
+            <button
+              type="button"
+              className={styles.searchClear}
+              title="Clear"
+              aria-label="Clear search"
+              onClick={clearSearch}
+            >
+              ✕
+            </button>
+          )}
+          <span className={styles.searchKbd} aria-hidden="true">
+            ⌘K
+          </span>
+        </div>
+        {suggestions.length > 0 && (
+          <div className={styles.scopeChips} role="group" aria-label="Scope search">
+            {suggestions.map((s) => (
+              <button
+                key={s.token}
+                type="button"
+                className={styles.scopeChip}
+                onClick={() => commitScope(s.token)}
+              >
+                <span className={styles.scopeChipKey}>{s.field}:</span>
+                {s.value}
+                <span className={styles.scopeChipCount}>{s.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className={styles.filterBar} role="group" aria-label="Filter sessions">
         {RAIL_FILTERS.map(({ id, label }) => (
           <button
@@ -259,7 +424,13 @@ export function SessionRail({
         {listRows.map((row) => (
           <RailRowGroup key={row.session.id} row={row} {...rowProps} />
         ))}
-        {visible.length === 0 && <div className={styles.emptyNote}>No sessions match this filter.</div>}
+        {visible.length === 0 && (
+          <div className={styles.emptyNote}>
+            {searching
+              ? `No session matches “${query.trim()}”. Searched name, workspace, directory and branch.`
+              : "No sessions match this filter."}
+          </div>
+        )}
       </div>
       {tailRows.length > 0 && (
         <div className={styles.list}>
@@ -316,6 +487,7 @@ function RailRowGroup({
   row,
   openTaskCounts,
   agentStates,
+  matchById,
   selectedId,
   onSelect,
   onResume,
@@ -333,6 +505,8 @@ function RailRowGroup({
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
   agentStates: Record<string, SessionAgentState>;
+  /** Only populated while a query is live — a card's own hit, for its reason line. */
+  matchById: Map<string, SearchMatch>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -355,6 +529,7 @@ function RailRowGroup({
         session={row.session}
         openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
         agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
+        matchReason={reasonFor(row.session, matchById)}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
@@ -377,6 +552,7 @@ function RailRowGroup({
             session={sub.session}
             openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
             agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
+            matchReason={reasonFor(sub.session, matchById)}
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
@@ -407,6 +583,11 @@ function RailRowGroup({
   );
 }
 
+function reasonFor(session: Session, matchById: Map<string, SearchMatch>) {
+  const match = matchById.get(session.id);
+  return match ? matchReason(session, match) : undefined;
+}
+
 /** Active renders nothing extra beyond the existing LINKED badge — only the non-terminal/degraded states need a pill. */
 function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined {
   switch (status) {
@@ -423,6 +604,7 @@ function SessionRow({
   session,
   openTaskBreakdown,
   agentState,
+  matchReason: reason,
   selected,
   onSelect,
   onResume,
@@ -449,6 +631,8 @@ function SessionRow({
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
   agentState: SessionAgentState;
+  /** Set only when a live search matched this card on something other than its name. */
+  matchReason?: MatchReason;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -530,6 +714,7 @@ function SessionRow({
     <div
       role="button"
       title={tooltip || undefined}
+      data-rail-card=""
       tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
       aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
       className={[
@@ -583,6 +768,13 @@ function SessionRow({
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
       </div>
+      {/* One reason, never an inventory: workspace beats branch beats dir. */}
+      {reason && (
+        <div className={styles.why} data-match-reason={reason.field}>
+          <span className={styles.whyKey}>{reason.field}</span>
+          {reason.value}
+        </div>
+      )}
       <ContextLine labels={labels} />
       {hasMeta && (
         <div className={styles.rowMeta}>

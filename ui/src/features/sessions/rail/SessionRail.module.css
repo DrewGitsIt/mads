@@ -11,6 +11,134 @@
   flex-direction: column;
 }
 
+/* #2b omni search. One field instead of a workspace picker: a picker can only
+   express the axis it was built for and costs a permanent control in a 280px
+   rail to do it. */
+.searchWrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-3);
+}
+
+.searchField {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: 4px var(--space-2);
+}
+
+.searchField:focus-within {
+  border-color: var(--accent);
+}
+
+.searchIcon {
+  flex: none;
+  color: var(--text3);
+  font-size: 11px;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font: 500 var(--fs-sm) var(--sans);
+}
+
+.searchInput::placeholder {
+  color: var(--text3);
+}
+
+.searchClear {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--text3);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+}
+
+.searchClear:hover {
+  color: var(--text2);
+}
+
+.searchKbd {
+  flex: none;
+  color: var(--text3);
+  font: 500 9.5px var(--mono);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+/* The only extra chrome the search gets: committable scope tokens. A dropdown
+   in a 280px rail would cover the very results it is suggesting, so the list
+   itself is the autosuggest and this row is the rest of it. */
+.scopeChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.scopeChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: 500 var(--fs-chip) var(--mono);
+  color: var(--text2);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+
+.scopeChip:hover {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.scopeChipKey {
+  color: var(--accent);
+}
+
+.scopeChipCount {
+  opacity: 0.6;
+}
+
+/* Why this card is here. Without it, typing "ui" and getting a session called
+   "persona split" reads as a bug. */
+.why {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-top: 2px;
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.whyKey {
+  flex: none;
+  color: var(--accent);
+  font: 600 var(--fs-chip) var(--mono);
+  opacity: 0.85;
+}
+
 /* The triage surface that replaced grouping: a count you can click, which
    narrows the list in place instead of relocating cards into a block. */
 .filterBar {
