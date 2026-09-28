@@ -19,8 +19,8 @@ import (
 //     that never got a result to "interrupted" as persisted
 //     session.tool_status_changed events.
 //   - T6: persists what the harness transcript can never replay — subagent
-//     sidechain events (parent-tagged), task lifecycle updates, and
-//     thinking blocks — into the Data Service event log.
+//     sidechain events (parent-tagged), task lifecycle updates, thinking
+//     blocks, and compaction status — into the Data Service event log.
 //   - the session rail's agent-state label (agentstate.go): what the MAIN
 //     agent is doing right now, floored and transition-only. The state edges
 //     themselves ride the turn lifecycle instead (Send/onTurnEnd), not this
@@ -152,6 +152,12 @@ func (r *Runner) persistConversation(ev provider.Event) {
 		})
 	case ev.Kind == provider.EventThinking && ev.Text != "":
 		r.appendConversation(contracts.SessionThinking, contracts.ThinkingBlock{Text: ev.Text})
+	case ev.Kind == provider.EventCompact && ev.Compact != nil:
+		r.appendConversation(contracts.SessionCompact, contracts.CompactStatus{
+			Phase:   ev.Compact.Phase,
+			Success: ev.Compact.Success,
+			Error:   ev.Compact.Error,
+		})
 	}
 }
 

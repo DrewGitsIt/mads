@@ -109,6 +109,19 @@ type ToolStatusChange struct {
 	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
 }
 
+// CompactStatus is the payload of SessionCompact: one phase of a native
+// context-compaction pass, mirroring providers/provider's CompactStatus.
+type CompactStatus struct {
+	// Phase is "start" (compaction began) or "done" (finished, successfully
+	// or not).
+	Phase string `json:"phase"`
+	// Success is meaningful only when Phase is "done".
+	Success bool `json:"success,omitempty"`
+	// Error is the provider's failure reason when Phase is "done" and
+	// Success is false.
+	Error string `json:"error,omitempty"`
+}
+
 // Agent states, the vocabulary of AgentState.State: whether a turn is in
 // flight at all. What the agent is doing inside a working turn lives in
 // Label, not in a wider state enum — a rail line is one clause, and every

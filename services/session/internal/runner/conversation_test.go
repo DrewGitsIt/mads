@@ -126,6 +126,33 @@ func TestConversationPersistence(t *testing.T) {
 	}
 }
 
+// TestCompactStatusPersisted: both phases of a compaction pass land in the
+// event log, failure reason included — a conversation opened after the fact
+// has no other way to learn it (/output never replays chat frames).
+func TestCompactStatusPersisted(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, nil)
+
+	r.observeConversation(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}})
+	r.observeConversation(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{
+		Phase: "done", Error: "Not enough messages to compact.",
+	}})
+	r.observeConversation(provider.Event{Kind: provider.EventCompact}) // no detail: nothing to persist
+
+	got := eventsOfType[contracts.CompactStatus](t, data, sess.ID, contracts.SessionCompact)
+	if len(got) != 2 {
+		t.Fatalf("persisted %d compact events, want 2: %+v", len(got), got)
+	}
+	if got[0].Phase != "start" {
+		t.Errorf("first compact event = %+v, want phase start", got[0])
+	}
+	if got[1].Phase != "done" || got[1].Success || got[1].Error != "Not enough messages to compact." {
+		t.Errorf("second compact event = %+v, want a failed done with its reason", got[1])
+	}
+}
+
 // TestObserveConversationStampsStatuses: the T5 engine's verdicts ride the
 // returned (broadcast) events — in_progress on announcement, completed/
 // failed on the result — and the turn-end sweep persists "interrupted" for

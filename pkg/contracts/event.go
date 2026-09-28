@@ -95,6 +95,15 @@ const (
 	// tool_use, completed/failed on tool_result) are stamped onto the event
 	// itself, not duplicated here. Payload: contracts.ToolStatusChange.
 	SessionToolStatusChanged EventType = "session.tool_status_changed"
+	// SessionCompact fires for each phase of a native context-compaction
+	// pass on the session (providers/provider/event.go EventCompact — the
+	// user's "Compact now"/"/compact", or the Runner's near-limit resume
+	// trigger): "start", then "done" with its outcome. Payload:
+	// contracts.CompactStatus. Persisted because the live /output stream
+	// never replays chat frames, so a conversation opened (or reopened)
+	// mid-compaction — or just after a failed one — can only learn the
+	// status from this log.
+	SessionCompact EventType = "session.compact"
 	// SessionAgentState fires when a session's main agent crosses a state
 	// boundary — a turn going in flight, the activity label inside that turn
 	// changing, and the turn ending. Payload: contracts.AgentState. This is
@@ -387,7 +396,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
-	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionAgentState,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionAgentState,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,
