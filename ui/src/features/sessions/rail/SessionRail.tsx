@@ -3,9 +3,10 @@ import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialo
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkCadenceControl } from "./LinkCadenceControl";
 import { LinkChooserDialog } from "./LinkChooserDialog";
-import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, groupSessions, totalOpenTasks } from "./railGroups";
+import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, totalOpenTasks } from "./railGroups";
 import type { OpenTaskBreakdown } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
+import { useSettledRailOrder } from "./railOrder";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import {
@@ -30,6 +31,12 @@ export interface SessionRailProps {
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
   routerClient?: RouterClient;
+  /**
+   * Opaque stamp of the active search/filter. Any change to it is a quiet
+   * boundary: the pending order applies at once, because a list the user just
+   * asked for has nothing to hold still.
+   */
+  filterKey?: string;
   className?: string;
 }
 
@@ -49,10 +56,16 @@ export function SessionRail({
   onDelete,
   links = [],
   routerClient = router,
+  filterKey,
   className,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
-  const { active, recent } = groupSessions(sessions);
+  // Order is settled, never live: see useSettledRailOrder for the contract.
+  const { active, recent, pendingMoves, settle, railHandlers } = useSettledRailOrder(
+    sessions,
+    selectedId,
+    filterKey,
+  );
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -83,7 +96,20 @@ export function SessionRail({
   }
 
   return (
-    <div className={[styles.rail, className].filter(Boolean).join(" ")} aria-label="Session list">
+    <div
+      className={[styles.rail, className].filter(Boolean).join(" ")}
+      aria-label="Session list"
+      {...railHandlers}
+    >
+      {pendingMoves > 0 && (
+        <button type="button" className={styles.pendingGhost} onClick={settle}>
+          <span className={styles.pendingArrow} aria-hidden="true">
+            ↑
+          </span>
+          {pendingMoves === 1 ? "1 session moved" : `${pendingMoves} sessions moved`}
+          <span className={styles.pendingHint}>— click to reorder</span>
+        </button>
+      )}
       {linkedSessionsEnabled && linkMode && (
         <div className={styles.linkBar}>
           <span className={styles.linkBarCount}>{linkMode.selectedIds.size} selected</span>
