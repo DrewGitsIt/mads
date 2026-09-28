@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { WORKSPACE_TABS } from "./tabRegistry";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
@@ -50,8 +50,10 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    // Rail chrome (tab switcher) renders regardless of display mode.
-    await waitFor(() => expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy());
+    // Rail chrome renders regardless of display mode; it starts collapsed.
+    await waitFor(() => expect(screen.getByLabelText("Expand context rail")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("Expand context rail"));
+    expect(screen.getByRole("button", { name: "Changes" })).toBeTruthy();
     // A fixture synthesis proposal card renders inside the rail.
     await waitFor(() =>
       expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy(),

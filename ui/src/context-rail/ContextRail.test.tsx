@@ -5,6 +5,22 @@ import { FakeRouterClient, fixtureTasks } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 
 const tasksById = Object.fromEntries(fixtureTasks.map((t) => [t.id, t]));
+const openTaskCount = fixtureTasks.filter((t) => t.status !== "done" && t.status !== "wont_do").length;
+
+function expand() {
+  fireEvent.click(screen.getByLabelText("Expand context rail"));
+}
+
+function renderRail() {
+  return render(
+    <ContextRail
+      sessionId="session-active"
+      routerClient={new FakeRouterClient()}
+      tasks={fixtureTasks}
+      tasksById={tasksById}
+    />,
+  );
+}
 
 describe("ContextRail", () => {
   beforeEach(() => {
@@ -16,6 +32,28 @@ describe("ContextRail", () => {
     vi.unstubAllGlobals();
   });
 
+  it("starts collapsed, with the open-task and touched-file counts on the strip", async () => {
+    renderRail();
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+    expect(screen.getByLabelText(`Tasks, ${openTaskCount} open`)).toBeTruthy();
+    await waitFor(() => expect(screen.getByLabelText(/^Changes, [1-9]\d* files$/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText(/pending proposals$/)).toBeTruthy());
+  });
+
+  it("clicking anywhere on the collapsed strip expands to the Tasks tab", () => {
+    const { container } = renderRail();
+    fireEvent.click(container.firstElementChild!);
+    expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
+  });
+
+  it("the collapsed strip's Changes label opens straight to Changes", async () => {
+    renderRail();
+    await waitFor(() => expect(screen.getByLabelText(/^Changes, [1-9]/)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText(/^Changes, /));
+    await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+  });
+
   it("shows the Tasks tab by default with quick-filter chips", () => {
     render(
       <ContextRail
@@ -25,6 +63,7 @@ describe("ContextRail", () => {
         tasksById={tasksById}
       />,
     );
+    expand();
     expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "In progress" })).toBeTruthy();
     expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy();
@@ -39,6 +78,7 @@ describe("ContextRail", () => {
         tasksById={tasksById}
       />,
     );
+    expand();
     await waitFor(() =>
       expect(screen.getByText("Add a metrics counter for retry exhaustion")).toBeTruthy(),
     );
@@ -55,6 +95,7 @@ describe("ContextRail", () => {
         tasksById={tasksById}
       />,
     );
+    expand();
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     expect(screen.getByText("Add retry metrics dashboard")).toBeTruthy();
     expect(screen.queryByText("Write regression test for the retry race")).toBeNull();
@@ -69,23 +110,18 @@ describe("ContextRail", () => {
         tasksById={tasksById}
       />,
     );
+    expand();
     fireEvent.click(screen.getByRole("button", { name: "Changes" }));
     await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
   });
 
   it("collapses and expands", () => {
-    render(
-      <ContextRail
-        sessionId="session-active"
-        routerClient={new FakeRouterClient()}
-        tasks={fixtureTasks}
-        tasksById={tasksById}
-      />,
-    );
+    renderRail();
+    expand();
     fireEvent.click(screen.getByLabelText("Collapse context rail"));
-    expect(screen.queryByText("Tasks")).toBeNull();
-    fireEvent.click(screen.getByLabelText("Expand context rail"));
-    expect(screen.getByText("Tasks")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "All" })).toBeNull();
+    expand();
+    expect(screen.getByRole("button", { name: "All" })).toBeTruthy();
   });
 
   it("invokes onOpenFile from the Changes tab", async () => {
@@ -99,6 +135,7 @@ describe("ContextRail", () => {
         onOpenFile={onOpenFile}
       />,
     );
+    expand();
     fireEvent.click(screen.getByRole("button", { name: "Changes" }));
     await waitFor(() => expect(screen.getByText("ingest.go")).toBeTruthy());
     fireEvent.click(screen.getByText("ingest.go"));

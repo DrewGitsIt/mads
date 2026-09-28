@@ -46,7 +46,9 @@ export function ContextRail({
   onOpenFile,
 }: ContextRailProps) {
   const [tab, setTab] = useState<RailTab>("tasks");
-  const [collapsed, setCollapsed] = useState(false);
+  // Starts collapsed: the conversation owns the pane until the user asks for
+  // the rail, and the collapsed strip's counts say when that's worth doing.
+  const [collapsed, setCollapsed] = useState(true);
   const [statusFilter, setStatusFilter] = useState<TaskStatus | undefined>(undefined);
   const [changes, setChanges] = useState<FileChange[]>([]);
   const proposals = useProposalStore(routerClient, sessionId);
@@ -68,18 +70,48 @@ export function ContextRail({
   // file edited across tasks or created-then-modified shows up many times.
   // Collapse to a set of touched files for both the count badge and the list.
   const touched = collapseChanges(changes);
+  const openTasks = tasks.filter((t) => t.status !== "done" && t.status !== "wont_do").length;
+  const pendingProposals = proposals.filter((p) => p.status === "proposed").length;
 
   if (collapsed) {
+    const open = (next?: RailTab) => {
+      if (next) setTab(next);
+      setCollapsed(false);
+    };
+    // The whole strip expands on click (a tall, easy target); the buttons
+    // inside carry the keyboard/a11y path and pick which tab opens.
     return (
-      <div className={styles.collapsed}>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setCollapsed(false)}
-          aria-label="Expand context rail"
-        >
+      <div className={styles.collapsed} onClick={() => open()} title="Show tasks and changes">
+        <button type="button" className={styles.expand} aria-label="Expand context rail">
           ◂
-        </Button>
+        </button>
+        <button
+          type="button"
+          className={styles.peek}
+          onClick={() => setTab("tasks")}
+          aria-label={`Tasks, ${openTasks} open`}
+        >
+          Tasks
+          <span className={styles.count}>{openTasks}</span>
+        </button>
+        <button
+          type="button"
+          className={styles.peek}
+          onClick={() => setTab("changes")}
+          aria-label={`Changes, ${touched.length} files`}
+        >
+          Changes
+          <span className={styles.count}>{touched.length}</span>
+        </button>
+        {pendingProposals > 0 && (
+          <span
+            className={styles.proposals}
+            aria-label={`${pendingProposals} pending proposals`}
+            title={`${pendingProposals} pending proposals`}
+          >
+            {pendingProposals}
+          </span>
+        )}
       </div>
     );
   }
@@ -94,6 +126,11 @@ export function ContextRail({
             onClick={() => setTab("tasks")}
           >
             Tasks
+            {openTasks > 0 && (
+              <span className={styles.count} aria-hidden="true">
+                {openTasks}
+              </span>
+            )}
           </button>
           <button
             type="button"

@@ -10,13 +10,73 @@
   overflow-y: auto;
 }
 
+/* Collapsed strip: the chevron stays pinned at the top, the vertical
+   Tasks/Changes labels sit under it, and the whole strip is the click target. */
 .collapsed {
   width: 40px;
+  height: 100%;
+  flex-shrink: 0;
   border-left: 1px solid var(--line-soft);
   background: var(--bg1);
   display: flex;
-  justify-content: center;
-  padding-top: var(--space-3);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  cursor: pointer;
+}
+
+.collapsed:hover {
+  background: var(--bg2);
+}
+
+.expand,
+.peek {
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  cursor: pointer;
+  font: inherit;
+}
+
+.expand {
+  padding: var(--space-1);
+  font-size: var(--fs-sm);
+  line-height: 1;
+}
+
+.peek {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-1);
+  font-size: var(--fs-sm);
+  writing-mode: vertical-rl;
+}
+
+.expand:hover,
+.peek:hover,
+.expand:focus-visible,
+.peek:focus-visible {
+  color: var(--text);
+}
+
+.peek .count {
+  writing-mode: horizontal-tb;
+}
+
+/* Pending synthesis proposals render above the tabs when expanded; collapsed,
+   they'd be invisible without this dot. */
+.proposals {
+  min-width: 1.4em;
+  padding: 0 var(--space-1);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg1);
+  font-size: var(--fs-chip);
+  line-height: 1.4;
+  text-align: center;
 }
 
 .header {
