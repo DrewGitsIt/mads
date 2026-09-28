@@ -53,17 +53,9 @@ type Config struct {
 	// it runs first whenever the index has a usable entry; rung 2 (a direct
 	// transcript content scan) is the fallback when it doesn't.
 	HistoryFile string
-	// Models overrides the pinned discovery list.
+	// Models pins the model list, short-circuiting live discovery
+	// (discover.go). Empty — the normal case — probes the binary instead.
 	Models []provider.Model
-}
-
-// DefaultModels is the pinned model list — claude-code has no discovery
-// call, hence model_discovery: emulated in the matrix.
-var DefaultModels = []provider.Model{
-	{ID: "claude-fable-5", Name: "Claude Fable 5"},
-	{ID: "claude-sonnet-5", Name: "Claude Sonnet 5", Default: true},
-	{ID: "claude-opus-5", Name: "Claude Opus 5"},
-	{ID: "claude-haiku-4-5-20251001", Name: "Claude Haiku 4.5"},
 }
 
 type Provider struct {
@@ -84,9 +76,6 @@ func New(cfg Config) *Provider {
 			cfg.HistoryFile = filepath.Join(home, ".claude", "history.jsonl")
 		}
 	}
-	if len(cfg.Models) == 0 {
-		cfg.Models = DefaultModels
-	}
 	return &Provider{cfg: cfg}
 }
 
@@ -97,11 +86,13 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorInteractive: provider.Native,
 		// Interrupt rides a stream-json control_request rather than a
 		// harness API call.
-		provider.BehaviorInterrupt:      provider.Emulated,
-		provider.BehaviorOneShot:        provider.Native,
-		provider.BehaviorResume:         provider.Native,
-		provider.BehaviorTranscript:     provider.Native,
-		provider.BehaviorModelDiscovery: provider.Emulated,
+		provider.BehaviorInterrupt:  provider.Emulated,
+		provider.BehaviorOneShot:    provider.Native,
+		provider.BehaviorResume:     provider.Native,
+		provider.BehaviorTranscript: provider.Native,
+		// `list_models` over stream-json returns the harness's own
+		// catalog — aliases included — so nothing is pinned (discover.go).
+		provider.BehaviorModelDiscovery: provider.Native,
 		provider.BehaviorCostReporting:  provider.Native,
 		provider.BehaviorACP:            provider.Native,
 		provider.BehaviorPTY:            provider.Native,
@@ -166,10 +157,6 @@ func trustArgs(trust provider.Trust) []string {
 	default:
 		return []string{"--permission-mode", "bypassPermissions"}
 	}
-}
-
-func (p *Provider) Models(context.Context) ([]provider.Model, error) {
-	return append([]provider.Model{}, p.cfg.Models...), nil
 }
 
 func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {

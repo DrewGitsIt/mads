@@ -9,7 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -870,29 +870,70 @@ func TestRegistersCleanly(t *testing.T) {
 	}
 }
 
-// Guards against DefaultModels regressing to bare family names (e.g.
-// "Claude Sonnet" instead of "Claude Sonnet 5") — the UI shows this Name
-// verbatim and must never display an ambiguous, unversioned model identity.
-func TestDefaultModelsAreVersionQualified(t *testing.T) {
-	digit := regexp.MustCompile(`[0-9]`)
-	for _, m := range DefaultModels {
-		if !digit.MatchString(m.Name) {
-			t.Errorf("model %q name %q has no version number", m.ID, m.Name)
-		}
+// Models probes the binary rather than returning a pinned list: the catalog
+// the harness reports is shaped by its own version, the settings cascade's
+// availableModels allowlist and the account's entitlement, none of which
+// this adapter can know.
+func TestModelsDiscoversFromBinary(t *testing.T) {
+	models, err := testProvider(t).Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	var got []string
+	for _, m := range models {
+		got = append(got, m.ID)
+	}
+	want := []string{"default", "opus", "fake-sonnet-9"}
+	if !slices.Equal(got, want) {
+		t.Errorf("model IDs = %v, want %v (discovery order preserved)", got, want)
+	}
+	if models[0].Name != "Default (recommended)" {
+		t.Errorf("Name = %q, want the harness's own displayName", models[0].Name)
+	}
+	if !models[0].Default || models[1].Default || models[2].Default {
+		t.Errorf("Default should mark exactly the \"default\" entry, got %+v", models)
 	}
 }
 
-// Guards against duplicate entries in the pinned list — the UI keys its
-// picker rows by ID, so a repeated ID renders twice (and trips React's
-// duplicate-key warning). A copy-paste duplicate shipped exactly this way
-// once; nothing downstream dedups (reads.go copies the slice verbatim).
-func TestDefaultModelsHaveUniqueIDs(t *testing.T) {
-	seen := map[string]bool{}
-	for _, m := range DefaultModels {
-		if seen[m.ID] {
-			t.Errorf("model ID %q appears more than once", m.ID)
-		}
-		seen[m.ID] = true
+// The ID must be the harness's selection value, never the concrete model an
+// alias currently resolves to — substituting "fake-opus-9" for "opus" would
+// freeze the picker to whatever the alias meant at discovery time and
+// silently defeat the point of tracking the latest model.
+func TestToModelsKeepsAliasNotResolvedModel(t *testing.T) {
+	got := toModels([]wireModel{
+		{Value: "opus", ResolvedModel: "fake-opus-9", DisplayName: "Fake Opus 9"},
+		{Value: "bare", ResolvedModel: "bare"},
+	})
+	if got[0].ID != "opus" {
+		t.Errorf("ID = %q, want the alias %q", got[0].ID, "opus")
+	}
+	// A catalog entry with no displayName still needs a label the UI can show.
+	if got[1].Name != "bare" {
+		t.Errorf("Name = %q, want fallback to the value", got[1].Name)
+	}
+}
+
+// Config.Models pins the list for operators and tests, and must short-circuit
+// the probe entirely — proven here by a Bin that could not possibly run.
+func TestModelsConfigOverrideSkipsProbe(t *testing.T) {
+	pinned := []provider.Model{{ID: "pinned-1", Name: "Pinned", Default: true}}
+	p := New(Config{Bin: filepath.Join(t.TempDir(), "does-not-exist"), Models: pinned})
+	got, err := p.Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models: %v", err)
+	}
+	if !slices.Equal(got, pinned) {
+		t.Errorf("Models = %v, want the configured pin %v", got, pinned)
+	}
+}
+
+// A probe that cannot run is an expected runtime condition, not a crash and
+// not a silent fall back to a stale hardcoded list: reads.go turns
+// ErrDiscoveryUnavailable into an empty picker carrying the detail.
+func TestModelsDiscoveryUnavailable(t *testing.T) {
+	p := New(Config{Bin: filepath.Join(t.TempDir(), "does-not-exist")})
+	if _, err := p.Models(context.Background()); !errors.Is(err, provider.ErrDiscoveryUnavailable) {
+		t.Fatalf("Models error = %v, want provider.ErrDiscoveryUnavailable", err)
 	}
 }
 
