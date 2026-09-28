@@ -452,28 +452,51 @@
   font-weight: 600;
 }
 
+/* The hover controls, as a column hanging off the card's right edge (mockup
+   docs/mockups/rail-action-cluster.html §B). Inside the card they needed a
+   scrim, and the scrim covered the right 82-134px of a 288px card — by now
+   that is the status line, the context labels and the stamps. Outside, they
+   cost the card neither width nor height.
+
+   It cannot be position:absolute: .rail is overflow-y:auto and a scroll
+   container clips both axes, so top/left are computed from the row's rect and
+   handed in as inline style, the way LinkOptionsMenu already places its
+   flyout. Until they are (data-anchored absent) the cluster stays hidden —
+   fixed with auto offsets would paint it at the card's flow position.
+
+   padding-left is a transparent bridge across the gap to the card, not a
+   margin: the pointer must never cross dead space or :hover drops mid-travel
+   and the cluster flickers out from under it. */
 .actionCluster {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
+  position: fixed;
+  z-index: 5;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding-left: 24px;
-  padding-right: var(--space-2);
-  background: linear-gradient(90deg, transparent, var(--bg2) 40%);
+  padding: 3px 4px 3px 8px;
+  /* Left corners squared and the left border dropped: it crosses the rail's
+     own right border on the way out, so it reads as a popover emerging from
+     the card rather than a tab still attached to it. */
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-left: none;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  box-shadow: var(--shadow);
   opacity: 0;
-  transform: translateX(8px);
+  pointer-events: none;
+  /* translateY(-50%) is the anchor: the inline `top` is the row's centre. */
+  transform: translateY(-50%) translateX(4px);
   transition:
     opacity 0.14s ease-out,
     transform 0.14s ease-out;
 }
 
-.row:hover .actionCluster,
-.row:focus-within .actionCluster {
+.row:hover .actionCluster[data-anchored],
+.row:focus-within .actionCluster[data-anchored] {
   opacity: 1;
-  transform: translateX(0);
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
 }
 
 .actionButton {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type { CSSProperties } from "react";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
@@ -326,6 +327,7 @@ export function SessionRail({
     <div
       ref={railRef}
       className={[styles.rail, className].filter(Boolean).join(" ")}
+      data-rail-scroll=""
       aria-label="Session list"
       onKeyDown={walkResults}
       {...railHandlers}
@@ -600,6 +602,18 @@ function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined 
   }
 }
 
+/**
+ * Where the hover action cluster paints: just past the card's right edge,
+ * centred on the row (.actionCluster carries the translateY(-50%)). Fixed,
+ * not absolute — .rail is overflow-y:auto, and a scroll container clips the
+ * cross axis too, so an absolutely positioned child could never escape
+ * sideways. Same trick LinkOptionsMenu already plays on this row's badge.
+ */
+function clusterPlacement(row: HTMLElement): CSSProperties {
+  const rect = row.getBoundingClientRect();
+  return { top: rect.top + rect.height / 2, left: rect.right };
+}
+
 function SessionRow({
   session,
   openTaskBreakdown,
@@ -697,6 +711,46 @@ function SessionRow({
       />
     ) : undefined;
 
+  // The action cluster hangs outside the card, so it is painted position:fixed
+  // off the row's rect and only revealed once those coordinates exist.
+  const rowRef = useRef<HTMLDivElement>(null);
+  const hovering = useRef(false);
+  const [clusterAt, setClusterAt] = useState<CSSProperties>();
+  const clusterAnchored = clusterAt !== undefined;
+
+  function anchorCluster() {
+    if (rowRef.current) setClusterAt(clusterPlacement(rowRef.current));
+  }
+
+  // Fixed coordinates go stale the moment anything scrolls or the window
+  // resizes. Follow the row rather than dismiss, and let go only once the row
+  // has left the rail's scroll viewport — a cluster beside a clipped card is
+  // the one thing worse than no cluster.
+  useEffect(() => {
+    if (!clusterAnchored) return;
+    function follow() {
+      const row = rowRef.current;
+      if (!row) return;
+      const rect = row.getBoundingClientRect();
+      const rail = row.closest("[data-rail-scroll]");
+      const centre = rect.top + rect.height / 2;
+      if (rail) {
+        const bounds = rail.getBoundingClientRect();
+        if (centre < bounds.top || centre > bounds.bottom) {
+          setClusterAt(undefined);
+          return;
+        }
+      }
+      setClusterAt({ top: centre, left: rect.right });
+    }
+    window.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
+    return () => {
+      window.removeEventListener("scroll", follow, true);
+      window.removeEventListener("resize", follow);
+    };
+  }, [clusterAnchored]);
+
   // Clicking a card opens it read-only — no eager resume. A paused session
   // keeps its inactive state (so SessionSummaryCard shows the full summary)
   // and wakes transparently on the first composer send. Explicit resume is the
@@ -716,6 +770,7 @@ function SessionRow({
 
   return (
     <div
+      ref={rowRef}
       role="button"
       title={tooltip || undefined}
       data-rail-card=""
@@ -731,6 +786,25 @@ function SessionRow({
         .filter(Boolean)
         .join(" ")}
       onClick={activateOrToggle}
+      onMouseEnter={() => {
+        hovering.current = true;
+        anchorCluster();
+      }}
+      onMouseLeave={() => {
+        hovering.current = false;
+        // Moving onto the cluster never lands here — it is a DOM child of the
+        // row, so :hover and mouseleave both ignore where it paints. Keep the
+        // anchor while something inside still holds focus, though: the reveal
+        // is also :focus-within, and dropping it would yank the button the
+        // keyboard is standing on out from under it.
+        if (!rowRef.current?.contains(document.activeElement)) setClusterAt(undefined);
+      }}
+      onFocus={anchorCluster}
+      onBlur={(e) => {
+        if (hovering.current) return;
+        if (e.relatedTarget instanceof Node && rowRef.current?.contains(e.relatedTarget)) return;
+        setClusterAt(undefined);
+      }}
       onKeyDown={(e) => {
         // Ignore keydowns that bubbled up from a nested action button —
         // those are handled by the button itself and shouldn't also
@@ -848,7 +922,13 @@ function SessionRow({
           {isLinkCrossWorkspace && <span className={styles.linkDimmedTag}>different workspace</span>}
         </div>
       ) : (
-        <div className={styles.actionCluster} role="group" aria-label={`${name} actions`}>
+        <div
+          className={styles.actionCluster}
+          style={clusterAt}
+          data-anchored={clusterAnchored ? "" : undefined}
+          role="group"
+          aria-label={`${name} actions`}
+        >
           {isPaused && onResume && (
             <button
               type="button"

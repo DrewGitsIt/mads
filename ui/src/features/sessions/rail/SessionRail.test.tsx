@@ -288,6 +288,112 @@ describe("SessionRail", () => {
     expect(within(cluster).getByRole("button", { name: "Archive resume me" })).toBeTruthy();
   });
 
+  // The cluster hangs outside the card's right edge (mockup §B): inside it, its
+  // scrim covered the right 82-134px of the card, which is now the status
+  // line, the context labels and the stamps.
+  describe("action cluster anchor", () => {
+    function fakeRect(box: Partial<DOMRect>): DOMRect {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: 0,
+        height: 0,
+        toJSON: () => ({}),
+        ...box,
+      } as DOMRect;
+    }
+
+    function renderOneRow() {
+      render(
+        <SessionRail
+          sessions={[makeSession({ id: "r1", name: "anchor me", activity: "inactive" })]}
+          openTaskCounts={{}}
+          onResume={vi.fn()}
+        />,
+      );
+      const row = screen.getByText("anchor me").closest('[role="button"]') as HTMLElement;
+      const rail = screen.getByLabelText("Session list") as HTMLElement;
+      const cluster = screen.getByRole("group", { name: "anchor me actions" });
+      // The rail's own scroll viewport, against which a scrolled row is judged.
+      rail.getBoundingClientRect = () => fakeRect({ top: 0, bottom: 400, left: 0, right: 312 });
+      return { row, rail, cluster };
+    }
+
+    it("places the cluster past the card's right edge, centred on the row", () => {
+      const { row, cluster } = renderOneRow();
+      row.getBoundingClientRect = () =>
+        fakeRect({ top: 100, bottom: 200, height: 100, left: 12, right: 300, width: 288 });
+
+      // Unanchored it has no coordinates, and the stylesheet keeps it hidden.
+      expect(cluster.getAttribute("data-anchored")).toBeNull();
+      expect(cluster.style.left).toBe("");
+
+      fireEvent.mouseEnter(row);
+
+      expect(cluster.getAttribute("data-anchored")).toBe("");
+      expect(cluster.style.left).toBe("300px");
+      expect(cluster.style.top).toBe("150px");
+    });
+
+    it("keyboard focus anchors it too, and it survives the pointer leaving a focused row", () => {
+      const { row, cluster } = renderOneRow();
+      row.getBoundingClientRect = () =>
+        fakeRect({ top: 100, bottom: 200, height: 100, left: 12, right: 300, width: 288 });
+
+      const resume = within(cluster).getByRole("button", { name: "Resume anchor me" });
+      act(() => resume.focus());
+      expect(document.activeElement).toBe(resume);
+      expect(cluster.getAttribute("data-anchored")).toBe("");
+
+      // :focus-within still holds it open, so the coordinates must not go.
+      fireEvent.mouseLeave(row);
+      expect(cluster.getAttribute("data-anchored")).toBe("");
+    });
+
+    it("follows its row as the rail scrolls, and lets go once the row leaves the viewport", () => {
+      const { row, rail, cluster } = renderOneRow();
+      let box = { top: 100, bottom: 200, height: 100, left: 12, right: 300, width: 288 };
+      row.getBoundingClientRect = () => fakeRect(box);
+
+      fireEvent.mouseEnter(row);
+      expect(cluster.style.top).toBe("150px");
+
+      // Scrolled up by 80: the cluster moves with the card, never stranding
+      // itself beside whichever row took its place.
+      box = { ...box, top: 20, bottom: 120 };
+      fireEvent.scroll(rail);
+      expect(cluster.style.top).toBe("70px");
+      expect(cluster.getAttribute("data-anchored")).toBe("");
+
+      // Scrolled clean out of the rail's viewport: dismissed rather than left
+      // floating over the search field above it.
+      box = { ...box, top: -300, bottom: -200 };
+      fireEvent.scroll(rail);
+      expect(cluster.getAttribute("data-anchored")).toBeNull();
+    });
+
+    it("paints outside the card without taking any of its width or height", () => {
+      const css = readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
+      const rest = css.match(/\.actionCluster \{([^}]*)\}/)![1];
+      // Fixed, not absolute: .rail is overflow-y:auto and clips both axes.
+      expect(rest).toMatch(/position:\s*fixed/);
+      // A column, not a strip across the card, and no scrim over its text.
+      expect(rest).toMatch(/flex-direction:\s*column/);
+      expect(rest).not.toMatch(/linear-gradient/);
+      // A transparent padding bridge, not a margin: the pointer must never
+      // cross dead space between card and cluster or :hover drops.
+      expect(rest).toMatch(/padding:\s*3px 4px 3px 8px/);
+      expect(rest).not.toMatch(/margin-left/);
+      // Hidden until the row's rect has been measured into an inline style.
+      expect(css).toMatch(/\.row:hover \.actionCluster\[data-anchored\]/);
+      expect(css).toMatch(/\.row:focus-within \.actionCluster\[data-anchored\]/);
+    });
+  });
+
   it("clicking Archive opens the shared confirm dialog; confirming targets the right row, canceling calls neither", () => {
     const onDelete = vi.fn();
     render(

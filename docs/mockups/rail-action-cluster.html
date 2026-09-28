@@ -1,0 +1,377 @@
+<!doctype html>
+<!--
+  mads — rail card action cluster: anchor it outside the card
+  ===========================================================
+
+  The hover cluster is an absolutely positioned full-height strip *inside* the
+  card's right edge, with a left-fading scrim so its buttons read over whatever
+  text is behind them. Two things are wrong with that now:
+
+    - the card carries five to seven lines of left-aligned text, all of which
+      run the full width, so the scrim covers the right 82-134px of a 288px
+      card — the status line, the context labels and the timestamps, which is
+      most of what the rail work just added;
+    - the card is already taller than it wants to be, so buying the cluster
+      room by stacking it vertically inside the card is the wrong trade.
+
+  Anchoring the cluster outside the card's right edge costs the card neither
+  width nor height. The rail is 312px in a much wider window; the space is
+  already there.
+
+  Card, button and rail geometry below is copied verbatim from
+  ui/src/features/sessions/rail/SessionRail.module.css and
+  ui/src/features/sessions/SessionsSurface.module.css. Hover any card.
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — rail action cluster, anchored outside</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1180px; margin:0 auto; padding:var(--space-6) var(--space-5) 120px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:86ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.warn { color:var(--warn-fg); background:var(--warn-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:94ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:94ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); display:flex; align-items:baseline; gap:var(--space-2); flex-wrap:wrap; }
+  .rowlabel.good { color:var(--ok-fg); }
+  .rowlabel.bad { color:var(--bad-fg); }
+  .rowlabel .m { font-weight:500; letter-spacing:0; text-transform:none; color:var(--text3); font-family:var(--mono); }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); }
+  td b { color:var(--text); font-weight:600; }
+  td.num { font-family:var(--mono); font-variant-numeric:tabular-nums; }
+  tr.sum td { border-bottom:none; color:var(--text); font-weight:600; }
+  .ok { color:var(--ok-fg); } .warnc { color:var(--warn-fg); } .badc { color:var(--bad-fg); }
+
+  /* ── the shell: 312px rail beside the pane it sits in ─────────────────── */
+  .shell { display:flex; border:1px solid var(--line-soft); border-radius:var(--r); overflow:hidden; background:var(--bg0); }
+  .railcol { flex:none; width:312px; padding:var(--space-3); border-right:1px solid var(--line-soft); background:var(--bg0);
+             /* The real rail scrolls, which is why an outside anchor cannot be
+                position:absolute — overflow-y:auto clips the x axis too. */
+             max-height:420px; overflow-y:auto; overflow-x:visible; }
+  .railcol.clip { overflow:hidden; }
+  .pane { flex:1; min-width:0; padding:var(--space-4); background:var(--bg0); color:var(--text3); font-size:var(--fs-sm); }
+  .pane .ghosted { opacity:.35; }
+  .pane .ghosted p { margin-bottom:var(--space-2); }
+
+  /* ── verbatim from SessionRail.module.css ─────────────────────────────── */
+  .row { position:relative; display:flex; flex-direction:column; gap:var(--space-1); width:100%; padding:var(--space-2) var(--space-3); margin-bottom:2px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); color:var(--text); font:500 var(--fs-sm) var(--sans); text-align:left; cursor:pointer; }
+  .row:hover { background:var(--bg2); }
+  .rowTop { display:flex; align-items:flex-start; gap:var(--space-2); }
+  .name { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; }
+  .when { flex:none; margin-left:auto; padding-left:var(--space-2); color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; line-height:1.35; }
+  .dot { flex:none; width:8px; height:8px; border-radius:50%; margin-top:5px; background:var(--text3); }
+  .dot.work { background:var(--accent); } .dot.attn { background:var(--warn); } .dot.on { background:var(--ok); }
+  .status { display:flex; align-items:center; gap:6px; min-width:0; min-height:15px; padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .status .lbl { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status.working, .status.working .lbl { color:var(--accent); }
+  .status.needs,   .status.needs .lbl   { color:var(--warn-fg); }
+  .context { display:flex; align-items:center; gap:5px; min-width:0; min-height:13px; padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; }
+  .context .branch { font-family:var(--mono); color:var(--text2); }
+  .context .sep { flex:none; opacity:.5; }
+  .summary { padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .stamps { padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; opacity:0; transition:opacity .12s ease-out; }
+  .row:hover .stamps { opacity:1; }
+  .btn { flex:none; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text2); cursor:pointer; font-size:12px; line-height:1; }
+  .btn:hover { color:var(--text); background:var(--bg4); }
+  .btn.danger:hover { color:var(--bad-fg); background:var(--bad-soft); border-color:var(--bad); }
+
+  /* ── A: today — inside the card, horizontal, scrim over the text ──────── */
+  .clusterIn { position:absolute; top:0; right:0; height:100%; display:flex; align-items:center; gap:2px; padding-left:24px; padding-right:var(--space-2); background:linear-gradient(90deg,transparent,var(--bg2) 40%); opacity:0; transition:opacity .14s ease-out; }
+  .row:hover .clusterIn { opacity:1; }
+  .eaten { position:absolute; top:0; bottom:0; right:0; width:134px; border-left:1px dashed var(--bad); background:rgba(210,96,74,.12); pointer-events:none; opacity:0; transition:opacity .14s; }
+  .row:hover .eaten { opacity:1; }
+  .eaten span { position:absolute; top:2px; left:4px; font:600 9px var(--mono); color:var(--bad-fg); }
+
+  /* ── B / C: outside the card's right edge ────────────────────────────────
+     Anchored to the card's vertical centre, pulled clear of the card box. It
+     reads as a tab drawn out of the card: same hover background, same border,
+     left corners square so the seam disappears, and the 8px of padding-left is
+     a transparent bridge so the pointer never crosses dead space on its way
+     out (crossing dead space would drop :hover and flicker the cluster). */
+  .clusterOut { position:absolute; top:50%; transform:translateY(-50%) translateX(4px); left:100%;
+                display:flex; align-items:center; gap:2px;
+                padding:3px 4px 3px 8px;
+                background:var(--bg2); border:1px solid var(--line-soft); border-left:none;
+                border-radius:0 var(--r-sm) var(--r-sm) 0;
+                box-shadow:var(--shadow);
+                opacity:0; pointer-events:none; transition:opacity .14s ease-out, transform .14s ease-out; z-index:5; }
+  .row:hover .clusterOut { opacity:1; pointer-events:auto; transform:translateY(-50%) translateX(0); }
+  .clusterOut.col { flex-direction:column; }
+
+  /* The unclipped demo needs the rail to not clip; the real one uses fixed
+     positioning for this, which a static mockup cannot show honestly, so the
+     demo rail below simply does not scroll. */
+  .railcol.noscroll { max-height:none; overflow:visible; }
+
+  .legend { display:flex; gap:var(--space-4); flex-wrap:wrap; margin-top:var(--space-3); font-size:var(--fs-sm); color:var(--text3); }
+  .legend b { color:var(--text2); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Rail card action cluster — anchor it outside the card</h1>
+  <p>
+    Hover any card below. <b>A</b> is today: a horizontal strip inside the card's
+    right edge, whose scrim covers 82&ndash;134px of a 288px card and takes out the
+    status line, the context labels and the timestamps. <b>B</b> and <b>C</b> hang
+    the same controls off the outside of the card's right edge, into rail padding
+    and pane that is already empty. The card keeps every pixel of its width and
+    <i>none</i> of its height changes — which is the point, since the card is
+    already taller than it should be. <b>B, the vertical column, is the pick</b>:
+    it overhangs 37px rather than 115px, and what it overhangs is a conversation.
+  </p>
+</header>
+
+<section class="block">
+  <h2><span class="tag">a</span> Today — inside the card <span class="sub">hover a card</span></h2>
+  <div class="body">
+    <p class="lead">
+      The red wash is the width the cluster's scrim takes from the card's text.
+      Watch the status line and the timestamps go under it exactly as you hover to
+      read them.
+    </p>
+    <div class="shell">
+      <div class="railcol noscroll">
+        <div class="row">
+          <div class="rowTop"><span class="dot on"></span><span class="name">Session status sidebar UX</span><span class="when">15m</span></div>
+          <div class="status"><span class="lbl">Ready</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>~/repo/mads</span></div>
+          <div class="summary">1 running</div>
+          <div class="stamps">started Sun 23:44 · last activity today 16:58</div>
+          <div class="clusterIn"><button class="btn">▶</button><button class="btn">⏸</button><button class="btn">🔗</button><button class="btn danger">🗑</button></div>
+          <div class="eaten"><span>134px</span></div>
+        </div>
+        <div class="row">
+          <div class="rowTop"><span class="dot work"></span><span class="name">Monitor event-driven redesign</span><span class="when">52m</span></div>
+          <div class="status working"><span class="lbl">Running bash · Query data service tasks</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>mads-bug-investigator</span></div>
+          <div class="stamps">started Sun 22:11 · last activity 52m ago</div>
+          <div class="clusterIn"><button class="btn">⏸</button><button class="btn danger">🗑</button></div>
+          <div class="eaten" style="width:82px"><span>82px</span></div>
+        </div>
+      </div>
+      <div class="pane"><div class="ghosted"><p>the conversation pane</p><p>— empty here, and 900px wide —</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">b</span> Outside, vertical <span class="sub">the pick — smallest footprint over the pane</span></h2>
+  <div class="body">
+    <p class="lead">
+      A column hanging off the card's right edge, centred on the row. It overhangs
+      <b>37px</b> where the horizontal version overhangs 115px — and what it
+      overhangs is a conversation you may well be reading, so the narrower
+      intrusion is worth the one thing it costs: the button order rotates from
+      left-to-right to top-to-bottom. Keep the sequence itself (resume, close,
+      link, archive) so it is a rotation and not a reshuffle. A four-control
+      cluster is 110px tall against an 87&ndash;103px card, so it will stand
+      slightly proud of a short card at both ends. Nothing clips it — it is
+      outside the card and painted above the rail — and reading it as a popover
+      rather than a tab makes that overhang unremarkable.
+    </p>
+    <div class="shell">
+      <div class="railcol noscroll">
+        <div class="row">
+          <div class="rowTop"><span class="dot on"></span><span class="name">Session status sidebar UX</span><span class="when">15m</span></div>
+          <div class="status"><span class="lbl">Ready</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>~/repo/mads</span></div>
+          <div class="summary">1 running</div>
+          <div class="stamps">started Sun 23:44 · last activity today 16:58</div>
+          <div class="clusterOut col" id="outB"><button class="btn">▶</button><button class="btn">⏸</button><button class="btn">🔗</button><button class="btn danger">🗑</button></div>
+        </div>
+        <div class="row">
+          <div class="rowTop"><span class="dot work"></span><span class="name">Monitor event-driven redesign</span><span class="when">52m</span></div>
+          <div class="status working"><span class="lbl">Running bash · Query data service tasks</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>mads-bug-investigator</span></div>
+          <div class="stamps">started Sun 22:11 · last activity 52m ago</div>
+          <div class="clusterOut col"><button class="btn">⏸</button><button class="btn danger">🗑</button></div>
+        </div>
+      </div>
+      <div class="pane"><div class="ghosted"><p>the conversation pane</p></div></div>
+    </div>
+    <div class="legend">
+      <span><b>overhang</b> <span id="ovB"></span></span>
+      <span><b>card width taken</b> <span class="ok">0px</span></span>
+      <span><b>card height added</b> <span class="ok">0px</span></span>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">c</span> Outside, horizontal <span class="sub">considered — keeps today's left-to-right order</span></h2>
+  <div class="body">
+    <p class="lead">
+      The same anchor laid out flat. Its one advantage is that the button order is
+      byte-for-byte today's, so nothing relearns at all. It is kept here as the
+      fallback if the rotated order in B turns out to cost more than it looked
+      like on paper — but at <b>115px</b> it overhangs three times as far, and
+      what it overhangs is the conversation, which is why B wins.
+    </p>
+    <div class="shell">
+      <div class="railcol noscroll">
+        <div class="row">
+          <div class="rowTop"><span class="dot on"></span><span class="name">Session status sidebar UX</span><span class="when">15m</span></div>
+          <div class="status"><span class="lbl">Ready</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>~/repo/mads</span></div>
+          <div class="summary">1 running</div>
+          <div class="stamps">started Sun 23:44 · last activity today 16:58</div>
+          <div class="clusterOut" id="outA"><button class="btn">▶</button><button class="btn">⏸</button><button class="btn">🔗</button><button class="btn danger">🗑</button></div>
+        </div>
+        <div class="row">
+          <div class="rowTop"><span class="dot work"></span><span class="name">Monitor event-driven redesign</span><span class="when">52m</span></div>
+          <div class="status working"><span class="lbl">Running bash · Query data service tasks</span></div>
+          <div class="context"><span class="branch">main</span><span class="sep">·</span><span>mads-bug-investigator</span></div>
+          <div class="stamps">started Sun 22:11 · last activity 52m ago</div>
+          <div class="clusterOut"><button class="btn">⏸</button><button class="btn danger">🗑</button></div>
+        </div>
+        <div class="row">
+          <div class="rowTop"><span class="dot attn"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">6m</span></div>
+          <div class="status needs"><span class="lbl">Needs you · permission</span></div>
+          <div class="context"></div>
+          <div class="stamps">started 15:04 · last activity 6m ago</div>
+          <div class="clusterOut"><button class="btn">⏸</button><button class="btn danger">🗑</button></div>
+        </div>
+      </div>
+      <div class="pane"><div class="ghosted"><p>the conversation pane</p><p>the cluster floats over its left margin, only while hovered</p></div></div>
+    </div>
+    <div class="legend">
+      <span><b>overhang</b> <span id="ovA"></span></span>
+      <span><b>card width taken</b> <span class="ok">0px</span></span>
+      <span><b>card height added</b> <span class="ok">0px</span></span>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">cost</span> What "outside" actually costs</h2>
+  <div class="body">
+    <table>
+      <thead><tr><th>Approach</th><th>Card width taken</th><th>Card height added</th><th>Overhang</th><th>Needs</th></tr></thead>
+      <tbody>
+        <tr><td><b>A · inside, horizontal</b> <span class="badc">today</span></td><td class="num badc">82&ndash;134px</td><td class="num ok">0</td><td class="num">—</td><td>nothing</td></tr>
+        <tr><td><b>inside, vertical</b></td><td class="num warnc">50&ndash;76px</td><td class="num badc">up to +15px</td><td class="num">—</td><td>a height floor on short cards</td></tr>
+        <tr><td><b>B · outside, vertical</b> <span class="ok">pick</span></td><td class="num ok">0</td><td class="num ok">0</td><td class="num" id="tOvB"></td><td>fixed positioning + JS anchor</td></tr>
+        <tr><td><b>C · outside, horizontal</b></td><td class="num ok">0</td><td class="num ok">0</td><td class="num" id="tOvA"></td><td>fixed positioning + JS anchor</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)">
+      <b>The one real cost is that it can't be CSS-only.</b> <code>.rail</code> is
+      <code>overflow-y: auto</code>, and a scroll container clips both axes — an
+      <code>absolute</code> child cannot escape sideways. The cluster has to be
+      <code>position: fixed</code> with its top and left computed from the row's
+      rect, which is exactly what <code>LinkOptionsMenu</code> already does through
+      <code>Popover</code>'s <code>style</code> prop (commit 2266faa), so the
+      pattern and its helper already exist in this file's neighbours.
+    </p>
+    <p class="note">
+      <b>Three things that have to be right.</b> <i>(1)</i> The pointer must never
+      cross dead space between card and cluster or <code>:hover</code> drops and the
+      cluster flickers — hence the 8px transparent bridge in the cluster's own
+      padding-left rather than a margin. <i>(2)</i> Fixed coordinates go stale on
+      rail scroll and window resize; reposition on both, or close on scroll.
+      <i>(3)</i> The cluster stays a DOM child of the row so <code>:hover</code>,
+      <code>:focus-within</code> and tab order all still work — only its painting
+      moves.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag warn">aside</span> Why the cards are too tall <span class="sub">two findings from the screenshot, not part of this change</span></h2>
+  <div class="body">
+    <p class="lead">
+      The blank lines in the rail are not slack in the design — they are a bug.
+      Every card in the screenshot is a <code>current_dir</code> session in the
+      single workspace <code>mads</code>, so none of them should carry a context
+      line at all. They all carry one anyway, and one of them renders a bare dot.
+    </p>
+    <table>
+      <thead><tr><th>Line</th><th>Height</th><th>Rendering in the screenshot</th></tr></thead>
+      <tbody>
+        <tr><td>name</td><td class="num">17px</td><td>the session name</td></tr>
+        <tr><td>status</td><td class="num">15 + 4px</td><td>"Ready", "Sleeping · wakes on send"</td></tr>
+        <tr><td><b>context</b></td><td class="num warnc">13 + 4px</td><td class="warnc">blank, or a lone "." — see below</td></tr>
+        <tr><td>meta</td><td class="num">~15 + 4px</td><td>"1 running", LEADER, TOOLS ON RESTART</td></tr>
+        <tr><td>summary</td><td class="num">14 + 4px</td><td>present on some</td></tr>
+        <tr><td>stamps</td><td class="num">14 + 4px</td><td>reserved always, painted on hover/selection</td></tr>
+        <tr class="sum"><td>card</td><td class="num">87&ndash;120px</td><td>of which 17px is a line that renders nothing</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)">
+      <b>1 · the workspace lookup never hits.</b>
+      <code>railLabels.workspaceFactsByName</code> keys facts by
+      <code>Workspace.name</code> and looks them up with
+      <code>session.workspace</code>. But the live record holds an <i>id</i> —
+      every session in the screenshot has
+      <code>workspace: "wsp_b8439a998b38a07f"</code> against a workspace named
+      <code>mads</code>. So <code>facts.get()</code> always misses,
+      <code>primaryRepo</code> is never known, and the "this cwd is just the
+      workspace's repo, don't label it" test can never fire. Same assumption in
+      <code>useSessionWorkspace.ts:27</code> and
+      <code>ConversationHeader.tsx:130</code>, which would print the raw id.
+    </p>
+    <p class="note">
+      <b>2 · and so <code>cwd</code> is always labelled, as ".".</b> A
+      <code>current_dir</code> session stores <code>cwd: "."</code>;
+      <code>displayPath(".")</code> returns <code>"."</code> unchanged. That is the
+      stray dot on the third card, and the leading dot in "· mads-bug-investigator"
+      on the second. Fix the lookup and these cards carry no context line at all —
+      which, since its height is deliberately reserved, is 17px back on every card
+      before anything is redesigned.
+    </p>
+  </div>
+</section>
+
+</div>
+<script>
+  function px(el) { return Math.round(el.getBoundingClientRect().width); }
+  function pxh(el) { return Math.round(el.getBoundingClientRect().height); }
+  var a = document.getElementById("outA"), b = document.getElementById("outB");
+  // Measured while hidden: opacity/pointer-events don't affect layout size.
+  var wa = px(a), wb = px(b), hb = pxh(b);
+  var sa = wa + "px wide";
+  var sb = wb + "px wide · " + hb + "px tall";
+  document.getElementById("ovA").textContent = sa;
+  document.getElementById("ovB").textContent = sb;
+  document.getElementById("tOvA").textContent = wa + "px";
+  document.getElementById("tOvB").textContent = wb + "px";
+</script>
+</body>
+</html>
