@@ -90,6 +90,18 @@ export interface AgentCapabilities {
   skills?: string[];
 }
 
+/**
+ * POST /agents/suggest-capabilities reply: provider tool names plus
+ * registry-grounded skill and MCP server names. `dropped` names anything the
+ * Fast Model proposed that isn't registered — already removed server-side.
+ */
+export interface CapabilitySuggestion {
+  tools?: string[];
+  mcp_servers?: string[];
+  skills?: string[];
+  dropped?: string[];
+}
+
 export interface AgentPermissions {
   allowed_paths?: string[];
   denied_commands?: string[];

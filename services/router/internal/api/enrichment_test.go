@@ -38,15 +38,16 @@ func TestSuggestCapabilitiesOverRouter(t *testing.T) {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 	body := decodeJSON[struct {
-		Tools      []string `json:"tools"`
-		MCPServers []string `json:"mcp_servers"`
-		Skills     []string `json:"skills"`
+		Tools   []string `json:"tools"`
+		Skills  []string `json:"skills"`
+		Dropped []string `json:"dropped"`
 	}](t, resp)
 	if len(body.Tools) != 1 || body.Tools[0] != "psql" {
 		t.Fatalf("tools = %+v", body.Tools)
 	}
-	if len(body.Skills) != 1 || body.Skills[0] != "db-migrate" {
-		t.Fatalf("skills = %+v", body.Skills)
+	// "db-migrate" isn't registered: it must not come back as a suggestion.
+	if len(body.Skills) != 0 || len(body.Dropped) != 1 || body.Dropped[0] != "db-migrate" {
+		t.Fatalf("skills = %+v, dropped = %+v", body.Skills, body.Dropped)
 	}
 }
 

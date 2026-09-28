@@ -36,13 +36,21 @@ const generationSystem = `You are the mads agent-builder assistant. Given a desc
 	`permissions. capabilities.tools may name any general-purpose provider tool freely (e.g. shell, ` +
 	`read, write). capabilities.skills and capabilities.mcp_servers MUST each be chosen only from the ` +
 	`"Available skills" / "Available MCP servers" lists given in the request below — never invent a ` +
-	`name that isn't listed; leave the list empty if nothing available fits. Reply with ONLY a JSON ` +
-	`object of this exact shape, no prose, no code fences:
+	`name that isn't listed; leave the list empty if nothing available fits. The agent's system ` +
+	`prompt is written as the four sections of the mads prompt scaffold, each addressed to the agent ` +
+	`in the second person: role (what it is responsible for), approach (how it works — style, tools ` +
+	`it favors, order of operations), boundaries (what it must never do), output (what a finished ` +
+	`turn looks like). Reply with ONLY a JSON object of this exact shape, no prose, no code fences:
 
 {
   "name": "kebab-case-identifier",
   "description": "one-sentence summary",
-  "prompt": "the agent's full persona/system prompt",
+  "prompt_sections": {
+    "role": "...",
+    "approach": "...",
+    "boundaries": "...",
+    "output": "..."
+  },
   "quadrant": "autonomous_executor" | "technical_partner" | "investigator" | "research_analyst",
   "tags": ["short", "keywords"],
   "capabilities": {"tools": [], "mcp_servers": [], "skills": []},
@@ -76,13 +84,16 @@ type Result struct {
 // generatedAgent is the Fast Model's structured reply shape for both
 // generation paths.
 type generatedAgent struct {
-	Name         string                      `json:"name"`
-	Description  string                      `json:"description"`
-	Prompt       string                      `json:"prompt"`
-	Quadrant     string                      `json:"quadrant"`
-	Tags         []string                    `json:"tags"`
-	Capabilities contracts.AgentCapabilities `json:"capabilities"`
-	Permissions  contracts.AgentPermissions  `json:"permissions"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// PromptSections is the requested shape; Prompt is accepted as a
+	// fallback when a model replies with a flat prompt anyway.
+	PromptSections promptSections              `json:"prompt_sections"`
+	Prompt         string                      `json:"prompt"`
+	Quadrant       string                      `json:"quadrant"`
+	Tags           []string                    `json:"tags"`
+	Capabilities   contracts.AgentCapabilities `json:"capabilities"`
+	Permissions    contracts.AgentPermissions  `json:"permissions"`
 }
 
 // Validate requires the two fields a usable agent can't do without — a name
@@ -93,8 +104,10 @@ func (g *generatedAgent) Validate() error {
 	if g.Name == "" {
 		probs = append(probs, "name is required")
 	}
-	if g.Prompt == "" {
-		probs = append(probs, "prompt is required")
+	if g.PromptSections.empty() && g.Prompt == "" {
+		probs = append(probs, "prompt_sections is required")
+	} else if g.Prompt == "" && g.PromptSections.Role == "" {
+		probs = append(probs, "prompt_sections.role is required")
 	}
 	if len(probs) > 0 {
 		return errors.New(strings.Join(probs, "; "))
@@ -164,13 +177,14 @@ func (g *Generator) GenerateFromDescription(ctx context.Context, description str
 // is dropped before the draft is built — agentgen may only ever persist
 // capabilities that exist (owner decision), never silently.
 func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadrant contracts.Quadrant) (contracts.Agent, []string, error) {
-	knownSkills, knownMCP, err := g.availableCapabilities(ctx)
+	caps, err := g.availableCapabilities(ctx)
 	if err != nil {
 		return contracts.Agent{}, nil, err
 	}
+	knownSkills, knownMCP := capabilityNames(caps)
 
 	var out generatedAgent
-	fullPrompt := prompt + registrySection(knownSkills, knownMCP)
+	fullPrompt := prompt + registrySection(caps)
 	if _, err := g.FastModel.Do(ctx, fastmodel.Job{System: generationSystem, Prompt: fullPrompt}, &out); err != nil {
 		return contracts.Agent{}, nil, fmt.Errorf("agentgen: generate: %w", err)
 	}
@@ -190,7 +204,7 @@ func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadran
 	return contracts.Agent{
 		Name:        out.Name,
 		Description: out.Description,
-		Prompt:      out.Prompt,
+		Prompt:      out.systemPrompt(),
 		Quadrant:    quadrant,
 		Tags:        out.Tags,
 		Capabilities: contracts.AgentCapabilities{
@@ -203,13 +217,18 @@ func (g *Generator) generate(ctx context.Context, prompt string, fallbackQuadran
 	}, dropped, nil
 }
 
-// availableCapabilities fetches the live capability registry and splits it
-// into skill and MCP server names, for grounding the generation prompt.
-func (g *Generator) availableCapabilities(ctx context.Context) (skills, mcpServers []string, err error) {
+// availableCapabilities fetches the live capability registry, for grounding
+// the generation prompt.
+func (g *Generator) availableCapabilities(ctx context.Context) ([]contracts.Capability, error) {
 	caps, err := g.Data.Capabilities(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("agentgen: list capabilities: %w", err)
+		return nil, fmt.Errorf("agentgen: list capabilities: %w", err)
 	}
+	return caps, nil
+}
+
+// capabilityNames splits the registry into skill and MCP server names.
+func capabilityNames(caps []contracts.Capability) (skills, mcpServers []string) {
 	for _, c := range caps {
 		switch c.Type {
 		case contracts.CapabilitySkill:
@@ -218,25 +237,39 @@ func (g *Generator) availableCapabilities(ctx context.Context) (skills, mcpServe
 			mcpServers = append(mcpServers, c.Name)
 		}
 	}
-	return skills, mcpServers, nil
+	return skills, mcpServers
 }
 
-// registrySection lists the registry-grounded names the model must choose
-// capabilities.skills/mcp_servers from, or says plainly that none exist.
-func registrySection(skills, mcpServers []string) string {
+// registrySection lists the registry entries the model must choose
+// capabilities.skills/mcp_servers from — with their descriptions, so the
+// choice is grounded in what each entry does rather than its name alone — or
+// says plainly that none exist.
+func registrySection(caps []contracts.Capability) string {
 	var b strings.Builder
-	b.WriteString("\n\nAvailable skills: ")
-	b.WriteString(namesOrNone(skills))
-	b.WriteString("\nAvailable MCP servers: ")
-	b.WriteString(namesOrNone(mcpServers))
+	b.WriteString("\n\nAvailable skills:")
+	writeEntries(&b, caps, contracts.CapabilitySkill)
+	b.WriteString("\nAvailable MCP servers:")
+	writeEntries(&b, caps, contracts.CapabilityMCP)
 	return b.String()
 }
 
-func namesOrNone(names []string) string {
-	if len(names) == 0 {
-		return "none available"
+func writeEntries(b *strings.Builder, caps []contracts.Capability, typ contracts.CapabilityType) {
+	n := 0
+	for _, c := range caps {
+		if c.Type != typ {
+			continue
+		}
+		n++
+		b.WriteString("\n- ")
+		b.WriteString(c.Name)
+		if d := strings.TrimSpace(c.Description); d != "" {
+			b.WriteString(": ")
+			b.WriteString(d)
+		}
 	}
-	return strings.Join(names, ", ")
+	if n == 0 {
+		b.WriteString(" none available")
+	}
 }
 
 // knownOnly splits names into those present in known and those that aren't —
