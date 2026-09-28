@@ -8,6 +8,12 @@ import type { OpenTaskBreakdown } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
+import {
+  formatAbsoluteStamp,
+  formatCalendarStamp,
+  formatRelativeStamp,
+  useRelativeNow,
+} from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
 import type { Grant, Link, LinkCadence, OrchestrateStatus, Session } from "../../../router/types";
 import styles from "./SessionRail.module.css";
@@ -329,8 +335,13 @@ function SessionRow({
   linkId?: string;
   routerClient?: RouterClient;
 }) {
+  const now = useRelativeNow();
   const dot = dotState(session, openTaskBreakdown);
   const name = session.name || "Untitled session";
+  // updated_at is "last activity", not "last reply": the runner bumps it on
+  // every turn end, but so do renames, summary writes and activity flips.
+  // It becomes an honest reply stamp only once last_turn_at lands.
+  const lastActivity = formatRelativeStamp(session.updated_at, now);
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
@@ -383,6 +394,14 @@ function SessionRow({
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
+        {lastActivity && (
+          <span
+            className={styles.when}
+            title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}
+          >
+            {lastActivity}
+          </span>
+        )}
       </div>
       {hasMeta && (
         <div className={styles.rowMeta}>
@@ -431,6 +450,19 @@ function SessionRow({
         </div>
       )}
       {showSummary && <div className={styles.summary}>{summaryTeaser(session.summary!)}</div>}
+      {/* Always rendered so its height is reserved at rest — the hover/selected
+          reveal is opacity-only and the rail never reflows under the pointer. */}
+      <div className={styles.stamps}>
+        <span title={`Initiated ${formatAbsoluteStamp(session.created_at)}`}>
+          started {formatCalendarStamp(session.created_at, now)}
+        </span>
+        <span className={styles.stampSep} aria-hidden="true">
+          ·
+        </span>
+        <span title={`Last activity ${formatAbsoluteStamp(session.updated_at)}`}>
+          last activity {formatCalendarStamp(session.updated_at, now)}
+        </span>
+      </div>
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}

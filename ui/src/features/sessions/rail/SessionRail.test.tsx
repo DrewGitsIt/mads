@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { SessionRail } from "./SessionRail";
 import { FLAGS } from "../../../featureFlags";
 import { FakeRouterClient } from "../../../router/fixtures";
 import type { Link, Session } from "../../../router/types";
+import { readFileSync } from "node:fs";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -527,5 +528,152 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
     expect(screen.getByText("MANUAL ONLY")).toBeTruthy();
     expect(screen.queryByText("DEBOUNCED DIGESTS")).toBeNull();
+  });
+});
+
+/** Fixed local reference point: Monday 28 Sep 2026, 13:40:00. */
+const NOW = new Date(2026, 8, 28, 13, 40, 0).getTime();
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
+const DAY = 24 * HOUR;
+const isoAgo = (ms: number) => new Date(NOW - ms).toISOString();
+
+function stampOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[class*="when"]')!;
+}
+
+function footerOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[class*="stamps"]')!;
+}
+
+describe("SessionRail timestamps", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows a relative last-activity stamp on every name row, across the formatter's buckets", () => {
+    vi.useFakeTimers({ now: NOW });
+    const cards: [string, number][] = [
+      ["sub-minute", 30_000],
+      ["minutes", 14 * MINUTE],
+      ["today", 5 * HOUR],
+      ["this week", 3 * DAY],
+      ["older", 10 * DAY],
+    ];
+    render(
+      <SessionRail
+        sessions={cards.map(([name, age], i) =>
+          makeSession({ id: `t${i}`, name, updated_at: isoAgo(age) }),
+        )}
+        openTaskCounts={{}}
+      />,
+    );
+
+    expect(stampOf("sub-minute").textContent).toBe("now");
+    expect(stampOf("minutes").textContent).toBe("14m");
+    expect(stampOf("today").textContent).toBe("08:40");
+    expect(stampOf("this week").textContent).toMatch(/^\w{3,} 13:40$/);
+    expect(stampOf("older").textContent).toMatch(/^18 \w{3,}$/);
+  });
+
+  it("puts the full absolute value in the stamp's title", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[makeSession({ name: "titled", updated_at: isoAgo(14 * MINUTE) })]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(stampOf("titled").title).toBe("Last activity 2026-09-28 13:26:00");
+  });
+
+  it("calls the stamp last activity, never last reply, while it is still updated_at", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[makeSession({ name: "honest", updated_at: isoAgo(14 * MINUTE) })]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(footerOf("honest").textContent).toContain("last activity");
+    expect(stampOf("honest").title).toMatch(/^Last activity /);
+    expect(screen.queryByText(/last reply/i)).toBeNull();
+    expect(screen.queryByText(/last response/i)).toBeNull();
+  });
+
+  it("renders the started / last-activity footer on every card, hovered or not, so the reveal cannot reflow the rail", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({
+            id: "a",
+            name: "resting",
+            created_at: isoAgo(10 * DAY),
+            updated_at: isoAgo(14 * MINUTE),
+          }),
+          makeSession({ id: "b", name: "chosen", created_at: isoAgo(5 * HOUR) }),
+        ]}
+        selectedId="b"
+        openTaskCounts={{}}
+      />,
+    );
+
+    // Mounted for the unselected, un-hovered card too: nothing is added to the
+    // layout when the pointer arrives.
+    const resting = footerOf("resting");
+    expect(resting.textContent).toMatch(/^started 18 \w{3,}\s*·\s*last activity today 13:26$/);
+    const beforeHover = resting.outerHTML;
+    fireEvent.mouseEnter(screen.getByText("resting").closest('[role="button"]')!);
+    expect(footerOf("resting").outerHTML).toBe(beforeHover);
+
+    expect(footerOf("chosen").textContent).toContain("started today 08:40");
+  });
+
+  it("reveals that footer with opacity alone — no display or height change", () => {
+    // Read as text: the reveal is a CSS fact, and jsdom/happy-dom has no layout
+    // to measure. Path is relative to the vitest root (ui/).
+    const css = readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
+    const rest = css.match(/\.stamps \{([^}]*)\}/)![1];
+    expect(rest).toContain("opacity: 0");
+    expect(rest).toMatch(/transition:\s*opacity/);
+    // Hidden by opacity, not by removal: no display:none and no collapsed box.
+    expect(rest).not.toMatch(/display:\s*none|(max-)?height:\s*0/);
+
+    const reveal = css.match(/\.row:hover \.stamps,[^{]*\{([^}]*)\}/)![1];
+    expect(reveal.trim()).toBe("opacity: 1;");
+    expect(css).toMatch(/\.row:focus-within \.stamps/);
+    expect(css).toMatch(/\.selected \.stamps/);
+  });
+
+  it("drives every card's relative label from one shared interval", async () => {
+    vi.useFakeTimers({ now: NOW });
+    const { unmount } = render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "one", updated_at: isoAgo(50_000) }),
+          makeSession({ id: "b", name: "two", updated_at: isoAgo(50_000) }),
+          makeSession({ id: "c", name: "three", updated_at: isoAgo(50_000) }),
+        ]}
+        openTaskCounts={{}}
+      />,
+    );
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(stampOf("one").textContent).toBe("now");
+
+    await act(async () => {
+      vi.advanceTimersByTime(30_000);
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    for (const name of ["one", "two", "three"]) {
+      expect(stampOf(name).textContent).toBe("1m");
+    }
+
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

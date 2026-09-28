@@ -61,6 +61,40 @@
   padding-left: 16px;
 }
 
+.when {
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-2);
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--mono);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+/* Reserved at rest: the row always carries this line, and hover/selection only
+   fades it in, so revealing it can never reflow the rail under the pointer. */
+.stamps {
+  padding-left: 16px;
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.row:hover .stamps,
+.row:focus-within .stamps,
+.selected .stamps {
+  opacity: 1;
+}
+
+.stampSep {
+  opacity: 0.5;
+  margin: 0 4px;
+}
+
 .summary {
   padding-left: 16px;
   color: var(--text3);
