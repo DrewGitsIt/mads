@@ -10,6 +10,7 @@ import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
 import { EMPTY_OPEN_TASK_BREAKDOWN, totalOpenTasks } from "./rail/railGroups";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
+import { useSessionAgentState } from "./state/useSessionAgentState";
 import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
 import { SessionWorkspace } from "./workspace/SessionWorkspace";
@@ -28,6 +29,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const openTaskCounts = useOpenTaskCounts();
   const links = useSessionLinks(sessions.map((s) => s.id));
   const [selectedId, setSelectedId] = useState<string>();
+  // One subscription for the whole rail, however many cards are listed —
+  // opening a session is also what retires its sticky "Done · your turn".
+  const agentStates = useSessionAgentState(selectedId);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
@@ -81,6 +85,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           <SessionRail
             sessions={sessions}
             openTaskCounts={openTaskCounts}
+            agentStates={agentStates}
             links={links}
             routerClient={router}
             selectedId={selectedId}

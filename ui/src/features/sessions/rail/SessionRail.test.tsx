@@ -3,6 +3,9 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { SessionRail } from "./SessionRail";
 import { FLAGS } from "../../../featureFlags";
 import { FakeRouterClient } from "../../../router/fixtures";
+import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { useSessionAgentState } from "../state/useSessionAgentState";
+import type { SessionAgentState } from "./railGroups";
 import type { Link, Session } from "../../../router/types";
 import { readFileSync } from "node:fs";
 
@@ -675,5 +678,268 @@ describe("SessionRail timestamps", () => {
 
     unmount();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+/** The card's status line (mockup §1) — its role="status" region. */
+function statusOf(name: string): HTMLElement {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return row.querySelector<HTMLElement>('[role="status"]')!;
+}
+
+/**
+ * The shape that drives card height: one base class per rendered line. Tone
+ * modifiers are stripped — colour is exactly what a state is allowed to change.
+ */
+function lineShape(name: string): string[] {
+  const row = screen.getByText(name).closest('[role="button"]')!;
+  return [...row.children].map((child) => child.className.split(" ")[0].replace(/_[a-z0-9]+$/i, ""));
+}
+
+describe("SessionRail status line", () => {
+  const live = makeSession({ id: "s1", name: "the session", activity: "active" });
+
+  function renderWith(state: Partial<SessionAgentState>, session: Session = live, counts = {}) {
+    render(
+      <SessionRail
+        sessions={[session]}
+        openTaskCounts={counts}
+        agentStates={{ [session.id]: { subagents: 0, ...state } }}
+      />,
+    );
+  }
+
+  it("renders 'Ready' with a muted glyph for a live session that has said nothing", () => {
+    renderWith({});
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("◦Ready");
+    expect(status.className).toMatch(/status-idle/);
+  });
+
+  it("renders 'Sleeping · wakes on send' for an inactive session", () => {
+    renderWith({}, makeSession({ id: "s1", name: "the session", activity: "inactive" }));
+    expect(statusOf("the session").textContent).toBe("◦Sleeping · wakes on send");
+  });
+
+  it("renders 'Done · your turn' in the ok tone with a check", () => {
+    renderWith({ done: true });
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("✓Done · your turn");
+    expect(status.className).toMatch(/status-done/);
+    expect(statusOf("the session").querySelector('[class*="dot"]')).toBeNull();
+  });
+
+  it("spins — with no glyph — while a turn is in flight, and names its subagents", () => {
+    renderWith({ workingSince: "2026-07-01T00:00:00Z", subagents: 3 });
+    const status = statusOf("the session");
+    expect(status.textContent).toContain("3 subagents running");
+    expect(status.className).toMatch(/status-working/);
+    const spinner = status.querySelector('[class*="statusSpinner"]')!;
+    expect(spinner).toBeTruthy();
+    // Decorative: colour and copy carry the state, the motion doesn't.
+    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("renders a parked approval in the warn tone, naming the tool", () => {
+    renderWith({ awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" });
+    const status = statusOf("the session");
+    expect(status.textContent).toContain("Needs approval · Bash");
+    expect(status.className).toMatch(/status-needs/);
+    expect(status.querySelector('[class*="statusGlyph"]')!.textContent).toBe("▲");
+  });
+
+  it("renders a crash in the bad tone, counting the blocked work it left behind", () => {
+    renderWith({ crashed: true }, live, { s1: { running: 0, ready: 0, blocked: 2 } });
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("✕Crashed · 2 blocked tasks");
+    expect(status.className).toMatch(/status-bad/);
+  });
+
+  it("paints the leading dot from the status: bad for a crash, accent while working", () => {
+    const { unmount } = render(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { subagents: 0, crashed: true } }}
+      />,
+    );
+    expect(
+      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-bad"]'),
+    ).toBeTruthy();
+    unmount();
+
+    renderWith({ workingSince: "2026-07-01T00:00:00Z" });
+    expect(
+      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-work"]'),
+    ).toBeTruthy();
+  });
+
+  it("holds the documented precedence — crash over approval over working over done", () => {
+    const everything: SessionAgentState = {
+      crashed: true,
+      awaitingSince: "2026-07-01T00:00:00Z",
+      awaitingTool: "Bash",
+      workingSince: "2026-07-01T00:00:00Z",
+      subagents: 2,
+      done: true,
+    };
+    const { rerender } = render(
+      <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={{ s1: everything }} />,
+    );
+    expect(statusOf("the session").textContent).toContain("Crashed");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { ...everything, crashed: false } }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toContain("Needs approval");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { ...everything, crashed: false, awaitingSince: undefined } }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toContain("2 subagents running");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{
+          s1: { ...everything, crashed: false, awaitingSince: undefined, workingSince: undefined },
+        }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toBe("✓Done · your turn");
+  });
+
+  it("renders the same line shape in every state, so card height can't change with it", () => {
+    const states: SessionAgentState[] = [
+      { subagents: 0 },
+      { subagents: 0, done: true },
+      { subagents: 0, workingSince: "2026-07-01T00:00:00Z" },
+      { subagents: 3, workingSince: "2026-07-01T00:00:00Z" },
+      { subagents: 0, awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" },
+      { subagents: 0, crashed: true },
+    ];
+    const shapes = states.map((state) => {
+      const { unmount } = render(
+        <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={{ s1: state }} />,
+      );
+      const shape = lineShape("the session");
+      unmount();
+      return shape;
+    });
+    for (const shape of shapes) expect(shape).toEqual(shapes[0]);
+  });
+
+  it("never reorders a card when its status changes", () => {
+    const sessions = [
+      makeSession({ id: "a", name: "alpha", updated_at: "2026-07-01T10:00:00Z" }),
+      makeSession({ id: "b", name: "bravo", updated_at: "2026-07-01T09:00:00Z" }),
+      makeSession({ id: "c", name: "charlie", updated_at: "2026-07-01T08:00:00Z" }),
+    ];
+    const order = () =>
+      [...screen.getByLabelText("Session list").querySelectorAll('div[role="button"]')].map(
+        (row) => row.querySelector('[class*="name"]')!.textContent,
+      );
+    const { rerender } = render(<SessionRail sessions={sessions} openTaskCounts={{}} />);
+    expect(order()).toEqual(["alpha", "bravo", "charlie"]);
+
+    rerender(
+      <SessionRail
+        sessions={sessions}
+        openTaskCounts={{}}
+        agentStates={{
+          c: { subagents: 1, workingSince: "2026-07-01T00:00:00Z" },
+          a: { subagents: 0, done: true },
+        }}
+      />,
+    );
+    expect(order()).toEqual(["alpha", "bravo", "charlie"]);
+  });
+
+  it("counts a live state's elapsed time off the shared 1s tick", () => {
+    vi.useFakeTimers({ now: Date.parse("2026-07-01T00:00:04Z") });
+    try {
+      renderWith({ workingSince: "2026-07-01T00:00:00Z" });
+      expect(statusOf("the session").textContent).toBe("Working…4s");
+      act(() => {
+        vi.advanceTimersByTime(60_000);
+      });
+      expect(statusOf("the session").textContent).toBe("Working…1m");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no counter for a state that isn't counting", () => {
+    renderWith({ done: true });
+    expect(statusOf("the session").querySelector('[class*="statusElapsed"]')).toBeNull();
+  });
+});
+
+describe("SessionRail status line motion and truncation", () => {
+  const css = () => readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
+
+  it("spins by default and degrades to a static accent ring under prefers-reduced-motion", () => {
+    const sheet = css();
+    expect(sheet.match(/\.statusSpinner \{([^}]*)\}/)![1]).toMatch(/animation:\s*railSpin/);
+    const reduced = sheet.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)![1];
+    expect(reduced).toContain(".statusSpinner");
+    // Still a ring, and still readable as one: the accent survives the motion.
+    expect(reduced).toMatch(/border-color:\s*var\(--accent\)/);
+  });
+
+  it("truncates its one clause instead of wrapping, so the line can never grow", () => {
+    const label = css().match(/\.statusLabel \{([^}]*)\}/)![1];
+    expect(label).toMatch(/white-space:\s*nowrap/);
+    expect(label).toMatch(/text-overflow:\s*ellipsis/);
+    expect(label).toMatch(/overflow:\s*hidden/);
+    // The line is reserved even when a state has nothing long to say.
+    expect(css().match(/\n\.status \{([^}]*)\}/)![1]).toMatch(/min-height/);
+  });
+});
+
+describe("SessionRail status subscription", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("uses one SSE connection however many sessions are listed", async () => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    const sessions = Array.from({ length: 12 }, (_, i) =>
+      makeSession({ id: `s${i}`, name: `session ${i}`, updated_at: `2026-07-01T00:00:${String(i).padStart(2, "0")}Z` }),
+    );
+
+    function Harness() {
+      const agentStates = useSessionAgentState();
+      return <SessionRail sessions={sessions} openTaskCounts={{}} agentStates={agentStates} />;
+    }
+    render(<Harness />);
+
+    const source = FakeEventSource.instances.filter((i) => !i.closed)[0];
+    act(() => {
+      source.emit(
+        "session.turn_ended",
+        JSON.stringify({
+          seq: 1,
+          timestamp: "2026-09-28T10:00:00Z",
+          type: "session.turn_ended",
+          actor: "agent",
+          session_id: "s7",
+        }),
+      );
+    });
+
+    await waitFor(() => expect(statusOf("session 7").textContent).toBe("✓Done · your turn"));
+    expect(statusOf("session 3").textContent).toBe("◦Ready");
+    expect(FakeEventSource.instances.filter((i) => !i.closed)).toHaveLength(1);
   });
 });

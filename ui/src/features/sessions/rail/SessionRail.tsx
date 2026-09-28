@@ -3,8 +3,8 @@ import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialo
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkCadenceControl } from "./LinkCadenceControl";
 import { LinkChooserDialog } from "./LinkChooserDialog";
-import { EMPTY_OPEN_TASK_BREAKDOWN, dotState, totalOpenTasks } from "./railGroups";
-import type { OpenTaskBreakdown } from "./railGroups";
+import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf, totalOpenTasks } from "./railGroups";
+import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
 import { buildRailRows, computeRailLinks } from "./railLinks";
 import { useSettledRailOrder } from "./railOrder";
 import { summaryTeaser } from "./summaryTeaser";
@@ -12,7 +12,9 @@ import { FLAGS } from "../../../featureFlags";
 import {
   formatAbsoluteStamp,
   formatCalendarStamp,
+  formatElapsedStamp,
   formatRelativeStamp,
+  useElapsedNow,
   useRelativeNow,
 } from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
@@ -22,6 +24,8 @@ import styles from "./SessionRail.module.css";
 export interface SessionRailProps {
   sessions: Session[];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
+  /** Live agent state per session (useSessionAgentState) — paints the status line, never the order. */
+  agentStates?: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -49,6 +53,7 @@ interface LinkModeState {
 export function SessionRail({
   sessions,
   openTaskCounts,
+  agentStates = {},
   selectedId,
   onSelect,
   onResume,
@@ -136,6 +141,7 @@ export function SessionRail({
               key={row.session.id}
               row={row}
               openTaskCounts={openTaskCounts}
+              agentStates={agentStates}
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
@@ -160,6 +166,7 @@ export function SessionRail({
               key={row.session.id}
               row={row}
               openTaskCounts={openTaskCounts}
+              agentStates={agentStates}
               selectedId={selectedId}
               onSelect={onSelect}
               onResume={onResume}
@@ -214,6 +221,7 @@ export function SessionRail({
 function RailRowGroup({
   row,
   openTaskCounts,
+  agentStates,
   selectedId,
   onSelect,
   onResume,
@@ -229,6 +237,7 @@ function RailRowGroup({
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
+  agentStates: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -249,6 +258,7 @@ function RailRowGroup({
       <SessionRow
         session={row.session}
         openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+        agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
         onResume={onResume}
@@ -269,6 +279,7 @@ function RailRowGroup({
             key={sub.session.id}
             session={sub.session}
             openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+            agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
             selected={sub.session.id === selectedId}
             onSelect={onSelect}
             onResume={onResume}
@@ -313,6 +324,7 @@ function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined 
 function SessionRow({
   session,
   openTaskBreakdown,
+  agentState,
   selected,
   onSelect,
   onResume,
@@ -337,6 +349,7 @@ function SessionRow({
 }: {
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
+  agentState: SessionAgentState;
   selected: boolean;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
@@ -362,7 +375,7 @@ function SessionRow({
   routerClient?: RouterClient;
 }) {
   const now = useRelativeNow();
-  const dot = dotState(session, openTaskBreakdown);
+  const status = statusOf(session, agentState, openTaskBreakdown);
   const name = session.name || "Untitled session";
   // updated_at is "last activity", not "last reply": the runner bumps it on
   // every turn end, but so do renames, summary writes and activity flips.
@@ -418,7 +431,7 @@ function SessionRow({
       }}
     >
       <div className={styles.rowTop}>
-        <span className={[styles.dot, styles[`dot-${dot}`]].join(" ")} aria-hidden="true" />
+        <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
         {lastActivity && (
           <span
@@ -428,6 +441,24 @@ function SessionRow({
             {lastActivity}
           </span>
         )}
+      </div>
+      {/* Always rendered, one clause, never wrapped: the card's height must be
+          identical in every state so a state change repaints and never reflows. */}
+      <div className={[styles.status, styles[`status-${status.tone}`]].join(" ")} role="status">
+        {status.glyph ? (
+          <span
+            className={[styles.statusGlyph, status.kind === "needs" ? styles.statusBell : ""]
+              .filter(Boolean)
+              .join(" ")}
+            aria-hidden="true"
+          >
+            {status.glyph}
+          </span>
+        ) : (
+          <span className={styles.statusSpinner} aria-hidden="true" />
+        )}
+        <span className={styles.statusLabel}>{status.label}</span>
+        {status.since && <StatusElapsed since={status.since} />}
       </div>
       {hasMeta && (
         <div className={styles.rowMeta}>
@@ -586,4 +617,15 @@ function SessionRow({
       )}
     </div>
   );
+}
+
+/**
+ * A live state's elapsed counter. Its own component on purpose: the 1s clock
+ * is only subscribed while some card is mid-turn or parked, so a rail of
+ * resting sessions runs no seconds timer at all.
+ */
+function StatusElapsed({ since }: { since: string }) {
+  const elapsed = formatElapsedStamp(since, useElapsedNow());
+  if (!elapsed) return null;
+  return <span className={styles.statusElapsed}>{elapsed}</span>;
 }

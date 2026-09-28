@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatAbsoluteStamp, formatCalendarStamp, formatRelativeStamp } from "./relativeTime";
+import {
+  formatAbsoluteStamp,
+  formatCalendarStamp,
+  formatElapsedStamp,
+  formatRelativeStamp,
+} from "./relativeTime";
 
 /** Fixed local reference point: Monday 28 Sep 2026, 13:40:00. */
 const NOW = new Date(2026, 8, 28, 13, 40, 0).getTime();
@@ -81,6 +86,26 @@ describe("formatCalendarStamp", () => {
 
   it("returns an empty string for an unparseable stamp", () => {
     expect(formatCalendarStamp("not a date", NOW)).toBe("");
+  });
+});
+
+describe("formatElapsedStamp", () => {
+  it("counts seconds, then minutes, then hours", () => {
+    expect(formatElapsedStamp(ago(4 * SECOND), NOW)).toBe("4s");
+    expect(formatElapsedStamp(ago(59 * SECOND), NOW)).toBe("59s");
+    expect(formatElapsedStamp(ago(MINUTE), NOW)).toBe("1m");
+    expect(formatElapsedStamp(ago(59 * MINUTE), NOW)).toBe("59m");
+    expect(formatElapsedStamp(ago(HOUR), NOW)).toBe("1h");
+  });
+
+  it("is empty below a second, so a state change doesn't flash a '0s'", () => {
+    expect(formatElapsedStamp(ago(0), NOW)).toBe("");
+    expect(formatElapsedStamp(ago(999), NOW)).toBe("");
+  });
+
+  it("is empty for a missing or unparseable stamp", () => {
+    expect(formatElapsedStamp(undefined, NOW)).toBe("");
+    expect(formatElapsedStamp("not a date", NOW)).toBe("");
   });
 });
 

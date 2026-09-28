@@ -16,6 +16,8 @@ const WEEK = 7 * 24 * HOUR;
 
 /** Every relative label in the window re-renders off this one interval. */
 const TICK_MS = 30_000;
+/** Elapsed counters need seconds ("31s"), so they ride a second, faster clock. */
+const ELAPSED_TICK_MS = 1_000;
 
 function pad(n: number): string {
   return String(n).padStart(2, "0");
@@ -62,6 +64,17 @@ export function formatCalendarStamp(iso: string | undefined, now: number = Date.
   return calendarStamp(new Date(t), new Date(now), "today ");
 }
 
+/** How long a live state has been running: "4s" · "2m" · "1h". Empty below a second. */
+export function formatElapsedStamp(iso: string | undefined, now: number = Date.now()): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(t)) return "";
+  const diff = now - t;
+  if (diff < 1000) return "";
+  if (diff < MINUTE) return `${Math.floor(diff / 1000)}s`;
+  if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m`;
+  return `${Math.floor(diff / HOUR)}h`;
+}
+
 /** The whole truth, for a `title`: local "2026-09-24 13:02:47". */
 export function formatAbsoluteStamp(iso: string | undefined): string {
   const t = iso ? Date.parse(iso) : NaN;
@@ -73,35 +86,53 @@ export function formatAbsoluteStamp(iso: string | undefined): string {
   );
 }
 
-let timer: ReturnType<typeof setInterval> | undefined;
-let nowMs = Date.now();
-const listeners = new Set<() => void>();
+/** One interval per cadence for the whole window, however many labels are mounted. */
+function makeClock(intervalMs: number) {
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let nowMs = Date.now();
+  const listeners = new Set<() => void>();
 
-function subscribe(onStoreChange: () => void): () => void {
-  listeners.add(onStoreChange);
-  // One interval for the whole window, however many labels are mounted: a
-  // rail of 40 cards must not mean 40 timers.
-  if (timer === undefined) {
-    nowMs = Date.now();
-    timer = setInterval(() => {
+  function subscribe(onStoreChange: () => void): () => void {
+    listeners.add(onStoreChange);
+    if (timer === undefined) {
       nowMs = Date.now();
-      for (const listener of listeners) listener();
-    }, TICK_MS);
-  }
-  return () => {
-    listeners.delete(onStoreChange);
-    if (listeners.size === 0 && timer !== undefined) {
-      clearInterval(timer);
-      timer = undefined;
+      timer = setInterval(() => {
+        nowMs = Date.now();
+        for (const listener of listeners) listener();
+      }, intervalMs);
     }
-  };
+    return () => {
+      listeners.delete(onStoreChange);
+      if (listeners.size === 0 && timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+  }
+
+  return { subscribe, getSnapshot: () => nowMs };
 }
 
-function getSnapshot(): number {
-  return nowMs;
-}
+// A rail of 40 cards must not mean 40 timers — and the seconds clock only
+// exists while something is actually counting, because nothing subscribes to
+// it unless a card is mid-turn or parked on an approval.
+const relativeClock = makeClock(TICK_MS);
+const elapsedClock = makeClock(ELAPSED_TICK_MS);
 
 /** Current time, re-rendering the caller on the shared 30s tick. */
 export function useRelativeNow(): number {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return useSyncExternalStore(
+    relativeClock.subscribe,
+    relativeClock.getSnapshot,
+    relativeClock.getSnapshot,
+  );
+}
+
+/** Current time on the shared 1s tick — for a live elapsed counter. */
+export function useElapsedNow(): number {
+  return useSyncExternalStore(
+    elapsedClock.subscribe,
+    elapsedClock.getSnapshot,
+    elapsedClock.getSnapshot,
+  );
 }
