@@ -56,8 +56,10 @@
 
 .rowMeta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
   padding-left: 16px;
 }
 
@@ -369,6 +371,9 @@
 .nestedRow {
   position: relative;
   margin-left: 20px;
+  /* .row is width: 100%; without this the indent pushes the card past the
+     rail's edge and the whole rail scrolls sideways. */
+  width: calc(100% - 20px);
 }
 
 /* Reaches up into the previous sibling row's dot. The offset is tuned for
@@ -495,4 +500,55 @@
 .pendingHint {
   color: var(--text3);
   opacity: 0.8;
+}
+
+/* Link options: the nested row's role badge doubles as the flyout trigger. */
+.linkOptionsTrigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.linkOptionsTrigger::after {
+  content: "";
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 3px solid currentColor;
+  opacity: 0.6;
+}
+
+.linkOptionsTrigger:hover:not(:disabled),
+.linkOptionsTrigger[aria-expanded="true"] {
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.linkOptionsState {
+  color: var(--text3);
+}
+
+/* Sized to fit inside the rail from a nested row's meta line (the rail
+   scrolls, so anything wider would be clipped or scroll it sideways). */
+.linkOptions {
+  min-width: 0;
+  width: 224px;
+}
+
+.linkOptionsNote {
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  color: var(--warn-fg);
+  font-size: var(--fs-chip);
+}
+
+.linkOptionsDivider {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--line-soft);
+}
+
+.linkOptionsDanger {
+  color: var(--bad-fg);
 }

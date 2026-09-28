@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
-import { LinkCadenceControl } from "./LinkCadenceControl";
+import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf, totalOpenTasks } from "./railGroups";
 import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
@@ -367,7 +367,7 @@ function SessionRow({
   isLinkSelected: boolean;
   onStartLinkMode: () => void;
   onToggleLinkSelection: () => void;
-  /** Only set on nested subject rows — the underlying link's cadence, editable via LinkCadenceControl. */
+  /** Only set on nested subject rows — the underlying link's cadence, editable via LinkOptionsMenu. */
   cadence?: LinkCadence;
   grants?: Grant[];
   grantingSessionId?: string;
@@ -386,6 +386,23 @@ function SessionRow({
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
   const showSummary = isPaused && Boolean(session.summary);
+  // A nested subject row's link controls (update policy, unlink) live in one
+  // flyout behind its role badge, so the row stays inside the rail's width.
+  const linkOptions =
+    nested && linkBadge && cadence && linkId && grantingSessionId && routerClient && onUnlinkRequest ? (
+      <LinkOptionsMenu
+        badge={linkBadge}
+        subjectName={name}
+        linkId={linkId}
+        grantingSessionId={grantingSessionId}
+        subjectSessionId={session.id}
+        grants={grants ?? []}
+        cadence={cadence}
+        orchestrateStatus={orchestrateStatus}
+        routerClient={routerClient}
+        onUnlinkRequest={onUnlinkRequest}
+      />
+    ) : undefined;
 
   // Clicking a card opens it read-only — no eager resume. A paused session
   // keeps its inactive state (so SessionSummaryCard shows the full summary)
@@ -475,7 +492,8 @@ function SessionRow({
               )}
             </span>
           )}
-          {linkedSessionsEnabled && linkBadge && (
+          {linkedSessionsEnabled && linkOptions}
+          {linkedSessionsEnabled && linkBadge && !linkOptions && (
             <span
               className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
                 .filter(Boolean)
@@ -493,16 +511,6 @@ function SessionRow({
             >
               {orchestrateLabel}
             </span>
-          )}
-          {linkedSessionsEnabled && nested && cadence && linkId && grantingSessionId && routerClient && (
-            <LinkCadenceControl
-              linkId={linkId}
-              grantingSessionId={grantingSessionId}
-              subjectSessionId={session.id}
-              grants={grants ?? []}
-              cadence={cadence}
-              routerClient={routerClient}
-            />
           )}
         </div>
       )}
@@ -585,20 +593,6 @@ function SessionRow({
               }}
             >
               🔗
-            </button>
-          )}
-          {linkedSessionsEnabled && nested && onUnlinkRequest && (
-            <button
-              type="button"
-              className={styles.actionButton}
-              title="Unlink"
-              aria-label={`Unlink ${name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onUnlinkRequest();
-              }}
-            >
-              ✕
             </button>
           )}
           <button
