@@ -315,6 +315,11 @@ export function SessionRail({
     else searchRef.current?.blur();
   }
 
+  // The delete dialog's copy is about one session, so it needs the record and
+  // not just the id — including for a row inside the collapsed "Earlier" tail
+  // or nested under a link, which is why this reads the unfiltered list.
+  const deleteTarget = sessions.find((s) => s.id === confirmDeleteId);
+
   // Shared by the main list and the "Earlier" tail — the two render identical
   // cards, they only differ in whether the fold is hiding them.
   const rowProps = {
@@ -463,14 +468,19 @@ export function SessionRail({
             tailRows.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
         </div>
       )}
-      <SessionDeleteConfirmDialog
-        open={confirmDeleteId !== undefined}
-        onConfirm={() => {
-          onDelete?.(confirmDeleteId!);
-          setConfirmDeleteId(undefined);
-        }}
-        onCancel={() => setConfirmDeleteId(undefined)}
-      />
+      {deleteTarget && (
+        <SessionDeleteConfirmDialog
+          open
+          session={deleteTarget}
+          agentState={agentStates[deleteTarget.id]}
+          openTaskBreakdown={openTaskCounts[deleteTarget.id]}
+          onConfirm={() => {
+            onDelete?.(deleteTarget.id);
+            setConfirmDeleteId(undefined);
+          }}
+          onCancel={() => setConfirmDeleteId(undefined)}
+        />
+      )}
       {linkedSessionsEnabled && (
         <SessionUnlinkConfirmDialog
           open={unlinkTarget !== undefined}

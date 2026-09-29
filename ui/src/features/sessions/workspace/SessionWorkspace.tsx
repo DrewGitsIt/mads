@@ -11,6 +11,12 @@ import {
   WORKSPACE_SESSION_EVENT_TYPES,
 } from "../../../router/sessionEventTypes";
 import type { Session } from "../../../router/types";
+import {
+  EMPTY_OPEN_TASK_BREAKDOWN,
+  totalOpenTasks,
+  type OpenTaskBreakdown,
+  type SessionAgentState,
+} from "../rail/railGroups";
 import { SessionActionsMenu } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
@@ -24,8 +30,10 @@ export interface SessionWorkspaceProps {
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
   ptyBridge?: PtyBridge;
-  /** This session's open-task count, computed once by the caller (SessionsSurface already runs useOpenTaskCounts) — not refetched here. */
-  openTaskCount: number;
+  /** This session's open work, computed once by the caller (SessionsSurface already runs useOpenTaskCounts) — not refetched here. Bucketed, not a bare count, because the delete dialog names the buckets. */
+  openTaskBreakdown?: OpenTaskBreakdown;
+  /** This session's live agent state (useSessionAgentState) — only the delete dialog reads it, and only to say what the turn in flight is doing. */
+  agentState?: SessionAgentState;
   initialTab?: WorkspaceTabId;
   onClose: () => void;
   /** Set for a session just created from the Launchpad — forwarded into the Conversation tab's context only. */
@@ -46,7 +54,8 @@ export function SessionWorkspace({
   routerClient,
   pipelineClient,
   ptyBridge,
-  openTaskCount,
+  openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
+  agentState,
   initialTab,
   onClose,
   provisioning,
@@ -67,6 +76,7 @@ export function SessionWorkspace({
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
+  const openTaskCount = totalOpenTasks(openTaskBreakdown);
 
   const refetchSession = useCallback(() => {
     void routerClient.getSession(sessionId).then(setSession);
@@ -267,11 +277,16 @@ export function SessionWorkspace({
         <Toast tone="bad" title="Session action failed" description={actionError} />
       )}
 
-      <SessionDeleteConfirmDialog
-        open={confirmingDelete}
-        onConfirm={() => void confirmDelete()}
-        onCancel={() => setConfirmingDelete(false)}
-      />
+      {session && (
+        <SessionDeleteConfirmDialog
+          open={confirmingDelete}
+          session={session}
+          agentState={agentState}
+          openTaskBreakdown={openTaskBreakdown}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
 
       {WORKSPACE_TABS.filter((tab) => visited.has(tab.id)).map((tab) => (
         <div

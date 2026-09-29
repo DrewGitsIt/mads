@@ -1,0 +1,360 @@
+<!doctype html>
+<!--
+  mads — session delete: drop the server gate, let the dialog carry the warning
+  ============================================================================
+
+  Today the rail's delete flow has the warning in the wrong two places.
+
+  The confirm dialog is byte-identical in every state (SessionDeleteConfirmDialog
+  takes only open/onConfirm/onCancel — it does not even know which session it is
+  deleting), so it warns about permanence and nothing else.
+
+  The actual refusal lives on the server. router handleDeleteSession returns 409
+  twice: once when Activity == active, once when the supervisor still tracks a
+  child. The UI does surface that — reportActionError sets a Toast — but the
+  Toast is an in-flow, non-positioned element rendered at the bottom of <main>,
+  which is the conversation pane, while the click that caused it happened in the
+  rail. It carries the raw string
+
+      router request failed: 409 delete session: session is active; close it
+      before deleting
+
+  and never auto-dismisses. So the dialog says "this can't be undone", you
+  confirm, and the card is still there.
+
+  Proposal: the server stops refusing, and the dialog starts telling the truth.
+
+  Dialog and button geometry copied verbatim from
+  ui/src/components/ConfirmDialog/ConfirmDialog.module.css.
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — session delete confirmation</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1180px; margin:0 auto; padding:var(--space-6) var(--space-5) 120px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:86ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.warn { color:var(--warn-fg); background:var(--warn-soft); }
+  .block > h2 .tag.bad { color:var(--bad-fg); background:var(--bad-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:94ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:94ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); }
+  .rowlabel.good { color:var(--ok-fg); } .rowlabel.bad { color:var(--bad-fg); } .rowlabel.warn { color:var(--warn-fg); }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); } td b { color:var(--text); font-weight:600; }
+  td.mono, .mono { font-family:var(--mono); }
+
+  .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-5); align-items:start; }
+  @media (max-width:1000px) { .grid2 { grid-template-columns:1fr; } }
+
+  /* ── verbatim from ConfirmDialog.module.css ───────────────────────────── */
+  .dialog { display:flex; flex-direction:column; gap:var(--space-3); width:420px; max-width:100%;
+            background:var(--bg1); border:1px solid var(--line); border-radius:var(--r);
+            box-shadow:var(--shadow); padding:var(--space-4); }
+  .dialog .title { font:650 var(--fs-ui) var(--sans); color:var(--text); }
+  .dialog .description { font:var(--fs-body) var(--sans); color:var(--text2); display:flex; flex-direction:column; gap:var(--space-3); }
+  .dialog .actions { display:flex; justify-content:flex-end; gap:var(--space-2); }
+  .btn { font:500 var(--fs-body) var(--sans); border-radius:var(--r-sm); padding:6px 14px; border:1px solid transparent; cursor:pointer; }
+  .btn.ghost { background:transparent; border-color:var(--line); color:var(--text2); }
+  .btn.ghost:hover { color:var(--text); background:var(--bg2); }
+  .btn.danger { background:var(--bad); color:#fff; }
+  .btn.danger:hover { background:var(--bad-fg); box-shadow:0 2px 10px var(--bad-soft); }
+
+  /* ── the new part: a state panel inside the description ───────────────── */
+  .statePanel { display:flex; flex-direction:column; gap:6px; padding:var(--space-3);
+                border-radius:var(--r-sm); border:1px solid var(--line-soft); background:var(--bg2); }
+  .statePanel.work { border-color:var(--accent); background:var(--accent-soft); }
+  .statePanel.attn { border-color:var(--warn); background:var(--warn-soft); }
+  .stateHead { display:flex; align-items:center; gap:var(--space-2); font:600 var(--fs-sm) var(--sans); color:var(--text); }
+  .stateDot { flex:none; width:8px; height:8px; border-radius:50%; background:var(--text3); }
+  .stateDot.work { background:var(--accent); }
+  .stateDot.attn { background:var(--warn); }
+  .stateDot.off  { background:var(--text3); }
+  .spinner { flex:none; width:9px; height:9px; border-radius:50%; border:1.5px solid var(--accent); border-top-color:transparent; animation:spin .7s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .stateLine { font:500 var(--fs-sm) var(--sans); color:var(--text2); padding-left:16px; }
+  .stateLine .mono { color:var(--text2); }
+  .loss { font:500 var(--fs-sm) var(--sans); color:var(--text3); }
+  .loss b { color:var(--text2); }
+  .keeps { color:var(--text3); font-size:var(--fs-sm); }
+
+  .sessname { color:var(--text); font-weight:600; }
+  .caption { margin-top:var(--space-2); color:var(--text3); font-size:var(--fs-sm); }
+  .caption b { color:var(--text2); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Deleting a session — move the warning from the server to the dialog</h1>
+  <p>
+    Today the dialog is identical no matter what you are deleting, and the thing
+    that actually knows better — the server — answers a confirmed delete with
+    <code>409</code>. The refusal lands as a raw-string toast at the bottom of the
+    conversation pane, nowhere near the rail you clicked in, and the card just
+    stays. So: <b>drop the 409</b>, and make the dialog say what deleting this
+    particular session will cost. The dialog still always appears — deletion is
+    irreversible — but it stops being the same dialog every time.
+  </p>
+</header>
+
+<section class="block">
+  <h2><span class="tag bad">today</span> One dialog for every session <span class="sub">and then a 409</span></h2>
+  <div class="body">
+    <div class="grid2">
+      <div>
+        <div class="rowlabel bad">what you see</div>
+        <div class="dialog">
+          <div class="title">Delete this session?</div>
+          <div class="description">
+            Deleting permanently removes this session, its tasks, file-change history,
+            and commit records. Provider transcripts and the event log survive. This
+            can't be undone.
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Cancel</button>
+            <button class="btn danger">Delete</button>
+          </div>
+        </div>
+        <p class="caption">
+          <b>It doesn't know which session it is.</b>
+          <code>SessionDeleteConfirmDialogProps</code> is
+          <code>{ open, onConfirm, onCancel }</code> — no session, no name, no state.
+        </p>
+      </div>
+      <div>
+        <div class="rowlabel bad">what happens next, if the session is live</div>
+        <table>
+          <tbody>
+            <tr><td><b>1</b></td><td>You confirm. The dialog closes.</td></tr>
+            <tr><td><b>2</b></td><td><code>handleDeleteSession</code> returns <code>409</code> — either <span class="mono">Activity == active</span> or the supervisor still tracks a child.</td></tr>
+            <tr><td><b>3</b></td><td><code>reportActionError</code> sets a <code>Toast</code> reading <span class="mono">router request failed: 409 delete session: session is active; close it before deleting</span>.</td></tr>
+            <tr><td><b>4</b></td><td>That <code>Toast</code> is <code>position: relative</code> — in flow, last child of <code>&lt;main&gt;</code>, i.e. the bottom of the conversation pane. It does not float, does not auto-dismiss, and is not where you were looking.</td></tr>
+            <tr><td><b>5</b></td><td>The card is still in the rail. It reads as nothing happening.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">proposed</span> Four states, one dialog <span class="sub">warning proportional to what is actually running</span></h2>
+  <div class="body">
+    <p class="lead">
+      Everything below is already on the session record — <code>activity</code>,
+      <code>agent_state</code> (state, label, since) and the rail's own open-task
+      breakdown. The dialog just has to be handed the session instead of a bare
+      <code>open</code> flag.
+    </p>
+    <div class="grid2">
+
+      <div>
+        <div class="rowlabel">1 · quiet — sleeping, nothing running</div>
+        <div class="dialog">
+          <div class="title">Delete “Ollama parallel inference tuning”?</div>
+          <div class="description">
+            <div class="statePanel">
+              <div class="stateHead"><span class="stateDot off"></span>Sleeping · nothing running</div>
+              <div class="stateLine">last activity 3 days ago</div>
+            </div>
+            <div class="loss">
+              Removes its <b>tasks</b>, <b>file-change history</b> and <b>commit records</b>.
+            </div>
+            <div class="keeps">Provider transcripts and the event log survive. This can't be undone.</div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Cancel</button>
+            <button class="btn danger">Delete</button>
+          </div>
+        </div>
+        <p class="caption">Today's dialog, plus a name and a one-line state. The quiet case should stay boring.</p>
+      </div>
+
+      <div>
+        <div class="rowlabel">2 · open — a child process exists, agent idle</div>
+        <div class="dialog">
+          <div class="title">Delete “Fix 5 MADS UI issues”?</div>
+          <div class="description">
+            <div class="statePanel">
+              <div class="stateHead"><span class="stateDot"></span>Open · waiting on you</div>
+              <div class="stateLine">Deleting closes it first.</div>
+            </div>
+            <div class="loss">
+              Removes its <b>tasks</b>, <b>file-change history</b> and <b>commit records</b>.
+            </div>
+            <div class="keeps">Provider transcripts and the event log survive. This can't be undone.</div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Cancel</button>
+            <button class="btn danger">Close and delete</button>
+          </div>
+        </div>
+        <p class="caption">
+          This is the case that 409s today. The child is terminated as part of the
+          delete, and the button says so rather than the server refusing.
+        </p>
+      </div>
+
+      <div>
+        <div class="rowlabel warn">3 · working — mid-turn right now</div>
+        <div class="dialog">
+          <div class="title">Delete “Session status sidebar UX”?</div>
+          <div class="description">
+            <div class="statePanel work">
+              <div class="stateHead"><span class="spinner"></span>Working right now — this will interrupt it</div>
+              <div class="stateLine">Running bash · <span class="mono">Query data service tasks</span> · 14s</div>
+            </div>
+            <div class="loss">
+              Removes its <b>tasks</b>, <b>file-change history</b> and <b>commit records</b>.
+              The turn in flight is lost.
+            </div>
+            <div class="keeps">Provider transcripts and the event log survive. This can't be undone.</div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Cancel</button>
+            <button class="btn danger">Stop and delete</button>
+          </div>
+        </div>
+        <p class="caption">
+          The live label is the one the status line already renders, so the dialog
+          and the card never disagree about what the agent is doing.
+        </p>
+      </div>
+
+      <div>
+        <div class="rowlabel bad">4 · working with a pipeline running</div>
+        <div class="dialog">
+          <div class="title">Delete “Monitor event-driven redesign”?</div>
+          <div class="description">
+            <div class="statePanel attn">
+              <div class="stateHead"><span class="spinner"></span>Working, and running a pipeline</div>
+              <div class="stateLine">Running bash · <span class="mono">go test ./services/…</span> · 2m</div>
+              <div class="stateLine">12 tasks · <b>1 running</b> · 4 ready · 1 blocked</div>
+            </div>
+            <div class="loss">
+              Removes <b>12 tasks</b> including the one in flight, plus its
+              <b>file-change history</b> and <b>commit records</b>.
+            </div>
+            <div class="keeps">Provider transcripts and the event log survive. This can't be undone.</div>
+          </div>
+          <div class="actions">
+            <button class="btn ghost">Cancel</button>
+            <button class="btn danger">Stop and delete</button>
+          </div>
+        </div>
+        <p class="caption">
+          The worst case gets the loudest panel and a count, because "12 tasks" is
+          the number that should stop your hand — not the word "permanently".
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">rules</span> What decides which dialog you get</h2>
+  <div class="body">
+    <table>
+      <thead><tr><th>State</th><th>Signal</th><th>Panel</th><th>Confirm button</th></tr></thead>
+      <tbody>
+        <tr><td><b>working</b></td><td class="mono">agent_state.state == "working"</td><td>accent, spinner, live label + elapsed</td><td class="mono">Stop and delete</td></tr>
+        <tr><td><b>open</b></td><td class="mono">activity == "active"</td><td>neutral, "Deleting closes it first"</td><td class="mono">Close and delete</td></tr>
+        <tr><td><b>quiet</b></td><td>neither</td><td>neutral, last activity</td><td class="mono">Delete</td></tr>
+        <tr><td colspan="4" style="color:var(--text3)">A running task count is additive — it escalates the panel to the warn tone and adds a line, in any of the three states above.</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)">
+      <b>Precedence is working › open › quiet</b>, the same order the rail's status
+      line already uses, so a card that says "working" can never open a dialog that
+      says "sleeping".
+    </p>
+    <p class="note">
+      <b>The button carries the verb.</b> The three labels differ because the
+      consequences differ, and the button is the last thing read before the click.
+      "Delete" that silently also kills a running agent is the lie worth removing.
+    </p>
+  </div>
+</section>
+
+<section class="block">
+  <h2><span class="tag">server</span> Dropping the gate</h2>
+  <div class="body">
+    <p class="lead">
+      <code>handleDeleteSession</code> (services/router/internal/api/sessions.go:378)
+      has two refusals. Both become a terminate-then-delete.
+    </p>
+    <table>
+      <thead><tr><th>Today</th><th>Proposed</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="mono">Activity == active → 409 "session is active; close it before deleting"</td>
+          <td>terminate, then delete</td>
+        </tr>
+        <tr>
+          <td class="mono">sup.SessionAddr(id) tracked → 409 "session has a running child; close it before deleting"</td>
+          <td>terminate, then delete</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)">
+      <b>The terminate already exists and is already safe in every state.</b> It is
+      the same <code>TerminateSession</code> the rail's close button calls, which
+      <code>SessionRail.tsx</code> documents as safe to call whether or not a child
+      is live — it kills a live child, or reconciles an already-inactive record as a
+      no-op. That is exactly the property a delete needs, and it is the reason the
+      record's <code>activity</code> flag is the wrong thing to gate on: it can
+      drift from the real child state, so today a session whose record says
+      <span class="mono">active</span> but whose child is long gone cannot be
+      deleted at all.
+    </p>
+    <p class="note">
+      <b>Delete stays failable, just not refusable.</b> If the terminate itself
+      errors the delete should still report it — and that report needs to reach the
+      rail, which is the last open question here: <code>Toast</code> is documented
+      as "presentational only — no queue/provider yet", and it renders in
+      <code>&lt;main&gt;</code>. Either it gets a portal/provider, or the rail grows
+      its own inline error affordance on the row. Worth settling separately from
+      this change, but not worth forgetting.
+    </p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>

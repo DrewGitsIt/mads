@@ -13,7 +13,6 @@ function renderWorkspace(props: Partial<Parameters<typeof SessionWorkspace>[0]> 
       sessionId={SESSION_ID}
       routerClient={new FakeRouterClient()}
       pipelineClient={new FakePipelineClient()}
-      openTaskCount={0}
       onClose={vi.fn()}
       {...props}
     />,
@@ -57,8 +56,7 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
 
@@ -89,7 +87,7 @@ describe("SessionWorkspace", () => {
   });
 
   it("shows the open-task-count badge on the Tasks tab, hidden at 0", async () => {
-    const { rerender } = renderWorkspace({ openTaskCount: 3 });
+    const { rerender } = renderWorkspace({ openTaskBreakdown: { running: 3, ready: 0, blocked: 0 } });
     await waitFor(() => expect(screen.getByRole("tab", { name: "Tasks" })).toBeTruthy());
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toContain("3");
 
@@ -98,8 +96,7 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={new FakeRouterClient()}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
     expect(screen.getByRole("tab", { name: "Tasks" }).textContent).toBe("Tasks");
@@ -145,8 +142,7 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
@@ -171,8 +167,7 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
@@ -204,8 +199,7 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
@@ -226,8 +220,7 @@ describe("SessionWorkspace", () => {
         sessionId="session-inactive"
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
-        openTaskCount={0}
-        onClose={vi.fn()}
+          onClose={vi.fn()}
       />,
     );
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
@@ -261,7 +254,7 @@ describe("SessionWorkspace", () => {
     }
   });
 
-  it("kebab always shows all three actions; while active, Resume and Delete are disabled with reasons", async () => {
+  it("kebab always shows all three actions; while active only Resume is disabled, since deleting now closes the session itself", async () => {
     renderWorkspace({ sessionId: "session-active" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
@@ -273,9 +266,15 @@ describe("SessionWorkspace", () => {
     const resume = screen.getByRole("button", { name: /Resume/ }) as HTMLButtonElement;
     expect(resume.disabled).toBe(true);
     expect(resume.textContent).toContain("Session is already active");
+    // The warning moved into the confirm dialog: a dead Delete item would
+    // pre-empt it the way the router's 409 used to.
     const del = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
-    expect(del.disabled).toBe(true);
-    expect(del.textContent).toContain("Close the session first");
+    expect(del.disabled).toBe(false);
+
+    fireEvent.click(del);
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("Deleting closes it first.");
+    expect(within(dialog).getByRole("button", { name: "Close and delete" })).toBeTruthy();
   });
 
   it("kebab always shows all three actions; while inactive, Resume, Delete, and Close are all enabled", async () => {

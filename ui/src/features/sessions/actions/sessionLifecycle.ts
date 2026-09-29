@@ -23,8 +23,12 @@ export function resumeState(activity: SessionActivity): LifecycleActionState {
     : { disabled: true, reason: "Session is already active" };
 }
 
-export function deleteState(activity: SessionActivity): LifecycleActionState {
-  return activity === "inactive"
-    ? { disabled: false }
-    : { disabled: true, reason: "Close the session first" };
+// Deleting no longer requires closing first: the router terminates the
+// session as part of the delete (handleDeleteSession), and the confirm dialog
+// is what says so — its button reads "Close and delete" for a live session and
+// "Stop and delete" for one mid-turn. Disabling the item here would pre-empt
+// that warning with a dead control, which is the same mistake the 409 made at
+// the other end of the click.
+export function deleteState(): LifecycleActionState {
+  return { disabled: false };
 }

@@ -1,0 +1,110 @@
+/* The delete dialog's state panel (mockup docs/mockups/session-delete-confirm.html
+   §"Four states, one dialog"). Lives here rather than in ConfirmDialog: the
+   panel is this dialog's copy, not dialog chrome. */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.statePanel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--bg2);
+}
+
+.panelWork {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* Open work escalates whatever state the panel is already in. */
+.panelAttn {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.stateHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: 600 var(--fs-sm) var(--sans);
+  color: var(--text);
+}
+
+.stateDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.stateDotAttn {
+  background: var(--warn);
+}
+
+.spinner {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  border-top-color: transparent;
+  animation: deleteDialogSpin 0.7s linear infinite;
+}
+
+@keyframes deleteDialogSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Matches the rail's own reduced-motion close-out: a static accent ring, since
+   the copy carries the state on its own. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    border-color: var(--accent);
+  }
+}
+
+/* Indented to clear the head's dot/spinner, so the lines read as one block. */
+.stateLine {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  padding-left: 16px;
+}
+
+.elapsed {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text3);
+}
+
+.bucketRunning {
+  color: var(--ok-fg);
+}
+
+.bucketReady {
+  color: var(--text3);
+}
+
+.bucketBlocked {
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+
+.loss {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.keeps {
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}

@@ -40,7 +40,7 @@ export function SessionActionsMenu({
 }: SessionActionsMenuProps) {
   const close = closeState();
   const resume = resumeState(activity);
-  const del = deleteState(activity);
+  const del = deleteState();
   const [copied, setCopied] = useState(false);
 
   function copySessionId() {

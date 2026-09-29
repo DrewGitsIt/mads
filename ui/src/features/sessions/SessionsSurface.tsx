@@ -9,7 +9,7 @@ import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
-import { EMPTY_OPEN_TASK_BREAKDOWN, totalOpenTasks } from "./rail/railGroups";
+import { EMPTY_OPEN_TASK_BREAKDOWN } from "./rail/railGroups";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionAgentState } from "./state/useSessionAgentState";
 import { useSessionLinks } from "./state/useSessionLinks";
@@ -138,7 +138,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             routerClient={router}
             pipelineClient={pipelineClient}
             ptyBridge={ptyBridge}
-            openTaskCount={totalOpenTasks(openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN)}
+            openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+            agentState={agentStates[selectedId]}
             initialTab={initialTab}
             onClose={() => setSelectedId(undefined)}
             provisioning={selectedId === provisioningSessionId}

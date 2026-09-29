@@ -104,21 +104,37 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await page.getByLabel("Workspace actions").click();
 
   // All three lifecycle actions are always visible in the kebab — while the
-  // session is still active, Resume and Delete render disabled with an
-  // inline reason instead of being hidden (discovery beats minimalism).
+  // session is still active, Resume renders disabled with an inline reason
+  // instead of being hidden (discovery beats minimalism).
   // Scoped to the open menu's own list: other sessions elsewhere on the page
   // (created by e2e tests running in parallel against the same backend) also
   // render "Resume ..." rail affordances, which an unscoped substring/regex
   // query would also match.
   const kebabList = page.getByRole("list");
   await expect(page.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+  // Delete is NOT disabled here any more: the router terminates the session as
+  // part of the delete, so the warning belongs in the confirm dialog rather
+  // than in a dead menu item that pre-empts it.
   const deleteWhileActive = kebabList.getByRole("button", { name: /Delete/ });
-  await expect(deleteWhileActive).toBeDisabled();
-  await expect(deleteWhileActive).toContainText("Close the session first");
+  await expect(deleteWhileActive).toBeEnabled();
   const resumeWhileActive = kebabList.getByRole("button", { name: /Resume/ });
   await expect(resumeWhileActive).toBeDisabled();
   await expect(resumeWhileActive).toContainText("Session is already active");
 
+  // The live session's dialog names it and carries the verb the delete will
+  // actually perform. Whether the first turn is still in flight decides
+  // between "Stop and delete" and "Close and delete" — both are the point,
+  // which is that a live session's button no longer reads a bare "Delete".
+  await deleteWhileActive.click();
+  const liveDialog = page.getByRole("alertdialog");
+  await expect(liveDialog).toContainText(`Delete “${goal}”?`);
+  await expect(
+    liveDialog.getByRole("button", { name: /^(Close|Stop) and delete$/ }),
+  ).toBeVisible();
+  await liveDialog.getByText("Cancel", { exact: true }).click();
+  await expect(liveDialog).toHaveCount(0);
+
+  await page.getByLabel("Workspace actions").click();
   await page.getByRole("button", { name: "Close", exact: true }).click();
 
   await expect(resumeAffordance).toBeVisible();
@@ -150,6 +166,8 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
 
   const dialog = page.getByRole("alertdialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText(`Delete “${goal}”?`);
+  await expect(dialog).toContainText("Sleeping");
   await expect(dialog).toContainText("event log survive");
 
   await dialog.getByText("Cancel", { exact: true }).click();
