@@ -42,10 +42,28 @@ export interface RailLabelContext {
    * is exactly why the context line's height must not depend on its contents.
    */
   multiWorkspace: boolean;
+  /**
+   * Whether the rail gives its cards a context line at all. The line's height
+   * is reserved whether or not it has content — that reservation is what stops
+   * a label appearing or vanishing from reflowing the rail — so a rail holding
+   * no session that could ever fill it must not reserve it for any of them.
+   * In the common single-workspace, current-dir instance that is 17px of blank
+   * on every card.
+   *
+   * Decided over every row the rail holds rather than the visible ones, and
+   * over the rail's own workspace span rather than the visible list's, so that
+   * narrowing a filter can never take the line away from the cards that
+   * survive. Only the rail's membership moves it.
+   */
+  lineShown: boolean;
   facts: Map<string, WorkspaceFacts>;
 }
 
-export const EMPTY_LABEL_CONTEXT: RailLabelContext = { multiWorkspace: false, facts: new Map() };
+export const EMPTY_LABEL_CONTEXT: RailLabelContext = {
+  multiWorkspace: false,
+  lineShown: false,
+  facts: new Map(),
+};
 
 /** The adaptive set for one card. Every field absent is a normal, common state. */
 export interface RailLabels {
@@ -113,6 +131,15 @@ export function railLabelsFor(session: Session, ctx: RailLabelContext): RailLabe
     agent: session.agent && session.agent !== facts?.defaultAgent ? session.agent : undefined,
     retro: Boolean(session.retro_id) || (session.tags ?? []).includes("retro"),
   };
+}
+
+/**
+ * Whether this session has anything at all to put on the context line — the
+ * question the rail asks of every session it holds before reserving the line's
+ * height on any card (see RailLabelContext.lineShown).
+ */
+export function hasRailLabels(labels: RailLabels): boolean {
+  return Boolean(labels.branch || labels.workspace || labels.cwd || labels.agent || labels.retro);
 }
 
 /** The workspace name for a session's reference, never the raw reference alone. */

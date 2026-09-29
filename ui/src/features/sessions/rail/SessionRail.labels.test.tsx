@@ -84,9 +84,11 @@ describe("SessionRail adaptive context labels", () => {
 
   // The shape the running instance actually has: the router writes the
   // workspace *id* onto the session (sessiondefaults.go), and an
-  // isolation:current_dir session stores cwd ".". Neither is a label, and the
-  // whole line — separators included — has to come out empty.
-  it("puts nothing on the context line of an id-referenced current_dir session", () => {
+  // isolation:current_dir session stores cwd ".". Neither is a label — and
+  // since no session in this rail has one either, the line is not reserved at
+  // all. An empty line still costs its reserved height, which on this instance
+  // was 17px of blank on every card.
+  it("gives no context line at all to a rail whose sessions have no labels", () => {
     render(
       <SessionRail
         sessions={[
@@ -98,14 +100,48 @@ describe("SessionRail adaptive context labels", () => {
             cwd: ".",
             agent: "builder",
           }),
+          makeSession({
+            id: "b",
+            name: "current dir two",
+            workspace: "ws-mads",
+            isolation: "current_dir",
+            cwd: ".",
+          }),
         ]}
         workspaces={WORKSPACES}
         openTaskCounts={{}}
       />,
     );
-    const card = cardFor("current dir one");
-    expect(labelsOn(card)).toEqual({});
-    expect(card.querySelector('[class*="context"]')!.textContent).toBe("");
+    for (const name of ["current dir one", "current dir two"]) {
+      expect(cardFor(name).querySelector('[class*="context"]')).toBeNull();
+    }
+  });
+
+  // The line's presence is a fact about the rail, not about one card: reserving
+  // it per-card would make a card's height depend on its own labels, which is
+  // the reflow the reservation exists to prevent.
+  it("reserves the line on every card once any session in the rail can fill it", () => {
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "plain one", workspace: "ws-mads", cwd: "." }),
+          makeSession({
+            id: "b",
+            name: "isolated one",
+            workspace: "ws-mads",
+            isolation: "worktree",
+            worktree_branch: "feat/x",
+          }),
+        ]}
+        workspaces={WORKSPACES}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(labelsOn(cardFor("isolated one")).branch).toBe("feat/x");
+    // No labels of its own, but it still carries the line, so the two cards are
+    // the same height.
+    expect(labelsOn(cardFor("plain one"))).toEqual({});
+    expect(cardFor("plain one").querySelector('[class*="context"]')).not.toBeNull();
   });
 
   it("labels an id-referenced workspace with its name across a mixed list", () => {

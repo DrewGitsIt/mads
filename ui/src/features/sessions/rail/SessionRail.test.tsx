@@ -702,11 +702,6 @@ function clauseOf(name: string): string {
   return row.querySelector<HTMLElement>('[class*="statusLabel"]')!.textContent!;
 }
 
-function footerOf(name: string): HTMLElement {
-  const row = screen.getByText(name).closest('[role="button"]')!;
-  return row.querySelector<HTMLElement>('[class*="stamps"]')!;
-}
-
 describe("SessionRail timestamps", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -740,15 +735,25 @@ describe("SessionRail timestamps", () => {
     expect(stampOf("older").textContent).toMatch(/^18 \w{3,}$/);
   });
 
-  it("puts the full absolute value in the stamp's title", () => {
+  // One stamp carries both absolutes, because the card no longer has a footer
+  // line to spell them out — and that footer showed nothing until hovered.
+  it("puts both absolute values in the stamp's title", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
-        sessions={[makeSession({ name: "titled", last_turn_at: isoAgo(14 * MINUTE) })]}
+        sessions={[
+          makeSession({
+            name: "titled",
+            created_at: isoAgo(10 * DAY),
+            last_turn_at: isoAgo(14 * MINUTE),
+          }),
+        ]}
         openTaskCounts={{}}
       />,
     );
-    expect(stampOf("titled").title).toBe("Last reply 2026-09-28 13:26:00");
+    expect(stampOf("titled").title).toBe(
+      "Last reply 2026-09-28 13:26:00 · Started 2026-09-18 13:40:00",
+    );
   });
 
   it("calls the stamp last reply, and reads it off last_turn_at — not updated_at", () => {
@@ -768,12 +773,11 @@ describe("SessionRail timestamps", () => {
       />,
     );
     expect(stampOf("honest").textContent).toBe("14m");
-    expect(stampOf("honest").title).toBe("Last reply 2026-09-28 13:26:00");
-    expect(footerOf("honest").textContent).toContain("last reply today 13:26");
+    expect(stampOf("honest").title).toContain("Last reply 2026-09-28 13:26:00");
     expect(screen.queryByText(/last activity/i)).toBeNull();
   });
 
-  it("says 'no reply yet' rather than dressing another stamp up as a reply", () => {
+  it("reads 'new' rather than dressing a creation time up as a reply", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
@@ -781,6 +785,8 @@ describe("SessionRail timestamps", () => {
           makeSession({
             name: "fresh",
             created_at: isoAgo(30_000),
+            // A rename a second ago. Neither this nor created_at is a reply,
+            // and neither may appear in the slot the eye reads as one.
             updated_at: isoAgo(1000),
             last_turn_at: undefined,
           }),
@@ -788,12 +794,11 @@ describe("SessionRail timestamps", () => {
         openTaskCounts={{}}
       />,
     );
-    // No stamp on the name row at all: there is nothing honest to put there.
-    expect(stampOf("fresh")).toBeNull();
-    expect(footerOf("fresh").textContent).toMatch(/^started today 13:39\s*·\s*no reply yet$/);
+    expect(stampOf("fresh").textContent).toBe("new");
+    expect(stampOf("fresh").title).toBe("No reply yet · Started 2026-09-28 13:39:30");
   });
 
-  it("renders the started / last-reply footer on every card, hovered or not, so the reveal cannot reflow the rail", () => {
+  it("carries no reserved footer line, so nothing on the card is blank at rest", () => {
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
@@ -816,31 +821,32 @@ describe("SessionRail timestamps", () => {
       />,
     );
 
-    // Mounted for the unselected, un-hovered card too: nothing is added to the
-    // layout when the pointer arrives.
-    const resting = footerOf("resting");
-    expect(resting.textContent).toMatch(/^started 18 \w{3,}\s*·\s*last reply today 13:26$/);
-    const beforeHover = resting.outerHTML;
-    fireEvent.mouseEnter(screen.getByText("resting").closest('[role="button"]')!);
-    expect(footerOf("resting").outerHTML).toBe(beforeHover);
+    // The footer this replaced was mounted on every card at opacity 0 — 16px
+    // of height showing nothing until the pointer arrived, half of it
+    // repeating the name-row stamp in longer words.
+    const row = screen.getByText("resting").closest('[role="button"]')!;
+    expect(row.querySelector('[class*="stamps"]')).toBeNull();
+    expect(row.textContent).not.toMatch(/started|last reply/i);
 
-    expect(footerOf("chosen").textContent).toContain("started today 08:40");
+    // And the reveal it needed is gone with it: hovering changes no text on
+    // the card. (It still anchors the action cluster, which is why this reads
+    // the card's words rather than diffing its markup.)
+    const before = row.textContent;
+    fireEvent.mouseEnter(row);
+    expect(row.textContent).toBe(before);
+
+    // Both stamps still reachable, on the one element that shows a time.
+    expect(stampOf("resting").title).toBe(
+      "Last reply 2026-09-28 13:26:00 · Started 2026-09-18 13:40:00",
+    );
+    expect(stampOf("chosen").title).toContain("Started 2026-09-28 08:40:00");
   });
 
-  it("reveals that footer with opacity alone — no display or height change", () => {
-    // Read as text: the reveal is a CSS fact, and jsdom/happy-dom has no layout
-    // to measure. Path is relative to the vitest root (ui/).
+  it("keeps no stamps rule in the stylesheet either", () => {
+    // Path is relative to the vitest root (ui/).
     const css = readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
-    const rest = css.match(/\.stamps \{([^}]*)\}/)![1];
-    expect(rest).toContain("opacity: 0");
-    expect(rest).toMatch(/transition:\s*opacity/);
-    // Hidden by opacity, not by removal: no display:none and no collapsed box.
-    expect(rest).not.toMatch(/display:\s*none|(max-)?height:\s*0/);
-
-    const reveal = css.match(/\.row:hover \.stamps,[^{]*\{([^}]*)\}/)![1];
-    expect(reveal.trim()).toBe("opacity: 1;");
-    expect(css).toMatch(/\.row:focus-within \.stamps/);
-    expect(css).toMatch(/\.selected \.stamps/);
+    expect(css).not.toMatch(/\.stamps\b/);
+    expect(css).not.toMatch(/\.stampSep\b/);
   });
 
   it("drives every card's relative label from one shared interval", async () => {

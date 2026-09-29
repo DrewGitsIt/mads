@@ -33,6 +33,7 @@ import type { MatchReason, SearchMatch } from "./railSearch";
 import { useSettledRailOrder } from "./railOrder";
 import {
   EMPTY_LABEL_CONTEXT,
+  hasRailLabels,
   railLabelsFor,
   railTooltip,
   workspaceFacts,
@@ -48,7 +49,6 @@ import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import {
   formatAbsoluteStamp,
-  formatCalendarStamp,
   formatElapsedStamp,
   formatRelativeStamp,
   useElapsedNow,
@@ -207,19 +207,41 @@ export function SessionRail({
   // every card repeats says nothing, so it only earns a card once the list
   // is mixed. Deliberately computed before the Earlier fold, so expanding
   // the tail cannot relabel the cards above it.
+  const sessionsOf = (row: RailRow) =>
+    linkedSessionsEnabled ? [row.session, ...row.subjects.map((s) => s.session)] : [row.session];
   const visibleWorkspaces = new Set<string>();
   for (const row of visible) {
-    const nested = linkedSessionsEnabled ? row.subjects.map((s) => s.session) : [];
-    for (const session of [row.session, ...nested]) {
+    for (const session of sessionsOf(row)) {
       // Counted by resolved name: two records referring to one workspace, one
       // by id and one by name, are not two workspaces.
       const name = workspaceNameForRef(session.workspace, wsIndex);
       if (name) visibleWorkspaces.add(name);
     }
   }
+  const facts = workspaceFacts(workspaces);
+  // Whether the line exists at all is a question about the whole rail, not the
+  // visible slice: answered off `visible` it would come and go as filters
+  // narrow, and every surviving card would change height — the reflow the
+  // reservation exists to prevent. So both inputs are rail-wide, and a filter
+  // can only change *which* labels a card shows, never whether it has a line.
+  const railWorkspaces = new Set<string>();
+  for (const row of allRows) {
+    for (const session of sessionsOf(row)) {
+      const name = workspaceNameForRef(session.workspace, wsIndex);
+      if (name) railWorkspaces.add(name);
+    }
+  }
+  const railWide: RailLabelContext = {
+    multiWorkspace: railWorkspaces.size > 1,
+    lineShown: true,
+    facts,
+  };
   const labelContext: RailLabelContext = {
     multiWorkspace: visibleWorkspaces.size > 1,
-    facts: workspaceFacts(workspaces),
+    lineShown: allRows.some((row) =>
+      sessionsOf(row).some((session) => hasRailLabels(railLabelsFor(session, railWide))),
+    ),
+    facts,
   };
 
   const head: RailRow[] = [];
@@ -708,12 +730,22 @@ function SessionRow({
   const name = session.name || "Untitled session";
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
-  // rename or a summary write wearing a reply's clothes. Absent — and so
-  // printed as "no reply yet" below — until the session's first turn ends.
+  // rename or a summary write wearing a reply's clothes.
+  //
+  // One stamp, not two. This used to be a stamp here plus a reserved footer
+  // line carrying "started X · last reply Y" at opacity 0 — 16px of every card
+  // spent showing nothing until the pointer arrived, and the half of it that
+  // did show repeated this stamp in longer words. Both absolutes moved into
+  // the title, where the thing you hover is the thing you asked about.
   const lastReply = formatRelativeStamp(session.last_turn_at, now);
-  const lastReplyTitle = session.last_turn_at
-    ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
-    : undefined;
+  // Never dressed up as a reply: a session that has not answered yet reads
+  // "new", and its title says so, rather than showing a creation time in the
+  // slot the eye reads as "when did this last say something".
+  const stamp = lastReply || "new";
+  const stampTitle =
+    (session.last_turn_at
+      ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
+      : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
@@ -852,11 +884,9 @@ function SessionRow({
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
-        {lastReply && (
-          <span className={styles.when} title={lastReplyTitle}>
-            {lastReply}
-          </span>
-        )}
+        <span className={styles.when} title={stampTitle}>
+          {stamp}
+        </span>
       </div>
       {/* Always rendered, one clause, never wrapped: the card's height must be
           identical in every state so a state change repaints and never reflows. */}
@@ -883,7 +913,7 @@ function SessionRow({
           {reason.value}
         </div>
       )}
-      <ContextLine labels={labels} />
+      {labelContext.lineShown && <ContextLine labels={labels} />}
       {hasMeta && (
         <div className={styles.rowMeta}>
           {openTaskCount > 0 && (
@@ -922,21 +952,6 @@ function SessionRow({
         </div>
       )}
       {showSummary && <div className={styles.summary}>{summaryTeaser(session.summary!)}</div>}
-      {/* Always rendered so its height is reserved at rest — the hover/selected
-          reveal is opacity-only and the rail never reflows under the pointer. */}
-      <div className={styles.stamps}>
-        <span title={`Initiated ${formatAbsoluteStamp(session.created_at)}`}>
-          started {formatCalendarStamp(session.created_at, now)}
-        </span>
-        <span className={styles.stampSep} aria-hidden="true">
-          ·
-        </span>
-        <span title={lastReplyTitle}>
-          {session.last_turn_at
-            ? `last reply ${formatCalendarStamp(session.last_turn_at, now)}`
-            : "no reply yet"}
-        </span>
-      </div>
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}

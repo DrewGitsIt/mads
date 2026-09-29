@@ -32,7 +32,7 @@ const MADS = makeWorkspace({
 });
 
 function context(overrides: Partial<RailLabelContext> = {}): RailLabelContext {
-  return { multiWorkspace: false, facts: workspaceFacts([MADS]), ...overrides };
+  return { multiWorkspace: false, lineShown: true, facts: workspaceFacts([MADS]), ...overrides };
 }
 
 describe("workspaceFacts", () => {
