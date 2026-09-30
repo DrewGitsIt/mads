@@ -71,12 +71,13 @@ prefix with an isolated `HOME`, verifies `mads --version` and first-run data
 dir creation, then drives `mads uninstall` through all three outcomes
 (declined, confirmed, `--keep-data`).
 
-The target platform matrix is linux and darwin (spec §14.10). This
-environment only has a linux runner, so the darwin row is skipped with an
-explicit "pending CI" message rather than silently passing — it needs a
-macOS GitHub Actions runner wired into `.github/workflows/ci.yml` before it
-can run for real (tracked for whichever work item stands up the release
-build matrix, spec §14 Notes / W7.7).
+The target platform matrix is linux and darwin (spec §14.10). The smoke
+itself only runs on linux: on darwin it skips with an explicit "pending CI"
+message rather than silently passing — and that skip is unconditional, so
+`make check` on a Mac skips it too even though the rest of the suite runs
+there. CI has no macOS row yet (every job is `ubuntu-latest`); un-skipping
+the darwin row goes with adding one (work item B3 in
+[docs/MACOS-PORT-DESIGN.md](../docs/MACOS-PORT-DESIGN.md)).
 
 ## Release gate
 
@@ -100,5 +101,6 @@ test (a deliberately broken `mads` binary that fails the health check) run
 in milliseconds instead of repeating a multi-minute cross-compile.
 
 The build matrix gives this gate darwin **build** coverage — it does not
-close the darwin **execution** gap noted above, which still needs an actual
-macOS runner.
+close the darwin **execution** gap noted above, which still needs a macOS CI
+row. Run on a Mac, the native candidate is darwin, so the health check runs
+for real there, but the install/uninstall smoke still skips.

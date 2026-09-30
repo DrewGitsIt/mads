@@ -38,6 +38,20 @@ make release-gate  # cross-platform build matrix + install/update smokes
                    # — a multi-minute cross-compile
 ```
 
+### macOS
+
+mads builds and runs on macOS as well as Linux. Before the first `make build`:
+
+- **Xcode Command Line Tools** (`xcode-select --install`): provides `git`, and
+  the C++ compiler `npm ci` needs to build `node-pty`.
+- **Go** at the version in `go.mod`.
+- **Node** at the version in `.nvmrc` (e.g. `nvm install`).
+- The **`claude`** CLI, for claude-code sessions and `mads run` agents.
+- Optionally **`goose`**, for goose sessions.
+
+Platform differences and the port's open items are in
+[docs/MACOS-PORT-DESIGN.md](docs/MACOS-PORT-DESIGN.md).
+
 ### Rebuilding one piece while mads is running
 
 `make build` is the all-or-nothing gate. For the inner loop there is a target
@@ -47,7 +61,8 @@ processes keep the binary they started with).
 
 ```sh
 make ui         # no restart at all — the Router serves ui/dist off disk and
-                # re-checks it per request; just reload the window (Ctrl+R)
+                # re-checks it per request; just reload the window
+                # (Ctrl+R / Cmd+R)
 make session    # next session spawn picks it up (-session-cmd is exec'd
                 # fresh); to move a live session onto it:
                 #   curl -sX POST localhost:17373/sessions/<id>/bounce

@@ -78,9 +78,9 @@ data:
 
 # No restart at all. The Router serves ui/dist off disk (it is not embedded in
 # the binary) and re-checks it per request, so this plus a window reload
-# (Ctrl+R / View -> Reload) is the entire loop. Note that vite empties ui/dist
-# before writing it: reloading *during* the build briefly shows the "UI not
-# built" placeholder.
+# (Ctrl+R / Cmd+R / View -> Reload) is the entire loop. Note that vite empties
+# ui/dist before writing it: reloading *during* the build briefly shows the
+# "UI not built" placeholder.
 ui:
 	npm --prefix ui run build
 
@@ -102,8 +102,11 @@ e2e-smoke:
 # ports, real UI build, chromium only. Separate from `make check`/CI's fast
 # test job and from `make e2e-smoke` (Go-only, no browser) — see
 # ui/e2e/HANDOFF.md and ui/README.md's "test layers" section. Browsers are
-# cached at ~/.cache/ms-playwright (Linux default) — key CI's cache on that
-# path plus the pinned Playwright version in ui/package-lock.json.
+# cached at ~/.cache/ms-playwright on every OS: that is Playwright's Linux
+# default, and PLAYWRIGHT_BROWSERS_PATH pins macOS there too instead of its
+# ~/Library/Caches/ms-playwright default (an explicit PLAYWRIGHT_BROWSERS_PATH
+# in the environment wins). Key CI's cache on that path plus the pinned
+# Playwright version in ui/package-lock.json.
 # VITE_ROUTER_URL="" bakes a relative (same-origin) router base into ui/dist
 # instead of the localhost:17373 default (client.ts's ROUTER_BASE) — the
 # Router serves this build itself on an ephemeral port, never 17373.
@@ -113,11 +116,18 @@ e2e-smoke:
 # worktrees races two extractions into the same target directory with no
 # lock of its own — see playwright-core's downloadBrowserWithProgressBar.
 # Serializing just this step (not the whole test run) avoids that without
-# giving up the warm-cache fast path on every other run.
+# giving up the warm-cache fast path on every other run. macOS ships no
+# flock(1), so there the install runs unlocked: the only exposure is two
+# worktrees cold-installing at once, which a warm cache already rules out.
+ui-smoke: export PLAYWRIGHT_BROWSERS_PATH ?= $(HOME)/.cache/ms-playwright
 ui-smoke: ui-deps
 	VITE_ROUTER_URL="" npm --prefix ui run build
-	mkdir -p ~/.cache/ms-playwright
-	flock ~/.cache/ms-playwright/.install.lock npx --prefix ui playwright install chromium
+	mkdir -p "$$PLAYWRIGHT_BROWSERS_PATH"
+	if command -v flock >/dev/null 2>&1; then \
+		flock "$$PLAYWRIGHT_BROWSERS_PATH/.install.lock" npx --prefix ui playwright install chromium; \
+	else \
+		npx --prefix ui playwright install chromium; \
+	fi
 	npm --prefix ui run test:e2e
 
 # Release gate: cross-platform build matrix + install/update smokes against

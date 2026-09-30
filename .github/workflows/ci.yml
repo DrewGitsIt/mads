@@ -50,6 +50,7 @@ jobs:
         run: echo "version=$(node -p "require('./ui/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
         with:
+          # the Makefile's ui-smoke pins PLAYWRIGHT_BROWSERS_PATH here on every OS
           path: ~/.cache/ms-playwright
           key: ms-playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
       - run: make ui-smoke
