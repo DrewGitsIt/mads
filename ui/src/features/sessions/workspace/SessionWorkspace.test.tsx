@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { SessionWorkspace } from "./SessionWorkspace";
+import { SessionWorkspace, openTasksTitle } from "./SessionWorkspace";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
@@ -389,5 +389,10 @@ describe("SessionWorkspace", () => {
 
     await waitFor(() => expect(spy).toHaveBeenCalledWith("session-inactive"));
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+  });
+
+  it("titles the Tasks badge with what it counts: open work, by status", () => {
+    expect(openTasksTitle({ running: 1, ready: 3, blocked: 0 })).toBe("4 open tasks: 1 running, 3 ready");
+    expect(openTasksTitle({ running: 0, ready: 0, blocked: 1 })).toBe("1 open task: 1 blocked");
   });
 });

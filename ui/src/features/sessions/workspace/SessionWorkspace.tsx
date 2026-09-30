@@ -227,7 +227,12 @@ export function SessionWorkspace({
             >
               {tab.label}
               {tab.id === "tasks" && openTaskCount > 0 && (
-                <span className={styles.badge} aria-hidden="true">
+                // The badge counts OPEN work only (running + ready, which
+                // includes needs_review, + blocked); done and discarded
+                // tasks never count. A bare number reads as the total or as
+                // the done count, and matches neither, so the tooltip says
+                // what it is.
+                <span className={styles.badge} aria-hidden="true" title={openTasksTitle(openTaskBreakdown)}>
                   {openTaskCount}
                 </span>
               )}
@@ -312,4 +317,15 @@ export function SessionWorkspace({
       ))}
     </div>
   );
+}
+
+/** "4 open tasks: 1 running, 3 ready" — the Tasks badge's tooltip. */
+export function openTasksTitle(b: OpenTaskBreakdown): string {
+  const total = totalOpenTasks(b);
+  const parts = [
+    b.running > 0 && `${b.running} running`,
+    b.ready > 0 && `${b.ready} ready`,
+    b.blocked > 0 && `${b.blocked} blocked`,
+  ].filter(Boolean);
+  return `${total} open ${total === 1 ? "task" : "tasks"}: ${parts.join(", ")}`;
 }
