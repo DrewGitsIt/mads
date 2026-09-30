@@ -434,3 +434,48 @@ func TestOpenFailsActionablyWhenKeyringUnavailableDuringMigration(t *testing.T) 
 		t.Errorf("original plaintext lost after failed migration: %s", raw)
 	}
 }
+
+// TestKeyringMessagesPerOS pins each platform's actionable keyring wording.
+// Linux text is compared verbatim (it predates the darwin port and must not
+// drift); darwin must name the login Keychain, Keychain Access, and the item,
+// and must not mention Linux-only tooling.
+func TestKeyringMessagesPerOS(t *testing.T) {
+	cause := errors.New("boom")
+	const path = "/x/credentials.json"
+
+	linuxUnavail := keyringUnavailableErr("linux", cause)
+	if want := "credstore: OS login keyring unavailable (Secret Service via D-Bus): boom — unlock your keyring (e.g. open Seahorse) or, over SSH/headless, run within a graphical session with a keyring daemon (gnome-keyring) running; credentials cannot be encrypted or decrypted until it is reachable"; linuxUnavail.Error() != want {
+		t.Errorf("linux unavailable =\n%q\nwant\n%q", linuxUnavail.Error(), want)
+	}
+	if want := "credstore: encryption key missing from OS keyring but encrypted credentials exist on disk at /x/credentials.json — if it wasn't intentionally deleted (e.g. via Seahorse), those credentials cannot be recovered; delete the file to start over"; keyMissingErr("linux", path).Error() != want {
+		t.Errorf("linux missing =\n%q\nwant\n%q", keyMissingErr("linux", path).Error(), want)
+	}
+
+	darwinUnavail := keyringUnavailableErr("darwin", cause)
+	darwinMissing := keyMissingErr("darwin", path)
+	for name, msg := range map[string]string{"unavailable": darwinUnavail.Error(), "missing": darwinMissing.Error()} {
+		for _, want := range []string{"login Keychain", "Keychain Access", `"mads-credstore"`, `"data-key"`} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("darwin %s %q missing %q", name, msg, want)
+			}
+		}
+		for _, bad := range []string{"D-Bus", "Secret Service", "gnome-keyring", "Seahorse"} {
+			if strings.Contains(msg, bad) {
+				t.Errorf("darwin %s %q mentions Linux-only %q", name, msg, bad)
+			}
+		}
+	}
+	for _, want := range []string{"keyring", "unlock", "boom"} {
+		if !strings.Contains(darwinUnavail.Error(), want) {
+			t.Errorf("darwin unavailable %q missing %q", darwinUnavail.Error(), want)
+		}
+	}
+	if !strings.Contains(darwinMissing.Error(), path) || !strings.Contains(darwinMissing.Error(), "delete the file") {
+		t.Errorf("darwin missing %q lacks path or fix", darwinMissing.Error())
+	}
+	for _, e := range []error{linuxUnavail, darwinUnavail} {
+		if !errors.Is(e, cause) {
+			t.Errorf("%v does not wrap the underlying keyring error", e)
+		}
+	}
+}

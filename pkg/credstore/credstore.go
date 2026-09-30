@@ -1,7 +1,7 @@
 // Package credstore is a local, restricted-permission credential store
 // (spec §13.1). Values are encrypted at rest — AES-256-GCM under a single
-// data key held in the user's OS login keyring (Secret Service via D-Bus,
-// envelope encryption: see crypto.go) — and live in a private JSON file on
+// data key held in the user's OS login keyring (Secret Service via D-Bus on
+// Linux, the login Keychain on macOS; envelope encryption: see crypto.go) — and live in a private JSON file on
 // disk as {name: ciphertext}, never plaintext. Every method operates by
 // env-var name only and never logs or serializes a decrypted value —
 // callers get env-var pairs back from ResolveEnv, nothing else.

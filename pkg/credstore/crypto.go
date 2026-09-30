@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	gokeyring "github.com/zalando/go-keyring"
@@ -15,8 +16,9 @@ import (
 const (
 	// dataKeyLen is the AES-256 key size in bytes.
 	dataKeyLen = 32
-	// keyringService/keyringUser identify the single Secret Service item
-	// holding the store's data key (envelope encryption, spec decision:
+	// keyringService/keyringUser identify the single keyring item (a
+	// Secret Service item on Linux, a login Keychain generic password on
+	// macOS: service "mads-credstore", account "data-key") holding the store's data key (envelope encryption, spec decision:
 	// one keyring item protects the whole credentials.json rather than one
 	// item per secret — keeps the single-file model and keeps the
 	// concurrent-open story to "one item to race over" instead of one per
@@ -30,17 +32,18 @@ const (
 )
 
 // dataKey fetches the store's AES-256 data key from the OS login keyring
-// (Secret Service via D-Bus — gnome-keyring on the owner's COSMIC/Pop!_OS
-// setup). createIfAbsent must be true only when the caller has already
+// (Linux: Secret Service via D-Bus — gnome-keyring on the owner's
+// COSMIC/Pop!_OS setup; macOS: the login Keychain, via go-keyring's
+// /usr/bin/security backend). createIfAbsent must be true only when the caller has already
 // established that no existing ciphertext in the store could depend on a
 // key it hasn't seen: minting a fresh key when ciphertext already exists
 // would silently orphan it (a deleted-from-keyring data key must surface as
 // an actionable error, never as "start over with a new key").
 //
-// A keyring access failure that is not "item not found" (locked keyring, no
-// D-Bus session — headless boot, SSH with no graphical session) returns a
-// wrapped, actionable error naming the cause and the fix, never a bare
-// dbus/keyring error string.
+// A keyring access failure that is not "item not found" (locked keyring or
+// Keychain, no D-Bus session — headless boot, SSH with no graphical
+// session) returns a wrapped, actionable error naming the cause and the
+// fix, never a bare dbus/keychain error string.
 func (s *Store) dataKey(createIfAbsent bool) ([]byte, error) {
 	b64, err := gokeyring.Get(keyringService, keyringUser)
 	if err == nil {
@@ -51,27 +54,41 @@ func (s *Store) dataKey(createIfAbsent bool) ([]byte, error) {
 		return key, nil
 	}
 	if !errors.Is(err, gokeyring.ErrNotFound) {
-		return nil, keyringUnavailableErr(err)
+		return nil, keyringUnavailableErr(runtime.GOOS, err)
 	}
 	if !createIfAbsent {
-		return nil, fmt.Errorf("credstore: encryption key missing from OS keyring but encrypted credentials exist on disk at %s — if it wasn't intentionally deleted (e.g. via Seahorse), those credentials cannot be recovered; delete the file to start over", s.path)
+		return nil, keyMissingErr(runtime.GOOS, s.path)
 	}
 	key := make([]byte, dataKeyLen)
 	if _, rErr := rand.Read(key); rErr != nil {
 		return nil, fmt.Errorf("credstore: generate data key: %w", rErr)
 	}
 	if sErr := gokeyring.Set(keyringService, keyringUser, base64.StdEncoding.EncodeToString(key)); sErr != nil {
-		return nil, keyringUnavailableErr(sErr)
+		return nil, keyringUnavailableErr(runtime.GOOS, sErr)
 	}
 	return key, nil
 }
 
-// keyringUnavailableErr wraps a Secret Service failure into the actionable
-// message required whenever the OS keyring can't be reached at all (as
-// opposed to a clean "item not found") — headless boot, an SSH session with
-// no D-Bus session bus, or a locked keyring the user hasn't unlocked yet.
-func keyringUnavailableErr(err error) error {
+// keyringUnavailableErr wraps a keyring failure into the actionable message
+// required whenever the OS keyring can't be reached at all (as opposed to a
+// clean "item not found"). goos is runtime.GOOS, injected so both
+// platforms' wording is testable anywhere. Linux: headless boot, an SSH
+// session with no D-Bus session bus, or a locked keyring. macOS: a locked
+// login Keychain, or an SSH session where the Keychain can't prompt.
+func keyringUnavailableErr(goos string, err error) error {
+	if goos == "darwin" {
+		return fmt.Errorf("credstore: OS login keyring unavailable (macOS login Keychain): %w — unlock your login Keychain (open Keychain Access, or run `security unlock-keychain` over SSH) and allow access to the item service %q, account %q; credentials cannot be encrypted or decrypted until it is reachable", err, keyringService, keyringUser)
+	}
 	return fmt.Errorf("credstore: OS login keyring unavailable (Secret Service via D-Bus): %w — unlock your keyring (e.g. open Seahorse) or, over SSH/headless, run within a graphical session with a keyring daemon (gnome-keyring) running; credentials cannot be encrypted or decrypted until it is reachable", err)
+}
+
+// keyMissingErr is the error for a data key absent from the keyring while
+// ciphertext exists at path. goos is runtime.GOOS, injected for testing.
+func keyMissingErr(goos, path string) error {
+	if goos == "darwin" {
+		return fmt.Errorf("credstore: encryption key missing from OS keyring (macOS login Keychain item service %q, account %q) but encrypted credentials exist on disk at %s — if it wasn't intentionally deleted (e.g. via Keychain Access), those credentials cannot be recovered; delete the file to start over", keyringService, keyringUser, path)
+	}
+	return fmt.Errorf("credstore: encryption key missing from OS keyring but encrypted credentials exist on disk at %s — if it wasn't intentionally deleted (e.g. via Seahorse), those credentials cannot be recovered; delete the file to start over", path)
 }
 
 // encryptValue seals plaintext under key with AES-256-GCM, a random nonce
