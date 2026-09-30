@@ -556,7 +556,7 @@ func TestLinkUpdatePreservesOrchestrateStatusAcrossGrantPreservingUpdate(t *test
 	if err := links.Create(ctx, &link, "user"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system"); err != nil {
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "", "system"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -605,7 +605,7 @@ func TestLinkUpdateClearsOrchestrateStatusWhenGrantRemoved(t *testing.T) {
 	if err := links.Create(ctx, &link, "user"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system"); err != nil {
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "", "system"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -638,7 +638,7 @@ func TestSetOrchestrateStatusRejectsLinkWithoutGrant(t *testing.T) {
 	if err := links.Create(ctx, &link, "user"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "system")
+	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "", "system")
 	var v *contracts.ValidationError
 	if !errors.As(err, &v) {
 		t.Fatalf("SetOrchestrateStatus on grant-less link: err = %v, want *ValidationError", err)
@@ -658,7 +658,7 @@ func TestSetOrchestrateStatusRejectsUnknownValue(t *testing.T) {
 	if err := links.Create(ctx, &link, "user"); err != nil {
 		t.Fatal(err)
 	}
-	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateStatus("bogus"), "system")
+	_, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateStatus("bogus"), "", "system")
 	var v *contracts.ValidationError
 	if !errors.As(err, &v) {
 		t.Fatalf("SetOrchestrateStatus(bogus): err = %v, want *ValidationError", err)
@@ -680,7 +680,7 @@ func TestSetOrchestrateStatusNoopWhenUnchanged(t *testing.T) {
 	}
 	// Already pending_restart from Create — setting the same value again
 	// must not emit a redundant link.updated envelope.
-	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestratePending, "system"); err != nil {
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestratePending, "", "system"); err != nil {
 		t.Fatal(err)
 	}
 	types := eventTypes(t, l, Filter{SessionID: subject.ID, Types: []string{"link.*"}})
@@ -709,5 +709,54 @@ func TestLinkSubjectCanHaveManyMonitors(t *testing.T) {
 	}
 	if len(got) != 3 {
 		t.Errorf("ForSession(subject) = %d links, want 3", len(got))
+	}
+}
+
+// TestLinkOrchestrateFailedCarriesError: "failed" stores its reason and it
+// round-trips through reads; any other status clears it, and an error sent
+// with a non-failed status is dropped.
+func TestLinkOrchestrateFailedCarriesError(t *testing.T) {
+	links, sessions, _ := newLinkStore(t)
+	ctx := context.Background()
+	leader := mkSession(t, sessions, contracts.Session{Name: "leader"})
+	subject := mkSession(t, sessions, contracts.Session{Name: "subject"})
+	link := contracts.Link{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID,
+		Grants: []contracts.Grant{contracts.GrantRead, contracts.GrantInject, contracts.GrantOrchestrate},
+	}
+	if err := links.Create(ctx, &link, "user"); err != nil {
+		t.Fatal(err)
+	}
+
+	const reason = `exec: "mads": executable file not found in $PATH`
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateFailed, reason, "system"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := links.Get(ctx, link.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestrateFailed || got.OrchestrateError != reason {
+		t.Fatalf("after failed: %q / %q", got.OrchestrateStatus, got.OrchestrateError)
+	}
+	listed, err := links.ForSession(ctx, leader.ID)
+	if err != nil || len(listed) != 1 || listed[0].OrchestrateError != reason {
+		t.Fatalf("ForSession lost the error: %+v / %v", listed, err)
+	}
+
+	// A cadence edit keeps the failure and its reason.
+	got.Cadence = contracts.CadencePerTurn
+	if err := links.Update(ctx, got, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := links.Get(ctx, link.ID); again.OrchestrateError != reason {
+		t.Fatalf("update dropped the error: %+v", again)
+	}
+
+	if _, err := links.SetOrchestrateStatus(ctx, link.ID, contracts.OrchestrateActive, "stale reason", "system"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = links.Get(ctx, link.ID); got.OrchestrateStatus != contracts.OrchestrateActive || got.OrchestrateError != "" {
+		t.Fatalf("after active: %q / %q, want the error cleared", got.OrchestrateStatus, got.OrchestrateError)
 	}
 }

@@ -23,6 +23,8 @@ export interface RailSubjectRow {
   linkId: string;
   /** Only set for LINKED (leader) rows — the orchestrate grant's materialization state (pkg/contracts/link.go OrchestrateStatus). */
   orchestrateStatus?: OrchestrateStatus;
+  /** Why the tools failed to start, when orchestrateStatus is "failed". */
+  orchestrateError?: string;
   cadence: LinkCadence;
   /** The underlying link's current grant set — a cadence-only PUT must resend it (store.Links.Update replaces the whole set). */
   grants: Grant[];
@@ -90,6 +92,7 @@ export function computeRailLinks(links: Link[]): RailLinkGraph {
         linkId: link.id,
         badge: "LINKED" as const,
         orchestrateStatus: link.orchestrate_status,
+        orchestrateError: link.orchestrate_error,
         cadence: link.cadence,
         grants: link.grants,
         grantingSessionId: link.granting_session_id,
@@ -119,6 +122,7 @@ export interface RailRow {
     badge: SubjectBadge;
     linkId: string;
     orchestrateStatus?: OrchestrateStatus;
+    orchestrateError?: string;
     cadence: LinkCadence;
     grants: Grant[];
     grantingSessionId: string;
@@ -149,6 +153,7 @@ export function buildRailRows(
                 badge: sub.badge,
                 linkId: sub.linkId,
                 orchestrateStatus: sub.orchestrateStatus,
+                orchestrateError: sub.orchestrateError,
                 cadence: sub.cadence,
                 grants: sub.grants,
                 grantingSessionId: sub.grantingSessionId,

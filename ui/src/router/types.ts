@@ -504,7 +504,7 @@ export type LinkCadence = "per_turn" | "on_signal" | "manual_only";
 // mirrors pkg/contracts/link.go OrchestrateStatus. Server-computed only —
 // never sent in a LinkRequest. Empty ("" — omitted from Link.orchestrate_status
 // when the link carries no orchestrate grant) reads the same as absent.
-export type OrchestrateStatus = "pending_restart" | "active" | "unsupported";
+export type OrchestrateStatus = "pending_restart" | "active" | "unsupported" | "failed";
 
 // mirrors pkg/contracts/link.go Link
 export interface Link {
@@ -515,6 +515,8 @@ export interface Link {
   cadence: LinkCadence;
   implicit?: boolean;
   orchestrate_status?: OrchestrateStatus;
+  /** Why the tools failed to start; set only while orchestrate_status is "failed". */
+  orchestrate_error?: string;
   created_at: string;
   updated_at: string;
 }

@@ -610,6 +610,7 @@ function RailRowGroup({
             onDeleteRequest={onDeleteRequest}
             linkBadge={sub.badge}
             orchestrateStatus={sub.orchestrateStatus}
+            orchestrateError={sub.orchestrateError}
             nested
             onUnlinkRequest={() =>
               onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
@@ -649,6 +650,8 @@ function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined 
       return "TOOLS ON RESTART";
     case "unsupported":
       return "NO TOOLS";
+    case "failed":
+      return "TOOLS FAILED";
     default:
       return undefined;
   }
@@ -678,6 +681,7 @@ function SessionRow({
   onDeleteRequest,
   linkBadge,
   orchestrateStatus,
+  orchestrateError,
   nested,
   onUnlinkRequest,
   linkedSessionsEnabled,
@@ -707,6 +711,8 @@ function SessionRow({
   linkBadge?: string;
   /** Only ever set on a LINKED (leader) subject row — the orchestrate grant's materialization state. */
   orchestrateStatus?: OrchestrateStatus;
+  /** Why the tools failed to start, when orchestrateStatus is "failed" — the badge's tooltip. */
+  orchestrateError?: string;
   nested?: boolean;
   onUnlinkRequest?: () => void;
   linkedSessionsEnabled: boolean;
@@ -768,6 +774,7 @@ function SessionRow({
         grants={grants ?? []}
         cadence={cadence}
         orchestrateStatus={orchestrateStatus}
+        orchestrateError={orchestrateError}
         routerClient={routerClient}
         onUnlinkRequest={onUnlinkRequest}
       />
@@ -943,8 +950,11 @@ function SessionRow({
             <span
               className={[
                 styles.orchestrateBadge,
-                orchestrateStatus === "unsupported" ? styles.orchestrateBadgeUnsupported : styles.orchestrateBadgePending,
+                orchestrateStatus === "unsupported" || orchestrateStatus === "failed"
+                  ? styles.orchestrateBadgeUnsupported
+                  : styles.orchestrateBadgePending,
               ].join(" ")}
+              title={orchestrateStatus === "failed" ? orchestrateError : undefined}
             >
               {orchestrateLabel}
             </span>

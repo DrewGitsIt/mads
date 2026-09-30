@@ -118,6 +118,12 @@ type Runner struct {
 	// calling Start, same pattern as Cwd/WorktreeRoot.
 	RouterURL string
 
+	// MadsCmd is the mads CLI binary the orchestrate capability runs as
+	// `<MadsCmd> internal orchestrate-mcp` (setupOrchestrate). main.go sets
+	// it from -mads-cmd, which defaults to ResolveMadsCmd's pick; empty
+	// means "mads" from $PATH.
+	MadsCmd string
+
 	// SelfURL is this session-service process's own bound HTTP address
 	// (e.g. "http://127.0.0.1:PORT"), set by main.go once the listener is
 	// bound and before calling Start (same pattern as Cwd/WorktreeRoot).
@@ -374,7 +380,7 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	agent, agentOK := r.loadAgent(ctx, sess)
 	capEnv := r.setupCapabilities(ctx, cwd, agent, agentOK)
-	orchestrateMCP := r.setupOrchestrate(ctx, sess)
+	orchestrateMCP, orchestrateErr := r.setupOrchestrate(ctx, sess)
 
 	opts := provider.StartOptions{
 		Mode:         provider.ModeACP,
@@ -445,6 +451,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.persistedRef = sess.ProviderRef
 	r.recordMu.Unlock()
 
+	if orchestrateErr != nil {
+		r.markOrchestrateLinks(ctx, contracts.OrchestrateFailed, orchestrateErr.Error())
+	}
 	if orchestrateMCP != nil {
 		// A fresh spawn always launches with the current desired MCP set
 		// already in opts.MCPServers (set above) — there is no "pending"
@@ -454,7 +463,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		if p.Matrix()[provider.BehaviorMCPServers].Works() {
 			status = contracts.OrchestrateActive
 		}
-		r.markOrchestrateLinks(ctx, status)
+		r.markOrchestrateLinks(ctx, status, "")
 	}
 
 	if err := r.data.Append(ctx, &contracts.Envelope{

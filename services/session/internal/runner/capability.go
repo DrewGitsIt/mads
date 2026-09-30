@@ -132,22 +132,27 @@ func (r *Runner) setupMCP(ctx context.Context, name string) {
 // session mid-conversation — see RefreshOrchestrate below, which reuses
 // this same function to compute the desired MCP set before deciding
 // whether/how to apply it.
-func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *provider.MCPServerRef {
+//
+// The error is non-nil only when a grant is held but the tools couldn't be
+// started: callers mark the links failed with it rather than cycling the
+// provider for nothing. Lookup failures (config, links) still log and
+// return (nil, nil), since they say nothing about the tools themselves.
+func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) (*provider.MCPServerRef, error) {
 	if r.MCPRegistry == nil {
-		return nil
+		return nil, nil
 	}
 	cfg, err := r.data.Config(ctx)
 	if err != nil {
 		log.Printf("runner: load config for orchestrate capability: %v", err)
-		return nil
+		return nil, nil
 	}
 	if !cfg.FeatureFlags.LinkedSessions {
-		return nil
+		return nil, nil
 	}
 	links, err := r.data.LinksForSession(ctx, r.sessionID)
 	if err != nil {
 		log.Printf("runner: load links for orchestrate capability: %v", err)
-		return nil
+		return nil, nil
 	}
 	hasOrchestrateGrant := false
 	hasReadGrant := false
@@ -163,13 +168,22 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 		}
 	}
 	if !hasOrchestrateGrant && !hasReadGrant {
-		return nil
+		return nil, nil
 	}
 
+	madsCmd := r.MadsCmd
+	if madsCmd == "" {
+		madsCmd = "mads"
+	}
 	c := contracts.Capability{
-		Name:   "orchestrate-" + r.sessionID,
-		Type:   contracts.CapabilityMCP,
-		Config: contracts.CapabilityConfig{Command: "mads internal orchestrate-mcp"},
+		Name: "orchestrate-" + r.sessionID,
+		Type: contracts.CapabilityMCP,
+		// The same command both starts the local helper here and goes to the
+		// provider as its MCP server, so it must resolve without $PATH: a
+		// Router started from the repo has bin/mads beside bin/session but
+		// usually not on PATH (see ResolveMadsCmd). Split on whitespace
+		// downstream, so a path containing spaces won't launch.
+		Config: contracts.CapabilityConfig{Command: madsCmd + " internal orchestrate-mcp"},
 	}
 	env := []string{"MADS_ROUTER_URL=" + r.RouterURL, "MADS_SESSION_ID=" + r.sessionID}
 	if !hasOrchestrateGrant {
@@ -177,9 +191,9 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 	}
 	if _, err := r.MCPRegistry.EnsureStarted(ctx, c, env); err != nil {
 		log.Printf("runner: start orchestrate capability: %v", err)
-		return nil
+		return nil, fmt.Errorf("start the orchestrate tools (%s): %w", c.Config.Command, err)
 	}
-	return &provider.MCPServerRef{Name: c.Name, Command: c.Config.Command, Env: env}
+	return &provider.MCPServerRef{Name: c.Name, Command: c.Config.Command, Env: env}, nil
 }
 
 // RefreshOrchestrate re-evaluates this session's held orchestrate grants
@@ -224,7 +238,14 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: load session for orchestrate refresh: %w", err)
 	}
-	desired := r.setupOrchestrate(ctx, sess)
+	desired, setupErr := r.setupOrchestrate(ctx, sess)
+	if setupErr != nil {
+		// A grant is held but its tools won't start. Say so on the link, and
+		// leave the provider process alone: cycling it would only relaunch
+		// it with the tools still missing.
+		r.markOrchestrateLinks(ctx, contracts.OrchestrateFailed, setupErr.Error())
+		return nil
+	}
 
 	if desired == nil && r.MCPRegistry != nil {
 		if err := r.MCPRegistry.Stop(ctx, "orchestrate-"+r.sessionID); err != nil {
@@ -234,7 +255,7 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 
 	if !prov.Matrix()[provider.BehaviorMCPServers].Works() {
 		if desired != nil {
-			r.markOrchestrateLinks(ctx, contracts.OrchestrateUnsupported)
+			r.markOrchestrateLinks(ctx, contracts.OrchestrateUnsupported, "")
 		}
 		return nil
 	}
@@ -254,7 +275,7 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 		return err
 	}
 	if desired != nil {
-		r.markOrchestrateLinks(ctx, contracts.OrchestrateActive)
+		r.markOrchestrateLinks(ctx, contracts.OrchestrateActive, "")
 	}
 	return nil
 }
@@ -267,7 +288,7 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 // store-defaulted pending_restart in place (store.Links.Create/Update), which
 // is still an honest, non-blank answer — never the silent nothing this
 // feature exists to eliminate.
-func (r *Runner) markOrchestrateLinks(ctx context.Context, status contracts.OrchestrateStatus) {
+func (r *Runner) markOrchestrateLinks(ctx context.Context, status contracts.OrchestrateStatus, errMsg string) {
 	links, err := r.data.LinksForSession(ctx, r.sessionID)
 	if err != nil {
 		log.Printf("runner: load links to mark orchestrate status: %v", err)
@@ -277,7 +298,7 @@ func (r *Runner) markOrchestrateLinks(ctx context.Context, status contracts.Orch
 		if l.GrantingSessionID != r.sessionID || !l.HasGrant(contracts.GrantOrchestrate) {
 			continue
 		}
-		if _, err := r.data.SetLinkOrchestrateStatus(ctx, l.ID, status); err != nil {
+		if _, err := r.data.SetLinkOrchestrateStatus(ctx, l.ID, status, errMsg); err != nil {
 			log.Printf("runner: set orchestrate status for link %s: %v", l.ID, err)
 		}
 	}
