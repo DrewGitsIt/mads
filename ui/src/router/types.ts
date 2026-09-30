@@ -945,6 +945,7 @@ export type PipelineRunOutcome =
 export interface PipelineRun {
   session_id: string;
   run_seq: number;
+  run_id?: string; // from pipeline.started; absent for runs from before it carried one
   started_at: string;
   ended_at?: string;
   outcome: PipelineRunOutcome;

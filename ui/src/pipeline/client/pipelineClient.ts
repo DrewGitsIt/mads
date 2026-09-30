@@ -53,6 +53,13 @@ export interface PipelineClient {
   getRunEvents(sessionId: string, since: number): Promise<Envelope[]>;
 }
 
+// services/data/internal/api/events.go defaultBatchLimit — a full page means
+// there may be more.
+const EVENTS_BATCH_LIMIT = 500;
+// A backstop against a server that ignores `since`: 50 pages is 25k fold
+// events, far past any real run.
+const MAX_EVENT_PAGES = 50;
+
 /** RouterClient-backed PipelineClient. Only exercised directly by pipelineClient.test.ts. */
 export class FetchPipelineClient implements PipelineClient {
   constructor(private readonly client: RouterClient = router) {}
@@ -127,8 +134,21 @@ export class FetchPipelineClient implements PipelineClient {
     return this.client.metricsPipelineRuns(sessionId);
   }
 
+  // GET /events answers at most EVENTS_BATCH_LIMIT envelopes per call, so a
+  // long run's history is read in pages. One page stopped short of the run's
+  // end on a big run: the resumed fold then read "running", and the live
+  // tail only starts after the page's last seq, so nothing corrected it and
+  // Start stayed disabled.
   async getRunEvents(sessionId: string, since: number): Promise<Envelope[]> {
-    return this.client.getEvents({ sessionId, since, types: FOLD_EVENT_TYPES });
+    const all: Envelope[] = [];
+    let cursor = since;
+    for (let page = 0; page < MAX_EVENT_PAGES; page++) {
+      const batch = await this.client.getEvents({ sessionId, since: cursor, types: FOLD_EVENT_TYPES });
+      all.push(...batch);
+      if (batch.length < EVENTS_BATCH_LIMIT) break;
+      cursor = batch[batch.length - 1].seq;
+    }
+    return all;
   }
 }
 
