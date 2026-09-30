@@ -656,7 +656,7 @@ function reasonFor(
 function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined {
   switch (status) {
     case "pending_restart":
-      return "TOOLS ON RESTART";
+      return "TOOLS WHEN IDLE";
     case "unsupported":
       return "NO TOOLS";
     default:

@@ -814,15 +814,23 @@ func (r *Runner) onTurnEnd() {
 	// serialize them anyway, but ordering them here means the refresh cycles
 	// with the model the switch just installed instead of the stale one it
 	// would have captured before the switch landed.
-	if !closing && (pendingModel != "" || refreshPending) {
+	//
+	// This quiet boundary (turn over, nothing queued) is also where a
+	// pending orchestrate grant activates even if no refresh was requested:
+	// orchestrateGrantPending makes it level-triggered. One refresh mounts
+	// the one orchestrate MCP server that serves every link, so several
+	// pending links still cost a single provider cycle, resumed on the same
+	// conversation.
+	if !closing {
 		go func() {
+			ctx := context.Background()
 			if pendingModel != "" {
-				if _, err := r.SetModel(context.Background(), pendingModel); err != nil {
+				if _, err := r.SetModel(ctx, pendingModel); err != nil {
 					log.Printf("runner: deferred model switch: %v", err)
 				}
 			}
-			if refreshPending {
-				if err := r.RefreshOrchestrate(context.Background()); err != nil {
+			if refreshPending || r.orchestrateGrantPending(ctx) {
+				if err := r.RefreshOrchestrate(ctx); err != nil {
 					log.Printf("runner: deferred orchestrate refresh: %v", err)
 				}
 			}

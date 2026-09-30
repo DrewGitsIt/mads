@@ -51,7 +51,9 @@ const CADENCE_STATE: Partial<Record<LinkCadence, string>> = {
 };
 
 const ORCHESTRATE_NOTE: Partial<Record<OrchestrateStatus, string>> = {
-  pending_restart: "Orchestration tools arrive the next time the leader restarts.",
+  // The runner mounts them at the leader's next quiet turn boundary (idle,
+  // nothing queued), resuming the same conversation, not at a restart.
+  pending_restart: "Orchestration tools activate when the leading agent is next idle.",
   unsupported: "The leader's provider can't host orchestration tools.",
 };
 

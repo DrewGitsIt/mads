@@ -230,6 +230,21 @@ Links are directed edges; nothing is 1:1 by design:
    (`providers/kirocli/README.md`) pending a confirmed live mechanism — the
    capability simply doesn't materialize for kiro-cli sessions, and the
    session child degrades gracefully rather than erroring.
+
+   **Activation (2026-09-30).** A new grant starts `pending_restart`. The
+   runner mounts it by cycling its provider process on the same
+   conversation (`RefreshOrchestrate` → `swapTransport` with resume), and
+   only at a quiet turn boundary: turn over, nothing queued. That happens
+   when the Router notifies it and, level-triggered, at every quiet boundary
+   while any of its grants are still pending. So a lost notification or a
+   refused cycle (`ErrSwitchBusy`, no resumable ref yet) retries at the next
+   idle moment rather than waiting for a restart. One cycle mounts every
+   pending link. A pipeline run doesn't block it; the run is separate
+   processes. The orchestrate server runs `mads` by absolute path
+   (`pkg/madsbin`); a bare `mads` missing from PATH is what left the first
+   live grant pending indefinitely. Until the tools mount, the Router's
+   grant notice gives the agent `mads orchestrate subjects|summary|send`
+   commands that do the same thing from a shell.
 6. **L3 Implicit hand-raiser**: pipeline start/session-activation hooks
    auto-granting `{read, inject}` over own-session runs.
 7. **L4 Link UI**: rail multi-select + Link flow + grouping/badges +

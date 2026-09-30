@@ -79,6 +79,6 @@ describe("LinkOptionsMenu", () => {
   it("explains a leader link whose orchestration tools are pending", () => {
     renderMenu({ badge: "LINKED", orchestrateStatus: "pending_restart" });
     fireEvent.click(screen.getByRole("button", { name: "Link options for worker" }));
-    expect(screen.getByText(/next time the leader restarts/)).toBeTruthy();
+    expect(screen.getByText(/activate when the leading agent is next idle/)).toBeTruthy();
   });
 });

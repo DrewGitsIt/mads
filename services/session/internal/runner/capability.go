@@ -249,9 +249,16 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 	_, model := r.currentSwapBasis()
 	if _, err := r.swapTransport(ctx, mode, mcp, model, true); err != nil {
 		if errors.Is(err, ErrNoResumeRef) || errors.Is(err, ErrSwitchBusy) {
-			// Leave whatever status the store already holds — pending_restart
-			// (the store default) is still an honest, non-blank answer, and a
-			// later refresh (next turn end, or another link mutation) retries.
+			// Leave whatever status the store already holds (pending_restart,
+			// the store default, is still an honest, non-blank answer) and
+			// re-arm the deferred apply, so the next quiet turn boundary
+			// retries. Both are cleared by a turn: ErrSwitchBusy means one
+			// started under us, and ErrNoResumeRef means none has produced a
+			// resumable ref yet. Without re-arming, a refresh that lost this
+			// race waited for the next link mutation.
+			r.mu.Lock()
+			r.orchestrateRefreshPending = true
+			r.mu.Unlock()
 			return nil
 		}
 		return err
@@ -260,6 +267,27 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 		r.markOrchestrateLinks(ctx, contracts.OrchestrateActive)
 	}
 	return nil
+}
+
+// orchestrateGrantPending reports whether this session grants orchestrate
+// on any link still marked pending_restart. onTurnEnd checks it at every
+// quiet turn boundary, making activation level-triggered: a grant whose
+// refresh notification was lost (a Router restart, a failed POST) still
+// mounts the next time the agent is idle instead of waiting for an
+// unrelated restart. Errors read as "not pending": the next boundary asks
+// again.
+func (r *Runner) orchestrateGrantPending(ctx context.Context) bool {
+	links, err := r.data.LinksForSession(ctx, r.sessionID)
+	if err != nil {
+		return false
+	}
+	for _, l := range links {
+		if l.GrantingSessionID == r.sessionID && l.HasGrant(contracts.GrantOrchestrate) &&
+			l.OrchestrateStatus == contracts.OrchestratePending {
+			return true
+		}
+	}
+	return false
 }
 
 // markOrchestrateLinks sets OrchestrateStatus to status on every link this

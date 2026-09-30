@@ -507,7 +507,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     FLAGS.linkedSessions = true;
     const pendingLink = makeLink({ ...link, orchestrate_status: "pending_restart" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[pendingLink]} />);
-    expect(screen.getByText("TOOLS ON RESTART")).toBeTruthy();
+    expect(screen.getByText("TOOLS WHEN IDLE")).toBeTruthy();
   });
 
   it("shows a no-tools pill on a leader link whose provider can't support orchestrate at all", () => {
@@ -521,7 +521,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     FLAGS.linkedSessions = true;
     const activeLink = makeLink({ ...link, orchestrate_status: "active" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[activeLink]} />);
-    expect(screen.queryByText("TOOLS ON RESTART")).toBeNull();
+    expect(screen.queryByText("TOOLS WHEN IDLE")).toBeNull();
     expect(screen.queryByText("NO TOOLS")).toBeNull();
   });
 
