@@ -26,7 +26,12 @@ export interface SessionsSurfaceProps {
 
 /** Top-level Sessions surface (registered in App.tsx) — owns the shared session list so the rail and launchpad don't duplicate fetch/subscribe logic. */
 export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: SessionsSurfaceProps) {
-  const { sessions, loading, error, createSession } = useSessionsList();
+  const { sessions, loading, error, retry, createSession } = useSessionsList();
+  // The error a user dismissed; a later, different failure shows again.
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!error) setDismissedError(null);
+  }, [error]);
   const openTaskCounts = useOpenTaskCounts();
   const links = useSessionLinks(sessions.map((s) => s.id));
   // Only the rail's adaptive context labels need these: a workspace's
@@ -158,7 +163,21 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             sessions={sessions}
           />
         )}
-        {error && <Toast tone="bad" title="Couldn't load sessions" description={error} />}
+        {error && error !== dismissedError && (
+          // With a list already on screen this is a failed refresh, not a
+          // failed load — say so, or the toast contradicts the visible rail.
+          <Toast
+            tone="bad"
+            title={sessions.length > 0 ? "Couldn't refresh sessions" : "Couldn't load sessions"}
+            description={
+              sessions.length > 0
+                ? `The list may be out of date. Retrying automatically. (${error})`
+                : `Retrying automatically. (${error})`
+            }
+            action={{ label: "Retry now", onClick: retry }}
+            onDismiss={() => setDismissedError(error)}
+          />
+        )}
         {actionError && (
           <Toast
             tone="bad"

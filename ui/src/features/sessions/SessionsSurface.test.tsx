@@ -312,4 +312,35 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
     expect(screen.getByText("Chat")).toBeTruthy();
   });
+
+  it("a failed refresh over a loaded list says so and can be dismissed", async () => {
+    let failSessions = false;
+    const sessions = [makeSession({ id: "a", name: "Alpha" })];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.endsWith("/sessions") && failSessions) {
+          return Promise.resolve(new Response("bad gateway", { status: 502 }));
+        }
+        if (url.endsWith("/sessions")) return json(sessions);
+        return json([]);
+      }),
+    );
+
+    render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+    await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+    failSessions = true;
+    FakeEventSource.instances[0].emit(
+      "session.updated",
+      JSON.stringify({ seq: 1, type: "session.updated", actor: "user", session_id: "a" }),
+    );
+    await waitFor(() => expect(screen.getByText("Couldn't refresh sessions")).toBeTruthy());
+    expect(screen.getByText(/may be out of date/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Dismiss"));
+    expect(screen.queryByText("Couldn't refresh sessions")).toBeNull();
+    expect(rail().getByText("Alpha")).toBeTruthy();
+  });
 });

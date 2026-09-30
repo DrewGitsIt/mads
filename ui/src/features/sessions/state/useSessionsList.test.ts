@@ -142,4 +142,57 @@ describe("useSessionsList", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toMatch(/500/);
   });
+
+  // The refetches are event-driven, so a failure used to stand until some
+  // unrelated session event came along — and even then a success never
+  // cleared it, leaving "Couldn't load sessions" up over a healthy list.
+  it("clears the error once a later fetch succeeds", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify([makeSession("s1")]), { status: 200 }))
+      .mockResolvedValueOnce(new Response("bad gateway", { status: 502 }))
+      .mockResolvedValue(new Response(JSON.stringify([makeSession("s1")]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { result } = renderHook(() => useSessionsList());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      FakeEventSource.instances[0].emit(
+        "session.updated",
+        JSON.stringify({ seq: 1, type: "session.updated", actor: "user", session_id: "s1" }),
+      );
+    });
+    await waitFor(() => expect(result.current.error).toMatch(/502/));
+    expect(result.current.sessions.map((s) => s.id)).toEqual(["s1"]);
+
+    act(() => result.current.retry());
+    await waitFor(() => expect(result.current.error).toBeNull());
+  });
+
+  it("retries a failed fetch on its own, with no event to trigger it", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response("boom", { status: 500 }))
+        .mockResolvedValue(new Response(JSON.stringify([makeSession("s1")]), { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { result } = renderHook(() => useSessionsList());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(result.current.error).toMatch(/500/);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(result.current.error).toBeNull();
+      expect(result.current.sessions.map((s) => s.id)).toEqual(["s1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
