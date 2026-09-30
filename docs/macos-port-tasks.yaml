@@ -1,0 +1,335 @@
+# macOS port (Tahoe, Apple Silicon) — seed with:
+#   SES=$(bin/mads new-session -name "macOS port")
+#   bin/mads seed -session $SES -file docs/macos-port-tasks.yaml
+#
+# Design doc: docs/MACOS-PORT-DESIGN.md (F-numbers and work-item numbers
+# A1..C2 below refer to it; its Resolutions section records Drew's calls).
+#
+# EXECUTION HOST: the pipeline runs these on Linux. Every task here is
+# doable and verifiable on Linux, with darwin covered by cross-compilation
+# (CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build/vet). No task may claim
+# anything was *run* on macOS. Darwin-only code (build-tagged _darwin.go)
+# must at least cross-vet clean, and its logic should sit behind
+# injectable seams so the parsing/mapping is unit-tested on Linux.
+#
+# NOT SEEDED — needs Drew at the MacBook Air, after this file lands:
+#   B1  first real `make check` + `make e2e-smoke` on the Air; triage the
+#       fallout (expected: /var → /private/var TempDir path-equality
+#       failures, maybe APFS case-insensitivity) — design doc F7
+#   B2' `make ui-smoke` green on the Air (the Makefile fix is seeded below;
+#       this is the on-device confirmation)
+#   C1  dogfood acceptance — design doc "Acceptance (C1)", six steps
+#   C2' visual check of ⌘ shortcut hints + macOS font fallbacks
+#
+# Parallelism: tasks touch disjoint files except where chained.
+#   Electron track:  A1 → A2 (both edit ensure-electron.sh / install.sh)
+#   Everything else is independent except B3 (CI), which waits for the Go
+#   darwin fixes so the new macOS row doesn't land red.
+# A1 and A6 are worth landing first: both help the Linux boxes today.
+
+tasks:
+  - title: "Upgrade Electron 33 to a supported major (>= 38.2) for the Tahoe GPU bug"
+    description: >
+      Design doc F1/A1. ui/package.json pins electron ^33.2.1; Electron
+      before 36.9.2 / 37.6.0 / 38.2.0 overrides AppKit's private _cornerMask
+      and pins WindowServer GPU load on macOS 26 Tahoe, lagging the whole
+      machine (electron/electron#48376). 33 is EOL and will never get the
+      fix. Move to the newest Electron major that is currently supported
+      AND >= 38.2. This change ships to the two Linux boxes too, so treat
+      it as a cross-platform upgrade, not a mac fix. Also:
+      (1) Re-evaluate the electron/electron#51619 extract-zip workaround in
+      scripts/ensure-electron.sh and scripts/install.sh
+      (node_electron_compat_check + the repair branch). Their comments
+      state the exact removal criterion. If the new Electron's install
+      path no longer hits it, delete the workaround as those comments
+      direct. Otherwise leave it and update the version facts in the
+      comments. Revisit ui/package.json engines.node (<24.16) on the same
+      evidence.
+      (2) node-pty is an optionalDependency with no electron-rebuild step.
+      Establish how ui/electron/pty/ptyHost.ts loads it today (which
+      process, which ABI) and make sure that still holds under the new
+      Electron. If a rebuild step is now required, add it to the npm
+      build.
+      (3) Fix any Electron API breakage in ui/electron/main.ts and
+      preload.ts (menu roles, setBadgeCount, window options).
+      (4) Update the allowScripts pins in ui/package.json and the lockfile.
+    acceptance_criteria: >
+      ui/package.json and package-lock.json resolve electron >= 38.2 on a
+      currently-supported major. make check passes. make ui-smoke passes.
+      npm --prefix ui run test:pty passes. scripts/app.sh launches the app
+      on Linux and the docked shell opens a working pty (state the host it
+      was verified on). The handoff states the #51619 outcome (removed, or
+      kept with the evidence) and how node-pty is loaded.
+    labels: [macos, electron, ui]
+
+  - title: "ensure-electron.sh / install.sh: resolve the Electron binary per OS"
+    description: >
+      Design doc F2/A2. mads_electron_ok checks dist/electron, but on
+      macOS the binary is dist/Electron.app/Contents/MacOS/Electron
+      (path.txt is already written correctly for Darwin). As a result,
+      every Mac launch "repairs" Electron, fails the post-check, and
+      scripts/app.sh exits. Add one mads_electron_bin helper that resolves
+      the path from `uname -s`, and route every use through it:
+      mads_electron_ok, the chmod lines,
+      mads_electron_needs_no_sandbox, and install.sh's post-install
+      `--version` smoke (install.sh is POSIX sh and executes
+      ensure-electron.sh as a subprocess, so it needs its own equivalent
+      resolution — keep it POSIX). On Darwin: extract with `ditto -x -k`
+      (python3's zipfile drops the symlinks Electron.app's frameworks need;
+      Info-ZIP unzip is fine but prefer ditto), and have
+      mads_electron_needs_no_sandbox return 1 immediately (the macOS
+      renderer sandbox is seatbelt, which always works, so the Linux
+      userns/SUID probing does not apply). Everything must stay bash 3.2
+      compatible (macOS /bin/bash). Linux behavior must not change.
+    acceptance_criteria: >
+      Linux: `bash scripts/ensure-electron.sh` exits 0 with no repair on a
+      healthy install, and the existing install smoke (go test
+      ./scripts/smoketest/...) passes. Darwin branches are exercised by a
+      test that stubs `uname` via PATH and a fake dist/Electron.app tree:
+      mads_electron_ok passes, no sandbox override, and the chosen
+      extractor is ditto. `bash -n` passes on both scripts, and no bash 4+
+      syntax is introduced. make check passes.
+    depends_on:
+      - "Upgrade Electron 33 to a supported major (>= 38.2) for the Tahoe GPU bug"
+    labels: [macos, electron, scripts]
+
+  - title: "Make Linux-only tests portable to darwin"
+    description: >
+      Design doc F7/A3. (1) providers/goosecli/fakegoose_test.go uses
+      unix.TCGETS/TCSETS, so `GOOS=darwin go vet ./...` fails to compile
+      the package. Move the ioctl request constants behind a tiny
+      build-tagged pair of test files (TCGETS/TCSETS on linux,
+      TIOCGETA/TIOCSETA on darwin), or switch to golang.org/x/term raw
+      mode if that is cleaner and already an indirect dep; don't add a new
+      module just for this. (2)
+      services/pipeline/engine/lease_isolated_test.go's pidAlive stats
+      /proc/<pid>. On darwin that always reports dead, so the kill
+      assertion passes WITHOUT testing anything. Replace it with
+      syscall.Kill(pid, 0), treating ESRCH as dead and EPERM as alive.
+      Keep the existing comment's point about why this can't be a wait on
+      a reaped child. (3) Sweep *_test.go for any other /proc reads,
+      Linux-only syscalls, or GNU-only tool invocations (stat -c, readlink
+      -f, sed -i without a suffix, timeout(1), setsid(1), flock(1)) and fix
+      or build-tag them. List what the sweep found in the handoff.
+    acceptance_criteria: >
+      CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go vet ./... is clean
+      (including test files). pidAlive no longer references /proc. make
+      check passes on Linux.
+    labels: [macos, tests]
+
+  - title: "Real flock(2) serialization on darwin: retag linux → unix"
+    description: >
+      Design doc F5/A4. pkg/credstore/flock_{linux,other}.go and
+      services/pipeline/engine/workspacelock_{linux,other}.go gate real
+      locking on `linux`, but syscall.Flock exists on darwin (and every
+      unix). The in-code rationale ("flock is a Linux guarantee") is wrong.
+      Rename them to *_unix.go / *_other.go with `//go:build unix` /
+      `//go:build !unix`, and fix the comments. Otherwise a CLI `mads run`
+      and a Router-spawned pipeline child can race merges into the same
+      workspace on the Mac.
+    acceptance_criteria: >
+      Both lock implementations build for linux and darwin with the real
+      flock path (confirm with `GOOS=darwin go list -f '{{.GoFiles}}'`
+      on both packages). The existing lock tests pass on Linux. No
+      comment still claims flock is Linux-only. make check passes.
+    labels: [macos, pipeline, credstore]
+
+  - title: "procid darwin backend: machine UUID, boot session UUID, kinfo_proc start time"
+    description: >
+      Design doc F4/A5. On darwin pkg/procid errors on every method, so
+      leases carry no identity and reap-on-launch never reclaims anything.
+      A crashed mads run's tasks then wait out the lease TTL. Add
+      procid_darwin.go (retag procid_other.go to !linux && !darwin), with
+      no cgo:
+      MachineID = IOPlatformUUID parsed from `ioreg -rd1 -c
+      IOPlatformExpertDevice` (read once and cached; it's hardware-stable).
+      BootID = unix.Sysctl("kern.bootsessionuuid"), read fresh on every
+      call like Linux.
+      PIDStartTicks = unix.SysctlKinfoProc("kern.proc.pid", pid) →
+      Proc.P_starttime as microseconds since the epoch. A missing process
+      (ESRCH, or a zero/empty kinfo result) must return an error satisfying
+      errors.Is(_, os.ErrNotExist), exactly like Linux's missing /proc
+      entry.
+      The units differ from Linux clock ticks. That is fine because
+      Evaluate only compares identities with matching MachineID. Say so in
+      a comment on contracts.LeaseIdentity's PIDStartTicks, but don't
+      rename the field. Put the ioreg-output parser and the timeval→int64
+      conversion in pure functions that are unit-tested on Linux against
+      captured sample ioreg output (commit it under testdata).
+    acceptance_criteria: >
+      GOOS=darwin go vet ./pkg/procid/... is clean. Pure parser/conversion
+      tests pass on Linux, covering ioreg output with the UUID, ioreg
+      output missing it (error, not an empty string), and timeval to µs.
+      The Reader interface doc comments describe both platforms. The Linux
+      backend is unchanged. make check passes. The handoff notes that the
+      live reclaim ("pid N not found" after a SIGKILLed run) is C1's
+      on-device check.
+    labels: [macos, pipeline, procid]
+
+  - title: "Setting: prevent system sleep while a pipeline is running (default on)"
+    description: >
+      Design doc F3a/A6. This is cross-platform and useful on Linux today.
+      engine.Config.DisableSleepInhibit exists but nothing sets it. Add
+      contracts.Config.AllowSleepDuringPipelines bool
+      (json:"allow_sleep_during_pipelines"). It is NEGATIVELY named on
+      purpose: its zero value means "prevent sleep", so every stored config
+      that predates the field gets the correct default with no migration,
+      the same zero-value-is-default idiom as SynthesisAutoApprove.
+      Document that reasoning on the field. Regenerate the config goldens.
+      Add ONE shared resolver (next to the existing stage-timeout
+      resolution, e.g. in pkg/pipelinerun or wherever both callers can
+      reach it) that both services/pipeline/main.go and cmd/mads/run.go
+      use to set DisableSleepInhibit, so the UI and CLI launch paths
+      cannot drift (the PipelineStageTimeoutMinutes comment describes that
+      exact bug). The setting is read once at run launch and does not
+      affect runs already in progress. UI: in
+      ui/src/features/settings/sections/PipelineSection.tsx add a checkbox
+      labeled "Prevent system sleep while a pipeline is running", bound to
+      !allow_sleep_during_pipelines. Its helper text says the change
+      applies to runs started afterward, plus a per-OS caveat. For the OS,
+      add a `platform` field (Go runtime.GOOS) to the Router response the
+      Settings screen already fetches (health or config — pick whichever
+      fits the existing client types; do not sniff navigator in the
+      renderer, because the Router's host is what matters). The helper
+      text is exactly:
+        darwin: "Closing the lid on battery still sleeps your Mac. The run
+                 pauses and recovers when it wakes."
+        linux:  "Closing a laptop lid may still suspend, depending on your
+                 desktop's lid settings."
+        other:  no caveat line.
+      Update ui/src/router/types.ts and fixtures.
+    acceptance_criteria: >
+      Go: the resolver is unit-tested (field false → inhibit, true → no
+      inhibit), and both launch paths call it (a test or grep-able single
+      call site each). An engine test with a fake Locker proves Acquire is
+      called when enabled and never when disabled. A config round-trip
+      test proves a stored config JSON WITHOUT the field decodes to
+      prevent-sleep. UI vitest: the checkbox is checked when the field is
+      false, toggling it writes true, and each OS shows the right caveat
+      (including none for other). On Linux, `systemd-inhibit --list` shows
+      mads's hold during a fake-provider run with the setting on and
+      nothing with it off (state the host). make check passes.
+    labels: [macos, settings, pipeline, ui]
+
+  - title: "Per-OS sleep inhibitor backends: dbus (linux), caffeinate (darwin), noop (other)"
+    description: >
+      Design doc F3b/A7. pkg/inhibit/dbus.go compiles on darwin, but no bus
+      exists there, so every Acquire logs a warning and does nothing. Make
+      NewLocker() build-tagged, and leave the Locker/Handle interface and
+      the engine call site untouched.
+      dbus_linux.go: today's logind + org.freedesktop.ScreenSaver code,
+      moved verbatim (git mv so blame survives).
+      caffeinate_darwin.go: spawn `caffeinate -i -s -w <os.Getpid()>`
+      (-i blocks idle sleep, -s blocks system sleep on AC, -w ties the
+      assertion to our pid so it dies with us even after SIGKILL). Release
+      kills and reaps it exactly once. No cgo; release builds are
+      CGO_ENABLED=0.
+      noop_other.go: a no-op Handle plus a single logged warning.
+      Every backend honors inhibit.go's contract: Acquire never errors and
+      never blocks more than ~2s, and a failed spawn degrades to a no-op
+      Handle with a warning. Put the darwin exec behind an injectable
+      command seam so its argv, Release-once semantics, and
+      spawn-failure degradation are unit-tested on Linux. Move the D-Bus
+      tests to _linux test files. Update the package doc and the
+      engine.Config field comments, which currently say "D-Bus-backed".
+    acceptance_criteria: >
+      GOOS=darwin go vet ./pkg/inhibit/... ./services/pipeline/... is
+      clean, and the darwin build does not link godbus (check with `go
+      list -deps`). Seam tests on Linux cover the darwin argv, double
+      Release, and a spawn failure returning a no-op. The Linux backend's
+      behavior is unchanged (existing tests pass). make check passes. The
+      handoff notes that `pmset -g assertions` is C1's on-device check.
+    labels: [macos, inhibit, pipeline]
+
+  - title: "credstore: platform-neutral keyring error messages"
+    description: >
+      Design doc F6/A8. On darwin go-keyring stores the data key in the
+      login Keychain through /usr/bin/security, and that works. But
+      pkg/credstore/crypto.go's actionable errors (keyringUnavailableErr,
+      the missing-key message, and the package comments) name D-Bus,
+      Secret Service, gnome-keyring, and Seahorse. Give each message
+      platform-appropriate wording via runtime.GOOS: on macOS, name the
+      login Keychain and Keychain Access (item service "mads-credstore",
+      account "data-key"); keep the Linux text as it is today. Messages
+      stay actionable: name the cause and the fix.
+    acceptance_criteria: >
+      A unit test asserts the wording for both linux and darwin (make GOOS
+      injectable into the message builder rather than reading
+      runtime.GOOS inline). Linux text is unchanged. make check passes.
+    labels: [macos, credstore]
+
+  - title: "Tooling for macOS: ui-smoke lock + Playwright cache path, README prerequisites"
+    description: >
+      Design doc F8/F10 (docs half)/B2. (1) The Makefile's ui-smoke target
+      calls flock(1), which macOS doesn't ship, and hard-codes
+      ~/.cache/ms-playwright (on macOS Playwright defaults to
+      ~/Library/Caches/ms-playwright). Pin the browser cache to one path
+      on both OSes via PLAYWRIGHT_BROWSERS_PATH (keeping the Linux
+      location), and take the install lock only when `command -v flock`
+      succeeds. The lock only guards concurrent cold installs across
+      worktrees; keep the existing comment's reasoning and add the macOS
+      note. Update the CI Playwright cache step's path to match. (2) Add a
+      "macOS" subsection to README.md's Working on mads: Xcode Command Line
+      Tools (git and the node-pty compiler), Go per go.mod, Node per
+      .nvmrc, the claude CLI, and optionally goose. Point to
+      docs/MACOS-PORT-DESIGN.md. Where README/Makefile comments say
+      "Ctrl+R", write "Ctrl+R / Cmd+R". (3) Fix scripts/README.md's
+      platform notes to match reality after this work.
+    acceptance_criteria: >
+      make ui-smoke passes on Linux with the cache still at the Linux path
+      (no re-download). Running the Makefile recipe with flock removed
+      from PATH still works (show the command used). README has the macOS
+      prerequisites. make check passes.
+    labels: [macos, tooling, docs]
+
+  - title: "CI: macOS row on push to main + workflow_dispatch"
+    description: >
+      Design doc B3 and Resolution Q1. Add a macOS job to
+      .github/workflows/ci.yml on macos-latest (arm64), triggered ONLY on
+      push to main and workflow_dispatch, never on pull_request (macOS
+      minutes cost about 10x Linux). Keep the existing Linux jobs' triggers
+      exactly as they are, which means splitting the job-level condition
+      rather than changing the workflow-level `on:` for everyone (add
+      workflow_dispatch to `on:`, and gate the mac job with an `if:` on
+      github.event_name). The job runs: go test -race ./... , go test
+      ./scripts/smoketest/... , make e2e-smoke. Un-skip the smoketest's
+      darwin "pending CI" branch so it runs on a darwin host. Leave the
+      skip in place only where the test truly cannot run, with the reason.
+      Don't add ui-smoke to the mac row yet (that's the B2' on-device
+      confirmation first).
+    acceptance_criteria: >
+      The workflow parses (actionlint if available, else a YAML load plus
+      review of the if: expressions in the handoff). PR runs schedule
+      exactly the same jobs as before. The smoketest no longer
+      unconditionally skips darwin. Linux make check passes. The handoff
+      says plainly that the mac row's first real result comes from the
+      next push to main, not from this task.
+    depends_on:
+      - "Make Linux-only tests portable to darwin"
+      - "Real flock(2) serialization on darwin: retag linux → unix"
+      - "procid darwin backend: machine UUID, boot session UUID, kinfo_proc start time"
+      - "Per-OS sleep inhibitor backends: dbus (linux), caffeinate (darwin), noop (other)"
+    labels: [macos, ci]
+
+  - title: "Render ⌘ instead of Ctrl in shortcut hints on macOS; macOS font fallbacks"
+    description: >
+      Design doc F10/C2. Shortcut handlers already accept
+      metaKey || ctrlKey. Only the displayed hints are wrong on a Mac.
+      Add one formatter (e.g. formatShortcut("Mod+K")) that renders ⌘ on
+      darwin and Ctrl elsewhere, using the platform from the Router field
+      added by the sleep-setting task (fall back to navigator.platform
+      only if that isn't loaded yet). Route every user-visible shortcut
+      hint through it: the command palette, the rail Mod+K, the composer
+      Mod+E, TaskDetailSheet Mod+Enter, and any tooltips. Ctrl+` for the
+      shell dock stays Ctrl on both platforms, as in VS Code. Also add
+      macOS fallbacks to the --sans/--mono font stacks (-apple-system /
+      "SF Pro Text", "SF Mono" / Menlo) ahead of the generic families.
+    acceptance_criteria: >
+      A vitest for the formatter covers darwin, linux, and unknown. No
+      hard-coded "Ctrl+" strings remain in user-visible hint text outside
+      the formatter (grep is clean, except the Ctrl+` dock hint). The font
+      stacks include the macOS families. On-device visual review is the
+      C2' checklist item. make check passes.
+    depends_on:
+      - "Setting: prevent system sleep while a pipeline is running (default on)"
+    labels: [macos, ui]
