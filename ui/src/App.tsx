@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
+import { Toast } from "./components/Toast/Toast";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
 import { ConfigGateFailure } from "./ConfigGateFailure";
 import { CommandPalette } from "./features/command-palette/CommandPalette";
@@ -67,6 +68,7 @@ export function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();
   const [jumpToTab, setJumpToTab] = useState<WorkspaceTabId>();
+  const [launchError, setLaunchError] = useState<{ title: string; message: string }>();
   const { sessions, tasks, openTaskCounts } = useCommandPaletteData();
 
   useAttentionBadge(sessions, openTaskCounts);
@@ -97,6 +99,27 @@ export function App() {
     return <FirstRunWizard onComplete={() => setConfig({ ...config, onboarding_complete: true })} />;
   }
 
+  // The palette's launch used to fire-and-forget, so a refused start (a run
+  // already in flight, a bad template) simply did nothing. Only a start that
+  // took lands on the Pipeline tab; one that didn't says why, the way the
+  // Pipeline tab's own Start does.
+  async function startPipelineFromPalette(sessionId: string, label: string) {
+    setLaunchError(undefined);
+    try {
+      await pipelineClient.startPipeline(sessionId, "default-implementation");
+    } catch (err) {
+      const name = label.replace(/^Start pipeline · /, "");
+      setLaunchError({
+        title: `Couldn't start the pipeline for “${name || "Untitled session"}”`,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    setActiveId("sessions");
+    setJumpToSessionId(sessionId);
+    setJumpToTab("pipeline");
+  }
+
   function handleDispatch(command: Command) {
     switch (command.kind) {
       case "jump-session":
@@ -106,12 +129,7 @@ export function App() {
         setJumpToTab(undefined);
         break;
       case "start-pipeline":
-        if (command.sessionId) {
-          void pipelineClient.startPipeline(command.sessionId, "default-implementation");
-          setActiveId("sessions");
-          setJumpToSessionId(command.sessionId);
-          setJumpToTab("pipeline");
-        }
+        if (command.sessionId) void startPipelineFromPalette(command.sessionId, command.label);
         break;
       case "new-session":
         // Real create flow already lives in SessionsSurface; this just navigates there.
@@ -159,6 +177,16 @@ export function App() {
           );
         })()}
       </ErrorBoundary>
+      {launchError && (
+        <div className={styles.toastDock}>
+          <Toast
+            tone="bad"
+            title={launchError.title}
+            description={launchError.message}
+            onDismiss={() => setLaunchError(undefined)}
+          />
+        </div>
+      )}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
