@@ -9,6 +9,7 @@
 //	mads run         -session ses_x -workspace ~/repo/mads [flags]
 //	mads uninstall   [-keep-data] [-yes]
 //	mads update      check | apply [-feed-url URL] [-router URL] [-yes]
+//	mads orchestrate subjects | summary | send [-session ID] [-router URL]
 //	mads --version
 package main
 
@@ -46,6 +47,8 @@ func main() {
 		err = cmdUninstall(os.Args[2:], os.Stdin, os.Stdout)
 	case "update":
 		err = cmdUpdate(os.Args[2:], os.Stdin, os.Stdout)
+	case "orchestrate":
+		err = cmdOrchestrate(os.Args[2:], os.Stdout)
 	case "internal":
 		err = cmdInternal(os.Args[2:])
 	case "-v", "--version", "version":
@@ -79,6 +82,9 @@ func usage() {
   mads uninstall   [-keep-data] [-yes]
   mads update check [-router URL]
   mads update apply [-feed-url URL] [-router URL] [-yes]
+  mads orchestrate subjects [-session ID] [-router URL]
+  mads orchestrate summary  -subject ID [-session ID] [-router URL]
+  mads orchestrate send     -subject ID -text TEXT [-wait 30s] [-session ID] [-router URL]
   mads --version
 
 The Data Service must be running (make -C services/data run).

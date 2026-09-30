@@ -1,12 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/madsbin"
 )
 
 // orchestrateRefreshTimeout bounds notifyOrchestrateRefresh's fire-and-forget
@@ -50,6 +54,85 @@ func (s *server) notifyOrchestrateRefresh(sessionID string) {
 	}()
 }
 
+// announceOrchestrateGrant handles orchestrate newly granted over link
+// (a create or an upgrade) while the granting session's child is live. The
+// grant is pending_restart at that point: its MCP tools mount only when the
+// runner can cycle its provider process, which waits for the agent to be
+// idle. So the agent first gets one attributed notice naming the subject and
+// giving shell commands that work right away (the mads CLI's orchestrate
+// subcommands, by absolute path), and only then the refresh. The notice's
+// turn is in flight when the refresh lands, so the runner defers the cycle
+// to that turn's end instead of swapping the process out from under it.
+// With no live child this is just the refresh, a no-op: the tools mount when
+// the session next starts.
+func (s *server) announceOrchestrateGrant(link contracts.Link) {
+	addr, ok := s.sup.SessionAddr(link.GrantingSessionID)
+	if !ok {
+		s.notifyOrchestrateRefresh(link.GrantingSessionID)
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), orchestrateRefreshTimeout)
+		defer cancel()
+		subjectName := link.SubjectSessionID
+		if sess, err := s.data.Session(ctx, link.SubjectSessionID); err == nil && sess.Name != "" {
+			subjectName = sess.Name
+		}
+		if err := postInject(ctx, addr, contracts.InjectRequest{
+			Text: orchestrateGrantNotice(madsbin.Path(), s.routerURL, link.GrantingSessionID, link.SubjectSessionID, subjectName),
+			Attribution: contracts.Attribution{
+				LinkID: link.ID, SourceName: grantNoticeSource, DigestAttributed: true,
+			},
+		}); err != nil {
+			log.Printf("router: orchestrate grant notice for %s: %v", link.GrantingSessionID, err)
+		}
+		s.notifyOrchestrateRefresh(link.GrantingSessionID)
+	}()
+}
+
+// grantNoticeSource attributes the Router's own grant notice. It isn't a
+// message from the subject, so awaitOrchestrateReply never takes it for a
+// reply, even though it's injected over the same link.
+const grantNoticeSource = "mads"
+
+// orchestrateGrantNotice is the text of announceOrchestrateGrant's notice.
+func orchestrateGrantNotice(mads, routerURL, leaderID, subjectID, subjectName string) string {
+	flags := "-session " + leaderID
+	if routerURL != "" {
+		flags += " -router " + routerURL
+	}
+	return fmt.Sprintf("You now lead %q (%s) through a Leader link. Your orchestrate tools "+
+		"(list_links, get_summary, send_message) mount the next time you're idle. "+
+		"Until then, the same actions work from a shell:\n\n"+
+		"  %[3]s orchestrate subjects %[4]s\n"+
+		"  %[3]s orchestrate summary %[4]s -subject %[2]s\n"+
+		"  %[3]s orchestrate send %[4]s -subject %[2]s -text \"your message\"\n\n"+
+		"(If nothing here needs your action, reply with exactly NOOP.)",
+		subjectName, subjectID, mads, flags)
+}
+
+// postInject POSTs req to a session child's /inject.
+func postInject(ctx context.Context, addr string, req contracts.InjectRequest) error {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/inject", bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusAccepted {
+		return fmt.Errorf("child inject: status %d", resp.StatusCode)
+	}
+	return nil
+}
+
 // requireLinkedSessions 404s while the linked-sessions flag is off — every
 // route this feature exposes is gated identically
 // (docs/LINKED-SESSIONS-DESIGN.md: "Everything ships behind the
@@ -90,7 +173,10 @@ func (s *server) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if link.HasGrant(contracts.GrantOrchestrate) || (prior != nil && prior.HasGrant(contracts.GrantOrchestrate)) {
+	switch {
+	case link.HasGrant(contracts.GrantOrchestrate) && (prior == nil || !prior.HasGrant(contracts.GrantOrchestrate)):
+		s.announceOrchestrateGrant(link)
+	case link.HasGrant(contracts.GrantOrchestrate) || (prior != nil && prior.HasGrant(contracts.GrantOrchestrate)):
 		s.notifyOrchestrateRefresh(link.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusCreated, link)
@@ -141,7 +227,10 @@ func (s *server) handleUpdateLink(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if old.HasGrant(contracts.GrantOrchestrate) || link.HasGrant(contracts.GrantOrchestrate) {
+	switch {
+	case link.HasGrant(contracts.GrantOrchestrate) && !old.HasGrant(contracts.GrantOrchestrate):
+		s.announceOrchestrateGrant(link)
+	case old.HasGrant(contracts.GrantOrchestrate) || link.HasGrant(contracts.GrantOrchestrate):
 		s.notifyOrchestrateRefresh(link.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusOK, link)

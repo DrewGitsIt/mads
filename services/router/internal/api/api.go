@@ -38,6 +38,7 @@ type server struct {
 	runsDir              string
 	fastModelFlagBaseURL string
 	models               *modelcatalog.Catalog
+	routerURL            string
 	// wakeLocks holds one *sync.Mutex per session ID, serializing
 	// ensureSession's check-then-spawn so concurrent wakers (a composer send
 	// racing a job's WakeSession, or several signal jobs for one dormant
@@ -80,6 +81,10 @@ type Options struct {
 	// endpoint falls back to calling the provider's discovery inline, the
 	// pre-cache behavior.
 	Models *modelcatalog.Catalog
+	// RouterURL is this Router's own base URL, printed into the shell
+	// commands a new leader is given while its orchestrate tools are
+	// pending. Empty leaves -router off those commands (the CLI's default).
+	RouterURL string
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
@@ -99,7 +104,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL}
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.

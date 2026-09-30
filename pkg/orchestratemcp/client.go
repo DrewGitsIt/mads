@@ -94,3 +94,32 @@ func (c *client) setAttention(ctx context.Context, linkID, cadence string) (int,
 	body := map[string]any{"link_id": linkID, "cadence": cadence}
 	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(c.sessionID)+"/orchestrate/attention", body)
 }
+
+// Client is the exported face of the same Router client the MCP tools use,
+// for the mads CLI's `orchestrate` fallback subcommands: a leader whose
+// orchestrate grant hasn't materialized as MCP tools yet (pending_restart)
+// can still run them from a shell. Each call returns the raw HTTP status
+// and body, exactly as the tools see them.
+type Client struct{ c *client }
+
+// NewClient builds a Client acting as sessionID against the Router at
+// routerURL.
+func NewClient(routerURL, sessionID string) *Client {
+	return &Client{c: newClient(routerURL, sessionID)}
+}
+
+// Subjects lists the links this session holds (list_links).
+func (c *Client) Subjects(ctx context.Context) (int, []byte, error) {
+	return c.c.listLinks(ctx)
+}
+
+// Summary returns a subject's current summary (get_summary).
+func (c *Client) Summary(ctx context.Context, subjectSessionID string) (int, []byte, error) {
+	return c.c.getSummary(ctx, subjectSessionID)
+}
+
+// Send messages a subject over linkID (send_message). waitMS > 0 waits up
+// to that long for the subject's reply.
+func (c *Client) Send(ctx context.Context, linkID, text string, waitMS int64) (int, []byte, error) {
+	return c.c.sendMessage(ctx, linkID, text, waitMS)
+}

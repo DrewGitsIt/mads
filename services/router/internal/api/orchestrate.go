@@ -531,10 +531,12 @@ func (s *server) awaitOrchestrateReply(ctx context.Context, link contracts.Link,
 					continue
 				}
 				var payload struct {
-					LinkID string `json:"link_id"`
-					Text   string `json:"text"`
+					LinkID     string `json:"link_id"`
+					SourceName string `json:"source_name"`
+					Text       string `json:"text"`
 				}
-				if json.Unmarshal(e.Payload, &payload) == nil && payload.LinkID == link.ID {
+				if json.Unmarshal(e.Payload, &payload) == nil && payload.LinkID == link.ID &&
+					payload.SourceName != grantNoticeSource {
 					return payload.Text, true
 				}
 			}

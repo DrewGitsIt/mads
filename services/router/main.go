@@ -150,7 +150,7 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string) http.Handler {
 	return api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
@@ -166,6 +166,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		RunsDir:              runsDir,
 		FastModelFlagBaseURL: fastModelFlagBaseURL,
 		Models:               models,
+		RouterURL:            routerURL,
 	})
 }
 
@@ -258,7 +259,7 @@ func main() {
 	// open — from blocking on an agent spawn.
 	models := modelcatalog.New(providers, modelcatalog.Options{})
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models, "http://"+*addr)}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
