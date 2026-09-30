@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
+import { formatShortcut } from "../../../platform/shortcut";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
@@ -428,7 +429,7 @@ export function SessionRail({
             </button>
           )}
           <span className={styles.searchKbd} aria-hidden="true">
-            ⌘K
+            {formatShortcut("Mod+K")}
           </span>
         </div>
         {suggestions.length > 0 && (

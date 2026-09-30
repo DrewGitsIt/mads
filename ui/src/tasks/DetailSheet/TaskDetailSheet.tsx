@@ -18,6 +18,7 @@ import { useGraphRunState } from "../GraphView/useGraphRunState";
 import { usePrefersReducedMotion } from "../GraphView/usePrefersReducedMotion";
 import { DependencyPicker } from "./DependencyPicker";
 import { NoteGroup } from "./NoteGroup";
+import { formatShortcut } from "../../platform/shortcut";
 import styles from "./TaskDetailSheet.module.css";
 
 export interface TaskDetailSheetProps {
@@ -111,6 +112,7 @@ function EditableTextField({
         className={styles.editor}
         value={draftValue}
         aria-label={label}
+        title={`${formatShortcut("Mod+Enter")} to save · Esc to cancel`}
         onChange={(e) => {
           setDraftValue(e.target.value);
           autosize(e.target);

@@ -242,8 +242,8 @@
     ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo,
     Consolas, monospace;
   --sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Roboto,
-    "Helvetica Neue", sans-serif;
+    -apple-system, "SF Pro Text", BlinkMacSystemFont, "Segoe UI", Ubuntu,
+    Roboto, "Helvetica Neue", sans-serif;
 
   --r: 8px;
   --r-sm: 6px;

@@ -140,12 +140,12 @@ describe("Composer", () => {
     render(<Composer routerClient={client} sessionId="session-active" />);
 
     const expandButton = screen.getByRole("button", { name: "Expand editor" });
-    expect(expandButton.getAttribute("title")).toBe("Expand editor (⌘E)");
+    expect(expandButton.getAttribute("title")).toBe("Expand editor (Ctrl+E)");
     fireEvent.click(expandButton);
 
     expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
     const collapseButton = screen.getByRole("button", { name: "Collapse editor" });
-    expect(collapseButton.getAttribute("title")).toBe("Collapse editor (⌘E)");
+    expect(collapseButton.getAttribute("title")).toBe("Collapse editor (Ctrl+E)");
     fireEvent.click(collapseButton);
 
     expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();

@@ -19,6 +19,7 @@ import { DashboardTab } from "./dashboard/DashboardTab";
 import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { requestShellToggle } from "./conversation/shellToggleSignal";
+import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
 
 const RAIL_ITEMS: IconRailItem[] = [
@@ -50,6 +51,7 @@ export function App() {
       .getConfig()
       .then((c) => {
         applyTheme(c.theme, c.palette);
+        setPlatform(c.platform);
         setFlags({
           multiRepo: c.feature_flags.multi_repo,
           linkedSessions: c.feature_flags.linked_sessions,

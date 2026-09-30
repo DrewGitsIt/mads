@@ -7,6 +7,7 @@ import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
 import { getDraft, setDraft } from "./composerDrafts";
+import { formatShortcut } from "../../platform/shortcut";
 import styles from "./Composer.module.css";
 
 const EMPTY_QUEUE: QueuedMessage[] = [];
@@ -300,7 +301,7 @@ export function Composer({
     }
   }
 
-  const expandTitle = expanded ? "Collapse editor (⌘E)" : "Expand editor (⌘E)";
+  const expandTitle = `${expanded ? "Collapse" : "Expand"} editor (${formatShortcut("Mod+E")})`;
 
   return (
     <div className={styles.composer} onKeyDownCapture={handleComposerKeyDownCapture}>
