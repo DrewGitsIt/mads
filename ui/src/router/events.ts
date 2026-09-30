@@ -45,14 +45,102 @@ const subscriptions = new Set<Subscription>();
 // the scalar dedupe below would still drop it as "already delivered."
 let lastDeliveredSeqByType = new Map<string, number>();
 let reconnectAttempt = 0;
+// Types the server refused to filter on — dropped from the connection's
+// union for the rest of this bus's life (see probeRejectedTypes). A refused
+// type fails the WHOLE shared stream, not just its own subscriber, so it
+// has to go for everything else to keep flowing.
+let rejectedTypes = new Set<string>();
+// Consecutive failed connects with no "open" in between. Feeds BusHealth.
+let consecutiveFailures = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 let queue: Envelope[] = [];
 let draining = false;
 
 function unionTypes(): string[] {
   const set = new Set<string>();
-  for (const sub of subscriptions) for (const t of sub.types) set.add(t);
+  for (const sub of subscriptions) for (const t of sub.types) if (!rejectedTypes.has(t)) set.add(t);
   return [...set];
+}
+
+/**
+ * Whether live updates are reaching this window. "failing" means the stream
+ * has failed to connect repeatedly — every live view (the session rail, task
+ * counts, a Pipeline tab's run state) is showing whatever it last fetched and
+ * nothing will correct it until the stream comes back. Surfaces show that
+ * rather than let stale state pass for current: a frozen rail reading
+ * "Sleeping" beside a conversation that is plainly awake is how the last
+ * outage of this kind (an unregistered type failing the whole stream) was
+ * first noticed.
+ */
+export interface BusHealth {
+  state: "live" | "connecting" | "failing";
+  /** Types dropped from the stream because the server refused them. */
+  ignoredTypes: string[];
+}
+
+// Two misses in a row: a single drop is ordinary (a Router restart, a sleep/
+// wake) and reconnects within a second; only a second one is worth a word.
+const FAILING_AFTER = 2;
+
+const healthListeners = new Set<(health: BusHealth) => void>();
+let health: BusHealth = { state: "connecting", ignoredTypes: [] };
+
+function setHealth(state: BusHealth["state"]): void {
+  const ignoredTypes = [...rejectedTypes];
+  if (state === health.state && ignoredTypes.length === health.ignoredTypes.length) return;
+  health = { state, ignoredTypes };
+  for (const listener of healthListeners) listener(health);
+}
+
+export function getBusHealth(): BusHealth {
+  return health;
+}
+
+/** Calls listener on every BusHealth change. Returns an unsubscribe function. */
+export function subscribeToBusHealth(listener: (health: BusHealth) => void): () => void {
+  healthListeners.add(listener);
+  return () => {
+    healthListeners.delete(listener);
+  };
+}
+
+// The server's refusal names the type: `"x.y" is neither an event type …`.
+const REJECTED_TYPE = /^"([^"]+)" is neither/;
+
+/**
+ * Finds out which of `types` the server refuses, after the stream failed.
+ * EventSource hides the HTTP status and body of a failed connect, so this
+ * asks the same question over the batch path (same route, same filter
+ * parser) with a cursor past the end, which costs nothing when the filter is
+ * fine and returns the validation errors when it isn't.
+ *
+ * Why this exists: the UI is served live from ui/dist and can ship ahead of
+ * a long-running Data Service. A new subscriber type the running build
+ * hadn't registered (session.queue_changed, 2026-09-30) got the stream
+ * refused, and the reconnect loop below retried the identical URL forever —
+ * silently freezing every live view in the window, because the union only
+ * ever widens. Newer Data Services accept unknown well-formed types (they
+ * just match nothing); this covers the older ones, and anything else a
+ * server may refuse. Best-effort: any failure here leaves the ordinary
+ * backoff in charge.
+ */
+async function probeRejectedTypes(types: string[]): Promise<string[]> {
+  if (types.length === 0 || typeof fetch !== "function") return [];
+  try {
+    const url = new URL(buildUrl(types, Number.MAX_SAFE_INTEGER));
+    const res = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+    if (res.ok) return [];
+    const body = (await res.json()) as { errors?: { field?: string; message?: string }[] };
+    const refused: string[] = [];
+    for (const e of body.errors ?? []) {
+      if (e.field !== "types") continue;
+      const m = REJECTED_TYPE.exec(e.message ?? "");
+      if (m && types.includes(m[1])) refused.push(m[1]);
+    }
+    return refused;
+  } catch {
+    return [];
+  }
 }
 
 function buildUrl(types: string[], since: number): string {
@@ -90,6 +178,8 @@ function dispatchOne(env: Envelope): void {
   if (env.seq <= lastForType) return;
   lastDeliveredSeqByType.set(env.type, env.seq);
   reconnectAttempt = 0; // live data flowing — connection is healthy
+  consecutiveFailures = 0;
+  setHealth("live");
   for (const sub of subscriptions) {
     if (sub.sessionId && env.session_id !== sub.sessionId) continue;
     if (!sub.types.includes(env.type)) continue;
@@ -119,6 +209,26 @@ function handleFrame(e: MessageEvent<string>): void {
   draining = false;
 }
 
+function onConnectError(): void {
+  consecutiveFailures++;
+  if (consecutiveFailures >= FAILING_AFTER) setHealth("failing");
+  const attempted = unionTypes();
+  scheduleReconnect();
+  void probeRejectedTypes(attempted).then((refused) => {
+    const fresh = refused.filter((t) => !rejectedTypes.has(t));
+    if (fresh.length === 0 || subscriptions.size === 0) return;
+    for (const t of fresh) rejectedTypes.add(t);
+    console.warn(
+      `events: the server refused ${fresh.join(", ")}; live updates continue without ${fresh.length === 1 ? "it" : "them"}`,
+    );
+    setHealth(health.state);
+    // Don't sit out the backoff: the cause is known and removed.
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = undefined;
+    openConnection();
+  });
+}
+
 function scheduleReconnect(): void {
   source?.close();
   source = null;
@@ -135,11 +245,15 @@ function openConnection(): void {
   const types = unionTypes();
   source = new EventSource(buildUrl(types, resumeSince()));
   for (const type of types) source.addEventListener(type, handleFrame as EventListener);
+  source.addEventListener("open", () => {
+    consecutiveFailures = 0;
+    setHealth("live");
+  });
   // A native EventSource auto-reconnects to the exact same URL (same
   // original `since`, or none), which would silently replay a huge or
   // unbounded amount of history. Close it ourselves to suppress that and
   // reconnect manually with an up-to-date cursor instead.
-  source.addEventListener("error", scheduleReconnect);
+  source.addEventListener("error", onConnectError);
 }
 
 /**
@@ -182,6 +296,9 @@ export function subscribeToEvents(
       source?.close();
       source = null;
       lastDeliveredSeqByType = new Map();
+      rejectedTypes = new Set();
+      consecutiveFailures = 0;
+      setHealth("connecting");
       queue = [];
       draining = false;
     }

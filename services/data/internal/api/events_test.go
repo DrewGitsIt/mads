@@ -124,6 +124,39 @@ func TestGetEventsRejectsBadFilter(t *testing.T) {
 	}
 }
 
+// A newer UI subscribing to a type this build hasn't registered must not
+// fail the request — for the SSE path that failed the window's only event
+// stream. The unknown type matches nothing; the known ones still flow.
+func TestGetEventsToleratesUnregisteredType(t *testing.T) {
+	srv, _ := newTestServer(t)
+	postEvent(t, srv, contracts.Envelope{Type: contracts.TaskCreated, SessionID: "ses_u", Actor: "t", Payload: json.RawMessage(`{}`)})
+	resp, err := srv.Client().Get(srv.URL + "/events?types=task.created,session.from_the_future")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	var events []contracts.Envelope
+	if err := json.NewDecoder(resp.Body).Decode(&events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != contracts.TaskCreated {
+		t.Errorf("events = %+v, want just the task.created", events)
+	}
+
+	// Malformed patterns are still an error, not a silent empty result.
+	bad, err := srv.Client().Get(srv.URL + "/events?types=a.b.c")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = bad.Body.Close()
+	if bad.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("a.b.c status = %d, want 422", bad.StatusCode)
+	}
+}
+
 // sseEvent is one parsed server-sent message.
 type sseEvent struct {
 	id   int64
