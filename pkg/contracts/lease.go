@@ -11,7 +11,8 @@ type Lease struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	// Identity is set only when the claiming engine could establish its
 	// own process identity (pkg/procid) at claim time. nil for
-	// pre-migration rows and non-Linux writers — never provable.
+	// pre-migration rows and writers on platforms other than Linux and
+	// darwin — never provable.
 	Identity *LeaseIdentity `json:"identity,omitempty"`
 }
 
@@ -19,8 +20,11 @@ type Lease struct {
 // launch proof — never a heuristic): this machine, this boot, this pid,
 // this pid's start time.
 type LeaseIdentity struct {
-	MachineID     string `json:"machine_id"`
-	BootID        string `json:"boot_id"`
-	PID           int    `json:"pid"`
-	PIDStartTicks int64  `json:"pid_start_ticks"`
+	MachineID string `json:"machine_id"`
+	BootID    string `json:"boot_id"`
+	PID       int    `json:"pid"`
+	// PIDStartTicks is platform-specific: clock ticks since boot on Linux,
+	// microseconds since the epoch on darwin. The units never mix because
+	// procid.Evaluate only compares identities whose MachineID matches.
+	PIDStartTicks int64 `json:"pid_start_ticks"`
 }

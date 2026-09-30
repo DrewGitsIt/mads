@@ -173,3 +173,52 @@ func TestCurrentErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestParseIOPlatformUUID(t *testing.T) {
+	out, err := os.ReadFile("testdata/ioreg-platform-expert.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := parseIOPlatformUUID(out)
+	if err != nil {
+		t.Fatalf("parseIOPlatformUUID: %v", err)
+	}
+	if want := "3F2A9C4E-7B1D-5E60-A8F3-19C2D4E6B7A0"; got != want {
+		t.Errorf("parseIOPlatformUUID = %q, want %q", got, want)
+	}
+}
+
+func TestParseIOPlatformUUIDMissing(t *testing.T) {
+	out, err := os.ReadFile("testdata/ioreg-no-uuid.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, in := range map[string][]byte{
+		"no uuid key": out,
+		"empty":       nil,
+		"empty value": []byte(`      "IOPlatformUUID" = ""` + "\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := parseIOPlatformUUID(in)
+			if err == nil {
+				t.Fatalf("parseIOPlatformUUID = %q, nil; want an error", got)
+			}
+		})
+	}
+}
+
+func TestTimevalMicros(t *testing.T) {
+	cases := []struct {
+		sec, usec, want int64
+	}{
+		{0, 0, 0},
+		{0, 1, 1},
+		{1, 0, 1_000_000},
+		{1759190400, 123456, 1759190400123456},
+	}
+	for _, c := range cases {
+		if got := timevalMicros(c.sec, c.usec); got != c.want {
+			t.Errorf("timevalMicros(%d, %d) = %d, want %d", c.sec, c.usec, got, c.want)
+		}
+	}
+}

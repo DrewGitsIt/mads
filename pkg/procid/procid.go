@@ -17,19 +17,30 @@ import (
 type Identity = contracts.LeaseIdentity
 
 // Reader reads this host's current process-identity facts. Default is the
-// real Linux backend; tests inject a fake so every proof branch — reboot,
-// dead pid, pid reuse, live sibling, /proc error — is testable without
-// real doomed processes or root-owned files.
+// real Linux or darwin backend (every method errors elsewhere); tests
+// inject a fake so every proof branch — reboot, dead pid, pid reuse, live
+// sibling, /proc error — is testable without real doomed processes or
+// root-owned files.
+//
+//	            Linux                               darwin
+//	MachineID   /etc/machine-id, trimmed            IOPlatformUUID from ioreg, read once and cached
+//	BootID      /proc/sys/kernel/random/boot_id     sysctl kern.bootsessionuuid
+//	StartTicks  field 22 of /proc/<pid>/stat        kinfo_proc p_starttime, µs since the epoch
+//	            (clock ticks since boot)
+//
+// BootID is read fresh on every call, never cached. PIDStartTicks returns
+// an error satisfying errors.Is(_, os.ErrNotExist) when pid doesn't exist
+// (no /proc entry on Linux; ESRCH or an empty kinfo_proc on darwin).
 type Reader interface {
-	MachineID() (string, error)           // /etc/machine-id, trimmed
-	BootID() (string, error)              // /proc/sys/kernel/random/boot_id, trimmed — read fresh every call, never cached
-	PIDStartTicks(pid int) (int64, error) // field 22 of /proc/<pid>/stat; error satisfying errors.Is(_, os.ErrNotExist) when pid has no /proc entry
+	MachineID() (string, error)
+	BootID() (string, error)
+	PIDStartTicks(pid int) (int64, error)
 }
 
 // Current gathers THIS process's own identity via r. ok=false means some
-// part couldn't be established (non-Linux, unreadable /proc, etc.) — the
-// caller must then record/compare no identity at all; a partial identity
-// is exactly the ambiguity "provable" forbids.
+// part couldn't be established (unsupported platform, unreadable /proc,
+// etc.) — the caller must then record/compare no identity at all; a
+// partial identity is exactly the ambiguity "provable" forbids.
 func Current(r Reader) (Identity, bool) {
 	machineID, err := r.MachineID()
 	if err != nil || machineID == "" {

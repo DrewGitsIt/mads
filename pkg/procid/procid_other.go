@@ -1,11 +1,11 @@
-//go:build !linux
+//go:build !linux && !darwin
 
 package procid
 
 import "fmt"
 
-// Default is the non-Linux backend: every method errors, collapsing
-// "definitely not Linux" and "can't read /proc" into the same
+// Default is the unsupported-platform backend: every method errors, collapsing
+// "unsupported platform" and "can't read identity" into the same
 // not-provable outcome (rule 4's non-Linux clause) for free.
 var Default Reader = otherReader{}
 

@@ -1,0 +1,28 @@
++-o Mac16,10  <class IOPlatformExpertDevice, id 0x100000224, registered, matched, active, busy 0 (1893 ms), retain 39>
+    {
+      "IOPolledInterface" = "AppleARMWatchdogTimerHibernateHandler is not serializable"
+      "#address-cells" = <02000000>
+      "AAPL,phandle" = <01000000>
+      "serial-number" = <4c3958584b3751505a590000000000000000000000000000000000000000000000000000000000000000>
+      "IOBusyInterest" = "IOCommand is not serializable"
+      "target-type" = <"J773g">
+      "platform-name" = <7436303430000000000000000000000000000000000000000000000000000000>
+      "secure-root-prefix" = <"md">
+      "name" = <"device-tree">
+      "region-info" = <4c4c2f41000000000000000000000000000000000000000000000000000000000>
+      "manufacturer" = <"Apple Inc.">
+      "compatible" = <"J773gAP","Mac16,10","AppleARM">
+      "config-number" = <00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000>
+      "IOPlatformSerialNumber" = "L9XXK7QPZY"
+      "regulatory-model-number" = <41333238340000000000000000000000000000000000000000000000000000000>
+      "time-stamp" = <"Sat Aug 16 21:47:09 PDT 2025">
+      "clock-frequency" = <00366e01>
+      "model" = <"Mac16,10">
+      "mlb-serial-number" = <4630583238313230314a5a3151475a4a41000000000000000000000000000000>
+      "model-number" = <4d5831344c4c2f4100000000000000000000000000000000000000000000000000>
+      "IONWInterrupts" = "IONWInterrupts"
+      "model-config" = <"SUNWAY;MoPED=0x3F4BC62A91D05E7F8C1A2B3D4E5F60718293A4B5">
+      "device_type" = <"bootrom">
+      "#size-cells" = <02000000>
+      "IOPlatformUUID" = "3F2A9C4E-7B1D-5E60-A8F3-19C2D4E6B7A0"
+    }
