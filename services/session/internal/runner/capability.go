@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/drewkidwell/mads/pkg/madsbin"
 	"log"
 	"strings"
 
@@ -167,9 +168,11 @@ func (r *Runner) setupOrchestrate(ctx context.Context, sess contracts.Session) *
 	}
 
 	c := contracts.Capability{
-		Name:   "orchestrate-" + r.sessionID,
-		Type:   contracts.CapabilityMCP,
-		Config: contracts.CapabilityConfig{Command: "mads internal orchestrate-mcp"},
+		Name: "orchestrate-" + r.sessionID,
+		Type: contracts.CapabilityMCP,
+		// Absolute when resolvable: both this process's MCPRegistry and the
+		// provider exec the command, and neither is guaranteed "mads" on PATH.
+		Config: contracts.CapabilityConfig{Command: madsbin.Path() + " internal orchestrate-mcp"},
 	}
 	env := []string{"MADS_ROUTER_URL=" + r.RouterURL, "MADS_SESSION_ID=" + r.sessionID}
 	if !hasOrchestrateGrant {

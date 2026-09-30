@@ -44,10 +44,10 @@ func (f *fakeVaultSource) Resolve(_ context.Context, ref string) (string, error)
 
 var envdumpBin string
 
-// madsBinDir holds a real `mads` binary — setupOrchestrate hardcodes
-// "mads internal orchestrate-mcp" as its Command (docs/LINKED-SESSIONS-DESIGN.md),
-// so exercising it end to end (rather than just its gating logic) needs the
-// real binary resolvable via PATH, the same way it would be once installed.
+// madsBinDir holds a real `mads` binary. setupOrchestrate's Command runs
+// "<mads> internal orchestrate-mcp" (docs/LINKED-SESSIONS-DESIGN.md), with
+// <mads> from madsbin.Path, so exercising it end to end (rather than just
+// its gating logic) needs a real binary it can resolve: here via PATH.
 var madsBinDir string
 
 func TestMain(m *testing.M) {

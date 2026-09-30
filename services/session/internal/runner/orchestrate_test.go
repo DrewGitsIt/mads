@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,9 +28,8 @@ func enableOrchestrateLinkedSessions(t *testing.T, data *dataclient.Client) {
 }
 
 // putMadsOnPath prepends madsBinDir (a real, freshly-built `mads` binary) to
-// PATH — setupOrchestrate's Config.Command is the fixed literal
-// "mads internal orchestrate-mcp", resolved via exec.Command's own PATH
-// lookup, exactly like a real installation.
+// PATH. setupOrchestrate resolves the binary with madsbin.Path, which falls
+// back to PATH when there's no $MADS_BIN and no mads beside the test binary.
 func putMadsOnPath(t *testing.T) {
 	t.Helper()
 	t.Setenv("PATH", madsBinDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -156,8 +156,10 @@ func TestSetupOrchestrateWithGrant(t *testing.T) {
 	if got.Name != "orchestrate-"+leader.ID {
 		t.Errorf("Name = %q, want orchestrate-%s", got.Name, leader.ID)
 	}
-	if got.Command != "mads internal orchestrate-mcp" {
-		t.Errorf("Command = %q", got.Command)
+	// Absolute, so neither the provider nor MCPRegistry depends on its own
+	// PATH to find mads.
+	if want := filepath.Join(madsBinDir, "mads") + " internal orchestrate-mcp"; got.Command != want {
+		t.Errorf("Command = %q, want %q", got.Command, want)
 	}
 	wantEnv := map[string]bool{"MADS_ROUTER_URL=http://localhost:9999": true, "MADS_SESSION_ID=" + leader.ID: true}
 	if len(got.Env) != 2 || !wantEnv[got.Env[0]] || !wantEnv[got.Env[1]] {
