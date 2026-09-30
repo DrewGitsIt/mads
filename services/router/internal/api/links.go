@@ -72,24 +72,45 @@ func (s *server) requireLinkedSessions(next http.HandlerFunc) http.HandlerFunc {
 }
 
 // handleCreateLink notifies the granting session's running child
-// (notifyOrchestrateRefresh) whenever the new link carries the orchestrate
-// grant — the case this task exists for: a leader link created onto an
+// (notifyOrchestrateRefresh) whenever orchestrate is held before or after —
+// the case this task exists for: a leader link created onto an
 // already-running session must materialize the tools without waiting for a
-// bounce, where the provider supports it.
+// bounce, where the provider supports it. A create for a pair that already
+// has a link merges into it (the Data Service's Links.Create), so it can
+// also drop orchestrate (leader re-created as monitor), which needs the same
+// teardown refresh an update would get.
 func (s *server) handleCreateLink(w http.ResponseWriter, r *http.Request) {
 	var req contracts.LinkRequest
 	if !decode(w, r, &req) {
 		return
 	}
+	prior := s.pairLink(r.Context(), req.GrantingSessionID, req.SubjectSessionID)
 	link, err := s.data.CreateLink(r.Context(), req)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	if link.HasGrant(contracts.GrantOrchestrate) {
+	if link.HasGrant(contracts.GrantOrchestrate) || (prior != nil && prior.HasGrant(contracts.GrantOrchestrate)) {
 		s.notifyOrchestrateRefresh(link.GrantingSessionID)
 	}
 	writeJSON(w, http.StatusCreated, link)
+}
+
+// pairLink returns the existing non-implicit link from grantingID to
+// subjectID, or nil if there is none or it can't be read. Best-effort: it
+// only decides whether a create needs an orchestrate refresh, and the create
+// itself re-reads the pair under its own transaction.
+func (s *server) pairLink(ctx context.Context, grantingID, subjectID string) *contracts.Link {
+	links, err := s.data.LinksForSession(ctx, grantingID)
+	if err != nil {
+		return nil
+	}
+	for _, l := range links {
+		if l.GrantingSessionID == grantingID && l.SubjectSessionID == subjectID && !l.Implicit {
+			return &l
+		}
+	}
+	return nil
 }
 
 func (s *server) handleGetLink(w http.ResponseWriter, r *http.Request) {

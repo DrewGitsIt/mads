@@ -69,16 +69,28 @@ func validateCadence(link *contracts.Link) *contracts.ValidationError {
 	return nil
 }
 
-// Create validates and stores a new link, emitting link.created. Validation
+// Create validates and stores a link, emitting link.created. Validation
 // order (docs/LINKED-SESSIONS-DESIGN.md, existence first — everything else
 // needs both rows): grant shape, both sessions exist, no self-link, no
 // reverse-direction duplicate (leader→subject only), the same-workspace
 // different-worktree constraint, orchestrate-vs-live-pipeline-subject, and
 // at-most-one-orchestrate-holder-per-subject.
+//
+// A directed pair holds at most one link, so a create for a pair that
+// already has one merges into it instead of adding a parallel row (two rows
+// both carrying read would double every digest and signal):
+//   - same grant set, and cadence unset or unchanged: idempotent success. The
+//     existing link is returned and no event is emitted.
+//   - otherwise the existing link is updated in place (same id) to the
+//     requested grants, and to the requested cadence if one was given, with
+//     link.updated. Orchestrate checks run when the update adds orchestrate.
+//
+// Either way *link is overwritten with the stored row.
 func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) error {
 	if verr := validateGrants(link.Grants); verr != nil {
 		return verr
 	}
+	cadenceGiven := link.Cadence != ""
 	if verr := validateCadence(link); verr != nil {
 		return verr
 	}
@@ -109,7 +121,19 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			v.Add("worktree", "sessions are isolated in different worktrees of the same workspace — linked sessions must not operate in different worktrees of the same repo")
 		}
 
-		if hasGrant(link.Grants, contracts.GrantOrchestrate) {
+		existing, err := pairLinkInTx(tx, link.GrantingSessionID, link.SubjectSessionID)
+		if err != nil {
+			return err
+		}
+		if existing != nil && sameGrantSet(existing.Grants, link.Grants) &&
+			(!cadenceGiven || existing.Cadence == link.Cadence) && v.Empty() {
+			*link = *existing
+			return nil
+		}
+
+		addsOrchestrate := hasGrant(link.Grants, contracts.GrantOrchestrate) &&
+			(existing == nil || !hasGrant(existing.Grants, contracts.GrantOrchestrate))
+		if addsOrchestrate {
 			live, err := subjectPipelineLive(tx, link.SubjectSessionID)
 			if err != nil {
 				return err
@@ -117,17 +141,23 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			if live {
 				v.Add("grants", "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
 			}
-			holderExists, err := orchestrateHolderExistsInTx(tx, link.SubjectSessionID, "")
-			if err != nil {
-				return err
+			excludeID := ""
+			if existing != nil {
+				excludeID = existing.ID
 			}
-			if holderExists {
-				v.Add("grants", "the subject already has an orchestrate holder — a subject may have at most one")
+			if msg, err := l.orchestrateHolderConflictInTx(tx, link.SubjectSessionID, excludeID); err != nil {
+				return err
+			} else if msg != "" {
+				v.Add("grants", msg)
 			}
 		}
 
 		if !v.Empty() {
 			return &v
+		}
+
+		if existing != nil {
+			return mergeIntoExistingLinkInTx(tx, existing, link, cadenceGiven, actor)
 		}
 
 		if link.ID == "" {
@@ -148,6 +178,65 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			Type: contracts.LinkCreated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
 		})
 	})
+}
+
+// mergeIntoExistingLinkInTx is Create's same-pair path: it rewrites existing
+// in place (keeping its id and created_at) with the requested grants, and
+// with the requested cadence only if the caller gave one, then emits
+// link.updated exactly as Update does. *link ends up as the stored row.
+func mergeIntoExistingLinkInTx(tx *Tx, existing, link *contracts.Link, cadenceGiven bool, actor string) error {
+	merged := *existing
+	merged.Grants = link.Grants
+	if cadenceGiven {
+		merged.Cadence = link.Cadence
+	}
+	merged.UpdatedAt = time.Now().UTC()
+	merged.OrchestrateStatus = nextOrchestrateStatus(existing, merged.Grants)
+	if err := writeLink(tx, &merged); err != nil {
+		return err
+	}
+	*link = merged
+	payload, _ := json.Marshal(map[string]any{
+		"granting_session_id": merged.GrantingSessionID,
+		"subject_session_id":  merged.SubjectSessionID,
+		"grants":              merged.Grants,
+	})
+	return tx.Append(&contracts.Envelope{
+		Type: contracts.LinkUpdated, SessionID: merged.SubjectSessionID, Actor: actor, Payload: payload,
+	})
+}
+
+// sameGrantSet compares grant sets, ignoring order and duplicates.
+func sameGrantSet(a, b []contracts.Grant) bool {
+	for _, g := range a {
+		if !hasGrant(b, g) {
+			return false
+		}
+	}
+	for _, g := range b {
+		if !hasGrant(a, g) {
+			return false
+		}
+	}
+	return true
+}
+
+// pairLinkInTx returns the non-implicit link from grantingID to subjectID,
+// if one exists. If an older database already holds parallel rows for the
+// pair, the oldest is the one merged into.
+func pairLinkInTx(tx *Tx, grantingID, subjectID string) (*contracts.Link, error) {
+	link, err := scanLinkRow(tx.QueryRow(
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		 FROM links WHERE granting_session_id = ? AND subject_session_id = ? AND implicit = 0
+		 ORDER BY created_at LIMIT 1`,
+		grantingID, subjectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return link, nil
 }
 
 // initialOrchestrateStatus decides the OrchestrateStatus a link should carry
@@ -210,12 +299,10 @@ func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) 
 			if live {
 				v.Add("grants", "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
 			}
-			holderExists, err := orchestrateHolderExistsInTx(tx, link.SubjectSessionID, link.ID)
-			if err != nil {
+			if msg, err := l.orchestrateHolderConflictInTx(tx, link.SubjectSessionID, link.ID); err != nil {
 				return err
-			}
-			if holderExists {
-				v.Add("grants", "the subject already has an orchestrate holder — a subject may have at most one")
+			} else if msg != "" {
+				v.Add("grants", msg)
 			}
 		}
 		if !v.Empty() {
@@ -496,33 +583,51 @@ func subjectPipelineLive(tx *Tx, sessionID string) (bool, error) {
 	return typ == string(contracts.PipelineStarted), nil
 }
 
-// orchestrateHolderExistsInTx reports whether subjectID already has a link
-// carrying the orchestrate grant, other than excludeLinkID (used by Update
-// to exclude the link's own row from the count).
-func orchestrateHolderExistsInTx(tx *Tx, subjectID, excludeLinkID string) (bool, error) {
+// orchestrateHolderConflictInTx returns the validation message for
+// subjectID already having an orchestrate holder other than excludeLinkID
+// (the link being updated or merged into), or "" if it has none. The message
+// names the holder session so the refusal is actionable. A holder whose
+// session record is gone (session deletion leaves links dangling) is named
+// by id alone.
+func (l *Links) orchestrateHolderConflictInTx(tx *Tx, subjectID, excludeLinkID string) (string, error) {
+	holderID, err := orchestrateHolderInTx(tx, subjectID, excludeLinkID)
+	if err != nil || holderID == "" {
+		return "", err
+	}
+	holder := holderID
+	if sess, err := l.sessions.getInTx(tx, holderID); err == nil && sess.Name != "" {
+		holder = fmt.Sprintf("%q (%s)", sess.Name, holderID)
+	}
+	return fmt.Sprintf("the subject is already led by %s — a subject may have at most one orchestrate holder", holder), nil
+}
+
+// orchestrateHolderInTx returns the granting session id of subjectID's
+// orchestrate-carrying link other than excludeLinkID, or "" if there is
+// none.
+func orchestrateHolderInTx(tx *Tx, subjectID, excludeLinkID string) (string, error) {
 	rows, err := tx.tx.Query(
-		`SELECT id, grants FROM links WHERE subject_session_id = ?`, subjectID)
+		`SELECT id, granting_session_id, grants FROM links WHERE subject_session_id = ? ORDER BY created_at`, subjectID)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id, grantsJSON string
-		if err := rows.Scan(&id, &grantsJSON); err != nil {
-			return false, err
+		var id, grantingID, grantsJSON string
+		if err := rows.Scan(&id, &grantingID, &grantsJSON); err != nil {
+			return "", err
 		}
 		if id == excludeLinkID {
 			continue
 		}
 		var grants []contracts.Grant
 		if err := json.Unmarshal([]byte(grantsJSON), &grants); err != nil {
-			return false, err
+			return "", err
 		}
 		if hasGrant(grants, contracts.GrantOrchestrate) {
-			return true, nil
+			return grantingID, nil
 		}
 	}
-	return false, rows.Err()
+	return "", rows.Err()
 }
 
 func linkExistsInTx(tx *Tx, grantingID, subjectID string) (bool, error) {

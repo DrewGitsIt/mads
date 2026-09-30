@@ -277,6 +277,55 @@ func TestLinkUpdateNotifiesOnGrantAddition(t *testing.T) {
 	waitOrchestrateStatusRouter(t, srv.URL, link.ID, contracts.OrchestrateActive)
 }
 
+// TestLinkCreateMergeUpgradeMaterializesOrchestrate: POST /links with the
+// Leader preset for a pair that already has a Monitor link upgrades that
+// link in place (same id) instead of adding a parallel one, and the upgrade
+// still reaches the running leader's /orchestrate/refresh and goes active.
+func TestLinkCreateMergeUpgradeMaterializesOrchestrate(t *testing.T) {
+	srv, _ := newTestServerWithRealSession(t)
+	setLinkedSessionsFlag(t, srv.URL, true)
+
+	leader := mkSessionRouter(t, srv.URL, "leader")
+	subject := mkSessionRouter(t, srv.URL, "subject")
+
+	mresp := postJSON(t, srv.URL+"/sessions/"+leader.ID+"/messages", map[string]string{"text": "echo hi"})
+	if mresp.StatusCode != http.StatusAccepted {
+		t.Fatalf("send message status = %d, want 202", mresp.StatusCode)
+	}
+	waitForTranscriptLenRouter(t, srv.URL, leader.ID, 2)
+
+	monitorResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID, Preset: contracts.PresetMonitor,
+	})
+	if monitorResp.StatusCode != http.StatusCreated {
+		t.Fatalf("monitor create: status %d", monitorResp.StatusCode)
+	}
+	monitor := decodeJSON[contracts.Link](t, monitorResp)
+
+	leaderResp := postJSON(t, srv.URL+"/links", contracts.LinkRequest{
+		GrantingSessionID: leader.ID, SubjectSessionID: subject.ID, Preset: contracts.PresetLeader,
+	})
+	if leaderResp.StatusCode != http.StatusCreated {
+		t.Fatalf("leader create over monitor: status %d", leaderResp.StatusCode)
+	}
+	upgraded := decodeJSON[contracts.Link](t, leaderResp)
+	if upgraded.ID != monitor.ID {
+		t.Fatalf("upgrade returned link %s, want the existing %s", upgraded.ID, monitor.ID)
+	}
+	if !upgraded.HasGrant(contracts.GrantOrchestrate) {
+		t.Fatalf("upgraded grants = %v, want orchestrate", upgraded.Grants)
+	}
+	waitOrchestrateStatusRouter(t, srv.URL, monitor.ID, contracts.OrchestrateActive)
+
+	resp, err := http.Get(srv.URL + "/sessions/" + leader.ID + "/links")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if links := decodeJSON[[]contracts.Link](t, resp); len(links) != 1 {
+		t.Fatalf("leader has %d links after the upgrade, want 1: %+v", len(links), links)
+	}
+}
+
 // TestLinkUpdateMonitorOnlyEditNeverNotifies proves a monitor-only edit
 // (orchestrate absent both before and after) never triggers a refresh
 // attempt — the link's OrchestrateStatus must stay empty throughout, not

@@ -39,6 +39,14 @@ Links are directed edges; nothing is 1:1 by design:
   them all).
 - A subject may have **at most one `orchestrate` holder** — two bosses invite
   conflicting direction; validated at L1. Revisit if a real use case appears.
+  The refusal names the existing holder (session name and id).
+- A directed pair holds **at most one link** (2026-09-30). A create for a pair
+  that's already linked merges into that link instead of adding a parallel
+  one (two rows carrying `read` would double every digest and signal). The
+  same grant set is an idempotent success with no event. A different grant
+  set updates the link in place (same id, `link.updated`); a cadence left
+  unset keeps the stored one. Adding `orchestrate` this way runs the same
+  checks as a fresh leader link.
 
 ## Decisions
 

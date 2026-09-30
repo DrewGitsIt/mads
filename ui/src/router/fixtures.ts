@@ -1526,6 +1526,15 @@ export class FakeRouterClient implements RouterClient {
         },
       ]);
     }
+    // Mirrors the Data Service's merge-on-create: a pair holds one link, so
+    // re-creating it returns (or updates in place) the existing one.
+    const existing = [...this.links.values()].find(
+      (l) =>
+        !l.implicit &&
+        l.granting_session_id === req.granting_session_id &&
+        l.subject_session_id === req.subject_session_id,
+    );
+    if (existing) return this.updateLink(existing.id, req);
     const now = new Date().toISOString();
     const link: Link = {
       id: `link-${this.nextLinkSeq++}`,
