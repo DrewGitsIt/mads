@@ -536,7 +536,7 @@ func TestQueueRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /queue: %v", err)
 	}
-	defer listResp.Body.Close()
+	defer func() { _ = listResp.Body.Close() }()
 	var list struct {
 		Queued []contracts.QueuedMessage `json:"queued"`
 	}
