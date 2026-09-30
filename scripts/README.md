@@ -71,13 +71,12 @@ prefix with an isolated `HOME`, verifies `mads --version` and first-run data
 dir creation, then drives `mads uninstall` through all three outcomes
 (declined, confirmed, `--keep-data`).
 
-The target platform matrix is linux and darwin (spec §14.10). The smoke
-itself only runs on linux: on darwin it skips with an explicit "pending CI"
-message rather than silently passing — and that skip is unconditional, so
-`make check` on a Mac skips it too even though the rest of the suite runs
-there. CI has no macOS row yet (every job is `ubuntu-latest`); un-skipping
-the darwin row goes with adding one (work item B3 in
-[docs/MACOS-PORT-DESIGN.md](../docs/MACOS-PORT-DESIGN.md)).
+The target platform matrix is linux and darwin (spec §14.10), and the smoke
+runs on both: linux in every CI run, darwin in CI's `macos` job (on push to
+`main` and `workflow_dispatch` only, never on pull requests — macOS minutes
+cost about 10x Linux; work item B3 in
+[docs/MACOS-PORT-DESIGN.md](../docs/MACOS-PORT-DESIGN.md)) and in
+`make check` on a Mac. Any other GOOS skips with an explicit message.
 
 ## Release gate
 
@@ -100,7 +99,7 @@ build otherwise. This is what lets `scripts/releasegate`'s negative-proof
 test (a deliberately broken `mads` binary that fails the health check) run
 in milliseconds instead of repeating a multi-minute cross-compile.
 
-The build matrix gives this gate darwin **build** coverage — it does not
-close the darwin **execution** gap noted above, which still needs a macOS CI
-row. Run on a Mac, the native candidate is darwin, so the health check runs
-for real there, but the install/uninstall smoke still skips.
+The build matrix gives this gate darwin **build** coverage only; darwin
+**execution** coverage comes from CI's `macos` job noted above. Run on a Mac,
+the native candidate is darwin, so the health check and the install/uninstall
+smoke both run for real there.

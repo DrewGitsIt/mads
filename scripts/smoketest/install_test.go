@@ -30,8 +30,8 @@ var (
 )
 
 // platformMatrix is the installer's target platform list (spec §14.10).
-// This machine only has a linux runner; darwin coverage is CI-infrastructure
-// this environment doesn't have — see scripts/README.md's pending-CI note.
+// Linux runs in every CI job; darwin runs in CI's macOS row (push to main and
+// workflow_dispatch only) and in `make check` on a Mac.
 var platformMatrix = []string{"linux", "darwin"}
 
 func TestMain(m *testing.M) {
@@ -81,9 +81,9 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// requireLocalRunner skips the test on a platform not in platformMatrix, and
-// (today) on every platform except linux — this environment has no darwin
-// runner yet.
+// requireLocalRunner skips the test on a platform not in platformMatrix —
+// install.sh is a POSIX sh script and the hermetic path it takes here
+// (MADS_INSTALL_SOURCE) has no per-OS branches, so every matrix platform runs.
 func requireLocalRunner(t *testing.T) {
 	t.Helper()
 	inMatrix := false
@@ -94,9 +94,6 @@ func requireLocalRunner(t *testing.T) {
 	}
 	if !inMatrix {
 		t.Skipf("GOOS=%s is not in the installer's platform matrix %v", runtime.GOOS, platformMatrix)
-	}
-	if runtime.GOOS != "linux" {
-		t.Skipf("pending CI: no %s runner available here (see scripts/README.md)", runtime.GOOS)
 	}
 }
 
