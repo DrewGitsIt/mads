@@ -44,6 +44,11 @@ type Config struct {
 	Provider provider.Provider
 	// SessionID scopes the run: its confirmed ready tasks are the work.
 	SessionID string
+	// RunID names this run on pipeline.started and pipeline.completed, the
+	// same id the Router puts on the pipeline.cancelled/failed it emits for
+	// the run, so the run history pairs a run with its end by id rather than
+	// by order (two engines can overlap on one session). Empty omits it.
+	RunID string
 	// Template is the frozen copy (spec §6: saves never disturb in-flight
 	// runs) — parse+validate before calling Run; Run re-checks structure.
 	Template *template.Template
@@ -332,6 +337,9 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 		"template":    e.cfg.Template.Name,
 		"concurrency": e.cfg.Concurrency,
 	}
+	if e.cfg.RunID != "" {
+		payload["run_id"] = e.cfg.RunID
+	}
 	// Omitted rather than sent as 0: a genuine version is always >= 1
 	// (contracts.Template.Version), so 0 only ever means "the caller
 	// couldn't tell us" (a pre-versioning row, or a bypassed LoadTemplate) —
@@ -451,12 +459,16 @@ func (e *engine) run(ctx context.Context) (*Summary, error) {
 	if len(summary.Blocked) > 0 || len(summary.Skipped) > 0 {
 		outcome = "incomplete"
 	}
-	e.event(ctx, contracts.PipelineCompleted, "", map[string]any{
+	completed := map[string]any{
 		"outcome": outcome,
 		"done":    len(summary.Done),
 		"blocked": len(summary.Blocked),
 		"skipped": len(summary.Skipped),
-	})
+	}
+	if e.cfg.RunID != "" {
+		completed["run_id"] = e.cfg.RunID
+	}
+	e.event(ctx, contracts.PipelineCompleted, "", completed)
 	return summary, nil
 }
 

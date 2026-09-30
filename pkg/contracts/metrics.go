@@ -74,6 +74,7 @@ type CapabilityUsage struct {
 type PipelineRun struct {
 	SessionID    string    `json:"session_id"`
 	RunSeq       int64     `json:"run_seq"`
+	RunID        string    `json:"run_id,omitempty"` // from pipeline.started; empty for runs started before it carried one
 	StartedAt    time.Time `json:"started_at"`
 	EndedAt      time.Time `json:"ended_at,omitempty"` // zero if still running (no terminal event yet)
 	Outcome      string    `json:"outcome"`            // "completed" | "incomplete" | "cancelled" | "failed" | "running" | "interrupted"

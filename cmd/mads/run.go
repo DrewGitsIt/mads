@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -125,8 +127,9 @@ func cmdRun(args []string, out io.Writer) error {
 	_, _ = fmt.Fprintf(out, "run: session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d stage-timeout=%s\n\n",
 		*session, tpl.Name, *providerName, ws, *isolated, *concurrency, *stageTimeout)
 
+	runID := newRunID()
 	sum, err := pipelinerun.Run(ctx, pipelinerun.Options{
-		Data: client, Provider: prov, SessionID: *session,
+		Data: client, Provider: prov, SessionID: *session, RunID: runID,
 		Template: tpl, TemplateVersion: tplVersion, Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
 		Isolated: *isolated, WorktreeRoot: root, DataURL: *data,
@@ -140,6 +143,13 @@ func cmdRun(args []string, out io.Writer) error {
 	}
 	stopTail()
 	<-tailDone
+	if err != nil && ctx.Err() != nil {
+		// Interrupted (Ctrl+C, SIGTERM). The engine stops without a terminal
+		// event, and no Router is watching this process to emit one, so
+		// without this the run reads "running" in the run history (and the
+		// Pipeline tab) forever.
+		recordInterrupted(client, *session, runID)
+	}
 	if err != nil {
 		return err
 	}
@@ -242,4 +252,27 @@ func eventLine(env contracts.Envelope) string {
 	}
 	return fmt.Sprintf("%s  %-20s %-22s %s",
 		env.Timestamp.Local().Format("15:04:05"), env.Type, task, strings.Join(kv, " "))
+}
+
+// newRunID mints a run id in the Router's format (services/router's
+// supervisor.NewRunID), so CLI runs pair with their end events by id too.
+func newRunID() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return "run_" + hex.EncodeToString(b[:])
+}
+
+// recordInterrupted appends the pipeline.cancelled a Router-launched run
+// would get from its Cancel. Its own short context: the run's has already
+// been cancelled by the signal. Best-effort; a failure only costs history.
+func recordInterrupted(client *dataclient.Client, sessionID, runID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.Append(ctx, &contracts.Envelope{
+		Type:      contracts.PipelineCancelled,
+		SessionID: sessionID,
+		Payload:   []byte(`{"run_id":"` + runID + `","reason":"interrupted"}`),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "run: could not record the interrupted run: %v\n", err)
+	}
 }

@@ -26,7 +26,9 @@ type Options struct {
 	Data      *dataclient.Client
 	Provider  provider.Provider
 	SessionID string
-	Template  *template.Template
+	// RunID names the run on its pipeline.* events (engine.Config.RunID).
+	RunID    string
+	Template *template.Template
 	// TemplateVersion is the contracts.Template.Version this Template was
 	// parsed from — LoadTemplate's caller reads it off the registry record
 	// LoadTemplate fetched and must pass it through separately, since the
@@ -119,6 +121,7 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 		Data:            opts.Data,
 		Provider:        opts.Provider,
 		SessionID:       opts.SessionID,
+		RunID:           opts.RunID,
 		Template:        opts.Template,
 		TemplateVersion: opts.TemplateVersion,
 		Cwd:             opts.Cwd,

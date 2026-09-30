@@ -113,3 +113,90 @@ func TestPipelineRunsRecentActivityStaysRunning(t *testing.T) {
 		t.Errorf("ended_at = %v, want zero", run.EndedAt)
 	}
 }
+
+// appendRunEvents appends pipeline lifecycle events to one session, each a
+// minute apart, and returns nothing: the log's own seqs order them.
+func appendRunEvents(t *testing.T, l *Log, sessionID string, evs ...contracts.Envelope) {
+	t.Helper()
+	at := time.Now().UTC().Add(-time.Duration(len(evs)) * time.Minute)
+	for _, ev := range evs {
+		ev.SessionID, ev.Actor, ev.Timestamp = sessionID, "pipeline", at
+		if err := l.Append(context.Background(), &ev); err != nil {
+			t.Fatal(err)
+		}
+		at = at.Add(time.Minute)
+	}
+}
+
+func runEvent(typ contracts.EventType, payload string) contracts.Envelope {
+	return contracts.Envelope{Type: typ, Payload: []byte(payload)}
+}
+
+func outcomes(runs []contracts.PipelineRun) []string {
+	out := make([]string, len(runs))
+	for i, r := range runs {
+		out[i] = r.RunID + ":" + r.Outcome
+	}
+	return out
+}
+
+// TestPipelineRunsPairByRunID: a UI-launched run and a CLI run overlap on
+// one session. The UI run's cancel closes the UI run — not whichever run
+// started last, which is what order-pairing did (the leader session's
+// run_seq 12226 stayed "running" forever while 12244 took its cancel).
+func TestPipelineRunsPairByRunID(t *testing.T) {
+	l := openMigratedDB(t)
+	metrics := NewMetrics(l, NewTasks(l), NewCapabilities(l))
+	appendRunEvents(t, l, "ses_overlap",
+		runEvent(contracts.PipelineStarted, `{"run_id":"run_ui","concurrency":3}`),
+		runEvent(contracts.PipelineStarted, `{"run_id":"run_cli","concurrency":1}`),
+		runEvent(contracts.PipelineCancelled, `{"run_id":"run_ui"}`),
+		runEvent(contracts.PipelineCompleted, `{"run_id":"run_cli","outcome":"completed","done":2}`),
+	)
+	runs, err := metrics.PipelineRuns(context.Background(), "ses_overlap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := outcomes(runs)
+	want := []string{"run_ui:cancelled", "run_cli:completed"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("runs = %v, want %v", got, want)
+	}
+	if runs[1].TasksDone != 2 || runs[0].EndedAt.IsZero() {
+		t.Errorf("runs = %+v", runs)
+	}
+}
+
+// TestPipelineRunsLegacyNeverRunningForever: the leader session's actual
+// log, from before pipeline.started carried run_id. The pairing can't be
+// recovered, but no run is left "running" behind a newer start.
+func TestPipelineRunsLegacyNeverRunningForever(t *testing.T) {
+	l := openMigratedDB(t)
+	metrics := NewMetrics(l, NewTasks(l), NewCapabilities(l))
+	appendRunEvents(t, l, "ses_legacy",
+		runEvent(contracts.PipelineStarted, `{"concurrency":3,"template":"default-implementation"}`),
+		runEvent(contracts.PipelineStarted, `{"concurrency":1,"template":"default-implementation"}`),
+		runEvent(contracts.PipelineCancelled, `{"run_id":"run_789d8b08f61b635b"}`),
+		runEvent(contracts.PipelineStarted, `{"concurrency":3,"template":"default-implementation"}`),
+	)
+	runs, err := metrics.PipelineRuns(context.Background(), "ses_legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := outcomes(runs)
+	want := []string{":interrupted", ":cancelled", ":running"}
+	for i := range want {
+		if i >= len(got) || got[i] != want[i] {
+			t.Fatalf("runs = %v, want %v", got, want)
+		}
+	}
+	running := 0
+	for _, r := range runs {
+		if r.Outcome == "running" {
+			running++
+		}
+	}
+	if running != 1 {
+		t.Errorf("%d runs report running, want only the newest", running)
+	}
+}
