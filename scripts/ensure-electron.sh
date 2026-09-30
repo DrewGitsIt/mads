@@ -33,16 +33,50 @@
 # works regardless of where the caller cd'd to.
 MADS_ELECTRON_PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ui/node_modules/electron"
 
+# The Electron executable inside dist/, per OS — the same layout install.js
+# records in path.txt. Every path to the binary goes through this.
+mads_electron_bin() {
+  case "$(uname -s)" in
+    Darwin) echo "$MADS_ELECTRON_PKG/dist/Electron.app/Contents/MacOS/Electron" ;;
+    *)      echo "$MADS_ELECTRON_PKG/dist/electron" ;;
+  esac
+}
+
 # 0 when the binary is present, executable, and matches the package version —
 # exactly the end state electron's own install.js is supposed to leave behind.
 mads_electron_ok() {
   local want
   [ -d "$MADS_ELECTRON_PKG" ] || return 1
   [ -f "$MADS_ELECTRON_PKG/path.txt" ] || return 1
-  [ -x "$MADS_ELECTRON_PKG/dist/electron" ] || return 1
+  [ -x "$(mads_electron_bin)" ] || return 1
   [ -f "$MADS_ELECTRON_PKG/dist/version" ] || return 1
   want="$(node -p "require('$MADS_ELECTRON_PKG/package.json').version")" || return 1
   [ "$(tr -d 'v' < "$MADS_ELECTRON_PKG/dist/version")" = "$want" ]
+}
+
+# Darwin fallback for mads_ensure_electron: fetch the checksum-verified zip
+# through @electron/get (a cache hit after install.js ran) and extract it with
+# ditto, then write path.txt the way install.js would (no trailing newline —
+# index.js path.join()s it verbatim).
+mads_electron_ditto_install() {
+  local zip
+  zip="$(cd "$MADS_ELECTRON_PKG" && node -e '
+      const {downloadArtifact} = require("@electron/get");
+      const os = require("os");
+      downloadArtifact({
+        version: require("./package.json").version,
+        artifactName: "electron",
+        platform: os.platform(),
+        arch: os.arch(),
+        checksums: require("./checksums.json"),
+      }).then((p) => console.log(p)).catch((e) => {
+        console.error(e.message); process.exit(1);
+      });')" || return 1
+  rm -rf "$MADS_ELECTRON_PKG/dist"
+  mkdir -p "$MADS_ELECTRON_PKG/dist"
+  ditto -x -k "$zip" "$MADS_ELECTRON_PKG/dist" || return 1
+  chmod +x "$(mads_electron_bin)" 2>/dev/null || true
+  printf 'Electron.app/Contents/MacOS/Electron' > "$MADS_ELECTRON_PKG/path.txt"
 }
 
 # Fetch + extract the binary via electron's own install.js when it is
@@ -53,8 +87,17 @@ mads_ensure_electron() {
   [ -f "$MADS_ELECTRON_PKG/install.js" ] \
     || { echo "ensure-electron: no electron package — run 'npm --prefix ui ci'" >&2; return 1; }
   echo "ensure-electron: electron binary not installed yet — running electron's installer"
-  node "$MADS_ELECTRON_PKG/install.js" \
-    || { echo "ensure-electron: electron install failed (network?)" >&2; return 1; }
+  if ! node "$MADS_ELECTRON_PKG/install.js"; then
+    [ "$(uname -s)" = Darwin ] \
+      || { echo "ensure-electron: electron install failed (network?)" >&2; return 1; }
+    # install.js extracts through a native binding that an OS policy can
+    # refuse to load (electron/electron#52481). Re-extract the zip it cached
+    # with ditto, which keeps the symlinks Electron.app's frameworks need
+    # (python3's zipfile drops them).
+    echo "ensure-electron: electron's installer failed — extracting with ditto" >&2
+    mads_electron_ditto_install \
+      || { echo "ensure-electron: electron install failed (network?)" >&2; return 1; }
+  fi
 
   mads_electron_ok || { echo "ensure-electron: still broken after install" >&2; return 1; }
   echo "ensure-electron: installed electron $(tr -d 'v' < "$MADS_ELECTRON_PKG/dist/version")"
@@ -65,6 +108,9 @@ mads_ensure_electron() {
 # (electron --version, which aborts hard when the SUID helper is misconfigured)
 # is authoritative.
 mads_electron_needs_no_sandbox() {
+  # macOS sandboxes renderers with seatbelt, which always works; the userns /
+  # SUID probing below is Linux-only.
+  [ "$(uname -s)" = Darwin ] && return 1
   if command -v unshare >/dev/null 2>&1 && unshare -Urm true 2>/dev/null; then
     return 1  # userns sandbox works — nothing to disable
   fi
@@ -72,7 +118,7 @@ mads_electron_needs_no_sandbox() {
   if [ -f "$helper" ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
     sudo -n chown root:root "$helper" && sudo -n chmod 4755 "$helper" || true
   fi
-  ! "$MADS_ELECTRON_PKG/dist/electron" --version >/dev/null 2>&1
+  ! "$(mads_electron_bin)" --version >/dev/null 2>&1
 }
 
 # Standalone: install, then report the sandbox verdict — both as an echo (for

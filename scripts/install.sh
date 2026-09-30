@@ -28,6 +28,11 @@ die()  { printf '[mads-install] ERROR: %s\n' "$*" >&2; exit 1; }
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UI_DIR="$REPO_ROOT/ui"
 ELECTRON_PKG="$UI_DIR/node_modules/electron"
+# POSIX twin of ensure-electron.sh's mads_electron_bin (that file is bash).
+case "$(uname -s)" in
+  Darwin) ELECTRON_BIN="$ELECTRON_PKG/dist/Electron.app/Contents/MacOS/Electron" ;;
+  *)      ELECTRON_BIN="$ELECTRON_PKG/dist/electron" ;;
+esac
 
 # ---- 0. hermetic binary install (CI / smoketest path) -----------------------
 # scripts/smoketest (spec §14.7) drives this script with MADS_INSTALL_SOURCE
@@ -137,8 +142,8 @@ log "launcher: $LAUNCHER"
 if [ "$ELECTRON_STEP_SKIPPED" -eq 1 ]; then
   log "smoke test: skipped (no bash in PATH, electron install was skipped)"
 elif [ "$SANDBOX_FALLBACK" -eq 1 ]; then
-  ELECTRON_DISABLE_SANDBOX=1 "$ELECTRON_PKG/dist/electron" --version
+  ELECTRON_DISABLE_SANDBOX=1 "$ELECTRON_BIN" --version
 else
-  "$ELECTRON_PKG/dist/electron" --version
+  "$ELECTRON_BIN" --version
 fi
 log "DONE. Launch the app with: $LAUNCHER"
