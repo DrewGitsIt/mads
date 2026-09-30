@@ -8,16 +8,20 @@
 # `bash scripts/ensure-electron.sh` and reads the exit status (see the
 # standalone block below). Also runnable standalone directly the same way.
 #
-# Two host problems live here, both of which come back on their own:
+# Two jobs live here:
 #
-#  1. electron's postinstall (install.js -> extract-zip@2.0.1 -> yauzl 2.10)
-#     stalls mid-extraction and exits 0 on Node >= 24.16 / >= 26.1, leaving a
-#     partial dist/ and no path.txt. See scripts/install.sh's
-#     node_electron_compat_check for the upstream links and the criterion for
-#     deleting all of this. `make build` runs `npm ci`, and npm re-runs the
-#     broken postinstall, so EVERY build re-breaks the binary — a one-time
-#     install-day repair is not enough, which is why app.sh repairs on each
-#     launch. The check below is a cheap stat when things are already fine.
+#  1. Electron >= 42 no longer has an npm postinstall: `npm ci` leaves
+#     node_modules/electron with no dist/ and no path.txt, and the binary is
+#     fetched lazily the first time something require()s the package. The
+#     sandbox probe below runs dist/electron directly, so make sure it exists
+#     first by running electron's own installer (install.js: checksum-verified
+#     download into ~/.cache/electron, then extract). `make build` runs
+#     `npm ci`, which wipes dist/ again, so app.sh does this on every launch;
+#     it is a cheap stat when the binary is already there.
+#     (This used to be a hand-rolled unzip working around electron/electron
+#     #51619, the extract-zip/yauzl stall on Node >= 24.16 / 26.1. Electron 44
+#     extracts with @electron-internal/extract-zip instead and installs
+#     cleanly on Node 26, so the workaround is gone.)
 #
 #  2. Chromium sandboxes renderers with unprivileged user namespaces. Some
 #     hosts block those (Ubuntu 24.04's AppArmor userns restriction, DGX
@@ -41,52 +45,19 @@ mads_electron_ok() {
   [ "$(tr -d 'v' < "$MADS_ELECTRON_PKG/dist/version")" = "$want" ]
 }
 
-# Rebuild dist/ + path.txt from the checksum-verified zip @electron/get keeps
-# in ~/.cache/electron (downloading it only if the cache is cold). No-op and
-# silent when mads_electron_ok already passes.
+# Fetch + extract the binary via electron's own install.js when it is
+# missing. No-op and silent when mads_electron_ok already passes.
 mads_ensure_electron() {
   mads_electron_ok && return 0
 
-  local version zip
-  version="$(node -p "require('$MADS_ELECTRON_PKG/package.json').version")" \
+  [ -f "$MADS_ELECTRON_PKG/install.js" ] \
     || { echo "ensure-electron: no electron package — run 'npm --prefix ui ci'" >&2; return 1; }
-  echo "ensure-electron: electron $version binary missing/partial (postinstall no-op) — repairing"
+  echo "ensure-electron: electron binary not installed yet — running electron's installer"
+  node "$MADS_ELECTRON_PKG/install.js" \
+    || { echo "ensure-electron: electron install failed (network?)" >&2; return 1; }
 
-  zip="$(cd "$MADS_ELECTRON_PKG" && node -e '
-      const {downloadArtifact} = require("@electron/get");
-      const os = require("os");
-      downloadArtifact({
-        version: require("./package.json").version,
-        artifactName: "electron",
-        platform: os.platform(),
-        arch: os.arch(),
-        checksums: require("./checksums.json"),
-      }).then((p) => console.log(p)).catch((e) => {
-        console.error(e.message); process.exit(1);
-      });')" \
-    || { echo "ensure-electron: could not obtain electron $version zip (network?)" >&2; return 1; }
-
-  rm -rf "$MADS_ELECTRON_PKG/dist"
-  mkdir -p "$MADS_ELECTRON_PKG/dist"
-  if command -v unzip >/dev/null 2>&1; then
-    unzip -o -q "$zip" -d "$MADS_ELECTRON_PKG/dist"
-  elif command -v python3 >/dev/null 2>&1; then
-    python3 -m zipfile -e "$zip" "$MADS_ELECTRON_PKG/dist/"
-  else
-    echo "ensure-electron: need 'unzip' or 'python3' to extract $zip" >&2; return 1
-  fi
-  # The zip carries no exec bits; install.js chmods these two.
-  chmod +x "$MADS_ELECTRON_PKG/dist/electron" 2>/dev/null || true
-  chmod +x "$MADS_ELECTRON_PKG/dist/chrome_crashpad_handler" 2>/dev/null || true
-  # path.txt has NO trailing newline — index.js path.join()s it verbatim.
-  case "$(uname -s)" in
-    Linux)  printf 'electron' > "$MADS_ELECTRON_PKG/path.txt" ;;
-    Darwin) printf 'Electron.app/Contents/MacOS/Electron' > "$MADS_ELECTRON_PKG/path.txt" ;;
-    *) echo "ensure-electron: unsupported platform $(uname -s)" >&2; return 1 ;;
-  esac
-
-  mads_electron_ok || { echo "ensure-electron: still broken after extraction" >&2; return 1; }
-  echo "ensure-electron: repaired electron $version"
+  mads_electron_ok || { echo "ensure-electron: still broken after install" >&2; return 1; }
+  echo "ensure-electron: installed electron $(tr -d 'v' < "$MADS_ELECTRON_PKG/dist/version")"
 }
 
 # 0 when the renderer sandbox cannot work on this host and the caller must set
@@ -104,7 +75,7 @@ mads_electron_needs_no_sandbox() {
   ! "$MADS_ELECTRON_PKG/dist/electron" --version >/dev/null 2>&1
 }
 
-# Standalone: repair, then report the sandbox verdict — both as an echo (for
+# Standalone: install, then report the sandbox verdict — both as an echo (for
 # humans watching `bash scripts/ensure-electron.sh` run directly) and as the
 # exit status (for install.sh, which cannot source this bash file and instead
 # executes it as a subprocess):

@@ -63,10 +63,10 @@ if ! up "http://$ROUTER_ADDR/health"; then
   echo "app.sh: started router ($ROUTER_ADDR)"
 fi
 
-# `npm ci` (via `make build`) re-runs electron's postinstall, which silently
-# no-ops on Node >= 24.16 / 26.1 and leaves a partial dist/ — so the binary
-# can be broken again since the last launch. Repair here rather than trusting
-# install day; it's a cheap stat when nothing is wrong. Same call decides
+# Electron has no postinstall and `npm ci` (via `make build`) wipes its
+# lazily-downloaded binary, so it can be missing again since the last launch.
+# Install it here rather than trusting install day; it's a cheap stat when
+# nothing is wrong. Same call decides
 # whether this host can sandbox the renderer at all.
 # shellcheck source=scripts/ensure-electron.sh
 . "$REPO_ROOT/scripts/ensure-electron.sh"
