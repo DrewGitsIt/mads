@@ -99,13 +99,14 @@ type Config struct {
 	Clock Clock
 
 	// DisableSleepInhibit turns off the OS sleep/idle inhibitor normally
-	// held for the run's duration (logind + ScreenSaver where available —
-	// COSMIC's idle-suspend only honors the latter). Default false
-	// (inhibitor enabled). Acquiring it never fails or delays the run: a
-	// missing/refused D-Bus service just logs a warning (pkg/inhibit).
+	// held for the run's duration (linux: logind + ScreenSaver where
+	// available — COSMIC's idle-suspend only honors the latter; darwin:
+	// caffeinate). Default false (inhibitor enabled). Acquiring it never
+	// fails or delays the run: a missing/refused service or a failed spawn
+	// just logs a warning (pkg/inhibit).
 	DisableSleepInhibit bool
 	// SleepInhibitor is the inhibitor implementation; nil defaults to the
-	// real D-Bus-backed inhibit.Locker. Tests inject a fake.
+	// real per-OS inhibit.NewLocker(). Tests inject a fake.
 	SleepInhibitor inhibit.Locker
 
 	// Isolated turns on worktree-per-task (spec §6, §17): stages before the

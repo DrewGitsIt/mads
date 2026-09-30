@@ -1,7 +1,10 @@
 // Package inhibit holds OS sleep/idle inhibitor locks so the machine doesn't
-// suspend while something important is in progress. Acquiring never fails or
-// blocks meaningfully: a missing/refused D-Bus service degrades to a no-op
-// with a logged warning.
+// suspend while something important is in progress. NewLocker picks the
+// backend per OS: logind + org.freedesktop.ScreenSaver over D-Bus on linux
+// (dbus_linux.go), a `caffeinate -i -s -w <pid>` child on darwin
+// (caffeinate_darwin.go), and a no-op elsewhere (noop_other.go). Acquiring
+// never fails or blocks meaningfully on any backend: a missing/refused
+// service or a failed spawn degrades to a no-op with a logged warning.
 package inhibit
 
 // Locker acquires inhibitor lock(s) and returns a Handle to release them.
