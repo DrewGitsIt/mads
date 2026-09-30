@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/drewkidwell/mads/pkg/madsbin"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/madsbin"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
