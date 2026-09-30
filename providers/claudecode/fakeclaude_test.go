@@ -309,7 +309,8 @@ type fcLine struct {
 	wireLine
 	RequestID string `json:"request_id"`
 	Request   struct {
-		Subtype string `json:"subtype"`
+		Subtype string                     `json:"subtype"`
+		Servers map[string]json.RawMessage `json:"servers"`
 	} `json:"request"`
 }
 
@@ -378,9 +379,33 @@ func fcStream(a fcArgs) {
 		_ = interrupted // claude reports interrupted turns as plain results too
 	}
 
+	// dynamic mirrors claude's mcp_set_servers-managed server set.
+	dynamic := map[string]json.RawMessage{}
 	for l := range lines {
 		if l.Type == "control_request" && l.Request.Subtype == "list_models" {
 			fcEmitListModels(l.RequestID)
+			continue
+		}
+		if l.Type == "control_request" && l.Request.Subtype == "mcp_set_servers" {
+			added, removed := []string{}, []string{}
+			for name := range l.Request.Servers {
+				if _, ok := dynamic[name]; !ok {
+					added = append(added, name)
+				}
+			}
+			for name := range dynamic {
+				if _, ok := l.Request.Servers[name]; !ok {
+					removed = append(removed, name)
+				}
+			}
+			dynamic = l.Request.Servers
+			fcEmit(map[string]any{
+				"type": "control_response",
+				"response": map[string]any{
+					"subtype": "success", "request_id": l.RequestID,
+					"response": map[string]any{"added": added, "removed": removed, "errors": map[string]string{}},
+				},
+			})
 			continue
 		}
 		if l.Type != "user" {
@@ -395,6 +420,10 @@ func fcStream(a fcArgs) {
 
 		if prompt == "mcp-echo" {
 			reply := fcMCPEcho(a)
+			if len(dynamic) > 0 {
+				raw, _ := json.Marshal(dynamic)
+				reply += " dynamic=" + string(raw)
+			}
 			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
 			result(reply, false)

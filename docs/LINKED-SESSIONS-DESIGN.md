@@ -232,9 +232,13 @@ Links are directed edges; nothing is 1:1 by design:
    session child degrades gracefully rather than erroring.
 
    **Activation (2026-09-30).** A new grant starts `pending_restart`. The
-   runner mounts it by cycling its provider process on the same
-   conversation (`RefreshOrchestrate` → `swapTransport` with resume), and
-   only at a quiet turn boundary: turn over, nothing queued. That happens
+   runner mounts it only at a quiet turn boundary (turn over, nothing
+   queued). Where the live session can change its MCP servers in place
+   (`provider.MCPHotSetter`: claude-code's stream transport, via the
+   `mcp_set_servers` control request, see
+   docs/research/claude-mcp-hot-mount.md), there is no restart at all.
+   Otherwise the runner cycles the provider process on the same
+   conversation (`RefreshOrchestrate` → `swapTransport` with resume). That happens
    when the Router notifies it and, level-triggered, at every quiet boundary
    while any of its grants are still pending. So a lost notification or a
    refused cycle (`ErrSwitchBusy`, no resumable ref yet) retries at the next

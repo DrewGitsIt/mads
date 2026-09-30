@@ -228,6 +228,17 @@ is the opt-in real-binary counterpart:
 MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run MCPSmoke
 ```
 
+A live stream session can also change its servers without a restart:
+`streamSession.SetMCPServers` (`provider.MCPHotSetter`) sends the
+`mcp_set_servers` control request, which replaces claude's *dynamic*
+server set. Tools reach the model from the next turn on the same
+conversation. It can add servers but not remove ones passed at launch;
+that case returns `provider.ErrMCPHotSetUnsupported`, and the Runner
+restarts the process instead. The PTY transport doesn't implement it.
+Findings and probes are in `docs/research/claude-mcp-hot-mount.md`, and
+the real-binary check is `TestRealClaudeMCPHotSetSmoke` (same
+`MADS_CLAUDE_SMOKE=1` gate, `-run MCPHotSetSmoke`).
+
 Note: declaring an MCP server in an agent's own capabilities
 (`agent.Capabilities.MCPServers` / `setupMCP` in `capability.go`) is a
 separate, still-unwired path — those servers run as health-checked

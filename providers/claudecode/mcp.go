@@ -11,6 +11,9 @@ import (
 )
 
 type mcpServerJSON struct {
+	// Type is set only on the live mcp_set_servers request ("stdio"); the
+	// --mcp-config file leaves it implicit.
+	Type    string            `json:"type,omitempty"`
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
@@ -32,24 +35,9 @@ type mcpConfigFile struct {
 func writeMCPConfig(servers []provider.MCPServerRef) (path string, err error) {
 	cfg := mcpConfigFile{MCPServers: map[string]mcpServerJSON{}}
 	for _, s := range servers {
-		fields := strings.Fields(s.Command)
-		if len(fields) == 0 {
-			return "", fmt.Errorf("mcp server %q: empty command", s.Name)
-		}
-		bin := fields[0]
-		if resolved, lookErr := exec.LookPath(bin); lookErr == nil {
-			bin = resolved
-		}
-		entry := mcpServerJSON{Command: bin, Args: fields[1:]}
-		for _, kv := range s.Env {
-			k, v, ok := strings.Cut(kv, "=")
-			if !ok {
-				continue
-			}
-			if entry.Env == nil {
-				entry.Env = map[string]string{}
-			}
-			entry.Env[k] = v
+		entry, err := mcpServerEntry(s)
+		if err != nil {
+			return "", err
 		}
 		cfg.MCPServers[s.Name] = entry
 	}
@@ -67,6 +55,32 @@ func writeMCPConfig(servers []provider.MCPServerRef) (path string, err error) {
 		return "", err
 	}
 	return f.Name(), nil
+}
+
+// mcpServerEntry is one stdio server as claude's config takes it: the
+// command split into binary and args, the binary resolved to an absolute
+// path, env as a map.
+func mcpServerEntry(s provider.MCPServerRef) (mcpServerJSON, error) {
+	fields := strings.Fields(s.Command)
+	if len(fields) == 0 {
+		return mcpServerJSON{}, fmt.Errorf("mcp server %q: empty command", s.Name)
+	}
+	bin := fields[0]
+	if resolved, lookErr := exec.LookPath(bin); lookErr == nil {
+		bin = resolved
+	}
+	entry := mcpServerJSON{Command: bin, Args: fields[1:]}
+	for _, kv := range s.Env {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if entry.Env == nil {
+			entry.Env = map[string]string{}
+		}
+		entry.Env[k] = v
+	}
+	return entry, nil
 }
 
 // mcpArgs returns the CLI args wiring servers into claude's real launch, and

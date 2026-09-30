@@ -1018,6 +1018,81 @@ func TestRealClaudeMCPSmoke(t *testing.T) {
 	}
 }
 
+// TestRealClaudeMCPHotSetSmoke proves SetMCPServers against the real binary,
+// mid-conversation: turn 1 sees no MCP tools, the orchestrate server is
+// mounted with mcp_set_servers, and turn 2 on the same session lists its
+// tools. No restart: the session ref is unchanged. Opt-in: it spends real
+// tokens (two short haiku turns).
+// MADS_CLAUDE_SMOKE=1 go test ./providers/claudecode -run MCPHotSetSmoke
+func TestRealClaudeMCPHotSetSmoke(t *testing.T) {
+	if os.Getenv("MADS_CLAUDE_SMOKE") != "1" {
+		t.Skip("set MADS_CLAUDE_SMOKE=1 (spends tokens) to run against the real claude binary")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skip("no claude binary on PATH")
+	}
+	binDir := t.TempDir()
+	build := exec.Command("go", "build", "-o", filepath.Join(binDir, "mads"), "github.com/drewkidwell/mads/cmd/mads")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build mads: %v\n%s", err, out)
+	}
+
+	p := New(Config{ExtraArgs: []string{"--dangerously-skip-permissions"}})
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, Cwd: t.TempDir(), Model: "haiku",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	turn := func(prompt string) string {
+		t.Helper()
+		if err := sess.Send(context.Background(), prompt); err != nil {
+			t.Fatal(err)
+		}
+		var text string
+		deadline := time.After(90 * time.Second)
+		for {
+			select {
+			case ev, ok := <-sess.Events():
+				if !ok {
+					t.Fatal("stream closed before turn end")
+				}
+				if ev.Kind == provider.EventText {
+					text += ev.Text
+				}
+				if ev.Kind == provider.EventTurnEnd {
+					return text
+				}
+			case <-deadline:
+				t.Fatal("no turn end")
+			}
+		}
+	}
+	const ask = "Without calling any tool, list the exact names of every tool you have whose name starts with mcp__, comma-separated. If there are none, reply NONE."
+	if first := turn(ask); strings.Contains(first, "list_links") {
+		t.Fatalf("turn 1 already sees orchestrate tools: %q", first)
+	}
+	ref := sess.Ref()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := sess.(provider.MCPHotSetter).SetMCPServers(ctx, []provider.MCPServerRef{{
+		Name:    "orchestrate-smoke",
+		Command: filepath.Join(binDir, "mads") + " internal orchestrate-mcp",
+		Env:     []string{"MADS_ROUTER_URL=http://localhost:1", "MADS_SESSION_ID=smoke"},
+	}}); err != nil {
+		t.Fatalf("SetMCPServers: %v", err)
+	}
+
+	if second := turn("Check again now. " + ask); !strings.Contains(second, "list_links") {
+		t.Fatalf("turn 2 after the hot set doesn't see list_links: %q", second)
+	}
+	if sess.Ref() != ref {
+		t.Errorf("session ref changed %q → %q; the hot set restarted the conversation", ref, sess.Ref())
+	}
+}
+
 // TestTranscriptSkipsReappendedEntries: when the CLI compacts it can append
 // verbatim copies of earlier entries — same uuid — after the newest ones
 // (observed on a real 2.x transcript: 622 lines). Rendered naively, old

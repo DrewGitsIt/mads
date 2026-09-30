@@ -288,6 +288,22 @@ type RefSetter interface {
 	SetRef(ref string)
 }
 
+// MCPHotSetter is implemented by a live session that can change its MCP
+// server set on the running process, without a restart and without losing
+// the conversation: new tools are visible from the next turn. The Runner
+// tries it before falling back to cycling the process
+// (RefreshOrchestrate). SetMCPServers takes the full desired set, like
+// StartOptions.MCPServers. A session that can only apply some changes (it
+// can add servers but not remove ones it was launched with) returns
+// ErrMCPHotSetUnsupported for the rest, so the caller cycles instead.
+type MCPHotSetter interface {
+	SetMCPServers(ctx context.Context, servers []MCPServerRef) error
+}
+
+// ErrMCPHotSetUnsupported means this particular change can't be applied
+// live; restart the process with the new set instead.
+var ErrMCPHotSetUnsupported = errors.New("provider: MCP server change needs a restart")
+
 // CompleteRequest is a single hermetic, stateless completion — the Fast
 // Model's default-provider transport. No session, no tools, no conversation
 // history.

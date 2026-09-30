@@ -86,6 +86,11 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		mcpConfigPath:    mcpConfigPath,
 		permSettingsPath: permSettingsPath,
 		announced:        make(chan string, 1),
+		launchMCP:        map[string]bool{},
+		controlWaiters:   map[string]chan controlReply{},
+	}
+	for _, srv := range opts.MCPServers {
+		s.launchMCP[srv.Name] = true
 	}
 	if opts.Resume != "" {
 		s.refFired = true
@@ -116,6 +121,23 @@ type streamSession struct {
 	reqSeq      int
 	closed      bool
 	refFired    bool // guards announced against a double-send
+
+	// launchMCP names the servers this process was started with
+	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
+	// top of them, so SetMCPServers can add servers but can't take these
+	// away.
+	launchMCP map[string]bool
+	// controlWaiters routes a control_response to the call waiting on its
+	// request_id.
+	controlWaiters map[string]chan controlReply
+}
+
+// controlReply is the part of a control_response line a waiter needs.
+type controlReply struct {
+	Subtype   string          `json:"subtype"`
+	RequestID string          `json:"request_id"`
+	Error     string          `json:"error"`
+	Response  json.RawMessage `json:"response"`
 }
 
 // read is the sole owner of the events channel: it normalizes stdout lines
@@ -148,6 +170,10 @@ func (s *streamSession) handleLine(raw []byte) {
 	var l wireLine
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return // not a protocol line; claude prints nothing else on stdout, but stay tolerant
+	}
+	if l.Type == "control_response" {
+		s.routeControlResponse(raw)
+		return
 	}
 	s.mu.Lock()
 	if l.SessionID != "" {
@@ -254,6 +280,111 @@ func (s *streamSession) Interrupt(_ context.Context) error {
 		return err
 	}
 	return s.write(append(line, '\n'))
+}
+
+// SetMCPServers implements provider.MCPHotSetter over the stream-json
+// control channel's mcp_set_servers request, which replaces the process's
+// dynamic MCP server set. claude connects the new servers right away and the
+// model sees their tools from the next turn, on the same conversation.
+// Verified against claude-code 2.1.283, mid-session: tools absent on turn 1,
+// set, present on turn 2 with the same session id (docs/research/
+// claude-mcp-hot-mount.md). Servers the process was launched with aren't in
+// the dynamic set, so a change that drops one is ErrMCPHotSetUnsupported.
+// So is a non-stdio server, which this adapter never passes live.
+func (s *streamSession) SetMCPServers(ctx context.Context, servers []provider.MCPServerRef) error {
+	s.mu.Lock()
+	launch := make(map[string]bool, len(s.launchMCP))
+	for name := range s.launchMCP {
+		launch[name] = true
+	}
+	s.mu.Unlock()
+
+	dynamic := map[string]mcpServerJSON{}
+	for _, srv := range servers {
+		if launch[srv.Name] {
+			delete(launch, srv.Name)
+			continue
+		}
+		if srv.Type != "" && srv.Type != "stdio" {
+			return fmt.Errorf("%w: server %q is %s", provider.ErrMCPHotSetUnsupported, srv.Name, srv.Type)
+		}
+		entry, err := mcpServerEntry(srv)
+		if err != nil {
+			return err
+		}
+		entry.Type = "stdio"
+		dynamic[srv.Name] = entry
+	}
+	if len(launch) > 0 {
+		return fmt.Errorf("%w: would drop a launch-time server", provider.ErrMCPHotSetUnsupported)
+	}
+
+	reply, err := s.control(ctx, map[string]any{"subtype": "mcp_set_servers", "servers": dynamic})
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Errors map[string]string `json:"errors"`
+	}
+	_ = json.Unmarshal(reply.Response, &result)
+	if len(result.Errors) > 0 {
+		return fmt.Errorf("claude mcp_set_servers: %v", result.Errors)
+	}
+	return nil
+}
+
+// control sends one control_request and waits for its control_response.
+func (s *streamSession) control(ctx context.Context, request map[string]any) (controlReply, error) {
+	s.mu.Lock()
+	s.reqSeq++
+	id := fmt.Sprintf("mads-%d", s.reqSeq)
+	ch := make(chan controlReply, 1)
+	s.controlWaiters[id] = ch
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.controlWaiters, id)
+		s.mu.Unlock()
+	}()
+
+	line, err := json.Marshal(map[string]any{"type": "control_request", "request_id": id, "request": request})
+	if err != nil {
+		return controlReply{}, err
+	}
+	if err := s.write(append(line, '\n')); err != nil {
+		return controlReply{}, err
+	}
+	select {
+	case reply := <-ch:
+		if reply.Subtype != "success" {
+			detail := reply.Error
+			if detail == "" {
+				detail = reply.Subtype
+			}
+			return reply, fmt.Errorf("claude %v: %s", request["subtype"], detail)
+		}
+		return reply, nil
+	case <-ctx.Done():
+		return controlReply{}, fmt.Errorf("claude %v: %w", request["subtype"], ctx.Err())
+	}
+}
+
+// routeControlResponse hands a control_response line to whoever is waiting
+// on its request_id. Responses nobody waits for (an interrupt's) are
+// dropped.
+func (s *streamSession) routeControlResponse(raw []byte) {
+	var line struct {
+		Response controlReply `json:"response"`
+	}
+	if json.Unmarshal(raw, &line) != nil {
+		return
+	}
+	s.mu.Lock()
+	ch := s.controlWaiters[line.Response.RequestID]
+	s.mu.Unlock()
+	if ch != nil {
+		ch <- line.Response
+	}
 }
 
 func (s *streamSession) write(line []byte) error {

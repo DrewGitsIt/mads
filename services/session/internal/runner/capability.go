@@ -7,6 +7,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/madsbin"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/capability"
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -246,6 +247,15 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 	if desired != nil {
 		mcp = []provider.MCPServerRef{*desired}
 	}
+	// Preferred: change the live process's MCP servers in place (claude-code
+	// mcp_set_servers). No cycle at all; tools appear from the next turn.
+	// Anything it can't do falls through to the cycle below.
+	if r.hotSetMCP(ctx, mcp) {
+		if desired != nil {
+			r.markOrchestrateLinks(ctx, contracts.OrchestrateActive)
+		}
+		return nil
+	}
 	_, model := r.currentSwapBasis()
 	if _, err := r.swapTransport(ctx, mode, mcp, model, true); err != nil {
 		if errors.Is(err, ErrNoResumeRef) || errors.Is(err, ErrSwitchBusy) {
@@ -267,6 +277,47 @@ func (r *Runner) RefreshOrchestrate(ctx context.Context) error {
 		r.markOrchestrateLinks(ctx, contracts.OrchestrateActive)
 	}
 	return nil
+}
+
+// hotSetMCPTimeout bounds one live MCP change; a provider that doesn't
+// answer in time gets the process cycle instead.
+const hotSetMCPTimeout = 20 * time.Second
+
+// hotSetMCP applies mcp to the running provider session in place when the
+// session supports it (provider.MCPHotSetter) and the runner is idle, and
+// reports whether it did. It holds opMu, like swapTransport, so the two
+// never overlap. Mid-turn it declines: the caller's cycle then refuses with
+// ErrSwitchBusy and re-arms for the next quiet boundary. A refusal
+// (ErrMCPHotSetUnsupported, e.g. dropping a launch-time server) or any error
+// also declines, and the caller cycles the process instead.
+func (r *Runner) hotSetMCP(ctx context.Context, mcp []provider.MCPServerRef) bool {
+	r.opMu.Lock()
+	defer r.opMu.Unlock()
+	r.mu.Lock()
+	sess, busy := r.sess, r.busy
+	current := r.baseOpts.MCPServers
+	r.mu.Unlock()
+	hs, ok := sess.(provider.MCPHotSetter)
+	if !ok || busy {
+		return false
+	}
+	if mcpServersEqual(current, mcp) {
+		return true // already live
+	}
+	hctx, cancel := context.WithTimeout(ctx, hotSetMCPTimeout)
+	defer cancel()
+	if err := hs.SetMCPServers(hctx, mcp); err != nil {
+		if !errors.Is(err, provider.ErrMCPHotSetUnsupported) {
+			log.Printf("runner: live MCP change for %s failed, cycling instead: %v", r.sessionID, err)
+		}
+		return false
+	}
+	r.mu.Lock()
+	// Later cycles (a model switch, a transport switch) relaunch with this
+	// set, so the tools survive them.
+	r.baseOpts.MCPServers = mcp
+	r.mu.Unlock()
+	return true
 }
 
 // orchestrateGrantPending reports whether this session grants orchestrate

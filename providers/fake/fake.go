@@ -76,6 +76,10 @@ type Fake struct {
 	// resume-above-threshold trigger, services/session/internal/runner/
 	// compact.go).
 	compactCalls []string
+	// mcpHotSet (WithMCPHotSet) makes Start's sessions provider.MCPHotSetter,
+	// and hotSets counts SetMCPServers calls.
+	mcpHotSet bool
+	hotSets   int
 }
 
 // Option configures a Fake at construction. The zero value of every Option
@@ -96,6 +100,33 @@ type Option func(*Fake)
 // processes resolve).
 func WithTranscriptDir(dir string) Option {
 	return func(f *Fake) { f.transcriptDir = dir }
+}
+
+// WithMCPHotSet makes the fake's sessions implement provider.MCPHotSetter,
+// the way claude-code's structured transport does: SetMCPServers replaces
+// the live session's recorded MCP servers (MCPServers(ref)) with no
+// restart and no Start call.
+func WithMCPHotSet() Option {
+	return func(f *Fake) { f.mcpHotSet = true }
+}
+
+// HotSetCalls counts SetMCPServers calls (WithMCPHotSet).
+func (f *Fake) HotSetCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.hotSets
+}
+
+// hotSetSession is a fakeSession that can also change its MCP servers live.
+type hotSetSession struct{ *fakeSession }
+
+func (s hotSetSession) SetMCPServers(_ context.Context, servers []provider.MCPServerRef) error {
+	ref := s.Ref() // before f.mu: Ref takes the session's own lock
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+	s.f.hotSets++
+	s.f.mcpServers[ref] = servers
+	return nil
 }
 
 // StartCalls returns every Start call's StartOptions, in order.
@@ -214,6 +245,9 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	}
 	if opts.Mode == provider.ModePTY {
 		s.ptyR, s.ptyW = io.Pipe()
+	}
+	if f.mcpHotSet && opts.Mode == provider.ModeACP {
+		return hotSetSession{s}, nil
 	}
 	return s, nil
 }
