@@ -25,7 +25,7 @@ const (
 // Store is a credential store backed by a single private JSON file
 // ({name: ciphertext}). Safe for concurrent use within one process; Open
 // additionally serializes the first-open migration across processes via an
-// OS-level file lock (see flock_linux.go).
+// OS-level file lock (see flock_unix.go).
 type Store struct {
 	path string
 	mu   sync.Mutex

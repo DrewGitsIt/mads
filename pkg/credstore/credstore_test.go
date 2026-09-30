@@ -252,8 +252,8 @@ func TestOpenMigratesPlaintextFile(t *testing.T) {
 // race detector).
 func TestOpenMigratesConcurrently(t *testing.T) {
 	mockKeyring(t)
-	if runtime.GOOS != "linux" {
-		t.Skip("acquireFlock's cross-process guarantee is a no-op off Linux")
+	if runtime.GOOS == "windows" {
+		t.Skip("acquireFlock's cross-process guarantee is a no-op on non-unix hosts")
 	}
 
 	seedKey := make([]byte, dataKeyLen)
@@ -312,8 +312,8 @@ func TestOpenMigratesConcurrently(t *testing.T) {
 // TestAcquireFlockBlocksUntilReleased exercises the raw lock primitive
 // directly, mirroring services/pipeline/engine's equivalent test.
 func TestAcquireFlockBlocksUntilReleased(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("acquireFlock is a no-op off Linux")
+	if runtime.GOOS == "windows" {
+		t.Skip("acquireFlock is a no-op on non-unix hosts")
 	}
 	path := filepath.Join(t.TempDir(), "credentials.json.lock")
 

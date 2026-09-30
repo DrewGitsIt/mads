@@ -20,8 +20,8 @@ import (
 // first releases, proving cross-process exclusion (not just in-process,
 // which landQueue already provides).
 func TestAcquireWorkspaceFlockBlocksUntilReleased(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("acquireWorkspaceFlock is a no-op off Linux")
+	if runtime.GOOS == "windows" {
+		t.Skip("acquireWorkspaceFlock is a no-op on non-unix hosts")
 	}
 	path := filepath.Join(t.TempDir(), "mads-land.lock")
 
