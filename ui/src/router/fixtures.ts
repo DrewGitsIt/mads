@@ -1574,6 +1574,7 @@ export const fixtureConfig: Config = {
   agent_selection_mode: "full",
   default_model_tier: "balanced",
   pipeline_stage_timeout_minutes: 30,
+  allow_sleep_during_pipelines: false,
   default_trust: "limited",
   display_mode: "comfortable",
   keybindings: "default",
@@ -1585,6 +1586,7 @@ export const fixtureConfig: Config = {
   log_retention_days: 30,
   feature_flags: { multi_repo: false, linked_sessions: false, remote_registry: false },
   onboarding_complete: true,
+  platform: "linux",
 };
 
 export const fixtureFastModelStatus: FastModelStatus = {

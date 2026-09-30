@@ -56,6 +56,41 @@ func TestConfigRoundTripsPipelineStageTimeout(t *testing.T) {
 	}
 }
 
+// TestConfigPreFieldDecodesToPreventSleep: AllowSleepDuringPipelines is
+// negatively named so a stored config JSON without the key (every install
+// predating it) decodes to "prevent sleep" with no migration.
+func TestConfigPreFieldDecodesToPreventSleep(t *testing.T) {
+	const preFieldJSON = `{"synthesis_mode":"light","synthesis_auto_approve":false,` +
+		`"concurrency_limit":3,"pipeline_stage_timeout_minutes":30}`
+	var got Config
+	if err := json.Unmarshal([]byte(preFieldJSON), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.AllowSleepDuringPipelines {
+		t.Fatal("pre-field config decoded AllowSleepDuringPipelines=true, want false (prevent sleep)")
+	}
+	if DefaultConfig().AllowSleepDuringPipelines {
+		t.Fatal("DefaultConfig() allows sleep, want prevent sleep")
+	}
+
+	c := DefaultConfig()
+	c.AllowSleepDuringPipelines = true
+	data, err := json.Marshal(&c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"allow_sleep_during_pipelines":true`) {
+		t.Fatalf("marshaled config missing allow_sleep_during_pipelines:true: %s", data)
+	}
+	var back Config
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if !back.AllowSleepDuringPipelines {
+		t.Fatal("AllowSleepDuringPipelines=true did not round-trip")
+	}
+}
+
 func TestValidateConfigReportsEveryProblem(t *testing.T) {
 	c := Config{
 		SynthesisMode:               "bogus",

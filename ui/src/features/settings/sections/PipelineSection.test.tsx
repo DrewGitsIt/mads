@@ -68,6 +68,47 @@ describe("PipelineSection", () => {
     );
   });
 
+  it("checks prevent-sleep when allow_sleep_during_pipelines is false", () => {
+    stubCredentials([]);
+    render(<PipelineSection config={makeConfig()} />);
+    const box = screen.getByLabelText(/prevent system sleep while a pipeline is running/i) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(screen.getByText("Changes apply to runs started afterward.")).toBeTruthy();
+  });
+
+  it("unchecks prevent-sleep when allow_sleep_during_pipelines is true", () => {
+    stubCredentials([]);
+    const draft = { ...fixtureConfig, allow_sleep_during_pipelines: true };
+    render(<PipelineSection config={makeConfig({ draft })} />);
+    const box = screen.getByLabelText(/prevent system sleep/i) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+  });
+
+  it("unchecking prevent-sleep writes allow_sleep_during_pipelines: true", () => {
+    stubCredentials([]);
+    const config = makeConfig();
+    render(<PipelineSection config={config} />);
+    fireEvent.click(screen.getByLabelText(/prevent system sleep/i));
+    expect(config.setDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ allow_sleep_during_pipelines: true }),
+    );
+  });
+
+  it.each([
+    ["darwin", "Closing the lid on battery still sleeps your Mac. The run pauses and recovers when it wakes."],
+    ["linux", "Closing a laptop lid may still suspend, depending on your desktop's lid settings."],
+  ])("shows the %s sleep caveat", (platform, caveat) => {
+    stubCredentials([]);
+    render(<PipelineSection config={makeConfig({ draft: { ...fixtureConfig, platform } })} />);
+    expect(screen.getByText(caveat)).toBeTruthy();
+  });
+
+  it("shows no sleep caveat on other platforms", () => {
+    stubCredentials([]);
+    render(<PipelineSection config={makeConfig({ draft: { ...fixtureConfig, platform: "windows" } })} />);
+    expect(screen.queryByText(/closing (the|a laptop) lid/i)).toBeNull();
+  });
+
   it("renders every field error from one submit", () => {
     stubCredentials([]);
     const config = makeConfig({

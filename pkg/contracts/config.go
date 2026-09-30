@@ -185,6 +185,18 @@ type Config struct {
 	// proposals before they become real tasks/notes.
 	SynthesisAutoApprove bool `json:"synthesis_auto_approve"`
 
+	// AllowSleepDuringPipelines turns off the OS sleep/idle inhibitor a
+	// pipeline run otherwise holds for its duration (pkg/inhibit, via
+	// engine.Config.DisableSleepInhibit). It is negatively named on
+	// purpose: the zero value (false) means "prevent sleep", so every
+	// stored config that predates this field decodes to the correct
+	// default with no migration — the same zero-value-is-default idiom as
+	// SynthesisAutoApprove above. A positively named "prevent sleep" bool
+	// would decode to false (sleep allowed) on every pre-field install.
+	// Read once at run launch (pipelinerun.SleepInhibitDisabled, shared by
+	// the UI and CLI launch paths); runs already in progress are unaffected.
+	AllowSleepDuringPipelines bool `json:"allow_sleep_during_pipelines"`
+
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`

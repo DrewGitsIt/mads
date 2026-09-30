@@ -208,7 +208,8 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		Data: client, Provider: prov, SessionID: sessionID,
 		Template: tpl, TemplateVersion: tplVersion, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
 		Model: sess.Model, StageTimeout: stageTimeout,
-		Isolated: isolated, WorktreeRoot: worktreeRoot,
+		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
+		Isolated:            isolated, WorktreeRoot: worktreeRoot,
 		DataURL: dataURL, MadsHome: madsHome,
 		// This binary is only ever spawned by the Router (see package doc
 		// above) — its Supervisor owns deactivating sessionID on exit

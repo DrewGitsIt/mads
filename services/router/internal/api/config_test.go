@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -27,6 +28,31 @@ func TestConfigRoutesProxied(t *testing.T) {
 	updated := decodeJSON[contracts.Config](t, putResp)
 	if updated.Palette != "space" {
 		t.Fatalf("update did not apply: %+v", updated)
+	}
+}
+
+// GET and PUT /config stamp the Router host's OS (response-only; the
+// Settings sleep-inhibit caveat keys off it) without persisting it.
+func TestConfigResponsesCarryPlatform(t *testing.T) {
+	srv := newTestServer(t)
+
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[map[string]any](t, getResp)
+	if got["platform"] != runtime.GOOS {
+		t.Fatalf("GET /config platform = %v, want %q", got["platform"], runtime.GOOS)
+	}
+
+	// Echoing the response back (as the UI does) must be accepted.
+	putResp := putJSON(t, srv.URL+"/config", got)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /config with platform echoed: status %d", putResp.StatusCode)
+	}
+	updated := decodeJSON[map[string]any](t, putResp)
+	if updated["platform"] != runtime.GOOS {
+		t.Fatalf("PUT /config platform = %v, want %q", updated["platform"], runtime.GOOS)
 	}
 }
 

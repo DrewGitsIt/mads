@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -39,10 +40,16 @@ type Options struct {
 	Concurrency     int
 	Model           string
 	StageTimeout    time.Duration
-	Isolated        bool
-	WorktreeRoot    string
-	DataURL         string
-	MadsHome        string
+	// DisableSleepInhibit maps onto engine.Config.DisableSleepInhibit;
+	// callers set it from SleepInhibitDisabled(cfg), never directly.
+	DisableSleepInhibit bool
+	// SleepInhibitor maps onto engine.Config.SleepInhibitor (nil = the
+	// real per-OS locker). Tests inject a fake.
+	SleepInhibitor inhibit.Locker
+	Isolated       bool
+	WorktreeRoot   string
+	DataURL        string
+	MadsHome       string
 	// FastModel powers agent:auto stages' generation fallback when no
 	// candidate agent survives selection; nil disables generation, and such
 	// a stage blocks with a clear reason instead (see engine.Config.FastModel).
@@ -61,6 +68,18 @@ type Options struct {
 	// defer remains the only thing that ever deactivates it, exactly as
 	// before (deliberate: commit 81ba055).
 	ManagedExternally bool
+}
+
+// SleepInhibitDisabled is the single resolution of the stored config's
+// AllowSleepDuringPipelines into Options.DisableSleepInhibit, shared by
+// both launch paths (services/pipeline/main.go for UI-launched runs,
+// cmd/mads/run.go for the CLI) so they cannot drift the way the stage
+// timeout once did (see contracts.Config.PipelineStageTimeoutMinutes). The
+// zero value — including every pre-field stored config — keeps the
+// inhibitor on. Read once at launch: toggling the setting never touches a
+// run already in progress.
+func SleepInhibitDisabled(cfg contracts.Config) bool {
+	return cfg.AllowSleepDuringPipelines
 }
 
 // LoadTemplate fetches a template by registry name/ID and runs the same
@@ -116,20 +135,22 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 	}
 
 	return engine.Run(ctx, engine.Config{
-		Data:            opts.Data,
-		Provider:        opts.Provider,
-		SessionID:       opts.SessionID,
-		Template:        opts.Template,
-		TemplateVersion: opts.TemplateVersion,
-		Cwd:             opts.Cwd,
-		Concurrency:     opts.Concurrency,
-		Model:           opts.Model,
-		StageTimeout:    opts.StageTimeout,
-		Isolated:        opts.Isolated,
-		WorktreeRoot:    opts.WorktreeRoot,
-		DataURL:         opts.DataURL,
-		MadsHome:        opts.MadsHome,
-		FastModel:       opts.FastModel,
+		Data:                opts.Data,
+		Provider:            opts.Provider,
+		SessionID:           opts.SessionID,
+		Template:            opts.Template,
+		TemplateVersion:     opts.TemplateVersion,
+		Cwd:                 opts.Cwd,
+		Concurrency:         opts.Concurrency,
+		Model:               opts.Model,
+		StageTimeout:        opts.StageTimeout,
+		DisableSleepInhibit: opts.DisableSleepInhibit,
+		SleepInhibitor:      opts.SleepInhibitor,
+		Isolated:            opts.Isolated,
+		WorktreeRoot:        opts.WorktreeRoot,
+		DataURL:             opts.DataURL,
+		MadsHome:            opts.MadsHome,
+		FastModel:           opts.FastModel,
 	})
 }
 

@@ -2,10 +2,26 @@ package api
 
 import (
 	"net/http"
+	"runtime"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
 )
+
+// configResponse is every Config the Router hands the UI (GET/PUT /config,
+// profile activate), stamped with the Router host's runtime.GOOS. Platform
+// is response-only — never stored: PUT /config decodes into
+// contracts.Config, which drops it — and it's the Router's host that
+// matters (it spawns the pipeline that holds the sleep inhibitor), so the
+// Settings screen reads the OS from here rather than sniffing navigator.
+type configResponse struct {
+	contracts.Config
+	Platform string `json:"platform"`
+}
+
+func withPlatform(cfg contracts.Config) configResponse {
+	return configResponse{Config: cfg, Platform: runtime.GOOS}
+}
 
 func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg, err := s.data.Config(r.Context())
@@ -13,7 +29,7 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, withPlatform(cfg))
 }
 
 // fastModelStatusResponse is the Settings Fast Model panel's live status: the
@@ -64,7 +80,7 @@ func (s *server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, withPlatform(cfg))
 }
 
 func (s *server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
@@ -115,5 +131,5 @@ func (s *server) handleActivateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, cfg)
+	writeJSON(w, http.StatusOK, withPlatform(cfg))
 }

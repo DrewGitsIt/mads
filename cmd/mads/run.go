@@ -73,15 +73,15 @@ func cmdRun(args []string, out io.Writer) error {
 	// UI launch path (services/pipeline/main.go reads the same field from
 	// the same config row). -stage-timeout still overrides explicitly, and
 	// a config-load failure here falls back to the flag default set above
-	// rather than failing the whole run over a secondary lookup.
-	if !stageTimeoutSet {
-		if cfg, err := client.Config(ctx); err == nil {
-			minutes := cfg.PipelineStageTimeoutMinutes
-			if minutes <= 0 {
-				minutes = contracts.DefaultPipelineStageTimeoutMinutes
-			}
-			*stageTimeout = time.Duration(minutes) * time.Minute
+	// rather than failing the whole run over a secondary lookup. The same
+	// failure leaves cfg zero-valued, which keeps the sleep inhibitor on.
+	cfg, cfgErr := client.Config(ctx)
+	if !stageTimeoutSet && cfgErr == nil {
+		minutes := cfg.PipelineStageTimeoutMinutes
+		if minutes <= 0 {
+			minutes = contracts.DefaultPipelineStageTimeoutMinutes
 		}
+		*stageTimeout = time.Duration(minutes) * time.Minute
 	}
 
 	// Frozen template copy + the same validation the editor runs (M9).
@@ -129,7 +129,8 @@ func cmdRun(args []string, out io.Writer) error {
 		Data: client, Provider: prov, SessionID: *session,
 		Template: tpl, TemplateVersion: tplVersion, Cwd: ws, Concurrency: *concurrency,
 		Model: *model, StageTimeout: *stageTimeout,
-		Isolated: *isolated, WorktreeRoot: root, DataURL: *data,
+		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
+		Isolated:            *isolated, WorktreeRoot: root, DataURL: *data,
 		MadsHome: madsHome,
 	})
 	if err == nil {

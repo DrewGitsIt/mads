@@ -34,6 +34,14 @@ const FAST_MODEL_MODES: { value: FastModelMode; label: string }[] = [
   { value: "off", label: "Off" },
 ];
 
+// SLEEP_CAVEATS is the per-OS helper line under the prevent-sleep checkbox,
+// keyed by the Router host's runtime.GOOS (Config.platform). Other OSes get
+// no caveat.
+const SLEEP_CAVEATS: Record<string, string> = {
+  darwin: "Closing the lid on battery still sleeps your Mac. The run pauses and recovers when it wakes.",
+  linux: "Closing a laptop lid may still suspend, depending on your desktop's lid settings.",
+};
+
 // effectiveFastModelMode mirrors pkg/contracts/config.go's
 // Config.FastModelEffectiveMode: an unset fast_model_mode (pre-mode-selector
 // install) resolves to endpoint if an endpoint was already configured, else
@@ -203,6 +211,21 @@ export function PipelineSection({ config }: PipelineSectionProps) {
         </div>
         {fieldErrors.pipeline_stage_timeout_minutes && (
           <div className={styles.error}>{fieldErrors.pipeline_stage_timeout_minutes}</div>
+        )}
+      </div>
+
+      <div className={styles.row}>
+        <label className={styles.toggleLabel}>
+          <input
+            type="checkbox"
+            checked={!draft.allow_sleep_during_pipelines}
+            onChange={(e) => setDraft({ ...draft, allow_sleep_during_pipelines: !e.target.checked })}
+          />
+          Prevent system sleep while a pipeline is running
+        </label>
+        <div className={styles.hint}>Changes apply to runs started afterward.</div>
+        {draft.platform && SLEEP_CAVEATS[draft.platform] && (
+          <div className={styles.hint}>{SLEEP_CAVEATS[draft.platform]}</div>
         )}
       </div>
 

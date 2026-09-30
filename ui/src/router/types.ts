@@ -1029,6 +1029,11 @@ export interface Config {
   // as a plain number, not optional: the server always returns a resolved
   // value, never a bare absence.
   pipeline_stage_timeout_minutes: number;
+  // allow_sleep_during_pipelines mirrors pkg/contracts/config.go's
+  // AllowSleepDuringPipelines. Negatively named so its zero value (false)
+  // means "prevent sleep" for every stored config predating it; the
+  // Settings checkbox binds to its negation. Read once at run launch.
+  allow_sleep_during_pipelines: boolean;
 
   default_workspace?: string;
   default_provider?: string;
@@ -1065,6 +1070,12 @@ export interface Config {
   // when env_mode is "isolated".
   env_mode?: EnvMode;
   env_passthrough?: string[];
+
+  // platform is the Router host's Go runtime.GOOS ("linux", "darwin", …),
+  // stamped onto every Config response by the Router — response-only, never
+  // stored (PUT /config drops it). The host is what matters (it runs the
+  // pipeline), so never substitute the renderer's navigator.
+  platform?: string;
 }
 
 export type EnvMode = "inherit" | "isolated";
