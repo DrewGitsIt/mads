@@ -87,10 +87,10 @@ func fgSessionMain(args []string) {
 		fmt.Println("no banner here")
 		return
 	}
-	if tio, err := unix.IoctlGetTermios(0, unix.TCGETS); err == nil {
+	if tio, err := unix.IoctlGetTermios(0, ioctlGetTermios); err == nil {
 		tio.Lflag &^= unix.ICANON | unix.ECHO | unix.ISIG
 		tio.Iflag &^= unix.ICRNL
-		_ = unix.IoctlSetTermios(0, unix.TCSETS, tio)
+		_ = unix.IoctlSetTermios(0, ioctlSetTermios, tio)
 	} else {
 		fmt.Fprintln(os.Stderr, "fakegoose: raw mode:", err)
 	}

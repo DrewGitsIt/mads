@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -55,12 +56,16 @@ func (p *killableProvider) OneShot(ctx context.Context, req provider.OneShotRequ
 	}
 }
 
-// pidAlive checks /proc directly rather than signal 0 on a reaped child,
-// since the killed process is this test's grandchild (spawned by sh -c), not
-// a direct child this test process could wait on.
+// pidAlive probes with signal 0 rather than waiting on the process: the
+// orphan is owned (and reaped) by the provider's own cmd.Wait goroutine, not
+// a child this test could wait on. Signal 0 still succeeds on an unreaped
+// zombie, so this only reports dead once that goroutine has reaped it — which
+// the provider does before OneShot returns. ESRCH means gone; EPERM means it
+// exists but belongs to someone else, which still counts as alive. Signal 0
+// works the same on Linux and darwin, unlike stat'ing /proc.
 func pidAlive(pid int) bool {
-	_, err := os.Stat(fmt.Sprintf("/proc/%d", pid))
-	return err == nil
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // The full suspend/lease-loss scenario end to end, with a real git worktree
