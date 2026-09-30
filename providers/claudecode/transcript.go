@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -58,7 +60,11 @@ type transcriptLine struct {
 	IsSidechain      bool `json:"isSidechain"`
 	// IsMeta marks harness-injected user lines (caveat preambles, scheduled
 	// prompt re-invocations, hook payloads) — text the human never typed.
-	IsMeta  bool         `json:"isMeta"`
+	IsMeta bool `json:"isMeta"`
+	// Origin marks a user-role line the CLI wrote itself: kind
+	// "task-notification" is the <task-notification> block it feeds the
+	// model when a background task finishes.
+	Origin  *wireOrigin  `json:"origin"`
 	Message *wireMessage `json:"message"`
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
@@ -83,6 +89,33 @@ type compactMetadata struct {
 func isCommandMarkup(text string) bool {
 	t := strings.TrimSpace(text)
 	return strings.HasPrefix(t, "<command-name>") || strings.HasPrefix(t, "<local-command-")
+}
+
+var (
+	notificationSummary = regexp.MustCompile(`(?s)<summary>(.*?)</summary>`)
+	notificationStatus  = regexp.MustCompile(`<status>(.*?)</status>`)
+)
+
+// taskNotificationText is the one line worth showing from a
+// <task-notification> block: its <summary> (the CLI's own sentence, e.g.
+// `Background command "make check" completed (exit code 0)`), unescaped, or
+// failing that the bare status.
+func taskNotificationText(m *wireMessage) string {
+	var raw string
+	for _, b := range m.blocks() {
+		if b.Type == "text" {
+			raw += b.Text
+		}
+	}
+	if sm := notificationSummary.FindStringSubmatch(raw); sm != nil {
+		if t := strings.TrimSpace(html.UnescapeString(sm[1])); t != "" {
+			return t
+		}
+	}
+	if st := notificationStatus.FindStringSubmatch(raw); st != nil {
+		return "Background task " + strings.TrimSpace(st[1])
+	}
+	return "Background task finished"
 }
 
 // normalizeTranscript maps transcript JSONL onto the provider-independent
@@ -147,6 +180,15 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 			} else {
 				msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Text: summary, Timestamp: ts})
 			}
+			continue
+		}
+		// A background task's completion notice is the CLI talking to the
+		// model, not the human: as a user bubble it showed up as a wall of
+		// raw <task-notification> XML in the human's voice (2026-09-30), and
+		// it can open a whole unprompted turn with no explanation. It becomes
+		// a "notification" entry the conversation draws as a system line.
+		if l.Type == "user" && (l.Origin != nil && l.Origin.Kind == "task-notification") {
+			msgs = append(msgs, provider.Message{Role: "notification", Text: taskNotificationText(l.Message), Timestamp: ts})
 			continue
 		}
 		switch l.Type {

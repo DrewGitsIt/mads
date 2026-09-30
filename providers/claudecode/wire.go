@@ -83,6 +83,47 @@ type wireOrigin struct {
 	Kind string `json:"kind"`
 }
 
+// isTaskNotificationResult reports whether this is the result line that
+// closes a background-task notification's re-invocation (see events).
+func (l *wireLine) isTaskNotificationResult() bool {
+	return l.Type == "result" && l.Origin != nil && l.Origin.Kind == "task-notification"
+}
+
+// turnEnd builds the EventTurnEnd a result line stands for, usage included.
+func (l *wireLine) turnEnd(interrupted bool) provider.Event {
+	ev := provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
+	if l.Usage != nil {
+		ev.Usage = &provider.Usage{
+			InputTokens:              l.Usage.InputTokens,
+			OutputTokens:             l.Usage.OutputTokens,
+			CacheCreationInputTokens: l.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     l.Usage.CacheReadInputTokens,
+			Model:                    l.model(),
+			CostUSD:                  l.TotalCostUSD,
+			ContextTokens:            l.Usage.contextTokens(),
+			ContextWindow:            l.contextWindowFor(l.model()),
+		}
+	}
+	return ev
+}
+
+// notificationTurnEnd is the end of an UNPROMPTED turn: the one the CLI runs
+// on its own when a background task finishes after the user's turn already
+// closed. Only the streaming transport can know that's what the line closes
+// (streamSession.handleLine). Its usage is the turn's real occupancy, so it
+// is kept. total_cost_usd is not: on this line it repeats a cumulative
+// figure, and counting it again would double-count the session's cost.
+func (l *wireLine) notificationTurnEnd() []provider.Event {
+	ev := l.turnEnd(false)
+	if ev.Usage != nil {
+		ev.Usage.CostUSD = 0
+	}
+	if l.IsError {
+		return []provider.Event{{Kind: provider.EventError, Text: l.Result}, ev}
+	}
+	return []provider.Event{ev}
+}
+
 // wireTaskPatch is a task_updated line's patch object. end_time also rides
 // along on the wire but the status transition is all consumers need.
 type wireTaskPatch struct {
@@ -310,25 +351,20 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 		// only an error surface should the re-invocation itself fail. Its
 		// per-invocation usage detail is dropped with it — the next real
 		// turn's result refreshes occupancy.
-		if l.Origin != nil && l.Origin.Kind == "task-notification" {
+		//
+		// That holds only while the continuation sits inside the user turn.
+		// A background task that finishes after the turn has already closed
+		// makes the CLI run a whole unprompted turn, and there this line is
+		// the only end that turn gets. The streaming transport tells the two
+		// apart (streamSession.handleLine) and builds that end itself via
+		// notificationTurnEnd; this stateless per-line view can't.
+		if l.isTaskNotificationResult() {
 			if l.IsError {
 				return []provider.Event{{Kind: provider.EventError, Text: l.Result}}
 			}
 			return nil
 		}
-		ev := provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
-		if l.Usage != nil {
-			ev.Usage = &provider.Usage{
-				InputTokens:              l.Usage.InputTokens,
-				OutputTokens:             l.Usage.OutputTokens,
-				CacheCreationInputTokens: l.Usage.CacheCreationInputTokens,
-				CacheReadInputTokens:     l.Usage.CacheReadInputTokens,
-				Model:                    l.model(),
-				CostUSD:                  l.TotalCostUSD,
-				ContextTokens:            l.Usage.contextTokens(),
-				ContextWindow:            l.contextWindowFor(l.model()),
-			}
-		}
+		ev := l.turnEnd(interrupted)
 		if l.IsError {
 			return []provider.Event{
 				{Kind: provider.EventError, Text: l.Result},

@@ -46,7 +46,7 @@ type ToolLocation struct {
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
 type TranscriptMessage struct {
-	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", or "compact"
+	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", "compact", or "notification"
 	Text        string       `json:"text,omitempty"`
 	Tool        *ToolUse     `json:"tool,omitempty"`
 	Attribution *Attribution `json:"attribution,omitempty"`

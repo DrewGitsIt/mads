@@ -79,6 +79,11 @@ export function buildFeedRows(turns: TranscriptMessage[]): FeedRow[] {
     if (turn.role === "compact") {
       return { kind: "prose", role: "system", text: compactLine(turn.compact ?? {}), timestamp: turn.timestamp };
     }
+    // The harness's own notice (a background task finished), not the stage's
+    // prompt or agent prose.
+    if (turn.role === "notification") {
+      return { kind: "prose", role: "system", text: turn.text, timestamp: turn.timestamp };
+    }
     const role: FeedRole = turn.role !== "user" ? "agent" : turn === stageOpener ? "system" : "user";
     return { kind: "prose", role, text: turn.text, timestamp: turn.timestamp };
   });

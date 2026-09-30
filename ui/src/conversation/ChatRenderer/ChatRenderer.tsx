@@ -221,6 +221,26 @@ export function ChatRenderer({
             />
           );
         }
+        if (message.role === "notification") {
+          // The harness telling the agent a background task finished, which
+          // can start a turn nobody typed. Drawn as a quiet system line, not
+          // in the human's voice: as a user bubble it was a wall of raw
+          // <task-notification> XML the human never wrote.
+          const at = parseMessageTime(message.timestamp);
+          return (
+            <div key={item.key} className={styles.notification} role="note">
+              <span aria-hidden="true">⏺</span>
+              <span className={styles.notificationText} title={message.text}>
+                {message.text || "Background task finished"}
+              </span>
+              {at && (
+                <time className={styles.notificationTime} dateTime={at.toISOString()} title={at.toLocaleString()}>
+                  {formatMessageTime(at)}
+                </time>
+              )}
+            </div>
+          );
+        }
         const at = parseMessageTime(message.timestamp);
         const stamp = at && (
           <time className={styles.stamp} dateTime={at.toISOString()} title={at.toLocaleString()}>

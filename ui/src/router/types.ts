@@ -466,8 +466,11 @@ export interface Attribution {
 
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool" | "tool_result" | "compact";
-  text?: string; // on role "compact", the summary the agent carried forward
+  role: "user" | "agent" | "tool" | "tool_result" | "compact" | "notification";
+  // on role "compact", the summary the agent carried forward; on role
+  // "notification" (a background task finished — the harness telling the
+  // agent, not the human speaking), the harness's one-line summary
+  text?: string;
   tool?: ToolUse;
   attribution?: Attribution;
   timestamp?: string; // RFC3339, when the provider recorded this entry
