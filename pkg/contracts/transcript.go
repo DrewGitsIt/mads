@@ -46,7 +46,7 @@ type ToolLocation struct {
 // TranscriptMessage mirrors providers/provider/event.go Message — one
 // normalized transcript entry, as returned by GET /sessions/{id}/transcript.
 type TranscriptMessage struct {
-	Role        string       `json:"role"` // "user", "agent", "tool", or "tool_result"
+	Role        string       `json:"role"` // "user", "agent", "tool", "tool_result", or "compact"
 	Text        string       `json:"text,omitempty"`
 	Tool        *ToolUse     `json:"tool,omitempty"`
 	Attribution *Attribution `json:"attribution,omitempty"`
@@ -56,6 +56,17 @@ type TranscriptMessage struct {
 	// IsError marks a Role "tool_result" entry as the tool call having
 	// failed. Meaningless on other roles.
 	IsError bool `json:"is_error,omitempty"`
+	// Compact describes a Role "compact" entry (a compaction pass); Text is
+	// then the summary carried forward. Mirrors provider.CompactMarker.
+	Compact *CompactMarker `json:"compact,omitempty"`
+}
+
+// CompactMarker mirrors providers/provider's CompactMarker.
+type CompactMarker struct {
+	Trigger    string `json:"trigger,omitempty"`
+	PreTokens  int    `json:"pre_tokens,omitempty"`
+	PostTokens int    `json:"post_tokens,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
 }
 
 // Usage mirrors providers/provider/event.go Usage — duplicated here (not

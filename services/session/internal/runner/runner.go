@@ -300,11 +300,16 @@ type Runner struct {
 	touched map[string]string
 }
 
-// pendingInjection is one queued Inject call, waiting for the in-flight
-// turn to end.
+// pendingInjection is one queued Inject or SendOrQueue call, waiting for
+// the in-flight turn to end.
 type pendingInjection struct {
 	text        string
 	attribution contracts.Attribution
+	// userID is set for the user's own message queued by SendOrQueue, empty
+	// for a linked-session injection. A user entry delivers as an ordinary
+	// user turn (no Attribution) and is the only kind the queue API exposes.
+	userID   string
+	queuedAt time.Time
 }
 
 // New builds a Runner for sessionID. data's actor must be sessionID (spec
@@ -661,7 +666,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, false)
 
-	r.markAgentWorking()
+	r.markAgentWorking(text)
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
@@ -699,7 +704,7 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.digest.recordUser(text, attribution.DigestAttributed)
 	r.recordInjectionAudit(ctx, attribution, text)
 
-	r.markAgentWorking()
+	r.markAgentWorking(text)
 	if err := sess.Send(ctx, text); err != nil {
 		r.mu.Lock()
 		r.busy = false
@@ -756,24 +761,38 @@ func (r *Runner) onTurnEnd() {
 	r.mu.Lock()
 	r.busy = false
 	if len(r.pending) > 0 {
-		text, attribution := r.drainNextLocked()
-		r.deliverLocked(&attribution)
+		next := r.drainNextLocked()
+		var delivered *contracts.QueuedMessage
+		var remaining []contracts.QueuedMessage
+		if next.userID != "" {
+			r.deliverLocked(nil)
+			delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
+			remaining = r.queuedLocked()
+		} else {
+			r.deliverLocked(&next.attribution)
+		}
 		sess := r.sess
 		r.mu.Unlock()
 		if sess == nil {
 			return
 		}
 
-		r.synthEngine.OnUserSend(text)
-		r.digest.recordUser(text, attribution.DigestAttributed)
+		r.synthEngine.OnUserSend(next.text)
+		r.digest.recordUser(next.text, next.attribution.DigestAttributed)
+		if delivered != nil {
+			r.publishQueue(contracts.QueueChanged{Queued: remaining, Delivered: delivered})
+		}
 
-		r.markAgentWorking()
-		if err := sess.Send(context.Background(), text); err != nil {
-			log.Printf("runner: deliver queued injection: %v", err)
+		r.markAgentWorking(next.text)
+		if err := sess.Send(context.Background(), next.text); err != nil {
+			log.Printf("runner: deliver queued message: %v", err)
 			r.mu.Lock()
 			r.busy = false
 			r.mu.Unlock()
 			r.markAgentIdle()
+			if delivered != nil {
+				r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
+			}
 		}
 		// orchestrateRefreshPending and pendingModel, if set, are left
 		// untouched here — both are only drained once the queue is truly
@@ -820,25 +839,26 @@ func (r *Runner) onTurnEnd() {
 // message, or a digest from a different link) stops the coalescing and is
 // left at the front of the queue for its own turn, so non-digest ordering
 // is untouched. Must be called with r.mu held; mutates r.pending in place.
-func (r *Runner) drainNextLocked() (text string, attribution contracts.Attribution) {
+func (r *Runner) drainNextLocked() pendingInjection {
 	head := r.pending[0]
-	if !head.attribution.DigestAttributed {
+	if head.userID != "" || !head.attribution.DigestAttributed {
 		r.pending = r.pending[1:]
-		return head.text, head.attribution
+		return head
 	}
 
 	texts := []string{head.text}
 	i := 1
 	for i < len(r.pending) {
 		item := r.pending[i]
-		if !item.attribution.DigestAttributed || item.attribution.LinkID != head.attribution.LinkID {
+		if item.userID != "" || !item.attribution.DigestAttributed || item.attribution.LinkID != head.attribution.LinkID {
 			break
 		}
 		texts = append(texts, item.text)
 		i++
 	}
 	r.pending = r.pending[i:]
-	return strings.Join(texts, "\n\n"), head.attribution
+	head.text = strings.Join(texts, "\n\n")
+	return head
 }
 
 // pushTurnEnded renders and resets the digest accumulator, appending a

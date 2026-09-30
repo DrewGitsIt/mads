@@ -148,7 +148,7 @@ func TestAgentStateLabelTransitions(t *testing.T) {
 	r := New(sess.ID, data, nil)
 	r.agent.floor = -1
 
-	r.markAgentWorking()
+	r.markAgentWorking("")
 	for _, ev := range []provider.Event{
 		{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 			ID: "toolu_bash", Name: "Bash", Kind: provider.ToolKindExecute, Title: "make check",
@@ -194,7 +194,7 @@ func TestAgentStateCoalesces(t *testing.T) {
 	data := dataclient.New(base, sess.ID)
 	r := New(sess.ID, data, nil) // production floor, deliberately not overridden
 
-	r.markAgentWorking()
+	r.markAgentWorking("")
 	for _, title := range []string{"go build ./…", "go vet ./…", "gofmt -l .", "go test ./…"} {
 		r.observeConversation(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 			Name: "Bash", Kind: provider.ToolKindExecute, Title: title,
@@ -221,7 +221,7 @@ func TestAgentStateStreamClosed(t *testing.T) {
 	r := New(sess.ID, data, nil)
 	r.agent.floor = -1
 
-	r.markAgentWorking()
+	r.markAgentWorking("")
 	r.observeConversation(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 		ID: "toolu_bash", Name: "Bash", Kind: provider.ToolKindExecute, Title: "sleep 600",
 	}})
@@ -240,7 +240,7 @@ func TestAgentStateStreamClosed(t *testing.T) {
 // Service, matching every other pump-side append.
 func TestAgentStateNilDataService(t *testing.T) {
 	r := New("ses_nodata", nil, nil)
-	r.markAgentWorking()
+	r.markAgentWorking("")
 	r.observeConversation(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
 		Name: "Bash", Kind: provider.ToolKindExecute, Title: "make check",
 	}})
@@ -346,5 +346,37 @@ func TestAgentStateMirroredOnRecord(t *testing.T) {
 			t.Fatal("timed out waiting for LastTurnAt to be stamped at turn end")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestAgentStateCompacting: a /compact turn reads "Compacting…" from its
+// first moment, a compaction that starts inside an ordinary turn (the
+// near-limit trigger) relabels it, and one that starts outside any turn
+// ("Compact now") leaves the session idle — nothing would ever mark it idle
+// again.
+func TestAgentStateCompacting(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, nil)
+	r.agent.floor = -1
+	compactStart := provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}}
+
+	r.observeConversation(compactStart) // no turn in flight: no state at all
+	r.markAgentWorking("  /compact focus on the queue work ")
+	r.markAgentIdle()
+	r.markAgentWorking("fix the rail")
+	r.observeConversation(compactStart)
+	r.markAgentIdle()
+
+	wantStates(t, eventsOfType[contracts.AgentState](t, data, sess.ID, contracts.SessionAgentState),
+		"working/"+agentLabelCompacting,
+		"idle/",
+		"working/"+agentLabelWorking,
+		"working/"+agentLabelCompacting,
+		"idle/",
+	)
+	if isCompactCommand("/compactor") {
+		t.Error(`isCompactCommand("/compactor") = true`)
 	}
 }

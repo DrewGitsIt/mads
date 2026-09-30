@@ -45,9 +45,18 @@ One process, one session — no `:id` in any path.
 
 - `GET /health` — `{"service":"session","status":"ok"}`, always 200 regardless of runner
   state (process-liveness probe, not session-readiness).
-- `POST /messages` — `{"text": "..."}`. 202 once relayed to the provider; 503 if the
-  provider session isn't up yet (`Start` still running or failed); 409 if a turn is already
-  in flight (one turn at a time).
+- `POST /messages` — `{"text": "...", "queue": bool}`. 202 `{"status":"accepted"}` once
+  relayed to the provider; 503 if the provider session isn't up yet (`Start` still running
+  or failed). A turn already in flight (one turn at a time) is a 409 — unless `queue` is
+  set, in which case the message waits in the Runner's queue behind that turn, FIFO with
+  any linked-session injections, and the answer is 202 `{"status":"queued","queued":
+  {"id","text","queued_at"}}`. The turn-end drain delivers it as an ordinary user turn.
+  Every queue change appends `session.queue_changed` carrying the whole remaining queue
+  (plus `delivered`, or `failed` + `error`). The queue is in-memory: it outlives the UI
+  pane that queued it, not this process.
+- `GET /queue` — `{"queued": [...]}`, the queued user messages in delivery order.
+- `DELETE /queue/{id}` — drop one before it's delivered; 204, or 404 if it isn't queued
+  (it may have just gone out).
 - `POST /interrupt` — stops the in-flight turn, if any. 503 if not ready.
 - `POST /merge` — `{"target_branch": "..."}` (target_branch optional; empty merges into
   whatever's currently checked out on the primary). 409 if the session has no isolated

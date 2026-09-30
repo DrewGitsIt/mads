@@ -13,6 +13,7 @@
   "session.thinking",
   "session.tool_status_changed",
   "session.compact",
+  "session.queue_changed",
   "session.agent_state",
   "task.created",
   "task.updated",

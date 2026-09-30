@@ -55,6 +55,10 @@ func normalizeTurns(msgs []provider.Message) []contracts.TranscriptMessage {
 	result := make([]contracts.TranscriptMessage, len(msgs))
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
+		if m.Compact != nil {
+			c := contracts.CompactMarker(*m.Compact)
+			tm.Compact = &c
+		}
 		if m.Tool != nil {
 			tm.Tool = &contracts.ToolUse{
 				ID:     m.Tool.ID,

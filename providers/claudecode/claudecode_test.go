@@ -1017,3 +1017,67 @@ func TestRealClaudeMCPSmoke(t *testing.T) {
 		t.Fatalf("claude did not report the orchestrate server's list_links tool: %q", text)
 	}
 }
+
+// TestTranscriptSkipsReappendedEntries: when the CLI compacts it can append
+// verbatim copies of earlier entries — same uuid — after the newest ones
+// (observed on a real 2.x transcript: 622 lines). Rendered naively, old
+// conversation reappears below the latest turn; only the first occurrence
+// of a uuid counts. Lines without a uuid are never deduped.
+func TestTranscriptSkipsReappendedEntries(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":"first question"},"timestamp":"2026-09-28T03:44:10Z"}`,
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]},"timestamp":"2026-09-28T03:44:20Z"}`,
+		`{"uuid":"u2","type":"user","message":{"role":"user","content":"latest question"},"timestamp":"2026-09-29T21:52:23Z"}`,
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":"first question"},"timestamp":"2026-09-28T03:44:10Z"}`,
+		`{"uuid":"a1","type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]},"timestamp":"2026-09-28T03:44:20Z"}`,
+		`{"type":"user","message":{"role":"user","content":"no uuid"}}`,
+		`{"type":"user","message":{"role":"user","content":"no uuid"}}`,
+	}, "\n")
+	msgs, err := normalizeTranscript(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, m := range msgs {
+		got = append(got, m.Text)
+	}
+	want := []string{"first question", "first answer", "latest question", "no uuid", "no uuid"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("messages = %q, want %q", got, want)
+	}
+}
+
+// TestTranscriptCompactionMarker: a compaction reads as one "compact" entry
+// where it happened — metadata from the boundary line, text from the summary
+// line after it — and the summary ("This session is being continued…") is
+// never a user message. Line shapes from a real 2.x transcript.
+func TestTranscriptCompactionMarker(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"uuid":"u1","type":"user","message":{"role":"user","content":"before"},"timestamp":"2026-09-30T02:50:00Z"}`,
+		`{"uuid":"b1","type":"system","subtype":"compact_boundary","content":"Conversation compacted","isMeta":false,"compactMetadata":{"trigger":"manual","preTokens":258267,"postTokens":14428,"durationMs":131618},"timestamp":"2026-09-30T02:59:42Z"}`,
+		`{"uuid":"s1","parentUuid":"b1","type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."},"timestamp":"2026-09-30T02:59:42Z"}`,
+		`{"uuid":"c1","type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>"},"timestamp":"2026-09-30T02:57:31Z"}`,
+		`{"uuid":"u2","type":"user","message":{"role":"user","content":"after"},"timestamp":"2026-09-30T03:00:10Z"}`,
+		// An orphan summary (no boundary before it) still isn't a user message.
+		`{"uuid":"s2","type":"user","isCompactSummary":true,"message":{"role":"user","content":[{"type":"text","text":"older summary"}]},"timestamp":"2026-09-30T04:00:00Z"}`,
+	}, "\n")
+	msgs, err := normalizeTranscript(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var roles []string
+	for _, m := range msgs {
+		roles = append(roles, m.Role+":"+m.Text)
+	}
+	want := []string{"user:before", "compact:This session is being continued from a previous conversation.", "user:after", "compact:older summary"}
+	if strings.Join(roles, "|") != strings.Join(want, "|") {
+		t.Fatalf("messages = %q, want %q", roles, want)
+	}
+	c := msgs[1].Compact
+	if c == nil || c.Trigger != "manual" || c.PreTokens != 258267 || c.PostTokens != 14428 || c.DurationMS != 131618 {
+		t.Errorf("compact marker = %+v", c)
+	}
+	if msgs[1].Timestamp.IsZero() {
+		t.Error("compact marker lost its timestamp")
+	}
+}

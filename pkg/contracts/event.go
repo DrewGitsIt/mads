@@ -104,6 +104,13 @@ const (
 	// mid-compaction — or just after a failed one — can only learn the
 	// status from this log.
 	SessionCompact EventType = "session.compact"
+	// SessionQueueChanged fires whenever the user's queue of messages waiting
+	// behind an in-flight turn changes: one queued, one cancelled, or the head
+	// delivered as the next turn (or failing to deliver). The queue lives in
+	// the Runner, not the UI, so a message queued in one session is still
+	// sent after the user navigates away. Payload: contracts.QueueChanged,
+	// always carrying the full remaining queue.
+	SessionQueueChanged EventType = "session.queue_changed"
 	// SessionAgentState fires when a session's main agent crosses a state
 	// boundary — a turn going in flight, the activity label inside that turn
 	// changing, and the turn ending. Payload: contracts.AgentState. This is
@@ -396,7 +403,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
-	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionAgentState,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

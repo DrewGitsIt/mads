@@ -93,6 +93,10 @@ func renderTranscript(msgs []provider.Message, attrs map[int]contracts.Attributi
 	var userIdx int
 	for i, m := range msgs {
 		tm := contracts.TranscriptMessage{Role: m.Role, Text: m.Text, Timestamp: m.Timestamp, IsError: m.IsError}
+		if m.Compact != nil {
+			c := contracts.CompactMarker(*m.Compact)
+			tm.Compact = &c
+		}
 		tm.Tool = contractsToolUse(m.Tool) // full enriched mapping — kind/title/status/locations/server
 		if m.Role == "user" {
 			userIdx++

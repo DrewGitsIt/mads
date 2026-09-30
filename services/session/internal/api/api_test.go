@@ -479,3 +479,84 @@ func TestTerminalOutputReplaysOnAttach(t *testing.T) {
 		t.Fatal("timed out waiting for the replay event")
 	}
 }
+
+// TestQueueRoundTrip: POST /messages with queue:true mid-turn answers
+// "queued" with the entry (where plain /messages answers 409), GET /queue
+// lists it, and DELETE /queue/{id} removes it — once.
+func TestQueueRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dataBase := datatest.Start(t)
+	bootstrap := dataclient.New(dataBase, "test-bootstrap")
+	sess := contracts.Session{Name: "test", Provider: "fake"}
+	if err := bootstrap.CreateSession(ctx, &sess); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := runner.New(sess.ID, dataclient.New(dataBase, sess.ID), reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start runner: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	srv := httptest.NewServer(New(r))
+	t.Cleanup(srv.Close)
+
+	post := func(body map[string]any) *http.Response {
+		t.Helper()
+		b, _ := json.Marshal(body)
+		resp, err := srv.Client().Post(srv.URL+"/messages", "application/json", bytes.NewReader(b))
+		if err != nil {
+			t.Fatalf("POST /messages: %v", err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+
+	if resp := post(map[string]any{"text": "slow"}); resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("first send status = %d", resp.StatusCode)
+	}
+	if resp := post(map[string]any{"text": "echo refused"}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("mid-turn send without queue status = %d, want 409", resp.StatusCode)
+	}
+	resp := post(map[string]any{"text": "echo later", "queue": true})
+	var queued struct {
+		Status string                  `json:"status"`
+		Queued contracts.QueuedMessage `json:"queued"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&queued); err != nil || resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("queue send = %d / %v", resp.StatusCode, err)
+	}
+	if queued.Status != "queued" || queued.Queued.ID == "" || queued.Queued.Text != "echo later" {
+		t.Fatalf("queue send body = %+v", queued)
+	}
+
+	listResp, err := srv.Client().Get(srv.URL + "/queue")
+	if err != nil {
+		t.Fatalf("GET /queue: %v", err)
+	}
+	defer listResp.Body.Close()
+	var list struct {
+		Queued []contracts.QueuedMessage `json:"queued"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&list); err != nil || len(list.Queued) != 1 || list.Queued[0].ID != queued.Queued.ID {
+		t.Fatalf("GET /queue = %+v / %v", list, err)
+	}
+
+	del := func() int {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodDelete, srv.URL+"/queue/"+queued.Queued.ID, nil)
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatalf("DELETE /queue: %v", err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := del(); got != http.StatusNoContent {
+		t.Fatalf("DELETE /queue/{id} = %d, want 204", got)
+	}
+	if got := del(); got != http.StatusNotFound {
+		t.Fatalf("second DELETE = %d, want 404", got)
+	}
+}

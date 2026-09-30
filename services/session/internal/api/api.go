@@ -27,6 +27,8 @@ func New(r *runner.Runner) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
+	mux.HandleFunc("GET /queue", s.handleQueue)
+	mux.HandleFunc("DELETE /queue/{id}", s.handleCancelQueued)
 	mux.HandleFunc("POST /inject", s.handleInject)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /compact", s.handleCompact)
@@ -60,15 +62,46 @@ func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Text string `json:"text"`
+		// Queue asks for a message sent mid-turn to wait behind the turn
+		// instead of being refused with 409 (runner.SendOrQueue).
+		Queue bool `json:"queue"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	if err := s.runner.Send(r.Context(), body.Text); err != nil {
+	if !body.Queue {
+		if err := s.runner.Send(r.Context(), body.Text); err != nil {
+			writeRunnerError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+		return
+	}
+	queued, err := s.runner.SendOrQueue(r.Context(), body.Text)
+	if err != nil {
 		writeRunnerError(w, err)
 		return
 	}
+	if queued != nil {
+		writeJSON(w, http.StatusAccepted, map[string]any{"status": "queued", "queued": queued})
+		return
+	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+// handleQueue lists the user's messages queued behind the in-flight turn.
+func (s *server) handleQueue(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"queued": s.runner.QueuedMessages()})
+}
+
+// handleCancelQueued drops one queued message before it's delivered; 404
+// when it isn't queued (anymore — it may have just gone out).
+func (s *server) handleCancelQueued(w http.ResponseWriter, r *http.Request) {
+	if !s.runner.CancelQueued(r.PathValue("id")) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "message is not queued"})
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleInject delivers a linked session's message into this session's

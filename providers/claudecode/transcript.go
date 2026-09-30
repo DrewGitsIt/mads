@@ -41,8 +41,21 @@ func (p *Provider) Transcript(_ context.Context, ref string) ([]provider.Message
 // Beyond user/assistant messages the file holds bookkeeping (queue
 // operations, attachments, summaries) — all skipped.
 type transcriptLine struct {
-	Type        string `json:"type"`
-	IsSidechain bool   `json:"isSidechain"`
+	// UUID identifies the entry. The CLI can append verbatim copies of
+	// earlier entries, same UUID, when it compacts (observed on 2.x: 622
+	// re-appended lines after a manual /compact), so normalizeTranscript
+	// keeps only the first occurrence.
+	UUID string `json:"uuid"`
+	Type string `json:"type"`
+	// Subtype and CompactMetadata are set on the "system" line the CLI
+	// writes for each compaction (subtype "compact_boundary").
+	Subtype         string           `json:"subtype"`
+	CompactMetadata *compactMetadata `json:"compactMetadata"`
+	// IsCompactSummary marks the user-role line right after a boundary that
+	// holds the summary the agent carries forward ("This session is being
+	// continued…") — the CLI's text, not the human's.
+	IsCompactSummary bool `json:"isCompactSummary"`
+	IsSidechain      bool `json:"isSidechain"`
 	// IsMeta marks harness-injected user lines (caveat preambles, scheduled
 	// prompt re-invocations, hook payloads) — text the human never typed.
 	IsMeta  bool         `json:"isMeta"`
@@ -53,6 +66,13 @@ type transcriptLine struct {
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`
+}
+
+type compactMetadata struct {
+	Trigger    string `json:"trigger"`
+	PreTokens  int    `json:"preTokens"`
+	PostTokens int    `json:"postTokens"`
+	DurationMS int64  `json:"durationMs"`
 }
 
 // isCommandMarkup reports whether a user text block is claude CLI
@@ -72,6 +92,7 @@ func isCommandMarkup(text string) bool {
 // sidechains are dropped.
 func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 	var msgs []provider.Message
+	seen := map[string]struct{}{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for sc.Scan() {
@@ -83,14 +104,50 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 		if err := json.Unmarshal([]byte(raw), &l); err != nil {
 			continue // tolerate unknown lines; the format is claude's, not ours
 		}
-		if l.IsSidechain || l.Message == nil {
+		if l.IsSidechain {
 			continue
+		}
+		if l.UUID != "" {
+			if _, dup := seen[l.UUID]; dup {
+				continue
+			}
+			seen[l.UUID] = struct{}{}
 		}
 		var ts time.Time
 		if l.Timestamp != "" {
 			if parsed, err := time.Parse(time.RFC3339Nano, l.Timestamp); err == nil {
 				ts = parsed
 			}
+		}
+		// A compaction becomes one "compact" entry where it happened: the
+		// boundary line supplies the metadata, the summary line after it
+		// the text. A summary with no boundary before it (older CLIs) still
+		// gets its own entry, so it never renders as a user message.
+		if l.Type == "system" && l.Subtype == "compact_boundary" {
+			marker := &provider.CompactMarker{}
+			if md := l.CompactMetadata; md != nil {
+				*marker = provider.CompactMarker{Trigger: md.Trigger, PreTokens: md.PreTokens, PostTokens: md.PostTokens, DurationMS: md.DurationMS}
+			}
+			msgs = append(msgs, provider.Message{Role: "compact", Compact: marker, Timestamp: ts})
+			continue
+		}
+		if l.Message == nil {
+			continue
+		}
+		if l.IsCompactSummary {
+			var parts []string
+			for _, b := range l.Message.blocks() {
+				if b.Type == "text" && b.Text != "" {
+					parts = append(parts, b.Text)
+				}
+			}
+			summary := strings.Join(parts, "\n")
+			if n := len(msgs); n > 0 && msgs[n-1].Role == "compact" && msgs[n-1].Text == "" {
+				msgs[n-1].Text = summary
+			} else {
+				msgs = append(msgs, provider.Message{Role: "compact", Compact: &provider.CompactMarker{}, Text: summary, Timestamp: ts})
+			}
+			continue
 		}
 		switch l.Type {
 		case "user":

@@ -152,3 +152,23 @@ type AgentState struct {
 	// rule). Turn-end time on idle.
 	Since time.Time `json:"since"`
 }
+
+// QueuedMessage is one user message waiting in the Runner's queue behind an
+// in-flight turn.
+type QueuedMessage struct {
+	ID       string    `json:"id"`
+	Text     string    `json:"text"`
+	QueuedAt time.Time `json:"queued_at"`
+}
+
+// QueueChanged is the payload of SessionQueueChanged. Queued is the whole
+// remaining queue in delivery order (never null), so a reader can adopt it
+// as-is. Delivered names the message that just went out as the next turn;
+// Failed names one whose delivery failed, with Error its reason. Both are
+// already gone from Queued.
+type QueueChanged struct {
+	Queued    []QueuedMessage `json:"queued"`
+	Delivered *QueuedMessage  `json:"delivered,omitempty"`
+	Failed    *QueuedMessage  `json:"failed,omitempty"`
+	Error     string          `json:"error,omitempty"`
+}

@@ -54,6 +54,30 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	s.proxyTo(w, r, addr, "/messages")
 }
 
+// handleSessionQueue and handleSessionCancelQueued forward the composer's
+// queued-message list and its per-message remove to the running child's own
+// GET /queue and DELETE /queue/{id}. The queue is the child's in-memory
+// state, so a session with no tracked child has nothing queued by
+// construction — an empty list, not a 404, like the permission-request list
+// below; cancelling against one is still a 404.
+func (s *server) handleSessionQueue(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{"queued": []any{}})
+		return
+	}
+	s.proxyTo(w, r, addr, "/queue")
+}
+
+func (s *server) handleSessionCancelQueued(w http.ResponseWriter, r *http.Request) {
+	addr, ok := s.sup.SessionAddr(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not running"})
+		return
+	}
+	s.proxyTo(w, r, addr, "/queue/"+r.PathValue("qid"))
+}
+
 // handleSessionCompact forwards the UI's "Compact now" action to the running
 // session child's own POST /compact. It wakes a dormant session first, like
 // handleSessionMessages rather than handleSessionInterrupt: the action's

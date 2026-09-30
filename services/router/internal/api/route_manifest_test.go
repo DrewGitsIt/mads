@@ -108,6 +108,8 @@ var routeManifest = []struct {
 	{"POST", "/sessions/abc/messages", "POST /sessions/{id}/messages"},
 	{"POST", "/sessions/abc/interrupt", "POST /sessions/{id}/interrupt"},
 	{"POST", "/sessions/abc/compact", "POST /sessions/{id}/compact"},
+	{"GET", "/sessions/abc/queue", "GET /sessions/{id}/queue"},
+	{"DELETE", "/sessions/abc/queue/q_1", "DELETE /sessions/{id}/queue/{qid}"},
 	{"GET", "/sessions/abc/output", "GET /sessions/{id}/output"},
 	{"POST", "/sessions/abc/transport", "POST /sessions/{id}/transport"},
 	{"GET", "/sessions/abc/transport", "GET /sessions/{id}/transport"},

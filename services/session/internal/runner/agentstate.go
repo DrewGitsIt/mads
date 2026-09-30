@@ -26,8 +26,9 @@ const agentStateFloor = 500 * time.Millisecond
 // (ui/src/conversation/ChatRenderer/WorkingIndicator.tsx and its ticker):
 // a turn in flight with no activity reported yet, and extended thinking.
 const (
-	agentLabelWorking  = "Working…"
-	agentLabelThinking = "Thinking…"
+	agentLabelWorking    = "Working…"
+	agentLabelThinking   = "Thinking…"
+	agentLabelCompacting = "Compacting…"
 )
 
 // agentState is the runner's view of what this session's main agent is doing,
@@ -64,9 +65,34 @@ type agentState struct {
 // markAgentWorking records that a turn has gone in flight. Called by every
 // path that delivers one (Send, Inject, onTurnEnd's queued drain), right
 // after the in-flight flag is set and the lock released — never under r.mu,
-// since this appends over HTTP.
-func (r *Runner) markAgentWorking() {
-	r.setAgentState(contracts.AgentWorking, agentLabelWorking, true)
+// since this appends over HTTP. text is the turn being delivered: a
+// /compact turn is labelled as such from its first moment, since it reports
+// no tool or thinking activity that would otherwise name it.
+func (r *Runner) markAgentWorking(text string) {
+	label := agentLabelWorking
+	if isCompactCommand(text) {
+		label = agentLabelCompacting
+	}
+	r.setAgentState(contracts.AgentWorking, label, true)
+}
+
+// relabelWorking changes the working label of a turn already in flight, and
+// is a no-op when none is. Only the pump calls it, and the pump is also what
+// ends a turn, so the check can't race the idle edge.
+func (r *Runner) relabelWorking(label string) {
+	r.agent.mu.Lock()
+	working := r.agent.state == contracts.AgentWorking
+	r.agent.mu.Unlock()
+	if working {
+		r.setAgentState(contracts.AgentWorking, label, false)
+	}
+}
+
+// isCompactCommand reports whether a turn's text is the CLI's /compact
+// command, with or without its optional focus instructions.
+func isCompactCommand(text string) bool {
+	t := strings.TrimSpace(text)
+	return t == "/compact" || strings.HasPrefix(t, "/compact ")
 }
 
 // markAgentIdle records that no turn is in flight. Called at turn end and
@@ -89,6 +115,12 @@ func (r *Runner) observeAgentState(ev provider.Event) {
 	switch {
 	case ev.Kind == provider.EventToolUse && ev.Tool != nil:
 		r.setAgentState(contracts.AgentWorking, agentToolLabel(ev.Tool), false)
+	case ev.Kind == provider.EventCompact && ev.Compact != nil && ev.Compact.Phase == "start":
+		// Any compaction, including the Runner's own near-limit trigger —
+		// not only a typed /compact, which markAgentWorking already names.
+		// Relabel only: "Compact now" (CompactNow) runs outside any turn,
+		// and nothing would ever mark that idle again.
+		r.relabelWorking(agentLabelCompacting)
 	case ev.Kind == provider.EventThinking:
 		// Deliberately not the ticker's "Thinking · N tokens": a token
 		// count would make every tick its own transition, and the count is

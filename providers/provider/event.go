@@ -317,7 +317,7 @@ type Usage struct {
 // Message is one normalized transcript entry (TranscriptReader). Synthesis
 // and retro (spec §4, §7) read this shape regardless of harness.
 type Message struct {
-	Role string   `json:"role"` // "user", "agent", "tool", or "tool_result"
+	Role string   `json:"role"` // "user", "agent", "tool", "tool_result", or "compact"
 	Text string   `json:"text,omitempty"`
 	Tool *ToolUse `json:"tool,omitempty"`
 	// Timestamp is when the provider recorded this entry, when the wire
@@ -326,4 +326,17 @@ type Message struct {
 	// IsError marks a Role "tool_result" entry as the tool call having
 	// failed. Meaningless on other roles.
 	IsError bool `json:"is_error,omitempty"`
+	// Compact describes a Role "compact" entry: a compaction pass, placed
+	// where it happened. Its Text is the summary the agent carried forward
+	// (empty if the provider recorded none) — never a user message.
+	Compact *CompactMarker `json:"compact,omitempty"`
+}
+
+// CompactMarker is one completed compaction pass as a transcript records
+// it. Zero fields mean the provider didn't say.
+type CompactMarker struct {
+	Trigger    string `json:"trigger,omitempty"` // "manual" (the user asked) or "auto"
+	PreTokens  int    `json:"pre_tokens,omitempty"`
+	PostTokens int    `json:"post_tokens,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
 }

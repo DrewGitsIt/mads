@@ -106,6 +106,10 @@ never called peer-to-peer.
   wake — expected, not an error. Once a child is tracked, this is a
   pure reverse proxy to the child's own `POST /messages`, same as
   `/interrupt`.
+- `GET /sessions/{id}/queue`, `DELETE /sessions/{id}/queue/{qid}` — reverse proxies to the
+  child's message queue (see services/session's `POST /messages` `queue` flag). With no
+  child tracked the list is `{"queued": []}` (the queue lives in the child's memory) and
+  a cancel is 404.
 - `POST /sessions/{id}/terminate` — stop the child (SIGTERM, grace, SIGKILL); 204. The
   session record survives, left inactive, with a summary generated shortly after (session
   summaries are triggered by the child-exit hook — see "Critical paths" below). This is
