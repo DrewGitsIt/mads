@@ -628,7 +628,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.queryByText(/selected$/)).toBeNull();
   });
 
-  it("offers Unlink only from the nested subject row's link options, and confirming deletes the link", async () => {
+  it("offers Unlink from the nested subject row's link options, and confirming deletes the link", async () => {
     FLAGS.linkedSessions = true;
     const client = new FakeRouterClient();
     const deleteLinkSpy = vi.spyOn(client, "deleteLink");
@@ -641,6 +641,7 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       />,
     );
 
+    // Per-link detail (the update policy) lives only here, on the subject row.
     expect(screen.queryByRole("button", { name: "Link options for investigator" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Link options for payments refactor" }));
@@ -651,6 +652,58 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     fireEvent.click(within(dialog).getByText("Unlink"));
 
     await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
+  });
+
+  it("unlinks from the holder's own badge too, naming the subject it would drop", async () => {
+    // The relationship used to be reachable only from the nested subject row:
+    // the holder's badge was a bare <span> in the same pill styling, so the
+    // obvious thing to click on the parent card did nothing and said nothing.
+    FLAGS.linkedSessions = true;
+    const client = new FakeRouterClient();
+    const deleteLinkSpy = vi.spyOn(client, "deleteLink");
+    render(
+      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
+    );
+
+    const holderBadge = screen.getByRole("button", {
+      name: "Linked sessions held by investigator",
+    });
+    expect(holderBadge.textContent).toContain("LEADER");
+    fireEvent.click(holderBadge);
+    fireEvent.click(screen.getByRole("menuitem", { name: /Unlink payments refactor…/ }));
+
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("payments refactor");
+    fireEvent.click(within(dialog).getByText("Unlink"));
+
+    await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
+  });
+
+  it("names every subject separately, so a holder of several is never ambiguous", () => {
+    FLAGS.linkedSessions = true;
+    const b = makeSession({ id: "b", name: "ledger cleanup" });
+    const second = makeLink({
+      id: "l2",
+      granting_session_id: "lead",
+      subject_session_id: "b",
+      grants: ["read"],
+    });
+    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link, second]} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Linked sessions held by investigator" }));
+    const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
+    expect(items).toHaveLength(2);
+    // Each carries the role it would sever, not just the name.
+    expect(items[0]).toContain("Unlink payments refactor…");
+    expect(items[0]).toContain("Leading this session");
+    expect(items[1]).toContain("Unlink ledger cleanup…");
+    expect(items[1]).toContain("Watching this session");
+  });
+
+  it("leaves a card that holds nothing without a badge menu at all", () => {
+    FLAGS.linkedSessions = true;
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[]} />);
+    expect(screen.queryByRole("button", { name: /^Linked sessions held by/ })).toBeNull();
   });
 
   it("edits a nested subject row's update policy from its link options", async () => {
@@ -912,6 +965,33 @@ describe("SessionRail status line", () => {
     const status = statusOf("the session");
     expect(status.textContent).toBe("◦Ready");
     expect(status.className).toMatch(/status-idle/);
+  });
+
+  it("keeps the main agent's clause while only backgrounded subagents run, and counts them in the tooltip", () => {
+    // The status line is the one place the fast-changing clause can live, and a
+    // backgrounded sidechain can outlast many turns — so it does not get to sit
+    // there. It still has to be countable somewhere, which is the tooltip.
+    renderWith({
+      workingSince: "2026-09-28T13:39:00.000Z",
+      label: "Running bash · make check",
+      subagents: 2,
+      blockingSubagents: 0,
+    });
+    expect(statusOf("the session").textContent).toContain("Running bash · make check");
+    const card = screen.getByText("the session").closest('[role="button"]')!;
+    expect(card.getAttribute("title")).toContain("Background subagents: 2 running");
+  });
+
+  it("says nothing about background subagents when every running one blocks", () => {
+    renderWith({
+      workingSince: "2026-09-28T13:39:00.000Z",
+      label: "Delegating · review the diff",
+      subagents: 2,
+      blockingSubagents: 2,
+    });
+    expect(statusOf("the session").textContent).toContain("2 subagents running");
+    const card = screen.getByText("the session").closest('[role="button"]')!;
+    expect(card.getAttribute("title") ?? "").not.toContain("Background subagents");
   });
 
   it("renders 'Sleeping · wakes on send' for an inactive session", () => {

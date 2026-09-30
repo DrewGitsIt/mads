@@ -37,8 +37,19 @@ export interface SessionAgentState {
   awaitingSince?: string;
   /** The parked call's tool, when the request named one. */
   awaitingTool?: string;
-  /** Spawned subagents still running. */
+  /** Spawned subagents still running, backgrounded or not. */
   subagents: number;
+  /**
+   * Of those, the ones the main agent is actually waiting on — a foreground
+   * Agent call blocks the turn, a backgrounded one does not. Only a blocking
+   * sidechain gets to speak for the session on the status line; see statusOf.
+   *
+   * Absent means "assume they all block", which is what every subagent was
+   * taken to do before backgrounding was distinguished — so a producer that
+   * doesn't know about the flag keeps the older, louder behaviour rather than
+   * silently going quiet.
+   */
+  blockingSubagents?: number;
   /**
    * Set while a turn is in flight — the instant the TURN went in flight, held
    * across the turn's label changes, so the counter spans the whole turn.
@@ -120,10 +131,17 @@ export function statusOf(
       dot: "work",
       // No glyph: this is the one state that spins.
       label:
-        state.subagents > 0
+        (state.blockingSubagents ?? state.subagents) > 0
           ? // A sidechain's tools are the subagent's activity, not the main
             // agent's: they roll up as a count, which is why the runner skips
-            // them when it builds the label below.
+            // them when it builds the label below. Only a *blocking* sidechain
+            // earns the line, though — while the main agent waits on one it
+            // has nothing of its own to report, so the count is the better
+            // clause. A backgrounded subagent leaves the main agent working,
+            // and those can outlive many turns: letting one own this line
+            // pinned every card that spawned one to a single sentence for
+            // minutes at a stretch while the label underneath changed
+            // constantly. The count still reaches the tooltip.
             `${plural(state.subagents, "subagent")} running`
           : // The server-built clause — the same enrichment the open
             // conversation's working-indicator ticker shows for the same call,

@@ -164,15 +164,49 @@ describe("statusOf", () => {
     }
   });
 
-  it("still rolls a sidechain up as a count, ahead of the main agent's own clause", () => {
+  it("still rolls a blocking sidechain up as a count, ahead of the main agent's own clause", () => {
     // The runner deliberately skips parent-tagged events when it builds the
-    // label, so a busy subagent can't churn it — the count is the subagents'
-    // line, and it is the more useful one while they run.
+    // label, so a busy subagent can't churn it — and while the main agent is
+    // waiting on one it has nothing of its own to report, so the count is the
+    // more useful line.
     const state = makeAgentState({
       workingSince: "2026-07-01T00:00:00Z",
       label: "Delegating · review the diff",
       subagents: 2,
+      blockingSubagents: 2,
     });
+    expect(statusOf(makeSession({}), state, idle).label).toBe("2 subagents running");
+  });
+
+  it("lets the main agent keep the line while only backgrounded subagents run", () => {
+    // A backgrounded Agent call doesn't block the turn: the main agent goes
+    // right on working, and these outlive whole turns. Counting them here
+    // pinned the card to one sentence for minutes while the label underneath
+    // changed every few seconds — the card looked frozen because it was.
+    const state = makeAgentState({
+      workingSince: "2026-07-01T00:00:00Z",
+      label: "Running bash · make check",
+      subagents: 2,
+      blockingSubagents: 0,
+    });
+    expect(statusOf(makeSession({}), state, idle).label).toBe("Running bash · make check");
+  });
+
+  it("counts every running sidechain once any of them blocks, backgrounded or not", () => {
+    // The clause is about the main agent being stuck, but once it is, all the
+    // sidechains are the story — reporting only the blocking ones would
+    // undercount what is actually running.
+    const state = makeAgentState({
+      workingSince: "2026-07-01T00:00:00Z",
+      label: "Delegating · review the diff",
+      subagents: 3,
+      blockingSubagents: 1,
+    });
+    expect(statusOf(makeSession({}), state, idle).label).toBe("3 subagents running");
+  });
+
+  it("assumes an unsplit count blocks, so a producer that can't tell stays loud", () => {
+    const state = makeAgentState({ workingSince: "2026-07-01T00:00:00Z", label: "Thinking…", subagents: 2 });
     expect(statusOf(makeSession({}), state, idle).label).toBe("2 subagents running");
   });
 

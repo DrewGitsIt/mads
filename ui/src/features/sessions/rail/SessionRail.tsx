@@ -3,6 +3,8 @@ import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
+import { LinkHolderMenu } from "./LinkHolderMenu";
+import type { LinkHolderSubject } from "./LinkHolderMenu";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import {
@@ -588,6 +590,12 @@ function RailRowGroup({
         onClose={onClose}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
+        heldSubjects={row.subjects.map((sub) => ({
+          name: sub.session.name || "Untitled session",
+          badge: sub.badge,
+          linkId: sub.linkId,
+        }))}
+        onUnlinkSubjectRequest={onUnlinkRequest}
         linkedSessionsEnabled={linkedSessionsEnabled}
         linkModeActive={Boolean(linkMode)}
         isLinkAnchor={isAnchor}
@@ -679,6 +687,8 @@ function SessionRow({
   onClose,
   onDeleteRequest,
   linkBadge,
+  heldSubjects,
+  onUnlinkSubjectRequest,
   orchestrateStatus,
   nested,
   onUnlinkRequest,
@@ -707,6 +717,13 @@ function SessionRow({
   onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
+  /**
+   * Only set on a holder row — the subjects it holds, which is what turns its
+   * badge from a bare pill into the menu that can unlink them.
+   */
+  heldSubjects?: LinkHolderSubject[];
+  /** Holder rows only: unlink one named subject, chosen from the badge's menu. */
+  onUnlinkSubjectRequest?: (target: { linkId: string; name: string }) => void;
   /** Only ever set on a LINKED (leader) subject row — the orchestrate grant's materialization state. */
   orchestrateStatus?: OrchestrateStatus;
   nested?: boolean;
@@ -753,8 +770,18 @@ function SessionRow({
   const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
-  // occupancy — plus the labels the line above adaptively dropped.
-  const tooltip = railTooltip(session, labelContext);
+  // occupancy — plus the labels the line above adaptively dropped, and any
+  // sidechain the status line deliberately stays quiet about: a backgrounded
+  // subagent never takes that line (railGroups.statusOf), so this is the only
+  // place it is still counted.
+  const backgroundSubagents =
+    agentState.subagents - (agentState.blockingSubagents ?? agentState.subagents);
+  const tooltip = [
+    railTooltip(session, labelContext),
+    backgroundSubagents > 0 ? `Background subagents: ${backgroundSubagents} running` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
   const showSummary = isPaused && Boolean(session.summary);
   // A nested subject row's link controls (update policy, unlink) live in one
@@ -772,6 +799,17 @@ function SessionRow({
         orchestrateStatus={orchestrateStatus}
         routerClient={routerClient}
         onUnlinkRequest={onUnlinkRequest}
+      />
+    ) : undefined;
+  // And the holder's own badge carries the same relationship from the other
+  // end, so the obvious thing to click on the parent card can unlink too.
+  const holderMenu =
+    linkBadge && heldSubjects?.length && onUnlinkSubjectRequest ? (
+      <LinkHolderMenu
+        badge={linkBadge}
+        holderName={name}
+        subjects={heldSubjects}
+        onUnlinkRequest={onUnlinkSubjectRequest}
       />
     ) : undefined;
 
@@ -932,7 +970,8 @@ function SessionRow({
             </span>
           )}
           {linkedSessionsEnabled && linkOptions}
-          {linkedSessionsEnabled && linkBadge && !linkOptions && (
+          {linkedSessionsEnabled && linkBadge && !linkOptions && holderMenu}
+          {linkedSessionsEnabled && linkBadge && !linkOptions && !holderMenu && (
             <span
               className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
                 .filter(Boolean)

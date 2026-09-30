@@ -131,6 +131,51 @@ describe("useSessionAgentState", () => {
     await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
   });
 
+  it("separates the subagents the main agent waits on from the backgrounded ones", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
+    // is_backgrounded rides the "started" line only, so it has to be
+    // remembered — a later phase's silence must not un-background a task.
+    emit("session.subagent_task", "s1", { phase: "started", task_id: "bg", is_backgrounded: true });
+    emit("session.subagent_task", "s1", { phase: "started", task_id: "fg" });
+    emit("session.subagent_task", "s1", { phase: "progress", task_id: "bg", tool_uses: 4 });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
+    expect(result.current.s1?.blockingSubagents).toBe(1);
+
+    emit("session.subagent_task", "s1", { phase: "notification", task_id: "fg", status: "completed" });
+    await waitFor(() => expect(result.current.s1?.blockingSubagents).toBe(0));
+    // The backgrounded one is still running — it just no longer speaks for the
+    // session on the status line.
+    expect(result.current.s1?.subagents).toBe(1);
+  });
+
+  it("retires a subagent count when the session goes to sleep, not only on its notification", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
+    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1", is_backgrounded: true });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
+
+    // The ending a killed child actually produces: no idle, no notification,
+    // just the activity flip. Without it the card spins on a stale `working`
+    // and carries the count for the life of the tab — mirroredWorking() won't
+    // save it, because `live` outranks the record mirror.
+    emit("session.activity_changed", "s1", { activity: "inactive" }, "2026-09-28T10:05:00Z");
+    // Nothing left to say, so the session drops out of the map entirely and
+    // the card reads EMPTY_AGENT_STATE: no spinner, no count.
+    await waitFor(() => expect(result.current.s1).toBeUndefined());
+  });
+
+  it("reads waking as no news about a turn", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
+    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
+
+    emit("session.activity_changed", "s1", { activity: "active" }, "2026-09-28T10:00:30Z");
+    expect(result.current.s1?.workingSince).toBe("2026-09-28T10:00:00Z");
+    expect(result.current.s1?.subagents).toBe(1);
+  });
+
   it("reports the turn in flight from agent_state alone — an in-turn signal is not a turn", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     // Subagent traffic used to be what made a card read "working". It no

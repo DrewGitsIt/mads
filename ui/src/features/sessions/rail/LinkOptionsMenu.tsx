@@ -35,7 +35,7 @@ const FLYOUT_HEIGHT_ESTIMATE = 260;
  * trigger. The rail is a scroll container, so an absolutely-positioned
  * flyout would be clipped by it or scroll it sideways.
  */
-function flyoutPlacement(trigger: DOMRect): CSSProperties {
+export function flyoutPlacement(trigger: DOMRect): CSSProperties {
   const gap = 4;
   const left = Math.max(8, Math.min(trigger.left, window.innerWidth - FLYOUT_WIDTH - 8));
   const openUp = trigger.bottom + gap + FLYOUT_HEIGHT_ESTIMATE > window.innerHeight;

@@ -19,6 +19,7 @@ import type { AgentState, Envelope, Session, SubagentTask } from "../../../route
  */
 const AGENT_STATE_EVENT_TYPES = [
   "session.agent_state",
+  "session.activity_changed",
   "session.crashed",
   "session.permission_requested",
   "session.permission_resolved",
@@ -33,6 +34,12 @@ interface Fold {
   /** Spawned subagents that haven't reported a final notification. */
   running: Set<string>;
   /**
+   * Which of `running` were spawned backgrounded — the subset the main agent
+   * is NOT waiting on. `is_backgrounded` rides the "started" phase only, so
+   * it has to be remembered here rather than re-read off a later phase.
+   */
+  backgrounded: Set<string>;
+  /**
    * The latest session.agent_state this connection saw. Once set it supersedes
    * the record mirror for good: the stream is newer than any list refetch.
    */
@@ -41,7 +48,13 @@ interface Fold {
 }
 
 function emptyFold(): Fold {
-  return { crashed: false, pending: new Map(), running: new Set(), done: false };
+  return {
+    crashed: false,
+    pending: new Map(),
+    running: new Set(),
+    backgrounded: new Set(),
+    done: false,
+  };
 }
 
 /**
@@ -53,6 +66,19 @@ function emptyFold(): Fold {
 function clearStale(fold: Fold): void {
   fold.crashed = false;
   fold.done = false;
+}
+
+/**
+ * Nothing is in flight any more: no park is outstanding and no sidechain is
+ * running. Every caller here is an event that ends the turn one way or
+ * another, and each one has to retire the subagent set too — a subagent is
+ * otherwise retired ONLY by its own final "notification", so a session whose
+ * child dies mid-sidechain would carry that count for the life of the tab.
+ */
+function clearInFlight(fold: Fold): void {
+  fold.pending.clear();
+  fold.running.clear();
+  fold.backgrounded.clear();
 }
 
 function apply(fold: Fold, env: Envelope): void {
@@ -69,11 +95,25 @@ function apply(fold: Fold, env: Envelope): void {
         return;
       }
       fold.crashed = false;
-      fold.pending.clear();
       // A turn end with no notification leaves nothing running, the same
       // conclusion finishRunningTasks() draws in the conversation.
-      fold.running.clear();
+      clearInFlight(fold);
       fold.done = true;
+      return;
+    }
+    case "session.activity_changed": {
+      // Going to sleep is the turn's other ending, and the only one that
+      // arrives when the child is killed rather than finished — a rebuild, a
+      // Close, the supervisor healing a stale `active` record. Without it a
+      // session terminated mid-sidechain keeps both a spinning card and its
+      // subagent count forever: mirroredWorking() refuses to trust a working
+      // mirror on a dead session, but `live` outranks the mirror, so the
+      // guard never gets a say. Waking says nothing about a turn, so only
+      // the transition to inactive is news here.
+      const p = (env.payload ?? {}) as { activity?: string };
+      if (p.activity !== "inactive") return;
+      fold.live = { state: "idle", since: env.timestamp };
+      clearInFlight(fold);
       return;
     }
     case "session.crashed":
@@ -83,8 +123,7 @@ function apply(fold: Fold, env: Envelope): void {
       fold.crashed = true;
       fold.done = false;
       fold.live = { state: "idle", since: env.timestamp };
-      fold.pending.clear();
-      fold.running.clear();
+      clearInFlight(fold);
       return;
     case "session.permission_requested": {
       const p = (env.payload ?? {}) as { request_id?: string; tool?: string };
@@ -105,8 +144,15 @@ function apply(fold: Fold, env: Envelope): void {
       if (!task.task_id) return;
       // Same vocabulary as the conversation's own fold (conversationItems.ts):
       // only a final "notification" retires a subagent.
-      if (task.phase === "notification") fold.running.delete(task.task_id);
-      else fold.running.add(task.task_id);
+      if (task.phase === "notification") {
+        fold.running.delete(task.task_id);
+        fold.backgrounded.delete(task.task_id);
+        return;
+      }
+      fold.running.add(task.task_id);
+      // "started" is the only phase that carries the flag, so remember it —
+      // and never unset it from a later phase's silence.
+      if (task.is_backgrounded) fold.backgrounded.add(task.task_id);
       return;
     }
   }
@@ -150,6 +196,10 @@ function project(
     // has been waiting on the user longest.
     const park = [...(fold?.pending.values() ?? [])].sort((a, b) => a.at.localeCompare(b.at))[0];
     const state: SessionAgentState = { subagents: fold?.running.size ?? 0 };
+    // Only when it says something, like every other field here: absent means
+    // "they all block", so the common case keeps the shape it always had.
+    const blocking = fold ? [...fold.running].filter((id) => !fold.backgrounded.has(id)).length : 0;
+    if (blocking !== state.subagents) state.blockingSubagents = blocking;
     if (fold?.crashed) state.crashed = true;
     if (park) {
       state.awaitingSince = park.at;
