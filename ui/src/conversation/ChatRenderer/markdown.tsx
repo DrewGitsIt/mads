@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
+import styles from "./markdown.module.css";
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -46,5 +47,10 @@ export function Markdown({ text, className }: { text: string; className?: string
     });
   }, [text]);
 
-  return <div className={className} dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div
+      className={[styles.markdown, className].filter(Boolean).join(" ")}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }

@@ -1,0 +1,17 @@
+/* Links in rendered prose. Without this they fall back to the browser's
+   default #0000ee, which is close to unreadable on the dark palettes.
+   --info-fg is tuned per palette and theme to read on --bg*. */
+.markdown a {
+  color: var(--info-fg);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--info-fg) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.markdown a:visited {
+  color: var(--info-fg);
+}

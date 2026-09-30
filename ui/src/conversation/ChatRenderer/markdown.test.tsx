@@ -10,7 +10,9 @@
 // run, not runtime behavior.
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
+import { readFileSync } from "node:fs";
 import { Markdown } from "./markdown";
+import styles from "./markdown.module.css";
 
 describe("Markdown", () => {
   it("renders basic markdown as HTML", () => {
@@ -34,5 +36,21 @@ describe("Markdown", () => {
     );
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  // Unstyled, a link falls back to the browser's #0000ee — near-unreadable on
+  // the dark palettes. The wrapper carries the scoping class, and the rule
+  // colors links from the palette-tuned --info-fg.
+  it("scopes a palette-aware link color to rendered prose", () => {
+    const { container } = render(
+      <Markdown className="prose" text="see [the docs](https://example.com)" />,
+    );
+    const wrapper = container.firstElementChild!;
+    expect(wrapper.classList.contains(styles.markdown)).toBe(true);
+    expect(wrapper.classList.contains("prose")).toBe(true);
+    expect(wrapper.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+
+    const css = readFileSync("src/conversation/ChatRenderer/markdown.module.css", "utf8");
+    expect(css).toMatch(/\.markdown a \{[^}]*color: var\(--info-fg\)/);
   });
 });
