@@ -8,6 +8,7 @@ import { router } from "../../../router/client";
 import type {
   Agent,
   CreateSessionPayload,
+  Link,
   LinkRequest,
   Session,
   SessionDefaults,
@@ -42,12 +43,15 @@ export interface LaunchpadProps {
   onSessionCreated: (session: Session, goalText: string) => void;
   /** Pickable pool for "Link to session(s)…" (flag-gated) — optional so render sites without the rail's list still compile. */
   sessions?: Session[];
+  /** Links touching `sessions`, so the link chooser can show which are already led. */
+  links?: Link[];
 }
 
 export function Launchpad({
   createSession,
   onSessionCreated,
   sessions = [],
+  links = [],
 }: LaunchpadProps) {
   const [text, setText] = useState("");
   const [staged, setStaged] = useState<StagedConfig>({});
@@ -317,6 +321,7 @@ export function Launchpad({
           <LinkChooserDialog
             sessionIds={[]}
             sessions={sessions}
+            links={links}
             routerClient={router}
             stagedHolder={{
               label: "This session (not started yet)",

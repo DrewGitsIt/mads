@@ -518,6 +518,7 @@ export function SessionRail({
         <LinkChooserDialog
           sessionIds={[...linkMode.selectedIds]}
           sessions={sessions}
+          links={links}
           routerClient={routerClient}
           onClose={() => setChooserOpen(false)}
           onCreated={() => {

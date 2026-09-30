@@ -56,6 +56,23 @@
   background: var(--bg3);
 }
 
+.preset:disabled {
+  cursor: not-allowed;
+  background: var(--bg2);
+}
+
+.preset:disabled .pt,
+.preset:disabled .pd,
+.preset:disabled .grants {
+  opacity: 0.5;
+}
+
+.blockedReason {
+  margin-top: 9px;
+  color: var(--warn-fg);
+  font: 600 var(--fs-sm) var(--sans);
+}
+
 .preset[aria-selected="true"] {
   border-color: var(--accent);
   background: var(--accent-soft);
@@ -159,6 +176,11 @@
 
 .fanOut {
   color: var(--text3);
+}
+
+.ledBy {
+  color: var(--text3);
+  font-style: italic;
 }
 
 .constraint {

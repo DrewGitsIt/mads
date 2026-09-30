@@ -5,6 +5,7 @@ import {
   NEW_SESSION_PLACEHOLDER,
   PRESET_GRANTS,
   type LinkCadence,
+  type Link,
   type LinkPreset,
   type LinkRequest,
   type Session,
@@ -27,6 +28,13 @@ export interface LinkChooserDialogProps {
   initialSubjectIds?: string[];
   initialPreset?: "monitor" | "leader";
   initialCadence?: LinkCadence;
+  /**
+   * Links touching the listed sessions (SessionsSurface's useSessionLinks),
+   * used to spot subjects that already have an orchestrate holder. The
+   * backend refuses a second one, so Leader is disabled for them up front
+   * instead of failing on submit.
+   */
+  links?: Link[];
 }
 
 // Only Monitor and Leader are user-selectable (docs/linked-sessions-mockup.html,
@@ -65,6 +73,19 @@ function sessionName(sessions: Session[], id: string): string {
   return sessions.find((s) => s.id === id)?.name || "Untitled session";
 }
 
+/** subject session id → the granting session id of its orchestrate holder. */
+function leadersBySubject(links: Link[]): Map<string, string> {
+  const leaders = new Map<string, string>();
+  for (const l of links) {
+    if (l.grants.includes("orchestrate")) leaders.set(l.subject_session_id, l.granting_session_id);
+  }
+  return leaders;
+}
+
+function leaderName(sessions: Session[], id: string): string {
+  return sessions.find((s) => s.id === id)?.name || "another session";
+}
+
 /** Monitor/Leader preset chooser + holder picker, per docs/linked-sessions-mockup.html panel 1. */
 export function LinkChooserDialog({
   sessionIds,
@@ -76,6 +97,7 @@ export function LinkChooserDialog({
   initialSubjectIds,
   initialPreset,
   initialCadence,
+  links = [],
 }: LinkChooserDialogProps) {
   const [preset, setPreset] = useState<UserPreset>(initialPreset ?? "leader");
   const [cadence, setCadence] = useState<LinkCadence>(initialCadence ?? "on_signal");
@@ -96,7 +118,33 @@ export function LinkChooserDialog({
   }, [onClose]);
 
   const subjectIds = stagedHolder ? checkedIds : sessionIds.filter((id) => id !== holderId);
-  const roleLabel = preset === "leader" ? "Who leads?" : "Who monitors?";
+
+  // A subject may have at most one orchestrate holder, and the backend
+  // refuses a second (even from the same holder), so Leader is unavailable
+  // while any current subject is already led. The user's pick is kept:
+  // Monitor applies only while Leader is blocked, and Leader comes back as
+  // soon as the led subject is deselected or becomes the holder.
+  const leaders = leadersBySubject(links);
+  const ledSubjects = subjectIds.filter((id) => leaders.has(id));
+  const leaderBlocked = ledSubjects.length > 0;
+  const effectivePreset: UserPreset = leaderBlocked ? "monitor" : preset;
+  const leaderBlockedReason =
+    ledSubjects.length === 1 && subjectIds.length === 1
+      ? `Already led by ${leaderName(sessions, leaders.get(ledSubjects[0])!)}`
+      : ledSubjects
+          .map(
+            (id) =>
+              `${sessionName(sessions, id)} is already led by ${leaderName(sessions, leaders.get(id)!)}`,
+          )
+          .join("; ");
+  const roleLabel = effectivePreset === "leader" ? "Who leads?" : "Who monitors?";
+
+  function ledByLabel(id: string) {
+    const leader = leaders.get(id);
+    return leader ? (
+      <span className={styles.ledBy}>· led by {leaderName(sessions, leader)}</span>
+    ) : null;
+  }
 
   // Holder radio is fixed to the phantom row in staged v1 — the other rows keep
   // their radios (disabled, not removed) so new-session-as-subject is a later
@@ -118,7 +166,7 @@ export function LinkChooserDialog({
         checkedIds.map((id) => ({
           granting_session_id: NEW_SESSION_PLACEHOLDER,
           subject_session_id: id,
-          preset,
+          preset: effectivePreset,
           cadence,
         })),
       );
@@ -132,7 +180,7 @@ export function LinkChooserDialog({
         await routerClient.createLink({
           granting_session_id: holderId,
           subject_session_id: subjectId,
-          preset,
+          preset: effectivePreset,
           cadence,
         });
       }
@@ -166,25 +214,30 @@ export function LinkChooserDialog({
             : "Pick a mode, then pick which session holds it — every other selected session becomes its subject."}
         </div>
         <div className={styles.presets}>
-          {(Object.keys(PRESET_COPY) as UserPreset[]).map((p) => (
-            <button
-              key={p}
-              type="button"
-              className={styles.preset}
-              aria-selected={preset === p}
-              onClick={() => setPreset(p)}
-            >
-              <div className={styles.pt}>{PRESET_COPY[p].title}</div>
-              <div className={styles.pd}>{PRESET_COPY[p].description}</div>
-              <div className={styles.grants}>
-                {PRESET_GRANTS[p].map((g) => (
-                  <span key={g} className={styles.grant}>
-                    {g}
-                  </span>
-                ))}
-              </div>
-            </button>
-          ))}
+          {(Object.keys(PRESET_COPY) as UserPreset[]).map((p) => {
+            const blocked = p === "leader" && leaderBlocked;
+            return (
+              <button
+                key={p}
+                type="button"
+                className={styles.preset}
+                aria-selected={effectivePreset === p}
+                disabled={blocked}
+                onClick={() => setPreset(p)}
+              >
+                <div className={styles.pt}>{PRESET_COPY[p].title}</div>
+                <div className={styles.pd}>{PRESET_COPY[p].description}</div>
+                {blocked && <div className={styles.blockedReason}>{leaderBlockedReason}</div>}
+                <div className={styles.grants}>
+                  {PRESET_GRANTS[p].map((g) => (
+                    <span key={g} className={styles.grant}>
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              </button>
+            );
+          })}
         </div>
         <div className={styles.cadenceSection}>
           <div className={styles.roleLabel}>How often should it hear back?</div>
@@ -214,6 +267,7 @@ export function LinkChooserDialog({
                   onChange={() => toggleChecked(s.id)}
                 />
                 {s.name || "Untitled session"}
+                {ledByLabel(s.id)}
               </label>
             ))}
           </div>
@@ -245,6 +299,7 @@ export function LinkChooserDialog({
                     ⟶ {others.map((other) => other.label).join(", ")}
                   </span>
                 )}
+                {ledByLabel(row.id)}
               </label>
             );
           })}

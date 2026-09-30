@@ -2,7 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import { FakeRouterClient } from "../../../router/fixtures";
-import type { Session } from "../../../router/types";
+import type { Grant, Link, Session } from "../../../router/types";
+
+function makeLink(granting: string, subject: string, grants: Grant[]): Link {
+  return {
+    id: `lnk-${granting}-${subject}`,
+    granting_session_id: granting,
+    subject_session_id: subject,
+    grants,
+    cadence: "on_signal",
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+  };
+}
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -257,6 +269,127 @@ describe("LinkChooserDialog", () => {
         screen.getByText("Catch up on request").closest("button")?.getAttribute("aria-selected"),
       ).toBe("true");
       expect(screen.getByText("Stage 1 link")).toBeTruthy();
+    });
+  });
+
+  describe("subjects that already have a leader", () => {
+    const leaderButton = () => screen.getByText("Leader").closest("button")!;
+    const monitorButton = () => screen.getByText("Monitor").closest("button")!;
+
+    it("disables Leader with the existing holder's name and falls back to Monitor", async () => {
+      const client = new FakeRouterClient();
+      const createLinkSpy = vi.spyOn(client, "createLink");
+      const onCreated = vi.fn();
+      render(
+        <LinkChooserDialog
+          sessionIds={["a", "b"]}
+          sessions={sessions}
+          links={[makeLink("c", "b", ["read", "inject", "orchestrate"])]}
+          routerClient={client}
+          onClose={vi.fn()}
+          onCreated={onCreated}
+        />,
+      );
+
+      expect(leaderButton().disabled).toBe(true);
+      expect(leaderButton().getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByText("Already led by gateway hardening")).toBeTruthy();
+      // The subject's row names its holder too.
+      expect(screen.getByText("· led by gateway hardening")).toBeTruthy();
+
+      // Monitor stays selectable, and it's what gets created.
+      expect(monitorButton().disabled).toBe(false);
+      expect(monitorButton().getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByText("Who monitors?")).toBeTruthy();
+      fireEvent.click(screen.getByText("Create 1 link"));
+      await waitFor(() => expect(onCreated).toHaveBeenCalled());
+      expect(createLinkSpy).toHaveBeenCalledWith({
+        granting_session_id: "a",
+        subject_session_id: "b",
+        preset: "monitor",
+        cadence: "on_signal",
+      });
+    });
+
+    it("keeps Leader enabled when the subject has no orchestrate holder", () => {
+      render(
+        <LinkChooserDialog
+          sessionIds={["a", "b"]}
+          sessions={sessions}
+          // A monitor over b is not a leader.
+          links={[makeLink("c", "b", ["read"])]}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          onCreated={vi.fn()}
+        />,
+      );
+      expect(leaderButton().disabled).toBe(false);
+      expect(leaderButton().getAttribute("aria-selected")).toBe("true");
+      expect(screen.queryByText(/^Already led by/)).toBeNull();
+      expect(screen.queryByText(/^· led by/)).toBeNull();
+    });
+
+    it("gives Leader back once the led session becomes the holder instead of a subject", () => {
+      render(
+        <LinkChooserDialog
+          sessionIds={["a", "b"]}
+          sessions={sessions}
+          links={[makeLink("c", "b", ["read", "inject", "orchestrate"])]}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          onCreated={vi.fn()}
+        />,
+      );
+      expect(leaderButton().disabled).toBe(true);
+      fireEvent.click(screen.getByRole("radio", { name: /^payments refactor ⟶/ }));
+      expect(leaderButton().disabled).toBe(false);
+      expect(leaderButton().getAttribute("aria-selected")).toBe("true");
+    });
+
+    it("names each led subject when several are selected", () => {
+      render(
+        <LinkChooserDialog
+          sessionIds={["a", "b", "c"]}
+          sessions={[...sessions, makeSession({ id: "d", name: "release captain" })]}
+          links={[makeLink("d", "b", ["read", "inject", "orchestrate"])]}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          onCreated={vi.fn()}
+        />,
+      );
+      expect(leaderButton().disabled).toBe(true);
+      expect(screen.getByText("payments refactor is already led by release captain")).toBeTruthy();
+    });
+
+    it("staged mode: checking a led subject disables Leader, unchecking restores it", () => {
+      const onStage = vi.fn();
+      render(
+        <LinkChooserDialog
+          sessionIds={[]}
+          sessions={sessions}
+          links={[makeLink("a", "b", ["read", "inject", "orchestrate"])]}
+          routerClient={new FakeRouterClient()}
+          onClose={vi.fn()}
+          stagedHolder={{ label: "This session (not started yet)", onStage }}
+        />,
+      );
+      // The subject list names the existing holder before anything is checked.
+      const bRow = screen.getByText("payments refactor").closest("label")!;
+      expect(bRow.textContent).toContain("led by investigator");
+      expect(leaderButton().disabled).toBe(false);
+
+      fireEvent.click(bRow.querySelector("input")!);
+      expect(leaderButton().disabled).toBe(true);
+      expect(screen.getByText("Already led by investigator")).toBeTruthy();
+      expect(monitorButton().getAttribute("aria-selected")).toBe("true");
+      fireEvent.click(screen.getByText("Stage 1 link"));
+      expect(onStage).toHaveBeenCalledWith([
+        expect.objectContaining({ subject_session_id: "b", preset: "monitor" }),
+      ]);
+
+      fireEvent.click(bRow.querySelector("input")!);
+      expect(leaderButton().disabled).toBe(false);
+      expect(leaderButton().getAttribute("aria-selected")).toBe("true");
     });
   });
 });

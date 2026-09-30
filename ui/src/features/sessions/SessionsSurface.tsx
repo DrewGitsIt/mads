@@ -161,6 +161,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             createSession={createSession}
             onSessionCreated={handleSessionCreated}
             sessions={sessions}
+            links={links}
           />
         )}
         {error && error !== dismissedError && (
