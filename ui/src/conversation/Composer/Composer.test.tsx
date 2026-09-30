@@ -187,6 +187,7 @@ describe("Composer", () => {
       expect(sendMessage).toHaveBeenCalledWith("session-active", {
         text: "hello from monaco",
         mentions: [],
+        queue: true,
       }),
     );
   });
@@ -230,36 +231,45 @@ describe("Composer", () => {
       expect(sendMessage).toHaveBeenCalledWith("session-active", {
         text: "hello there",
         mentions: [],
+        queue: true,
       }),
     );
     expect(textarea.value).toBe("");
   });
 
-  it("queues a message sent while busy, then flushes it once the turn ends", async () => {
+  // The queue lives in the session process now: the composer always asks to
+  // queue, and a mid-turn send comes back "queued" rather than being held
+  // here — a local queue died with the pane and the message was never sent.
+  it("hands a mid-turn send to the session's queue instead of holding it", async () => {
     const client = new FakeRouterClient();
-    const sendMessage = vi.spyOn(client, "sendMessage");
+    const queued = { id: "q_1", text: "next question", queued_at: "2026-09-29T22:58:00Z" };
+    const sendMessage = vi
+      .spyOn(client, "sendMessage")
+      .mockResolvedValue({ status: "queued", queued });
+    const onQueued = vi.fn();
+    const onSent = vi.fn();
 
-    const { rerender } = render(
-      <Composer routerClient={client} sessionId="session-active" busy />,
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        busy
+        onQueued={onQueued}
+        onSent={onSent}
+      />,
     );
     const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "next question" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    // While busy: nothing sent, input cleared, and a queued chip appears.
-    expect(sendMessage).not.toHaveBeenCalled();
+    await waitFor(() => expect(onQueued).toHaveBeenCalledWith(queued));
+    expect(sendMessage).toHaveBeenCalledWith("session-active", {
+      text: "next question",
+      mentions: [],
+      queue: true,
+    });
+    expect(onSent).not.toHaveBeenCalled(); // no user bubble until it's delivered
     expect(textarea.value).toBe("");
-    expect(screen.getByText("Queued")).toBeTruthy();
-    expect(screen.getByText("next question")).toBeTruthy();
-
-    // Turn ends → busy clears → the queued message flushes in order.
-    rerender(<Composer routerClient={client} sessionId="session-active" busy={false} />);
-    await waitFor(() =>
-      expect(sendMessage).toHaveBeenCalledWith("session-active", {
-        text: "next question",
-        mentions: [],
-      }),
-    );
   });
 
   it("shows a Stop button while busy and calls onStop when clicked", () => {
@@ -278,23 +288,23 @@ describe("Composer", () => {
     expect(onStop).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the user cancel a queued message before it flushes", async () => {
-    const client = new FakeRouterClient();
-    const sendMessage = vi.spyOn(client, "sendMessage");
-
-    const { rerender } = render(
-      <Composer routerClient={client} sessionId="session-active" busy />,
+  it("renders the session's queued messages and cancels one by id", () => {
+    const onCancelQueued = vi.fn();
+    render(
+      <Composer
+        routerClient={new FakeRouterClient()}
+        sessionId="session-active"
+        busy
+        queued={[
+          { id: "q_1", text: "first", queued_at: "2026-09-29T22:58:00Z" },
+          { id: "q_2", text: "second", queued_at: "2026-09-29T22:58:05Z" },
+        ]}
+        onCancelQueued={onCancelQueued}
+      />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
-    fireEvent.change(textarea, { target: { value: "oops" } });
-    fireEvent.keyDown(textarea, { key: "Enter" });
-
-    fireEvent.click(screen.getByLabelText("Remove queued message"));
-    expect(screen.queryByText("Queued")).toBeNull();
-
-    rerender(<Composer routerClient={client} sessionId="session-active" busy={false} />);
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(screen.getAllByText("Queued")).toHaveLength(2);
+    fireEvent.click(screen.getAllByLabelText("Remove queued message")[1]);
+    expect(onCancelQueued).toHaveBeenCalledWith("q_2");
   });
 
   it("restores a per-session draft after the composer remounts", () => {
@@ -342,6 +352,7 @@ describe("Composer", () => {
       expect(sendMessage).toHaveBeenCalledWith("session-active", {
         text: "fix the deploy script",
         mentions: [],
+        queue: true,
       }),
     );
     await waitFor(() => expect(textarea.value).toBe(""));

@@ -1,6 +1,8 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { RouterValidationError } from "./client";
 import type {
+  QueuedMessage,
+  SendResult,
   Agent,
   CapabilitySuggestion,
   AgentLeaderboardEntry,
@@ -840,7 +842,25 @@ export class FakeRouterClient implements RouterClient {
     return source;
   }
 
-  async sendMessage(): Promise<void> {}
+  async sendMessage(): Promise<SendResult> {
+    return { status: "accepted" };
+  }
+
+  /** Per-session queued messages; tests seed via seedQueuedMessages. */
+  private readonly queuedMessages = new Map<string, QueuedMessage[]>();
+
+  seedQueuedMessages(sessionId: string, queued: QueuedMessage[]): void {
+    this.queuedMessages.set(sessionId, queued);
+  }
+
+  async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {
+    return this.queuedMessages.get(sessionId) ?? [];
+  }
+
+  async cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void> {
+    const list = this.queuedMessages.get(sessionId);
+    if (list) this.queuedMessages.set(sessionId, list.filter((q) => q.id !== queuedId));
+  }
 
   async interrupt(): Promise<void> {}
 

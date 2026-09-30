@@ -4,6 +4,9 @@ import type { ToolUse } from "../../router/types";
 import { toolTitle } from "../activity/toolDisplay";
 import styles from "./WorkingIndicator.module.css";
 
+const WORKING = "Working…";
+const COMPACTING = "Compacting…";
+
 /**
  * Turn-long "agent is working" affordance, V2 (mockup's .wi): mounted for
  * the entire live turn (ConversationTab keeps `working` truthy from send to
@@ -55,14 +58,22 @@ export function WorkingIndicator({
       </div>
     );
   }
-  const label = tool ? `Using ${tool.name}…` : "Working…";
-  const ticker = activity ?? (tool ? toolTitle(tool) : undefined);
+  // The session's mirrored labels (services/session's agentstate.go) include
+  // two that describe the whole turn rather than a step in it: the generic
+  // "Working…", which would only echo the label beside it, and
+  // "Compacting…", which replaces that label — a compaction turn has no
+  // steps to tick through.
+  const compacting = activity === COMPACTING;
+  const ticker =
+    activity === WORKING || compacting ? undefined : (activity ?? (tool ? toolTitle(tool) : undefined));
+  const shown = compacting ? COMPACTING : WORKING;
+  const label = tool ? `Using ${tool.name}…` : shown;
   return (
     <div className={styles.working} role="status" aria-label={label}>
       <span className={styles.dot} aria-hidden="true" />
       <span className={styles.dot} aria-hidden="true" />
       <span className={styles.dot} aria-hidden="true" />
-      <span className={styles.label}>Working…</span>
+      <span className={styles.label}>{shown}</span>
       {ticker && (
         <span className={styles.ticker} data-testid="working-ticker" key={ticker}>
           {ticker}

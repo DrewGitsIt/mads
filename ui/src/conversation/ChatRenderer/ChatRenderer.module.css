@@ -18,6 +18,29 @@
   justify-content: flex-end;
 }
 
+/* Per-message time, shown only while the row is hovered — reserved space,
+   so revealing it never reflows the row. */
+.user,
+.agent {
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+
+.stamp {
+  flex: none;
+  padding-bottom: 2px;
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.user:hover .stamp,
+.agent:hover .stamp {
+  opacity: 1;
+}
+
 .prose {
   max-width: var(--measure-prose);
   min-width: 0;

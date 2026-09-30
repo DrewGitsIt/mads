@@ -1,0 +1,69 @@
+/* Full-width, centered, info-tinted system row — see
+   docs/mockups/compaction-marker.html. */
+.marker {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--r);
+  background: var(--info-soft);
+  border: 1px solid color-mix(in srgb, var(--info) 22%, transparent);
+  text-align: center;
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--info-fg);
+}
+
+.glyph {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.meta {
+  color: var(--text3);
+  font-weight: 400;
+}
+
+.sep {
+  color: var(--text3);
+  opacity: 0.6;
+}
+
+.disclose {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--info-fg);
+  font: 500 var(--fs-sm) var(--sans);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--info-fg) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.disclose:hover {
+  text-decoration-color: currentColor;
+}
+
+.summary {
+  align-self: stretch;
+  text-align: left;
+  font: var(--fs-sm) var(--sans);
+  line-height: 1.6;
+  color: var(--text2);
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-3);
+  max-height: 320px;
+  overflow: auto;
+}

@@ -12,6 +12,8 @@ import {
 import { PlanWidget } from "../activity/PlanWidget";
 import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
+import { CompactionMarker } from "./CompactionMarker";
+import { formatMessageTime, parseMessageTime } from "./messageTime";
 import styles from "./ChatRenderer.module.css";
 
 /**
@@ -209,14 +211,34 @@ export function ChatRenderer({
             </div>
           );
         }
+        if (message.role === "compact") {
+          return (
+            <CompactionMarker
+              key={item.key}
+              marker={message.compact ?? {}}
+              summary={message.text}
+              timestamp={message.timestamp}
+            />
+          );
+        }
+        const at = parseMessageTime(message.timestamp);
+        const stamp = at && (
+          <time className={styles.stamp} dateTime={at.toISOString()} title={at.toLocaleString()}>
+            {formatMessageTime(at)}
+          </time>
+        );
+        const isUser = message.role === "user";
         return (
           <div
             key={item.key}
             className={styles[message.role] ?? styles.agent}
             // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
-            data-user-msg={message.role === "user" ? "" : undefined}
+            data-user-msg={isUser ? "" : undefined}
           >
+            {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
+            {isUser && stamp}
             <Markdown className={styles.prose} text={message.text ?? ""} />
+            {!isUser && stamp}
           </div>
         );
       })}

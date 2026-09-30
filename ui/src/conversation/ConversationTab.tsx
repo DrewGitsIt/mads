@@ -12,6 +12,8 @@ import {
 } from "../router/sessionEventTypes";
 import type {
   AgentState,
+  QueueChanged,
+  QueuedMessage,
   CompactStatus,
   PermissionRequest,
   Session,
@@ -287,6 +289,12 @@ export function ConversationTab({
     return () => window.clearTimeout(id);
   }, [compactStatus]);
 
+  // The user's messages waiting behind the in-flight turn. The session
+  // process owns the queue (POST /messages with queue:true), so it survives
+  // this pane unmounting; this is only its mirror — fetched on mount, then
+  // kept current by session.queue_changed.
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+
   useEffect(() => {
     let cancelled = false;
     setLoadError(false);
@@ -300,6 +308,7 @@ export function ConversationTab({
     setCompactSuggestionDismissed(false);
     setAgentSince(undefined);
     setPendingReplay(null);
+    setQueuedMessages([]);
     setToolStatuses(new Map());
     setTasks(new Map());
     setSubagentStreams(new Map());
@@ -357,6 +366,14 @@ export function ConversationTab({
     // live stream still being connected) — a resolved request's terminal
     // event is already carried by the live stream, so nothing further is
     // needed for those once this mount is done.
+    void routerClient
+      .listQueuedMessages(sessionId)
+      .then((q) => {
+        // Merge rather than replace: a queue_changed that landed while this
+        // was in flight is fresher, and it carries the whole queue anyway.
+        if (!cancelled) setQueuedMessages((live) => (live.length > 0 ? live : q));
+      })
+      .catch(() => {});
     void routerClient
       .getPermissionRequests(sessionId)
       .then((reqs) => {
@@ -705,6 +722,41 @@ export function ConversationTab({
       }
     });
   }, [sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
+
+  // A queued message going out is the start of a turn this pane didn't
+  // send, so it gets the user bubble a direct send gets from onSent. The
+  // turn-end transcript refetch reconciles either way.
+  useEffect(() => {
+    return subscribeToEvents({ sessionId, types: ["session.queue_changed"] }, (envelope) => {
+      const change = envelope.payload as Partial<QueueChanged> | undefined;
+      if (!change) return;
+      setQueuedMessages(change.queued ?? []);
+      if (change.delivered) {
+        const text = change.delivered.text;
+        setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
+        setTurnPhase((p) => (p === "idle" ? "live" : p));
+      }
+      if (change.failed) {
+        setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
+      }
+    });
+  }, [sessionId]);
+
+  // Queued messages live in the session process, so a session that stops
+  // has none, whatever the last event said.
+  useEffect(() => {
+    if (session && session.activity !== "active") setQueuedMessages([]);
+  }, [session]);
+
+  const handleCancelQueued = useCallback(
+    (queuedId: string) => {
+      setQueuedMessages((q) => q.filter((m) => m.id !== queuedId));
+      routerClient.cancelQueuedMessage(sessionId, queuedId).catch((err: unknown) => {
+        setSendError(err instanceof Error ? err.message : "Couldn't remove the queued message.");
+      });
+    },
+    [routerClient, sessionId],
+  );
 
   const handleCompactNow = useCallback(async () => {
     // Optimistic "Compacting…" so the click lands visibly even before the
@@ -1303,6 +1355,12 @@ export function ConversationTab({
                 onUpdateSession={handleUpdateSession}
                 onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
                 onCommandError={(message) => setCommandToast({ tone: "bad", message })}
+                queued={queuedMessages}
+                onQueued={(q) => {
+                  setWaking(false);
+                  setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
+                }}
+                onCancelQueued={handleCancelQueued}
                 onSent={(text) => {
                   // A send against a dormant session wakes it (Router:
                   // handleSessionMessages) synchronously within the POST's
@@ -1316,7 +1374,7 @@ export function ConversationTab({
                   // specific turn.
                   const wasDormant = session.activity !== "active";
                   setWaking(false);
-                  setMessages((m) => [...m, { role: "user", text }]);
+                  setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
                   if (wasDormant) void refetchAfterTurn();
                 }}
                 />

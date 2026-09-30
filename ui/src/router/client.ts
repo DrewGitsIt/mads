@@ -37,6 +37,8 @@ import type {
   Retro,
   Session,
   SessionDefaults,
+  QueuedMessage,
+  SendResult,
   SessionTrust,
   SetSessionModelResponse,
   Task,
@@ -77,10 +79,20 @@ export interface RouterClient {
   getSession(id: string): Promise<Session>;
   getTranscript(sessionId: string, page?: string): Promise<TranscriptMessage[]>;
   streamSession(sessionId: string): SessionEventSource;
+  /**
+   * `queue: true` asks the session to hold a message sent mid-turn and
+   * deliver it when the turn ends (resolving `{status: "queued"}`) rather
+   * than refuse it with 409. The queue lives in the session process, so it
+   * outlives this pane.
+   */
   sendMessage(
     sessionId: string,
-    body: { text: string; mentions?: string[] },
-  ): Promise<void>;
+    body: { text: string; mentions?: string[]; queue?: boolean },
+  ): Promise<SendResult>;
+  /** The session's queued messages, in delivery order. */
+  listQueuedMessages(sessionId: string): Promise<QueuedMessage[]>;
+  /** Drop one queued message before it's delivered. */
+  cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void>;
   interrupt(sessionId: string): Promise<void>;
   /**
    * Run a native context-compaction pass now (the "Compact now" banner
@@ -465,8 +477,8 @@ export class FetchRouterClient implements RouterClient {
 
   async sendMessage(
     sessionId: string,
-    body: { text: string; mentions?: string[] },
-  ): Promise<void> {
+    body: { text: string; mentions?: string[]; queue?: boolean },
+  ): Promise<SendResult> {
     const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/messages`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -492,10 +504,38 @@ export class FetchRouterClient implements RouterClient {
           errBody.retryable ?? false,
         );
       }
+      if (res.status === 409 && body.queue) {
+        // Only a session process predating the queue refuses a queued
+        // send mid-turn; it goes away once that session restarts.
+        throw new Error(
+          "The agent is mid-turn, and this session is running an older mads build that can't queue messages. Wait for the turn to finish, or restart the session.",
+        );
+      }
       const text = await res.text();
       throw new Error(`router request failed: ${res.status} ${text}`);
     }
-    await readJSON(res);
+    const result = await readJSON<Partial<SendResult> | null>(res);
+    return result?.status === "queued" && "queued" in result
+      ? (result as SendResult)
+      : { status: "accepted" };
+  }
+
+  async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {
+    const res = await routerGet<{ queued?: QueuedMessage[] }>(
+      this.baseUrl,
+      `/sessions/${sessionId}/queue`,
+    );
+    return res.queued ?? [];
+  }
+
+  async cancelQueuedMessage(sessionId: string, queuedId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/queue/${queuedId}`, {
+      method: "DELETE",
+    });
+    // 404: already delivered (or the session stopped) — nothing left to cancel.
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`router request failed: ${res.status} ${await res.text()}`);
+    }
   }
 
   async interrupt(sessionId: string): Promise<void> {

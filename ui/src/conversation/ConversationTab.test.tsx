@@ -167,7 +167,7 @@ describe("ConversationTab", () => {
     let resolveSend!: () => void;
     vi.spyOn(client, "sendMessage").mockReturnValueOnce(
       new Promise((resolve) => {
-        resolveSend = () => resolve(undefined);
+        resolveSend = () => resolve({ status: "accepted" });
       }),
     );
     render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
@@ -538,6 +538,7 @@ describe("ConversationTab", () => {
       expect(sendMessage).toHaveBeenCalledWith("session-active", {
         text: "fix the deploy script",
         mentions: [],
+        queue: true,
       }),
     );
     await waitFor(() => expect(screen.getByText("fix the deploy script")).toBeTruthy());

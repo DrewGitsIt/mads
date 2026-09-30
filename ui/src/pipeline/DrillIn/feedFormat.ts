@@ -1,3 +1,4 @@
+import { compactLine } from "../../conversation/ChatRenderer/compactFormat";
 import { foldToolResults } from "../../router/toolPairing";
 import type { ToolUse, TranscriptMessage } from "../../router/types";
 
@@ -72,6 +73,11 @@ export function buildFeedRows(turns: TranscriptMessage[]): FeedRow[] {
   return foldToolResults(turns).map((turn) => {
     if (turn.role === "tool" && turn.tool) {
       return { kind: "tool", tool: turn.tool, timestamp: turn.timestamp, pending: turn === trailingPending };
+    }
+    // A compaction is a system event, not agent prose — and its text is the
+    // (long) carried-forward summary, so the feed gets the one-line marker.
+    if (turn.role === "compact") {
+      return { kind: "prose", role: "system", text: compactLine(turn.compact ?? {}), timestamp: turn.timestamp };
     }
     const role: FeedRole = turn.role !== "user" ? "agent" : turn === stageOpener ? "system" : "user";
     return { kind: "prose", role, text: turn.text, timestamp: turn.timestamp };

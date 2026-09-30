@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
-import type { Session } from "../../router/types";
+import type { QueuedMessage, Session } from "../../router/types";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
 import { getDraft, setDraft } from "./composerDrafts";
 import styles from "./Composer.module.css";
+
+const EMPTY_QUEUE: QueuedMessage[] = [];
 
 export interface ComposerProps {
   routerClient: RouterClient;
@@ -19,11 +21,17 @@ export interface ComposerProps {
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
   /**
-   * A turn is in flight. The composer stays usable, but a send is held in a
-   * local queue and flushed automatically once `busy` clears (the turn ends),
-   * rather than interleaving with the agent's response.
+   * A turn is in flight. The composer stays usable: a send mid-turn is queued
+   * by the session process (see handleSend) rather than interleaving with the
+   * agent's response. Here it only decides whether Stop shows.
    */
   busy?: boolean;
+  /** The session's queued messages, owned by the session process and mirrored by the caller. */
+  queued?: QueuedMessage[];
+  /** A send was queued behind the in-flight turn instead of run (no user bubble yet). */
+  onQueued?: (queued: QueuedMessage) => void;
+  /** The user removed a queued message before it went out. */
+  onCancelQueued?: (queuedId: string) => void;
   /**
    * Interrupts the in-flight turn (chat mode's ⌘/Ctrl-C). When set and `busy`,
    * a Stop button appears alongside Send; Send keeps queueing as before.
@@ -90,6 +98,9 @@ export function Composer({
   onUpdateSession,
   onCommandExecuted,
   onCommandError,
+  queued = EMPTY_QUEUE,
+  onQueued,
+  onCancelQueued,
 }: ComposerProps) {
   // Seed from a saved draft (survives navigating away and back) unless the
   // caller handed us an initialValue to auto-send.
@@ -235,56 +246,27 @@ export function Composer({
     }
   }
 
-  // Messages composed while a turn is in flight — flushed in order once `busy`
-  // clears (see the effect below), so a send never interleaves with the
-  // agent's response.
-  const [queued, setQueued] = useState<{ text: string; mentions: string[] }[]>([]);
-  const flushingRef = useRef(false);
-
-  async function sendNow(text: string, mentions: string[]): Promise<boolean> {
-    onSendStart?.();
-    try {
-      await routerClient.sendMessage(sessionId, { text, mentions });
-      onSent?.(text, mentions);
-      return true;
-    } catch (err) {
-      onSendError?.(err instanceof Error ? err.message : String(err));
-      return false;
-    }
-  }
-
+  // Every send asks to queue: mid-turn, the session process holds the
+  // message and delivers it when the turn ends — so it still goes out if
+  // this pane unmounts first — and an idle session just runs it. Asking
+  // whatever `busy` says here also covers a turn this pane hasn't seen yet.
   async function handleSend() {
     const text = value.trim();
     if (!text) return;
     const mentions = injected.map((i) => i.id);
-    if (busy) {
-      // Queue behind the in-flight turn; the input clears now so it reads as
-      // "handed off", and the flush effect sends it when the turn ends.
-      setQueued((q) => [...q, { text, mentions }]);
-      setValue("");
-      setCursor(0);
-      setInjected([]);
+    onSendStart?.();
+    try {
+      const result = await routerClient.sendMessage(sessionId, { text, mentions, queue: true });
+      if (result.status === "queued") onQueued?.(result.queued);
+      else onSent?.(text, mentions);
+    } catch (err) {
+      onSendError?.(err instanceof Error ? err.message : String(err));
       return;
     }
-    if (await sendNow(text, mentions)) {
-      setValue("");
-      setCursor(0);
-      setInjected([]);
-    }
+    setValue("");
+    setCursor(0);
+    setInjected([]);
   }
-
-  // Flush one queued message whenever the turn is idle. Sending it starts a new
-  // turn (busy → true again), so items drain one per turn, in order.
-  useEffect(() => {
-    if (busy || disabled || queued.length === 0 || flushingRef.current) return;
-    flushingRef.current = true;
-    const [head, ...rest] = queued;
-    setQueued(rest);
-    void sendNow(head.text, head.mentions).finally(() => {
-      flushingRef.current = false;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- sendNow is stable enough for this drain; deps intentionally limited to the drain triggers
-  }, [busy, disabled, queued]);
 
   const autoSentRef = useRef(false);
   useEffect(() => {
@@ -328,15 +310,15 @@ export function Composer({
       />
       {queued.length > 0 && (
         <div className={styles.queued}>
-          {queued.map((q, i) => (
-            <div key={i} className={styles.queuedItem}>
+          {queued.map((q) => (
+            <div key={q.id} className={styles.queuedItem}>
               <span className={styles.queuedBadge}>Queued</span>
               <span className={styles.queuedText}>{q.text}</span>
               <button
                 type="button"
                 className={styles.queuedRemove}
                 aria-label="Remove queued message"
-                onClick={() => setQueued((cur) => cur.filter((_, j) => j !== i))}
+                onClick={() => onCancelQueued?.(q.id)}
               >
                 ✕
               </button>

@@ -466,12 +466,22 @@ export interface Attribution {
 
 // mirrors providers/provider/event.go Message (TranscriptReader shape)
 export interface TranscriptMessage {
-  role: "user" | "agent" | "tool" | "tool_result";
-  text?: string;
+  role: "user" | "agent" | "tool" | "tool_result" | "compact";
+  text?: string; // on role "compact", the summary the agent carried forward
   tool?: ToolUse;
   attribution?: Attribution;
   timestamp?: string; // RFC3339, when the provider recorded this entry
   is_error?: boolean; // set on role "tool_result" when the tool call failed
+  compact?: CompactMarker; // set on role "compact": one compaction pass, where it happened
+}
+
+// mirrors pkg/contracts/transcript.go CompactMarker. Zero/absent fields mean
+// the provider didn't record them.
+export interface CompactMarker {
+  trigger?: "manual" | "auto" | string;
+  pre_tokens?: number;
+  post_tokens?: number;
+  duration_ms?: number;
 }
 
 // mirrors pkg/contracts/link.go Grant
@@ -550,6 +560,27 @@ export interface CompactStatus {
   success?: boolean;
   error?: string;
 }
+
+// mirrors pkg/contracts/conversation.go QueuedMessage: one user message
+// waiting in the session process's queue behind an in-flight turn.
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  queued_at: string;
+}
+
+// mirrors pkg/contracts/conversation.go QueueChanged (payload of
+// "session.queue_changed"): the whole remaining queue, plus the entry that
+// just went out as the next turn (delivered) or failed to (failed + error).
+export interface QueueChanged {
+  queued: QueuedMessage[];
+  delivered?: QueuedMessage;
+  failed?: QueuedMessage;
+  error?: string;
+}
+
+/** What POST /sessions/{id}/messages did with a send: ran it, or queued it behind the in-flight turn. */
+export type SendResult = { status: "accepted" } | { status: "queued"; queued: QueuedMessage };
 
 // mirrors providers/provider/event.go TaskStatus (payload of the "task"
 // stream event) and pkg/contracts/conversation.go SubagentTask (payload of

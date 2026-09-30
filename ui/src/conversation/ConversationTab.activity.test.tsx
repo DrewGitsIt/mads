@@ -569,4 +569,37 @@ describe("ConversationTab — reopened mid-turn", () => {
     await waitFor(() => expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy());
     expect(screen.queryByText("Conversation compacted.")).toBeNull();
   });
+
+  // The screenshot bug: a message queued behind a /compact, then the user
+  // navigated away. The queue now lives in the session process, so the
+  // reopened pane shows it, and when it goes out it lands as a user bubble.
+  it("shows the session's queued messages on reopen, and a delivered one as the user's bubble", async () => {
+    const client = new FakeRouterClient();
+    working(client, iso(30_000), "Compacting…");
+    const queued = { id: "q_1", text: "now wire the tasks count", queued_at: iso(10_000) };
+    client.seedQueuedMessages("session-active", [queued]);
+    await mountActive(client);
+
+    expect(await screen.findByText("now wire the tasks count")).toBeTruthy();
+    expect(screen.getByText("Queued")).toBeTruthy();
+
+    controlEnvelope("session.queue_changed", { queued: [], delivered: queued });
+    await waitFor(() => expect(screen.queryByText("Queued")).toBeNull());
+    const bubble = screen.getByText("now wire the tasks count");
+    expect(bubble.closest("[data-user-msg]")).toBeTruthy();
+  });
+
+  it("removing a queued message cancels it in the session", async () => {
+    const client = new FakeRouterClient();
+    working(client, iso(30_000));
+    client.seedQueuedMessages("session-active", [
+      { id: "q_1", text: "never mind this", queued_at: iso(5_000) },
+    ]);
+    const cancel = vi.spyOn(client, "cancelQueuedMessage");
+    await mountActive(client);
+
+    fireEvent.click(await screen.findByLabelText("Remove queued message"));
+    expect(cancel).toHaveBeenCalledWith("session-active", "q_1");
+    expect(screen.queryByText("never mind this")).toBeNull();
+  });
 });

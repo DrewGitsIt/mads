@@ -1,0 +1,169 @@
+<!doctype html>
+<!--
+  mads — compaction as a system message in the conversation
+  ==========================================================
+
+  Today a compaction leaves no durable trace: the transcript parser drops the
+  CLI's `<command-name>/compact` bookkeeping lines, and the one line it does
+  keep, the post-compaction summary ("This session is being continued…"),
+  renders as a giant user bubble.
+
+  Claude Code writes a `compact_boundary` system line for every compaction,
+  carrying compactMetadata: trigger (manual | auto), preTokens, postTokens,
+  durationMs. That's enough for a full-width, centered, info-tinted row in the
+  history, at the point the compaction happened, that survives a reload:
+
+    - in progress: comes from the live session.compact "start" (and its
+      replay on reopen), since the transcript only gets the boundary once the
+      pass is done;
+    - done: comes from the transcript boundary, with the summary folded
+      behind a disclosure instead of posing as something the user said;
+    - failed: comes from session.compact "done" with an error.
+
+  The typed `/compact` gets no user bubble of its own: the marker's "you
+  asked" is the record of it, and a bubble above it would say the same thing
+  twice.
+
+  Queued messages (fix a) sit where they sit today, above the input, but now
+  come from the session process, so they survive navigating away.
+
+  Chat geometry and tokens are copied from
+  ui/src/conversation/ChatRenderer/ChatRenderer.module.css,
+  ui/src/conversation/Composer/Composer.module.css and ui/src/tokens/tokens.css.
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — compaction marker</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15);
+    --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px; --fs-chat:15px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1180px; margin:0 auto; padding:var(--space-6) var(--space-5) 120px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:86ch; margin-top:var(--space-2); }
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; gap:var(--space-3); align-items:baseline; }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+
+  /* --- conversation pane (as shipped) --- */
+  .pane { background:var(--bg0); padding:var(--space-5); display:flex; flex-direction:column; gap:var(--space-4); }
+  .agent, .user { display:flex; }
+  .user { justify-content:flex-end; }
+  .prose { max-width:92ch; font:var(--fs-chat)/1.6 var(--sans); color:var(--text); }
+  .user .prose { background:var(--accent-soft); border-radius:var(--r); padding:var(--space-2) var(--space-3); }
+  .actions { font:var(--fs-sm) var(--mono); color:var(--text2); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:6px var(--space-3); background:var(--bg1); }
+
+  /* --- proposed: system row --- */
+  .system {
+    align-self:stretch;
+    display:flex; flex-direction:column; align-items:center; gap:var(--space-2);
+    padding:var(--space-2) var(--space-4);
+    border-radius:var(--r);
+    background:var(--info-soft);
+    border:1px solid color-mix(in srgb, var(--info) 22%, transparent);
+    text-align:center;
+  }
+  .system .line { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:var(--space-2); font:500 var(--fs-sm) var(--sans); color:var(--info-fg); }
+  .system .glyph { font-size:13px; line-height:1; }
+  .system .meta { color:var(--text3); font-weight:400; }
+  .system .meta b { color:var(--text2); font-weight:600; }
+  .system .sep { color:var(--text3); opacity:.6; }
+  .system button.disclose { background:none; border:none; color:var(--info-fg); font:500 var(--fs-sm) var(--sans); cursor:pointer; text-decoration:underline; text-decoration-color:color-mix(in srgb, var(--info-fg) 45%, transparent); text-underline-offset:2px; padding:0; }
+  .system .summary { align-self:stretch; text-align:left; font:var(--fs-sm)/1.6 var(--sans); color:var(--text2); background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:var(--space-3); max-height:180px; overflow:auto; }
+  .system.running .glyph { animation:spin 1.2s linear infinite; display:inline-block; }
+  .system.failed { background:var(--bad-soft); border-color:color-mix(in srgb, var(--bad) 25%, transparent); }
+  .system.failed .line { color:var(--bad-fg); }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* alternate: hairline divider, no fill */
+  .divider { align-self:stretch; display:flex; align-items:center; gap:var(--space-3); font:500 var(--fs-sm) var(--sans); color:var(--info-fg); }
+  .divider::before, .divider::after { content:""; flex:1; border-top:1px dashed color-mix(in srgb, var(--info) 40%, transparent); }
+  .divider .meta { color:var(--text3); font-weight:400; }
+
+  /* --- working indicator + composer (as shipped) --- */
+  .working { display:flex; align-items:center; gap:var(--space-2); font:var(--fs-sm) var(--sans); color:var(--text2); padding:0 var(--space-5) var(--space-2); background:var(--bg0); }
+  .working .dots { color:var(--text3); letter-spacing:2px; }
+  .working .elapsed { color:var(--text3); font-family:var(--mono); font-size:11px; }
+  .composer { background:var(--bg0); padding:var(--space-2) var(--space-5) var(--space-4); display:flex; flex-direction:column; gap:var(--space-1); border-top:1px solid var(--line-soft); }
+  .queuedItem { display:flex; align-items:center; gap:var(--space-2); padding:4px var(--space-2); background:var(--bg2); border:1px dashed var(--line); border-radius:var(--r-sm); }
+  .queuedBadge { font:600 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.04em; color:var(--warn-fg); }
+  .queuedText { flex:1; color:var(--text2); font:var(--fs-sm) var(--sans); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .queuedRemove { color:var(--text3); font-size:11px; }
+  .input { margin-top:var(--space-1); border:1px solid var(--line); border-radius:var(--r); background:var(--bg1); color:var(--text3); padding:10px var(--space-3); font:var(--fs-body) var(--sans); }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Compaction as a system message</h1>
+    <p>A full-width, centered, info-tinted row in the history, placed where the compaction happened. It's built from the provider's own record, so it survives navigating away and reloading. The summary the agent carries forward moves behind a disclosure instead of rendering as a user bubble.</p>
+  </header>
+
+  <section class="block">
+    <h2>1 · Mid-compaction, after reopening the session <span class="sub">your screenshot's moment, with fixes a + b + d</span></h2>
+    <div class="pane">
+      <div class="agent"><div class="prose">Done and committed on <code>main</code> as <code>ed34b9f</code>. A quiet card goes 87px → 54px, measured against the shipped stylesheet before and after.</div></div>
+      <div class="system running">
+        <div class="line"><span class="glyph">◌</span> Compacting the conversation <span class="sep">·</span> <span class="meta">you asked · started 22:57</span></div>
+      </div>
+    </div>
+    <div class="working"><span class="dots">•••</span> Compacting… <span class="elapsed">106s</span></div>
+    <div class="composer">
+      <div class="queuedItem"><span class="queuedBadge">Queued</span><span class="queuedText">Now wire the Tasks count into the collapsed strip too</span><span class="queuedRemove">✕</span></div>
+      <div class="input">Message the agent — @ to mention, / for commands</div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>2 · Done <span class="sub">from the transcript's compact_boundary; summary folded</span></h2>
+    <div class="pane">
+      <div class="agent"><div class="prose">Done and committed on <code>main</code> as <code>ed34b9f</code>.</div></div>
+      <div class="system">
+        <div class="line"><span class="glyph">⇲</span> Conversation compacted <span class="sep">·</span> <span class="meta">you asked · <b>258k → 14k</b> tokens · 2m 12s · 22:59</span> <span class="sep">·</span> <button class="disclose" onclick="this.closest('.system').querySelector('.summary').hidden ^= true">Show summary</button></div>
+        <div class="summary" hidden>This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.<br><br>1. Primary Request and Intent: …</div>
+      </div>
+      <div class="user"><div class="prose">Now wire the Tasks count into the collapsed strip too</div></div>
+      <div class="agent"><div class="prose">On it — the strip already has the open-task count, so this is…</div></div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>3 · Auto-compaction, and a failure</h2>
+    <div class="pane">
+      <div class="system">
+        <div class="line"><span class="glyph">⇲</span> Conversation auto-compacted <span class="sep">·</span> <span class="meta">context was full · <b>191k → 12k</b> tokens · 1m 48s · 14:02</span> <span class="sep">·</span> <button class="disclose">Show summary</button></div>
+      </div>
+      <div class="system failed">
+        <div class="line"><span class="glyph">!</span> Compaction failed <span class="sep">·</span> <span class="meta">Not enough messages to compact.</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <h2>Alternate · hairline divider <span class="sub">lighter weight, no fill; for comparison</span></h2>
+    <div class="pane">
+      <div class="agent"><div class="prose">Done and committed on <code>main</code> as <code>ed34b9f</code>.</div></div>
+      <div class="divider"><span>⇲ Conversation compacted</span><span class="meta">you asked · 258k → 14k tokens · 22:59</span></div>
+      <div class="user"><div class="prose">Now wire the Tasks count into the collapsed strip too</div></div>
+    </div>
+  </section>
+</div>
+</body>
+</html>
