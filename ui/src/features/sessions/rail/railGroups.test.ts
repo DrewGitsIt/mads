@@ -7,6 +7,7 @@ import {
   mostUrgentBucket,
   statusOf,
   totalOpenTasks,
+  WORKING_STALE_AFTER_MS,
 } from "./railGroups";
 import type { OpenTaskBreakdown, SessionAgentState } from "./railGroups";
 import type { Session } from "../../../router/types";
@@ -55,20 +56,26 @@ function makeAgentState(overrides: Partial<SessionAgentState> = {}): SessionAgen
 
 describe("statusOf", () => {
   const idle = makeBreakdown({});
+  // Every fixture below stamps its state at TURN_START. Reading them "now"
+  // would make each one older than WORKING_STALE_AFTER_MS, which is the point
+  // of the stale rule — so the live-state cases pass a clock that sits inside
+  // the turn, and the stale case is the one that moves it.
+  const TURN_START = "2026-07-01T00:00:00Z";
+  const DURING = Date.parse(TURN_START) + 60_000;
 
   it("reads a crash first, naming its blocked work when there is any", () => {
     const state = makeAgentState({ crashed: true, awaitingTool: "Bash", workingSince: "2026-07-01T00:00:00Z", done: true });
-    expect(statusOf(makeSession({}), state, idle)).toMatchObject({
+    expect(statusOf(makeSession({}), state, idle, DURING)).toMatchObject({
       kind: "crashed",
       tone: "bad",
       dot: "bad",
       glyph: "✕",
       label: "Crashed · reopen to restart",
     });
-    expect(statusOf(makeSession({}), state, makeBreakdown({ blocked: 2 })).label).toBe(
+    expect(statusOf(makeSession({}), state, makeBreakdown({ blocked: 2 }), DURING).label).toBe(
       "Crashed · 2 blocked tasks",
     );
-    expect(statusOf(makeSession({}), state, makeBreakdown({ blocked: 1 })).label).toBe(
+    expect(statusOf(makeSession({}), state, makeBreakdown({ blocked: 1 }), DURING).label).toBe(
       "Crashed · 1 blocked task",
     );
   });
@@ -80,7 +87,7 @@ describe("statusOf", () => {
       workingSince: "2026-07-01T00:00:00Z",
       done: true,
     });
-    expect(statusOf(makeSession({}), state, idle)).toEqual({
+    expect(statusOf(makeSession({}), state, idle, DURING)).toEqual({
       kind: "needs",
       tone: "needs",
       dot: "attn",
@@ -97,7 +104,7 @@ describe("statusOf", () => {
 
   it("spins — no glyph — while a turn is in flight, and counts subagents when it has them", () => {
     const working = makeAgentState({ workingSince: "2026-07-01T00:00:00Z", done: true });
-    expect(statusOf(makeSession({}), working, idle)).toEqual({
+    expect(statusOf(makeSession({}), working, idle, DURING)).toEqual({
       kind: "working",
       tone: "working",
       dot: "work",
@@ -106,10 +113,10 @@ describe("statusOf", () => {
       label: "Working…",
       since: "2026-07-01T00:00:00Z",
     });
-    expect(statusOf(makeSession({}), { ...working, subagents: 3 }, idle).label).toBe(
+    expect(statusOf(makeSession({}), { ...working, subagents: 3 }, idle, DURING).label).toBe(
       "3 subagents running",
     );
-    expect(statusOf(makeSession({}), { ...working, subagents: 1 }, idle).label).toBe(
+    expect(statusOf(makeSession({}), { ...working, subagents: 1 }, idle, DURING).label).toBe(
       "1 subagent running",
     );
   });
@@ -156,7 +163,9 @@ describe("statusOf", () => {
     // The same string the open conversation's working-indicator ticker shows
     // for the same call — one server-side enrichment feeds both.
     for (const label of ["Running bash · make check", "Thinking…", "Reading · railGroups.ts"]) {
-      expect(statusOf(makeSession({}), makeAgentState({ workingSince: at, label }), idle)).toMatchObject({
+      expect(
+        statusOf(makeSession({}), makeAgentState({ workingSince: at, label }), idle, DURING),
+      ).toMatchObject({
         kind: "working",
         label,
         since: at,
@@ -175,7 +184,7 @@ describe("statusOf", () => {
       subagents: 2,
       blockingSubagents: 2,
     });
-    expect(statusOf(makeSession({}), state, idle).label).toBe("2 subagents running");
+    expect(statusOf(makeSession({}), state, idle, DURING).label).toBe("2 subagents running");
   });
 
   it("lets the main agent keep the line while only backgrounded subagents run", () => {
@@ -189,7 +198,7 @@ describe("statusOf", () => {
       subagents: 2,
       blockingSubagents: 0,
     });
-    expect(statusOf(makeSession({}), state, idle).label).toBe("Running bash · make check");
+    expect(statusOf(makeSession({}), state, idle, DURING).label).toBe("Running bash · make check");
   });
 
   it("counts every running sidechain once any of them blocks, backgrounded or not", () => {
@@ -202,21 +211,67 @@ describe("statusOf", () => {
       subagents: 3,
       blockingSubagents: 1,
     });
-    expect(statusOf(makeSession({}), state, idle).label).toBe("3 subagents running");
+    expect(statusOf(makeSession({}), state, idle, DURING).label).toBe("3 subagents running");
   });
 
   it("assumes an unsplit count blocks, so a producer that can't tell stays loud", () => {
     const state = makeAgentState({ workingSince: "2026-07-01T00:00:00Z", label: "Thinking…", subagents: 2 });
-    expect(statusOf(makeSession({}), state, idle).label).toBe("2 subagents running");
+    expect(statusOf(makeSession({}), state, idle, DURING).label).toBe("2 subagents running");
   });
 
   it("carries an elapsed origin for exactly the two states that count", () => {
-    const at = "2026-07-01T00:00:00Z";
-    expect(statusOf(makeSession({}), makeAgentState({ crashed: true }), idle).since).toBeUndefined();
-    expect(statusOf(makeSession({}), makeAgentState({ awaitingSince: at }), idle).since).toBe(at);
-    expect(statusOf(makeSession({}), makeAgentState({ workingSince: at }), idle).since).toBe(at);
-    expect(statusOf(makeSession({}), makeAgentState({ done: true }), idle).since).toBeUndefined();
-    expect(statusOf(makeSession({}), makeAgentState(), idle).since).toBeUndefined();
+    const at = TURN_START;
+    const at_ = (state: Partial<SessionAgentState>) =>
+      statusOf(makeSession({}), makeAgentState(state), idle, DURING).since;
+    expect(at_({ crashed: true })).toBeUndefined();
+    expect(at_({ awaitingSince: at })).toBe(at);
+    expect(at_({ workingSince: at })).toBe(at);
+    expect(at_({ done: true })).toBeUndefined();
+    expect(at_({})).toBeUndefined();
+  });
+
+  // The 2026-10-01 rail: two cards spinning "Thinking… 23h", one of them for a
+  // session whose provider child had been gone for most of that time. Nothing
+  // retires agent_state but the Runner that wrote it, so a wedged agent's last
+  // word stands forever — the card must not keep asserting it in the present
+  // tense.
+  it("stops believing a working claim once it outlives the longest turn mads runs", () => {
+    const state = makeAgentState({ workingSince: TURN_START, label: "Thinking…" });
+    const stale = Date.parse(TURN_START) + WORKING_STALE_AFTER_MS;
+    expect(statusOf(makeSession({ activity: "active" }), state, idle, stale)).toEqual({
+      kind: "stalled",
+      tone: "needs",
+      dot: "attn",
+      // No spinner: the one state that animates is the one actually moving.
+      glyph: "◌",
+      label: "Stalled · no agent activity",
+      // Kept, so the counter reads "23h" — the age is the whole argument.
+      since: TURN_START,
+    });
+  });
+
+  it("still believes a claim right up to the bound", () => {
+    const state = makeAgentState({ workingSince: TURN_START, label: "Thinking…" });
+    const justInside = Date.parse(TURN_START) + WORKING_STALE_AFTER_MS - 1;
+    expect(statusOf(makeSession({}), state, idle, justInside).kind).toBe("working");
+  });
+
+  it("never calls a claim stale on an unparseable stamp", () => {
+    // A bad value is not evidence of a dead agent; guessing from one would
+    // turn a clock-skewed record into a false alarm.
+    const state = makeAgentState({ workingSince: "not a date", label: "Thinking…" });
+    expect(statusOf(makeSession({}), state, idle, Date.now()).kind).toBe("working");
+  });
+
+  it("keeps a crash and a parked approval ahead of stalled", () => {
+    const old = { workingSince: TURN_START };
+    const stale = Date.parse(TURN_START) + WORKING_STALE_AFTER_MS;
+    expect(statusOf(makeSession({}), makeAgentState({ ...old, crashed: true }), idle, stale).kind).toBe(
+      "crashed",
+    );
+    expect(
+      statusOf(makeSession({}), makeAgentState({ ...old, awaitingSince: TURN_START }), idle, stale).kind,
+    ).toBe("needs");
   });
 });
 
@@ -235,8 +290,16 @@ describe("filterBucketOf", () => {
   const live = makeSession({ activity: "active" });
   const sleeping = makeSession({ activity: "inactive" });
 
-  function bucket(session: Session, state: Partial<SessionAgentState>, breakdown = idle) {
-    return filterBucketOf(statusOf(session, makeAgentState(state), breakdown));
+  const TURN_START = "2026-07-01T00:00:00Z";
+  const DURING = Date.parse(TURN_START) + 60_000;
+
+  function bucket(
+    session: Session,
+    state: Partial<SessionAgentState>,
+    breakdown = idle,
+    now = DURING,
+  ) {
+    return filterBucketOf(statusOf(session, makeAgentState(state), breakdown, now));
   }
 
   it("counts a crash and a parked approval as 'needs you'", () => {
@@ -246,6 +309,12 @@ describe("filterBucketOf", () => {
 
   it("counts an in-flight turn as 'working'", () => {
     expect(bucket(live, { workingSince: "2026-07-01T00:00:00Z" })).toBe("working");
+  });
+
+  it("counts a stalled turn as 'needs you' — a wedged agent will not recover alone", () => {
+    expect(
+      bucket(live, { workingSince: TURN_START }, idle, Date.parse(TURN_START) + WORKING_STALE_AFTER_MS),
+    ).toBe("needs");
   });
 
   it("counts ready, done and sleeping as 'idle' — the turn they report is over", () => {

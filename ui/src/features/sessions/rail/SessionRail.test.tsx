@@ -503,21 +503,29 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
   });
 
-  it("shows a pending-restart pill on a leader link whose orchestrate grant hasn't materialized yet", () => {
+  // A nested subject row has a link flyout, and the flyout already explains
+  // every orchestrate state in a full sentence. A second pill shouting the same
+  // thing in caps was an extra line of card spent on a restatement — and the
+  // loudest thing on a subordinate row at that.
+  it("keeps a nested row to one control, whatever the orchestrate state", () => {
     FLAGS.linkedSessions = true;
-    const pendingLink = makeLink({ ...link, orchestrate_status: "pending_restart" });
-    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[pendingLink]} />);
-    expect(screen.getByText("TOOLS WHEN IDLE")).toBeTruthy();
+    for (const status of ["pending_restart", "unsupported", "failed", "active"] as const) {
+      const { unmount } = render(
+        <SessionRail
+          sessions={[lead, a]}
+          openTaskCounts={{}}
+          links={[makeLink({ ...link, orchestrate_status: status })]}
+        />,
+      );
+      expect(screen.queryByText("TOOLS WHEN IDLE")).toBeNull();
+      expect(screen.queryByText("NO TOOLS")).toBeNull();
+      expect(screen.queryByText("TOOLS FAILED")).toBeNull();
+      expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
+      unmount();
+    }
   });
 
-  it("shows a no-tools pill on a leader link whose provider can't support orchestrate at all", () => {
-    FLAGS.linkedSessions = true;
-    const unsupportedLink = makeLink({ ...link, orchestrate_status: "unsupported" });
-    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[unsupportedLink]} />);
-    expect(screen.getByText("NO TOOLS")).toBeTruthy();
-  });
-
-  it("shows a tools-failed pill, with the reason as its tooltip, when the tools couldn't start", () => {
+  it("says why the tools failed on the nested row's own trigger", () => {
     FLAGS.linkedSessions = true;
     const failedLink = makeLink({
       ...link,
@@ -525,17 +533,8 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       orchestrate_error: 'exec: "mads": executable file not found in $PATH',
     });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[failedLink]} />);
-    const pill = screen.getByText("TOOLS FAILED");
-    expect(pill.getAttribute("title")).toMatch(/not found in \$PATH/);
-    expect(screen.queryByText("TOOLS ON RESTART")).toBeNull();
-  });
-
-  it("renders no extra pill once the orchestrate grant is active", () => {
-    FLAGS.linkedSessions = true;
-    const activeLink = makeLink({ ...link, orchestrate_status: "active" });
-    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[activeLink]} />);
-    expect(screen.queryByText("TOOLS WHEN IDLE")).toBeNull();
-    expect(screen.queryByText("NO TOOLS")).toBeNull();
+    const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
+    expect(trigger.getAttribute("title")).toMatch(/not found in \$PATH/);
   });
 
   it("clicking a card's link action enters link mode with it as the anchor and shows a floating bar", () => {
@@ -740,13 +739,16 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
   });
 
-  it("flags a manual_only link on the nested row's badge", () => {
+  it("leaves the cadence to the flyout rather than spelling it out on the row", () => {
     FLAGS.linkedSessions = true;
     const manualLink = makeLink({ ...link, cadence: "manual_only" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
+    const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
+    expect(trigger.textContent).toBe("LINKED");
+    fireEvent.click(trigger);
     expect(
-      screen.getByRole("button", { name: "Link options for payments refactor" }).textContent,
-    ).toContain("MANUAL");
+      screen.getByRole("menuitemradio", { name: /Catch up on request/ }).getAttribute("aria-checked"),
+    ).toBe("true");
   });
 });
 
@@ -960,6 +962,15 @@ function lineShape(name: string): string[] {
   return [...row.children].map((child) => child.className.split(" ")[0].replace(/_[a-z0-9]+$/i, ""));
 }
 
+/**
+ * A turn that started a minute ago: in flight, and nowhere near the bound past
+ * which the rail stops believing a working claim (WORKING_STALE_AFTER_MS). The
+ * fixtures below used to carry a fixed 2026 stamp, which read as a turn that
+ * had been running for months — exactly the state the rail now refuses to
+ * animate.
+ */
+const inFlight = () => new Date(Date.now() - 60_000).toISOString();
+
 describe("SessionRail status line", () => {
   const live = makeSession({ id: "s1", name: "the session", activity: "active" });
 
@@ -985,7 +996,7 @@ describe("SessionRail status line", () => {
     // backgrounded sidechain can outlast many turns — so it does not get to sit
     // there. It still has to be countable somewhere, which is the tooltip.
     renderWith({
-      workingSince: "2026-09-28T13:39:00.000Z",
+      workingSince: inFlight(),
       label: "Running bash · make check",
       subagents: 2,
       blockingSubagents: 0,
@@ -997,7 +1008,7 @@ describe("SessionRail status line", () => {
 
   it("says nothing about background subagents when every running one blocks", () => {
     renderWith({
-      workingSince: "2026-09-28T13:39:00.000Z",
+      workingSince: inFlight(),
       label: "Delegating · review the diff",
       subagents: 2,
       blockingSubagents: 2,
@@ -1021,7 +1032,7 @@ describe("SessionRail status line", () => {
   });
 
   it("spins — with no glyph — while a turn is in flight, and names its subagents", () => {
-    renderWith({ workingSince: "2026-07-01T00:00:00Z", subagents: 3 });
+    renderWith({ workingSince: inFlight(), subagents: 3 });
     const status = statusOf("the session");
     expect(status.textContent).toContain("3 subagents running");
     expect(status.className).toMatch(/status-working/);
@@ -1059,7 +1070,7 @@ describe("SessionRail status line", () => {
     ).toBeTruthy();
     unmount();
 
-    renderWith({ workingSince: "2026-07-01T00:00:00Z" });
+    renderWith({ workingSince: inFlight() });
     expect(
       screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-work"]'),
     ).toBeTruthy();
@@ -1070,7 +1081,7 @@ describe("SessionRail status line", () => {
       crashed: true,
       awaitingSince: "2026-07-01T00:00:00Z",
       awaitingTool: "Bash",
-      workingSince: "2026-07-01T00:00:00Z",
+      workingSince: inFlight(),
       subagents: 2,
       done: true,
     };
@@ -1113,8 +1124,8 @@ describe("SessionRail status line", () => {
     const states: SessionAgentState[] = [
       { subagents: 0 },
       { subagents: 0, done: true },
-      { subagents: 0, workingSince: "2026-07-01T00:00:00Z" },
-      { subagents: 3, workingSince: "2026-07-01T00:00:00Z" },
+      { subagents: 0, workingSince: inFlight() },
+      { subagents: 3, workingSince: inFlight() },
       { subagents: 0, awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" },
       { subagents: 0, crashed: true },
     ];
@@ -1147,7 +1158,7 @@ describe("SessionRail status line", () => {
         sessions={sessions}
         openTaskCounts={{}}
         agentStates={{
-          c: { subagents: 1, workingSince: "2026-07-01T00:00:00Z" },
+          c: { subagents: 1, workingSince: inFlight() },
           a: { subagents: 0, done: true },
         }}
       />,
@@ -1155,9 +1166,32 @@ describe("SessionRail status line", () => {
     expect(order()).toEqual(["alpha", "bravo", "charlie"]);
   });
 
+  // The 2026-10-01 rail: two cards spinning "Thinking… 23h", one of them for a
+  // session whose provider child had been gone for most of that time. Nothing
+  // but the Runner that wrote agent_state ever retires it, so a wedged agent's
+  // last word stands forever — the card must stop asserting it in the present
+  // tense, and must stop animating while it does.
+  it("stops spinning, and says so, once a working claim has outlived any real turn", () => {
+    renderWith({
+      workingSince: new Date(Date.now() - 23 * 60 * 60 * 1000).toISOString(),
+      label: "Thinking…",
+    });
+    const status = statusOf("the session");
+    expect(status.textContent).toBe("◌Stalled · no agent activity23h");
+    expect(status.className).toMatch(/status-needs/);
+    // A glyph, not the spinner: the one state that animates is the one moving.
+    expect(status.querySelector('[class*="statusSpinner"]')).toBeNull();
+    // The clause it last reported is still the most useful thing to know — it
+    // just has to come with the time attached rather than as present tense.
+    const card = screen.getByText("the session").closest('[role="button"]')!;
+    expect(card.getAttribute("title")).toContain("Last reported: Thinking…");
+  });
+
   it("counts a live state's elapsed time off the shared 1s tick", () => {
     vi.useFakeTimers({ now: Date.parse("2026-07-01T00:00:04Z") });
     try {
+      // Stamped against the fake clock, not the real one: inFlight() would be
+      // decades ahead of it and read as a turn that hasn't started.
       renderWith({ workingSince: "2026-07-01T00:00:00Z" });
       expect(statusOf("the session").textContent).toBe("Working…4s");
       act(() => {
@@ -1249,7 +1283,8 @@ describe("SessionRail status subscription", () => {
     const sessions = [makeSession({ id: "s1", name: "live one" })];
     render(<Harness sessions={sessions} />);
 
-    emitAgentState("s1", { state: "working", label: "Working…", since: "2026-09-28T13:40:00Z" });
+    const turnStart = inFlight();
+    emitAgentState("s1", { state: "working", label: "Working…", since: turnStart });
     // The elapsed counter rides the real clock here, so only the clause is read.
     await waitFor(() => expect(clauseOf("live one")).toBe("Working…"));
 
@@ -1257,11 +1292,11 @@ describe("SessionRail status subscription", () => {
     // for this call: one server-side enrichment feeds both surfaces.
     emitAgentState(
       "s1",
-      { state: "working", label: "Running bash · make check", since: "2026-09-28T13:40:00Z" },
+      { state: "working", label: "Running bash · make check", since: turnStart },
       2,
     );
     await waitFor(() => expect(clauseOf("live one")).toBe("Running bash · make check"));
-    emitAgentState("s1", { state: "working", label: "Thinking…", since: "2026-09-28T13:40:00Z" }, 3);
+    emitAgentState("s1", { state: "working", label: "Thinking…", since: turnStart }, 3);
     await waitFor(() => expect(clauseOf("live one")).toBe("Thinking…"));
   });
 

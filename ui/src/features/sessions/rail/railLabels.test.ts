@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { railLabelsFor, railTooltip, workspaceFacts } from "./railLabels";
+import { railLabelsFor, railTooltip, reservesContextLine, workspaceFacts } from "./railLabels";
 import type { RailLabelContext } from "./railLabels";
-import type { Session, Workspace } from "../../../router/types";
+import { agentIndex } from "../../../router/agentRef";
+import type { Agent, Session, Workspace } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -31,8 +32,25 @@ const MADS = makeWorkspace({
   defaults: { agent: "builder" },
 });
 
+function makeAgent(overrides: Partial<Agent>): Agent {
+  return {
+    id: "agt_1",
+    name: "agent",
+    prompt: "",
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
 function context(overrides: Partial<RailLabelContext> = {}): RailLabelContext {
-  return { multiWorkspace: false, lineShown: true, facts: workspaceFacts([MADS]), ...overrides };
+  return {
+    multiWorkspace: false,
+    railMultiWorkspace: false,
+    facts: workspaceFacts([MADS]),
+    agents: agentIndex([]),
+    ...overrides,
+  };
 }
 
 describe("workspaceFacts", () => {
@@ -201,10 +219,60 @@ describe("railLabelsFor", () => {
     );
   });
 
+  it("names the persona an agt_ reference points at, rather than printing the id", () => {
+    const partner = makeAgent({ id: "agt_3212544bb2e37c92", name: "mads-coding-partner" });
+    const ctx = context({ agents: agentIndex([partner]) });
+    expect(railLabelsFor(makeSession({ agent: "agt_3212544bb2e37c92" }), ctx).agent).toBe(
+      "mads-coding-partner",
+    );
+  });
+
+  it("drops an agt_ reference it cannot resolve rather than showing the hash", () => {
+    // A deleted persona, or a list that hasn't loaded: a label nobody can read
+    // is worse than no label, and the card has one line to spend.
+    expect(railLabelsFor(makeSession({ agent: "agt_3212544bb2e37c92" }), context()).agent).toBeUndefined();
+  });
+
+  it("drops the persona when the reference and the workspace default name the same one in different forms", () => {
+    // Session.agent is an id, the workspace default is a name — compared raw
+    // they never match, so every such session claimed to be running something
+    // other than the default.
+    const builder = makeAgent({ id: "agt_builder", name: "builder" });
+    const labels = railLabelsFor(
+      makeSession({ workspace: "ws", agent: "agt_builder" }),
+      context({ agents: agentIndex([builder]) }),
+    );
+    expect(labels.agent).toBeUndefined();
+  });
+
   it("marks retro sessions, by record or by tag", () => {
     expect(railLabelsFor(makeSession({ retro_id: "retro-1" }), context()).retro).toBe(true);
     expect(railLabelsFor(makeSession({ tags: ["retro"] }), context()).retro).toBe(true);
     expect(railLabelsFor(makeSession({ tags: ["other"] }), context()).retro).toBe(false);
+  });
+});
+
+describe("reservesContextLine", () => {
+  // The whitespace fix: the reservation is per card, so one session with a
+  // branch no longer gives every other card a blank line.
+  it("reserves nothing for a session with no label under the rail-wide context", () => {
+    const plain = makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" });
+    expect(reservesContextLine(plain, context())).toBe(false);
+    expect(reservesContextLine(plain, context({ multiWorkspace: true }))).toBe(false);
+  });
+
+  it("reserves the line for a session that has a label", () => {
+    expect(reservesContextLine(makeSession({ worktree_branch: "wt/x" }), context())).toBe(true);
+  });
+
+  // The reservation's whole job: a filter changes which labels show, never
+  // whether the line is there. A card whose ONLY label is the workspace keeps
+  // its line even while the visible list is single-workspace and drops it.
+  it("keeps the line for a workspace-only card the visible set has narrowed", () => {
+    const session = makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" });
+    const ctx = context({ multiWorkspace: false, railMultiWorkspace: true });
+    expect(railLabelsFor(session, ctx).workspace).toBeUndefined();
+    expect(reservesContextLine(session, ctx)).toBe(true);
   });
 });
 

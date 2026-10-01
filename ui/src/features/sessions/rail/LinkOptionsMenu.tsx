@@ -44,11 +44,24 @@ export function flyoutPlacement(trigger: DOMRect): CSSProperties {
     : { position: "fixed", left, top: trigger.bottom + gap };
 }
 
-/** Badge suffix for a non-default cadence, so it reads at a glance. */
-const CADENCE_STATE: Partial<Record<LinkCadence, string>> = {
-  on_signal: "· ON SIGNAL",
-  manual_only: "· MANUAL",
-};
+/**
+ * Whether a link is in a state the user should see without opening anything.
+ *
+ * Only trouble qualifies. The trigger used to spell out the cadence too
+ * ("LINKED · ON SIGNAL") and the row carried a second pill for the
+ * orchestrate state beside it, which on a nested card — already indented,
+ * already the quieter row — put two shouted lines of configuration under a
+ * one-line status. Cadence is a setting, not news: the flyout shows it as the
+ * checked option, which is where a setting belongs. A degraded orchestrate
+ * grant IS news (the leader's tools are not there and will not arrive on
+ * their own), so it keeps a mark on the trigger and its sentence inside.
+ *
+ * pending_restart is deliberately not news: the tools mount at the leader's
+ * next idle moment without anyone doing anything.
+ */
+function isDegraded(status?: OrchestrateStatus): boolean {
+  return status === "unsupported" || status === "failed";
+}
 
 const ORCHESTRATE_NOTE: Partial<Record<OrchestrateStatus, string>> = {
   // The runner mounts them at the leader's next quiet turn boundary (idle,
@@ -145,6 +158,10 @@ export function LinkOptionsMenu({
           type="button"
           className={[styles.linkBadge, styles.linkOptionsTrigger].join(" ")}
           aria-label={`Link options for ${subjectName}`}
+          // The mark on the trigger says "something is wrong here"; this says
+          // what, on hover and to a screen reader, without the label itself
+          // becoming a sentence that changes identity with the link's state.
+          title={isDegraded(orchestrateStatus) ? note : undefined}
           aria-haspopup="menu"
           aria-expanded={open}
           disabled={pending}
@@ -155,7 +172,9 @@ export function LinkOptionsMenu({
           }}
         >
           {badge}
-          {CADENCE_STATE[cadence] && <span className={styles.linkOptionsState}>{CADENCE_STATE[cadence]}</span>}
+          {isDegraded(orchestrateStatus) && (
+            <span className={styles.linkBadgeAlert} aria-hidden="true" />
+          )}
         </button>
       }
     >

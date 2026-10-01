@@ -1,4 +1,6 @@
 import { displayPath } from "../../../files/displayPath";
+import { EMPTY_AGENT_INDEX, agentNameForRef } from "../../../router/agentRef";
+import type { AgentIndex } from "../../../router/agentRef";
 import { contextOccupancy, contextWindowForModel } from "../../../router/modelDisplay";
 import type { Session, Workspace } from "../../../router/types";
 import { workspaceIndex } from "../../../router/workspaceRef";
@@ -43,26 +45,21 @@ export interface RailLabelContext {
    */
   multiWorkspace: boolean;
   /**
-   * Whether the rail gives its cards a context line at all. The line's height
-   * is reserved whether or not it has content — that reservation is what stops
-   * a label appearing or vanishing from reflowing the rail — so a rail holding
-   * no session that could ever fill it must not reserve it for any of them.
-   * In the common single-workspace, current-dir instance that is 17px of blank
-   * on every card.
-   *
-   * Decided over every row the rail holds rather than the visible ones, and
-   * over the rail's own workspace span rather than the visible list's, so that
-   * narrowing a filter can never take the line away from the cards that
-   * survive. Only the rail's membership moves it.
+   * The same question asked of the whole rail rather than the visible slice —
+   * which is what reservesContextLine() needs, and the only reason a card's
+   * line can ever change content without the rail's membership changing.
    */
-  lineShown: boolean;
+  railMultiWorkspace: boolean;
   facts: Map<string, WorkspaceFacts>;
+  /** Resolves Session.agent, an id-or-name reference (router/agentRef.ts). */
+  agents: AgentIndex;
 }
 
 export const EMPTY_LABEL_CONTEXT: RailLabelContext = {
   multiWorkspace: false,
-  lineShown: false,
+  railMultiWorkspace: false,
   facts: new Map(),
+  agents: EMPTY_AGENT_INDEX,
 };
 
 /** The adaptive set for one card. Every field absent is a normal, common state. */
@@ -128,18 +125,51 @@ export function railLabelsFor(session: Session, ctx: RailLabelContext): RailLabe
     branch,
     workspace: ctx.multiWorkspace ? workspaceLabel(session, ctx.facts) : undefined,
     cwd: showCwd ? displayPath(session.cwd!) : undefined,
-    agent: session.agent && session.agent !== facts?.defaultAgent ? session.agent : undefined,
+    agent: agentLabel(session, ctx),
     retro: Boolean(session.retro_id) || (session.tags ?? []).includes("retro"),
   };
 }
 
 /**
- * Whether this session has anything at all to put on the context line — the
- * question the rail asks of every session it holds before reserving the line's
- * height on any card (see RailLabelContext.lineShown).
+ * The persona, when it is worth a slot. Both sides resolve through the agent
+ * index first (router/agentRef.ts): Session.agent and a workspace default are
+ * each an id-or-name reference, so comparing them raw answered "differs from
+ * the default" by which form happened to be stored rather than by which
+ * persona it is. An id that resolves to nothing is dropped rather than
+ * printed — `agt_3212544bb2e37c92` on a 280px card is a line spent saying
+ * nothing.
  */
+function agentLabel(session: Session, ctx: RailLabelContext): string | undefined {
+  const name = agentNameForRef(session.agent, ctx.agents);
+  if (!name) return undefined;
+  const facts = session.workspace ? ctx.facts.get(session.workspace) : undefined;
+  return name === agentNameForRef(facts?.defaultAgent, ctx.agents) ? undefined : name;
+}
+
+/** Whether this session has anything at all to put on the context line. */
 export function hasRailLabels(labels: RailLabels): boolean {
   return Boolean(labels.branch || labels.workspace || labels.cwd || labels.agent || labels.retro);
+}
+
+/**
+ * Whether THIS card gets a context line at all — asked per card, not per rail.
+ *
+ * The line's height is reserved whether or not it has content, so that a label
+ * appearing or vanishing repaints rather than reflows the rail. But only one
+ * label is adaptive: `workspace` comes and goes as a filter narrows the
+ * visible set. Everything else (branch, cwd, agent, retro) is a fact about the
+ * session that no filter can change. So a card with no label under the
+ * rail-wide context can never acquire one, and reserving its line buys nothing
+ * — it just spends 17px of every card on blank.
+ *
+ * That is the whitespace the rail used to carry: the reservation was decided
+ * once for the whole rail, so a single session with a branch gave every other
+ * card an empty line. Deciding it per card keeps the no-reflow guarantee
+ * exactly (the only mover is still rail-wide) and spends the height only where
+ * something is written.
+ */
+export function reservesContextLine(session: Session, ctx: RailLabelContext): boolean {
+  return hasRailLabels(railLabelsFor(session, { ...ctx, multiWorkspace: ctx.railMultiWorkspace }));
 }
 
 /** The workspace name for a session's reference, never the raw reference alone. */
@@ -163,7 +193,7 @@ export function railTooltip(session: Session, ctx: RailLabelContext = EMPTY_LABE
     ...line("Workspace", workspaceLabel(session, ctx.facts)),
     ...line("Directory", session.cwd ? displayPath(session.cwd) : undefined),
     ...line("Branch", session.worktree_branch),
-    ...line("Agent", session.agent),
+    ...line("Agent", agentNameForRef(session.agent, ctx.agents) ?? session.agent),
     ...line("Model", session.model),
     ...line("Provider", session.provider),
     ...line("Trust", session.trust),

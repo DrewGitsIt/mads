@@ -237,13 +237,27 @@
   gap: var(--space-2);
 }
 
-.rowMeta {
+/* The card's one subordinate row: adaptive labels on the left, badges and
+   counts on the right. They used to be two stacked rows, which on a linked
+   card indented under its holder made four lines out of two lines of content.
+   Wraps rather than overflows — a card carrying both a long branch and a
+   breakdown is rare, and falling back to two lines there is exactly what it
+   did before. */
+.detail {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1) var(--space-2);
   min-width: 0;
   padding-left: 16px;
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
 }
 
 .when {
@@ -358,6 +372,12 @@
 
 .statusBell {
   animation: railBreathe 1.6s ease-in-out infinite;
+}
+
+/* ◌ is a light glyph by design — it has to carry at the same optical weight as
+   ✓ and ▲ beside it, which at 9px it does not. */
+.statusStalled {
+  font-size: 11px;
 }
 
 .statusSpinner {
@@ -716,8 +736,15 @@
   color: var(--text);
 }
 
-.linkOptionsState {
-  color: var(--text3);
+/* The one thing a nested row still says out loud about its link: something
+   is wrong with the orchestrate grant. A mark, not a word — the sentence is
+   in the flyout this trigger opens (LinkOptionsMenu's note). */
+.linkBadgeAlert {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--warn-fg);
 }
 
 /* Sized to fit inside the rail from a nested row's meta line (the rail
@@ -744,18 +771,23 @@
   color: var(--bad-fg);
 }
 
-/* Adaptive context labels. Always rendered, one line, never wrapped, with its
-   height reserved even when every label is adaptively absent: the visible
-   label set changes as filters narrow the list (a workspace name appears the
-   moment the list spans two), and that must repaint the line, never reflow
-   the rail. Same contract as .status above. */
+/* Adaptive context labels. One line, never wrapped, with its height reserved
+   even when every label is adaptively absent: the visible label set changes as
+   filters narrow the list (a workspace name appears the moment the list spans
+   two), and that must repaint the line, never reflow the rail. Same contract
+   as .status above.
+
+   Rendered only on the cards that have something to put here, though —
+   railLabels.reservesContextLine decides per card, not per rail. The
+   reservation protects a card that can gain or lose a label; a card that can
+   do neither was simply carrying 17px of blank. */
 .context {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
   min-height: 13px;
-  padding-left: 16px;
   color: var(--text3);
   font: 500 var(--fs-chip) var(--sans);
   white-space: nowrap;

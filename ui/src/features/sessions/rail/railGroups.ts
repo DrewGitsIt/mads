@@ -66,7 +66,14 @@ export interface SessionAgentState {
 
 export const EMPTY_AGENT_STATE: SessionAgentState = { subagents: 0 };
 
-export type RailStatusKind = "crashed" | "needs" | "working" | "done" | "ready" | "sleeping";
+export type RailStatusKind =
+  | "crashed"
+  | "needs"
+  | "working"
+  | "stalled"
+  | "done"
+  | "ready"
+  | "sleeping";
 
 /** Maps 1:1 onto the mockup's `.status.bad|needs|working|done|idle` tones. */
 export type RailStatusTone = "bad" | "needs" | "working" | "done" | "idle";
@@ -88,6 +95,30 @@ function plural(n: number, noun: string): string {
 }
 
 /**
+ * How long a "working" claim stays credible. Past this the card stops
+ * animating and says the agent has gone quiet instead.
+ *
+ * The bound is the product's own longest turn, not a guess: 30 minutes is
+ * DefaultPipelineStageTimeoutMinutes (pkg/contracts/config.go) — what mads
+ * itself is willing to wait for one agent turn before calling it failed. A
+ * claim older than that is older than any turn this system would let run.
+ *
+ * It exists because nothing else can retire the claim. agent_state is written
+ * by the Runner on transitions only (services/session/internal/runner/
+ * agentstate.go), so the last thing a wedged or hard-killed agent wrote stays
+ * on the record forever: useSessionAgentState's mirroredWorking() already
+ * refuses a working mirror on an *inactive* session, but a session whose
+ * service is alive while the agent underneath it is not stays `active`, and
+ * the rail spun a "Thinking…" that had been true 23 hours earlier (observed
+ * 2026-10-01, two sessions, one with no provider child left at all).
+ *
+ * This is presentation, not repair — the underlying session is still wedged
+ * and still needs closing. It is here because the rail must not state as
+ * present tense something it cannot support.
+ */
+export const WORKING_STALE_AFTER_MS = 30 * 60 * 1000;
+
+/**
  * The card's second line (mockup docs/mockups/sessions-ux-v2.html §1), in the
  * mockup's precedence: the first state that applies wins, so an approval park
  * always beats "working" and a crash always beats everything.
@@ -101,6 +132,7 @@ export function statusOf(
   session: Session,
   state: SessionAgentState,
   breakdown: OpenTaskBreakdown,
+  now: number = Date.now(),
 ): RailStatus {
   if (state.crashed) {
     return {
@@ -122,6 +154,20 @@ export function statusOf(
       glyph: "▲",
       label: state.awaitingTool ? `Needs approval · ${state.awaitingTool}` : "Needs approval",
       since: state.awaitingSince,
+    };
+  }
+  if (state.workingSince !== undefined && isStaleWorking(state.workingSince, now)) {
+    // Deliberately keeps `since`, so the counter beside it reads "23h" — the
+    // age of the claim is the whole evidence for not believing it.
+    return {
+      kind: "stalled",
+      tone: "needs",
+      dot: "attn",
+      // A spinner that stopped. No animation: the one state that moves is the
+      // one that is actually moving.
+      glyph: "◌",
+      label: "Stalled · no agent activity",
+      since: state.workingSince,
     };
   }
   if (state.workingSince !== undefined) {
@@ -164,6 +210,17 @@ export function statusOf(
 }
 
 /**
+ * Whether a working claim has outlived the longest turn mads would run (see
+ * WORKING_STALE_AFTER_MS). An unparseable stamp is never stale — a bad value
+ * is not evidence of a dead agent, and guessing from one would turn every
+ * clock-skewed record into a false alarm.
+ */
+export function isStaleWorking(workingSince: string, now: number): boolean {
+  const since = Date.parse(workingSince);
+  return Number.isFinite(since) && now - since >= WORKING_STALE_AFTER_MS;
+}
+
+/**
  * The rail's filter chips (mockup docs/mockups/sessions-ux-v2.html §2, option
  * B). They replace the old Active/Recent grouping: a chip is a *badge you can
  * click*, so triage stops costing the list its stability — nothing moves when
@@ -199,7 +256,11 @@ export function mostUrgentBucket(buckets: RailFilterBucket[]): RailFilterBucket 
  * "Done · your turn" included, since the turn it is reporting is over.
  */
 export function filterBucketOf(status: RailStatus): RailFilterBucket {
-  if (status.kind === "crashed" || status.kind === "needs") return "needs";
+  // Stalled joins the attention set: a wedged agent is not going to recover on
+  // its own, and closing it is the user's job.
+  if (status.kind === "crashed" || status.kind === "needs" || status.kind === "stalled") {
+    return "needs";
+  }
   if (status.kind === "working") return "working";
   return status.dot === "attn" ? "needs" : "idle";
 }

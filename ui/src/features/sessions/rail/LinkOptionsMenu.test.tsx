@@ -22,20 +22,59 @@ function renderMenu(overrides: Partial<LinkOptionsMenuProps> = {}) {
 }
 
 describe("LinkOptionsMenu", () => {
-  it("uses the role badge as its trigger, flagging manual-only links", () => {
+  // The trigger used to spell the cadence out ("WATCHED · ON SIGNAL") and the
+  // row carried a second pill for the orchestrate state beside it, which on an
+  // already-indented nested card stacked two shouted lines of configuration
+  // under a one-line status. A cadence is a setting, and the flyout shows it as
+  // the checked option — which is where a setting belongs.
+  it("is just the role badge, whatever the cadence", () => {
+    for (const cadence of ["per_turn", "on_signal", "manual_only"] as const) {
+      const { unmount } = render(
+        <LinkOptionsMenu
+          badge="WATCHED"
+          subjectName="worker"
+          linkId="l1"
+          grantingSessionId="g1"
+          subjectSessionId="s1"
+          grants={["read"]}
+          cadence={cadence}
+          routerClient={new FakeRouterClient()}
+          onUnlinkRequest={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Link options for worker" }).textContent).toBe(
+        "WATCHED",
+      );
+      unmount();
+    }
+  });
+
+  it("names the cadence inside, as the checked option", () => {
     renderMenu({ cadence: "manual_only" });
+    fireEvent.click(screen.getByRole("button", { name: "Link options for worker" }));
+    expect(
+      screen.getByRole("menuitemradio", { name: /Catch up on request/ }).getAttribute("aria-checked"),
+    ).toBe("true");
+  });
+
+  // Trouble is the exception: a degraded orchestrate grant will not fix itself,
+  // so the trigger carries a mark for it — and the sentence on hover.
+  it("marks the trigger, and says why, when the orchestrate grant is degraded", () => {
+    renderMenu({ orchestrateStatus: "failed", orchestrateError: "mads not found" });
     const trigger = screen.getByRole("button", { name: "Link options for worker" });
-    expect(trigger.textContent).toBe("WATCHED· MANUAL");
+    expect(trigger.querySelector("span[aria-hidden]")).toBeTruthy();
+    expect(trigger.getAttribute("title")).toBe(
+      "Orchestration tools failed to start. mads not found",
+    );
   });
 
-  it("flags on-signal links on the badge", () => {
-    renderMenu({ cadence: "on_signal" });
-    expect(screen.getByRole("button", { name: "Link options for worker" }).textContent).toBe("WATCHED· ON SIGNAL");
-  });
-
-  it("shows just the badge for the default debounced cadence", () => {
-    renderMenu();
-    expect(screen.getByRole("button", { name: "Link options for worker" }).textContent).toBe("WATCHED");
+  it("leaves the trigger unmarked for a grant that is merely waiting to mount", () => {
+    // pending_restart is not news: the tools mount at the leader's next idle
+    // moment with nobody doing anything.
+    renderMenu({ orchestrateStatus: "pending_restart" });
+    const trigger = screen.getByRole("button", { name: "Link options for worker" });
+    expect(trigger.querySelector("span[aria-hidden]")).toBeNull();
+    expect(trigger.getAttribute("title")).toBeNull();
   });
 
   it("changes the update policy, resending the grants unchanged", async () => {

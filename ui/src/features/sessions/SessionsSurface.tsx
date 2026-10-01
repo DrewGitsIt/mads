@@ -4,6 +4,7 @@ import { Toast } from "../../components/Toast/Toast";
 import { useBusHealth } from "../../router/useBusHealth";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
+import { useAgents } from "../../library/agents/useAgents";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
 import { router } from "../../router/client";
 import type { Session } from "../../router/types";
@@ -48,8 +49,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const links = useSessionLinks(sessions.map((s) => s.id));
   // Only the rail's adaptive context labels need these: a workspace's
   // primary repo and default persona are what decide whether a card's cwd
-  // and agent are worth printing.
+  // and agent are worth printing — and the persona list is what turns the
+  // `agt_…` reference a session record stores into a name worth printing at
+  // all (router/agentRef.ts).
   const { workspaces } = useWorkspaces();
+  const { agents } = useAgents();
   const [selectedId, setSelectedId] = useState<string>();
   // One subscription for the whole rail, however many cards are listed. The
   // list is handed in too: each record mirrors its session's latest agent
@@ -119,6 +123,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             agentStates={agentStates}
             links={links}
             workspaces={workspaces}
+            agents={agents}
             routerClient={router}
             selectedId={selectedId}
             onSelect={(id) => {

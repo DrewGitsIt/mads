@@ -36,9 +36,9 @@ import type { MatchReason, SearchMatch } from "./railSearch";
 import { useSettledRailOrder } from "./railOrder";
 import {
   EMPTY_LABEL_CONTEXT,
-  hasRailLabels,
   railLabelsFor,
   railTooltip,
+  reservesContextLine,
   workspaceFacts,
 } from "./railLabels";
 import type { RailLabelContext, RailLabels } from "./railLabels";
@@ -48,6 +48,7 @@ import {
   workspaceNameForRef,
 } from "../../../router/workspaceRef";
 import type { WorkspaceIndex } from "../../../router/workspaceRef";
+import { agentIndex } from "../../../router/agentRef";
 import { summaryTeaser } from "./summaryTeaser";
 import { FLAGS } from "../../../featureFlags";
 import {
@@ -59,6 +60,7 @@ import {
 } from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
 import type {
+  Agent,
   Grant,
   Link,
   LinkCadence,
@@ -88,6 +90,12 @@ export interface SessionRailProps {
    * name: Session.workspace is a name, not an id.
    */
   workspaces?: Workspace[];
+  /**
+   * Persona records, so a card can name the persona it is running rather than
+   * the `agt_…` reference the record stores (router/agentRef.ts). Absent is a
+   * normal pre-load state: the label is dropped, never shown as a hash.
+   */
+  agents?: Agent[];
   routerClient?: RouterClient;
   /**
    * Opaque stamp of an externally-driven search query, folded together with
@@ -117,6 +125,7 @@ export function SessionRail({
   onDelete,
   links = [],
   workspaces = [],
+  agents = [],
   routerClient = router,
   filterKey,
   className,
@@ -186,6 +195,7 @@ export function SessionRail({
         session,
         agentStates[session.id] ?? EMPTY_AGENT_STATE,
         openTaskCounts[session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN,
+        now,
       ),
     );
   }
@@ -222,11 +232,12 @@ export function SessionRail({
     }
   }
   const facts = workspaceFacts(workspaces);
-  // Whether the line exists at all is a question about the whole rail, not the
+  // Whether a card gets a line is a question about the whole rail, not the
   // visible slice: answered off `visible` it would come and go as filters
-  // narrow, and every surviving card would change height — the reflow the
-  // reservation exists to prevent. So both inputs are rail-wide, and a filter
-  // can only change *which* labels a card shows, never whether it has a line.
+  // narrow, and the surviving cards would change height — the reflow the
+  // reservation exists to prevent. So railMultiWorkspace rides along beside
+  // the visible-set answer, and a filter can only change *which* labels a card
+  // shows, never whether it has a line (railLabels.reservesContextLine).
   const railWorkspaces = new Set<string>();
   for (const row of allRows) {
     for (const session of sessionsOf(row)) {
@@ -234,17 +245,11 @@ export function SessionRail({
       if (name) railWorkspaces.add(name);
     }
   }
-  const railWide: RailLabelContext = {
-    multiWorkspace: railWorkspaces.size > 1,
-    lineShown: true,
-    facts,
-  };
   const labelContext: RailLabelContext = {
     multiWorkspace: visibleWorkspaces.size > 1,
-    lineShown: allRows.some((row) =>
-      sessionsOf(row).some((session) => hasRailLabels(railLabelsFor(session, railWide))),
-    ),
+    railMultiWorkspace: railWorkspaces.size > 1,
     facts,
+    agents: agentIndex(agents),
   };
 
   const head: RailRow[] = [];
@@ -751,7 +756,7 @@ function SessionRow({
   routerClient?: RouterClient;
 }) {
   const now = useRelativeNow();
-  const status = statusOf(session, agentState, openTaskBreakdown);
+  const status = statusOf(session, agentState, openTaskBreakdown, now);
   const name = session.name || "Untitled session";
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
@@ -782,13 +787,24 @@ function SessionRow({
   // place it is still counted.
   const backgroundSubagents =
     agentState.subagents - (agentState.blockingSubagents ?? agentState.subagents);
+  // A stalled card withholds the clause the agent last reported, because
+  // stating it would be stating it as true. It is still the most useful thing
+  // to know about the session, so it goes here with the time attached — the
+  // difference between "it is doing this" and "this is the last thing it said
+  // it was doing, 23h ago".
+  const stalledNote =
+    status.kind === "stalled"
+      ? `Last reported: ${agentState.label ?? "Working…"} (${formatAbsoluteStamp(status.since!)})`
+      : "";
   const tooltip = [
     railTooltip(session, labelContext),
+    stalledNote,
     backgroundSubagents > 0 ? `Background subagents: ${backgroundSubagents} running` : "",
   ]
     .filter(Boolean)
     .join("\n");
   const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
+  const showContext = reservesContextLine(session, labelContext);
   const showSummary = isPaused && Boolean(session.summary);
   // A nested subject row's link controls (update policy, unlink) live in one
   // flyout behind its role badge, so the row stays inside the rail's width.
@@ -940,7 +956,11 @@ function SessionRow({
       <div className={[styles.status, styles[`status-${status.tone}`]].join(" ")} role="status">
         {status.glyph ? (
           <span
-            className={[styles.statusGlyph, status.kind === "needs" ? styles.statusBell : ""]
+            className={[
+              styles.statusGlyph,
+              status.kind === "needs" ? styles.statusBell : "",
+              status.kind === "stalled" ? styles.statusStalled : "",
+            ]
               .filter(Boolean)
               .join(" ")}
             aria-hidden="true"
@@ -960,45 +980,60 @@ function SessionRow({
           {reason.value}
         </div>
       )}
-      {labelContext.lineShown && <ContextLine labels={labels} />}
-      {hasMeta && (
-        <div className={styles.rowMeta}>
-          {openTaskCount > 0 && (
-            <span className={styles.workBreakdown}>
-              {openTaskBreakdown.running > 0 && (
-                <span className={styles.bucketRunning}>{openTaskBreakdown.running} running</span>
+      {/* One subordinate line, not two. The adaptive labels and the badges are
+          both "detail under the status", and giving each its own row stacked a
+          four-line card out of two lines of content — the labels truncate, the
+          badges keep their width, and in the common case they sit together. */}
+      {(showContext || hasMeta) && (
+        <div className={styles.detail}>
+          {showContext && <ContextLine labels={labels} />}
+          {hasMeta && (
+            <div className={styles.rowMeta}>
+              {openTaskCount > 0 && (
+                <span className={styles.workBreakdown}>
+                  {openTaskBreakdown.running > 0 && (
+                    <span className={styles.bucketRunning}>{openTaskBreakdown.running} running</span>
+                  )}
+                  {openTaskBreakdown.ready > 0 && (
+                    <span className={styles.bucketReady}>{openTaskBreakdown.ready} ready</span>
+                  )}
+                  {openTaskBreakdown.blocked > 0 && (
+                    <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
+                  )}
+                </span>
               )}
-              {openTaskBreakdown.ready > 0 && (
-                <span className={styles.bucketReady}>{openTaskBreakdown.ready} ready</span>
+              {linkedSessionsEnabled && linkOptions}
+              {linkedSessionsEnabled && linkBadge && !linkOptions && holderMenu}
+              {linkedSessionsEnabled && linkBadge && !linkOptions && !holderMenu && (
+                <span
+                  className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
+                    .filter(Boolean)
+                    .join(" ")}
+                >
+                  {linkBadge}
+                </span>
               )}
-              {openTaskBreakdown.blocked > 0 && (
-                <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
+              {/* Only where nothing else can carry it. A nested subject row has a
+                  link flyout, and the flyout already explains every orchestrate
+                  state in a full sentence (LinkOptionsMenu's ORCHESTRATE_NOTE) —
+                  so a second pill shouting the same thing in caps was a whole
+                  extra line of card spent on a restatement, and the loudest thing
+                  on a subordinate row at that. The trigger keeps a quiet mark for
+                  the states that are actually news (see LinkOptionsMenu). */}
+              {linkedSessionsEnabled && orchestrateLabel && !linkOptions && (
+                <span
+                  className={[
+                    styles.orchestrateBadge,
+                    orchestrateStatus === "unsupported" || orchestrateStatus === "failed"
+                      ? styles.orchestrateBadgeUnsupported
+                      : styles.orchestrateBadgePending,
+                  ].join(" ")}
+                  title={orchestrateStatus === "failed" ? orchestrateError : undefined}
+                >
+                  {orchestrateLabel}
+                </span>
               )}
-            </span>
-          )}
-          {linkedSessionsEnabled && linkOptions}
-          {linkedSessionsEnabled && linkBadge && !linkOptions && holderMenu}
-          {linkedSessionsEnabled && linkBadge && !linkOptions && !holderMenu && (
-            <span
-              className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
-                .filter(Boolean)
-                .join(" ")}
-            >
-              {linkBadge}
-            </span>
-          )}
-          {linkedSessionsEnabled && orchestrateLabel && (
-            <span
-              className={[
-                styles.orchestrateBadge,
-                orchestrateStatus === "unsupported" || orchestrateStatus === "failed"
-                  ? styles.orchestrateBadgeUnsupported
-                  : styles.orchestrateBadgePending,
-              ].join(" ")}
-              title={orchestrateStatus === "failed" ? orchestrateError : undefined}
-            >
-              {orchestrateLabel}
-            </span>
+            </div>
           )}
         </div>
       )}

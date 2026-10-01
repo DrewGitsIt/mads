@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { SessionRail } from "./SessionRail";
-import type { Session, Workspace } from "../../../router/types";
+import type { Agent, Session, Workspace } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -42,8 +42,14 @@ function cardFor(name: string) {
   return screen.getByText(name).closest('[role="button"]') as HTMLElement;
 }
 
+/** Whether this card spends a line on context at all (railLabels.reservesContextLine). */
+function hasContextLine(card: HTMLElement): boolean {
+  return card.querySelector('[class*="context"]') !== null;
+}
+
 function labelsOn(card: HTMLElement): Record<string, string> {
-  const line = card.querySelector('[class*="context"]')!;
+  const line = card.querySelector('[class*="context"]');
+  if (!line) return {};
   return Object.fromEntries(
     [...line.querySelectorAll("[data-label]")].map((el) => [
       el.getAttribute("data-label")!,
@@ -80,6 +86,7 @@ describe("SessionRail adaptive context labels", () => {
     );
     expect(labelsOn(cardFor("isolated one"))).toEqual({ branch: "wt/goose-acp" });
     expect(labelsOn(cardFor("plain one"))).toEqual({});
+    expect(hasContextLine(cardFor("plain one"))).toBe(false);
   });
 
   // The shape the running instance actually has: the router writes the
@@ -117,10 +124,12 @@ describe("SessionRail adaptive context labels", () => {
     }
   });
 
-  // The line's presence is a fact about the rail, not about one card: reserving
-  // it per-card would make a card's height depend on its own labels, which is
-  // the reflow the reservation exists to prevent.
-  it("reserves the line on every card once any session in the rail can fill it", () => {
+  // The reservation is per card, not per rail. One session with a branch used
+  // to give every other card an empty 17px line — the unaccounted-for
+  // whitespace in the rail. The reservation protects a card that can gain or
+  // lose a label (see the filter test below); a card that can do neither was
+  // just carrying blank.
+  it("spends the line only on the cards that have something to put on it", () => {
     render(
       <SessionRail
         sessions={[
@@ -138,10 +147,7 @@ describe("SessionRail adaptive context labels", () => {
       />,
     );
     expect(labelsOn(cardFor("isolated one")).branch).toBe("feat/x");
-    // No labels of its own, but it still carries the line, so the two cards are
-    // the same height.
-    expect(labelsOn(cardFor("plain one"))).toEqual({});
-    expect(cardFor("plain one").querySelector('[class*="context"]')).not.toBeNull();
+    expect(hasContextLine(cardFor("plain one"))).toBe(false);
   });
 
   it("labels an id-referenced workspace with its name across a mixed list", () => {
@@ -170,7 +176,7 @@ describe("SessionRail adaptive context labels", () => {
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("in the repo")).cwd).toBeUndefined();
+    expect(hasContextLine(cardFor("in the repo"))).toBe(false);
     expect(labelsOn(cardFor("elsewhere")).cwd).toBe("~/repo/mads-ui");
   });
 
@@ -185,8 +191,35 @@ describe("SessionRail adaptive context labels", () => {
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("default persona")).agent).toBeUndefined();
+    expect(hasContextLine(cardFor("default persona"))).toBe(false);
     expect(labelsOn(cardFor("other persona")).agent).toBe("reviewer");
+  });
+
+  // What the live rail actually showed: the launchpad stages the persona *id*,
+  // so cards read "agt_3212544bb2e37c92". Resolving it also fixes the
+  // comparison against the workspace default, which is stored as a name — an
+  // id never matched one, so a session running the default claimed otherwise.
+  it("names the persona an agt_ reference points at, and drops one it cannot resolve", () => {
+    const agents: Agent[] = [
+      { id: "agt_3212544bb2e37c92", name: "mads-coding-partner", prompt: "", created_at: "", updated_at: "" },
+      { id: "agt_builder", name: "builder", prompt: "", created_at: "", updated_at: "" },
+    ];
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "partner one", workspace: "mads", agent: "agt_3212544bb2e37c92" }),
+          makeSession({ id: "b", name: "default by id", workspace: "mads", agent: "agt_builder" }),
+          makeSession({ id: "c", name: "gone one", workspace: "mads", agent: "agt_deleted" }),
+        ]}
+        workspaces={WORKSPACES}
+        agents={agents}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(labelsOn(cardFor("partner one")).agent).toBe("mads-coding-partner");
+    expect(hasContextLine(cardFor("default by id"))).toBe(false);
+    // A hash nobody can read is worse than no label.
+    expect(hasContextLine(cardFor("gone one"))).toBe(false);
   });
 
   it("shows the workspace only while the visible list spans more than one, and filtering it down to one does not change the card", () => {
