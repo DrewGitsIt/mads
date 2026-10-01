@@ -22,8 +22,10 @@ func resultFor(t *testing.T, results []Result, b provider.Behavior) Result {
 
 func TestHonestStubPasses(t *testing.T) {
 	results := Check(context.Background(), newStub(nil, lies{}), stubScript())
-	if len(results) != len(provider.Behaviors()) {
-		t.Fatalf("%d results, want one per behavior (%d)", len(results), len(provider.Behaviors()))
+	// One per matrix behavior, plus the structural checks that are not matrix
+	// rows at all (TurnTermination — an adapter cannot decline it).
+	if want := len(provider.Behaviors()) + 1; len(results) != want {
+		t.Fatalf("%d results, want one per behavior plus the structural checks (%d)", len(results), want)
 	}
 	for _, r := range results {
 		if r.Err != nil {

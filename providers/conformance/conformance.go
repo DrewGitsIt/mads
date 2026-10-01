@@ -40,6 +40,13 @@ type Script struct {
 	// command. Used to probe BehaviorTrustLimited: the command must never
 	// complete successfully.
 	AttemptCommand func() string
+	// Unprompted returns a prompt after which the agent produces more
+	// main-agent output once its own turn has already ended — the claude
+	// CLI waking itself to read a background task that finished late is the
+	// case this exists for. Used by the TurnTermination check; leave it nil
+	// on a harness that cannot elicit the shape, and the check records that
+	// it was not probed rather than passing silently.
+	Unprompted func() string
 	// Timeout bounds each wait on the provider. Zero means 5s.
 	Timeout time.Duration
 }
@@ -54,6 +61,28 @@ func (s Script) timeout() time.Duration {
 // MatrixResult is the pseudo-behavior naming the matrix's own structural
 // validation in Result lists.
 const MatrixResult provider.Behavior = "matrix"
+
+// TurnTermination is the pseudo-behavior naming the turn-termination
+// contract. Unlike the matrix rows it is not a capability an adapter may
+// decline: every adapter on the structured transport owes it unconditionally,
+// which is why it has no Support column.
+//
+// The contract: an adapter must never leave main-agent output unterminated.
+// Every run of main-agent activity it emits — text, a tool call, a thinking
+// block, anything with no ParentToolUseID — must be followed by an
+// EventTurnEnd before the adapter emits further main-agent activity, and
+// before the stream closes.
+//
+// It exists because the session runner's agent state has exactly two exits,
+// an EventTurnEnd or the stream closing, and both are the adapter's to give.
+// An adapter that emits activity it never ends leaves the session asserting a
+// turn in flight with nothing able to retire the claim. That is not
+// hypothetical: on 2026-09-30 a background task finished after the user's turn
+// had closed, the claude CLI ran a whole unprompted turn, and the adapter
+// filtered its result line as an in-turn continuation — correct inside a turn,
+// wrong outside one. Two sessions read "Thinking…" for 23 hours with healthy,
+// idle agents behind them (fixed in 187007d).
+const TurnTermination provider.Behavior = "turn_termination"
 
 // Result is one behavior's verdict: how it is declared, and the mismatch if
 // the probe disagreed (nil Err = declaration and behavior agree). Note
@@ -75,7 +104,11 @@ func Run(t *testing.T, p provider.Provider, s Script) {
 				t.Log(res.Note)
 			}
 			if res.Err != nil {
-				t.Errorf("declared %q: %v", res.Declared, res.Err)
+				if res.Declared == "" {
+					t.Errorf("%v", res.Err) // structural check, not a matrix row
+				} else {
+					t.Errorf("declared %q: %v", res.Declared, res.Err)
+				}
 			}
 		})
 	}
@@ -156,6 +189,22 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	c.add(provider.BehaviorCwdReroot, nil, "not probed: no functional probe defined yet")
 
 	c.add(provider.BehaviorMCPServers, c.mcpServers(), "")
+
+	switch {
+	case !structured:
+		c.add(TurnTermination, nil, "not probed: needs the structured transport")
+	case s.Unprompted != nil:
+		c.add(TurnTermination, c.turnTermination(s.Unprompted()), "")
+	case s.Echo != nil:
+		// Thinner, but not nothing: it still proves the adapter goes quiet
+		// after a turn rather than trailing unterminated output. Only a
+		// script that can elicit post-turn output probes the case that
+		// actually broke.
+		c.add(TurnTermination, c.turnTermination(s.Echo("settle")),
+			"probed with the Echo prompt: no Unprompted script, so a post-turn continuation was never elicited")
+	default:
+		c.add(TurnTermination, nil, "not probed: no Unprompted or Echo script provided")
+	}
 
 	if m[provider.BehaviorTrustLimited].Works() {
 		if s.AttemptCommand != nil {
@@ -265,6 +314,64 @@ func (c *checker) collect(sess provider.Session) (string, *provider.Event, error
 			return text.String(), nil, fmt.Errorf("no turn end within %s", c.s.timeout())
 		case <-c.ctx.Done():
 			return text.String(), nil, c.ctx.Err()
+		}
+	}
+}
+
+// turnTermination drives a turn that keeps talking after it ends, then
+// watches the stream settle. Anything the adapter emits as the main agent
+// past the turn's end must itself be ended; the settle window is what
+// distinguishes "still arriving" from "abandoned".
+//
+// Deliberately reads the stream rather than the adapter's source: the failure
+// this guards against was an adapter dropping a terminal line it had already
+// parsed, which no amount of reading the switch statement makes obvious.
+func (c *checker) turnTermination(prompt string) error {
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		return fmt.Errorf("Start(acp): %w", err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(c.ctx, prompt); err != nil {
+		return fmt.Errorf("Send: %w", err)
+	}
+	if _, _, err := c.collect(sess); err != nil {
+		return fmt.Errorf("the prompt's own turn: %w", err)
+	}
+
+	// Past the turn's end. Keep reading: if the adapter speaks again as the
+	// main agent, that run owes an end too.
+	open := false
+	var opener provider.EventKind
+	settle := time.After(c.s.timeout())
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				// The stream closing IS an end — the runner treats it as one
+				// (flushTurnState). Nothing is left asserting anything.
+				return nil
+			}
+			if ev.ParentToolUseID != "" {
+				continue // a subagent's sidechain is not the main agent's turn
+			}
+			switch ev.Kind {
+			case provider.EventText, provider.EventToolUse, provider.EventThinking:
+				if !open {
+					open, opener = true, ev.Kind
+				}
+			case provider.EventTurnEnd:
+				open = false
+			}
+		case <-settle:
+			if open {
+				return fmt.Errorf(
+					"emitted main-agent %s after the turn ended and never ended it: the session would assert a turn in flight with nothing able to retire the claim",
+					opener)
+			}
+			return nil
+		case <-c.ctx.Done():
+			return c.ctx.Err()
 		}
 	}
 }

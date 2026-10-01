@@ -443,6 +443,29 @@ func fcStream(a fcArgs) {
 			result(reply, false)
 			continue
 		}
+		// The 2026-09-30 wire shape: the user's turn ends normally, then a
+		// backgrounded task finishes and the CLI wakes the model on its own.
+		// That unprompted turn produces main-agent output and closes with a
+		// result stamped origin "task-notification" — the line the adapter
+		// correctly suppresses INSIDE a turn, and which outside one is the
+		// only end that turn will ever get.
+		if prompt == "unprompted" {
+			reply := "ok"
+			fcEmitText(id, reply)
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+
+			late := "the background task finished"
+			fcEmitText(id, late)
+			fcAppendTranscript(transcript, "assistant", late, "")
+			fcEmit(map[string]any{
+				"type": "result", "subtype": "success", "is_error": false,
+				"result": late, "session_id": id,
+				"origin": map[string]any{"kind": "task-notification"},
+				"usage":  map[string]any{"input_tokens": 3, "output_tokens": 5},
+			})
+			continue
+		}
 		if prompt == "slow" {
 			interrupted := false
 			for i := 0; i < 400 && !interrupted; i++ {
