@@ -401,3 +401,50 @@ func TestSessionWorkingDiffMissingPath(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestSessionWorkingDiffThroughSymlinkedRoot: a ledger path that reaches the
+// workspace through a symlink still finds the shadow baseline. Roots come
+// from git, which always answers with the physical path, so a symlinked
+// ledger path used to send filepath.Rel up and out of the root with ../..;
+// the baseline could not contain that name, which read as "the session added
+// this file" and served an empty original — a modified file rendered as
+// wholly new content. macOS hit this on every path under /var or /tmp, but
+// any symlinked workspace does (shadow.RealPath).
+func TestSessionWorkingDiffThroughSymlinkedRoot(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	sess, store := shadowSession(t, data)
+
+	repo := t.TempDir()
+	gitCommitTestRun(t, repo, "init", "-q")
+	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "seed")
+	store.Baseline(repo)
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// Edit and commit, so the pre-shadow heuristic would read HEAD and show
+	// nothing: only the baseline can answer, and only if the path resolves.
+	if err := os.WriteFile(filepath.Join(repo, "hello.txt"), []byte("edited\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "edit")
+
+	symlinked := filepath.Join(link, "hello.txt")
+	recordChange(t, data, sess.ID, "", symlinked, "modified")
+
+	resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, symlinked, "")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	got := decodeJSON[fileDiffResp](t, resp)
+	if got.Original != "base\n" || got.Modified != "edited\n" {
+		t.Errorf("diff = %+v, want {Original:\"base\\n\" Modified:\"edited\\n\"} through the symlink", got)
+	}
+}

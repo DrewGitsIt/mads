@@ -96,6 +96,10 @@ func readWorkingFile(path string) (string, error) {
 // all — is the benign empty-original shape, same as commit_diff's
 // added-file case.
 func (s *server) workingOriginal(ctx context.Context, sessionID, path string) string {
+	// The ledger path comes from the agent's tool call; every root below comes
+	// from git, which answers physically. Canonicalize once here so the
+	// root-relative lookups further down can't straddle the two (shadow.RealPath).
+	path = shadow.RealPath(path)
 	dir := filepath.Dir(path)
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

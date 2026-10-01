@@ -14,6 +14,16 @@ import (
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
+// shadowCwd is a session cwd in the canonical form the shadow store records
+// (shadow.RealPath). These tests derive a RootKey from the cwd to read the
+// store back, so under a symlinked TMPDIR — every macOS temp dir, since /var
+// points into /private/var — a raw t.TempDir() keys a root the store never
+// wrote.
+func shadowCwd(t *testing.T) string {
+	t.Helper()
+	return shadow.RealPath(t.TempDir())
+}
+
 // TestShadowProvisioning: with ShadowRoot set, Start records the session's
 // shadow_dir on the session record and baselines the primary root in the
 // background; a turn whose scripted tool writes a file yields a turn
@@ -41,7 +51,7 @@ func TestShadowProvisioning(t *testing.T) {
 	}
 
 	r := New(sess.ID, data, reg)
-	r.Cwd = t.TempDir()
+	r.Cwd = shadowCwd(t)
 	r.ShadowRoot = t.TempDir()
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -102,7 +112,7 @@ func TestShadowCaptureRecordsPreImage(t *testing.T) {
 	data := dataclient.New(base, sess.ID)
 
 	r := New(sess.ID, data, provider.NewRegistry())
-	dir := t.TempDir()
+	dir := shadowCwd(t)
 	r.Cwd = dir
 	r.ShadowRoot = t.TempDir()
 	r.shadowStore = shadow.New(r.ShadowRoot, sess.ID)

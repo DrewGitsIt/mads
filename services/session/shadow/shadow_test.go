@@ -22,11 +22,22 @@ func gitRun(t *testing.T, dir string, args ...string) {
 	}
 }
 
+// tempRoot is t.TempDir() in the canonical form this package records
+// (RealPath): on macOS the temp dir lives under /var, a symlink into
+// /private/var, so a raw t.TempDir() is not the path git — nor the store —
+// reports back for it. Workspace roots in these fixtures come from here so
+// the assertions compare like with like on every OS; shadow dirs still use
+// t.TempDir() directly, since nothing compares a recorded path to those.
+func tempRoot(t *testing.T) string {
+	t.Helper()
+	return RealPath(t.TempDir())
+}
+
 // newRepo initializes a git repo with one committed file and returns its
 // path.
 func newRepo(t *testing.T, files map[string]string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := tempRoot(t)
 	gitRun(t, dir, "init", "-q")
 	for name, content := range files {
 		writeFile(t, filepath.Join(dir, name), content)
@@ -70,7 +81,7 @@ func TestBaseline(t *testing.T) {
 		{
 			name: "non-git dir is its own root",
 			setup: func(t *testing.T) string {
-				root := t.TempDir()
+				root := tempRoot(t)
 				writeFile(t, filepath.Join(root, "notes.md"), "plain\n")
 				return root
 			},
@@ -79,7 +90,7 @@ func TestBaseline(t *testing.T) {
 		{
 			name: "mads exclude list skips build dirs",
 			setup: func(t *testing.T) string {
-				root := t.TempDir()
+				root := tempRoot(t)
 				writeFile(t, filepath.Join(root, "src.go"), "package x\n")
 				writeFile(t, filepath.Join(root, "node_modules", "dep.js"), "junk\n")
 				return root
@@ -134,7 +145,7 @@ func TestBaselineOriginalNoShadow(t *testing.T) {
 // guard, and paths outside any git repo still captured (path-agnostic).
 func TestCapture(t *testing.T) {
 	repo := newRepo(t, map[string]string{"tracked.txt": "v1\n"})
-	plain := t.TempDir()
+	plain := tempRoot(t)
 	big := strings.Repeat("x", MaxBlobBytes+1)
 	writeFile(t, filepath.Join(repo, "big.bin"), big)
 	writeFile(t, filepath.Join(plain, "loose.txt"), "loose\n")
@@ -200,7 +211,7 @@ func TestCapture(t *testing.T) {
 func TestMultiRootDiscovery(t *testing.T) {
 	repoA := newRepo(t, map[string]string{"a.txt": "a\n"})
 	repoB := newRepo(t, map[string]string{"b.txt": "b\n"})
-	plain := t.TempDir()
+	plain := tempRoot(t)
 	writeFile(t, filepath.Join(plain, "c.txt"), "c\n")
 	// A file in a subdirectory must resolve to the repo root, not the subdir.
 	writeFile(t, filepath.Join(repoA, "sub", "deep.txt"), "deep\n")
@@ -290,7 +301,7 @@ func TestCommitTurn(t *testing.T) {
 // TestCommitTurnSkipsUnbaselinedRoot: a root whose baseline hasn't landed
 // yet is skipped by the turn commit (never raced), not errored.
 func TestCommitTurnSkipsUnbaselinedRoot(t *testing.T) {
-	root := t.TempDir()
+	root := tempRoot(t)
 	writeFile(t, filepath.Join(root, "a.txt"), "v1\n")
 	s := New(t.TempDir(), "ses_test")
 	// Register the root without baselining it — the deterministic stand-in
@@ -341,5 +352,64 @@ func TestReadIndexTolerance(t *testing.T) {
 	}
 	if len(recs) != 1 || recs[0].ToolUseID != "toolu_ok" {
 		t.Errorf("records = %+v, want just toolu_ok", recs)
+	}
+}
+
+// TestSymlinkedRootSharesOneIdentity: a workspace reached through a symlink
+// must land in the same shadow root as the physical path, and a record must
+// be internally consistent — Path under Root, so Rel(Root, Path) is the
+// plain relative name the Router asks its baseline for.
+//
+// This is the defect a first macOS CI run exposed (there /var is a symlink
+// into /private/var, so every t.TempDir() took this path), but nothing about
+// it is macOS-specific: before RealPath, Root came back physical from git
+// while Path stayed symlinked, Rel went up and out with ../.., the baseline
+// lookup missed, and a modified file was served with an empty original.
+func TestSymlinkedRootSharesOneIdentity(t *testing.T) {
+	repo := newRepo(t, map[string]string{"tracked.txt": "v1\n"})
+	link := filepath.Join(tempRoot(t), "link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	s := New(t.TempDir(), "ses_test")
+	t.Cleanup(s.Wait)
+	s.Capture("t_physical", filepath.Join(repo, "tracked.txt"))
+	s.Capture("t_symlinked", filepath.Join(link, "tracked.txt"))
+
+	recs, err := ReadIndex(s.Dir())
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	physical, _, ok := FindCapture(recs, "t_physical")
+	if !ok {
+		t.Fatal("no capture through the physical path")
+	}
+	linked, _, ok := FindCapture(recs, "t_symlinked")
+	if !ok {
+		t.Fatal("no capture through the symlink")
+	}
+
+	// One root, one shadow git dir, one blob: the symlink is not a second
+	// workspace, and the Router keys on RootKey alone.
+	if linked.Root != physical.Root || linked.RootKey != physical.RootKey {
+		t.Errorf("symlinked root = %q (key %s), want %q (key %s)",
+			linked.Root, linked.RootKey, physical.Root, physical.RootKey)
+	}
+	if linked.Blob != physical.Blob {
+		t.Errorf("symlinked blob = %q, want the same pre-image as %q", linked.Blob, physical.Blob)
+	}
+	for _, rec := range []Record{physical, linked} {
+		rel, err := filepath.Rel(rec.Root, rec.Path)
+		if err != nil || rel != "tracked.txt" {
+			t.Errorf("Rel(%q, %q) = %q, %v; want \"tracked.txt\"", rec.Root, rec.Path, rel, err)
+		}
+	}
+
+	// And the baseline the Router reads answers for that relative name.
+	s.Baseline(link)
+	original, ok := BaselineOriginal(context.Background(), s.Dir(), linked.Root, "tracked.txt")
+	if !ok || original != "v1\n" {
+		t.Errorf("BaselineOriginal = %q, %v; want \"v1\\n\", true", original, ok)
 	}
 }

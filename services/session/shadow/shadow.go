@@ -10,7 +10,10 @@
 // the root's absolute path (RootKey) and the actual path is recorded in the
 // shadow dir's git config (`mads.root`) for reverse lookup. Roots are
 // discovered lazily from captured paths (`git rev-parse --show-toplevel`,
-// cached); a non-git directory counts as its own root. Tool_use_id → blob
+// cached); a non-git directory counts as its own root. Every path entering
+// the package is canonicalized first (RealPath) — git reports roots
+// physically, so an unresolved path would key a second, parallel root and
+// break every root-relative lookup against it. Tool_use_id → blob
 // mappings live in a shadow-local append-only JSONL index (index.go), not
 // the event log, keeping this decoupled from pkg/contracts.
 //
@@ -88,6 +91,44 @@ var excludeList = []string{
 func RootKey(root string) string {
 	sum := sha256.Sum256([]byte(root))
 	return hex.EncodeToString(sum[:])[:12]
+}
+
+// RealPath is the canonical form of a path for everything in this package:
+// absolute, with symlinks in it resolved. Both sides must agree on it for the
+// same reason they must agree on RootKey.
+//
+// Roots arrive from `git rev-parse --show-toplevel`, which always answers
+// with the *physical* path. A captured file path arrives from the agent's own
+// tool call, which does not. Mixing the two silently breaks every
+// root-relative lookup built on them: filepath.Rel("/private/var/x",
+// "/var/x/f") is not "f" but a ../.. escape, so the Router asked its baseline
+// for a path the commit cannot contain, read that as "the session added this
+// file", and served an empty original — a modified file rendered as wholly
+// new content. RootKey(root) drifts the same way for a non-git root.
+//
+// macOS makes this unconditional (/var and /tmp are symlinks into /private),
+// which is how a first macOS CI run surfaced it; it was never macOS-specific,
+// though. Any workspace reached through a symlink — ~/work -> /mnt/data/work,
+// a symlinked checkout — splits identically on Linux.
+//
+// A path whose leaf does not exist yet still resolves: Capture records the
+// pre-image of a file a tool is about to create, so "not there yet" is an
+// ordinary case, and only the directory can be resolved then. A path whose
+// directory is also absent resolves to merely absolute — nothing to follow,
+// and git will discover its root the same way.
+func RealPath(p string) string {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+	dir, base := filepath.Split(abs)
+	if resolved, err := filepath.EvalSymlinks(filepath.Clean(dir)); err == nil {
+		return filepath.Join(resolved, base)
+	}
+	return abs
 }
 
 // Store is one session's shadow store. The zero value is not usable; New
@@ -180,12 +221,7 @@ func (s *Store) Baseline(root string) {
 	if s == nil || root == "" {
 		return
 	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		logf("shadow: resolve root %q: %v", root, err)
-		return
-	}
-	rs := s.rootState(abs)
+	rs := s.rootState(RealPath(root))
 	if rs == nil {
 		return
 	}
@@ -204,11 +240,7 @@ func (s *Store) Capture(toolUseID, absPath string) {
 	if s == nil || toolUseID == "" || absPath == "" {
 		return
 	}
-	abs, err := filepath.Abs(absPath)
-	if err != nil {
-		logf("shadow: resolve capture path %q: %v", absPath, err)
-		return
-	}
+	abs := RealPath(absPath)
 	root := s.rootFor(abs)
 	rs := s.rootState(root)
 	if rs == nil {

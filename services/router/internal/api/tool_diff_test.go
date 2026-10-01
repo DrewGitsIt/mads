@@ -57,7 +57,7 @@ func TestSessionToolDiffHappyPath(t *testing.T) {
 	data := dataclient.New(base, "test")
 	sess, store := shadowSession(t, data)
 
-	dir := t.TempDir()
+	dir := toolDiffRoot(t)
 	path := filepath.Join(dir, "file.txt")
 	writeToolDiffFile(t, path, "v1\n")
 	store.Baseline(dir)
@@ -101,7 +101,7 @@ func TestSessionToolDiffMarkers(t *testing.T) {
 	data := dataclient.New(base, "test")
 	sess, store := shadowSession(t, data)
 
-	dir := t.TempDir()
+	dir := toolDiffRoot(t)
 	fresh := filepath.Join(dir, "fresh.txt")
 	store.Capture("toolu_fresh", fresh) // absent pre-tool
 	writeToolDiffFile(t, fresh, "created\n")
@@ -146,7 +146,7 @@ func TestSessionToolDiffMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, store := shadowSession(t, data)
-	dir := t.TempDir()
+	dir := toolDiffRoot(t)
 	path := filepath.Join(dir, "file.txt")
 	writeToolDiffFile(t, path, "v1\n")
 	store.Capture("toolu_1", path)
@@ -172,6 +172,16 @@ func TestSessionToolDiffMissing(t *testing.T) {
 			}
 		})
 	}
+}
+
+// toolDiffRoot is a workspace dir in the canonical form the shadow store
+// records (shadow.RealPath). These tests assert on recorded paths and derive
+// RootKey themselves, and under a symlinked TMPDIR — every macOS temp dir,
+// since /var points into /private/var — a raw t.TempDir() is not what git,
+// nor the store, reports back for it.
+func toolDiffRoot(t *testing.T) string {
+	t.Helper()
+	return shadow.RealPath(t.TempDir())
 }
 
 func writeToolDiffFile(t *testing.T, path, content string) {
