@@ -55,6 +55,7 @@ const ORCHESTRATE_NOTE: Partial<Record<OrchestrateStatus, string>> = {
   // nothing queued), resuming the same conversation, not at a restart.
   pending_restart: "Orchestration tools activate when the leading agent is next idle.",
   unsupported: "The leader's provider can't host orchestration tools.",
+  failed: "Orchestration tools failed to start.",
 };
 
 export interface LinkOptionsMenuProps {
@@ -67,6 +68,8 @@ export interface LinkOptionsMenuProps {
   grants: Grant[];
   cadence: LinkCadence;
   orchestrateStatus?: OrchestrateStatus;
+  /** Why the tools failed to start, appended to the "failed" note. */
+  orchestrateError?: string;
   routerClient: RouterClient;
   onUnlinkRequest: () => void;
 }
@@ -87,6 +90,7 @@ export function LinkOptionsMenu({
   grants,
   cadence,
   orchestrateStatus,
+  orchestrateError,
   routerClient,
   onUnlinkRequest,
 }: LinkOptionsMenuProps) {
@@ -107,7 +111,9 @@ export function LinkOptionsMenu({
       window.removeEventListener("resize", dismiss);
     };
   }, [open]);
-  const note = orchestrateStatus ? ORCHESTRATE_NOTE[orchestrateStatus] : undefined;
+  const baseNote = orchestrateStatus ? ORCHESTRATE_NOTE[orchestrateStatus] : undefined;
+  const note =
+    baseNote && orchestrateStatus === "failed" && orchestrateError ? `${baseNote} ${orchestrateError}` : baseNote;
 
   async function handleSelect(next: LinkCadence) {
     if (next === cadence) {

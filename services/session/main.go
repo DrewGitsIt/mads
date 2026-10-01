@@ -120,6 +120,7 @@ func main() {
 	shadowRoot := flag.String("shadow-root", shadow.DefaultRoot(), "base dir for per-session shadow git stores (docs/SHADOW-GIT-DIFFS-ADR.md; empty disables shadowing)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
+	madsCmd := flag.String("mads-cmd", "", "mads CLI binary for the orchestrate capability (default: $MADS_BIN, else the mads beside this binary, else $PATH)")
 	flag.Parse()
 
 	if *sessionID == "" {
@@ -153,6 +154,9 @@ func main() {
 	r.WorktreeRoot = *worktreeRoot
 	r.ShadowRoot = *shadowRoot
 	r.RouterURL = *routerURL
+	// Empty means "resolve it yourself": setupOrchestrate falls back to
+	// pkg/madsbin ($MADS_BIN, then this binary's own directory, then $PATH).
+	r.MadsCmd = *madsCmd
 	r.FastModel = fastmodel.New(fmProvider, fastmodel.Config{})
 
 	// A credstore failure degrades to "no capabilities wired", not a fatal

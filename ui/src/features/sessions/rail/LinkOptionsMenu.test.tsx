@@ -81,4 +81,10 @@ describe("LinkOptionsMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Link options for worker" }));
     expect(screen.getByText(/activate when the leading agent is next idle/)).toBeTruthy();
   });
+
+  it("says why a leader link's orchestration tools failed", () => {
+    renderMenu({ badge: "LINKED", orchestrateStatus: "failed", orchestrateError: "start the orchestrate tools: not found" });
+    fireEvent.click(screen.getByRole("button", { name: "Link options for worker" }));
+    expect(screen.getByText("Orchestration tools failed to start. start the orchestrate tools: not found")).toBeTruthy();
+  });
 });

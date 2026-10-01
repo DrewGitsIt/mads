@@ -115,9 +115,12 @@ describe("App", () => {
 
 const sessions = [fixtureSessions["session-active"], fixtureSessions["session-inactive"]];
 
-function stubRouterFetch() {
+function stubRouterFetch(pipelineResponse?: () => Response) {
   const fetchMock = vi.fn().mockImplementation((input: URL | string) => {
     const url = input.toString();
+    if (pipelineResponse && url.endsWith("/pipelines")) {
+      return Promise.resolve(pipelineResponse());
+    }
     if (url.includes("/sessions") && !url.includes("/pipelines")) {
       return Promise.resolve(new Response(JSON.stringify(sessions), { status: 200 }));
     }
@@ -202,6 +205,26 @@ describe("App command palette (W6.11)", () => {
         "true",
       ),
     );
+  });
+
+  // The palette's launch used to fire-and-forget: a refused start did
+  // nothing at all, with no hint why.
+  it("a refused palette launch says why and stays put", async () => {
+    stubRouterFetch(
+      () => new Response(JSON.stringify({ error: "a pipeline run is already in progress" }), { status: 409 }),
+    );
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Add retry backoff to the ingest worker")).toBeTruthy());
+
+    fireEvent.keyDown(document, { key: "P", metaKey: true, shiftKey: true });
+    fireEvent.click(screen.getByTestId("start-pipeline:session-active"));
+
+    const toast = await screen.findByText(/Couldn't start the pipeline for/);
+    expect(toast.closest('[role="status"]')?.textContent).toMatch(/already in progress/);
+    expect(screen.queryByRole("tab", { name: "Pipeline", selected: true })).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("Dismiss"));
+    expect(screen.queryByText(/Couldn't start the pipeline for/)).toBeNull();
   });
 
   it("Ctrl+` toggles the Shell dock while a session workspace is open", async () => {

@@ -205,7 +205,7 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		runID, sessionID, tpl.Name, providerName, repo, isolated, cfg.ConcurrencyLimit, stageTimeout)
 
 	_, err = pipelinerun.Run(ctx, pipelinerun.Options{
-		Data: client, Provider: prov, SessionID: sessionID,
+		Data: client, Provider: prov, SessionID: sessionID, RunID: runID,
 		Template: tpl, TemplateVersion: tplVersion, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
 		Model: sess.Model, StageTimeout: stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),

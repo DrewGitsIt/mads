@@ -88,6 +88,27 @@ describe("FetchPipelineClient", () => {
     expect(runs).toEqual([{ session_id: "ses_1", run_seq: 7, outcome: "completed" }]);
   });
 
+  it("getRunEvents pages past the 500-event batch limit, resuming from each page's last seq", async () => {
+    const page = (from: number, n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        seq: from + i,
+        timestamp: "2026-09-30T04:21:03Z",
+        type: "stage.started",
+        session_id: "ses_1",
+        actor: "pipeline",
+        payload: {},
+      }));
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(page(7, 500)), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(page(507, 3)), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const events = await new FetchPipelineClient().getRunEvents("ses_1", 6);
+    expect(events).toHaveLength(503);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0].toString()).toContain("since=506");
+  });
+
   it("getRunEvents GETs /events with session_id, since, and the fold event types", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchPipelineClient();

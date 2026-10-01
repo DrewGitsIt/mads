@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -723,4 +724,102 @@ func assertNoOrchestrateMCPServer(t *testing.T, data *dataclient.Client, fp *fak
 	if len(refs) != 0 {
 		t.Fatalf("MCPServers = %+v, want none", refs)
 	}
+}
+
+// startLeaderWithTurn starts a leader runner with the fake provider and
+// drives one turn so it has a ref a live refresh could resume.
+func startLeaderWithTurn(t *testing.T, madsCmd string) (r *Runner, fp *fake.Fake, leaderData *dataclient.Client, leaderID, subjectID string) {
+	t.Helper()
+	ctx := context.Background()
+	base := datatest.Start(t)
+	enableOrchestrateLinkedSessions(t, dataclient.New(base, "test-bootstrap"))
+	leader := newSession(t, base)
+	subject := newSession(t, base)
+	leaderData = dataclient.New(base, leader.ID)
+
+	reg := provider.NewRegistry()
+	fp = fake.New()
+	if err := reg.Register(fp); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r = New(leader.ID, leaderData, reg)
+	r.MCPRegistry = testMCPRegistry(t)
+	r.RouterURL = "http://localhost:0"
+	r.MadsCmd = madsCmd
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(func() { _ = r.MCPRegistry.Stop(context.Background(), "orchestrate-"+leader.ID) })
+
+	ch, unsubscribe := r.Subscribe()
+	if err := r.Send(ctx, "echo hi"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+	unsubscribe()
+	return r, fp, leaderData, leader.ID, subject.ID
+}
+
+// TestRefreshOrchestrateUsesMadsCmdWithoutPath: with mads absent from PATH
+// (the repo-launched Router's situation), an explicit MadsCmd still starts
+// the tools and is what the provider is handed.
+func TestRefreshOrchestrateUsesMadsCmdWithoutPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // nothing named mads on it
+	madsPath := filepath.Join(madsBinDir, "mads")
+	ctx := context.Background()
+	r, fp, leaderData, leaderID, subjectID := startLeaderWithTurn(t, madsPath)
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leaderID, SubjectSessionID: subjectID, Preset: contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+	refs := providerMCPServers(t, leaderData, fp, leaderID)
+	if len(refs) != 1 || refs[0].Command != madsPath+" internal orchestrate-mcp" {
+		t.Fatalf("MCPServers = %+v, want the orchestrate server launched via %s", refs, madsPath)
+	}
+	if got, _ := leaderData.Link(ctx, link.ID); got.OrchestrateStatus != contracts.OrchestrateActive {
+		t.Fatalf("status = %q, want active", got.OrchestrateStatus)
+	}
+}
+
+// TestRefreshOrchestrateFailedStartMarksLink: the bug on a real machine —
+// the tools can't start, and the link used to sit in pending_restart
+// forever. It now reads failed with the reason, and the provider process is
+// left alone rather than cycled into the same missing tools.
+func TestRefreshOrchestrateFailedStartMarksLink(t *testing.T) {
+	ctx := context.Background()
+	missing := filepath.Join(t.TempDir(), "no-such-mads")
+	r, fp, leaderData, leaderID, subjectID := startLeaderWithTurn(t, missing)
+	startsBefore := len(fp.StartCalls())
+
+	link, err := leaderData.CreateLink(ctx, contracts.LinkRequest{
+		GrantingSessionID: leaderID, SubjectSessionID: subjectID, Preset: contracts.PresetLeader,
+	})
+	if err != nil {
+		t.Fatalf("create link: %v", err)
+	}
+	if err := r.RefreshOrchestrate(ctx); err != nil {
+		t.Fatalf("RefreshOrchestrate: %v", err)
+	}
+
+	got, err := leaderData.Link(ctx, link.ID)
+	if err != nil {
+		t.Fatalf("load link: %v", err)
+	}
+	if got.OrchestrateStatus != contracts.OrchestrateFailed {
+		t.Fatalf("status = %q, want failed", got.OrchestrateStatus)
+	}
+	if !strings.Contains(got.OrchestrateError, missing) {
+		t.Errorf("error = %q, want it to name the command that failed", got.OrchestrateError)
+	}
+	if n := len(fp.StartCalls()); n != startsBefore {
+		t.Errorf("provider started %d more time(s); a failed tool start must not cycle it", n-startsBefore)
+	}
+	assertNoOrchestrateMCPServer(t, leaderData, fp, leaderID)
 }

@@ -82,11 +82,13 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 	mux.HandleFunc("PUT /links/{id}/orchestrate-status", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Status contracts.OrchestrateStatus `json:"status"`
+			// Error is the reason for a "failed" status; ignored otherwise.
+			Error string `json:"error"`
 		}
 		if !decode(w, r, &req) {
 			return
 		}
-		link, err := links.SetOrchestrateStatus(r.Context(), r.PathValue("id"), req.Status, "system")
+		link, err := links.SetOrchestrateStatus(r.Context(), r.PathValue("id"), req.Status, req.Error, "system")
 		if err != nil {
 			writeStoreError(w, err)
 			return

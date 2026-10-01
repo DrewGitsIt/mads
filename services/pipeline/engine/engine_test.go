@@ -907,3 +907,25 @@ func TestPipelineStartedOmitsZeroTemplateVersion(t *testing.T) {
 		t.Fatalf("pipeline.started should omit template_version when zero: %+v", started)
 	}
 }
+
+// TestPipelineEventsCarryRunID: the run's id rides pipeline.started and
+// pipeline.completed, so the run history pairs them by id — the Router's
+// cancel/failed already carry it — rather than by order, which misfiled a
+// cancel when two engines overlapped on one session.
+func TestPipelineEventsCarryRunID(t *testing.T) {
+	h := newHarness(t)
+	h.seed(contracts.Task{Title: "identified run"})
+	if _, err := Run(context.Background(), Config{
+		Data: h.data, Provider: fake.New(), SessionID: h.sess.ID, RunID: "run_abc123",
+		Template: solitaryTemplate(t, ""), Cwd: h.cwd, Concurrency: 1,
+		StageTimeout: 30 * time.Second,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range []string{"pipeline.started", "pipeline.completed"} {
+		evs := h.events(t, typ)
+		if len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"run_id":"run_abc123"`) {
+			t.Errorf("%s: %+v, want run_id run_abc123", typ, evs)
+		}
+	}
+}

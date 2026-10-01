@@ -226,7 +226,7 @@ func sameGrantSet(a, b []contracts.Grant) bool {
 // pair, the oldest is the one merged into.
 func pairLinkInTx(tx *Tx, grantingID, subjectID string) (*contracts.Link, error) {
 	link, err := scanLinkRow(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? AND subject_session_id = ? AND implicit = 0
 		 ORDER BY created_at LIMIT 1`,
 		grantingID, subjectID))
@@ -312,6 +312,11 @@ func (l *Links) Update(ctx context.Context, link *contracts.Link, actor string) 
 		link.CreatedAt = old.CreatedAt
 		link.UpdatedAt = time.Now().UTC()
 		link.OrchestrateStatus = nextOrchestrateStatus(old, link.Grants)
+		// The reason travels with a carried-over "failed" and nothing else.
+		link.OrchestrateError = ""
+		if link.OrchestrateStatus == contracts.OrchestrateFailed {
+			link.OrchestrateError = old.OrchestrateError
+		}
 		if err := writeLink(tx, link); err != nil {
 			return err
 		}
@@ -358,7 +363,13 @@ func (l *Links) Delete(ctx context.Context, id, actor string) error {
 // or cycling the granting session's provider process. Rejects links with no
 // orchestrate grant (status is meaningless there) and no-ops (no redundant
 // link.updated envelope) if the status already matches.
-func (l *Links) SetOrchestrateStatus(ctx context.Context, id string, status contracts.OrchestrateStatus, actor string) (*contracts.Link, error) {
+//
+// errMsg is the reason for a "failed" status and is ignored otherwise: every
+// other status clears it.
+func (l *Links) SetOrchestrateStatus(ctx context.Context, id string, status contracts.OrchestrateStatus, errMsg, actor string) (*contracts.Link, error) {
+	if status != contracts.OrchestrateFailed {
+		errMsg = ""
+	}
 	if !status.Valid() {
 		var v contracts.ValidationError
 		v.Add("orchestrate_status", fmt.Sprintf("unknown status %q", status))
@@ -375,11 +386,12 @@ func (l *Links) SetOrchestrateStatus(ctx context.Context, id string, status cont
 			v.Add("orchestrate_status", "link does not carry the orchestrate grant")
 			return &v
 		}
-		if link.OrchestrateStatus == status {
+		if link.OrchestrateStatus == status && link.OrchestrateError == errMsg {
 			out = link
 			return nil
 		}
 		link.OrchestrateStatus = status
+		link.OrchestrateError = errMsg
 		link.UpdatedAt = time.Now().UTC()
 		if err := writeLink(tx, link); err != nil {
 			return err
@@ -406,7 +418,7 @@ func (l *Links) SetOrchestrateStatus(ctx context.Context, id string, status cont
 // Get returns one link.
 func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 	return scanLink(l.log.db.QueryRowContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -416,7 +428,7 @@ func (l *Links) Get(ctx context.Context, id string) (*contracts.Link, error) {
 // an empty result.
 func (l *Links) ForSession(ctx context.Context, sessionID string) ([]contracts.Link, error) {
 	rows, err := l.log.db.QueryContext(ctx,
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? OR subject_session_id = ? ORDER BY created_at`,
 		sessionID, sessionID)
 	if err != nil {
@@ -518,7 +530,7 @@ func (l *Links) RemoveImplicitHandRaiser(ctx context.Context, sessionID, actor s
 // RemoveImplicitHandRaiser's lookup.
 func implicitHandRaiserInTx(tx *Tx, sessionID string) (*contracts.Link, error) {
 	link, err := scanLinkRow(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
 		 FROM links WHERE granting_session_id = ? AND subject_session_id = ? AND implicit = 1`,
 		sessionID, sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -707,7 +719,7 @@ func (l *Links) DrainDigests(ctx context.Context, id string) ([]contracts.LinkDi
 
 func getLinkInTx(tx *Tx, id string) (*contracts.Link, error) {
 	return scanLink(tx.QueryRow(
-		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at
+		`SELECT id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at
 		 FROM links WHERE id = ?`, id))
 }
 
@@ -717,12 +729,14 @@ func writeLink(tx *Tx, link *contracts.Link) error {
 		return err
 	}
 	_, err = tx.Exec(
-		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO links (id, granting_session_id, subject_session_id, grants, cadence, implicit, orchestrate_status, orchestrate_error, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (id) DO UPDATE SET
-		   grants = excluded.grants, cadence = excluded.cadence, orchestrate_status = excluded.orchestrate_status, updated_at = excluded.updated_at`,
+		   grants = excluded.grants, cadence = excluded.cadence, orchestrate_status = excluded.orchestrate_status,
+		   orchestrate_error = excluded.orchestrate_error, updated_at = excluded.updated_at`,
 		link.ID, link.GrantingSessionID, link.SubjectSessionID, string(grantsJSON), string(link.Cadence),
-		boolToInt(link.Implicit), string(link.OrchestrateStatus), link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
+		boolToInt(link.Implicit), string(link.OrchestrateStatus), link.OrchestrateError,
+		link.CreatedAt.Format(time.RFC3339Nano), link.UpdatedAt.Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -750,7 +764,7 @@ func scanLinkRow(row rowScanner) (*contracts.Link, error) {
 		createdAt         string
 		updatedAt         string
 	)
-	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &implicit, &orchestrateStatus, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&link.ID, &link.GrantingSessionID, &link.SubjectSessionID, &grantsJSON, &cadence, &implicit, &orchestrateStatus, &link.OrchestrateError, &createdAt, &updatedAt); err != nil {
 		return nil, err
 	}
 	link.Cadence = contracts.LinkCadence(cadence)

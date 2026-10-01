@@ -296,62 +296,91 @@ func (m *Metrics) pipelineRunsForSession(ctx context.Context, sessionID string) 
 		return nil, fmt.Errorf("metrics: pipeline runs: %w", err)
 	}
 
+	// Runs pair with their terminal event by run_id when both carry one,
+	// so two engines on one session (a UI-launched run and a CLI `mads run`)
+	// can overlap without one's cancel closing the other. Events from before
+	// pipeline.started carried run_id pair by order, as they always did,
+	// except that a legacy run still open when the next one starts is
+	// recorded as interrupted rather than left "running" forever: nothing
+	// will ever close it.
 	type openRun struct {
 		run    contracts.PipelineRun
 		endSeq int64 // 0 while still open
+		open   bool
 	}
-	var (
-		runs []openRun
-		open *openRun
-	)
-	closeOpen := func() {
-		if open != nil {
-			runs = append(runs, *open)
-			open = nil
+	var runs []*openRun
+	byID := map[string]*openRun{}
+	var legacyOpen *openRun // the latest open run without a run_id
+	closeRun := func(r *openRun, at time.Time, seq int64, outcome string) {
+		r.run.EndedAt = at
+		r.run.Outcome = outcome
+		r.endSeq = seq
+		r.open = false
+		if r == legacyOpen {
+			legacyOpen = nil
 		}
 	}
+	// target picks the run a terminal event belongs to: the run with its
+	// run_id when that run is open, else the legacy (id-less) open run.
+	target := func(runID string) *openRun {
+		if r, ok := byID[runID]; ok && runID != "" && r.open {
+			return r
+		}
+		return legacyOpen
+	}
 	for _, env := range envs {
+		var ids struct {
+			RunID string `json:"run_id"`
+		}
+		_ = json.Unmarshal(env.Payload, &ids)
 		switch env.Type {
 		case contracts.PipelineStarted:
-			closeOpen()
-			open = &openRun{run: contracts.PipelineRun{
+			if legacyOpen != nil {
+				closeRun(legacyOpen, env.Timestamp, env.Seq-1, "interrupted")
+			}
+			r := &openRun{open: true, run: contracts.PipelineRun{
 				SessionID: sessionID,
 				RunSeq:    env.Seq,
+				RunID:     ids.RunID,
 				StartedAt: env.Timestamp,
 				Outcome:   "running",
 			}}
+			runs = append(runs, r)
+			if ids.RunID != "" {
+				byID[ids.RunID] = r
+			} else {
+				legacyOpen = r
+			}
 		case contracts.PipelineCompleted:
-			if open == nil {
+			r := target(ids.RunID)
+			if r == nil {
 				continue
 			}
 			var p pipelineCompletedPayload
 			if err := json.Unmarshal(env.Payload, &p); err != nil {
 				return nil, fmt.Errorf("metrics: pipeline runs: decode seq %d: %w", env.Seq, err)
 			}
-			open.run.EndedAt = env.Timestamp
-			open.run.Outcome = p.Outcome
-			open.run.TasksDone = p.Done
-			open.run.TasksBlocked = p.Blocked
-			open.run.TasksSkipped = p.Skipped
-			open.endSeq = env.Seq
-			closeOpen()
+			closeRun(r, env.Timestamp, env.Seq, p.Outcome)
+			r.run.TasksDone = p.Done
+			r.run.TasksBlocked = p.Blocked
+			r.run.TasksSkipped = p.Skipped
 		case contracts.PipelineCancelled:
-			if open == nil {
-				continue
+			if r := target(ids.RunID); r != nil {
+				closeRun(r, env.Timestamp, env.Seq, "cancelled")
 			}
-			open.run.EndedAt = env.Timestamp
-			open.run.Outcome = "cancelled"
-			open.endSeq = env.Seq
-			closeOpen()
 		case contracts.PipelineFailed:
-			if open == nil {
-				continue
+			if r := target(ids.RunID); r != nil {
+				closeRun(r, env.Timestamp, env.Seq, "failed")
 			}
-			open.run.EndedAt = env.Timestamp
-			open.run.Outcome = "failed"
-			open.endSeq = env.Seq
-			closeOpen()
 		}
+	}
+	// A run still open at the end may have died without a word (a CLI run
+	// SIGKILLed). Session activity is the only evidence left, and it is
+	// session-wide, so it can only speak for the newest run: older open runs
+	// overlap it, and its events would keep them looking alive.
+	var open *openRun
+	if n := len(runs); n > 0 && runs[n-1].open {
+		open = runs[n-1]
 	}
 	if open != nil {
 		lastSeq, lastAt, err := m.lastActivity(ctx, sessionID, open.run.RunSeq-1)
@@ -359,12 +388,9 @@ func (m *Metrics) pipelineRunsForSession(ctx context.Context, sessionID string) 
 			return nil, err
 		}
 		if lastSeq != 0 && m.now().Sub(lastAt) > runStaleAfter {
-			open.run.Outcome = "interrupted"
-			open.run.EndedAt = lastAt
-			open.endSeq = lastSeq
+			closeRun(open, lastAt, lastSeq, "interrupted")
 		}
 	}
-	closeOpen()
 
 	out := make([]contracts.PipelineRun, len(runs))
 	for i, r := range runs {

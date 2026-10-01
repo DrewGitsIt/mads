@@ -517,6 +517,19 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByText("NO TOOLS")).toBeTruthy();
   });
 
+  it("shows a tools-failed pill, with the reason as its tooltip, when the tools couldn't start", () => {
+    FLAGS.linkedSessions = true;
+    const failedLink = makeLink({
+      ...link,
+      orchestrate_status: "failed",
+      orchestrate_error: 'exec: "mads": executable file not found in $PATH',
+    });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[failedLink]} />);
+    const pill = screen.getByText("TOOLS FAILED");
+    expect(pill.getAttribute("title")).toMatch(/not found in \$PATH/);
+    expect(screen.queryByText("TOOLS ON RESTART")).toBeNull();
+  });
+
   it("renders no extra pill once the orchestrate grant is active", () => {
     FLAGS.linkedSessions = true;
     const activeLink = makeLink({ ...link, orchestrate_status: "active" });

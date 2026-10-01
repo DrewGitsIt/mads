@@ -101,10 +101,17 @@ const (
 	// servers unsupported outright — a terminal state; restarting never
 	// helps.
 	OrchestrateUnsupported OrchestrateStatus = "unsupported"
+	// OrchestrateFailed: the orchestrate grant is held, but the tools
+	// couldn't be started (e.g. the orchestrate MCP helper binary didn't
+	// launch). Link.OrchestrateError carries the reason. A later refresh or
+	// restart retries, so it isn't terminal the way unsupported is, but it
+	// needs something fixed first; it is not the passive wait pending_restart
+	// describes.
+	OrchestrateFailed OrchestrateStatus = "failed"
 )
 
 // OrchestrateStatuses is the full registry, for validation and enumeration.
-var OrchestrateStatuses = []OrchestrateStatus{OrchestratePending, OrchestrateActive, OrchestrateUnsupported}
+var OrchestrateStatuses = []OrchestrateStatus{OrchestratePending, OrchestrateActive, OrchestrateUnsupported, OrchestrateFailed}
 
 // Valid reports whether s is a registered orchestrate status.
 func (s OrchestrateStatus) Valid() bool {
@@ -136,8 +143,11 @@ type Link struct {
 	// materialized as live tools yet. Empty when the link carries no
 	// orchestrate grant. Server-computed; see OrchestrateStatus.
 	OrchestrateStatus OrchestrateStatus `json:"orchestrate_status,omitempty"`
-	CreatedAt         time.Time         `json:"created_at"`
-	UpdatedAt         time.Time         `json:"updated_at"`
+	// OrchestrateError is why the tools failed to start, set only while
+	// OrchestrateStatus is "failed". Server-computed, like the status.
+	OrchestrateError string    `json:"orchestrate_error,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // HasGrant reports whether l carries g.
