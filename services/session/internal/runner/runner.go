@@ -1401,6 +1401,13 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 		log.Printf("runner: release leases: %v", err)
 	}
 
+	// Nothing left to report for. Stops a retry the agent-state writer may
+	// have armed (agentstate.go) from re-arming past the Runner's life — the
+	// retry loop is deliberately unbounded, so shutdown has to be what ends it.
+	r.agent.mu.Lock()
+	r.agent.stopTimerLocked()
+	r.agent.mu.Unlock()
+
 	r.hub.close()
 	return closeErr
 }

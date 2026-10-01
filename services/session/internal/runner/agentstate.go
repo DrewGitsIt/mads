@@ -21,6 +21,22 @@ import (
 // time).
 const agentStateFloor = 500 * time.Millisecond
 
+// agentStateRetry is how long to wait before re-publishing a transition whose
+// write to the Data Service failed. The record is the only thing a cold
+// reader has (a page load, an SSE reconnect), so a dropped write is not a
+// cosmetic loss: it is the difference between a session that reports idle and
+// one that reports a turn still in flight, forever. Nothing else ever revisits
+// it — agent_state is written on transitions only, and "idle" is the last
+// transition a turn makes.
+//
+// Retries ride the same trailing timer the floor already uses, so this adds no
+// machinery of its own: flushAgentState re-publishes whatever the latest state
+// is, which is also why a retry can never land a stale state over a newer one.
+// It re-arms until the write lands or a newer transition supersedes it, since
+// a Data Service that is down for a minute (a restart) must not leave the
+// record wrong for the life of the session.
+const agentStateRetry = 2 * time.Second
+
 // The generic clauses, matching the copy the open conversation's working
 // indicator already shows for the same two situations
 // (ui/src/conversation/ChatRenderer/WorkingIndicator.tsx and its ticker):
@@ -41,6 +57,9 @@ type agentState struct {
 	// value disables coalescing entirely (every transition appends). Tests
 	// set it — nothing in production does.
 	floor time.Duration
+	// retry overrides agentStateRetry; zero means the const. Tests set it —
+	// nothing in production does.
+	retry time.Duration
 
 	// state/label/since are the live truth; sentState/sentLabel/sentAt are
 	// the last values actually appended. Transitions are the diff between
@@ -191,16 +210,41 @@ func (r *Runner) flushAgentState() {
 // Called with st.mu held, including across the call, so two racing callers
 // can never invert working and idle. A nil Data Service is a no-op, matching
 // every other pump-side append.
+//
+// "Sent" means the write landed. Marking it sent first and then logging the
+// failure — which is what this did — tells the transition guard in
+// setAgentState that the world already knows, so the state is never published
+// again: one dropped request (a Data Service restart, a lock timeout) left the
+// record asserting a turn in flight for the rest of the session's life, with a
+// single log line to show for it. On failure the state stays unsent and a
+// trailing retry is armed instead, so the record converges as soon as the Data
+// Service answers.
 func (r *Runner) emitAgentStateLocked(now time.Time) {
 	st := &r.agent
+	state := contracts.AgentState{State: st.state, Label: st.label, Since: st.since}
+	if r.data != nil {
+		if err := r.data.SetSessionAgentState(context.Background(), r.sessionID, state); err != nil {
+			log.Printf("runner: set agent state %s (retrying): %v", state.State, err)
+			st.armRetryLocked(r.flushAgentState)
+			return
+		}
+	}
 	st.sentState, st.sentLabel, st.sentAt = st.state, st.label, now
-	if r.data == nil {
+}
+
+// armRetryLocked schedules the trailing flush to re-publish an unsent state,
+// unless a flush is already pending — the one already armed will publish
+// whatever the latest state is by then, which is the same thing this one would
+// have done. Callers must hold st.mu.
+func (st *agentState) armRetryLocked(flush func()) {
+	if st.timer != nil {
 		return
 	}
-	state := contracts.AgentState{State: st.state, Label: st.label, Since: st.since}
-	if err := r.data.SetSessionAgentState(context.Background(), r.sessionID, state); err != nil {
-		log.Printf("runner: set agent state %s: %v", state.State, err)
+	delay := st.retry
+	if delay == 0 {
+		delay = agentStateRetry
 	}
+	st.timer = time.AfterFunc(delay, flush)
 }
 
 func (st *agentState) stopTimerLocked() {

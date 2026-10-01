@@ -2,6 +2,12 @@ package runner
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -401,5 +407,185 @@ func TestAgentStateCompacting(t *testing.T) {
 	)
 	if isCompactCommand("/compactor") {
 		t.Error(`isCompactCommand("/compactor") = true`)
+	}
+}
+
+// flakyData proxies a Data Service, failing agent-state writes while its
+// gate is closed. Everything else passes through untouched, so the Runner
+// under test is otherwise fully live — the point is to drop exactly the one
+// request whose loss used to be permanent.
+type flakyData struct {
+	mu      sync.Mutex
+	failing bool
+	writes  int
+}
+
+func (f *flakyData) set(failing bool) {
+	f.mu.Lock()
+	f.failing = failing
+	f.mu.Unlock()
+}
+
+func (f *flakyData) agentStateWrites() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.writes
+}
+
+// startFlakyData returns a base URL that forwards to upstream, plus the gate.
+func startFlakyData(t *testing.T, upstream string) (string, *flakyData) {
+	t.Helper()
+	target, err := url.Parse(upstream)
+	if err != nil {
+		t.Fatalf("parse upstream: %v", err)
+	}
+	gate := &flakyData{}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if strings.HasSuffix(req.URL.Path, "/agent-state") {
+			gate.mu.Lock()
+			gate.writes++
+			failing := gate.failing
+			gate.mu.Unlock()
+			if failing {
+				// The shape a restarting Data Service presents.
+				http.Error(w, "data service unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		proxy.ServeHTTP(w, req)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, gate
+}
+
+// TestAgentStateSurvivesAFailedWrite: a turn whose "idle" write is refused
+// must not leave the record asserting a turn in flight. The write is marked
+// sent only once it lands, and the trailing flush retries until it does —
+// otherwise one dropped request (a Data Service restart, a lock timeout) was
+// permanent, because agent_state is written on transitions only and "idle" is
+// the last transition a turn makes.
+func TestAgentStateSurvivesAFailedWrite(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	proxyURL, gate := startFlakyData(t, base)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	// The Runner writes through the proxy; the test reads the truth directly.
+	r := New(sess.ID, dataclient.New(proxyURL, sess.ID), reg)
+	truth := dataclient.New(base, sess.ID)
+	r.agent.floor = -1 // every transition is its own write, so the gate is exact
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+	gate.set(true)
+	if err := r.Send(ctx, "hello"); err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	drainText(t, ch)
+
+	// Both edges were refused, so the log has nothing — and before the fix
+	// this was the terminal state: the Runner believed it had already said
+	// idle and would never say it again.
+	if got := eventsOfType[contracts.AgentState](t, truth, sess.ID, contracts.SessionAgentState); len(got) != 0 {
+		t.Fatalf("agent states while the write was refused = %+v, want none", got)
+	}
+	refused := gate.agentStateWrites()
+	if refused == 0 {
+		t.Fatal("the gate saw no agent-state write at all; the test proves nothing")
+	}
+
+	// The Data Service comes back. The armed retry publishes the state the
+	// turn actually ended in, with no further provider activity at all.
+	gate.set(false)
+	states := waitAgentStates(t, truth, sess.ID, 1)
+	if last := states[len(states)-1]; last.State != contracts.AgentIdle {
+		t.Fatalf("recovered state = %q (%+v), want idle — the turn had ended", last.State, states)
+	}
+}
+
+// TestAgentStateRetryPublishesTheCurrentState: a retry must publish what the
+// session is doing when the flush fires, never the value whose write failed.
+// Driven directly rather than through the pump so the sequence is exact: three
+// refused transitions, then the Data Service returns while the LAST of them
+// (working) is current. Republishing the captured "idle" here would park a
+// live turn as finished — the same lie this change exists to remove, pointing
+// the other way.
+func TestAgentStateRetryPublishesTheCurrentState(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	proxyURL, gate := startFlakyData(t, base)
+
+	r := New(sess.ID, dataclient.New(proxyURL, sess.ID), provider.NewRegistry())
+	truth := dataclient.New(base, sess.ID)
+	r.agent.floor = -1                    // every transition is its own write
+	r.agent.retry = 50 * time.Millisecond // don't make the test wait out the real delay
+
+	gate.set(true)
+	r.markAgentWorking("one")
+	r.markAgentIdle()
+	r.markAgentWorking("two")
+	if got := eventsOfType[contracts.AgentState](t, truth, sess.ID, contracts.SessionAgentState); len(got) != 0 {
+		t.Fatalf("agent states while refused = %+v, want none", got)
+	}
+
+	gate.set(false)
+	states := waitAgentStates(t, truth, sess.ID, 1)
+	if states[0].State != contracts.AgentWorking {
+		t.Fatalf("first recovered state = %q (%+v), want working — the turn is live", states[0].State, labelsOf(states))
+	}
+
+	// And it converges: the turn ends, and the record says so.
+	r.markAgentIdle()
+	final := waitAgentStates(t, truth, sess.ID, 2)
+	if last := final[len(final)-1]; last.State != contracts.AgentIdle {
+		t.Fatalf("final state = %q (%+v), want idle", last.State, labelsOf(final))
+	}
+}
+
+// TestAgentStateRetryStopsAtShutdown: the retry loop is unbounded by design
+// (a Data Service down for a minute must not leave the record wrong for the
+// session's life), so Shutdown has to be what ends it — otherwise a Runner
+// whose Data Service never comes back re-arms a timer forever.
+func TestAgentStateRetryStopsAtShutdown(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	proxyURL, gate := startFlakyData(t, base)
+
+	r := New(sess.ID, dataclient.New(proxyURL, sess.ID), provider.NewRegistry())
+	r.agent.floor = -1
+	r.agent.retry = 20 * time.Millisecond
+
+	gate.set(true)
+	r.markAgentWorking("one")
+	r.agent.mu.Lock()
+	armed := r.agent.timer != nil
+	r.agent.mu.Unlock()
+	if !armed {
+		t.Fatal("a refused write armed no retry")
+	}
+
+	if err := r.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+	r.agent.mu.Lock()
+	stillArmed := r.agent.timer != nil
+	r.agent.mu.Unlock()
+	if stillArmed {
+		t.Fatal("the retry timer outlived Shutdown")
+	}
+	before := gate.agentStateWrites()
+	time.Sleep(100 * time.Millisecond) // several retry periods
+	if after := gate.agentStateWrites(); after != before {
+		t.Fatalf("agent-state writes went from %d to %d after Shutdown; the retry is still running", before, after)
 	}
 }
