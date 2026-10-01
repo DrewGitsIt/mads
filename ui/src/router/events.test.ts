@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { subscribeToEvents } from "./events";
+import { getBusHealth, subscribeToBusHealth, subscribeToEvents } from "./events";
 import { FakeEventSource } from "./testFakeEventSource";
 import type { Envelope } from "./types";
 
@@ -27,6 +27,7 @@ describe("subscribeToEvents", () => {
     // its connection (and lastDeliveredSeq) into the next test.
     for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -212,6 +213,76 @@ describe("subscribeToEvents", () => {
     second.emit("session.created", JSON.stringify(envelope(2)));
     second.emit("session.created", JSON.stringify(envelope(3)));
     expect(received).toEqual([1, 2, 3]);
+  });
+
+  // Regression, 2026-09-30: a subscriber type the running Data Service hadn't
+  // registered got the whole shared stream refused, and the reconnect loop
+  // retried the same URL forever — every live view in the window froze.
+  it("drops a type the server refuses and reconnects at once without it", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const types = new URL(url).searchParams.get("types") ?? "";
+      if (!types.includes("session.queue_changed")) return new Response("[]", { status: 200 });
+      return new Response(
+        JSON.stringify({
+          errors: [
+            {
+              field: "types",
+              message: '"session.queue_changed" is neither a registered event type nor a domain wildcard like "task.*"',
+            },
+          ],
+        }),
+        { status: 422 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onSession = vi.fn();
+    subscribe({ types: ["session.updated"] }, onSession);
+    subscribe({ types: ["session.queue_changed"] }, () => {});
+    const refused = FakeEventSource.instances.at(-1)!;
+    expect(new URL(refused.url).searchParams.get("types")).toBe("session.updated,session.queue_changed");
+
+    refused.simulateError();
+    await vi.waitFor(() => expect(FakeEventSource.instances.filter((s) => !s.closed)).toHaveLength(1));
+
+    const retried = FakeEventSource.instances.find((s) => !s.closed)!;
+    expect(retried).not.toBe(refused);
+    expect(new URL(retried.url).searchParams.get("types")).toBe("session.updated");
+    expect(getBusHealth().ignoredTypes).toEqual(["session.queue_changed"]);
+    retried.emit("session.updated", JSON.stringify(envelope(5, "session.updated")));
+    expect(onSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the ordinary backoff in charge when the probe finds nothing refused", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    subscribe({ types: ["session.created"] }, () => {});
+    FakeEventSource.instances[0].simulateError();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(getBusHealth().ignoredTypes).toEqual([]);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeEventSource.instances).toHaveLength(2);
+  });
+
+  it("reports failing after repeated connect errors, and live again once data flows", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("[]", { status: 200 })));
+    const seen: string[] = [];
+    const stop = subscribeToBusHealth((h) => seen.push(h.state));
+    subscribe({ types: ["session.created"] }, () => {});
+
+    FakeEventSource.instances[0].simulateError();
+    expect(getBusHealth().state).not.toBe("failing"); // one drop is ordinary
+    await vi.advanceTimersByTimeAsync(30_000);
+    FakeEventSource.instances[1].simulateError();
+    expect(getBusHealth().state).toBe("failing");
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    FakeEventSource.instances[2].emit("session.created", JSON.stringify(envelope(1)));
+    expect(getBusHealth().state).toBe("live");
+    expect(seen).toEqual(["failing", "live"]);
+    stop();
   });
 
   it("resets state on teardown — a fresh subscriber after full unsubscribe gets no since param", () => {

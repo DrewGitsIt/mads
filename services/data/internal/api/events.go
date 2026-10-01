@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -111,6 +112,20 @@ func (s *server) streamEvents(w http.ResponseWriter, r *http.Request, f store.Fi
 	}
 }
 
+// eventTypeShape is what an event type looks like ("domain.name"), whether or
+// not this build has it registered. A read filter accepts any well-formed
+// type, and an unregistered one simply matches nothing: the UI is served
+// live from ui/dist and routinely ships ahead of a long-running Data
+// Service, and it subscribes to every type it wants over ONE shared
+// EventSource. Rejecting a single type this build doesn't know yet (as a 422
+// here, a 502 through the Router) used to fail that whole stream, and the
+// UI's reconnect loop retried it forever with the same list, so every live
+// view in the window went quiet at once: the rail froze on stale session
+// records, the Pipeline tab never saw a run end. Writes still validate
+// against the registry (handlePostEvent); only reads are forgiving. Truly
+// malformed filters ("nope", "a.b.c") are still rejected.
+var eventTypeShape = regexp.MustCompile(`^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$`)
+
 func parseFilter(r *http.Request) (store.Filter, *contracts.ValidationError) {
 	var (
 		f store.Filter
@@ -132,9 +147,9 @@ func parseFilter(r *http.Request) (store.Filter, *contracts.ValidationError) {
 			if p == "" {
 				continue
 			}
-			if !contracts.EventType(p).Valid() {
+			if !contracts.EventType(p).Valid() && !eventTypeShape.MatchString(p) {
 				if dom, ok := strings.CutSuffix(p, ".*"); !ok || dom == "" || strings.Contains(dom, ".") {
-					v.Add("types", fmt.Sprintf("%q is neither a registered event type nor a domain wildcard like %q", p, "task.*"))
+					v.Add("types", fmt.Sprintf("%q is neither an event type like %q nor a domain wildcard like %q", p, "task.created", "task.*"))
 					continue
 				}
 			}

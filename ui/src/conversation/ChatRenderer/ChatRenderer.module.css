@@ -90,6 +90,31 @@
   padding: var(--space-2) var(--space-3);
 }
 
+/* A background task's completion notice — a system line, centred and muted
+   like the compaction marker's meta text, but without its tinted box: it is
+   routine bookkeeping, not an event that reshaped the context. */
+.notification {
+  align-self: center;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: 100%;
+  font: var(--fs-sm) var(--sans);
+  color: var(--text3);
+}
+
+.notificationText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+
+.notificationTime {
+  flex: none;
+  opacity: 0.75;
+}
+
 .quiet {
   display: flex;
   justify-content: center;

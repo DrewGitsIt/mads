@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
+import { useBusHealth } from "../../router/useBusHealth";
 import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
@@ -32,6 +33,17 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   useEffect(() => {
     if (!error) setDismissedError(null);
   }, [error]);
+  // The rail, its task counts and agent states are only as fresh as the
+  // window's live-event stream: when that stream can't connect they keep
+  // showing whatever they last fetched, with nothing on screen to say so. That
+  // is how a rail reading "Sleeping" (and a stale context %) sat beside a
+  // conversation that was plainly working, 2026-09-30. Say it out loud.
+  const busHealth = useBusHealth();
+  const [busWarningDismissed, setBusWarningDismissed] = useState(false);
+  useEffect(() => {
+    // Each new outage gets its own warning, even if the last one was waved off.
+    if (busHealth.state === "live") setBusWarningDismissed(false);
+  }, [busHealth.state]);
   const openTaskCounts = useOpenTaskCounts();
   const links = useSessionLinks(sessions.map((s) => s.id));
   // Only the rail's adaptive context labels need these: a workspace's
@@ -177,6 +189,15 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             }
             action={{ label: "Retry now", onClick: retry }}
             onDismiss={() => setDismissedError(error)}
+          />
+        )}
+        {busHealth.state === "failing" && !busWarningDismissed && (
+          <Toast
+            tone="warn"
+            title="Live updates paused"
+            description="Can't reach the event stream, so session status, task counts and pipeline state may be out of date. Reconnecting automatically."
+            action={{ label: "Reload", onClick: () => window.location.reload() }}
+            onDismiss={() => setBusWarningDismissed(true)}
           />
         )}
         {actionError && (

@@ -118,9 +118,20 @@ type streamSession struct {
 	ref         string
 	model       string
 	interrupted bool // an interrupt was requested this turn
-	reqSeq      int
-	closed      bool
-	refFired    bool // guards announced against a double-send
+	// turnOpen is set from Send until the turn's own (origin-less) result
+	// line; unprompted records main-agent output seen while no turn was
+	// open. Together they tell handleLine what a task-notification result
+	// closes. Inside a turn it closes an internal continuation and must stay
+	// silent (see wire.go). After the turn it may close an unprompted turn
+	// the CLI ran by itself, when a background task finished late. That
+	// turn's tool and thinking events had already set the session
+	// "working", and before this nothing ever set it back: the session sat
+	// on "Working…" with a climbing counter, 2026-09-30.
+	turnOpen   bool
+	unprompted bool
+	reqSeq     int
+	closed     bool
+	refFired   bool // guards announced against a double-send
 
 	// launchMCP names the servers this process was started with
 	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
@@ -188,12 +199,30 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	model := s.model
 	interrupted := s.interrupted
-	if l.Type == "result" {
+	closesUnprompted := false
+	switch {
+	case l.isTaskNotificationResult():
+		// Only an end for output this stream actually saw after the turn
+		// closed. A continuation that produced nothing past the turn's end
+		// (the capture in testdata/stream-task-subagent.jsonl: its result
+		// lands right behind the canonical one) has nothing to close, and a
+		// second end there would double-fire every per-turn consumer.
+		closesUnprompted = !s.turnOpen && s.unprompted
+		s.unprompted = false
+	case l.Type == "result":
 		s.interrupted = false
+		s.turnOpen = false
+		s.unprompted = false
+	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
+		s.unprompted = true
 	}
 	s.mu.Unlock()
 
-	for _, ev := range l.events(interrupted, true) {
+	evs := l.events(interrupted, true)
+	if closesUnprompted {
+		evs = l.notificationTurnEnd()
+	}
+	for _, ev := range evs {
 		if ev.Usage != nil {
 			if ev.Usage.Model == "" {
 				ev.Usage.Model = model // learned from the init line
@@ -248,6 +277,9 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
+	s.turnOpen = true
+	s.mu.Unlock()
 	return s.write(append(line, '\n'))
 }
 

@@ -1156,3 +1156,101 @@ func TestTranscriptCompactionMarker(t *testing.T) {
 		t.Error("compact marker lost its timestamp")
 	}
 }
+
+// discardWriteCloser stands in for the CLI's stdin.
+type discardWriteCloser struct{}
+
+func (discardWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (discardWriteCloser) Close() error                { return nil }
+
+func drainTurnEnds(s *streamSession) []provider.Event {
+	var ends []provider.Event
+	for {
+		select {
+		case ev := <-s.events:
+			if ev.Kind == provider.EventTurnEnd {
+				ends = append(ends, ev)
+			}
+		default:
+			return ends
+		}
+	}
+}
+
+// A background task that finishes after the user's turn has ended makes the
+// CLI run an unprompted turn, closed only by a task-notification result. That
+// line must end the turn, or the runner (which saw the turn's tool calls and
+// went "working") never goes idle again: live on ses_8321cf360ff691ca,
+// 2026-09-30, "Working… 540s" on a finished session.
+func TestStreamSessionLateNotificationEndsUnpromptedTurn(t *testing.T) {
+	s := &streamSession{events: make(chan provider.Event, 16), announced: make(chan string, 1), stdin: discardWriteCloser{}}
+	if err := s.Send(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	s.handleLine([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"started it in the background"}]}}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","total_cost_usd":1.5,"usage":{"input_tokens":1,"cache_read_input_tokens":1000}}`))
+	if n := len(drainTurnEnds(s)); n != 1 {
+		t.Fatalf("user turn: %d turn ends, want 1", n)
+	}
+
+	// The background task finishes; the CLI wakes the model on its own.
+	s.handleLine([]byte(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_late","name":"Bash","input":{"command":"cat out"}}]}}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","origin":{"kind":"task-notification"},"total_cost_usd":1.9,"usage":{"input_tokens":1,"cache_read_input_tokens":2000}}`))
+	ends := drainTurnEnds(s)
+	if len(ends) != 1 {
+		t.Fatalf("unprompted turn: %d turn ends, want 1", len(ends))
+	}
+	if u := ends[0].Usage; u == nil || u.CacheReadInputTokens != 2000 || u.CostUSD != 0 {
+		t.Errorf("unprompted turn usage = %+v, want its occupancy and no repeated cumulative cost", u)
+	}
+}
+
+// The shape the notification suppression exists for: a continuation whose
+// result follows the turn's own with no output of its own past it (as in
+// testdata/stream-task-subagent.jsonl), or one that lands while the user's
+// turn is still open. Neither is a second turn.
+func TestStreamSessionNotificationWithoutUnpromptedOutputIsNoTurn(t *testing.T) {
+	s := &streamSession{events: make(chan provider.Event, 16), announced: make(chan string, 1), stdin: discardWriteCloser{}}
+	if err := s.Send(context.Background(), "go"); err != nil {
+		t.Fatal(err)
+	}
+	s.handleLine([]byte(`{"type":"assistant","message":{"content":[{"type":"text","text":"working"}]}}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","origin":{"kind":"task-notification"}}`))
+	if n := len(drainTurnEnds(s)); n != 0 {
+		t.Fatalf("notification inside the open turn: %d turn ends, want 0", n)
+	}
+	s.handleLine([]byte(`{"type":"result","subtype":"success"}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","origin":{"kind":"task-notification"}}`))
+	if n := len(drainTurnEnds(s)); n != 1 {
+		t.Fatalf("turn then bare notification: %d turn ends, want exactly the turn's own", n)
+	}
+}
+
+// The CLI's <task-notification> user line (a background task finished) is
+// the harness talking to the model. It must not come back as a user message
+// full of raw XML; it becomes one "notification" entry carrying the summary.
+func TestTranscriptTaskNotification(t *testing.T) {
+	content := "<task-notification>\n<task-id>bs10rzv0r</task-id>\n<status>completed</status>\n" +
+		"<summary>Background command \"make ui &amp;&amp; echo ok &gt; /tmp/x\" completed (exit code 0)</summary>\n</task-notification>"
+	line, _ := json.Marshal(map[string]any{
+		"uuid": "n1", "type": "user", "origin": map[string]string{"kind": "task-notification"},
+		"message": map[string]any{"role": "user", "content": content}, "timestamp": "2026-09-30T04:57:12Z",
+	})
+	bare, _ := json.Marshal(map[string]any{
+		"uuid": "n2", "type": "user", "origin": map[string]string{"kind": "task-notification"},
+		"message": map[string]any{"role": "user", "content": "<task-notification><status>failed</status></task-notification>"},
+	})
+	msgs, err := normalizeTranscript(strings.NewReader(string(line) + "\n" + string(bare)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages = %+v, want 2 notification entries", msgs)
+	}
+	if m := msgs[0]; m.Role != "notification" || m.Text != `Background command "make ui && echo ok > /tmp/x" completed (exit code 0)` || m.Timestamp.IsZero() {
+		t.Errorf("notification = %+v", m)
+	}
+	if m := msgs[1]; m.Role != "notification" || m.Text != "Background task failed" {
+		t.Errorf("summary-less notification = %+v", m)
+	}
+}

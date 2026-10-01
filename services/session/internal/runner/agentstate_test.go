@@ -185,6 +185,29 @@ func TestAgentStateLabelTransitions(t *testing.T) {
 	}
 }
 
+// TestAgentStateUnpromptedTurnEnds: a turn the provider runs on its own (the
+// claude CLI waking to read a background task that finished after the user's
+// turn) goes "working" from its first tool call with no Send behind it, and
+// must go idle at its turn end all the same. Before the claudecode provider
+// emitted that end, nothing did: the session read "Working…" indefinitely.
+func TestAgentStateUnpromptedTurnEnds(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, nil)
+	r.agent.floor = -1
+
+	r.observeConversation(provider.Event{Kind: provider.EventToolUse, Tool: &provider.ToolUse{
+		ID: "toolu_late", Name: "Bash", Kind: provider.ToolKindExecute, Title: "git worktree remove",
+	}})
+	r.onTurnEnd() // what pump runs for the provider's EventTurnEnd
+
+	wantStates(t, waitAgentStates(t, data, sess.ID, 2),
+		"working/Running bash · git worktree remove",
+		"idle/",
+	)
+}
+
 // TestAgentStateCoalesces: a tool-heavy burst under the production floor
 // appends once, and the label that lands is the LAST one — dropping the
 // trailing flush would leave the rail naming a tool that already finished.
