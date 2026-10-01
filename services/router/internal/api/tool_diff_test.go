@@ -150,6 +150,10 @@ func TestSessionToolDiffMissing(t *testing.T) {
 	path := filepath.Join(dir, "file.txt")
 	writeToolDiffFile(t, path, "v1\n")
 	store.Capture("toolu_1", path)
+	// Capture backgrounds the root's first-touch baseline, which writes into
+	// this same objects dir. Wait for it, or RemoveAll races the writer and
+	// fails with "directory not empty" — CI caught that on 2026-10-01.
+	store.Wait()
 	// Destroy the object store behind the recorded blob: missing-blob path.
 	if err := os.RemoveAll(filepath.Join(store.Dir(), shadow.RootKey(dir), "objects")); err != nil {
 		t.Fatal(err)
