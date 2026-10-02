@@ -1,0 +1,561 @@
+<!doctype html>
+<!--
+  Session rail, pass 3 (2026-10-01). Self-contained: open in any browser.
+  Follows docs/mockups/sessions-ux-v2.html (status legibility) and
+  rail-action-cluster.html (the hover cluster). This pass is about *identity
+  and relationship* — four asks, from the 20:45 screenshot:
+
+    #1  Leader -> subordinate / monitor -> watched should read as a drawn
+        relationship, not a pair of shouted pills.
+    #2  The harness and the agent's working directory belong on the card;
+        they beat the persona for glanceability.
+    #3  The hover tooltip says "Directory: ." on every session. A bug, and
+        a symptom of a deeper one.
+    #4  Link options should hang off the session's own action cluster, not
+        off a badge that is about to stop existing.
+
+  Clay/dark tokens copied verbatim from ui/src/tokens/tokens.css. Card chrome
+  copied verbatim from ui/src/features/sessions/rail/SessionRail.module.css so
+  the deltas below are the only differences you are looking at.
+
+  Live surfaces this mocks:
+    ui/src/features/sessions/rail/SessionRail.tsx + .module.css
+    ui/src/features/sessions/rail/railLabels.ts   (context line, tooltip)
+    ui/src/features/sessions/rail/railLinks.ts    (the holder/subject graph)
+    ui/src/features/sessions/rail/LinkOptionsMenu.tsx
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — rail links, harness identity, cwd</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+  a { color:var(--accent); }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:88ch; margin-top:var(--space-2); }
+  header.intro ol { color:var(--text2); max-width:88ch; margin:var(--space-3) 0 0 var(--space-4); }
+  header.intro li { margin-bottom:var(--space-1); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.rec { color:var(--ok-fg); background:var(--ok-soft); }
+  .block > h2 .tag.bug { color:var(--bad-fg); background:var(--bad-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:94ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:94ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); display:flex; align-items:baseline; gap:var(--space-2); flex-wrap:wrap; }
+  .rowlabel.good { color:var(--ok-fg); }
+  .rowlabel.bad { color:var(--bad-fg); }
+  .rowlabel .m { font-weight:500; letter-spacing:0; text-transform:none; color:var(--text3); font-family:var(--mono); }
+
+  .cols { display:flex; gap:var(--space-5); flex-wrap:wrap; align-items:flex-start; }
+  .col { flex:1 1 300px; min-width:290px; }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); }
+  td b { color:var(--text); font-weight:600; }
+  .ok { color:var(--ok-fg); } .warnc { color:var(--warn-fg); } .badc { color:var(--bad-fg); }
+
+  /* ── the shell: 312px rail ─────────────────────────────────────────────── */
+  .railcol { width:312px; padding:var(--space-3); border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); }
+
+  /* ── verbatim from SessionRail.module.css ──────────────────────────────── */
+  .row { position:relative; display:flex; flex-direction:column; gap:var(--space-1); width:100%; padding:var(--space-2) var(--space-3); margin-bottom:2px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); color:var(--text); font:500 var(--fs-sm) var(--sans); text-align:left; cursor:pointer; }
+  .row:hover { background:var(--bg2); }
+  .rowTop { display:flex; align-items:flex-start; gap:var(--space-2); }
+  .name { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; }
+  .when { flex:none; margin-left:auto; padding-left:var(--space-2); color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; line-height:1.35; }
+  .dot { flex:none; width:8px; height:8px; border-radius:50%; margin-top:5px; background:var(--text3); }
+  .dot.work { background:var(--accent); } .dot.attn { background:var(--warn); } .dot.on { background:var(--ok); }
+  .status { display:flex; align-items:center; gap:6px; min-width:0; min-height:15px; padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .status .lbl { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status.working, .status.working .lbl { color:var(--accent); }
+  .status.needs,   .status.needs .lbl   { color:var(--warn-fg); }
+  .context { display:flex; align-items:center; gap:5px; min-width:0; min-height:13px; padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; }
+  .context .branch { font-family:var(--mono); color:var(--text2); }
+  .context .dir { font-family:var(--mono); color:var(--text2); }
+  .context .sep { flex:none; opacity:.5; }
+  .spin { flex:none; width:9px; height:9px; border-radius:50%; border:1.5px solid var(--accent); border-top-color:transparent; animation:sp .9s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+
+  /* today's badges, for the before/after */
+  .linkBadge { flex:none; font:600 var(--fs-chip) var(--sans); letter-spacing:.04em; border-radius:var(--r-sm); padding:1px 7px; background:var(--bg3); color:var(--text2); }
+  .linkBadge.lead { background:var(--accent-soft); color:var(--accent); }
+  .detail { display:flex; flex-wrap:wrap; align-items:center; gap:var(--space-1) var(--space-2); min-width:0; padding-left:16px; }
+
+  /* today's elbow — 1px, magic -16px offset, breaks on 2-line titles */
+  .nested { position:relative; margin-left:20px; width:calc(100% - 20px); }
+  .nested.old::before { content:""; position:absolute; left:-10px; top:-16px; bottom:50%; width:10px; border-left:1px solid var(--line); border-bottom:1px solid var(--line); border-bottom-left-radius:6px; }
+
+  /* ══ #1 THE SPINE ══════════════════════════════════════════════════════
+     One trunk for the whole subject stack, plus a 10px tick per subject.
+     Nothing here measures anything: the trunk spans its own container and
+     the tick sits at 18px — the status dot's centre, which is fixed by the
+     title row's own box (8px padding + 1px border + 5px dot margin + 4px).
+     Contrast today's .nestedRow::before, which hangs off the CHILD at a
+     hard-coded top:-16px tuned for a nominal one-line parent, and stops
+     reaching the moment the parent grows a second title line. */
+  .subs { position:relative; margin-left:20px; }
+  .subs .row { position:relative; width:100%; }
+  /* Elbow: down from the row above, round the corner, out to this card's edge.
+     Each row draws only its OWN segment, so the chain terminates at the last
+     tick — a lone subject gets an elbow and nothing hanging past it. */
+  .subs .row::before { content:""; position:absolute; left:-11px; top:-5px; width:11px; height:24px;
+                       border-left:2px solid var(--conn); border-bottom:2px solid var(--conn);
+                       border-bottom-left-radius:7px; }
+  /* and only a row with another below it continues the trunk past its own tick */
+  .subs .row:not(:last-child)::after { content:""; position:absolute; left:-11px; top:18px; bottom:-5px;
+                                       border-left:2px solid var(--conn); }
+  /* Arrowhead — leader only; a monitor pulls, it does not push. Its tip lands on
+     the card's border and its centreline is the elbow's: the elbow's bottom
+     border spans y 17-19, so the 8px-tall head is centred on 18. */
+  .subs .ah { position:absolute; left:-7px; top:14px; width:0; height:0;
+              border-left:7px solid var(--conn-strong,var(--conn));
+              border-top:4px solid transparent; border-bottom:4px solid transparent; }
+  /* A monitor terminates in a hollow ring instead — an eye, not a push.
+     NOT a dashed line: over an 11x24 elbow a dash pattern never establishes a
+     rhythm and renders as a broken box (tested; see the note below). */
+  .watch .subs .ah { left:-7px; top:15px; width:6px; height:6px; border:1.5px solid var(--conn-strong,var(--conn));
+                     border-radius:50%; background:var(--bg1); box-sizing:border-box; }
+
+  /* Monochrome, style-coded (recommended): leader solid, monitor dashed.
+     The rail's colour vocabulary is already fully spent on STATE —
+     accent=working, warn=needs you, bad=crashed, ok=done. A connector in
+     accent would be a second thing on the card painted "working". */
+  .mono { --conn:#6b6252; --conn-strong:#9a9080; }
+  
+
+
+  /* Colour-coded, as asked. Held well below status chroma so a line never
+     competes with a dot. */
+  .hue.leader  { --conn:rgba(192,133,82,.6); --conn-strong:rgba(192,133,82,.95); }
+  .hue.watch   { --conn:rgba(150,175,199,.55); --conn-strong:rgba(150,175,199,.95); }
+  
+
+
+  /* The traffic pulse: dashes march down the trunk while a linked session is
+     transitioning. One element, so there is no seam to misphase. */
+  .live .subs .row:not(:last-child)::after { border:none; width:2px;
+        background-image:linear-gradient(var(--conn-strong,var(--conn)) 50%, transparent 0);
+        background-size:2px 8px; animation:march .7s linear infinite; }
+  @keyframes march { to { background-position-y:8px; } }
+  @media (prefers-reduced-motion:reduce) { .live .subs .row::after { animation:none; } }
+
+  /* the fan-out count, where "LEADER · 3" used to be */
+  .grp { position:relative; }
+  .grp .fan { position:absolute; left:2px; width:15px; height:15px; border-radius:50%; background:var(--bg0);
+              border:1px solid var(--conn); color:var(--text3); font:600 9px var(--sans);
+              display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:2; }
+
+  /* ══ #2 HARNESS MARK ═══════════════════════════════════════════════════
+     Monochrome by the same rule as the connector. The harnesses differ by
+     SHAPE and letterform, never by hue. */
+  .hx { flex:none; width:14px; height:14px; border-radius:4px; background:var(--bg3); color:var(--text3); font:700 8px/1 var(--sans); letter-spacing:.02em; display:inline-flex; align-items:center; justify-content:center; }
+  .row:hover .hx { color:var(--text2); background:var(--bg4); }
+  .hx svg { width:10px; height:10px; display:block; }
+  .hx.big { width:18px; height:18px; border-radius:5px; font-size:10px; }
+  .hx.big svg { width:13px; height:13px; }
+
+  .swatches { display:flex; gap:var(--space-4); flex-wrap:wrap; align-items:center; }
+  .sw { display:flex; align-items:center; gap:var(--space-2); font-size:var(--fs-sm); color:var(--text2); }
+  .sw code { font-size:11px; }
+
+  /* ══ #4 the action cluster ═════════════════════════════════════════════ */
+  .clusterOut { position:absolute; top:50%; transform:translateY(-50%) translateX(4px); left:100%;
+                display:flex; align-items:center; gap:2px; padding:3px 4px 3px 8px;
+                background:var(--bg2); border:1px solid var(--line-soft); border-left:none;
+                border-radius:0 var(--r-sm) var(--r-sm) 0; box-shadow:var(--shadow);
+                opacity:0; pointer-events:none; transition:opacity .14s ease-out, transform .14s ease-out; z-index:5; }
+  .clusterOut.show { opacity:1 !important; pointer-events:auto; transform:translateY(-50%) translateX(0) !important; }
+  .row:hover .clusterOut { opacity:1; pointer-events:auto; transform:translateY(-50%) translateX(0); }
+  .btn { flex:none; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text2); cursor:pointer; font-size:12px; line-height:1; }
+  .btn:hover { color:var(--text); background:var(--bg4); }
+  .btn.danger:hover { color:var(--bad-fg); background:var(--bad-soft); border-color:var(--bad); }
+  .btn.on { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .btn .alert { position:absolute; margin:-12px 0 0 12px; width:5px; height:5px; border-radius:50%; background:var(--warn-fg); }
+
+  .flyout { width:224px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); box-shadow:var(--shadow); padding:var(--space-1); }
+  .flyout .grouplabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; color:var(--text3); padding:6px 8px 4px; }
+  .flyout .opt { display:block; width:100%; text-align:left; padding:6px 8px; border:none; background:none; border-radius:4px; cursor:pointer; color:var(--text); font:500 var(--fs-sm) var(--sans); }
+  .flyout .opt:hover { background:var(--bg3); }
+  .flyout .opt.sel { background:var(--bg3); }
+  .flyout .opt .d { display:block; color:var(--text3); font:500 var(--fs-chip) var(--sans); line-height:1.4; }
+  .flyout .opt.sel .l::before { content:"✓ "; color:var(--accent); }
+  .flyout .div { height:1px; background:var(--line-soft); margin:var(--space-1) 0; }
+  .flyout .danger { color:var(--bad-fg); }
+  .flyout p.n { color:var(--text3); font:500 var(--fs-chip) var(--sans); padding:4px 8px 6px; }
+
+  .toggle { display:inline-flex; align-items:center; gap:var(--space-2); font-size:var(--fs-sm); color:var(--text2); cursor:pointer; user-select:none; margin-bottom:var(--space-3); }
+  .toggle input { accent-color:var(--accent); }
+  .hr { height:1px; background:var(--line-soft); margin:var(--space-5) 0; }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Session rail, pass 3 — relationship, identity, place</h1>
+  <p>Four asks off the 2026-10-01 20:45 screenshot. Two are pure presentation and could ship today; one is a one-line bug with a much larger cause sitting behind it; one needs a field that the record does not currently carry.</p>
+  <ol>
+    <li><b>#1</b> — leader → subordinate and monitor → watched as a <em>drawn</em> relationship, not a pair of pills.</li>
+    <li><b>#2</b> — the harness and the agent's working directory on the card, in place of the persona.</li>
+    <li><b>#3</b> — <code>Directory: .</code> on every tooltip.</li>
+    <li><b>#4</b> — link options move into the session's own action cluster.</li>
+  </ol>
+  <p class="note" style="margin-top:12px">Everything below is static HTML with the real tokens and the real card CSS. Hover any card to see its cluster.</p>
+</header>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#1 &nbsp;The relationship is a line, not a label <span class="tag">A / B</span>
+    <span class="sub">SessionRail.tsx · RailRowGroup &nbsp;·&nbsp; .nestedRow::before</span></h2>
+  <div class="body">
+    <p class="lead">A pill states a relationship in words on a card that is already indented <em>underneath</em> the other party. The indent is the statement; the pill is the caption repeating it in caps. Drawing the line properly lets the pill go.</p>
+
+    <div class="cols">
+      <div class="col">
+        <div class="rowlabel bad">Today <span class="m">1px elbow + LEADER/LINKED pills</span></div>
+        <div class="railcol">
+          <div class="row">
+            <div class="rowTop"><span class="dot on"></span><span class="name">mads macOS Tahoe port spec</span><span class="when">Wed 03:12</span></div>
+            <div class="status"><span>✓</span><span class="lbl">Done · your turn</span></div>
+            <div class="detail"><span class="context">mads-coding-partner</span><span class="linkBadge lead">LEADER ▾</span></div>
+          </div>
+          <div class="row nested old">
+            <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">Wed 01:47</span></div>
+            <div class="status"><span>✓</span><span class="lbl">Done · your turn</span></div>
+            <div class="detail"><span class="context">mads-coding-partner</span><span class="linkBadge">LINKED ▾</span></div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px">Two caps pills on a two-card group. The elbow is 1px <code>var(--line)</code> and hangs off the child at a hard-coded <code>top:-16px</code>, tuned for a one-line title — the parent here has three lines, so it does not reach.</p>
+      </div>
+
+      <div class="col">
+        <div class="rowlabel good">A — monochrome, style-coded <span class="m">recommended</span></div>
+        <div class="railcol">
+          <div class="grp mono">
+            <div class="row">
+              <div class="rowTop"><span class="dot on"></span><span class="name">mads macOS Tahoe port spec</span><span class="when">Wed 03:12</span></div>
+              <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">Wed 01:47</span></div>
+                <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="hr" style="margin:14px 0"></div>
+          <div class="grp mono watch">
+            <div class="row">
+              <div class="rowTop"><span class="dot "></span><span class="name">Monitor event-driven redesign</span><span class="when">Wed 01:11</span></div>
+              <div class="status "><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="when">Wed 01:45</span></div>
+                <div class="status needs"><span>◌</span><span class="lbl">Stalled · no agent activity</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px"><b>An arrowhead leads</b> — instructions flow into the subject. <b>A hollow ring watches</b> — it reads, nothing flows. One deviation from what you approved: I drew the monitor dashed first, and over an 11&times;24px elbow a dash pattern never gets a rhythm going; it renders as a broken box rather than a line. Terminators carry the distinction at any size, and the line stays one solid weight. Colour on this card is <em>already</em> fully spent on state, and a connector painted <code>--accent</code> would be a second thing on the row saying "working".</p>
+      </div>
+
+      <div class="col">
+        <div class="rowlabel">B — colour-coded <span class="m">as asked, held at 45–55% alpha</span></div>
+        <div class="railcol">
+          <div class="grp hue leader">
+            <div class="row">
+              <div class="rowTop"><span class="dot on"></span><span class="name">mads macOS Tahoe port spec</span><span class="when">Wed 03:12</span></div>
+              <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">Wed 01:47</span></div>
+                <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="hr" style="margin:14px 0"></div>
+          <div class="grp hue watch">
+            <div class="row">
+              <div class="rowTop"><span class="dot "></span><span class="name">Monitor event-driven redesign</span><span class="when">Wed 01:11</span></div>
+              <div class="status "><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="when">Wed 01:45</span></div>
+                <div class="status needs"><span>◌</span><span class="lbl">Stalled · no agent activity</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px">Amber leads, blue-grey watches — same two terminators. Reads faster than A at the cost of putting a third amber thing on a card that already has an amber dot and an amber status clause. If you want colour, this is the dosage I would use — not full chroma.</p>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="cols">
+      <div class="col" style="flex:0 0 312px">
+        <div class="rowlabel">Fan-out, and the pulse</div>
+        <div class="railcol">
+          <div class="grp mono live">
+            <div class="fan" style="top:47px">3</div>
+            <div class="row">
+              <div class="rowTop"><span class="dot work"></span><span class="name">Release 0.4 orchestration</span><span class="when">2m</span></div>
+              <div class="status working"><span class="spin"></span><span class="lbl">Running bash · make check</span></div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot work"></span><span class="name">Port the shadow store</span><span class="when">12s</span></div>
+                <div class="status working"><span class="spin"></span><span class="lbl">Editing · shadow/store.go</span></div>
+              </div>
+              <div class="row">
+                <div class="rowTop"><span class="dot on"></span><span class="name">Conformance matrix rows</span><span class="when">4m</span></div>
+                <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
+              </div>
+              <div class="row">
+                <div class="rowTop"><span class="dot attn"></span><span class="name">macOS smoke on the Mac mini</span><span class="when">18m</span></div>
+                <div class="status needs"><span>🔔</span><span class="lbl">Needs you · permission</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <p class="note"><b>The count moves onto the trunk.</b> <code>LEADER · 3</code> becomes a 15px numeral sitting where the trunk begins. It is the same fact, costing a glyph instead of a pill, and it sits on the thing it is counting.</p>
+        <p class="note"><b>The marching dashes.</b> Running live in this column — the straight runs between cards are a repeating <code>linear-gradient</code> rather than a border, because a border's dash offset cannot animate; every run shares one keyframe, so they move together. The rounded elbows stay still and read as the joints. <code>prefers-reduced-motion</code> freezes it.</p>
+        <p class="note"><b>What would drive it, honestly.</b> There is no "cross-session message in flight" signal on the shared bus today. Digest delivery happens server-side and the rail never hears about it. Two options:</p>
+        <table style="margin-top:10px">
+          <tr><th>Driver</th><th>Honest claim</th><th>Cost</th></tr>
+          <tr><td><b>Derived</b> — pulse ~2s whenever a <em>subject's</em> <code>agent_state</code> transitions</td><td>"the linked session just did something" — true, observed, already on the control plane</td><td class="ok">None. Pure UI.</td></tr>
+          <tr><td><b>Real</b> — a <code>link.digest</code> envelope when a digest is actually injected</td><td>"a digest crossed this link just now"</td><td class="warnc">New event type + a Data Service that knows it. See <code>sse-bus-unknown-type</code>: one type the running Data Service doesn't know kills the whole UI bus, so this needs the usual rollout care.</td></tr>
+        </table>
+        <p class="note">I would start derived. It animates the moment the thing you actually care about happens, it cannot lie about a delivery it did not witness, and it costs nothing to remove if the real event lands later.</p>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:18px"><b>The structural win, independent of which option you pick.</b> Today's elbow is drawn by the <em>child</em>, reaching <em>upward</em> with <code>top:-16px</code> — a number tuned for a nominal one-line parent, as the live comment on <code>.nestedRow::before</code> admits outright. The moment a parent grows a two-line title, a summary teaser or a context line, the elbow stops reaching it. You can see it failing in the first column above.</p>
+    <p class="note">The version here never reaches across a box it does not own. One trunk spans the subject stack (<code>.subs::before</code>, <code>top:-5px; bottom:8px</code> — its own container), and each subject taps it with a 10px tick at <code>top:18px</code>. Eighteen is not a guess: it is the status dot's centre, fixed by the title row's own box (8px padding + 1px border + 5px dot margin + half of 8px dot). Every other number is a container edge. Nothing measures a sibling, so no row height can break it. The chain also terminates where it should: only a row with another below it continues the trunk past its own tick, so a lone subject gets an elbow and nothing dangling underneath.</p>
+    <p class="note">The structural change in <code>SessionRail.tsx</code> is small: <code>RailRowGroup</code> already renders the holder and its subjects together, so the subjects just need a wrapping <code>&lt;div&gt;</code>. That is also what finally lets the group carry a state — <code>.live</code>, the pulse — which no amount of per-child <code>::before</code> could.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#2 &nbsp;Harness and place, in the persona's slot <span class="tag rec">B recommended</span>
+    <span class="sub">railLabels.ts · railLabelsFor</span></h2>
+  <div class="body">
+    <p class="lead">Agreed on the premise: you have <code>claude-code</code> and <code>goose</code> sessions interleaved in one rail right now, and nothing on any card says which is which. The persona, by contrast, is already suppressed whenever it matches the workspace default — so it is a label that is usually absent and, when present, rarely the thing you are looking for.</p>
+
+    <div class="rowlabel">The marks</div>
+    <div class="swatches" style="margin-bottom:18px">
+      <span class="sw"><span class="hx big"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><code>claude-code</code> <span style="color:var(--text3)">sunburst</span></span>
+      <span class="sw"><span class="hx big"><svg viewBox="0 0 18 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.0071 7.16447C10.5745 6.92558 11.2015 6.80613 11.7988 6.95544C12.1003 7.03082 12.5236 7.31174 12.9266 7.57912C13.3217 7.8413 13.6972 8.09046 13.9189 8.12003C14.116 8.14631 14.3825 8.13212 14.6446 8.11816C14.9781 8.10039 15.3045 8.08301 15.4717 8.14989C15.6038 8.20273 15.7301 8.39585 15.8686 8.6077C16.0432 8.87472 16.2372 9.17151 16.487 9.25476C16.5922 9.28984 16.7041 9.31998 16.8105 9.34866C17.157 9.44203 17.4461 9.51992 17.2634 9.70268C17.0245 9.94157 15.5613 10.0909 15.412 10.0312C15.3359 10.0007 15.3451 9.92367 15.3567 9.82777C15.3678 9.73558 15.3809 9.62596 15.3224 9.52351C15.2664 9.4255 15.1579 9.26841 15.0553 9.11996C14.9391 8.95179 14.8306 8.7947 14.8148 8.74712C14.6953 8.65753 14.1877 8.56795 14.1877 8.68739C14.1877 8.80684 14.337 9.67282 14.4564 9.79226C14.4745 9.8103 14.4925 9.82765 14.5095 9.84402C14.6051 9.93604 14.6683 9.99678 14.5161 9.97143C14.337 9.94157 13.3217 9.52351 12.9932 9.19504C12.6647 8.86656 12.187 8.41864 11.7689 8.41864C11.537 8.41864 10.9651 9.13537 10.4151 9.82462C9.97367 10.3779 9.54632 10.9135 9.32028 11.0464C8.81264 11.345 7.14041 12.0319 6.18485 12.0916C5.22928 12.1513 4.06469 12.1513 4.03483 11.8527C4.00497 11.5541 4.12442 11.2853 4.57234 11.345C5.02025 11.4048 8.6932 10.718 9.70848 9.67282C9.94369 9.43068 10.1356 9.23824 10.2902 9.08322C10.803 8.56912 10.9051 8.46672 10.8133 8.32906C10.7819 8.28192 10.6885 8.19137 10.5738 8.08026C10.2527 7.76904 9.76504 7.2965 10.0071 7.16447ZM15.2312 8.76968C15.2319 8.78023 15.2327 8.79236 15.2327 8.80683C15.2327 8.89641 15.2625 8.95613 15.3521 8.986C15.4417 9.01586 15.5014 8.89641 15.4716 8.80683C15.4417 8.71724 15.4118 8.62766 15.3521 8.62766C15.2269 8.70278 15.2277 8.71491 15.2312 8.76968Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.64867 4.38727C10.0966 4.80533 9.64867 6.68659 9.61881 6.80604C9.48385 7.34586 8.53703 6.96702 8.2454 6.49312C8.08882 6.23868 7.95806 5.94006 7.94658 5.64145C7.91672 4.86505 7.4688 4.11852 7.34935 3.76019C7.22991 3.40185 5.73684 2.83449 5.05003 2.65532C4.36322 2.47615 4.24378 1.19212 4.33336 1.01295C4.42295 0.83378 6.96116 2.56573 7.94658 3.01365C8.932 3.46157 9.20075 3.96922 9.64867 4.38727Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M3.91529 10.9269C3.70626 10.9269 3.58682 11.0464 3.34793 11.4346C3.08913 11.783 2.54167 12.5036 2.42223 12.5992C2.27292 12.7186 2.15348 12.4797 1.73542 12.4499C1.31736 12.42 0.929164 13.1367 0.749996 13.3457C0.570828 13.5547 1.55625 13.6145 2.54167 13.1367C3.5271 12.6589 4.0646 11.3749 4.15418 11.1658C4.24377 10.9568 4.12432 10.9269 3.91529 10.9269Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M6.18467 3.70048C6.96106 4.02896 7.17009 4.50674 7.19995 5.25327C7.26902 6.97998 7.44621 8.63468 5.86457 9.33089C4.73222 9.82934 3.61483 10.2557 3.40757 10.3297C2.98951 10.479 2.72076 10.6283 2.54159 10.8672C2.36242 11.1061 2.63117 11.1658 2.78048 11.4047C2.92979 11.6436 2.36242 11.9422 1.82492 11.9123C1.28741 11.8825 0.570744 11.4346 0.540882 11.0464C0.511021 10.6582 1.97422 10.27 2.54159 10.1207C3.10895 9.97135 3.91521 9.1651 4.42285 8.95607C4.93049 8.74704 4.36313 8.86649 4.21382 8.71718C4.06452 8.56787 3.94507 7.88106 3.91521 7.55259C3.88535 7.22411 3.52701 6.68661 3.40757 6.5373C3.28812 6.388 4.90063 6.47758 4.96035 6.35814C5.02008 6.23869 3.91521 6.26855 3.19854 6.14911C2.48187 6.02966 2.18325 5.55188 2.09367 5.40258C2.00409 5.25327 4.63188 5.70119 4.78119 5.55188C4.93049 5.40258 3.67632 5.40258 3.07909 5.28313C2.48187 5.16369 1.88464 5.04424 1.58603 4.83521C1.28741 4.62618 1.01866 4.11854 1.25755 4.23799C1.49644 4.35743 4.42285 4.89493 4.63188 4.77549C4.84091 4.65604 1.64575 3.93937 1.16797 3.7602C0.690189 3.58104 0.272131 2.74492 0.212408 2.56575C0.152686 2.38659 0.899218 2.92409 1.25755 3.04353C1.61589 3.16298 4.12424 3.99909 4.42285 3.93937C4.72146 3.87965 1.9145 2.89423 1.10825 2.56575C0.30199 2.23728 0.0631005 1.31158 0.00337795 1.07269C-0.0563446 0.833798 0.690188 1.34144 1.10825 1.61019C1.5263 1.87894 5.40827 3.37201 6.18467 3.70048Z" fill="currentColor"/></svg></span><code>goose</code> <span style="color:var(--text3)">Bird1, from goose's own FlyingBird</span></span>
+      <span class="sw"><span class="hx big">K</span><code>kiro-cli</code> <span style="color:var(--text3)">monogram</span></span>
+      <span class="sw"><span class="hx big"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v4"/></svg></span><code>acp-rpc</code> <span style="color:var(--text3)">generic plug</span></span>
+    </div>
+    <p class="note" style="margin-bottom:18px"><b>Monochrome on purpose</b> — <code>--text3</code> on <code>--bg3</code>, differing by shape, never by hue. Same rule as the connector in #1: every colour on this card already means a <em>state</em>. A harness that painted itself green would be read as "done" at a glance by exactly the peripheral vision this is supposed to serve. These are drawn marks, not vendor logos: nothing to license, nothing to keep in sync with a rebrand, and they stay legible at 10px where a real logo does not. An unknown provider falls back to its first letter, so a new harness needs no art to ship.</p>
+
+    <div class="cols">
+      <div class="col">
+        <div class="rowlabel">A — mark leads the context line</div>
+        <div class="railcol">
+          <div class="row">
+            <div class="rowTop"><span class="dot on"></span><span class="name">Session status sidebar UX</span><span class="when">1m</span></div>
+            <div class="status"><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+            <div class="context"><span class="hx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span></div>
+          </div>
+          <div class="row">
+            <div class="rowTop"><span class="dot work"></span><span class="name">DGX Spark relay flapping debug</span><span class="when">Wed 21:29</span></div>
+            <div class="status working"><span class="spin"></span><span class="lbl">Thinking…</span></div>
+            <div class="context"><span class="hx"><svg viewBox="0 0 18 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.0071 7.16447C10.5745 6.92558 11.2015 6.80613 11.7988 6.95544C12.1003 7.03082 12.5236 7.31174 12.9266 7.57912C13.3217 7.8413 13.6972 8.09046 13.9189 8.12003C14.116 8.14631 14.3825 8.13212 14.6446 8.11816C14.9781 8.10039 15.3045 8.08301 15.4717 8.14989C15.6038 8.20273 15.7301 8.39585 15.8686 8.6077C16.0432 8.87472 16.2372 9.17151 16.487 9.25476C16.5922 9.28984 16.7041 9.31998 16.8105 9.34866C17.157 9.44203 17.4461 9.51992 17.2634 9.70268C17.0245 9.94157 15.5613 10.0909 15.412 10.0312C15.3359 10.0007 15.3451 9.92367 15.3567 9.82777C15.3678 9.73558 15.3809 9.62596 15.3224 9.52351C15.2664 9.4255 15.1579 9.26841 15.0553 9.11996C14.9391 8.95179 14.8306 8.7947 14.8148 8.74712C14.6953 8.65753 14.1877 8.56795 14.1877 8.68739C14.1877 8.80684 14.337 9.67282 14.4564 9.79226C14.4745 9.8103 14.4925 9.82765 14.5095 9.84402C14.6051 9.93604 14.6683 9.99678 14.5161 9.97143C14.337 9.94157 13.3217 9.52351 12.9932 9.19504C12.6647 8.86656 12.187 8.41864 11.7689 8.41864C11.537 8.41864 10.9651 9.13537 10.4151 9.82462C9.97367 10.3779 9.54632 10.9135 9.32028 11.0464C8.81264 11.345 7.14041 12.0319 6.18485 12.0916C5.22928 12.1513 4.06469 12.1513 4.03483 11.8527C4.00497 11.5541 4.12442 11.2853 4.57234 11.345C5.02025 11.4048 8.6932 10.718 9.70848 9.67282C9.94369 9.43068 10.1356 9.23824 10.2902 9.08322C10.803 8.56912 10.9051 8.46672 10.8133 8.32906C10.7819 8.28192 10.6885 8.19137 10.5738 8.08026C10.2527 7.76904 9.76504 7.2965 10.0071 7.16447ZM15.2312 8.76968C15.2319 8.78023 15.2327 8.79236 15.2327 8.80683C15.2327 8.89641 15.2625 8.95613 15.3521 8.986C15.4417 9.01586 15.5014 8.89641 15.4716 8.80683C15.4417 8.71724 15.4118 8.62766 15.3521 8.62766C15.2269 8.70278 15.2277 8.71491 15.2312 8.76968Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.64867 4.38727C10.0966 4.80533 9.64867 6.68659 9.61881 6.80604C9.48385 7.34586 8.53703 6.96702 8.2454 6.49312C8.08882 6.23868 7.95806 5.94006 7.94658 5.64145C7.91672 4.86505 7.4688 4.11852 7.34935 3.76019C7.22991 3.40185 5.73684 2.83449 5.05003 2.65532C4.36322 2.47615 4.24378 1.19212 4.33336 1.01295C4.42295 0.83378 6.96116 2.56573 7.94658 3.01365C8.932 3.46157 9.20075 3.96922 9.64867 4.38727Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M3.91529 10.9269C3.70626 10.9269 3.58682 11.0464 3.34793 11.4346C3.08913 11.783 2.54167 12.5036 2.42223 12.5992C2.27292 12.7186 2.15348 12.4797 1.73542 12.4499C1.31736 12.42 0.929164 13.1367 0.749996 13.3457C0.570828 13.5547 1.55625 13.6145 2.54167 13.1367C3.5271 12.6589 4.0646 11.3749 4.15418 11.1658C4.24377 10.9568 4.12432 10.9269 3.91529 10.9269Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M6.18467 3.70048C6.96106 4.02896 7.17009 4.50674 7.19995 5.25327C7.26902 6.97998 7.44621 8.63468 5.86457 9.33089C4.73222 9.82934 3.61483 10.2557 3.40757 10.3297C2.98951 10.479 2.72076 10.6283 2.54159 10.8672C2.36242 11.1061 2.63117 11.1658 2.78048 11.4047C2.92979 11.6436 2.36242 11.9422 1.82492 11.9123C1.28741 11.8825 0.570744 11.4346 0.540882 11.0464C0.511021 10.6582 1.97422 10.27 2.54159 10.1207C3.10895 9.97135 3.91521 9.1651 4.42285 8.95607C4.93049 8.74704 4.36313 8.86649 4.21382 8.71718C4.06452 8.56787 3.94507 7.88106 3.91521 7.55259C3.88535 7.22411 3.52701 6.68661 3.40757 6.5373C3.28812 6.388 4.90063 6.47758 4.96035 6.35814C5.02008 6.23869 3.91521 6.26855 3.19854 6.14911C2.48187 6.02966 2.18325 5.55188 2.09367 5.40258C2.00409 5.25327 4.63188 5.70119 4.78119 5.55188C4.93049 5.40258 3.67632 5.40258 3.07909 5.28313C2.48187 5.16369 1.88464 5.04424 1.58603 4.83521C1.28741 4.62618 1.01866 4.11854 1.25755 4.23799C1.49644 4.35743 4.42285 4.89493 4.63188 4.77549C4.84091 4.65604 1.64575 3.93937 1.16797 3.7602C0.690189 3.58104 0.272131 2.74492 0.212408 2.56575C0.152686 2.38659 0.899218 2.92409 1.25755 3.04353C1.61589 3.16298 4.12424 3.99909 4.42285 3.93937C4.72146 3.87965 1.9145 2.89423 1.10825 2.56575C0.30199 2.23728 0.0631005 1.31158 0.00337795 1.07269C-0.0563446 0.833798 0.690188 1.34144 1.10825 1.61019C1.5263 1.87894 5.40827 3.37201 6.18467 3.70048Z" fill="currentColor"/></svg></span><span class="dir">spark-relay</span><span class="sep">·</span><span class="branch">⎇ fix/flap</span></div>
+          </div>
+          <div class="row">
+            <div class="rowTop"><span class="dot"></span><span class="name">Ollama parallel inference tuning</span><span class="when">Mon 10:47</span></div>
+            <div class="status"><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+            <div class="context"><span class="hx"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span></div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px">Groups naturally — the mark, the place and the branch are all "what this runs on". <b>But</b> it gives a context line back to <em>every</em> card, which is the 17px-per-card reservation we just finished removing in <code>dca8a72</code>. On your current rail, where 18 of 20 sessions have no branch, one workspace and a default persona, that is 20 new lines to carry one 14px glyph.</p>
+      </div>
+
+      <div class="col">
+        <div class="rowlabel good">B — mark rides the title row <span class="m">recommended</span></div>
+        <div class="railcol">
+          <div class="row">
+            <div class="rowTop"><span class="dot on"></span><span class="name">Session status sidebar UX</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><span class="when">1m</span></div>
+            <div class="status"><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+          </div>
+          <div class="row">
+            <div class="rowTop"><span class="dot work"></span><span class="name">DGX Spark relay flapping debug</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 18 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.0071 7.16447C10.5745 6.92558 11.2015 6.80613 11.7988 6.95544C12.1003 7.03082 12.5236 7.31174 12.9266 7.57912C13.3217 7.8413 13.6972 8.09046 13.9189 8.12003C14.116 8.14631 14.3825 8.13212 14.6446 8.11816C14.9781 8.10039 15.3045 8.08301 15.4717 8.14989C15.6038 8.20273 15.7301 8.39585 15.8686 8.6077C16.0432 8.87472 16.2372 9.17151 16.487 9.25476C16.5922 9.28984 16.7041 9.31998 16.8105 9.34866C17.157 9.44203 17.4461 9.51992 17.2634 9.70268C17.0245 9.94157 15.5613 10.0909 15.412 10.0312C15.3359 10.0007 15.3451 9.92367 15.3567 9.82777C15.3678 9.73558 15.3809 9.62596 15.3224 9.52351C15.2664 9.4255 15.1579 9.26841 15.0553 9.11996C14.9391 8.95179 14.8306 8.7947 14.8148 8.74712C14.6953 8.65753 14.1877 8.56795 14.1877 8.68739C14.1877 8.80684 14.337 9.67282 14.4564 9.79226C14.4745 9.8103 14.4925 9.82765 14.5095 9.84402C14.6051 9.93604 14.6683 9.99678 14.5161 9.97143C14.337 9.94157 13.3217 9.52351 12.9932 9.19504C12.6647 8.86656 12.187 8.41864 11.7689 8.41864C11.537 8.41864 10.9651 9.13537 10.4151 9.82462C9.97367 10.3779 9.54632 10.9135 9.32028 11.0464C8.81264 11.345 7.14041 12.0319 6.18485 12.0916C5.22928 12.1513 4.06469 12.1513 4.03483 11.8527C4.00497 11.5541 4.12442 11.2853 4.57234 11.345C5.02025 11.4048 8.6932 10.718 9.70848 9.67282C9.94369 9.43068 10.1356 9.23824 10.2902 9.08322C10.803 8.56912 10.9051 8.46672 10.8133 8.32906C10.7819 8.28192 10.6885 8.19137 10.5738 8.08026C10.2527 7.76904 9.76504 7.2965 10.0071 7.16447ZM15.2312 8.76968C15.2319 8.78023 15.2327 8.79236 15.2327 8.80683C15.2327 8.89641 15.2625 8.95613 15.3521 8.986C15.4417 9.01586 15.5014 8.89641 15.4716 8.80683C15.4417 8.71724 15.4118 8.62766 15.3521 8.62766C15.2269 8.70278 15.2277 8.71491 15.2312 8.76968Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.64867 4.38727C10.0966 4.80533 9.64867 6.68659 9.61881 6.80604C9.48385 7.34586 8.53703 6.96702 8.2454 6.49312C8.08882 6.23868 7.95806 5.94006 7.94658 5.64145C7.91672 4.86505 7.4688 4.11852 7.34935 3.76019C7.22991 3.40185 5.73684 2.83449 5.05003 2.65532C4.36322 2.47615 4.24378 1.19212 4.33336 1.01295C4.42295 0.83378 6.96116 2.56573 7.94658 3.01365C8.932 3.46157 9.20075 3.96922 9.64867 4.38727Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M3.91529 10.9269C3.70626 10.9269 3.58682 11.0464 3.34793 11.4346C3.08913 11.783 2.54167 12.5036 2.42223 12.5992C2.27292 12.7186 2.15348 12.4797 1.73542 12.4499C1.31736 12.42 0.929164 13.1367 0.749996 13.3457C0.570828 13.5547 1.55625 13.6145 2.54167 13.1367C3.5271 12.6589 4.0646 11.3749 4.15418 11.1658C4.24377 10.9568 4.12432 10.9269 3.91529 10.9269Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M6.18467 3.70048C6.96106 4.02896 7.17009 4.50674 7.19995 5.25327C7.26902 6.97998 7.44621 8.63468 5.86457 9.33089C4.73222 9.82934 3.61483 10.2557 3.40757 10.3297C2.98951 10.479 2.72076 10.6283 2.54159 10.8672C2.36242 11.1061 2.63117 11.1658 2.78048 11.4047C2.92979 11.6436 2.36242 11.9422 1.82492 11.9123C1.28741 11.8825 0.570744 11.4346 0.540882 11.0464C0.511021 10.6582 1.97422 10.27 2.54159 10.1207C3.10895 9.97135 3.91521 9.1651 4.42285 8.95607C4.93049 8.74704 4.36313 8.86649 4.21382 8.71718C4.06452 8.56787 3.94507 7.88106 3.91521 7.55259C3.88535 7.22411 3.52701 6.68661 3.40757 6.5373C3.28812 6.388 4.90063 6.47758 4.96035 6.35814C5.02008 6.23869 3.91521 6.26855 3.19854 6.14911C2.48187 6.02966 2.18325 5.55188 2.09367 5.40258C2.00409 5.25327 4.63188 5.70119 4.78119 5.55188C4.93049 5.40258 3.67632 5.40258 3.07909 5.28313C2.48187 5.16369 1.88464 5.04424 1.58603 4.83521C1.28741 4.62618 1.01866 4.11854 1.25755 4.23799C1.49644 4.35743 4.42285 4.89493 4.63188 4.77549C4.84091 4.65604 1.64575 3.93937 1.16797 3.7602C0.690189 3.58104 0.272131 2.74492 0.212408 2.56575C0.152686 2.38659 0.899218 2.92409 1.25755 3.04353C1.61589 3.16298 4.12424 3.99909 4.42285 3.93937C4.72146 3.87965 1.9145 2.89423 1.10825 2.56575C0.30199 2.23728 0.0631005 1.31158 0.00337795 1.07269C-0.0563446 0.833798 0.690188 1.34144 1.10825 1.61019C1.5263 1.87894 5.40827 3.37201 6.18467 3.70048Z" fill="currentColor"/></svg></span><span class="when">Wed 21:29</span></div>
+            <div class="status working"><span class="spin"></span><span class="lbl">Thinking…</span></div>
+            <div class="context"><span class="dir">spark-relay</span><span class="sep">·</span><span class="branch">⎇ fix/flap</span></div>
+          </div>
+          <div class="row">
+            <div class="rowTop"><span class="dot"></span><span class="name">Ollama parallel inference tuning</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><span class="when">Mon 10:47</span></div>
+            <div class="status"><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+          </div>
+          <div class="row">
+            <div class="rowTop"><span class="dot"></span><span class="name">Agent/Persona Label Cleanup</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 18 16"><path fill-rule="evenodd" clip-rule="evenodd" d="M10.0071 7.16447C10.5745 6.92558 11.2015 6.80613 11.7988 6.95544C12.1003 7.03082 12.5236 7.31174 12.9266 7.57912C13.3217 7.8413 13.6972 8.09046 13.9189 8.12003C14.116 8.14631 14.3825 8.13212 14.6446 8.11816C14.9781 8.10039 15.3045 8.08301 15.4717 8.14989C15.6038 8.20273 15.7301 8.39585 15.8686 8.6077C16.0432 8.87472 16.2372 9.17151 16.487 9.25476C16.5922 9.28984 16.7041 9.31998 16.8105 9.34866C17.157 9.44203 17.4461 9.51992 17.2634 9.70268C17.0245 9.94157 15.5613 10.0909 15.412 10.0312C15.3359 10.0007 15.3451 9.92367 15.3567 9.82777C15.3678 9.73558 15.3809 9.62596 15.3224 9.52351C15.2664 9.4255 15.1579 9.26841 15.0553 9.11996C14.9391 8.95179 14.8306 8.7947 14.8148 8.74712C14.6953 8.65753 14.1877 8.56795 14.1877 8.68739C14.1877 8.80684 14.337 9.67282 14.4564 9.79226C14.4745 9.8103 14.4925 9.82765 14.5095 9.84402C14.6051 9.93604 14.6683 9.99678 14.5161 9.97143C14.337 9.94157 13.3217 9.52351 12.9932 9.19504C12.6647 8.86656 12.187 8.41864 11.7689 8.41864C11.537 8.41864 10.9651 9.13537 10.4151 9.82462C9.97367 10.3779 9.54632 10.9135 9.32028 11.0464C8.81264 11.345 7.14041 12.0319 6.18485 12.0916C5.22928 12.1513 4.06469 12.1513 4.03483 11.8527C4.00497 11.5541 4.12442 11.2853 4.57234 11.345C5.02025 11.4048 8.6932 10.718 9.70848 9.67282C9.94369 9.43068 10.1356 9.23824 10.2902 9.08322C10.803 8.56912 10.9051 8.46672 10.8133 8.32906C10.7819 8.28192 10.6885 8.19137 10.5738 8.08026C10.2527 7.76904 9.76504 7.2965 10.0071 7.16447ZM15.2312 8.76968C15.2319 8.78023 15.2327 8.79236 15.2327 8.80683C15.2327 8.89641 15.2625 8.95613 15.3521 8.986C15.4417 9.01586 15.5014 8.89641 15.4716 8.80683C15.4417 8.71724 15.4118 8.62766 15.3521 8.62766C15.2269 8.70278 15.2277 8.71491 15.2312 8.76968Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M9.64867 4.38727C10.0966 4.80533 9.64867 6.68659 9.61881 6.80604C9.48385 7.34586 8.53703 6.96702 8.2454 6.49312C8.08882 6.23868 7.95806 5.94006 7.94658 5.64145C7.91672 4.86505 7.4688 4.11852 7.34935 3.76019C7.22991 3.40185 5.73684 2.83449 5.05003 2.65532C4.36322 2.47615 4.24378 1.19212 4.33336 1.01295C4.42295 0.83378 6.96116 2.56573 7.94658 3.01365C8.932 3.46157 9.20075 3.96922 9.64867 4.38727Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M3.91529 10.9269C3.70626 10.9269 3.58682 11.0464 3.34793 11.4346C3.08913 11.783 2.54167 12.5036 2.42223 12.5992C2.27292 12.7186 2.15348 12.4797 1.73542 12.4499C1.31736 12.42 0.929164 13.1367 0.749996 13.3457C0.570828 13.5547 1.55625 13.6145 2.54167 13.1367C3.5271 12.6589 4.0646 11.3749 4.15418 11.1658C4.24377 10.9568 4.12432 10.9269 3.91529 10.9269Z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M6.18467 3.70048C6.96106 4.02896 7.17009 4.50674 7.19995 5.25327C7.26902 6.97998 7.44621 8.63468 5.86457 9.33089C4.73222 9.82934 3.61483 10.2557 3.40757 10.3297C2.98951 10.479 2.72076 10.6283 2.54159 10.8672C2.36242 11.1061 2.63117 11.1658 2.78048 11.4047C2.92979 11.6436 2.36242 11.9422 1.82492 11.9123C1.28741 11.8825 0.570744 11.4346 0.540882 11.0464C0.511021 10.6582 1.97422 10.27 2.54159 10.1207C3.10895 9.97135 3.91521 9.1651 4.42285 8.95607C4.93049 8.74704 4.36313 8.86649 4.21382 8.71718C4.06452 8.56787 3.94507 7.88106 3.91521 7.55259C3.88535 7.22411 3.52701 6.68661 3.40757 6.5373C3.28812 6.388 4.90063 6.47758 4.96035 6.35814C5.02008 6.23869 3.91521 6.26855 3.19854 6.14911C2.48187 6.02966 2.18325 5.55188 2.09367 5.40258C2.00409 5.25327 4.63188 5.70119 4.78119 5.55188C4.93049 5.40258 3.67632 5.40258 3.07909 5.28313C2.48187 5.16369 1.88464 5.04424 1.58603 4.83521C1.28741 4.62618 1.01866 4.11854 1.25755 4.23799C1.49644 4.35743 4.42285 4.89493 4.63188 4.77549C4.84091 4.65604 1.64575 3.93937 1.16797 3.7602C0.690189 3.58104 0.272131 2.74492 0.212408 2.56575C0.152686 2.38659 0.899218 2.92409 1.25755 3.04353C1.61589 3.16298 4.12424 3.99909 4.42285 3.93937C4.72146 3.87965 1.9145 2.89423 1.10825 2.56575C0.30199 2.23728 0.0631005 1.31158 0.00337795 1.07269C-0.0563446 0.833798 0.690188 1.34144 1.10825 1.61019C1.5263 1.87894 5.40827 3.37201 6.18467 3.70048Z" fill="currentColor"/></svg></span><span class="when">Mon 10:47</span></div>
+            <div class="status"><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px">Costs <b>zero vertical space</b> — the title row already reserves that height for the timestamp. And it is the more honest grouping: the harness is part of the session's <em>identity</em>, like its name, not part of where it happens to be running. The card settles into three clean registers:</p>
+        <table style="margin-top:8px">
+          <tr><th>Row</th><th>Answers</th><th>Always?</th></tr>
+          <tr><td><b>Title</b></td><td>who it is — name, harness, when it last spoke</td><td class="ok">always</td></tr>
+          <tr><td><b>Status</b></td><td>what it is doing right now</td><td class="ok">always</td></tr>
+          <tr><td><b>Context</b></td><td>where it is — dir, branch, workspace</td><td class="warnc">only when there is something to name</td></tr>
+        </table>
+        <p class="note" style="margin-top:8px">Scan the second column: the goose sessions separate from the claude ones without reading a word.</p>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+    <div class="rowlabel bad">The cwd half needs a backend change first <span class="m">and then still shows nothing on your rail</span></div>
+    <p class="note">I checked the live records before mocking this, and the directory is not there to show:</p>
+    <table style="margin-top:10px;max-width:96ch">
+      <tr><th>Fact</th><th>Evidence</th></tr>
+      <tr><td><b>Every session on this machine has <code>cwd: "."</code></b></td><td>All 20 records from <code>GET /sessions</code>. Not some — all.</td></tr>
+      <tr><td>Nothing can set it</td><td><code>runner.Options.Cwd</code> comes from the session service's <code>-cwd</code> flag; <code>services/router/main.go:189</code> builds the child argv and never passes one. Default is <code>"."</code> (<code>runner.go:329</code>).</td></tr>
+      <tr><td>So <code>sess.Cwd = cwd</code> stores the literal dot</td><td><code>runner.go:445</code> — "the resolved working dir the agent runs in". It is unresolved.</td></tr>
+      <tr><td>The real dir is knowable</td><td>Every live <code>bin/session</code> and every <code>claude</code> child reads <code>/home/drew/repo/mads</code> in <code>/proc/&lt;pid&gt;/cwd</code>. They inherit the Router's.</td></tr>
+      <tr><td>For an isolated session the dir is useless anyway</td><td><code>~/.mads/worktrees/ses_7f373f2558686f50</code> — the terminal dir is the session id. The branch is the readable form of the same fact, which is why <code>railLabelsFor</code> already drops cwd when it is the worktree.</td></tr>
+    </table>
+    <p class="note" style="margin-top:12px"><b>The fix is small and worth doing on its own merits:</b> resolve <code>"."</code> with <code>os.Getwd()</code> in <code>Start</code>, before <code>sess.Cwd = cwd</code>. Not an inference — the provider child literally inherits that directory, so the record would be stating a fact it currently guesses at. It also fixes #3 at the root rather than at the tooltip.</p>
+    <p class="note"><b>And then, honestly:</b> the label will be blank on every session you have, because they all run in the workspace's primary repo and <code>railLabelsFor</code> correctly suppresses a cwd that <em>is</em> the primary repo. It starts earning its slot the first time you run a session outside <code>~/repo/mads</code>. That is the right behaviour — I just don't want to hand you a label that looks broken because it is working.</p>
+    <p class="note"><b>One trap in that suppression.</b> <code>samePath</code> compares strings, and your workspace stores its repo as <code>~/repo/mads</code> while a resolved cwd would be <code>/home/drew/repo/mads</code>. Without tilde expansion the two stop matching and <em>every</em> card gains a redundant <code>mads</code> label — the exact noise this is meant to avoid.</p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#3 &nbsp;<code>Directory: .</code> <span class="tag bug">confirmed bug</span>
+    <span class="sub">railLabels.ts:194</span></h2>
+  <div class="body">
+    <p class="lead">Two layers, and both are worth fixing.</p>
+    <div class="cols">
+      <div class="col">
+        <div class="rowlabel bad">The proximate bug</div>
+        <p class="note">The card and the tooltip read the same field through different rules. <code>railLabelsFor</code> runs it through <code>isLocation()</code>, which exists precisely to reject <code>"."</code> — its comment says <em>"a bare '.' on the context line is junk, not a location"</em>. <code>railTooltip</code> never got the guard:</p>
+        <p class="note" style="margin-top:8px"><code>...line("Directory", session.cwd ? displayPath(session.cwd) : undefined)</code></p>
+        <p class="note">A one-line fix, and it removes the junk from all 20 cards immediately.</p>
+      </div>
+      <div class="col">
+        <div class="rowlabel bad">The cause</div>
+        <p class="note">The guard only ever existed because the field is <em>empty of meaning</em>, not because dots are ugly. Fixing the tooltip alone trades a wrong line for a missing one — the hover still cannot answer "where is this running", for any session, ever.</p>
+        <p class="note">Resolving <code>"."</code> server-side (above) is what makes the line worth printing. Then the guard stops firing because there is a real path, not because we taught the UI to look away.</p>
+        <p class="note"><b>Order:</b> ship the guard now so the tooltip stops lying; land the resolution with #2, since that is the thing that needs the data.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#4 &nbsp;Link options join the action cluster <span class="tag rec">follows from #1</span>
+    <span class="sub">LinkOptionsMenu.tsx · LinkHolderMenu.tsx</span></h2>
+  <div class="body">
+    <p class="lead">These two are one change. The <code>LINKED ▾</code> pill is currently both the label and the trigger — delete the label in #1 and the menu loses its handle. The cluster is where every other per-session verb already lives.</p>
+
+    <div class="cols">
+      <div class="col" style="flex:0 0 420px">
+        <div class="rowlabel">Hover either card</div>
+        <div class="railcol" style="overflow:visible;width:360px">
+          <div class="grp mono">
+            <div class="row">
+              <div class="rowTop"><span class="dot on"></span><span class="name">mads macOS Tahoe port spec</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><span class="when">Wed 03:12</span></div>
+              <div class="status"><span>✓</span><span class="lbl">Done · your turn</span></div>
+              <div class="clusterOut">
+                <span class="btn">▶</span><span class="btn">⏸</span>
+                <span class="btn on" title="Leads 1 session">⇲</span>
+                <span class="btn danger">🗑</span>
+              </div>
+            </div>
+            <div class="subs">
+              <div class="row"><i class="ah"></i>
+                <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><span class="when">Wed 01:47</span></div>
+                <div class="status"><span>✓</span><span class="lbl">Done · your turn</span></div>
+                <div class="clusterOut show">
+                  <span class="btn">▶</span><span class="btn">⏸</span>
+                  <span class="btn on" title="Led by &ldquo;mads macOS Tahoe port spec&rdquo;">⇱<i class="alert"></i></span>
+                  <span class="btn danger">🗑</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note" style="margin-top:10px">The glyph carries the direction the connector draws. <code>⇲</code> on a holder opens "who I lead"; <code>⇱</code> on a subject opens "who leads me". A plain <code>🔗</code> on an unlinked card still means <em>start link mode</em>, exactly as today — so one button never means two things on the same card.</p>
+        <p class="note">The warn dot survives verbatim from <code>dca8a72</code>: a degraded orchestrate grant (<code>unsupported</code> / <code>failed</code>) marks the button, <code>pending_restart</code> does not, because it resolves itself.</p>
+      </div>
+
+      <div class="col">
+        <div class="rowlabel">The flyout — unchanged content, new anchor</div>
+        <div class="flyout">
+          <div class="grouplabel">Link · led by this session</div>
+          <button class="opt"><span class="l">Follow intently</span><span class="d">Debounced digest after each burst of activity.</span></button>
+          <button class="opt sel"><span class="l">Wake on signals</span><span class="d">Digest only when it needs attention — a permission request, a crash, a task done or blocked.</span></button>
+          <button class="opt"><span class="l">Catch up on request</span><span class="d">No automatic digests; the agent can ask for a summary.</span></button>
+          <p class="n">Orchestration tools activate when the leading agent is next idle.</p>
+          <div class="div"></div>
+          <button class="opt danger">Unlink…</button>
+        </div>
+        <p class="note" style="margin-top:12px">Same three cadence options, same <code>ORCHESTRATE_NOTE</code>, same Unlink. The only edits are the group label — which now has to name the relationship the pill used to, since the trigger is a glyph — and the anchor, which moves from the badge's rect to the cluster button's.</p>
+        <p class="note"><code>flyoutPlacement()</code> already takes a <code>DOMRect</code> and already handles the near-the-bottom flip, so it carries over untouched. The cluster paints <code>position:fixed</code> for the same reason the flyout does: the rail is <code>overflow-y:auto</code>, and a scroll container clips both axes.</p>
+        <p class="note"><b>One thing this gains.</b> A holder's menu and a subject's menu are different components today (<code>LinkHolderMenu</code> vs <code>LinkOptionsMenu</code>) only because they hung off differently-shaped badges. Anchored to the same button they can converge, and a holder of three subjects stops needing a submenu to name which one you are unlinking — the cluster is already on the row you mean.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>Phasing <span class="sub">what is free, what needs a server change, what needs a new event</span></h2>
+  <div class="body">
+    <table>
+      <tr><th style="width:30px"></th><th>Change</th><th>Where</th><th>Depends on</th></tr>
+      <tr><td><b>1</b></td><td><b>Guard the tooltip's Directory line</b></td><td><code>railLabels.ts:194</code></td><td class="ok">Nothing. One line.</td></tr>
+      <tr><td><b>2</b></td><td><b>Harness mark on the title row</b> (option B), persona to the tooltip</td><td><code>SessionRail.tsx</code>, new <code>harnessMark.tsx</code></td><td class="ok">Nothing — <code>session.provider</code> is already on the record.</td></tr>
+      <tr><td><b>3</b></td><td><b>Spine replaces the pills</b>, drawn by the group</td><td><code>SessionRail.tsx</code> · <code>.module.css</code></td><td class="ok">Nothing. Also repairs the elbow's broken geometry.</td></tr>
+      <tr><td><b>4</b></td><td><b>Link options into the cluster</b></td><td><code>LinkOptionsMenu.tsx</code> + <code>LinkHolderMenu.tsx</code></td><td class="ok">Nothing. Ships with 3 — it has to.</td></tr>
+      <tr><td><b>5</b></td><td><b>Resolve <code>cwd: "."</code> to a real path</b></td><td><code>runner.go</code> Start, + <code>samePath</code> tilde expansion</td><td class="warnc">Server change. Blank on your current rail by design; earns itself the first time a session runs elsewhere.</td></tr>
+      <tr><td><b>6</b></td><td><b>Pulse the spine on linked activity</b></td><td><code>SessionRail.tsx</code></td><td class="warnc">Derived from <code>agent_state</code> — free, and honest about depicting activity rather than a delivery.</td></tr>
+      <tr><td><b>7</b></td><td><em>Pulse on a real digest</em></td><td>new <code>link.digest</code> envelope</td><td class="badc">New SSE type. Read <code>sse-bus-unknown-type</code> first — an unknown type takes down the whole UI bus.</td></tr>
+    </table>
+    <p class="note" style="margin-top:14px">1–4 are one commit's worth of UI with no new data and no new machinery, and they are the ones that answer the screenshot. 5 is a small server fix worth landing regardless of this list, because <code>sess.Cwd</code> currently claims to be resolved and is not. 6 is a nice-to-have. 7 I would not build until something other than an animation wants the event.</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
