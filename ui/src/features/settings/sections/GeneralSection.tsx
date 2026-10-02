@@ -179,7 +179,7 @@ export function GeneralSection({ config }: GeneralSectionProps) {
       <section className={styles.preflight}>
         <h3 className={styles.heading}>Preflight</h3>
         <div className={styles.checks}>
-          <PreflightChecks checks={preflight.checks} loading={preflight.loading} />
+          <PreflightChecks checks={preflight.checks} loading={preflight.loading} onRerun={preflight.rerun} />
         </div>
         <Button variant="ghost" size="sm" onClick={preflight.rerun} disabled={preflight.loading}>
           Run preflight

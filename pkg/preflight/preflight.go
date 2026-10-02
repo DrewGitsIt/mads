@@ -17,6 +17,11 @@ type Check struct {
 	// so the UI hides these rows from the health list and only names them
 	// in its "providers checked" disclosure.
 	NotInstalled bool `json:"not_installed,omitempty"`
+	// InstallURL and InstallCommand are the vendor's own install page and
+	// documented one-line installer, set on provider rows only — the UI's
+	// "nothing detected" state offers them as the way forward.
+	InstallURL     string `json:"install_url,omitempty"`
+	InstallCommand string `json:"install_command,omitempty"`
 }
 
 // Checker runs the wizard's environment checks.

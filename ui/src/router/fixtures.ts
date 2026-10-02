@@ -1694,8 +1694,10 @@ export const fixturePreflightChecks: PreflightCheck[] = [
     name: "provider:kiro-cli",
     healthy: false,
     not_installed: true,
-    detail: "kiro-cli not found on PATH",
+    detail: "kiro-cli not found on PATH or in known install locations",
     fix_hint: "install Kiro CLI and ensure `kiro-cli` is on PATH",
+    install_url: "https://kiro.dev/docs/cli/",
+    install_command: "curl -fsSL https://cli.kiro.dev/install | bash",
   },
 ];
 

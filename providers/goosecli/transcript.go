@@ -41,15 +41,16 @@ func (p *Provider) Transcript(ctx context.Context, ref string) ([]provider.Messa
 // exit failure carries goose's stderr in the error — that's where `Session
 // not found` lands.
 func (p *Provider) gooseQuery(ctx context.Context, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, p.cfg.Bin, args...)
+	bin := p.bin()
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = agentenv.Build(p.cfg.EnvMode, os.Environ(), p.cfg.Env, p.cfg.EnvPassthrough, nil)
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
-			return nil, fmt.Errorf("%s %s: %w: %s", p.cfg.Bin, strings.Join(args, " "), err, strings.TrimSpace(string(ee.Stderr)))
+			return nil, fmt.Errorf("%s %s: %w: %s", bin, strings.Join(args, " "), err, strings.TrimSpace(string(ee.Stderr)))
 		}
-		return nil, fmt.Errorf("%s %s: %w", p.cfg.Bin, strings.Join(args, " "), err)
+		return nil, fmt.Errorf("%s %s: %w", bin, strings.Join(args, " "), err)
 	}
 	return out, nil
 }

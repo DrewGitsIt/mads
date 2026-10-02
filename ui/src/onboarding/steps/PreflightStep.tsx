@@ -21,7 +21,7 @@ export function PreflightStep({ onNext, onBack }: PreflightStepProps) {
   return (
     <div className={styles.step}>
       <h2 className={styles.title}>Provider preflight</h2>
-      <PreflightChecks checks={preflight.checks} loading={preflight.loading} />
+      <PreflightChecks checks={preflight.checks} loading={preflight.loading} onRerun={preflight.rerun} />
       <div className={styles.actions}>
         <Button variant="ghost" onClick={onBack}>
           Back

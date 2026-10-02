@@ -28,14 +28,15 @@ import (
 // the PTY tier's generic-engine case has shrunk; a generic ptycli engine,
 // if ever built, absorbs it later.
 func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error) {
-	cmd := exec.Command(p.cfg.Bin, p.ptyArgs(opts)...)
+	bin := p.bin()
+	cmd := exec.Command(bin, p.ptyArgs(opts)...)
 	cmd.Dir = opts.Cwd
 	// The direct composition the engineConfig comment documents as the
 	// byte-identical non-engine form of its BaseEnv/Env split.
 	cmd.Env = agentenv.Build(p.cfg.EnvMode, os.Environ(), p.cfg.Env, p.cfg.EnvPassthrough, opts.Env)
 	master, err := pty.Start(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("start %s on a pty: %w", p.cfg.Bin, err)
+		return nil, fmt.Errorf("start %s on a pty: %w", bin, err)
 	}
 
 	s := &ptySession{cmd: cmd, master: master, ref: opts.Resume, announced: make(chan string, 1)}
