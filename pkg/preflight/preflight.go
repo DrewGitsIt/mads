@@ -12,6 +12,11 @@ type Check struct {
 	Healthy bool   `json:"healthy"`
 	Detail  string `json:"detail,omitempty"`
 	FixHint string `json:"fix_hint,omitempty"`
+	// NotInstalled marks a provider row whose binary wasn't found at all —
+	// distinct from installed-but-broken. Provider harnesses are optional,
+	// so the UI hides these rows from the health list and only names them
+	// in its "providers checked" disclosure.
+	NotInstalled bool `json:"not_installed,omitempty"`
 }
 
 // Checker runs the wizard's environment checks.

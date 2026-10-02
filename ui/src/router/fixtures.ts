@@ -1683,11 +1683,19 @@ export const fixtureProviderBehaviors: BehaviorInfo[] = [
 export const fixturePreflightChecks: PreflightCheck[] = [
   { name: "git", healthy: true, detail: "git version 2.43.0" },
   { name: "data_service", healthy: true },
+  { name: "provider:claude-code", healthy: true, detail: "claude-code v2.1.3" },
   {
-    name: "provider:claude-code",
+    name: "provider:goose",
     healthy: false,
-    detail: "not found on PATH",
-    fix_hint: "install Claude Code and ensure `claude` is on PATH",
+    detail: "goose v1.50.1 detected",
+    fix_hint: "mads has only been proven against < 1.49.0, detected 1.50.1",
+  },
+  {
+    name: "provider:kiro-cli",
+    healthy: false,
+    not_installed: true,
+    detail: "kiro-cli not found on PATH",
+    fix_hint: "install Kiro CLI and ensure `kiro-cli` is on PATH",
   },
 ];
 

@@ -1,4 +1,5 @@
 import { Button } from "../../components/Button/Button";
+import { PreflightChecks } from "../../features/settings/PreflightChecks";
 import { usePreflight } from "../../features/settings/state/usePreflight";
 import styles from "./PreflightStep.module.css";
 
@@ -20,15 +21,7 @@ export function PreflightStep({ onNext, onBack }: PreflightStepProps) {
   return (
     <div className={styles.step}>
       <h2 className={styles.title}>Provider preflight</h2>
-      <ul className={styles.checks}>
-        {preflight.checks.map((check) => (
-          <li key={check.name} className={styles.check}>
-            <span aria-hidden="true">{check.healthy ? "✓" : "✗"}</span>
-            {check.name}
-            {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
-          </li>
-        ))}
-      </ul>
+      <PreflightChecks checks={preflight.checks} loading={preflight.loading} />
       <div className={styles.actions}>
         <Button variant="ghost" onClick={onBack}>
           Back

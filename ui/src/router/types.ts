@@ -1141,6 +1141,7 @@ export interface PreflightCheck {
   healthy: boolean;
   detail?: string;
   fix_hint?: string;
+  not_installed?: boolean;
 }
 
 // Body for POST /agents/generate — moved here from useAgentGeneration.ts so

@@ -49,8 +49,8 @@ func TestRun_BrokenPATH(t *testing.T) {
 	}
 
 	provider := findCheck(t, checks, "provider:claude-code")
-	if provider.Healthy || provider.FixHint == "" {
-		t.Errorf("provider:claude-code check = %+v, want unhealthy with fix guidance", provider)
+	if provider.Healthy || !provider.NotInstalled || provider.FixHint == "" {
+		t.Errorf("provider:claude-code check = %+v, want not-installed with install guidance", provider)
 	}
 
 	for _, c := range checks {
@@ -114,6 +114,22 @@ func TestCheckProviderBinary_GooseLeadingSpace(t *testing.T) {
 	check := checkProviderBinary(context.Background(), "goose", knownProviderBinaries["goose"])
 	if !check.Healthy || check.Detail != "goose v1.46.0" {
 		t.Errorf("checkProviderBinary(goose) = %+v, want healthy with Detail %q", check, "goose v1.46.0")
+	}
+}
+
+// TestCheckProviderBinary_InstalledButBroken pins the line between a missing
+// provider (NotInstalled, hidden by the UI) and one that's present but
+// fails its version probe (a real health problem the UI must show).
+func TestCheckProviderBinary_InstalledButBroken(t *testing.T) {
+	bin := t.TempDir()
+	script := filepath.Join(bin, "goose")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	check := checkProviderBinary(context.Background(), "goose", knownProviderBinaries["goose"])
+	if check.Healthy || check.NotInstalled {
+		t.Errorf("checkProviderBinary(goose) = %+v, want unhealthy but not NotInstalled", check)
 	}
 }
 

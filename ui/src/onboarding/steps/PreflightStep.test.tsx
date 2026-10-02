@@ -39,8 +39,8 @@ describe("PreflightStep", () => {
     );
     const onNext = vi.fn();
     render(<PreflightStep onNext={onNext} onBack={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("provider:claude-code")).toBeTruthy());
-    expect(screen.getByText("install Claude Code and ensure `claude` is on PATH")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("provider:goose")).toBeTruthy());
+    expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
     fireEvent.click(screen.getByText("Continue"));
     expect(onNext).toHaveBeenCalledTimes(1);
   });

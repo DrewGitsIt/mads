@@ -19,14 +19,19 @@ type providerBinary struct {
 
 // knownProviderBinaries is deliberately small and honest: one entry per
 // provider adapter this repo actually ships (providers/claudecode,
-// providers/goosecli). Add kiro-cli's entry here when W7.1 lands that
-// adapter — nothing else in this file changes.
+// providers/kirocli, providers/goosecli).
 var knownProviderBinaries = map[string]providerBinary{
 	"claude-code": {
 		Bin:          "claude",
 		VersionArgs:  []string{"--version"},
 		ParseVersion: parseSemverish,
 		InstallHint:  "install Claude Code (https://docs.claude.com/en/docs/claude-code) and ensure `claude` is on PATH",
+	},
+	"kiro-cli": {
+		Bin:          "kiro-cli",
+		VersionArgs:  []string{"--version"},
+		ParseVersion: parseSemverish,
+		InstallHint:  "install Kiro CLI (https://kiro.dev/docs/cli/) and ensure `kiro-cli` is on PATH",
 	},
 	"goose": {
 		Bin:         "goose",
@@ -43,7 +48,7 @@ func checkProviderBinary(ctx context.Context, name string, spec providerBinary) 
 	checkName := "provider:" + name
 	path, err := exec.LookPath(spec.Bin)
 	if err != nil {
-		return Check{Name: checkName, Healthy: false, Detail: spec.Bin + " not found on PATH", FixHint: spec.InstallHint}
+		return Check{Name: checkName, Healthy: false, NotInstalled: true, Detail: spec.Bin + " not found on PATH", FixHint: spec.InstallHint}
 	}
 	out, err := runVersion(ctx, path, spec.VersionArgs...)
 	if err != nil {
