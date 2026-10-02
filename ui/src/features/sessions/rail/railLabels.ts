@@ -69,7 +69,6 @@ export interface RailLabels {
   workspace?: string;
   /** Home-collapsed directory, shown only when it isn't the workspace's primary repo. */
   cwd?: string;
-  agent?: string;
   /** Retro sessions read differently; they get a prefix glyph rather than a word. */
   retro: boolean;
 }
@@ -85,10 +84,21 @@ function isLocation(cwd: string | undefined): boolean {
   return Boolean(trimmed) && trimmed !== "." && trimmed !== "./";
 }
 
+/**
+ * Whether two paths name the same place, across the forms the records use.
+ *
+ * A workspace stores its repos as the user typed them, which is usually
+ * `~/repo/mads`, while a session's cwd is absolute — the Session Service
+ * resolves it with os.Getwd(). Compared raw those never match, so every card
+ * would print a directory that is exactly the workspace's primary repo: the
+ * redundant label this comparison exists to suppress. displayPath collapses
+ * the home prefix and passes an already-collapsed path through unchanged, so
+ * running both sides through it puts them in one form.
+ */
 function samePath(a: string | undefined, b: string | undefined): boolean {
   if (!a || !b) return false;
   const trim = (p: string) => (p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p);
-  return trim(a) === trim(b);
+  return trim(displayPath(a)) === trim(displayPath(b));
 }
 
 /**
@@ -101,11 +111,15 @@ function samePath(a: string | undefined, b: string | undefined): boolean {
  * - workspace only when the visible list spans more than one;
  * - cwd only when it differs from the workspace's primary repo, and never
  *   when it is just the worktree the branch above already names;
- * - agent only when it isn't the workspace's default persona;
  * - a retro glyph for retro sessions.
  *
- * Everything else (model, provider, trust, isolation, context occupancy) is
- * railTooltip's job, not the resting card's.
+ * The persona used to take a slot here and no longer does. It was already
+ * suppressed whenever it matched the workspace default, so it was a label
+ * that is usually absent and, when present, rarely what you are scanning
+ * for — while the harness, which the title row now carries, is the thing
+ * that actually differs between two cards sitting next to each other. The
+ * persona is still in railTooltip, with everything else the resting card
+ * drops (model, provider, trust, isolation, context occupancy).
  */
 export function railLabelsFor(session: Session, ctx: RailLabelContext): RailLabels {
   const facts = session.workspace ? ctx.facts.get(session.workspace) : undefined;
@@ -125,30 +139,13 @@ export function railLabelsFor(session: Session, ctx: RailLabelContext): RailLabe
     branch,
     workspace: ctx.multiWorkspace ? workspaceLabel(session, ctx.facts) : undefined,
     cwd: showCwd ? displayPath(session.cwd!) : undefined,
-    agent: agentLabel(session, ctx),
     retro: Boolean(session.retro_id) || (session.tags ?? []).includes("retro"),
   };
 }
 
-/**
- * The persona, when it is worth a slot. Both sides resolve through the agent
- * index first (router/agentRef.ts): Session.agent and a workspace default are
- * each an id-or-name reference, so comparing them raw answered "differs from
- * the default" by which form happened to be stored rather than by which
- * persona it is. An id that resolves to nothing is dropped rather than
- * printed — `agt_3212544bb2e37c92` on a 280px card is a line spent saying
- * nothing.
- */
-function agentLabel(session: Session, ctx: RailLabelContext): string | undefined {
-  const name = agentNameForRef(session.agent, ctx.agents);
-  if (!name) return undefined;
-  const facts = session.workspace ? ctx.facts.get(session.workspace) : undefined;
-  return name === agentNameForRef(facts?.defaultAgent, ctx.agents) ? undefined : name;
-}
-
 /** Whether this session has anything at all to put on the context line. */
 export function hasRailLabels(labels: RailLabels): boolean {
-  return Boolean(labels.branch || labels.workspace || labels.cwd || labels.agent || labels.retro);
+  return Boolean(labels.branch || labels.workspace || labels.cwd || labels.retro);
 }
 
 /**
@@ -157,7 +154,7 @@ export function hasRailLabels(labels: RailLabels): boolean {
  * The line's height is reserved whether or not it has content, so that a label
  * appearing or vanishing repaints rather than reflows the rail. But only one
  * label is adaptive: `workspace` comes and goes as a filter narrows the
- * visible set. Everything else (branch, cwd, agent, retro) is a fact about the
+ * visible set. Everything else (branch, cwd, retro) is a fact about the
  * session that no filter can change. So a card with no label under the
  * rail-wide context can never acquire one, and reserving its line buys nothing
  * — it just spends 17px of every card on blank.
@@ -191,7 +188,11 @@ export function railTooltip(session: Session, ctx: RailLabelContext = EMPTY_LABE
   const occupancy = contextOccupancy(session.last_usage, contextWindowForModel(session.model));
   return [
     ...line("Workspace", workspaceLabel(session, ctx.facts)),
-    ...line("Directory", session.cwd ? displayPath(session.cwd) : undefined),
+    // Through isLocation, exactly as the card is: an isolation:current_dir
+    // session stores "." — the absence of a chosen directory — and "Directory:
+    // ." is not an answer to "where is this running". The card has always
+    // dropped it; the tooltip printed it on every session in the rail.
+    ...line("Directory", isLocation(session.cwd) ? displayPath(session.cwd!) : undefined),
     ...line("Branch", session.worktree_branch),
     ...line("Agent", agentNameForRef(session.agent, ctx.agents) ?? session.agent),
     ...line("Model", session.model),

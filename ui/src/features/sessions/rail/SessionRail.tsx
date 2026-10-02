@@ -7,6 +7,7 @@ import { LinkHolderMenu } from "./LinkHolderMenu";
 import type { LinkHolderSubject } from "./LinkHolderMenu";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
+import { HarnessMark } from "./HarnessMark";
 import {
   EMPTY_AGENT_STATE,
   EMPTY_OPEN_TASK_BREAKDOWN,
@@ -582,6 +583,7 @@ function RailRowGroup({
 }) {
   const isAnchor = linkMode?.anchorId === row.session.id;
   const isCrossWorkspace = Boolean(linkMode) && !isAnchor && row.session.workspace !== anchorWorkspace;
+  const subjects = linkedSessionsEnabled ? row.subjects : [];
   return (
     <>
       <SessionRow
@@ -595,7 +597,7 @@ function RailRowGroup({
         onClose={onClose}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
-        heldSubjects={row.subjects.map((sub) => ({
+        heldSubjects={subjects.map((sub) => ({
           name: sub.session.name || "Untitled session",
           badge: sub.badge,
           linkId: sub.linkId,
@@ -610,41 +612,53 @@ function RailRowGroup({
         onStartLinkMode={() => onStartLinkMode(row.session.id)}
         onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
       />
-      {linkedSessionsEnabled &&
-        row.subjects.map((sub) => (
-          <SessionRow
-            key={sub.session.id}
-            session={sub.session}
-            openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-            agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
-            matchReason={reasonFor(sub.session, matchById, wsIndex)}
-            selected={sub.session.id === selectedId}
-            onSelect={onSelect}
-            onResume={onResume}
-            onClose={onClose}
-            onDeleteRequest={onDeleteRequest}
-            linkBadge={sub.badge}
-            orchestrateStatus={sub.orchestrateStatus}
-            orchestrateError={sub.orchestrateError}
-            nested
-            onUnlinkRequest={() =>
-              onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
-            }
-            linkedSessionsEnabled={linkedSessionsEnabled}
-            linkModeActive={false}
-            isLinkAnchor={false}
-            isLinkCrossWorkspace={false}
-            isLinkSelected={false}
-            onStartLinkMode={() => {}}
-            onToggleLinkSelection={() => {}}
-            labelContext={labelContext}
-            cadence={sub.cadence}
-            grants={sub.grants}
-            grantingSessionId={sub.grantingSessionId}
-            linkId={sub.linkId}
-            routerClient={routerClient}
-          />
-        ))}
+      {/* The subjects share one container so the trunk can be drawn by rules
+          that only ever measure their own box — see .subjects in the CSS. A
+          holder of several subjects gets one numeral on the trunk rather than
+          a "LEADER · 3" pill on its meta row. */}
+      {subjects.length > 0 && (
+        <div className={styles.subjects}>
+          {subjects.length > 1 && (
+            <span className={styles.linkFan} aria-hidden="true">
+              {subjects.length}
+            </span>
+          )}
+          {subjects.map((sub) => (
+            <SessionRow
+              key={sub.session.id}
+              session={sub.session}
+              openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+              agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
+              matchReason={reasonFor(sub.session, matchById, wsIndex)}
+              selected={sub.session.id === selectedId}
+              onSelect={onSelect}
+              onResume={onResume}
+              onClose={onClose}
+              onDeleteRequest={onDeleteRequest}
+              linkBadge={sub.badge}
+              orchestrateStatus={sub.orchestrateStatus}
+              orchestrateError={sub.orchestrateError}
+              nested
+              onUnlinkRequest={() =>
+                onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
+              }
+              linkedSessionsEnabled={linkedSessionsEnabled}
+              linkModeActive={false}
+              isLinkAnchor={false}
+              isLinkCrossWorkspace={false}
+              isLinkSelected={false}
+              onStartLinkMode={() => {}}
+              onToggleLinkSelection={() => {}}
+              labelContext={labelContext}
+              cadence={sub.cadence}
+              grants={sub.grants}
+              grantingSessionId={sub.grantingSessionId}
+              linkId={sub.linkId}
+              routerClient={routerClient}
+            />
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -656,20 +670,6 @@ function reasonFor(
 ) {
   const match = matchById.get(session.id);
   return match ? matchReason(session, match, wsIndex) : undefined;
-}
-
-/** Active renders nothing extra beyond the existing LINKED badge — only the non-terminal/degraded states need a pill. */
-function orchestrateStatusLabel(status?: OrchestrateStatus): string | undefined {
-  switch (status) {
-    case "pending_restart":
-      return "TOOLS WHEN IDLE";
-    case "unsupported":
-      return "NO TOOLS";
-    case "failed":
-      return "TOOLS FAILED";
-    default:
-      return undefined;
-  }
 }
 
 /**
@@ -778,7 +778,6 @@ function SessionRow({
       : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
   const isPaused = session.activity !== "active";
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
-  const orchestrateLabel = orchestrateStatusLabel(orchestrateStatus);
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
   // occupancy — plus the labels the line above adaptively dropped, and any
@@ -803,11 +802,17 @@ function SessionRow({
   ]
     .filter(Boolean)
     .join("\n");
-  const hasMeta = openTaskCount > 0 || (linkedSessionsEnabled && (Boolean(linkBadge) || Boolean(orchestrateLabel)));
+  const hasMeta = openTaskCount > 0;
   const showContext = reservesContextLine(session, labelContext);
   const showSummary = isPaused && Boolean(session.summary);
-  // A nested subject row's link controls (update policy, unlink) live in one
-  // flyout behind its role badge, so the row stays inside the rail's width.
+  // Link controls — the update policy and Unlink — used to hang off the
+  // LINKED / WATCHED pill, which was both the label and the trigger. The pill
+  // is gone (the connector states the relationship), so they move to the
+  // action cluster, where every other per-session verb already lives. The
+  // glyph carries the direction the connector draws: a holder opens "who I
+  // lead", a subject opens "who leads me", and the plain link glyph on an
+  // unlinked card still starts link mode — so one button never means two
+  // things on the same card.
   const linkOptions =
     nested && linkBadge && cadence && linkId && grantingSessionId && routerClient && onUnlinkRequest ? (
       <LinkOptionsMenu
@@ -824,12 +829,9 @@ function SessionRow({
         onUnlinkRequest={onUnlinkRequest}
       />
     ) : undefined;
-  // And the holder's own badge carries the same relationship from the other
-  // end, so the obvious thing to click on the parent card can unlink too.
   const holderMenu =
     linkBadge && heldSubjects?.length && onUnlinkSubjectRequest ? (
       <LinkHolderMenu
-        badge={linkBadge}
         holderName={name}
         subjects={heldSubjects}
         onUnlinkRequest={onUnlinkSubjectRequest}
@@ -944,9 +946,21 @@ function SessionRow({
         }
       }}
     >
+      {nested && (
+        <span
+          className={[
+            styles.linkTerminator,
+            linkBadge === "WATCHED" ? styles.linkTerminatorWatch : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          aria-hidden="true"
+        />
+      )}
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
+        <HarnessMark provider={session.provider} />
         <span className={styles.when} title={stampTitle}>
           {stamp}
         </span>
@@ -989,50 +1003,17 @@ function SessionRow({
           {showContext && <ContextLine labels={labels} />}
           {hasMeta && (
             <div className={styles.rowMeta}>
-              {openTaskCount > 0 && (
-                <span className={styles.workBreakdown}>
-                  {openTaskBreakdown.running > 0 && (
-                    <span className={styles.bucketRunning}>{openTaskBreakdown.running} running</span>
-                  )}
-                  {openTaskBreakdown.ready > 0 && (
-                    <span className={styles.bucketReady}>{openTaskBreakdown.ready} ready</span>
-                  )}
-                  {openTaskBreakdown.blocked > 0 && (
-                    <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
-                  )}
-                </span>
-              )}
-              {linkedSessionsEnabled && linkOptions}
-              {linkedSessionsEnabled && linkBadge && !linkOptions && holderMenu}
-              {linkedSessionsEnabled && linkBadge && !linkOptions && !holderMenu && (
-                <span
-                  className={[styles.linkBadge, linkBadge.startsWith("LEADER") ? styles.linkBadgeLead : ""]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  {linkBadge}
-                </span>
-              )}
-              {/* Only where nothing else can carry it. A nested subject row has a
-                  link flyout, and the flyout already explains every orchestrate
-                  state in a full sentence (LinkOptionsMenu's ORCHESTRATE_NOTE) —
-                  so a second pill shouting the same thing in caps was a whole
-                  extra line of card spent on a restatement, and the loudest thing
-                  on a subordinate row at that. The trigger keeps a quiet mark for
-                  the states that are actually news (see LinkOptionsMenu). */}
-              {linkedSessionsEnabled && orchestrateLabel && !linkOptions && (
-                <span
-                  className={[
-                    styles.orchestrateBadge,
-                    orchestrateStatus === "unsupported" || orchestrateStatus === "failed"
-                      ? styles.orchestrateBadgeUnsupported
-                      : styles.orchestrateBadgePending,
-                  ].join(" ")}
-                  title={orchestrateStatus === "failed" ? orchestrateError : undefined}
-                >
-                  {orchestrateLabel}
-                </span>
-              )}
+              <span className={styles.workBreakdown}>
+                {openTaskBreakdown.running > 0 && (
+                  <span className={styles.bucketRunning}>{openTaskBreakdown.running} running</span>
+                )}
+                {openTaskBreakdown.ready > 0 && (
+                  <span className={styles.bucketReady}>{openTaskBreakdown.ready} ready</span>
+                )}
+                {openTaskBreakdown.blocked > 0 && (
+                  <span className={styles.bucketBlocked}>{openTaskBreakdown.blocked} blocked</span>
+                )}
+              </span>
             </div>
           )}
         </div>
@@ -1097,7 +1078,8 @@ function SessionRow({
               ⏸
             </button>
           )}
-          {linkedSessionsEnabled && !nested && (
+          {linkedSessionsEnabled && (linkOptions ?? holderMenu)}
+          {linkedSessionsEnabled && !nested && !holderMenu && (
             <button
               type="button"
               className={styles.actionButton}
@@ -1141,7 +1123,6 @@ function ContextLine({ labels }: { labels: RailLabels }) {
     labels.branch ? { key: "branch", cls: styles.ctxBranch, text: labels.branch } : undefined,
     labels.workspace ? { key: "workspace", cls: styles.ctxItem, text: labels.workspace } : undefined,
     labels.cwd ? { key: "cwd", cls: styles.ctxItem, text: labels.cwd } : undefined,
-    labels.agent ? { key: "agent", cls: styles.ctxItem, text: labels.agent } : undefined,
   ].filter((part): part is { key: string; cls: string; text: string } => part !== undefined);
   return (
     <div className={styles.context}>

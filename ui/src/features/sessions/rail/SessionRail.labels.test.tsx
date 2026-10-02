@@ -180,46 +180,60 @@ describe("SessionRail adaptive context labels", () => {
     expect(labelsOn(cardFor("elsewhere")).cwd).toBe("~/repo/mads-ui");
   });
 
-  it("shows the agent only when it is not the workspace's default persona", () => {
+  // The persona used to take a slot on this line, resolved through agentRef so
+  // a card read "mads-coding-partner" rather than "agt_3212544bb2e37c92". It
+  // no longer appears at all: the harness mark below took the glance it was
+  // competing for, and the persona was a label that is suppressed whenever it
+  // matches the workspace default — usually absent, and rarely what you are
+  // scanning for when it is not. It is still in the hover tooltip.
+  it("spends no line on the persona, whatever persona it is", () => {
+    const agents: Agent[] = [
+      { id: "agt_3212544bb2e37c92", name: "mads-coding-partner", prompt: "", created_at: "", updated_at: "" },
+    ];
     render(
       <SessionRail
         sessions={[
           makeSession({ id: "a", name: "default persona", workspace: "mads", agent: "builder" }),
           makeSession({ id: "b", name: "other persona", workspace: "mads", agent: "reviewer" }),
-        ]}
-        workspaces={WORKSPACES}
-        openTaskCounts={{}}
-      />,
-    );
-    expect(hasContextLine(cardFor("default persona"))).toBe(false);
-    expect(labelsOn(cardFor("other persona")).agent).toBe("reviewer");
-  });
-
-  // What the live rail actually showed: the launchpad stages the persona *id*,
-  // so cards read "agt_3212544bb2e37c92". Resolving it also fixes the
-  // comparison against the workspace default, which is stored as a name — an
-  // id never matched one, so a session running the default claimed otherwise.
-  it("names the persona an agt_ reference points at, and drops one it cannot resolve", () => {
-    const agents: Agent[] = [
-      { id: "agt_3212544bb2e37c92", name: "mads-coding-partner", prompt: "", created_at: "", updated_at: "" },
-      { id: "agt_builder", name: "builder", prompt: "", created_at: "", updated_at: "" },
-    ];
-    render(
-      <SessionRail
-        sessions={[
-          makeSession({ id: "a", name: "partner one", workspace: "mads", agent: "agt_3212544bb2e37c92" }),
-          makeSession({ id: "b", name: "default by id", workspace: "mads", agent: "agt_builder" }),
-          makeSession({ id: "c", name: "gone one", workspace: "mads", agent: "agt_deleted" }),
+          makeSession({ id: "c", name: "persona by id", workspace: "mads", agent: "agt_3212544bb2e37c92" }),
         ]}
         workspaces={WORKSPACES}
         agents={agents}
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("partner one")).agent).toBe("mads-coding-partner");
-    expect(hasContextLine(cardFor("default by id"))).toBe(false);
-    // A hash nobody can read is worse than no label.
-    expect(hasContextLine(cardFor("gone one"))).toBe(false);
+    for (const name of ["default persona", "other persona", "persona by id"]) {
+      expect(hasContextLine(cardFor(name))).toBe(false);
+    }
+  });
+
+  // What the rail could not answer before: you have claude-code and goose
+  // sessions interleaved and nothing on any card said which was which. The
+  // mark rides the title row, which already reserves its height for the
+  // stamp, so it costs no vertical space and never adds a line.
+  it("marks each card with the harness it runs on, costing no context line", () => {
+    render(
+      <SessionRail
+        sessions={[
+          makeSession({ id: "a", name: "on claude", workspace: "mads", provider: "claude-code" }),
+          makeSession({ id: "b", name: "on goose", workspace: "mads", provider: "goose" }),
+          makeSession({ id: "c", name: "on something new", workspace: "mads", provider: "zed-acp" }),
+          makeSession({ id: "d", name: "no provider yet", workspace: "mads" }),
+        ]}
+        workspaces={WORKSPACES}
+        openTaskCounts={{}}
+      />,
+    );
+    const markOn = (name: string) => cardFor(name).querySelector('[class*="harness"]');
+    expect(markOn("on claude")?.getAttribute("aria-label")).toBe("claude-code");
+    expect(markOn("on goose")?.getAttribute("aria-label")).toBe("goose");
+    // An unknown harness is legible the day it lands: no art required.
+    expect(markOn("on something new")?.textContent).toBe("Z");
+    // A record that has not said yet claims nothing.
+    expect(markOn("no provider yet")).toBeNull();
+    for (const name of ["on claude", "on goose", "on something new"]) {
+      expect(hasContextLine(cardFor(name))).toBe(false);
+    }
   });
 
   it("shows the workspace only while the visible list spans more than one, and filtering it down to one does not change the card", () => {

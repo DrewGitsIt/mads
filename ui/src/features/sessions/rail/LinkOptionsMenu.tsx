@@ -72,7 +72,7 @@ const ORCHESTRATE_NOTE: Partial<Record<OrchestrateStatus, string>> = {
 };
 
 export interface LinkOptionsMenuProps {
-  /** The subject row's role badge (LINKED / WATCHED) — doubles as the trigger. */
+  /** The subject row's role (LINKED / WATCHED) — picks the glyph and the copy, no longer rendered as a pill. */
   badge: string;
   subjectName: string;
   linkId: string;
@@ -156,7 +156,7 @@ export function LinkOptionsMenu({
       anchor={
         <button
           type="button"
-          className={[styles.linkBadge, styles.linkOptionsTrigger].join(" ")}
+          className={[styles.actionButton, styles.linkOptionsTrigger].join(" ")}
           aria-label={`Link options for ${subjectName}`}
           // The mark on the trigger says "something is wrong here"; this says
           // what, on hover and to a screen reader, without the label itself
@@ -171,7 +171,8 @@ export function LinkOptionsMenu({
             else setPlacement(flyoutPlacement(e.currentTarget.getBoundingClientRect()));
           }}
         >
-          {badge}
+          {/* Points back up the connector, at the holder this subject hangs from. */}
+          <span aria-hidden="true">⇱</span>
           {isDegraded(orchestrateStatus) && (
             <span className={styles.linkBadgeAlert} aria-hidden="true" />
           )}
@@ -180,7 +181,9 @@ export function LinkOptionsMenu({
     >
       {/* Clicks inside the flyout must not bubble to the row and open it. */}
       <div className={pillStyles.menu} role="menu" onClick={(e) => e.stopPropagation()}>
-        <div className={pillStyles.groupLabel}>Updates from this session</div>
+        <div className={pillStyles.groupLabel}>
+          {badge === "WATCHED" ? "Watched by" : "Led by"} the session above · updates from here
+        </div>
         {CADENCE_OPTIONS.map((opt) => (
           <button
             key={opt.value}

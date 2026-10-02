@@ -14,8 +14,6 @@ export interface LinkHolderSubject {
 }
 
 export interface LinkHolderMenuProps {
-  /** The holder's role badge ("LEADER", "LEADER · 2", "MONITOR · 2") — doubles as the trigger. */
-  badge: string;
   holderName: string;
   subjects: LinkHolderSubject[];
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
@@ -29,16 +27,15 @@ const ROLE_NOTE: Record<SubjectBadge, string> = {
 /**
  * Unlink, reachable from the holder's own badge.
  *
- * The relationship is already editable from the nested subject row below, but
- * that was the *only* place it lived: the holder's badge was a bare <span>
- * wearing the same pill styling as the child's interactive one, so the obvious
- * thing to click on the parent card did nothing and gave no hint why. A holder
- * can hold several subjects, so this names each one rather than assuming which
- * link "unlink" means. Cadence stays on the child row — that is per-link
- * detail, and this menu is the whole-relationship view.
+ * A holder can hold several subjects, so this names each one rather than
+ * assuming which link "unlink" means. Cadence stays on the child row — that is
+ * per-link detail, and this menu is the whole-relationship view.
+ *
+ * It takes no badge any more. The role used to be a pill on the holder's meta
+ * row that doubled as this trigger; the connector states the relationship now,
+ * the fan-out count sits on the trunk, and the trigger is a cluster button.
  */
 export function LinkHolderMenu({
-  badge,
   holderName,
   subjects,
   onUnlinkRequest,
@@ -69,7 +66,8 @@ export function LinkHolderMenu({
       anchor={
         <button
           type="button"
-          className={[styles.linkBadge, styles.linkBadgeLead, styles.linkOptionsTrigger].join(" ")}
+          className={[styles.actionButton, styles.linkOptionsTrigger].join(" ")}
+          title="Linked sessions"
           aria-label={`Linked sessions held by ${holderName}`}
           aria-haspopup="menu"
           aria-expanded={open}
@@ -79,7 +77,8 @@ export function LinkHolderMenu({
             else setPlacement(flyoutPlacement(e.currentTarget.getBoundingClientRect()));
           }}
         >
-          {badge}
+          {/* Points down the connector, at the subjects hanging off it. */}
+          <span aria-hidden="true">⇲</span>
         </button>
       }
     >

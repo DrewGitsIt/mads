@@ -490,16 +490,23 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByText("payments refactor")).toBeTruthy();
   });
 
-  it("shows the holder badge and nests the subject row with a LINKED badge when the flag is on", () => {
+  // The relationship is drawn, not captioned: the subject already renders
+  // indented underneath its holder, so LEADER / LINKED pills were the caption
+  // repeating the indent in caps. Both sides keep a control — now in the
+  // action cluster, where every other per-session verb lives.
+  it("nests the subject under its holder with no pill on either row, when the flag is on", () => {
     FLAGS.linkedSessions = true;
     render(
       <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} />,
     );
-    expect(screen.getByText("LEADER")).toBeTruthy();
-    expect(screen.getByText("LINKED")).toBeTruthy();
-    // Holder row gets a link-toggle button; the nested subject row's badge
-    // opens its link options instead.
-    expect(screen.getByRole("button", { name: "Add investigator to link selection" })).toBeTruthy();
+    expect(screen.queryByText("LEADER")).toBeNull();
+    expect(screen.queryByText("LINKED")).toBeNull();
+    const subject = screen.getByText("payments refactor").closest('[role="button"]')!;
+    expect(subject.parentElement?.className).toMatch(/subjects/);
+    // A holder with one subject has nothing to count, so the trunk carries no
+    // numeral — "LEADER · 2" only ever earned a count above one.
+    expect(subject.parentElement?.querySelector('[class*="linkFan"]')).toBeNull();
+    expect(screen.getByRole("button", { name: "Linked sessions held by investigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
   });
 
@@ -667,9 +674,8 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
   });
 
   it("unlinks from the holder's own badge too, naming the subject it would drop", async () => {
-    // The relationship used to be reachable only from the nested subject row:
-    // the holder's badge was a bare <span> in the same pill styling, so the
-    // obvious thing to click on the parent card did nothing and said nothing.
+    // Reachable from both ends of the connector: the holder's cluster names
+    // every subject it would drop, the subject's own cluster names its holder.
     FLAGS.linkedSessions = true;
     const client = new FakeRouterClient();
     const deleteLinkSpy = vi.spyOn(client, "deleteLink");
@@ -677,11 +683,12 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
     );
 
-    const holderBadge = screen.getByRole("button", {
+    const holderTrigger = screen.getByRole("button", {
       name: "Linked sessions held by investigator",
     });
-    expect(holderBadge.textContent).toContain("LEADER");
-    fireEvent.click(holderBadge);
+    // Points down the connector, at the subjects hanging off it.
+    expect(holderTrigger.textContent).toBe("⇲");
+    fireEvent.click(holderTrigger);
     fireEvent.click(screen.getByRole("menuitem", { name: /Unlink payments refactor…/ }));
 
     const dialog = screen.getByRole("alertdialog");
@@ -689,6 +696,34 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     fireEvent.click(within(dialog).getByText("Unlink"));
 
     await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
+  });
+
+  // How the line ENDS is what says which relationship it is. Dashing the line
+  // itself was the first attempt: over an 11x24px elbow a dash pattern never
+  // establishes a rhythm and renders as a broken box, so the distinction moved
+  // to the terminator, which is legible at any size.
+  it("terminates a leader's connector differently from a monitor's", () => {
+    FLAGS.linkedSessions = true;
+    const watched = makeSession({ id: "w", name: "under watch" });
+    render(
+      <SessionRail
+        sessions={[lead, a, watched]}
+        openTaskCounts={{}}
+        links={[
+          link,
+          makeLink({ id: "l9", granting_session_id: "lead", subject_session_id: "w", grants: ["read"] }),
+        ]}
+      />,
+    );
+    const termOf = (name: string) =>
+      screen.getByText(name).closest('[role="button"]')!.querySelector('[class*="linkTerminator"]')!;
+    // An arrowhead leads — instructions flow into the subject.
+    expect(termOf("payments refactor").className).not.toMatch(/Watch/);
+    // A ring watches — it reads, nothing flows.
+    expect(termOf("under watch").className).toMatch(/linkTerminatorWatch/);
+    // Two subjects now, so the trunk carries the count the pill used to.
+    const trunk = screen.getByText("payments refactor").closest('[role="button"]')!.parentElement!;
+    expect(trunk.querySelector('[class*="linkFan"]')?.textContent).toBe("2");
   });
 
   it("names every subject separately, so a holder of several is never ambiguous", () => {
@@ -744,7 +779,8 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     const manualLink = makeLink({ ...link, cadence: "manual_only" });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
     const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
-    expect(trigger.textContent).toBe("LINKED");
+    // Points back up the connector. Not the role spelled out, not the cadence.
+    expect(trigger.textContent).toBe("⇱");
     fireEvent.click(trigger);
     expect(
       screen.getByRole("menuitemradio", { name: /Catch up on request/ }).getAttribute("aria-checked"),

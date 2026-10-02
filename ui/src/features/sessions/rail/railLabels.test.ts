@@ -128,7 +128,6 @@ describe("railLabelsFor", () => {
       branch: undefined,
       workspace: undefined,
       cwd: undefined,
-      agent: undefined,
       retro: false,
     });
   });
@@ -147,19 +146,26 @@ describe("railLabelsFor", () => {
     expect(labels.cwd).toBe("~/repo/mads-ui");
   });
 
-  it("drops the agent label for the default agent of an id-referenced workspace", () => {
-    expect(
-      railLabelsFor(makeSession({ workspace: "ws", agent: "builder" }), context()).agent,
-    ).toBeUndefined();
-    expect(railLabelsFor(makeSession({ workspace: "ws", agent: "reviewer" }), context()).agent).toBe(
-      "reviewer",
-    );
-  });
-
   it("hides the cwd when it is the workspace's primary repo", () => {
     const labels = railLabelsFor(
       makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads" }),
       context(),
+    );
+    expect(labels.cwd).toBeUndefined();
+  });
+
+  // The Session Service resolves cwd with os.Getwd(), so the record is
+  // absolute; a workspace stores its repos as typed, which is usually
+  // tilde-collapsed. Compared raw they never match, and every card in the
+  // workspace prints its own primary repo back at itself.
+  it("hides a cwd that is the primary repo written in the other form", () => {
+    const labels = railLabelsFor(
+      makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads" }),
+      context({
+        facts: workspaceFacts([
+          makeWorkspace({ name: "mads", repos: [{ path: "~/repo/mads", primary: true }] }),
+        ]),
+      }),
     );
     expect(labels.cwd).toBeUndefined();
   });
@@ -210,39 +216,6 @@ describe("railLabelsFor", () => {
       context(),
     );
     expect(labels.cwd).toBe("~/repo/other");
-  });
-
-  it("shows the agent only when it is not the workspace's default persona", () => {
-    expect(railLabelsFor(makeSession({ workspace: "mads", agent: "builder" }), context()).agent).toBeUndefined();
-    expect(railLabelsFor(makeSession({ workspace: "mads", agent: "reviewer" }), context()).agent).toBe(
-      "reviewer",
-    );
-  });
-
-  it("names the persona an agt_ reference points at, rather than printing the id", () => {
-    const partner = makeAgent({ id: "agt_3212544bb2e37c92", name: "mads-coding-partner" });
-    const ctx = context({ agents: agentIndex([partner]) });
-    expect(railLabelsFor(makeSession({ agent: "agt_3212544bb2e37c92" }), ctx).agent).toBe(
-      "mads-coding-partner",
-    );
-  });
-
-  it("drops an agt_ reference it cannot resolve rather than showing the hash", () => {
-    // A deleted persona, or a list that hasn't loaded: a label nobody can read
-    // is worse than no label, and the card has one line to spend.
-    expect(railLabelsFor(makeSession({ agent: "agt_3212544bb2e37c92" }), context()).agent).toBeUndefined();
-  });
-
-  it("drops the persona when the reference and the workspace default name the same one in different forms", () => {
-    // Session.agent is an id, the workspace default is a name — compared raw
-    // they never match, so every such session claimed to be running something
-    // other than the default.
-    const builder = makeAgent({ id: "agt_builder", name: "builder" });
-    const labels = railLabelsFor(
-      makeSession({ workspace: "ws", agent: "agt_builder" }),
-      context({ agents: agentIndex([builder]) }),
-    );
-    expect(labels.agent).toBeUndefined();
   });
 
   it("marks retro sessions, by record or by tag", () => {
@@ -302,6 +275,34 @@ describe("railTooltip", () => {
       "Isolation: worktree",
       "Context: 45% of 200k",
     ]);
+  });
+
+  // The context line no longer carries the persona at all — the harness mark
+  // on the title row took the glance it was competing for. The tooltip is
+  // where it lives now, so this is where the reference still has to resolve:
+  // an `agt_...` is a hash, and printing one answers nothing.
+  it("names the persona an agt_ reference points at, rather than printing the id", () => {
+    const partner = makeAgent({ id: "agt_3212544bb2e37c92", name: "mads-coding-partner" });
+    const tooltip = railTooltip(
+      makeSession({ agent: "agt_3212544bb2e37c92" }),
+      context({ agents: agentIndex([partner]) }),
+    );
+    expect(tooltip).toBe("Agent: mads-coding-partner");
+  });
+
+  // Unlike the card, which dropped it: the tooltip is the detail view, and a
+  // session whose persona record is gone is better described by the dangling
+  // reference than by saying nothing about its persona at all.
+  it("falls back to the reference for a persona it cannot resolve", () => {
+    expect(railTooltip(makeSession({ agent: "agt_deleted" }), context())).toBe("Agent: agt_deleted");
+  });
+
+  // The card suppressed a cwd of "." through isLocation and the tooltip did
+  // not, so every session in the rail hovered as "Directory: ." — the record
+  // stores that for any session without an explicitly chosen directory.
+  it("does not offer a bare dot as a directory", () => {
+    expect(railTooltip(makeSession({ cwd: "." }), context())).toBe("");
+    expect(railTooltip(makeSession({ cwd: "./" }), context())).toBe("");
   });
 
   it("names the workspace an id reference points at", () => {

@@ -260,6 +260,33 @@
   min-width: 0;
 }
 
+.harness {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  /* The title row is align-items: flex-start, so the mark is nudged onto the
+     name's own baseline band rather than sitting on the row's top edge. */
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--bg3);
+  color: var(--text3);
+  font: 700 8px/1 var(--sans);
+}
+
+.harness svg {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+
+.row:hover .harness {
+  color: var(--text2);
+  background: var(--bg4);
+}
+
 .when {
   flex: none;
   margin-left: auto;
@@ -581,25 +608,103 @@
 
 .nestedRow {
   position: relative;
-  margin-left: 20px;
   /* .row is width: 100%; without this the indent pushes the card past the
      rail's edge and the whole rail scrolls sideways. */
-  width: calc(100% - 20px);
+  width: 100%;
 }
 
-/* Reaches up into the previous sibling row's dot. The offset is tuned for
-   a nominal single-line row height and is only an approximation once rows
-   above vary in height (2-line titles, meta/summary lines). */
-.nestedRow::before {
+/* ── the link connector ──────────────────────────────────────────────────
+   A holder's subjects hang off a drawn trunk instead of wearing a
+   LINKED / WATCHED pill: the card is already indented underneath the other
+   party, so the pill was the caption repeating what the indent said.
+
+   Every number here is an edge of a box this rule owns. The elbow reaches
+   UP from the subject to bridge the gap above it and then turns out to the
+   subject's own border — it never reaches across the holder, whose height
+   it cannot know. (The previous .nestedRow::before did: it hung off the
+   child at a hard-coded top: -16px tuned for a nominal one-line holder, and
+   stopped connecting the moment the holder grew a second title line, a
+   summary teaser or a context line.)
+
+   The dot's centre is 18px below the card's top border: 1px border + 8px
+   padding + 5px dot margin + half of the 8px dot. These are positioned
+   against the card's PADDING box, which already excludes that border, so
+   every offset below is one less than the figure it is aiming at. */
+.subjects {
+  position: relative;
+  margin-left: 20px;
+}
+
+.subjects .row::before {
   content: "";
   position: absolute;
-  left: -10px;
-  top: -16px;
-  bottom: 50%;
-  width: 10px;
-  border-left: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  border-bottom-left-radius: 6px;
+  left: -11px;
+  top: -6px;
+  width: 11px;
+  /* -6 + 24 - 1 puts the bottom border's centreline on 17 from the padding
+     box, which is the dot's 18 from the border box. */
+  height: 24px;
+  border-left: 2px solid var(--line);
+  border-bottom: 2px solid var(--line);
+  border-bottom-left-radius: 7px;
+}
+
+/* Only a subject with another below it carries the trunk past its own
+   elbow, so the chain terminates exactly at the last connection — a holder
+   with one subject gets an elbow and nothing dangling underneath it. */
+.subjects .row:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: -11px;
+  top: 18px;
+  bottom: -5px;
+  border-left: 2px solid var(--line);
+}
+
+/* How the line ends is what says which relationship it is. Dashing the line
+   itself was the first attempt and does not survive the geometry: over an
+   11x24 elbow a dash pattern never establishes a rhythm and renders as a
+   broken box. A terminator is legible at any size, and brighter than the
+   line it ends so it stays discernible against the card's border. */
+.linkTerminator {
+  position: absolute;
+  left: -7px;
+  /* centred on the elbow: 13 + half of the 8px the two borders make. */
+  top: 13px;
+  width: 0;
+  height: 0;
+  border-left: 7px solid var(--text3);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+}
+
+/* A monitor reads; nothing flows to it. A ring, not a push. */
+.linkTerminatorWatch {
+  top: 14px;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text3);
+  border-radius: 50%;
+  background: var(--bg1);
+}
+
+/* The fan-out count, where "LEADER · 3" used to be: it sits on the trunk it
+   is counting rather than taking a pill's worth of the holder's meta row. */
+.linkFan {
+  position: absolute;
+  left: 2px;
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--bg0);
+  color: var(--text3);
+  font: 600 9px var(--sans);
+  pointer-events: none;
 }
 
 .linkBar {
@@ -714,33 +819,22 @@
 }
 
 /* Link options: the nested row's role badge doubles as the flyout trigger. */
+/* The link menus are cluster buttons now, so .actionButton carries all the
+   chrome and this only has to make room for the alert mark. The disclosure
+   caret that used to hang off here went with the pill: in a column of 24px
+   squares it was noise, and none of the cluster's other buttons claim to be
+   anything but a button. */
 .linkOptionsTrigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  border: 1px solid transparent;
-  cursor: pointer;
-}
-
-.linkOptionsTrigger::after {
-  content: "";
-  border-left: 3px solid transparent;
-  border-right: 3px solid transparent;
-  border-top: 3px solid currentColor;
-  opacity: 0.6;
-}
-
-.linkOptionsTrigger:hover:not(:disabled),
-.linkOptionsTrigger[aria-expanded="true"] {
-  border-color: var(--line);
-  color: var(--text);
+  position: relative;
 }
 
 /* The one thing a nested row still says out loud about its link: something
    is wrong with the orchestrate grant. A mark, not a word — the sentence is
    in the flyout this trigger opens (LinkOptionsMenu's note). */
 .linkBadgeAlert {
-  flex: none;
+  position: absolute;
+  top: 2px;
+  right: 2px;
   width: 5px;
   height: 5px;
   border-radius: 50%;

@@ -27,7 +27,7 @@ describe("LinkOptionsMenu", () => {
   // already-indented nested card stacked two shouted lines of configuration
   // under a one-line status. A cadence is a setting, and the flyout shows it as
   // the checked option — which is where a setting belongs.
-  it("is just the role badge, whatever the cadence", () => {
+  it("is one glyph pointing back up the connector, whatever the cadence", () => {
     for (const cadence of ["per_turn", "on_signal", "manual_only"] as const) {
       const { unmount } = render(
         <LinkOptionsMenu
@@ -42,9 +42,9 @@ describe("LinkOptionsMenu", () => {
           onUnlinkRequest={vi.fn()}
         />,
       );
-      expect(screen.getByRole("button", { name: "Link options for worker" }).textContent).toBe(
-        "WATCHED",
-      );
+      // Not the role spelled out, and not the cadence: the connector states
+      // the relationship, and a setting is not news.
+      expect(screen.getByRole("button", { name: "Link options for worker" }).textContent).toBe("⇱");
       unmount();
     }
   });
@@ -73,7 +73,8 @@ describe("LinkOptionsMenu", () => {
     // moment with nobody doing anything.
     renderMenu({ orchestrateStatus: "pending_restart" });
     const trigger = screen.getByRole("button", { name: "Link options for worker" });
-    expect(trigger.querySelector("span[aria-hidden]")).toBeNull();
+    // The glyph itself is aria-hidden, so the mark is the only other child.
+    expect(trigger.childElementCount).toBe(1);
     expect(trigger.getAttribute("title")).toBeNull();
   });
 
