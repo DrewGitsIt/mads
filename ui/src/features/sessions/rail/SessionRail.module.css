@@ -614,86 +614,60 @@
 }
 
 /* ── the link connector ──────────────────────────────────────────────────
-   A holder's subjects hang off a drawn trunk instead of wearing a
+   A holder's subjects hang off a drawn line instead of wearing a
    LINKED / WATCHED pill: the card is already indented underneath the other
    party, so the pill was the caption repeating what the indent said.
 
-   Every number here is an edge of a box this rule owns. The elbow reaches
-   UP from the subject to bridge the gap above it and then turns out to the
-   subject's own border — it never reaches across the holder, whose height
-   it cannot know. (The previous .nestedRow::before did: it hung off the
-   child at a hard-coded top: -16px tuned for a nominal one-line holder, and
-   stopped connecting the moment the holder grew a second title line, a
-   summary teaser or a context line.)
+   The elbow and its head are SVG (LinkConnector.tsx) — a border can only
+   turn through its radius and can only end in a CSS triangle, and at 1x
+   that read as a speck. Only the straight continuation below a subject
+   that has another after it is still a border, because there is nothing
+   for it to curve and one element beats one per row.
 
-   The dot's centre is 18px below the card's top border: 1px border + 8px
-   padding + 5px dot margin + half of the 8px dot. These are positioned
-   against the card's PADDING box, which already excludes that border, so
-   every offset below is one less than the figure it is aiming at. */
+   Both are --text3, not --line: this has to survive against --bg0 at 1x on
+   a real display, which --line does not. It is still below the status
+   vocabulary — colour on these cards means a state, and a connector in
+   --accent would be a second thing on the row saying "working". */
 .subjects {
   position: relative;
-  margin-left: 20px;
+  /* Wider than the 20px it was: the connector needs room for the sweep, and
+     this puts its trunk just inside the holder card's left edge rather than
+     hanging outside it. */
+  margin-left: 26px;
 }
 
-.subjects .row::before {
-  content: "";
+.subjects .row {
+  position: relative;
+  width: 100%;
+}
+
+.linkConnector {
   position: absolute;
-  left: -11px;
-  top: -6px;
-  width: 11px;
-  /* -6 + 24 - 1 puts the bottom border's centreline on 17 from the padding
-     box, which is the dot's 18 from the border box. */
-  height: 24px;
-  border-left: 2px solid var(--line);
-  border-bottom: 2px solid var(--line);
-  border-bottom-left-radius: 7px;
+  left: -30px;
+  top: -7px;
+  color: var(--text3);
+  pointer-events: none;
+  overflow: visible;
 }
 
-/* Only a subject with another below it carries the trunk past its own
-   elbow, so the chain terminates exactly at the last connection — a holder
-   with one subject gets an elbow and nothing dangling underneath it. */
+/* Only a subject with another below it carries the line past its own head,
+   so the chain terminates exactly at the last connection — a holder with
+   one subject gets an elbow and nothing dangling underneath it. x matches
+   the connector's trunk (SVG x 6, in a box that starts 30px out). */
 .subjects .row:not(:last-child)::after {
   content: "";
   position: absolute;
-  left: -11px;
-  top: 18px;
-  bottom: -5px;
-  border-left: 2px solid var(--line);
+  left: -25px;
+  top: 17px;
+  bottom: -6px;
+  border-left: 2.6px solid var(--text3);
 }
 
-/* How the line ends is what says which relationship it is. Dashing the line
-   itself was the first attempt and does not survive the geometry: over an
-   11x24 elbow a dash pattern never establishes a rhythm and renders as a
-   broken box. A terminator is legible at any size, and brighter than the
-   line it ends so it stays discernible against the card's border. */
-.linkTerminator {
-  position: absolute;
-  left: -7px;
-  /* centred on the elbow: 13 + half of the 8px the two borders make. */
-  top: 13px;
-  width: 0;
-  height: 0;
-  border-left: 7px solid var(--text3);
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-}
-
-/* A monitor reads; nothing flows to it. A ring, not a push. */
-.linkTerminatorWatch {
-  top: 14px;
-  width: 6px;
-  height: 6px;
-  box-sizing: border-box;
-  border: 1.5px solid var(--text3);
-  border-radius: 50%;
-  background: var(--bg1);
-}
-
-/* The fan-out count, where "LEADER · 3" used to be: it sits on the trunk it
+/* The fan-out count, where "LEADER · 3" used to be: it sits on the line it
    is counting rather than taking a pill's worth of the holder's meta row. */
 .linkFan {
   position: absolute;
-  left: 2px;
+  left: -5px;
   width: 15px;
   height: 15px;
   display: flex;

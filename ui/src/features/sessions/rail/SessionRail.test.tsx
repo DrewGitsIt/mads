@@ -699,10 +699,10 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
   });
 
   // How the line ENDS is what says which relationship it is. Dashing the line
-  // itself was the first attempt: over an 11x24px elbow a dash pattern never
-  // establishes a rhythm and renders as a broken box, so the distinction moved
-  // to the terminator, which is legible at any size.
-  it("terminates a leader's connector differently from a monitor's", () => {
+  // itself was the first attempt and does not survive the geometry: over an
+  // elbow this short a dash pattern never establishes a rhythm and renders as
+  // a broken box. A solid head drives, an open one reads.
+  it("heads a leader's connector differently from a monitor's", () => {
     FLAGS.linkedSessions = true;
     const watched = makeSession({ id: "w", name: "under watch" });
     render(
@@ -715,12 +715,21 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
         ]}
       />,
     );
-    const termOf = (name: string) =>
-      screen.getByText(name).closest('[role="button"]')!.querySelector('[class*="linkTerminator"]')!;
-    // An arrowhead leads — instructions flow into the subject.
-    expect(termOf("payments refactor").className).not.toMatch(/Watch/);
-    // A ring watches — it reads, nothing flows.
-    expect(termOf("under watch").className).toMatch(/linkTerminatorWatch/);
+    // The head is the last path in the connector: filled for a leader,
+    // stroked for a monitor. Asserted on the attributes rather than a class,
+    // because that IS the distinction — there is no second element to name.
+    const headOf = (name: string) => {
+      const paths = screen
+        .getByText(name)
+        .closest('[role="button"]')!
+        .querySelectorAll('[class*="linkConnector"] path');
+      return paths[paths.length - 1];
+    };
+    // Solid: instructions flow into the subject.
+    expect(headOf("payments refactor").getAttribute("fill")).toBe("currentColor");
+    // Open: a monitor reads its subject, it does not drive it.
+    expect(headOf("under watch").getAttribute("fill")).toBeNull();
+    expect(headOf("under watch").getAttribute("stroke")).toBe("currentColor");
     // Two subjects now, so the trunk carries the count the pill used to.
     const trunk = screen.getByText("payments refactor").closest('[role="button"]')!.parentElement!;
     expect(trunk.querySelector('[class*="linkFan"]')?.textContent).toBe("2");

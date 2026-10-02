@@ -8,6 +8,7 @@ import type { LinkHolderSubject } from "./LinkHolderMenu";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import { HarnessMark } from "./HarnessMark";
+import { LinkConnector } from "./LinkConnector";
 import {
   EMPTY_AGENT_STATE,
   EMPTY_OPEN_TASK_BREAKDOWN,
@@ -946,17 +947,7 @@ function SessionRow({
         }
       }}
     >
-      {nested && (
-        <span
-          className={[
-            styles.linkTerminator,
-            linkBadge === "WATCHED" ? styles.linkTerminatorWatch : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          aria-hidden="true"
-        />
-      )}
+      {nested && <LinkConnector watched={linkBadge === "WATCHED"} />}
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
