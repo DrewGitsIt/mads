@@ -14,6 +14,7 @@ import type {
   Config,
   CostMetrics,
   DiagnoseResult,
+  EnvCandidates,
   Envelope,
   FastModelStatus,
   FileChange,
@@ -1262,7 +1263,7 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: deleteCredential");
   }
 
-  async listCredentialEnvCandidates(): Promise<string[]> {
+  async listCredentialEnvCandidates(): Promise<EnvCandidates> {
     throw new Error("not fixtured: listCredentialEnvCandidates");
   }
 

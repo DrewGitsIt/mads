@@ -48,7 +48,7 @@ describe("CredentialsSection", () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
-        "GET /credentials/env-candidates": () => jsonResponse([]),
+        "GET /credentials/env-candidates": () => jsonResponse({ candidates: [], looked_for: [] }),
         "GET /credentials": () => jsonResponse([]),
         "POST /credentials": () => jsonResponse({ name: "OPENAI_API_KEY" }, 201),
       }),
@@ -73,7 +73,8 @@ describe("CredentialsSection", () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
-        "GET /credentials/env-candidates": () => jsonResponse(["ANTHROPIC_API_KEY"]),
+        "GET /credentials/env-candidates": () =>
+          jsonResponse({ candidates: ["ANTHROPIC_API_KEY"], looked_for: ["AWS_*"] }),
         "GET /credentials": () => jsonResponse([]),
         "POST /credentials/import": () => jsonResponse({ imported: ["ANTHROPIC_API_KEY"] }),
       }),

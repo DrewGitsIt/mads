@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -116,7 +117,14 @@ func TestCredentialEnvCandidatesUsesAllowlistNotHeuristic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidates := decodeJSON[[]string](t, resp)
+	body := decodeJSON[struct {
+		Candidates []string `json:"candidates"`
+		LookedFor  []string `json:"looked_for"`
+	}](t, resp)
+	candidates := body.Candidates
+	if !slices.Contains(body.LookedFor, "ANTHROPIC_API_KEY") || !slices.Contains(body.LookedFor, "AWS_*") {
+		t.Errorf("looked_for = %v, want the allowlist with prefixes as NAME_*", body.LookedFor)
+	}
 
 	hasAllowlisted, hasRandom := false, false
 	for _, c := range candidates {

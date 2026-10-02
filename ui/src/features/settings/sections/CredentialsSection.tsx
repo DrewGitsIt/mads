@@ -2,6 +2,7 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Chip } from "../../../components/Chip/Chip";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
+import { EnvLookedFor } from "../EnvLookedFor";
 import { useCredentials } from "../state/useCredentials";
 import type { UseConfig } from "../state/useConfig";
 import type { EnvMode, Profile } from "../../../router/types";
@@ -262,9 +263,13 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
                 </li>
               ))}
               {credentials.envCandidates.length === 0 && (
-                <li className={styles.empty}>No unimported env vars detected.</li>
+                <li className={styles.empty}>
+                  None of the variables mads looks for are set in the environment it was started from, or
+                  they&apos;re already stored.
+                </li>
               )}
             </ul>
+            <EnvLookedFor names={credentials.envLookedFor} />
             <Button
               variant="primary"
               onClick={() => void handleImport()}

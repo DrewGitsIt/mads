@@ -23,7 +23,10 @@ describe("CredentialImportStep", () => {
       "fetch",
       routedFetch({
         "GET /credentials": [],
-        "GET /credentials/env-candidates": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+        "GET /credentials/env-candidates": {
+          candidates: ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"],
+          looked_for: ["AWS_*"],
+        },
         "POST /credentials/import": { imported: ["OPENAI_API_KEY"] },
       }),
     );
@@ -37,18 +40,21 @@ describe("CredentialImportStep", () => {
     await waitFor(() => expect(onNext).toHaveBeenCalledTimes(1));
   });
 
-  it("Skip for now calls onNext without importing", async () => {
+  it("explains an empty scan, names what it looked for, and continues without importing", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
         "GET /credentials": [],
-        "GET /credentials/env-candidates": [],
+        "GET /credentials/env-candidates": { candidates: [], looked_for: ["ANTHROPIC_API_KEY", "AWS_*"] },
       }),
     );
     const onNext = vi.fn();
     render(<CredentialImportStep onNext={onNext} onBack={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText(/no unimported env vars/i)).toBeTruthy());
-    fireEvent.click(screen.getByText("Skip for now"));
+    await waitFor(() => expect(screen.getByText(/nothing to import/i)).toBeTruthy());
+    expect(screen.queryByText("Import selected")).toBeNull();
+    fireEvent.click(screen.getByText("What does mads look for?"));
+    expect(screen.getByText("AWS_*")).toBeTruthy();
+    fireEvent.click(screen.getByText("Continue"));
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 });

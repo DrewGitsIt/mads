@@ -32,7 +32,8 @@ function stubCredentials(
     vi.fn().mockImplementation((input: URL | string) => {
       const url = input.toString();
       if (url.includes("/fast-model/status")) return Promise.resolve(jsonResponse(fastModelStatus));
-      if (url.includes("/credentials/env-candidates")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/credentials/env-candidates"))
+        return Promise.resolve(jsonResponse({ candidates: [], looked_for: [] }));
       if (url.includes("/credentials")) return Promise.resolve(jsonResponse(names));
       throw new Error(`unhandled fetch: ${url}`);
     }),

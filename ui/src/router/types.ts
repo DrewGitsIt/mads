@@ -1135,6 +1135,14 @@ export interface BehaviorInfo {
   level: BehaviorLevel;
 }
 
+// GET /credentials/env-candidates — the import picklist plus the allowlist
+// that produced it (prefixes as "AWS_*"), so an empty picklist can say what
+// was looked for.
+export interface EnvCandidates {
+  candidates: string[];
+  looked_for: string[];
+}
+
 // mirrors pkg/preflight/preflight.go Check
 export interface PreflightCheck {
   name: string;

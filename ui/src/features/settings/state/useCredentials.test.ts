@@ -42,7 +42,11 @@ describe("useCredentials", () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(new Response(JSON.stringify([]), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(["MADS_TEST_SECRET"]), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ candidates: ["MADS_TEST_SECRET"], looked_for: ["MADS_TEST_*"] }), {
+          status: 200,
+        }),
+      )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ imported: ["MADS_TEST_SECRET"] }), { status: 200 }),
       );
@@ -55,6 +59,7 @@ describe("useCredentials", () => {
       await result.current.loadEnvCandidates();
     });
     expect(result.current.envCandidates).toEqual(["MADS_TEST_SECRET"]);
+    expect(result.current.envLookedFor).toEqual(["MADS_TEST_*"]);
 
     let imported: string[] = [];
     await act(async () => {

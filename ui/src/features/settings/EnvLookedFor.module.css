@@ -1,0 +1,34 @@
+.details {
+  font: 400 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.summary {
+  cursor: pointer;
+  color: var(--text2);
+}
+
+.summary:hover {
+  color: var(--text);
+}
+
+.body {
+  margin: var(--space-2) 0;
+}
+
+.names {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.names code {
+  padding: 1px var(--space-1);
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+  font: 400 var(--fs-sm) var(--mono);
+  color: var(--text);
+}
