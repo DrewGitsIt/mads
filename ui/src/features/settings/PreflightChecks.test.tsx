@@ -12,6 +12,12 @@ describe("PreflightChecks", () => {
     expect(screen.queryByText("provider:kiro-cli")).toBeNull();
   });
 
+  it("marks an unproven-version provider with a warning, not a failure", () => {
+    render(<PreflightChecks checks={fixturePreflightChecks} loading={false} onRerun={vi.fn()} />);
+    expect(screen.getByText("provider:goose").textContent).toContain("⚠");
+    expect(screen.getByText("provider:goose").textContent).not.toContain("✗");
+  });
+
   it("lists every probed provider, detected or not, behind the (i) button", () => {
     render(<PreflightChecks checks={fixturePreflightChecks} loading={false} onRerun={vi.fn()} />);
     expect(screen.queryByText("Providers checked")).toBeNull();

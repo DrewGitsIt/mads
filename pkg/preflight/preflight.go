@@ -17,6 +17,11 @@ type Check struct {
 	// so the UI hides these rows from the health list and only names them
 	// in its "providers checked" disclosure.
 	NotInstalled bool `json:"not_installed,omitempty"`
+	// Warning qualifies an unhealthy row as a caution rather than a
+	// failure — e.g. a provider newer than its proven compat window, which
+	// probably works but hasn't been shown to. Healthy stays false so a
+	// consumer that only reads Healthy still flags it.
+	Warning bool `json:"warning,omitempty"`
 	// InstallURL and InstallCommand are the vendor's own install page and
 	// documented one-line installer, set on provider rows only — the UI's
 	// "nothing detected" state offers them as the way forward.

@@ -135,22 +135,24 @@ func TestCheckProviderBinary_InstalledButBroken(t *testing.T) {
 
 // TestGooseCompatRange pins the proven 1.46–1.48 window: versions inside it
 // pass, versions on either side get guidance (Max is exclusive at 1.49.0 so
-// the whole proven 1.48.x line passes).
+// the whole proven 1.48.x line passes), and only the newer side is a mere
+// warning — too-old is a known incompatibility.
 func TestGooseCompatRange(t *testing.T) {
 	r, known := compatMatrix["goose"]
 	if !known {
 		t.Fatal("no goose row in compatMatrix")
 	}
-	for version, want := range map[string]bool{
-		"1.45.9": false,
-		"1.46.0": true,
-		"1.48.0": true,
-		"1.48.5": true,
-		"1.49.0": false,
+	for version, want := range map[string]struct{ ok, unproven bool }{
+		"1.45.9": {false, false},
+		"1.46.0": {true, false},
+		"1.48.0": {true, false},
+		"1.48.5": {true, false},
+		"1.49.0": {false, true},
+		"1.50.1": {false, true},
 	} {
-		ok, guidance := r.evaluate(version)
-		if ok != want {
-			t.Errorf("goose compat evaluate(%s) = %v, want %v", version, ok, want)
+		ok, unproven, guidance := r.evaluate(version)
+		if ok != want.ok || unproven != want.unproven {
+			t.Errorf("goose compat evaluate(%s) = ok %v unproven %v, want %+v", version, ok, unproven, want)
 		}
 		if !ok && guidance == "" {
 			t.Errorf("goose compat evaluate(%s) rejected without guidance", version)

@@ -1687,6 +1687,7 @@ export const fixturePreflightChecks: PreflightCheck[] = [
   {
     name: "provider:goose",
     healthy: false,
+    warning: true,
     detail: "goose v1.50.1 detected",
     fix_hint: "mads has only been proven against < 1.49.0, detected 1.50.1",
   },

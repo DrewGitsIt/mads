@@ -27,6 +27,10 @@
   color: var(--text2);
 }
 
+.warnIcon {
+  color: var(--warn-fg);
+}
+
 .hint {
   color: var(--warn-fg);
   font: 400 var(--fs-sm) var(--sans);

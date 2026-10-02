@@ -33,7 +33,7 @@ export function PreflightChecks({ checks, loading, onRerun }: PreflightChecksPro
         <ul className={styles.checks}>
           {shown.map((check) => (
             <li key={check.name} className={styles.check}>
-              <span aria-hidden="true">{check.healthy ? "✓" : "✗"}</span>
+              <StatusIcon check={check} />
               {check.name}
               {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
             </li>
@@ -74,6 +74,19 @@ export function PreflightChecks({ checks, loading, onRerun }: PreflightChecksPro
       {noneDetected && <NoProviderDetected providers={probed} loading={loading} onRerun={onRerun} />}
     </div>
   );
+}
+
+/** ✓ healthy, ⚠ a caution (e.g. a provider newer than its proven range), ✗ a failure. */
+function StatusIcon({ check }: { check: PreflightCheck }) {
+  if (check.healthy) return <span aria-hidden="true">✓</span>;
+  if (check.warning) {
+    return (
+      <span aria-hidden="true" className={styles.warnIcon}>
+        ⚠
+      </span>
+    );
+  }
+  return <span aria-hidden="true">✗</span>;
 }
 
 function providerName(check: PreflightCheck): string {

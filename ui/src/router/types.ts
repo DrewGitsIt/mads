@@ -1139,6 +1139,7 @@ export interface BehaviorInfo {
 export interface PreflightCheck {
   name: string;
   healthy: boolean;
+  warning?: boolean;
   detail?: string;
   fix_hint?: string;
   not_installed?: boolean;
