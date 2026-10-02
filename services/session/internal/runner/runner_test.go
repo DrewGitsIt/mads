@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -1769,5 +1770,32 @@ func TestTranscriptPrefersLiveACPBuffer(t *testing.T) {
 	}
 	if msgs[1].Role != "agent" || msgs[1].Text != "you said hi" {
 		t.Errorf("msgs[1] = %+v, want {role: agent, text: you said hi}", msgs[1])
+	}
+}
+
+// The record is the only place anyone can read a session's working directory
+// — the rail's hover, the docked shell — and it said "." for every session
+// that did not pick one, which is every session: the Router spawns the Session
+// Service without -cwd. The resolution has to be the real inherited directory
+// and nothing else, because the alternative is guessing at it from a workspace.
+func TestRecordedCwdResolvesTheInheritedDirectory(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for _, implicit := range []string{".", "./", ""} {
+		if got := recordedCwd(implicit); got != wd {
+			t.Errorf("recordedCwd(%q) = %q, want the process's own dir %q", implicit, got, wd)
+		}
+	}
+}
+
+// A directory someone chose is reported exactly as chosen, including the
+// worktree Start isolated the session into.
+func TestRecordedCwdLeavesAChosenDirectoryAlone(t *testing.T) {
+	for _, dir := range []string{"/home/drew/repo/other", "/tmp/mads-worktrees/ses_1", "relative/path"} {
+		if got := recordedCwd(dir); got != dir {
+			t.Errorf("recordedCwd(%q) = %q, want it unchanged", dir, got)
+		}
 	}
 }

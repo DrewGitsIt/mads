@@ -442,7 +442,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	// after this point still leaves a resumable ref recorded.
 	sess.ProviderRef = provSess.Ref()
 	sess.Activity = contracts.SessionActive
-	sess.Cwd = cwd // the resolved working dir the agent runs in — surfaced for the docked shell
+	sess.Cwd = recordedCwd(cwd) // where the agent actually runs — the docked shell opens here
 	r.recordMu.Lock()
 	if err := r.data.UpdateSession(ctx, &sess); err != nil {
 		r.recordMu.Unlock()
@@ -505,6 +505,32 @@ func (r *Runner) Start(ctx context.Context) error {
 	go r.pump(provSess)
 	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
 	return nil
+}
+
+// recordedCwd is the working directory to put on the session record.
+//
+// cwd is "." for every session that did not choose one — the Router spawns the
+// Session Service without -cwd, so the child inherits the Router's directory
+// and the provider child inherits it in turn. "." is the honest value for the
+// code paths below, which have to tell a *chosen* directory from an inherited
+// one: installHook and the shadow store both refuse to act on "." because
+// writing into whatever repo this process happens to have been started from is
+// not the same act as writing into a directory someone asked for.
+//
+// Reporting it is a different question, and "." is no answer to it: the rail's
+// hover read "Directory: ." on every session in the list, and the UI had to
+// suppress the field to avoid printing junk. The resolution is not an
+// inference — os.Getwd() is literally the directory the provider child runs in.
+// A failure leaves the record saying what it said before rather than guessing.
+func recordedCwd(cwd string) string {
+	if cwd != "" && cwd != "." && cwd != "./" {
+		return cwd
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return cwd
+	}
+	return wd
 }
 
 // installHook installs the mads post-commit hook (spec §5) in the session's
