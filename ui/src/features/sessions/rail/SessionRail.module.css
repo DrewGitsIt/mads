@@ -658,7 +658,10 @@
   content: "";
   position: absolute;
   left: -25px;
-  top: 17px;
+  /* Where the curve LEAVES the trunk (SVG y10, in a box starting 7px up),
+     not where it meets the card: the 14px in between is the bend, and
+     starting the continuation below it left a gap in the vertical line. */
+  top: 3px;
   bottom: -6px;
   border-left: 2.6px solid var(--text3);
 }
@@ -667,7 +670,14 @@
    is counting rather than taking a pill's worth of the holder's meta row. */
 .linkFan {
   position: absolute;
-  left: -5px;
+  /* Centred on the trunk, which .linkConnector puts at -23 from .subjects
+     (its own box starts 30px out, the trunk is 6 into that, +1 for the
+     row's border). Sits above the first subject's bend so it masks a
+     straight run rather than a curve — hence the z-index, over a line that
+     is drawn by rows later in the DOM. */
+  left: -30px;
+  top: -12px;
+  z-index: 1;
   width: 15px;
   height: 15px;
   display: flex;

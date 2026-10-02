@@ -114,63 +114,49 @@
   .nested { position:relative; margin-left:20px; width:calc(100% - 20px); }
   .nested.old::before { content:""; position:absolute; left:-10px; top:-16px; bottom:50%; width:10px; border-left:1px solid var(--line); border-bottom:1px solid var(--line); border-bottom-left-radius:6px; }
 
-  /* ══ #1 THE SPINE ══════════════════════════════════════════════════════
-     One trunk for the whole subject stack, plus a 10px tick per subject.
-     Nothing here measures anything: the trunk spans its own container and
-     the tick sits at 18px — the status dot's centre, which is fixed by the
-     title row's own box (8px padding + 1px border + 5px dot margin + 4px).
-     Contrast today's .nestedRow::before, which hangs off the CHILD at a
-     hard-coded top:-16px tuned for a nominal one-line parent, and stops
-     reaching the moment the parent grows a second title line. */
-  .subs { position:relative; margin-left:20px; }
+  /* ══ #1 THE CONNECTOR ══════════════════════════════════════════════════
+     The elbow and its head are SVG, not borders on a pseudo-element. The
+     first pass here was borders, and it failed at 1x: a border can only
+     turn through its border-radius (7px, where this sweeps 14), can only
+     end in a CSS triangle, and left the head 9px of an 11px horizontal run
+     to live in — so the stroke bled through its body and it read as a
+     funnel. Only the straight continuation below a subject that has another
+     after it is still a border, because there is nothing for it to curve.
+
+     Coordinates are relative to the subject card's PADDING box, which is
+     what an absolutely-positioned child is placed from, so each is one less
+     than the figure it aims at: x29 the card's border, x6 the trunk, y24
+     the status dot's centre. */
+  .subs { position:relative; margin-left:26px; }
   .subs .row { position:relative; width:100%; }
-  /* Elbow: down from the row above, round the corner, out to this card's edge.
-     Each row draws only its OWN segment, so the chain terminates at the last
-     tick — a lone subject gets an elbow and nothing hanging past it. */
-  .subs .row::before { content:""; position:absolute; left:-11px; top:-5px; width:11px; height:24px;
-                       border-left:2px solid var(--conn); border-bottom:2px solid var(--conn);
-                       border-bottom-left-radius:7px; }
-  /* and only a row with another below it continues the trunk past its own tick */
-  .subs .row:not(:last-child)::after { content:""; position:absolute; left:-11px; top:18px; bottom:-5px;
-                                       border-left:2px solid var(--conn); }
-  /* Arrowhead — leader only; a monitor pulls, it does not push. Its tip lands on
-     the card's border and its centreline is the elbow's: the elbow's bottom
-     border spans y 17-19, so the 8px-tall head is centred on 18. */
-  .subs .ah { position:absolute; left:-7px; top:14px; width:0; height:0;
-              border-left:7px solid var(--conn-strong,var(--conn));
-              border-top:4px solid transparent; border-bottom:4px solid transparent; }
-  /* A monitor terminates in a hollow ring instead — an eye, not a push.
-     NOT a dashed line: over an 11x24 elbow a dash pattern never establishes a
-     rhythm and renders as a broken box (tested; see the note below). */
-  .watch .subs .ah { left:-7px; top:15px; width:6px; height:6px; border:1.5px solid var(--conn-strong,var(--conn));
-                     border-radius:50%; background:var(--bg1); box-sizing:border-box; }
+  .conn { position:absolute; left:-30px; top:-7px; color:var(--conn); pointer-events:none; overflow:visible; }
+  .subs .row:not(:last-child)::after { content:""; position:absolute; left:-25px; top:3px; bottom:-6px;
+                                       border-left:2.6px solid var(--conn); }
 
-  /* Monochrome, style-coded (recommended): leader solid, monitor dashed.
-     The rail's colour vocabulary is already fully spent on STATE —
-     accent=working, warn=needs you, bad=crashed, ok=done. A connector in
-     accent would be a second thing on the card painted "working". */
-  .mono { --conn:#6b6252; --conn-strong:#9a9080; }
-  
+  /* Monochrome (recommended): the two roles differ by how the head is
+     PAINTED — solid drives, open reads — not by hue and not by dashing the
+     line. The rail's colour vocabulary is already fully spent on STATE
+     (accent=working, warn=needs you, bad=crashed, ok=done), and a dash
+     pattern over an elbow this short never establishes a rhythm: it renders
+     as a broken box rather than a line. */
+  .mono { --conn:var(--text3); }
 
-
-  /* Colour-coded, as asked. Held well below status chroma so a line never
+  /* Colour-coded, as asked. Held below status chroma so a line never
      competes with a dot. */
-  .hue.leader  { --conn:rgba(192,133,82,.6); --conn-strong:rgba(192,133,82,.95); }
-  .hue.watch   { --conn:rgba(150,175,199,.55); --conn-strong:rgba(150,175,199,.95); }
-  
+  .hue.leader { --conn:rgba(192,133,82,.85); }
+  .hue.watch  { --conn:rgba(150,175,199,.8); }
 
-
-  /* The traffic pulse: dashes march down the trunk while a linked session is
-     transitioning. One element, so there is no seam to misphase. */
-  .live .subs .row:not(:last-child)::after { border:none; width:2px;
-        background-image:linear-gradient(var(--conn-strong,var(--conn)) 50%, transparent 0);
-        background-size:2px 8px; animation:march .7s linear infinite; }
+  /* The traffic pulse: dashes march down the straight runs between cards
+     while a linked session is transitioning. */
+  .live .subs .row:not(:last-child)::after { border:none; width:2.6px;
+        background-image:linear-gradient(var(--conn) 50%, transparent 0);
+        background-size:2.6px 8px; animation:march .7s linear infinite; }
   @keyframes march { to { background-position-y:8px; } }
   @media (prefers-reduced-motion:reduce) { .live .subs .row::after { animation:none; } }
 
   /* the fan-out count, where "LEADER · 3" used to be */
   .grp { position:relative; }
-  .grp .fan { position:absolute; left:2px; width:15px; height:15px; border-radius:50%; background:var(--bg0);
+  .grp .fan { position:absolute; left:-5px; top:-12px; z-index:3; width:15px; height:15px; border-radius:50%; background:var(--bg0);
               border:1px solid var(--conn); color:var(--text3); font:600 9px var(--sans);
               display:flex; align-items:center; justify-content:center; pointer-events:none; z-index:2; }
 
@@ -266,7 +252,7 @@
               <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">Wed 01:47</span></div>
                 <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
               </div>
@@ -279,14 +265,14 @@
               <div class="status "><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M22 18.8 L28 24 L22 29.2" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <div class="rowTop"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="when">Wed 01:45</span></div>
                 <div class="status needs"><span>◌</span><span class="lbl">Stalled · no agent activity</span></div>
               </div>
             </div>
           </div>
         </div>
-        <p class="note" style="margin-top:10px"><b>An arrowhead leads</b> — instructions flow into the subject. <b>A hollow ring watches</b> — it reads, nothing flows. One deviation from what you approved: I drew the monitor dashed first, and over an 11&times;24px elbow a dash pattern never gets a rhythm going; it renders as a broken box rather than a line. Terminators carry the distinction at any size, and the line stays one solid weight. Colour on this card is <em>already</em> fully spent on state, and a connector painted <code>--accent</code> would be a second thing on the row saying "working".</p>
+        <p class="note" style="margin-top:10px"><b>A solid head drives</b>; <b>an open one reads</b>. One deviation from what you approved: I drew the monitor dashed first, and over an elbow this short a dash pattern never gets a rhythm going — it renders as a broken box rather than a line. How the head is painted carries the distinction at any size, and the line stays one weight. Colour on this card is <em>already</em> fully spent on state, and a connector painted <code>--accent</code> would be a second thing on the row saying "working".</p>
       </div>
 
       <div class="col">
@@ -298,7 +284,7 @@
               <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="when">Wed 01:47</span></div>
                 <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
               </div>
@@ -311,14 +297,14 @@
               <div class="status "><span>·</span><span class="lbl">Sleeping · wakes on send</span></div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M22 18.8 L28 24 L22 29.2" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <div class="rowTop"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="when">Wed 01:45</span></div>
                 <div class="status needs"><span>◌</span><span class="lbl">Stalled · no agent activity</span></div>
               </div>
             </div>
           </div>
         </div>
-        <p class="note" style="margin-top:10px">Amber leads, blue-grey watches — same two terminators. Reads faster than A at the cost of putting a third amber thing on a card that already has an amber dot and an amber status clause. If you want colour, this is the dosage I would use — not full chroma.</p>
+        <p class="note" style="margin-top:10px">Amber leads, blue-grey watches — same two heads. Reads faster than A at the cost of putting a third amber thing on a card that already has an amber dot and an amber status clause. If you want colour, this is the dosage I would use — not full chroma.</p>
       </div>
     </div>
 
@@ -329,21 +315,21 @@
         <div class="rowlabel">Fan-out, and the pulse</div>
         <div class="railcol">
           <div class="grp mono live">
-            <div class="fan" style="top:47px">3</div>
+            <div class="fan">3</div>
             <div class="row">
               <div class="rowTop"><span class="dot work"></span><span class="name">Release 0.4 orchestration</span><span class="when">2m</span></div>
               <div class="status working"><span class="spin"></span><span class="lbl">Running bash · make check</span></div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot work"></span><span class="name">Port the shadow store</span><span class="when">12s</span></div>
                 <div class="status working"><span class="spin"></span><span class="lbl">Editing · shadow/store.go</span></div>
               </div>
-              <div class="row">
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot on"></span><span class="name">Conformance matrix rows</span><span class="when">4m</span></div>
                 <div class="status "><span>✓</span><span class="lbl">Done · your turn</span></div>
               </div>
-              <div class="row">
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot attn"></span><span class="name">macOS smoke on the Mac mini</span><span class="when">18m</span></div>
                 <div class="status needs"><span>🔔</span><span class="lbl">Needs you · permission</span></div>
               </div>
@@ -503,7 +489,7 @@
               </div>
             </div>
             <div class="subs">
-              <div class="row"><i class="ah"></i>
+              <div class="row"><svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none" aria-hidden="true"><path d="M6 0 L6 10 Q6 24 21 24" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor"/></svg>
                 <div class="rowTop"><span class="dot on"></span><span class="name">Fix 5 MADS UI issues</span><span class="hx" style="margin-top:3px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/></svg></span><span class="when">Wed 01:47</span></div>
                 <div class="status"><span>✓</span><span class="lbl">Done · your turn</span></div>
                 <div class="clusterOut show">
