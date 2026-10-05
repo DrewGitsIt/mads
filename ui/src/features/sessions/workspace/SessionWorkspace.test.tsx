@@ -48,6 +48,18 @@ describe("SessionWorkspace", () => {
     expect(screen.queryByRole("tabpanel", { name: "Pipeline" })).toBeNull();
   });
 
+  // The title stands alone: no "ACTIVE"/"INACTIVE" chip beside it — the rail
+  // card's status line says what the session is doing.
+  it("shows the session name with no activity chip beside it", async () => {
+    renderWorkspace();
+
+    const nameButton = await screen.findByTitle("Rename session");
+    await waitFor(() => expect(nameButton.textContent).toBe("Add retry backoff to the ingest worker"));
+    const titleRow = nameButton.parentElement!;
+    expect(titleRow.textContent).toBe("Add retry backoff to the ingest worker");
+    expect(within(titleRow.parentElement!).queryByText(/^(active|inactive)$/i)).toBeNull();
+  });
+
   it("renames the session from the header via renameSession", async () => {
     const routerClient = new FakeRouterClient();
     const rename = vi.spyOn(routerClient, "renameSession");

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
-import { Chip } from "../../../components/Chip/Chip";
 import { Toast } from "../../../components/Toast/Toast";
 import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
@@ -44,7 +43,9 @@ export interface SessionWorkspaceProps {
 }
 
 /**
- * Thin per-session shell: back control, name/activity chip, tab bar. Tabs
+ * Thin per-session shell: back control, name, tab bar. (No activity chip:
+ * the rail card's status line already says whether the session is working,
+ * sleeping or done, in more useful words than "active".) Tabs
  * lazy-mount on first visit and stay mounted (hidden) after that so a
  * visited tab's own state (composer draft, graph toggle, scroll) survives
  * flipping between tabs — see tabRegistry.tsx for the tab definitions.
@@ -207,9 +208,6 @@ export function SessionWorkspace({
             >
               {session ? session.name || "Untitled session" : "Loading…"}
             </button>
-          )}
-          {session && (
-            <Chip tone={session.activity === "active" ? "ok" : "neutral"}>{session.activity}</Chip>
           )}
         </span>
         <nav className={styles.tabs} role="tablist">
