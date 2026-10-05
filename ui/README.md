@@ -59,6 +59,11 @@ that's already serving the just-built `ui/dist` (see `services/router/README.md`
 "Serving the UI"). From the repo root, `make app` (`scripts/app.sh`) starts the Data
 Service and Router first and only then runs `npm --prefix ui start`, so that ordering
 already holds — running `npm start` here directly assumes a Router is already up.
+If a Data Service or Router is already answering on its port, `app.sh` reuses it only when
+its `/health` `root` is this checkout (and says so, noting it was not rebuilt — restart it
+to pick up Go changes); one started from another checkout, or an older build that doesn't
+report `root`, makes it stop with the owning path and pid instead of silently showing
+that checkout's UI. `MADS_REUSE_SERVICES=1` reuses whatever is running anyway.
 `VITE_DEV_SERVER_URL` (set by `npm run dev`'s tooling) still takes priority when present,
 for the Vite dev-server loop.
 

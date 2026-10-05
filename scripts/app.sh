@@ -2,10 +2,16 @@
 # The local end-to-end entry point (until W7 packaging does this properly):
 # ensures the Data Service and Router are up, then launches the Electron app.
 # Services it starts are stopped again when the app exits; services that were
-# already running are left alone.
+# already running are left alone — but only reused if they were launched from
+# THIS checkout (their /health reports it), since the Router serves the UI
+# from its own cwd's ui/dist: a Router left running by another checkout would
+# show that checkout's UI and backend with no hint. MADS_REUSE_SERVICES=1
+# reuses whatever is running anyway.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Physical path (-P): services report os.Getwd(), and the comparison below
+# must not trip over a symlinked checkout.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO_ROOT"
 
 DATA_ADDR="${MADS_DATA_ADDR:-localhost:17374}"
@@ -46,7 +52,72 @@ wait_up() { # <url> <pid> <name> <logfile>
   return 1
 }
 
-if ! up "http://$DATA_ADDR/health"; then
+# One string field out of /health's flat JSON object. No jq dependency; the
+# values are paths and timestamps, so a plain unescaped match is enough.
+health_field() { # <json> <key>
+  printf '%s' "$1" | sed -n 's/.*"'"$2"'":"\([^"]*\)".*/\1/p'
+}
+
+# The pid listening on addr's port, or empty — best effort (lsof may be absent).
+listener_pid() { # <addr>
+  command -v lsof >/dev/null 2>&1 || return 0
+  lsof -nP -iTCP:"${1##*:}" -sTCP:LISTEN -t 2>/dev/null | head -n 1 || true
+}
+
+# A pid's cwd, for builds whose /health predates `root` — best effort.
+pid_cwd() { # <pid>
+  [ -n "$1" ] || return 0
+  if [ -e "/proc/$1/cwd" ]; then
+    readlink "/proc/$1/cwd" 2>/dev/null || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1 || true
+  fi
+}
+
+# A service already answers on addr: reuse it only if it was launched from
+# this checkout, else stop with what's running and how to get out of it.
+check_reuse() { # <addr> <display name> <extra stop note>
+  local addr="$1" name="$2" note="$3" body root started pid where
+  body="$(curl -sf "http://$addr/health" 2>/dev/null || true)"
+  root="$(health_field "$body" root)"
+  started="$(health_field "$body" started_at)"
+  [ -n "$root" ] && [ -d "$root" ] && root="$(cd "$root" && pwd -P)"
+  if [ "$root" = "$REPO_ROOT" ] || [ "${MADS_REUSE_SERVICES:-}" = 1 ]; then
+    echo "app.sh: reusing the $name already running on $addr${root:+ from $root}${started:+ (started $started)} — not rebuilt, so restart it to pick up Go changes"
+    return 0
+  fi
+  pid="$(listener_pid "$addr")"
+  local why="This checkout is $REPO_ROOT, so you'd be looking at the other checkout's code."
+  if [ -n "$root" ]; then
+    where="a $name from $root is already running on $addr${started:+ (started $started)}"
+  else
+    where="a $name is already running on $addr, but it is an older build that doesn't report which checkout it is from"
+    why="This checkout is $REPO_ROOT; that one may be serving another checkout's code, and is at least older than this one's."
+    local cwd
+    cwd="$(pid_cwd "$pid")"
+    [ -n "$cwd" ] && where="$where (its working directory is $cwd)"
+  fi
+  {
+    echo "app.sh: $where."
+    echo "$why"
+    echo "Quit the app and stop that $name${pid:+ (pid $pid)} first${note}, or set MADS_REUSE_SERVICES=1 to use it anyway."
+  } >&2
+  exit 1
+}
+
+# Check both before starting either, so a refusal leaves nothing behind.
+data_running=0 router_running=0
+if up "http://$DATA_ADDR/health"; then
+  data_running=1
+  check_reuse "$DATA_ADDR" "Data Service" ""
+fi
+if up "http://$ROUTER_ADDR/health"; then
+  router_running=1
+  check_reuse "$ROUTER_ADDR" "Router" \
+    " (stopping it also ends the agent sessions and pipeline runs it is running: a turn in progress is cut off, and sessions wake again on your next message)"
+fi
+
+if [ "$data_running" = 0 ]; then
   go build -o bin/data ./services/data
   ./bin/data -addr "$DATA_ADDR" >> /tmp/mads-data.log 2>&1 &
   started+=($!)
@@ -54,7 +125,7 @@ if ! up "http://$DATA_ADDR/health"; then
   echo "app.sh: started data service ($DATA_ADDR)"
 fi
 
-if ! up "http://$ROUTER_ADDR/health"; then
+if [ "$router_running" = 0 ]; then
   go build -o bin/router ./services/router
   go build -o bin/session ./services/session
   ./bin/router -addr "$ROUTER_ADDR" -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &

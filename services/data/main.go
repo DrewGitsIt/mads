@@ -111,5 +111,9 @@ func main() {
 		log.Fatalf("data: listen %s: %v", *addr, err)
 	}
 	log.Printf("data: schema v%d, listening on %s (data dir %s)", version, ln.Addr(), *dataDir)
-	log.Fatal(http.Serve(ln, api.New(db)))
+	ident := api.Identity{StartedAt: time.Now()}
+	if root, err := os.Getwd(); err == nil {
+		ident.Root = root
+	}
+	log.Fatal(http.Serve(ln, api.NewWithIdentity(db, ident)))
 }

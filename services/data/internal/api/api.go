@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -20,16 +21,31 @@ type server struct {
 	leases  *store.Leases
 	caps    *store.Registry[contracts.Capability]
 	metrics *store.Metrics
+	ident   Identity
 }
 
-// New returns the Data Service handler backed by db.
-func New(db *sql.DB) http.Handler {
+// Identity is what GET /health reports about where this process came from,
+// so a launcher (scripts/app.sh) can tell a Data Service started from this
+// checkout from one left running by another — reusing the wrong one
+// silently serves old code. Zero fields are omitted from the response.
+type Identity struct {
+	// Root is the absolute working directory the service was launched
+	// from (the checkout, for app.sh and `make run`).
+	Root      string
+	StartedAt time.Time
+}
+
+// New returns the Data Service handler backed by db, with no Identity.
+func New(db *sql.DB) http.Handler { return NewWithIdentity(db, Identity{}) }
+
+// NewWithIdentity is New plus the Identity GET /health reports.
+func NewWithIdentity(db *sql.DB, ident Identity) http.Handler {
 	l := store.NewLog(db)
 	caps := store.NewCapabilities(l)
 	tasks := store.NewTasks(l)
 	s := &server{
 		db: db, log: l, tasks: tasks, leases: store.NewLeases(l), caps: caps,
-		metrics: store.NewMetrics(l, tasks, caps),
+		metrics: store.NewMetrics(l, tasks, caps), ident: ident,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
@@ -77,7 +93,14 @@ func (s *server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if err := s.db.PingContext(r.Context()); err != nil {
 		status, code = "database unreachable", http.StatusServiceUnavailable
 	}
-	writeJSON(w, code, map[string]string{"service": "data", "status": status})
+	body := map[string]string{"service": "data", "status": status}
+	if s.ident.Root != "" {
+		body["root"] = s.ident.Root
+	}
+	if !s.ident.StartedAt.IsZero() {
+		body["started_at"] = s.ident.StartedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, code, body)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

@@ -66,7 +66,11 @@ Wire types live in `pkg/contracts`. Counterparties: the UI (HTTP, and eventually
 the Data Service (via `pkg/dataclient`); children (Session/Pipeline) are spawned processes,
 never called peer-to-peer.
 
-- `GET /health` — `{"service":"router","status":"ok"}`
+- `GET /health` — `{"service":"router","status":"ok","root":"/abs/checkout","ui_dist":"/abs/checkout/ui/dist","started_at":"<RFC 3339>"}`.
+  `root` is the cwd the Router was launched from and `ui_dist` the absolute `-ui-dist` it
+  serves; `scripts/app.sh` reads them to refuse reusing a Router started from a different
+  checkout (it would serve that checkout's UI and backend). Builds before these fields
+  existed report only `service`/`status`.
 - `GET /version` — `{"version": "..."}`, the linker-set build version (`-ldflags
   -X main.version=...`, `"dev"` in local builds). `cmd/mads update apply`'s health check
   after a binary swap calls the *binary* directly (`mads --version`), not this route — this

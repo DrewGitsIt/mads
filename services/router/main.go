@@ -150,7 +150,7 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity) http.Handler {
 	return api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
@@ -167,7 +167,30 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		FastModelFlagBaseURL: fastModelFlagBaseURL,
 		Models:               models,
 		RouterURL:            routerURL,
+		Root:                 ident.root,
+		UIDist:               ident.uiDist,
+		StartedAt:            ident.startedAt,
 	})
+}
+
+// identity is what GET /health reports about this process's origin (see
+// api.Options.Root): the checkout it was launched from and the UI it
+// serves, both absolute, so scripts/app.sh can refuse to silently reuse a
+// Router left running by a different checkout.
+type identity struct {
+	root, uiDist string
+	startedAt    time.Time
+}
+
+func newIdentity(uiDist string) identity {
+	id := identity{startedAt: time.Now()}
+	if root, err := os.Getwd(); err == nil {
+		id.root = root
+	}
+	if abs, err := filepath.Abs(uiDist); err == nil {
+		id.uiDist = abs
+	}
+	return id
 }
 
 func main() {
@@ -259,7 +282,7 @@ func main() {
 	// open — from blocking on an agent spawn.
 	models := modelcatalog.New(providers, modelcatalog.Options{})
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models, "http://"+*addr)}
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist))}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

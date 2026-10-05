@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
@@ -216,6 +217,48 @@ func TestHealth(t *testing.T) {
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	body := decodeJSON[map[string]string](t, resp)
+	if body["service"] != "router" || body["status"] != "ok" {
+		t.Errorf("unexpected health body: %v", body)
+	}
+	// No identity configured: the fields are absent, which is what an older
+	// build looks like to scripts/app.sh.
+	for _, k := range []string{"root", "ui_dist", "started_at"} {
+		if _, ok := body[k]; ok {
+			t.Errorf("health body has %q without an identity: %v", k, body)
+		}
+	}
+}
+
+// TestHealthReportsIdentity pins the fields scripts/app.sh reads to refuse
+// reusing a Router launched from a different checkout.
+func TestHealthReportsIdentity(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	opts := testOptions(t, data, sup)
+	opts.Root = "/src/checkout"
+	opts.UIDist = "/src/checkout/ui/dist"
+	opts.StartedAt = time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	srv := httptest.NewServer(api.New(opts))
+	t.Cleanup(srv.Close)
+
+	resp, err := http.Get(srv.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body := decodeJSON[map[string]string](t, resp)
+	want := map[string]string{
+		"service": "router", "status": "ok", "root": "/src/checkout",
+		"ui_dist": "/src/checkout/ui/dist", "started_at": "2026-09-28T10:00:00Z",
+	}
+	for k, v := range want {
+		if body[k] != v {
+			t.Errorf("health %s = %q, want %q (body %v)", k, body[k], v, body)
+		}
 	}
 }
 

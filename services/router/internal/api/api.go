@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
@@ -39,6 +40,9 @@ type server struct {
 	fastModelFlagBaseURL string
 	models               *modelcatalog.Catalog
 	routerURL            string
+	root                 string
+	uiDist               string
+	startedAt            time.Time
 	// wakeLocks holds one *sync.Mutex per session ID, serializing
 	// ensureSession's check-then-spawn so concurrent wakers (a composer send
 	// racing a job's WakeSession, or several signal jobs for one dormant
@@ -85,6 +89,15 @@ type Options struct {
 	// commands a new leader is given while its orchestrate tools are
 	// pending. Empty leaves -router off those commands (the CLI's default).
 	RouterURL string
+	// Root, UIDist and StartedAt are reported on GET /health so a launcher
+	// (scripts/app.sh) can tell a Router started from this checkout from
+	// one left running by another — which would serve that checkout's UI
+	// and backend without saying so. Root is the absolute cwd the Router
+	// was launched from, UIDist the absolute path it serves the UI from.
+	// Zero values are omitted from the response.
+	Root      string
+	UIDist    string
+	StartedAt time.Time
 }
 
 // New returns the Router's HTTP handler. See Options's doc for the
@@ -104,7 +117,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt}
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.
@@ -252,7 +265,17 @@ func NewMux(opts Options) *http.ServeMux {
 }
 
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"service": "router", "status": "ok"})
+	body := map[string]string{"service": "router", "status": "ok"}
+	if s.root != "" {
+		body["root"] = s.root
+	}
+	if s.uiDist != "" {
+		body["ui_dist"] = s.uiDist
+	}
+	if !s.startedAt.IsZero() {
+		body["started_at"] = s.startedAt.UTC().Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

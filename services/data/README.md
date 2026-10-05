@@ -43,7 +43,9 @@ Wire types live in `pkg/contracts` (Envelope, Task, ValidationError) with golden
 in `pkg/contracts/testdata/`. Counterparties: the Router (reads/subscribes on behalf of
 the UI) and the other services (writes via lease, event append via outbox).
 
-- `GET /health` — `{"service":"data","status":"ok"}`; 503 when the db is unreachable.
+- `GET /health` — `{"service":"data","status":"ok","root":"/abs/checkout","started_at":"<RFC 3339>"}`;
+  503 when the db is unreachable. `root` is the cwd the service was launched from —
+  `scripts/app.sh` refuses to reuse a Data Service started from a different checkout.
 - `POST /events` — append a standalone event (envelope minus seq/timestamp); 201 with
   the assigned seq; 422 `ValidationError` listing every problem at once.
 - `GET /events?since=<seq>&session_id=<id>&types=task.*,note.created` — filtered,
