@@ -1,4 +1,4 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import {
   EMPTY_AGENT_STATE,
@@ -8,7 +8,9 @@ import {
   totalOpenTasks,
 } from "../rail/railGroups";
 import type { OpenTaskBreakdown, RailStatus, SessionAgentState } from "../rail/railGroups";
+import type { RouterClient } from "../../../router/client";
 import type { Session } from "../../../router/types";
+import { isIsolated } from "../../../conversation/Worktree/workState";
 import {
   formatAbsoluteStamp,
   formatCalendarStamp,
@@ -26,6 +28,12 @@ export interface SessionDeleteConfirmDialogProps {
   agentState?: SessionAgentState;
   /** This session's open work, as the rail already computes it. */
   openTaskBreakdown?: OpenTaskBreakdown;
+  /**
+   * Recounts an isolated session's work when the dialog opens (GET
+   * /sessions/{id}/worktree) — delete removes its folder and branch, so the
+   * dialog says in words what that discards. Absent: the record's counts.
+   */
+  routerClient?: RouterClient;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -86,6 +94,7 @@ export function SessionDeleteConfirmDialog({
   session,
   agentState = EMPTY_AGENT_STATE,
   openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
+  routerClient,
   onConfirm,
   onCancel,
 }: SessionDeleteConfirmDialogProps) {
@@ -105,6 +114,7 @@ export function SessionDeleteConfirmDialog({
           session={session}
           openTaskBreakdown={openTaskBreakdown}
           openTasks={openTasks}
+          routerClient={routerClient}
         />
       }
       confirmLabel={CONFIRM_LABEL[state]}
@@ -125,12 +135,14 @@ function DeleteDescription({
   session,
   openTaskBreakdown,
   openTasks,
+  routerClient,
 }: {
   state: SessionDeleteState;
   status: RailStatus;
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
   openTasks: number;
+  routerClient?: RouterClient;
 }) {
   // Open work escalates any of the three states to the warn tone.
   const tone = openTasks > 0 ? "attn" : state === "working" ? "work" : "neutral";
@@ -192,9 +204,51 @@ function DeleteDescription({
           </div>
         )}
       </div>
+      {isIsolated(session) && <UnlandedWork session={session} routerClient={routerClient} />}
       <div className={styles.loss}>{lossSentence(state, openTasks)}</div>
       <div className={styles.keeps}>
         Provider transcripts and the event log survive. This can't be undone.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What deleting an isolated session's folder and branch throws away (D7,
+ * mockup docs/mockups/session-worktrees.html §5), recounted when the
+ * dialog opens; the record's counts stand in until then.
+ */
+function UnlandedWork({ session, routerClient }: { session: Session; routerClient?: RouterClient }) {
+  const [counts, setCounts] = useState({
+    unlanded: session.unlanded_count ?? 0,
+    uncommitted: session.uncommitted_count ?? 0,
+  });
+  useEffect(() => {
+    if (!routerClient) return;
+    let cancelled = false;
+    routerClient
+      .getWorktreeStatus(session.id)
+      .then((st) => {
+        if (!cancelled) setCounts({ unlanded: st.unlanded_count, uncommitted: st.uncommitted_count });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [routerClient, session.id]);
+  if (counts.unlanded === 0 && counts.uncommitted === 0) return null;
+  const parts = [
+    counts.unlanded > 0 ? plural(counts.unlanded, "unlanded commit") : "",
+    counts.uncommitted > 0 ? plural(counts.uncommitted, "uncommitted file") : "",
+  ].filter(Boolean);
+  return (
+    <div className={[styles.statePanel, styles.panelAttn].join(" ")} data-delete-work="">
+      <div className={styles.stateHead}>
+        <span className={[styles.stateDot, styles.stateDotAttn].join(" ")} aria-hidden="true" />
+        Work that isn't in {session.worktree_base}
+      </div>
+      <div className={styles.stateLine}>
+        {parts.join(" and ")} will be discarded.
       </div>
     </div>
   );

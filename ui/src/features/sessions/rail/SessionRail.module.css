@@ -356,6 +356,27 @@
   text-overflow: ellipsis;
 }
 
+/* The work marker (docs/mockups/session-worktrees.html §1): a small accent
+   dot — hollow for uncommitted files, filled for commits to land. */
+.workMark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.workMarkHollow {
+  background: transparent;
+  border: 1.5px solid var(--accent);
+}
+
+.workNote {
+  flex: none;
+  color: var(--text3);
+  white-space: nowrap;
+}
+
 .statusElapsed {
   flex: none;
   color: var(--text3);

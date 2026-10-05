@@ -168,4 +168,55 @@ describe("GeneralSection", () => {
     await waitFor(() => expect(screen.getByText("provider:goose")).toBeTruthy());
     expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
   });
+
+  describe("Write commit messages for me", () => {
+    function stubFastModel(providerCompleter: boolean) {
+      const base = (globalThis.fetch as unknown as (i: RequestInfo | URL) => Promise<Response>);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: RequestInfo | URL) =>
+          String(input).includes("/fast-model/status")
+            ? Promise.resolve(
+                new Response(
+                  JSON.stringify({ mode: "provider", provider_name: "claude-code", provider_completer: providerCompleter }),
+                  { status: 200 },
+                ),
+              )
+            : base(input),
+        ),
+      );
+    }
+
+    it("writes auto_commit_messages when ticked", async () => {
+      stubFastModel(true);
+      const setDraft = vi.fn();
+      render(<GeneralSection config={makeConfig({ setDraft })} />);
+      const box = screen.getByLabelText("Write commit messages for me") as HTMLInputElement;
+      await waitFor(() => expect(box.disabled).toBe(false));
+      expect(screen.getByText(/skips the dialog: the Fast Model writes the message/)).toBeTruthy();
+      fireEvent.click(box);
+      expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ auto_commit_messages: true }));
+    });
+
+    it("is disabled, with a hint, without a Fast Model", async () => {
+      stubFastModel(false);
+      render(<GeneralSection config={makeConfig()} />);
+      await waitFor(() =>
+        expect(screen.getByTestId("auto-commit-unavailable").textContent).toMatch(/No Fast Model is set up/),
+      );
+      expect((screen.getByLabelText("Write commit messages for me") as HTMLInputElement).disabled).toBe(true);
+    });
+
+    it("can still be turned off when it was saved on and the Fast Model went away", async () => {
+      stubFastModel(false);
+      const setDraft = vi.fn();
+      const draft = { ...fixtureConfig, auto_commit_messages: true };
+      render(<GeneralSection config={makeConfig({ draft, setDraft })} />);
+      const box = screen.getByLabelText("Write commit messages for me") as HTMLInputElement;
+      expect(box.disabled).toBe(false);
+      fireEvent.click(box);
+      expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ auto_commit_messages: false }));
+    });
+  });
 });
+

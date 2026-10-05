@@ -268,3 +268,53 @@ describe("the rail and the workspace kebab render the same text for the same ses
     expect(fromWorkspace).toBe(fromRail);
   });
 });
+
+describe("SessionDeleteConfirmDialog — an isolated session's work (D7)", () => {
+  const isolated = makeSession({
+    worktree_dir: "/home/u/.mads/session-worktrees/s1",
+    worktree_branch: "mads/session/s1",
+    worktree_base: "main",
+    uncommitted_count: 0,
+    unlanded_count: 0,
+  });
+
+  it("recounts at open and says what deleting discards", async () => {
+    const client = new FakeRouterClient();
+    client.worktreeStatus = { ...client.worktreeStatus, unlanded_count: 3, uncommitted_count: 2 };
+    render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByText("Work that isn't in main")).toBeTruthy();
+    expect(screen.getByText("3 unlanded commits and 2 uncommitted files will be discarded.")).toBeTruthy();
+  });
+
+  it("names only what there is", async () => {
+    const client = new FakeRouterClient();
+    client.worktreeStatus = { ...client.worktreeStatus, unlanded_count: 1, uncommitted_count: 0 };
+    render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByText("1 unlanded commit will be discarded.")).toBeTruthy();
+  });
+
+  it("says nothing when the work is all landed", async () => {
+    const client = new FakeRouterClient();
+    client.worktreeStatus = { ...client.worktreeStatus, unlanded_count: 0, uncommitted_count: 0 };
+    const spy = vi.spyOn(client, "getWorktreeStatus");
+    render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("s1"));
+    expect(screen.queryByText(/will be discarded/)).toBeNull();
+  });
+
+  it("doesn't ask git about a session working in place — its folder isn't deleted", () => {
+    const client = new FakeRouterClient();
+    const spy = vi.spyOn(client, "getWorktreeStatus");
+    render(
+      <SessionDeleteConfirmDialog
+        open
+        session={makeSession({ uncommitted_count: 2 })}
+        routerClient={client}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect(spy).not.toHaveBeenCalled();
+    expect(screen.queryByText(/will be discarded/)).toBeNull();
+  });
+});

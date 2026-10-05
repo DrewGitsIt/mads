@@ -54,6 +54,7 @@ export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   default_model: "general",
   default_agent: "general",
   default_isolation: "general",
+  auto_commit_messages: "general",
 
   synthesis_mode: "pipeline",
   agent_selection_mode: "pipeline",
@@ -85,6 +86,7 @@ export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
   default_model: "Default model",
   default_agent: "Default persona",
   default_isolation: "Default isolation",
+  auto_commit_messages: "Write commit messages for me",
 
   synthesis_mode: "Synthesis mode",
   agent_selection_mode: "Agent selection mode",

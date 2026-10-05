@@ -2,11 +2,13 @@ import { useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { PathField } from "../../../components/PathField/PathField";
 import { router } from "../../../router/client";
+import { fastModelAvailable } from "../../../router/fastModel";
 import type { Workspace } from "../../../router/types";
 import { PreflightChecks } from "../PreflightChecks";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
 import { useProviderMatrix } from "../state/useProviderMatrix";
+import { useFastModelStatus } from "../state/useFastModelStatus";
 import type { UseConfig } from "../state/useConfig";
 import styles from "./GeneralSection.module.css";
 
@@ -33,6 +35,7 @@ export function GeneralSection({ config }: GeneralSectionProps) {
   const { draft, fieldErrors, dirtyRestartFields, setDraft, save } = config;
   const preflight = usePreflight();
   const { providers } = useProviderMatrix();
+  const fastModelStatus = useFastModelStatus();
   const [saving, setSaving] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
@@ -51,6 +54,7 @@ export function GeneralSection({ config }: GeneralSectionProps) {
     workspaces.find((w) => w.id === ref || w.name === ref)?.name ?? ref;
 
   const restartVisible = dirtyRestartFields.length > 0;
+  const commitDraftsAvailable = fastModelAvailable(draft, fastModelStatus.status);
 
   const handleSave = async () => {
     setSaving(true);
@@ -211,6 +215,32 @@ export function GeneralSection({ config }: GeneralSectionProps) {
               </option>
             ))}
         </select>
+      </div>
+      {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): the header's
+          Commit… skips the dialog. Off and disabled without a Fast Model
+          to write the messages — a saved "on" then just falls back to the
+          dialog. */}
+      <div className={styles.row}>
+        <label className={styles.toggleLabel}>
+          <input
+            type="checkbox"
+            checked={draft.auto_commit_messages === true}
+            disabled={!commitDraftsAvailable && draft.auto_commit_messages !== true}
+            onChange={(e) => setDraft({ ...draft, auto_commit_messages: e.target.checked })}
+          />
+          Write commit messages for me
+        </label>
+        <div className={styles.hint}>
+          The Commit button skips the dialog: the Fast Model writes the message and commits all of
+          this session's files. You can undo from the result. Needs a Fast Model.
+        </div>
+        {!commitDraftsAvailable && (
+          <div className={styles.hint} data-testid="auto-commit-unavailable">
+            {fastModelStatus.loading
+              ? "Checking for a Fast Model…"
+              : "No Fast Model is set up — turn one on under Pipeline & synthesis to use this."}
+          </div>
+        )}
       </div>
       <div className={styles.actions}>
         <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>

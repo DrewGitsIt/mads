@@ -288,6 +288,7 @@ export function SessionWorkspace({
           session={session}
           agentState={agentState}
           openTaskBreakdown={openTaskBreakdown}
+          routerClient={routerClient}
           onConfirm={() => void confirmDelete()}
           onCancel={() => setConfirmingDelete(false)}
         />

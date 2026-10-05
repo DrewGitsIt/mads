@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
+import { SessionCloseLandDialog } from "../actions/SessionCloseLandDialog";
 import { LinkHolderMenu } from "./LinkHolderMenu";
 import type { LinkHolderSubject } from "./LinkHolderMenu";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
@@ -52,6 +53,8 @@ import {
 import type { WorkspaceIndex } from "../../../router/workspaceRef";
 import { agentIndex } from "../../../router/agentRef";
 import { summaryTeaser } from "./summaryTeaser";
+import { isIsolated, workState, type WorkState } from "../../../conversation/Worktree/workState";
+import { plural } from "../../../conversation/Worktree/worktreeCopy";
 import { FLAGS } from "../../../featureFlags";
 import {
   formatAbsoluteStamp,
@@ -149,6 +152,7 @@ export function SessionRail({
   const [filter, setFilter] = useState<RailFilter>("all");
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
+  const [confirmCloseId, setConfirmCloseId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
   const [unlinkTarget, setUnlinkTarget] = useState<{ linkId: string; name: string }>();
@@ -351,6 +355,19 @@ export function SessionRail({
   // not just the id — including for a row inside the collapsed "Earlier" tail
   // or nested under a link, which is why this reads the unfiltered list.
   const deleteTarget = sessions.find((s) => s.id === confirmDeleteId);
+  const closeTarget = sessions.find((s) => s.id === confirmCloseId);
+
+  // Close asks once when an isolated session has commits its base doesn't
+  // (D6): land them first, or keep them for later. Close itself never
+  // discards anything, so every other close goes straight through.
+  function requestClose(id: string) {
+    const session = allSessionsById.get(id);
+    if (session && isIsolated(session) && (session.unlanded_count ?? 0) > 0) {
+      setConfirmCloseId(id);
+      return;
+    }
+    onClose?.(id);
+  }
 
   // Shared by the main list and the "Earlier" tail — the two render identical
   // cards, they only differ in whether the fold is hiding them.
@@ -362,7 +379,7 @@ export function SessionRail({
     selectedId,
     onSelect,
     onResume,
-    onClose,
+    onClose: onClose && requestClose,
     onDeleteRequest: setConfirmDeleteId,
     onUnlinkRequest: setUnlinkTarget,
     linkedSessionsEnabled,
@@ -506,11 +523,23 @@ export function SessionRail({
           session={deleteTarget}
           agentState={agentStates[deleteTarget.id]}
           openTaskBreakdown={openTaskCounts[deleteTarget.id]}
+          routerClient={routerClient}
           onConfirm={() => {
             onDelete?.(deleteTarget.id);
             setConfirmDeleteId(undefined);
           }}
           onCancel={() => setConfirmDeleteId(undefined)}
+        />
+      )}
+      {closeTarget && (
+        <SessionCloseLandDialog
+          session={closeTarget}
+          routerClient={routerClient}
+          onClose={() => {
+            onClose?.(closeTarget.id);
+            setConfirmCloseId(undefined);
+          }}
+          onDismiss={() => setConfirmCloseId(undefined)}
         />
       )}
       {linkedSessionsEnabled && (
@@ -759,6 +788,10 @@ function SessionRow({
   const now = useRelativeNow();
   const status = statusOf(session, agentState, openTaskBreakdown, now);
   const name = session.name || "Untitled session";
+  // The work marker (mockup docs/mockups/session-worktrees.html §1): hollow
+  // for uncommitted files, filled for commits waiting to land. Quiet — read
+  // off the record's counts, the same ones the header control uses.
+  const work = workState(session);
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
   // rename or a summary write wearing a reply's clothes.
@@ -951,6 +984,16 @@ function SessionRow({
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
+        {work && (
+          <span
+            className={[styles.workMark, work.kind === "commit" ? styles.workMarkHollow : ""]
+              .filter(Boolean)
+              .join(" ")}
+            title={workNote(work)}
+            aria-label={workNote(work)}
+            data-work-mark={work.kind}
+          />
+        )}
         <HarnessMark provider={session.provider} />
         <span className={styles.when} title={stampTitle}>
           {stamp}
@@ -977,6 +1020,8 @@ function SessionRow({
         )}
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
+        {/* Only while resting: a live state's clause is the thing to read. */}
+        {work && RESTING.has(status.kind) && <span className={styles.workNote}>· {workNote(work)}</span>}
       </div>
       {/* One reason, never an inventory: workspace beats branch beats dir. */}
       {reason && (
@@ -1100,6 +1145,14 @@ function SessionRow({
       )}
     </div>
   );
+}
+
+/** Status kinds with nothing live to say — the work note may share the line. */
+const RESTING = new Set(["done", "ready", "sleeping"]);
+
+/** The work marker's words: what the header control would offer next. */
+function workNote(work: NonNullable<WorkState>): string {
+  return work.kind === "commit" ? "uncommitted changes" : `${plural(work.commits, "commit")} to land`;
 }
 
 /**
