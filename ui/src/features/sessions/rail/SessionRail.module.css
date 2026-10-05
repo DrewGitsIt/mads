@@ -220,6 +220,9 @@
   font: 500 var(--fs-sm) var(--sans);
   text-align: left;
   cursor: pointer;
+  transition:
+    background-color 0.4s ease,
+    box-shadow 0.4s ease;
 }
 
 .row:hover {
@@ -229,6 +232,45 @@
 .selected {
   background: var(--bg3);
   border-color: var(--line);
+}
+
+/* A card the user hasn't met yet — freshly imported, or created by something
+   other than them. Soft accent wash plus a leading bar: shape as well as
+   colour, and static once it has arrived. It clears on hover/focus/open, and
+   the transition on .row makes that a fade rather than a snap. The one-shot
+   arrival glow settles into the resting state; nothing loops. global.css
+   strips both the animation and the transition under prefers-reduced-motion,
+   which leaves the static tint and bar — the state without the motion. */
+.row.unseen {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+  animation: railArrive 1.2s ease-out;
+}
+
+@keyframes railArrive {
+  from {
+    box-shadow:
+      inset 3px 0 0 var(--accent),
+      0 0 10px var(--accent-soft);
+  }
+  to {
+    box-shadow:
+      inset 3px 0 0 var(--accent),
+      0 0 0 transparent;
+  }
+}
+
+/* Visually hidden, still read: "New session" for the unseen card. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .rowTop {

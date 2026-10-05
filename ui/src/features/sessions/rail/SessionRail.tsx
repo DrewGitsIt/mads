@@ -37,6 +37,7 @@ import {
 } from "./railSearch";
 import type { MatchReason, SearchMatch } from "./railSearch";
 import { useSettledRailOrder } from "./railOrder";
+import { useUnseenSessions } from "./railUnseen";
 import {
   EMPTY_LABEL_CONTEXT,
   railLabelsFor,
@@ -99,6 +100,12 @@ export interface SessionRailProps {
   agents?: Agent[];
   routerClient?: RouterClient;
   /**
+   * True once the first session list has actually loaded. The rail seeds its
+   * "already seen" set from that list, so it must not do so from the empty
+   * pre-load one. Absent, a non-empty list counts as loaded.
+   */
+  sessionsLoaded?: boolean;
+  /**
    * Opaque stamp of an externally-driven search query, folded together with
    * the rail's own omni-search box. Any change to either is a quiet boundary:
    * the pending order applies at once, because a list the user just asked for
@@ -128,6 +135,7 @@ export function SessionRail({
   workspaces = [],
   agents = [],
   routerClient = router,
+  sessionsLoaded,
   filterKey,
   className,
 }: SessionRailProps) {
@@ -144,6 +152,7 @@ export function SessionRail({
     selectedId,
     `${filterKey ?? ""}\u0000${query}`,
   );
+  const { isUnseen, markSeen } = useUnseenSessions(sessions, selectedId, sessionsLoaded);
   const now = useRelativeNow();
   const [filter, setFilter] = useState<RailFilter>("all");
   const [earlierOpen, setEarlierOpen] = useState(false);
@@ -343,6 +352,8 @@ export function SessionRail({
     matchById,
     wsIndex,
     selectedId,
+    isUnseen,
+    onSeen: markSeen,
     onSelect,
     onResume,
     onClose: onClose && requestClose,
@@ -543,6 +554,8 @@ function RailRowGroup({
   matchById,
   wsIndex,
   selectedId,
+  isUnseen,
+  onSeen,
   onSelect,
   onResume,
   onClose,
@@ -564,6 +577,9 @@ function RailRowGroup({
   /** Resolves a session's workspace reference to its workspace (router/workspaceRef.ts). */
   wsIndex: WorkspaceIndex;
   selectedId?: string;
+  /** Not yet hovered, focused or opened by the user — see useUnseenSessions. */
+  isUnseen: (id: string) => boolean;
+  onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
   onClose?: (id: string) => void;
@@ -588,6 +604,8 @@ function RailRowGroup({
         agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
         matchReason={reasonFor(row.session, matchById, wsIndex)}
         selected={row.session.id === selectedId}
+        unseen={isUnseen(row.session.id)}
+        onSeen={onSeen}
         onSelect={onSelect}
         onResume={onResume}
         onClose={onClose}
@@ -627,6 +645,8 @@ function RailRowGroup({
               agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
               matchReason={reasonFor(sub.session, matchById, wsIndex)}
               selected={sub.session.id === selectedId}
+              unseen={isUnseen(sub.session.id)}
+              onSeen={onSeen}
               onSelect={onSelect}
               onResume={onResume}
               onClose={onClose}
@@ -686,6 +706,8 @@ function SessionRow({
   agentState,
   matchReason: reason,
   selected,
+  unseen,
+  onSeen,
   onSelect,
   onResume,
   onClose,
@@ -717,6 +739,9 @@ function SessionRow({
   /** Set only when a live search matched this card on something other than its name. */
   matchReason?: MatchReason;
   selected: boolean;
+  /** Shown until the user first hovers, focuses or opens the card. */
+  unseen: boolean;
+  onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onResume?: (id: string) => void;
   onClose?: (id: string) => void;
@@ -904,11 +929,13 @@ function SessionRow({
       role="button"
       title={tooltip || undefined}
       data-rail-card=""
+      data-unseen={unseen ? "" : undefined}
       tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
       aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
       className={[
         styles.row,
         selected ? styles.selected : "",
+        unseen ? styles.unseen : "",
         nested ? styles.nestedRow : "",
         linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
         linkModeActive && isLinkCrossWorkspace ? styles.linkDimmed : "",
@@ -918,6 +945,7 @@ function SessionRow({
       onClick={activateOrToggle}
       onMouseEnter={() => {
         hovering.current = true;
+        onSeen(session.id);
         anchorCluster();
       }}
       onMouseLeave={() => {
@@ -929,7 +957,10 @@ function SessionRow({
         // keyboard is standing on out from under it.
         if (!rowRef.current?.contains(document.activeElement)) setClusterAt(undefined);
       }}
-      onFocus={anchorCluster}
+      onFocus={() => {
+        onSeen(session.id);
+        anchorCluster();
+      }}
       onBlur={(e) => {
         if (hovering.current) return;
         if (e.relatedTarget instanceof Node && rowRef.current?.contains(e.relatedTarget)) return;
@@ -950,6 +981,8 @@ function SessionRow({
       <div className={styles.rowTop}>
         <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
+        {/* The tint is colour alone; this is the same fact for a screen reader. */}
+        {unseen && <span className={styles.srOnly}>New session</span>}
         {work && (
           <span
             className={[styles.workMark, work.kind === "commit" ? styles.workMarkHollow : ""]
