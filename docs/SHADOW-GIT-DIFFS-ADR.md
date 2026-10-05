@@ -96,7 +96,9 @@ non-repo root the store records per-capture pre-image blobs and nothing else:
   (`sed -i`, `mv`, build output), edits by the user — has no pre-image and no tree
   diff, so it doesn't appear in the diff view. This is the same "Bash gets turn-level
   diffs only" limitation, minus the turn-level part. The file ledger still lists those
-  paths; only the before-side is unavailable. `root_key` is a hash of the root's absolute path, with the path recorded in
+  paths; only the before-side is unavailable.
+
+`root_key` is a hash of the root's absolute path, with the path recorded in
 the shadow dir's config for reverse lookup.
 
 The **runner** (session service) writes captures and commits — it owns the event
