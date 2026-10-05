@@ -14,7 +14,9 @@ import (
 // with their own landQueue, still never interleave a land attempt against
 // the same workspace (spec: "land attempts must be mutually excluded across
 // engine processes"). The session service and the Router take the same lock
-// for session worktree work, so they serialize against land attempts too.
+// for their own writes to the primary checkout (merge-back, Land), so those
+// serialize against land attempts too; work inside a session's worktree
+// takes only that session's lock and never waits on a land.
 func acquireWorkspaceLock(ctx context.Context, w *worktrees) (release func(), err error) {
 	return sessionwt.AcquireLock(ctx, w.primary)
 }

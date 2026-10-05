@@ -489,3 +489,124 @@ func TestLockWaitHonorsContext(t *testing.T) {
 	}
 	_ = r2()
 }
+
+// Same-session Ensures serialize on the session lock: while one holder has
+// it, an Ensure that needs to create the folder waits, then finds it made.
+func TestSessionLockSerializesSameSessionEnsure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("locks are a no-op on non-unix hosts")
+	}
+	ctx := context.Background()
+	s := newSpec(t)
+
+	path, err := SessionLockPath(ctx, s.Primary, s.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "mads-session-ses_test.lock" {
+		t.Fatalf("session lock path = %s", path)
+	}
+	if _, err := SessionLockPath(ctx, s.Primary, "../escape"); err == nil {
+		t.Error("a session id with a path separator was accepted")
+	}
+
+	release, err := AcquireSessionLock(ctx, s.Primary, s.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan EnsureResult, 1)
+	go func() {
+		res, err := EnsureWithLock(ctx, s)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	select {
+	case <-done:
+		t.Fatal("Ensure ran while another holder had the session lock")
+	case <-time.After(200 * time.Millisecond):
+	}
+	// The holder does the work itself, as a concurrent start would.
+	first, err := Ensure(ctx, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case res := <-done:
+		if res.Action != ActionReused || res.Dir != first.Dir {
+			t.Errorf("waiter = %+v, want a reuse of the folder the holder made", res)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("waiter never got the session lock")
+	}
+
+	// Another session's lock is a different file: no waiting.
+	other := s
+	other.SessionID = "ses_other"
+	release, err = AcquireSessionLock(ctx, s.Primary, s.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := EnsureWithLock(ctx2, other); err != nil {
+		t.Fatalf("other session's ensure: %v", err)
+	}
+}
+
+// A land holding the repo lock — through its whole gate — must not hold up
+// a session start: Ensure for a new session completes meanwhile.
+func TestRepoLockDoesNotBlockEnsure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("locks are a no-op on non-unix hosts")
+	}
+	ctx := context.Background()
+	s := newSpec(t)
+	held := make(chan struct{})
+	finish := make(chan struct{})
+	landDone := make(chan error, 1)
+	go func() {
+		landDone <- WithLock(ctx, s.Primary, func() error {
+			close(held)
+			<-finish
+			return nil
+		})
+	}()
+	<-held
+	defer func() {
+		close(finish)
+		if err := <-landDone; err != nil {
+			t.Error(err)
+		}
+	}()
+
+	ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	res, err := EnsureWithLock(ctx2, s)
+	if err != nil {
+		t.Fatalf("ensure behind a held repo lock: %v", err)
+	}
+	if res.Action != ActionCreated {
+		t.Errorf("result = %+v, want created", res)
+	}
+}
+
+// The permitted order — session lock, then repo lock — works from one
+// goroutine, and the two are distinct files.
+func TestLockOrderSessionThenRepo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("locks are a no-op on non-unix hosts")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s := newSpec(t)
+	err := WithSessionLock(ctx, s.Primary, s.SessionID, func() error {
+		return WithLock(ctx, s.Primary, func() error { return nil })
+	})
+	if err != nil {
+		t.Fatalf("session-then-repo: %v", err)
+	}
+}

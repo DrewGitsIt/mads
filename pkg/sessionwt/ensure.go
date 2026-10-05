@@ -83,7 +83,9 @@ func (r EnsureResult) Notable() bool {
 //   - both gone: `worktree add -b <branch> <path> <Base>`, falling back to
 //     the primary's HEAD when Base is gone.
 //
-// The caller holds the repo lock (WithLock / EnsureWithLock).
+// The caller holds the session lock (WithSessionLock / EnsureWithLock).
+// Ensure never touches the primary checkout's files, so it doesn't need the
+// repo lock and doesn't wait behind a land.
 func Ensure(ctx context.Context, s Spec) (EnsureResult, error) {
 	res, ok, err := reuse(ctx, s)
 	if err != nil || ok {
@@ -146,16 +148,16 @@ func Ensure(ctx context.Context, s Spec) (EnsureResult, error) {
 	return res, nil
 }
 
-// EnsureWithLock is Ensure for a caller that doesn't hold the repo lock.
-// A folder that is already a worktree of the repo is used without waiting
-// for the lock: checking is read-only, and the lock may be held by a
-// pipeline land running its whole gate. Anything that needs repair waits.
+// EnsureWithLock is Ensure for a caller that doesn't hold the session lock.
+// A folder that is already a worktree of the repo is used without taking
+// it, since checking is read-only; anything that needs repair waits for
+// the session lock (never the repo lock).
 func EnsureWithLock(ctx context.Context, s Spec) (EnsureResult, error) {
 	if res, ok, err := reuse(ctx, s); err == nil && ok {
 		return res, nil
 	}
 	var res EnsureResult
-	err := WithLock(ctx, s.Primary, func() error {
+	err := WithSessionLock(ctx, s.Primary, s.SessionID, func() error {
 		var err error
 		res, err = Ensure(ctx, s)
 		return err

@@ -1,18 +1,20 @@
 // Package sessionwt owns the git mechanics of session isolation
 // (docs/SESSION-WORKTREES-DESIGN.md): one worktree and one branch per
 // session, found by a deterministic path and name rather than by whatever the
-// session record says, plus the per-repo lock every process that changes a
-// repo's worktrees or branches takes first.
+// session record says, plus the two tiers of lock (a per-session lock and the
+// per-repo land lock) every process that changes them takes first.
 //
 // It lives in pkg, not inside one service, because three processes do this
 // work (D3): the session child at start and resume, the Router for inactive
 // sessions, and the pipeline child for task merges. They serialize against
-// each other only if they share one lock file and one idea of where a
+// each other only if they share the same lock files and one idea of where a
 // session's folder is.
 //
-// Functions that change the repository (Ensure, CommitStray, Merge, Remove)
-// assume the caller holds the repo lock — see WithLock. Functions that only
-// read (IsGitRepo, CurrentBranch, Prefix, Count*) take no lock.
+// Functions that change the repository assume the caller holds a lock (see
+// lock.go for the two tiers and their order): Ensure and CommitStray the
+// session lock; Merge and Remove, which write the primary, the session lock
+// and then the repo lock. Functions that only read (IsGitRepo,
+// CurrentBranch, Prefix, Count*) take no lock.
 package sessionwt
 
 import (

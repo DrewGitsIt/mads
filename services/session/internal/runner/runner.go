@@ -600,8 +600,10 @@ func implicitDir(dir string) bool {
 // the conversation.
 //
 // The worktree comes from sessionwt.EnsureWithLock, which works from the
-// deterministic path and branch and repairs a lost or blocked folder (D2).
-// Its fields are persisted here, before the provider starts, so a provider
+// deterministic path and branch and repairs a lost or blocked folder (D2)
+// under this session's own lock — not the repo lock, so a pipeline land
+// running its gate in the same repo never holds up a start. Its fields are
+// persisted here, before the provider starts, so a provider
 // that fails to start leaves a record the next start reuses instead of
 // tripping over its own branch.
 func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, error) {
@@ -803,13 +805,20 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 		return contracts.MergeResult{}, ErrNoWorktree
 	}
 
-	// The whole merge-back runs under the repo lock, so it can't interleave
-	// with a pipeline land or another session's worktree work (D3).
-	release, err := sessionwt.AcquireLock(ctx, r.Cwd)
+	// The merge-back writes both the session's worktree and the primary
+	// checkout, so it holds both locks for its whole run — session lock
+	// first, then the repo lock, the only order sessionwt allows — and can't
+	// interleave with an Ensure of this session or a pipeline land (D3).
+	releaseSession, err := sessionwt.AcquireSessionLock(ctx, r.Cwd, r.sessionID)
 	if err != nil {
 		return contracts.MergeResult{}, fmt.Errorf("runner: %w", err)
 	}
-	defer release()
+	defer releaseSession()
+	releaseRepo, err := sessionwt.AcquireLock(ctx, r.Cwd)
+	if err != nil {
+		return contracts.MergeResult{}, fmt.Errorf("runner: %w", err)
+	}
+	defer releaseRepo()
 
 	if targetBranch != "" {
 		if _, err := sessionwt.Git(ctx, r.Cwd, "checkout", targetBranch); err != nil {

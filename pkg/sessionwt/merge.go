@@ -10,12 +10,13 @@ import (
 )
 
 // The merge-back path below is W4.5's, kept working until Land (D6) replaces
-// it: Runner.Merge still calls it. Every function here changes the repo, so
-// the caller holds the repo lock.
+// it: Runner.Merge still calls it. Every function here changes the repo:
+// CommitStray needs the session lock, Merge and Remove the session lock and
+// then the repo lock.
 
 // CommitStray commits any uncommitted work in dir so nothing is lost at merge
 // time, with the safety identity and a Session trailer linking it back.
-// Caller holds the repo lock.
+// Caller holds the session lock.
 func CommitStray(ctx context.Context, dir, sessionID, title string) error {
 	status, err := Git(ctx, dir, "status", "--porcelain")
 	if err != nil {
@@ -35,8 +36,8 @@ func CommitStray(ctx context.Context, dir, sessionID, title string) error {
 // Merge brings branch into primary's current HEAD. mergeCmd is e.g. "git
 // merge --no-ff". A conflict aborts cleanly and comes back as a structured
 // contracts.MergeResult, not an error, so the API can hand it straight to
-// the UI; only unexpected git failures are errors. Caller holds the repo
-// lock.
+// the UI; only unexpected git failures are errors. Caller holds the session
+// lock, then the repo lock.
 func Merge(ctx context.Context, primary, mergeCmd, sessionID, title, branch string) (contracts.MergeResult, error) {
 	// Two -m flags make subject + body paragraphs — %q on a multiline
 	// string would bake literal \n into the subject and break the trailer.
@@ -62,7 +63,9 @@ func Merge(ctx context.Context, primary, mergeCmd, sessionID, title, branch stri
 
 // Remove deletes a session's worktree and branch, best-effort. git removes a
 // worktree even with a process still working inside it, so the caller makes
-// sure nothing is (D3). Caller holds the repo lock.
+// sure nothing is (D3). Caller holds the session lock, then the repo lock
+// (removing the worktree writes the primary's worktree metadata, and the
+// old merge-back removes it right after merging into the primary).
 func Remove(ctx context.Context, primary, dir, branch string) {
 	_, _ = Git(ctx, primary, "worktree", "remove", "--force", dir)
 	_, _ = Git(ctx, primary, "branch", "-D", branch)
