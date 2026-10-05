@@ -14,7 +14,8 @@ import { ShellHostCore, type ShellRequest } from "./shellHostCore";
  * `{type: "window-gone", windowId}` when that window reloads, crashes or
  * closes. Everything else is ShellHostCore. Requests arrive on a window's
  * port as `{id?, ...ShellRequest}` and are answered with `{id, ok, result}` or
- * `{id, ok: false, error}`; the core's events are posted unsolicited.
+ * `{id, ok: false, error}`; the core's events are posted unsolicited, and an
+ * open's held live output follows its reply (see ShellHostCore.handleAndReply).
  *
  * The shells die with this process (node-pty SIGHUPs them), and this process
  * dies with the app.
@@ -36,16 +37,11 @@ function connectWindow(windowId: number, port: MessagePortMain): void {
   port.on("message", (message) => {
     const { id, ...request } = message.data as { id?: number } & ShellRequest;
     // No id means fire-and-forget (write/resize): nobody is waiting for a reply.
-    core.handle(windowId, request as ShellRequest).then(
-      (result) => id !== undefined && port.postMessage({ id, ok: true, result }),
-      (error: unknown) =>
-        id !== undefined &&
-        port.postMessage({
-          id,
-          ok: false,
-          error: error instanceof Error ? error.message : String(error),
-        }),
-    );
+    // The core posts through `reply` itself so a re-open's held output goes out
+    // only after the reply that carries its snapshot and shellId.
+    void core.handleAndReply(windowId, request as ShellRequest, (outcome) => {
+      if (id !== undefined) port.postMessage({ id, ...outcome });
+    });
   });
   // A renderer that goes away closes its end; treat that like window-gone,
   // unless a newer connection for the same window id already replaced us.

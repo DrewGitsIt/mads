@@ -97,6 +97,11 @@ interface ShellOpenResult {
   created: boolean;
   /** The session's last shell exited on its own while detached. */
   previousExit?: { exitCode: number; exitedAt: number };
+  /**
+   * Only when created is false: the live shell's screen, to write into a
+   * fresh terminal of the open's size before any `data` arrives.
+   */
+  snapshot?: string;
 }
 
 interface ShellInfo {

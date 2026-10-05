@@ -62,11 +62,27 @@ describe("shell host core with real node-pty", () => {
         shellId: string;
         created: boolean;
       };
-      expect(again).toEqual({ shellId, created: false });
+      expect(again).toMatchObject({ shellId, created: false });
       expect(core.list()[0].pid).toBe(pid);
 
       await core.handle(1, { type: "write", shellId, data: "echo more-$((2+2))\n" });
       await waitFor("more-4");
+
+      // Output produced while detached comes back in the re-open's snapshot.
+      await core.handle(1, { type: "write", shellId, data: "printf 'line%s\\n' 1 2 3\n" });
+      await waitFor("line3");
+      await core.handle(1, { type: "write", shellId, data: "sleep 0.3; echo after-detach\n" });
+      await core.handle(1, { type: "detach", shellId });
+      await new Promise((r) => setTimeout(r, 800));
+      const restored = (await core.handle(1, {
+        type: "open",
+        sessionId: "ses_real",
+        cols: 80,
+        rows: 24,
+      })) as { snapshot?: string };
+      for (const needle of ["line1", "line2", "line3", "after-detach"]) {
+        expect(restored.snapshot).toContain(needle);
+      }
     } catch (error) {
       // No usable pty on this box (sandboxed container without a controlling
       // terminal) — skip rather than fail the manual run.

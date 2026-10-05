@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { defaultShell, resolveCwd, type NodePtyModule, type PtyProcess } from "./ptyHost";
 import { shellEnv } from "./shellEnv";
+import { createHeadlessMirror, type CreateMirror, type ShellMirror } from "./shellMirror";
+
+export { SHELL_SCROLLBACK } from "./shellMirror";
+
+/** How long attached output is batched before it is sent to the window. */
+export const DATA_BATCH_MS = 16;
 
 /**
  * The shell host's message-handling core: one shell per session id, attached
@@ -15,6 +21,10 @@ import { shellEnv } from "./shellEnv";
  * id). A shell outlives whichever window is looking at it: `detach` and a
  * window going away only unhook the view; the process keeps running until
  * `end`, its own exit, or the host dying.
+ *
+ * Every shell also feeds a screen mirror (shellMirror.ts, D3) whether or not a
+ * window is attached. Re-opening a live shell returns the mirror's snapshot in
+ * the open result (see openExisting for why it can't be an event).
  */
 
 export type ShellRequest =
@@ -41,7 +51,17 @@ export interface ShellOpenResult {
    * starts the replacement, so the dock can say "[process exited]".
    */
   previousExit?: { exitCode: number; exitedAt: number };
+  /**
+   * Only when created is false: the shell's screen, scrollback and modes as
+   * a string to write into a fresh terminal of the open's size. It is in the
+   * reply, not an event, because the window only learns the shellId from the
+   * reply. Live `data` then continues exactly where the snapshot ends.
+   */
+  snapshot?: string;
 }
+
+/** What a request resolved or rejected with, as the glue posts it back. */
+export type ShellOutcome = { ok: true; result: unknown } | { ok: false; error: string };
 
 export interface ShellInfo {
   sessionId: string;
@@ -63,6 +83,10 @@ export interface ShellHostDeps {
   shell?: () => string;
   now?: () => number;
   newId?: () => string;
+  /** The screen mirror factory; defaults to a real @xterm/headless one. */
+  createMirror?: CreateMirror;
+  /** Runs `fn` after `ms` and returns a canceller; defaults to setTimeout. */
+  schedule?: (fn: () => void, ms: number) => () => void;
 }
 
 interface ShellEntry {
@@ -72,6 +96,27 @@ interface ShellEntry {
   cwd: string | undefined;
   startedAt: number;
   attachedTo: number | undefined;
+  mirror: ShellMirror;
+  /** Output waiting for the attached window's next batch flush. */
+  pending: string[];
+  cancelFlush: (() => void) | undefined;
+  /**
+   * Set from the cut of a re-open until its reply is posted: output for the
+   * new window collects in `pending` and an exit waits in `heldExit`, so
+   * nothing reaches the window before it knows the shellId.
+   */
+  holdToken: object | undefined;
+  heldExit: number | undefined;
+  /** Re-opens whose snapshot cut is still waiting on the mirror. */
+  cuts: number;
+  /** The shell ended while a cut was pending; the mirror dies when it finishes. */
+  disposeAfterCuts: boolean;
+}
+
+/** An open's result plus the step that lets held output through, after the reply is posted. */
+interface Dispatched {
+  result: unknown;
+  release?: () => void;
 }
 
 export class ShellHostCore {
@@ -93,11 +138,46 @@ export class ShellHostCore {
   disconnect(windowId: number): void {
     this.windows.delete(windowId);
     for (const entry of this.byId.values()) {
-      if (entry.attachedTo === windowId) entry.attachedTo = undefined;
+      if (entry.attachedTo === windowId) this.unhook(entry);
     }
   }
 
+  /**
+   * Answers a request. For a re-open this releases the output held behind the
+   * snapshot as soon as the promise resolves, which is *before* the caller
+   * can post the reply — use handleAndReply where reply order matters.
+   */
   async handle(windowId: number, request: ShellRequest): Promise<unknown> {
+    const { result, release } = await this.dispatch(windowId, request);
+    release?.();
+    return result;
+  }
+
+  /**
+   * Like handle, but posts the answer itself through `reply`, and only then
+   * lets output that arrived during a re-open's snapshot cut flow to the
+   * window. The glue (shellHost.ts) uses this so the renderer sees the open
+   * reply, and with it the shellId, before any `data` or `exit` that follows
+   * the snapshot. `reply` must post synchronously.
+   */
+  async handleAndReply(
+    windowId: number,
+    request: ShellRequest,
+    reply: (outcome: ShellOutcome) => void,
+  ): Promise<void> {
+    let release: (() => void) | undefined;
+    try {
+      const dispatched = await this.dispatch(windowId, request);
+      release = dispatched.release;
+      reply({ ok: true, result: dispatched.result });
+    } catch (error) {
+      reply({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      release?.();
+    }
+  }
+
+  private async dispatch(windowId: number, request: ShellRequest): Promise<Dispatched> {
     if (!this.windows.has(windowId)) {
       throw new Error(`window ${windowId} is not connected to the shell host`);
     }
@@ -107,18 +187,20 @@ export class ShellHostCore {
       case "detach":
         // Only the attached window can detach; a stale view must not unhook a newer one.
         if (this.owned(windowId, request.shellId)) this.detach(request.shellId);
-        return undefined;
+        return { result: undefined };
       case "end":
         this.end(request.shellId);
-        return undefined;
+        return { result: undefined };
       case "write":
         this.owned(windowId, request.shellId)?.proc.write(request.data);
-        return undefined;
-      case "resize":
-        this.owned(windowId, request.shellId)?.proc.resize(request.cols, request.rows);
-        return undefined;
+        return { result: undefined };
+      case "resize": {
+        const entry = this.owned(windowId, request.shellId);
+        if (entry) this.resize(entry, request.cols, request.rows);
+        return { result: undefined };
+      }
       case "list":
-        return this.list();
+        return { result: this.list() };
     }
   }
 
@@ -142,34 +224,26 @@ export class ShellHostCore {
   private async open(
     windowId: number,
     request: Extract<ShellRequest, { type: "open" }>,
-  ): Promise<ShellOpenResult> {
+  ): Promise<Dispatched> {
     const nodePty = await this.deps.loadPty();
     if (!nodePty) {
       throw new Error("node-pty is unavailable on this machine");
     }
-    // Everything below is synchronous, so two concurrent opens for one session
-    // can't both see "no shell" and spawn twice.
+    // Everything up to the cut below is synchronous, so two concurrent opens
+    // for one session can't both see "no shell" and spawn twice.
     const sink = this.windows.get(windowId);
     if (!sink) throw new Error(`window ${windowId} is not connected to the shell host`);
 
     const existing = this.bySession.get(request.sessionId);
-    if (existing) {
-      // Latest open wins: the window that had it learns it lost it.
-      const previous = existing.attachedTo;
-      existing.attachedTo = windowId;
-      if (previous !== undefined && previous !== windowId) {
-        this.windows.get(previous)?.({ event: "detached", shellId: existing.shellId });
-      }
-      // The new view may be a different size than the one that left.
-      if (request.cols && request.rows) existing.proc.resize(request.cols, request.rows);
-      return { shellId: existing.shellId, created: false };
-    }
+    if (existing) return this.openExisting(windowId, existing, request);
 
     const cwd = resolveCwd(request.cwd);
+    const cols = request.cols ?? 80;
+    const rows = request.rows ?? 24;
     const proc = nodePty.spawn((this.deps.shell ?? defaultShell)(), [], {
       name: "xterm-256color",
-      cols: request.cols ?? 80,
-      rows: request.rows ?? 24,
+      cols,
+      rows,
       cwd,
       env: shellEnv((this.deps.env ?? (() => process.env))()),
     });
@@ -180,13 +254,23 @@ export class ShellHostCore {
       cwd,
       startedAt: (this.deps.now ?? Date.now)(),
       attachedTo: windowId,
+      mirror: (this.deps.createMirror ?? createHeadlessMirror)(cols, rows),
+      pending: [],
+      cancelFlush: undefined,
+      holdToken: undefined,
+      heldExit: undefined,
+      cuts: 0,
+      disposeAfterCuts: false,
     };
     this.bySession.set(entry.sessionId, entry);
     this.byId.set(entry.shellId, entry);
 
     proc.onData((data) => {
-      // Detached output is dropped here; the D3 mirror will catch it later.
-      this.sendToAttached(entry, { event: "data", shellId: entry.shellId, data });
+      // The mirror sees every byte; the window only what arrives while it is attached.
+      entry.mirror.write(data);
+      if (entry.attachedTo === undefined) return;
+      entry.pending.push(data);
+      if (entry.holdToken === undefined) this.scheduleFlush(entry);
     });
     proc.onExit(({ exitCode }) => {
       // An `end` already removed the entry and nobody is waiting on it.
@@ -194,26 +278,116 @@ export class ShellHostCore {
       if (entry.attachedTo === undefined) {
         // Nobody was watching; remember it so the next open can say so.
         this.tombstones.set(entry.sessionId, { exitCode, exitedAt: (this.deps.now ?? Date.now)() });
+      } else if (entry.holdToken !== undefined) {
+        // A re-open's reply isn't out yet: the exit goes after it, behind the held data.
+        entry.heldExit = exitCode;
+      } else {
+        this.flush(entry);
+        this.sendToAttached(entry, { event: "exit", shellId: entry.shellId, exitCode });
       }
-      this.sendToAttached(entry, { event: "exit", shellId: entry.shellId, exitCode });
       this.remove(entry);
     });
     const previousExit = this.tombstones.get(request.sessionId);
     this.tombstones.delete(request.sessionId);
-    return previousExit
-      ? { shellId: entry.shellId, created: true, previousExit }
-      : { shellId: entry.shellId, created: true };
+    return {
+      result: previousExit
+        ? { shellId: entry.shellId, created: true, previousExit }
+        : { shellId: entry.shellId, created: true },
+    };
+  }
+
+  /**
+   * Re-open of a live shell: the window gets the mirror's screen in the open
+   * result. The cut has to be exact, and xterm parses writes asynchronously,
+   * so serializing right now could miss queued data. Instead, at time T the
+   * pty is resized (the SIGWINCH makes full-screen programs repaint) and an
+   * empty write is queued on the mirror; its callback runs after every byte
+   * before T is parsed and before any byte after T, so the mirror is resized
+   * and serialized there. Output after T collects in `pending` (held: the
+   * window can't be sent anything before it learns the shellId from the
+   * reply) and goes out when `release` is called after the reply is posted.
+   * Bytes before T are in the snapshot only, bytes after only in the live
+   * stream. An exit during the cut is held the same way.
+   */
+  private async openExisting(
+    windowId: number,
+    entry: ShellEntry,
+    request: Extract<ShellRequest, { type: "open" }>,
+  ): Promise<Dispatched> {
+    // Latest open wins: the window that had it learns it lost it, after any
+    // output it was already owed.
+    const previous = entry.attachedTo;
+    if (previous !== undefined && previous !== windowId && entry.holdToken === undefined) {
+      this.flush(entry);
+      this.windows.get(previous)?.({ event: "detached", shellId: entry.shellId });
+    }
+    // Whatever was batched for the old view is in the snapshot instead.
+    this.clearPending(entry);
+    entry.attachedTo = windowId;
+    const token = {};
+    entry.holdToken = token;
+    entry.heldExit = undefined;
+
+    const resizeTo = request.cols && request.rows ? { cols: request.cols, rows: request.rows } : undefined;
+    // The new view may be a different size than the one that left.
+    if (resizeTo) entry.proc.resize(resizeTo.cols, resizeTo.rows);
+    entry.cuts += 1;
+    const snapshot = await new Promise<string>((resolve) => {
+      entry.mirror.write("", () => {
+        if (resizeTo) entry.mirror.resize(resizeTo.cols, resizeTo.rows);
+        resolve(entry.mirror.serialize());
+      });
+    });
+    entry.cuts -= 1;
+    if (entry.disposeAfterCuts && entry.cuts === 0) entry.mirror.dispose();
+
+    return {
+      result: { shellId: entry.shellId, created: false, snapshot },
+      release: () => {
+        if (entry.holdToken !== token) return; // a newer open took over the hold
+        entry.holdToken = undefined;
+        if (entry.attachedTo !== windowId) {
+          this.clearPending(entry);
+          entry.heldExit = undefined;
+          return;
+        }
+        this.flush(entry);
+        if (entry.heldExit !== undefined) {
+          const exitCode = entry.heldExit;
+          entry.heldExit = undefined;
+          this.sendToAttached(entry, { event: "exit", shellId: entry.shellId, exitCode });
+        }
+      },
+    };
+  }
+
+  private resize(entry: ShellEntry, cols: number, rows: number): void {
+    entry.proc.resize(cols, rows);
+    // Queued behind the bytes already written so they parse at the old size.
+    entry.mirror.write("", () => entry.mirror.resize(cols, rows));
   }
 
   private detach(shellId: string): void {
     const entry = this.byId.get(shellId);
-    if (entry) entry.attachedTo = undefined;
+    if (entry) this.unhook(entry);
+  }
+
+  /** The view is gone: whatever was batched for it is dropped, the mirror has it. */
+  private unhook(entry: ShellEntry): void {
+    entry.attachedTo = undefined;
+    entry.holdToken = undefined;
+    entry.heldExit = undefined;
+    this.clearPending(entry);
   }
 
   private end(shellId: string): void {
     const entry = this.byId.get(shellId);
     if (!entry) return;
     this.remove(entry);
+    // An end owes the window nothing, not even output held behind a re-open.
+    entry.holdToken = undefined;
+    entry.heldExit = undefined;
+    this.clearPending(entry);
     entry.proc.kill();
   }
 
@@ -225,6 +399,44 @@ export class ShellHostCore {
   private remove(entry: ShellEntry): void {
     this.byId.delete(entry.shellId);
     if (this.bySession.get(entry.sessionId) === entry) this.bySession.delete(entry.sessionId);
+    if (entry.cuts > 0) {
+      // A snapshot is still waiting on the mirror; it disposes it when done.
+      entry.disposeAfterCuts = true;
+    } else {
+      entry.mirror.dispose();
+    }
+    // A held batch/exit stays for the pending release; otherwise nothing is owed.
+    if (entry.holdToken === undefined) this.clearPending(entry);
+  }
+
+  private scheduleFlush(entry: ShellEntry): void {
+    if (entry.cancelFlush) return;
+    const schedule =
+      this.deps.schedule ??
+      ((fn, ms) => {
+        const timer = setTimeout(fn, ms);
+        return () => clearTimeout(timer);
+      });
+    entry.cancelFlush = schedule(() => {
+      entry.cancelFlush = undefined;
+      this.flush(entry);
+    }, DATA_BATCH_MS);
+  }
+
+  /** Sends the batch now (one `data` event) and cancels its timer. */
+  private flush(entry: ShellEntry): void {
+    entry.cancelFlush?.();
+    entry.cancelFlush = undefined;
+    if (entry.pending.length === 0) return;
+    const data = entry.pending.join("");
+    entry.pending = [];
+    this.sendToAttached(entry, { event: "data", shellId: entry.shellId, data });
+  }
+
+  private clearPending(entry: ShellEntry): void {
+    entry.cancelFlush?.();
+    entry.cancelFlush = undefined;
+    entry.pending = [];
   }
 
   private sendToAttached(entry: ShellEntry, event: ShellEvent): void {

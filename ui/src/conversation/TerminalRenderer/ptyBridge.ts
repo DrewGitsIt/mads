@@ -74,6 +74,13 @@ export interface ShellHostBridge {
     shellId: string;
     created: boolean;
     previousExit?: { exitCode: number; exitedAt: number };
+    /**
+     * Only when created is false: the shell's screen, scrollback and modes.
+     * Write it into a fresh terminal (same SHELL_SCROLLBACK as the host's
+     * mirror) of the open's size before the first `data`; live output
+     * continues exactly where it ends.
+     */
+    snapshot?: string;
   }>;
   /** The view went away; the shell keeps running. */
   detach(shellId: string): Promise<void>;
