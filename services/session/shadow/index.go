@@ -140,6 +140,35 @@ func BaselineOriginal(ctx context.Context, shadowDir, root, relPath string) (con
 	return content, true
 }
 
+// FirstCaptureOriginal resolves a file's content as of the session's first
+// captured tool call on it — the best "original" a root with no baseline
+// commit (a non-repo root, see Store.Baseline) can offer. It is the file's
+// state just before the session first changed it through a tool; changes
+// made some other way (shell commands) are invisible, as in every
+// capture-based view. ok=false when the file was never captured or its
+// pre-image isn't stored (too large). ok=true with content=="" is the
+// "file did not exist" shape (the session created it).
+func FirstCaptureOriginal(ctx context.Context, shadowDir, path string) (content string, ok bool) {
+	recs, err := ReadIndex(shadowDir)
+	if err != nil {
+		return "", false
+	}
+	for _, rec := range recs {
+		if rec.Kind != RecordCapture || rec.Path != path {
+			continue
+		}
+		if rec.Missing {
+			return "", true
+		}
+		if rec.TooLarge || rec.Blob == "" {
+			return "", false
+		}
+		content, err := BlobContent(ctx, shadowDir, rec.RootKey, rec.Blob)
+		return content, err == nil
+	}
+	return "", false
+}
+
 func readGit(ctx context.Context, gitDir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()

@@ -57,7 +57,10 @@ func TestSessionToolDiffHappyPath(t *testing.T) {
 	data := dataclient.New(base, "test")
 	sess, store := shadowSession(t, data)
 
+	// A repo: turn commits only exist for repo roots (a non-repo root is
+	// never tree-committed — see shadow.Store.Baseline).
 	dir := toolDiffRoot(t)
+	gitCommitTestRun(t, dir, "init", "-q")
 	path := filepath.Join(dir, "file.txt")
 	writeToolDiffFile(t, path, "v1\n")
 	store.Baseline(dir)

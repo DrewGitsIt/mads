@@ -322,32 +322,45 @@ func TestSessionWorkingDiffPrefersShadowBaseline(t *testing.T) {
 	}
 }
 
-// TestSessionWorkingDiffShadowBaselineNonGitRoot: the shadow baseline also
-// resolves originals for files outside any git repo — where the heuristic
-// has nothing at all (previously always an empty original).
-func TestSessionWorkingDiffShadowBaselineNonGitRoot(t *testing.T) {
+// TestSessionWorkingDiffNonGitRoot: a file outside any git repo has no
+// shadow baseline (the store never bulk-scans a non-repo root), so "original"
+// is the pre-image captured before the session's tool call changed it. A
+// file the tool created has an empty original.
+func TestSessionWorkingDiffNonGitRoot(t *testing.T) {
 	srv, base := newTestServerWithData(t)
 	data := dataclient.New(base, "test")
 	sess, store := shadowSession(t, data)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "plain.txt")
+	created := filepath.Join(dir, "created.txt")
 	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	store.Baseline(dir)
+	store.Baseline(dir) // provisioning-time call: must be a no-op here
+	store.Capture("toolu_edit", path)
+	store.Capture("toolu_create", created)
 	if err := os.WriteFile(path, []byte("after\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	recordChange(t, data, sess.ID, "", path, "modified")
-
-	resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, path, "")
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	if err := os.WriteFile(created, []byte("new\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	got := decodeJSON[fileDiffResp](t, resp)
-	if got.Original != "before\n" || got.Modified != "after\n" {
-		t.Errorf("diff = %+v, want {Original:\"before\\n\" Modified:\"after\\n\"}", got)
+	recordChange(t, data, sess.ID, "", path, "modified")
+	recordChange(t, data, sess.ID, "", created, "added")
+
+	for _, tc := range []struct{ path, original, modified string }{
+		{path, "before\n", "after\n"},
+		{created, "", "new\n"},
+	} {
+		resp := getWorkingDiffThroughRouter(t, srv.URL, sess.ID, tc.path, "")
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", tc.path, resp.StatusCode)
+		}
+		got := decodeJSON[fileDiffResp](t, resp)
+		if got.Original != tc.original || got.Modified != tc.modified {
+			t.Errorf("%s: diff = %+v, want original %q modified %q", tc.path, got, tc.original, tc.modified)
+		}
 	}
 }
 

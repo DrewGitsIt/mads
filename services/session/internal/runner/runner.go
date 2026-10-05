@@ -514,7 +514,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Primary-root baseline, backgrounded: measured 6.3s on a 39 GB
 	// checkout — it must never block provisioning. Other roots baseline on
 	// first touch (shadow.Store.Capture). No-op when already baselined
-	// (bounce/resume) or when shadowing is disabled (nil-safe).
+	// (bounce/resume) or when shadowing is disabled (nil-safe). Also a no-op
+	// when cwd isn't in a git repo: a session rooted at ~ or / must not copy
+	// the folder into git objects, so those get per-capture pre-images only.
 	go r.shadowStore.Baseline(cwd)
 
 	go r.pump(provSess)

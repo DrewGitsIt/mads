@@ -79,18 +79,9 @@ func TestBaseline(t *testing.T) {
 			absent:  []string{".env"},
 		},
 		{
-			name: "non-git dir is its own root",
-			setup: func(t *testing.T) string {
-				root := tempRoot(t)
-				writeFile(t, filepath.Join(root, "notes.md"), "plain\n")
-				return root
-			},
-			present: map[string]string{"notes.md": "plain\n"},
-		},
-		{
 			name: "mads exclude list skips build dirs",
 			setup: func(t *testing.T) string {
-				root := tempRoot(t)
+				root := newRepo(t, map[string]string{"seed.txt": "s\n"})
 				writeFile(t, filepath.Join(root, "src.go"), "package x\n")
 				writeFile(t, filepath.Join(root, "node_modules", "dep.js"), "junk\n")
 				return root
@@ -129,6 +120,50 @@ func TestBaseline(t *testing.T) {
 				t.Errorf("baseline commit count = %q (%v), want 1", strings.TrimSpace(string(out)), err)
 			}
 		})
+	}
+}
+
+// TestBaselineSkipsNonRepoRoot: a folder that isn't in a git repo (a session
+// rooted at ~ or / looks exactly like this) gets no baseline — no baseline
+// commit, no bulk object write — at provisioning, on first touch via
+// Capture, or at turn end. Only the one captured pre-image blob is stored.
+func TestBaselineSkipsNonRepoRoot(t *testing.T) {
+	root := tempRoot(t)
+	writeFile(t, filepath.Join(root, "notes.md"), "plain\n")
+	writeFile(t, filepath.Join(root, "other.md"), "must not be scanned\n")
+	s := New(t.TempDir(), "ses_test")
+	t.Cleanup(s.Wait)
+
+	s.Baseline(root)
+	if _, err := os.Stat(filepath.Join(s.Dir(), RootKey(root))); !os.IsNotExist(err) {
+		t.Errorf("Baseline created a shadow dir for a non-repo root (stat err = %v)", err)
+	}
+
+	// Edited directly in the root itself — the lazy path that would make the
+	// file's own directory (~) the root.
+	s.Capture("toolu_1", filepath.Join(root, "notes.md"))
+	s.CommitTurnAsync()
+	s.Wait()
+
+	gitDir := filepath.Join(s.Dir(), RootKey(root))
+	if err := exec.Command("git", "--git-dir="+gitDir, "rev-parse", "--verify", "--quiet", BaselineTag+"^{commit}").Run(); err == nil {
+		t.Error("non-repo root has a baseline commit")
+	}
+	if err := exec.Command("git", "--git-dir="+gitDir, "rev-parse", "--verify", "--quiet", "HEAD").Run(); err == nil {
+		t.Error("non-repo root has a HEAD commit — a turn commit scanned it")
+	}
+	// Object store holds exactly the captured blob: a bulk add would also
+	// have written other.md's blob (and trees).
+	out, err := exec.Command("git", "--git-dir="+gitDir, "count-objects", "-v").Output()
+	if err != nil || !strings.Contains(string(out), "count: 1\n") {
+		t.Errorf("count-objects = %q (%v), want exactly 1 loose object", out, err)
+	}
+	if _, ok := BaselineOriginal(context.Background(), s.Dir(), root, "notes.md"); ok {
+		t.Error("BaselineOriginal ok=true for a non-repo root, want false")
+	}
+	got, ok := FirstCaptureOriginal(context.Background(), s.Dir(), filepath.Join(root, "notes.md"))
+	if !ok || got != "plain\n" {
+		t.Errorf("FirstCaptureOriginal = (%q, %v), want (\"plain\\n\", true)", got, ok)
 	}
 }
 
