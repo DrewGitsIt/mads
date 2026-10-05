@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { railLabelsFor, railTooltip, reservesContextLine, workspaceFacts } from "./railLabels";
+import { railLabelsFor, railTooltip, workspaceFacts } from "./railLabels";
 import type { RailLabelContext } from "./railLabels";
 import { agentIndex } from "../../../router/agentRef";
 import type { Agent, Session, Workspace } from "../../../router/types";
@@ -29,7 +29,6 @@ function makeWorkspace(overrides: Partial<Workspace>): Workspace {
 const MADS = makeWorkspace({
   name: "mads",
   repos: [{ path: "/home/drew/repo/mads", primary: true }, { path: "/home/drew/repo/mads-ui" }],
-  defaults: { agent: "builder" },
 });
 
 function makeAgent(overrides: Partial<Agent>): Agent {
@@ -45,8 +44,6 @@ function makeAgent(overrides: Partial<Agent>): Agent {
 
 function context(overrides: Partial<RailLabelContext> = {}): RailLabelContext {
   return {
-    multiWorkspace: false,
-    railMultiWorkspace: false,
     facts: workspaceFacts([MADS]),
     agents: agentIndex([]),
     ...overrides,
@@ -56,45 +53,27 @@ function context(overrides: Partial<RailLabelContext> = {}): RailLabelContext {
 describe("workspaceFacts", () => {
   // The live case: the router canonicalises Session.workspace to the workspace
   // *id* (sessiondefaults.go), so a facts map keyed only by name never hits.
-  it("answers for a session that references its workspace by id", () => {
+  it("answers for a session that references its workspace by id or by name", () => {
     const facts = workspaceFacts([MADS]);
-    expect(facts.get("ws")?.primaryRepo).toBe("/home/drew/repo/mads");
-    expect(facts.get("ws")?.defaultAgent).toBe("builder");
     expect(facts.get("ws")?.name).toBe("mads");
-  });
-
-  it("prefers the repo marked primary", () => {
-    expect(workspaceFacts([MADS]).get("mads")?.primaryRepo).toBe("/home/drew/repo/mads");
-  });
-
-  it("falls back to the only repo when none is marked primary", () => {
-    const ws = makeWorkspace({ name: "solo", repos: [{ path: "/home/drew/repo/solo" }] });
-    expect(workspaceFacts([ws]).get("solo")?.primaryRepo).toBe("/home/drew/repo/solo");
-  });
-
-  it("reads the default persona from either defaults.agent or defaults.persona", () => {
-    const facts = workspaceFacts([
-      makeWorkspace({ name: "a", defaults: { agent: "builder" } }),
-      makeWorkspace({ id: "ws-b", name: "b", defaults: { persona: "reviewer" } }),
-    ]);
-    expect(facts.get("a")?.defaultAgent).toBe("builder");
-    expect(facts.get("b")?.defaultAgent).toBe("reviewer");
+    expect(facts.get("mads")?.name).toBe("mads");
   });
 });
 
 describe("railLabelsFor", () => {
-  it("shows the branch for an isolated session", () => {
+  it("shows the location and the branch for an isolated session", () => {
     const labels = railLabelsFor(
       makeSession({
         workspace: "mads",
-        isolation: "worktree",
-        worktree_branch: "wt/goose-acp",
-        worktree_dir: "/home/drew/repo/mads-wt/goose-acp",
-        cwd: "/home/drew/repo/mads-wt/goose-acp",
+        dir: "/home/drew/repo/mads",
+        worktree_branch: "mads/session/ses_k3f9",
+        worktree_base: "main",
+        worktree_dir: "/home/drew/.mads/session-worktrees/ses_k3f9",
+        cwd: "/home/drew/.mads/session-worktrees/ses_k3f9",
       }),
       context(),
     );
-    expect(labels.branch).toBe("wt/goose-acp");
+    expect(labels).toEqual({ location: "mads", branch: "mads/session/ses_k3f9", retro: false });
   });
 
   it("shows no branch for a session working in the repo itself", () => {
@@ -105,117 +84,48 @@ describe("railLabelsFor", () => {
     expect(labels.branch).toBeUndefined();
   });
 
-  it("shows the workspace only when the visible list spans more than one", () => {
-    const session = makeSession({ workspace: "mads" });
-    expect(railLabelsFor(session, context()).workspace).toBeUndefined();
-    expect(railLabelsFor(session, context({ multiWorkspace: true })).workspace).toBe("mads");
+  // Always, not only when the list spans more than one workspace: "which
+  // project is this?" is asked of every card.
+  it("shows the workspace in a single-workspace rail", () => {
+    expect(railLabelsFor(makeSession({ workspace: "mads" }), context()).location).toBe("mads");
   });
 
   it("labels an id-referenced workspace with its name, never the id", () => {
-    const session = makeSession({ workspace: "ws" });
-    expect(railLabelsFor(session, context({ multiWorkspace: true })).workspace).toBe("mads");
+    expect(railLabelsFor(makeSession({ workspace: "ws" }), context()).location).toBe("mads");
   });
 
-  // The whole defect, in the shape the running instance has it: an
-  // id-referenced current_dir session in a single-workspace instance. Nothing
-  // it carries is worth a label, so the context line carries nothing.
-  it("gives a current_dir session on its workspace's default agent no labels at all", () => {
+  it("names the workspace even when the folder is somewhere else", () => {
     const labels = railLabelsFor(
-      makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" }),
+      makeSession({ workspace: "ws", dir: "/home/drew/repo/mads-ui" }),
       context(),
     );
-    expect(labels).toEqual({
-      branch: undefined,
-      workspace: undefined,
-      cwd: undefined,
-      retro: false,
-    });
+    expect(labels.location).toBe("mads");
   });
 
-  it("never labels a cwd that is not a location", () => {
+  it("falls back to the folder's basename for a session with no workspace", () => {
+    expect(railLabelsFor(makeSession({ dir: "/home/drew/scratch" }), context()).location).toBe("scratch");
+    expect(railLabelsFor(makeSession({ cwd: "/home/drew/notes" }), context()).location).toBe("notes");
+  });
+
+  // An isolated session's cwd is its worktree, named for the session id — the
+  // folder the user chose is the answer.
+  it("never names an isolated session after its worktree", () => {
+    const labels = railLabelsFor(
+      makeSession({
+        dir: "/home/drew/repo/sidecar",
+        worktree_branch: "mads/session/ses_k3f9",
+        worktree_dir: "/home/drew/.mads/session-worktrees/ses_k3f9",
+        cwd: "/home/drew/.mads/session-worktrees/ses_k3f9",
+      }),
+      context(),
+    );
+    expect(labels.location).toBe("sidecar");
+  });
+
+  it("gives a session that names no place no location", () => {
     for (const cwd of [".", "./", "", " "]) {
-      expect(railLabelsFor(makeSession({ workspace: "ws", cwd }), context()).cwd).toBeUndefined();
+      expect(railLabelsFor(makeSession({ cwd }), context()).location).toBeUndefined();
     }
-  });
-
-  it("still labels a cwd that differs from the primary repo of an id-referenced workspace", () => {
-    const labels = railLabelsFor(
-      makeSession({ workspace: "ws", cwd: "/home/drew/repo/mads-ui" }),
-      context(),
-    );
-    expect(labels.cwd).toBe("~/repo/mads-ui");
-  });
-
-  it("hides the cwd when it is the workspace's primary repo", () => {
-    const labels = railLabelsFor(
-      makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads" }),
-      context(),
-    );
-    expect(labels.cwd).toBeUndefined();
-  });
-
-  // The Session Service resolves cwd with os.Getwd(), so the record is
-  // absolute; a workspace stores its repos as typed, which is usually
-  // tilde-collapsed. Compared raw they never match, and every card in the
-  // workspace prints its own primary repo back at itself.
-  it("hides a cwd that is the primary repo written in the other form", () => {
-    const labels = railLabelsFor(
-      makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads" }),
-      context({
-        facts: workspaceFacts([
-          makeWorkspace({ name: "mads", repos: [{ path: "~/repo/mads", primary: true }] }),
-        ]),
-      }),
-    );
-    expect(labels.cwd).toBeUndefined();
-  });
-
-  it("ignores a trailing slash when comparing against the primary repo", () => {
-    const labels = railLabelsFor(
-      makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads/" }),
-      context(),
-    );
-    expect(labels.cwd).toBeUndefined();
-  });
-
-  it("shows the cwd, home-collapsed, when it differs from the primary repo", () => {
-    const labels = railLabelsFor(
-      makeSession({ workspace: "mads", cwd: "/home/drew/repo/mads-ui" }),
-      context(),
-    );
-    expect(labels.cwd).toBe("~/repo/mads-ui");
-  });
-
-  it("shows the cwd for a session with no workspace to judge it against", () => {
-    const labels = railLabelsFor(makeSession({ cwd: "/home/drew/scratch" }), context());
-    expect(labels.cwd).toBe("~/scratch");
-  });
-
-  it("does not spend the card's second slot repeating the worktree the branch already names", () => {
-    const labels = railLabelsFor(
-      makeSession({
-        workspace: "mads",
-        isolation: "worktree",
-        worktree_branch: "wt/goose-acp",
-        worktree_dir: "/home/drew/repo/mads-wt/goose-acp",
-        cwd: "/home/drew/repo/mads-wt/goose-acp",
-      }),
-      context(),
-    );
-    expect(labels.cwd).toBeUndefined();
-  });
-
-  it("still shows the cwd of an isolated session that is not in its worktree", () => {
-    const labels = railLabelsFor(
-      makeSession({
-        workspace: "mads",
-        worktree_branch: "wt/goose-acp",
-        worktree_dir: "/home/drew/repo/mads-wt/goose-acp",
-        cwd: "/home/drew/repo/other",
-      }),
-      context(),
-    );
-    expect(labels.cwd).toBe("~/repo/other");
   });
 
   it("marks retro sessions, by record or by tag", () => {
@@ -225,36 +135,14 @@ describe("railLabelsFor", () => {
   });
 });
 
-describe("reservesContextLine", () => {
-  // The whitespace fix: the reservation is per card, so one session with a
-  // branch no longer gives every other card a blank line.
-  it("reserves nothing for a session with no label under the rail-wide context", () => {
-    const plain = makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" });
-    expect(reservesContextLine(plain, context())).toBe(false);
-    expect(reservesContextLine(plain, context({ multiWorkspace: true }))).toBe(false);
-  });
-
-  it("reserves the line for a session that has a label", () => {
-    expect(reservesContextLine(makeSession({ worktree_branch: "wt/x" }), context())).toBe(true);
-  });
-
-  // The reservation's whole job: a filter changes which labels show, never
-  // whether the line is there. A card whose ONLY label is the workspace keeps
-  // its line even while the visible list is single-workspace and drops it.
-  it("keeps the line for a workspace-only card the visible set has narrowed", () => {
-    const session = makeSession({ workspace: "ws", isolation: "current_dir", cwd: ".", agent: "builder" });
-    const ctx = context({ multiWorkspace: false, railMultiWorkspace: true });
-    expect(railLabelsFor(session, ctx).workspace).toBeUndefined();
-    expect(reservesContextLine(session, ctx)).toBe(true);
-  });
-});
-
 describe("railTooltip", () => {
   it("carries the fields the resting card does not show", () => {
     const tooltip = railTooltip(
       makeSession({
         workspace: "mads",
-        cwd: "/home/drew/repo/mads",
+        dir: "/home/drew/repo/mads",
+        cwd: "/home/drew/.mads/session-worktrees/ses_k3f9",
+        worktree_dir: "/home/drew/.mads/session-worktrees/ses_k3f9",
         worktree_branch: "wt/goose-acp",
         agent: "reviewer",
         model: "claude-opus-5",
@@ -266,7 +154,8 @@ describe("railTooltip", () => {
     );
     expect(tooltip.split("\n")).toEqual([
       "Workspace: mads",
-      "Directory: ~/repo/mads",
+      "Folder: ~/repo/mads",
+      "Worktree: ~/.mads/session-worktrees/ses_k3f9",
       "Branch: wt/goose-acp",
       "Agent: reviewer",
       "Model: claude-opus-5",
@@ -290,17 +179,15 @@ describe("railTooltip", () => {
     expect(tooltip).toBe("Agent: mads-coding-partner");
   });
 
-  // Unlike the card, which dropped it: the tooltip is the detail view, and a
-  // session whose persona record is gone is better described by the dangling
-  // reference than by saying nothing about its persona at all.
-  it("falls back to the reference for a persona it cannot resolve", () => {
-    expect(railTooltip(makeSession({ agent: "agt_deleted" }), context())).toBe("Agent: agt_deleted");
+  // A session whose persona record is gone still has a persona line — but
+  // a hash in it answers nothing, so it reads the way the header pill does.
+  it("reads an unresolvable persona id as Unknown agent", () => {
+    expect(railTooltip(makeSession({ agent: "agt_deleted" }), context())).toBe("Agent: Unknown agent");
   });
 
-  // The card suppressed a cwd of "." through isLocation and the tooltip did
-  // not, so every session in the rail hovered as "Directory: ." — the record
-  // stores that for any session without an explicitly chosen directory.
-  it("does not offer a bare dot as a directory", () => {
+  // The record stores cwd "." for any session without an explicitly chosen
+  // directory; "Folder: ." is not an answer.
+  it("does not offer a bare dot as a folder", () => {
     expect(railTooltip(makeSession({ cwd: "." }), context())).toBe("");
     expect(railTooltip(makeSession({ cwd: "./" }), context())).toBe("");
   });

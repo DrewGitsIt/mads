@@ -40,16 +40,12 @@ import { useSettledRailOrder } from "./railOrder";
 import {
   EMPTY_LABEL_CONTEXT,
   railLabelsFor,
+  hasRailLabels,
   railTooltip,
-  reservesContextLine,
   workspaceFacts,
 } from "./railLabels";
 import type { RailLabelContext, RailLabels } from "./railLabels";
-import {
-  EMPTY_WORKSPACE_INDEX,
-  workspaceIndex,
-  workspaceNameForRef,
-} from "../../../router/workspaceRef";
+import { EMPTY_WORKSPACE_INDEX, workspaceIndex } from "../../../router/workspaceRef";
 import type { WorkspaceIndex } from "../../../router/workspaceRef";
 import { agentIndex } from "../../../router/agentRef";
 import { summaryTeaser } from "./summaryTeaser";
@@ -222,38 +218,8 @@ export function SessionRail({
   // the whole reason a chip can do triage without a group's side effects.
   const visible =
     filter === "all" ? rows : rows.filter((row) => bucketByRowId.get(row.session.id) === filter);
-  // Labels read the *visible* list, not the whole rail: a workspace name
-  // every card repeats says nothing, so it only earns a card once the list
-  // is mixed. Deliberately computed before the Earlier fold, so expanding
-  // the tail cannot relabel the cards above it.
-  const sessionsOf = (row: RailRow) =>
-    linkedSessionsEnabled ? [row.session, ...row.subjects.map((s) => s.session)] : [row.session];
-  const visibleWorkspaces = new Set<string>();
-  for (const row of visible) {
-    for (const session of sessionsOf(row)) {
-      // Counted by resolved name: two records referring to one workspace, one
-      // by id and one by name, are not two workspaces.
-      const name = workspaceNameForRef(session.workspace, wsIndex);
-      if (name) visibleWorkspaces.add(name);
-    }
-  }
   const facts = workspaceFacts(workspaces);
-  // Whether a card gets a line is a question about the whole rail, not the
-  // visible slice: answered off `visible` it would come and go as filters
-  // narrow, and the surviving cards would change height — the reflow the
-  // reservation exists to prevent. So railMultiWorkspace rides along beside
-  // the visible-set answer, and a filter can only change *which* labels a card
-  // shows, never whether it has a line (railLabels.reservesContextLine).
-  const railWorkspaces = new Set<string>();
-  for (const row of allRows) {
-    for (const session of sessionsOf(row)) {
-      const name = workspaceNameForRef(session.workspace, wsIndex);
-      if (name) railWorkspaces.add(name);
-    }
-  }
   const labelContext: RailLabelContext = {
-    multiWorkspace: visibleWorkspaces.size > 1,
-    railMultiWorkspace: railWorkspaces.size > 1,
     facts,
     agents: agentIndex(agents),
   };
@@ -837,7 +803,7 @@ function SessionRow({
     .filter(Boolean)
     .join("\n");
   const hasMeta = openTaskCount > 0;
-  const showContext = reservesContextLine(session, labelContext);
+  const showContext = hasRailLabels(labels);
   const showSummary = isPaused && Boolean(session.summary);
   // Link controls — the update policy and Unlink — used to hang off the
   // LINKED / WATCHED pill, which was both the label and the trigger. The pill
@@ -1156,17 +1122,14 @@ function workNote(work: NonNullable<WorkState>): string {
 }
 
 /**
- * The adaptive context line (mockup docs/mockups/sessions-ux-v2.html §2).
- * Always rendered, one line, never wrapped, with its height reserved in CSS
- * even when every label is absent: which labels apply depends on the visible
- * set (a workspace name appears the moment a filter leaves two in the list),
- * and that has to repaint the line without ever reflowing the rail.
+ * The context line (mockup docs/mockups/sessions-ux-v2.html §2): where the
+ * session belongs, then its branch. One line, never wrapped — the branch
+ * truncates first, since the location is the answer the rail is scanned for.
  */
 function ContextLine({ labels }: { labels: RailLabels }) {
   const parts = [
+    labels.location ? { key: "location", cls: styles.ctxLocation, text: labels.location } : undefined,
     labels.branch ? { key: "branch", cls: styles.ctxBranch, text: labels.branch } : undefined,
-    labels.workspace ? { key: "workspace", cls: styles.ctxItem, text: labels.workspace } : undefined,
-    labels.cwd ? { key: "cwd", cls: styles.ctxItem, text: labels.cwd } : undefined,
   ].filter((part): part is { key: string; cls: string; text: string } => part !== undefined);
   return (
     <div className={styles.context}>

@@ -58,8 +58,8 @@ function labelsOn(card: HTMLElement): Record<string, string> {
   );
 }
 
-describe("SessionRail adaptive context labels", () => {
-  it("shows the branch for an isolated session and nothing for one working in the repo", () => {
+describe("SessionRail context labels", () => {
+  it("shows location then branch for an isolated session, and just the location for one in place", () => {
     render(
       <SessionRail
         sessions={[
@@ -67,10 +67,11 @@ describe("SessionRail adaptive context labels", () => {
             id: "wt",
             name: "isolated one",
             workspace: "mads",
-            isolation: "worktree",
-            worktree_branch: "wt/goose-acp",
-            worktree_dir: "/home/drew/repo/mads-wt/goose-acp",
-            cwd: "/home/drew/repo/mads-wt/goose-acp",
+            dir: "/home/drew/repo/mads",
+            worktree_branch: "mads/session/wt",
+            worktree_base: "main",
+            worktree_dir: "/home/drew/.mads/session-worktrees/wt",
+            cwd: "/home/drew/.mads/session-worktrees/wt",
           }),
           makeSession({
             id: "plain",
@@ -84,100 +85,66 @@ describe("SessionRail adaptive context labels", () => {
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("isolated one"))).toEqual({ branch: "wt/goose-acp" });
-    expect(labelsOn(cardFor("plain one"))).toEqual({});
-    expect(hasContextLine(cardFor("plain one"))).toBe(false);
+    expect(labelsOn(cardFor("isolated one"))).toEqual({ location: "mads", branch: "mads/session/wt" });
+    const order = [...cardFor("isolated one").querySelectorAll("[data-label]")].map((el) =>
+      el.getAttribute("data-label"),
+    );
+    expect(order).toEqual(["location", "branch"]);
+    expect(labelsOn(cardFor("plain one"))).toEqual({ location: "mads" });
   });
 
-  // The shape the running instance actually has: the router writes the
-  // workspace *id* onto the session (sessiondefaults.go), and an
-  // isolation:current_dir session stores cwd ".". Neither is a label — and
-  // since no session in this rail has one either, the line is not reserved at
-  // all. An empty line still costs its reserved height, which on this instance
-  // was 17px of blank on every card.
-  it("gives no context line at all to a rail whose sessions have no labels", () => {
+  // The shape the running instance has: the router writes the workspace *id*
+  // onto the session, every card is in one workspace, and an
+  // isolation:current_dir session stores cwd ".". The card still says which
+  // workspace — by name, not by id.
+  it("names the workspace on every card of a single-workspace rail", () => {
     render(
       <SessionRail
         sessions={[
-          makeSession({
-            id: "a",
-            name: "current dir one",
-            workspace: "ws-mads",
-            isolation: "current_dir",
-            cwd: ".",
-            agent: "builder",
-          }),
-          makeSession({
-            id: "b",
-            name: "current dir two",
-            workspace: "ws-mads",
-            isolation: "current_dir",
-            cwd: ".",
-          }),
+          makeSession({ id: "a", name: "current dir one", workspace: "ws-mads", cwd: "." }),
+          makeSession({ id: "b", name: "current dir two", workspace: "ws-mads", cwd: "." }),
         ]}
         workspaces={WORKSPACES}
         openTaskCounts={{}}
       />,
     );
     for (const name of ["current dir one", "current dir two"]) {
-      expect(cardFor(name).querySelector('[class*="context"]')).toBeNull();
+      expect(labelsOn(cardFor(name))).toEqual({ location: "mads" });
     }
   });
 
-  // The reservation is per card, not per rail. One session with a branch used
-  // to give every other card an empty 17px line — the unaccounted-for
-  // whitespace in the rail. The reservation protects a card that can gain or
-  // lose a label (see the filter test below); a card that can do neither was
-  // just carrying blank.
-  it("spends the line only on the cards that have something to put on it", () => {
+  it("names a session with no workspace by its folder", () => {
     render(
       <SessionRail
         sessions={[
-          makeSession({ id: "a", name: "plain one", workspace: "ws-mads", cwd: "." }),
+          makeSession({ id: "a", name: "in a folder", dir: "/home/drew/scratch/notes" }),
           makeSession({
             id: "b",
-            name: "isolated one",
-            workspace: "ws-mads",
-            isolation: "worktree",
-            worktree_branch: "feat/x",
+            name: "isolated in a folder",
+            dir: "/home/drew/repo/sidecar",
+            worktree_branch: "mads/session/b",
+            worktree_dir: "/home/drew/.mads/session-worktrees/b",
+            cwd: "/home/drew/.mads/session-worktrees/b",
           }),
         ]}
-        workspaces={WORKSPACES}
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("isolated one")).branch).toBe("feat/x");
-    expect(hasContextLine(cardFor("plain one"))).toBe(false);
+    expect(labelsOn(cardFor("in a folder"))).toEqual({ location: "notes" });
+    expect(labelsOn(cardFor("isolated in a folder"))).toEqual({
+      location: "sidecar",
+      branch: "mads/session/b",
+    });
   });
 
-  it("labels an id-referenced workspace with its name across a mixed list", () => {
+  it("spends no line on a card that names no place", () => {
     render(
       <SessionRail
-        sessions={[
-          makeSession({ id: "a", name: "by id", workspace: "ws-mads", cwd: "." }),
-          makeSession({ id: "b", name: "by name", workspace: "sidecar", cwd: "." }),
-        ]}
-        workspaces={WORKSPACES}
+        sessions={[makeSession({ id: "a", name: "nowhere", cwd: "." })]}
         openTaskCounts={{}}
       />,
     );
-    expect(labelsOn(cardFor("by id"))).toEqual({ workspace: "mads" });
-    expect(labelsOn(cardFor("by name"))).toEqual({ workspace: "sidecar" });
-  });
-
-  it("shows the cwd only when it differs from the workspace's primary repo", () => {
-    render(
-      <SessionRail
-        sessions={[
-          makeSession({ id: "a", name: "in the repo", workspace: "mads", cwd: "/home/drew/repo/mads" }),
-          makeSession({ id: "b", name: "elsewhere", workspace: "mads", cwd: "/home/drew/repo/mads-ui" }),
-        ]}
-        workspaces={WORKSPACES}
-        openTaskCounts={{}}
-      />,
-    );
-    expect(hasContextLine(cardFor("in the repo"))).toBe(false);
-    expect(labelsOn(cardFor("elsewhere")).cwd).toBe("~/repo/mads-ui");
+    expect(hasContextLine(cardFor("nowhere"))).toBe(false);
   });
 
   // The persona used to take a slot on this line, resolved through agentRef so
@@ -186,7 +153,7 @@ describe("SessionRail adaptive context labels", () => {
   // competing for, and the persona was a label that is suppressed whenever it
   // matches the workspace default — usually absent, and rarely what you are
   // scanning for when it is not. It is still in the hover tooltip.
-  it("spends no line on the persona, whatever persona it is", () => {
+  it("puts no persona on the line, whatever persona it is", () => {
     const agents: Agent[] = [
       { id: "agt_3212544bb2e37c92", name: "mads-coding-partner", prompt: "", created_at: "", updated_at: "" },
     ];
@@ -203,7 +170,7 @@ describe("SessionRail adaptive context labels", () => {
       />,
     );
     for (const name of ["default persona", "other persona", "persona by id"]) {
-      expect(hasContextLine(cardFor(name))).toBe(false);
+      expect(labelsOn(cardFor(name))).toEqual({ location: "mads" });
     }
   });
 
@@ -211,7 +178,7 @@ describe("SessionRail adaptive context labels", () => {
   // sessions interleaved and nothing on any card said which was which. The
   // mark rides the title row, which already reserves its height for the
   // stamp, so it costs no vertical space and never adds a line.
-  it("marks each card with the harness it runs on, costing no context line", () => {
+  it("marks each card with the harness it runs on, adding nothing to the context line", () => {
     render(
       <SessionRail
         sessions={[
@@ -232,42 +199,27 @@ describe("SessionRail adaptive context labels", () => {
     // A record that has not said yet claims nothing.
     expect(markOn("no provider yet")).toBeNull();
     for (const name of ["on claude", "on goose", "on something new"]) {
-      expect(hasContextLine(cardFor(name))).toBe(false);
+      expect(labelsOn(cardFor(name))).toEqual({ location: "mads" });
     }
   });
 
-  it("shows the workspace only while the visible list spans more than one, and filtering it down to one does not change the card", () => {
+  it("keeps a card's labels as a filter narrows the list", () => {
     render(
       <SessionRail
         sessions={[
-          makeSession({
-            id: "needs",
-            name: "blocked one",
-            workspace: "mads",
-            activity: "inactive",
-            cwd: "/home/drew/repo/mads",
-          }),
+          makeSession({ id: "needs", name: "blocked one", workspace: "mads", activity: "inactive" }),
           makeSession({ id: "idle", name: "calm one", workspace: "sidecar" }),
         ]}
         workspaces={WORKSPACES}
         openTaskCounts={{ needs: { running: 0, ready: 0, blocked: 1 } }}
       />,
     );
+    expect(labelsOn(cardFor("blocked one"))).toEqual({ location: "mads" });
+    expect(labelsOn(cardFor("calm one"))).toEqual({ location: "sidecar" });
 
-    // Two workspaces on screen: the name earns its place on every card.
-    expect(labelsOn(cardFor("blocked one")).workspace).toBe("mads");
-    expect(labelsOn(cardFor("calm one")).workspace).toBe("sidecar");
-    const before = cards().map((card) => card.querySelectorAll('[class*="context"]').length);
-
-    // "Needs you" leaves one workspace visible, so the name stops saying
-    // anything and drops off — but the line it lived on stays reserved, which
-    // is what keeps the surviving card's height identical.
     fireEvent.click(screen.getByRole("button", { name: /Needs you/ }));
     expect(cards()).toHaveLength(1);
-    expect(labelsOn(cardFor("blocked one"))).toEqual({});
-    const after = cards().map((card) => card.querySelectorAll('[class*="context"]').length);
-    expect(before.every((n) => n === 1)).toBe(true);
-    expect(after).toEqual([1]);
+    expect(labelsOn(cardFor("blocked one"))).toEqual({ location: "mads" });
   });
 
   it("reserves the context line's height in CSS, so gaining or losing a label cannot reflow the rail", () => {
@@ -314,8 +266,8 @@ describe("SessionRail adaptive context labels", () => {
     expect(title).toContain("Trust: limited");
     expect(title).toContain("Isolation: current_dir");
     expect(title).toContain("Context: 50% of 200k");
-    // Including the labels the resting card adaptively dropped.
+    // And the full path behind the card's short location.
     expect(title).toContain("Workspace: mads");
-    expect(title).toContain("Directory: ~/repo/mads");
+    expect(title).toContain("Folder: ~/repo/mads");
   });
 });

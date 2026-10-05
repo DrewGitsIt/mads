@@ -870,16 +870,9 @@
   color: var(--bad-fg);
 }
 
-/* Adaptive context labels. One line, never wrapped, with its height reserved
-   even when every label is adaptively absent: the visible label set changes as
-   filters narrow the list (a workspace name appears the moment the list spans
-   two), and that must repaint the line, never reflow the rail. Same contract
-   as .status above.
-
-   Rendered only on the cards that have something to put here, though —
-   railLabels.reservesContextLine decides per card, not per rail. The
-   reservation protects a card that can gain or lose a label; a card that can
-   do neither was simply carrying 17px of blank. */
+/* Context labels: location · branch. One line, never wrapped, and a steady
+   height so a card's line reads the same whatever is on it. Rendered only on
+   the cards that have something to put here (railLabels.hasRailLabels). */
 .context {
   flex: 1 1 auto;
   display: flex;
@@ -893,21 +886,25 @@
   overflow: hidden;
 }
 
-.ctxItem {
+/* Location first, and it keeps its width (up to half the line) while the
+   branch beside it truncates: which project a card belongs to is the thing
+   the rail is scanned for. */
+.ctxLocation {
+  flex: none;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text2);
+}
+
+.ctxBranch {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-/* The branch is the label most often worth checking, so it keeps its width
-   while the softer labels beside it truncate. */
-.ctxBranch {
-  flex: none;
-  max-width: 60%;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-family: var(--mono);
-  color: var(--text2);
+  /* Room for the mono underscore of `ses_…` — overflow: hidden clips at
+     the line box, and the default line height cuts it off. */
+  line-height: 1.35;
 }
 
 .ctxRetro {

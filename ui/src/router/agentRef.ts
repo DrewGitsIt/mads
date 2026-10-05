@@ -57,3 +57,18 @@ export function agentNameForRef(
   if (resolved) return resolved;
   return isAgentId(ref) ? undefined : ref;
 }
+
+/** What a persona reference reads as when it can't be resolved to a name. */
+export const UNKNOWN_AGENT = "Unknown agent";
+
+/**
+ * The label for a persona reference wherever one must be shown even when it
+ * doesn't resolve — the conversation header's persona pill, the rail
+ * tooltip. Same rule as agentNameForRef, except an unresolvable `agt_…` reads
+ * "Unknown agent" instead of disappearing: the slot is there either way, and
+ * a hash in it answers nothing. Undefined only when there is no reference.
+ */
+export function agentLabel(ref: string | undefined, index: AgentIndex): string | undefined {
+  if (!ref) return undefined;
+  return agentNameForRef(ref, index) ?? UNKNOWN_AGENT;
+}

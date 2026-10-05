@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentIndex, agentNameForRef, isAgentId } from "./agentRef";
+import { UNKNOWN_AGENT, agentIndex, agentLabel, agentNameForRef, isAgentId } from "./agentRef";
 import type { Agent } from "./types";
 
 function makeAgent(overrides: Partial<Agent>): Agent {
@@ -57,5 +57,24 @@ describe("agentNameForRef", () => {
 
   it("gives nothing for no reference at all", () => {
     expect(agentNameForRef(undefined, agentIndex([PARTNER]))).toBeUndefined();
+  });
+});
+
+describe("agentLabel", () => {
+  it("names a resolved persona", () => {
+    expect(agentLabel("agt_3212544bb2e37c92", agentIndex([PARTNER]))).toBe("mads-coding-partner");
+  });
+
+  it("passes a name reference through", () => {
+    expect(agentLabel("reviewer", agentIndex([]))).toBe("reviewer");
+  });
+
+  // The header pill printed "AGT_3212544BB2E37C92" for exactly this case.
+  it("reads an unresolvable id as Unknown agent, never the id", () => {
+    expect(agentLabel("agt_deleted", agentIndex([PARTNER]))).toBe(UNKNOWN_AGENT);
+  });
+
+  it("is undefined only when there is no reference", () => {
+    expect(agentLabel(undefined, agentIndex([PARTNER]))).toBeUndefined();
   });
 });
