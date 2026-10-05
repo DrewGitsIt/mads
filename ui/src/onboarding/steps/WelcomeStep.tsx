@@ -5,7 +5,7 @@ export interface WelcomeStepProps {
   onNext: () => void;
 }
 
-/** Step 1/5: static copy, no backend (HANDOFF §6). */
+/** Step 1/6: static copy, no backend (HANDOFF §6). */
 export function WelcomeStep({ onNext }: WelcomeStepProps) {
   return (
     <div className={styles.step}>

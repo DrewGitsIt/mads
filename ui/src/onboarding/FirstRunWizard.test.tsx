@@ -28,10 +28,11 @@ describe("FirstRunWizard", () => {
     vi.unstubAllGlobals();
   });
 
-  it("completes the full 5-step flow against a clean data dir", async () => {
+  it("completes the full 6-step flow against a clean data dir", async () => {
     const fetchMock = routedFetch({
       "GET /config": { ...fixtureConfig, onboarding_complete: false },
       "GET /preflight": fixturePreflightChecks,
+      "GET /imports/conversations": { providers: [], folders: [], total: 0, already_imported: 0, looked_for: [] },
       "GET /credentials": [],
       "GET /credentials/env-candidates": { candidates: [], looked_for: ["ANTHROPIC_API_KEY", "AWS_*"] },
       "GET /providers": fixtureProviders,
@@ -50,18 +51,22 @@ describe("FirstRunWizard", () => {
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
-    // 3. Credential import — skip
+    // 3. Conversation import — nothing found, so a plain Continue
+    await waitFor(() => expect(screen.getByText(/nothing to import — mads didn.t find any existing/i)).toBeTruthy());
+    fireEvent.click(screen.getByText("Continue"));
+
+    // 4. Credential import — skip
     await waitFor(() => expect(screen.getByText(/nothing to import/i)).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
-    // 4. First workspace
+    // 5. First workspace
     await waitFor(() => expect(screen.getByLabelText(/name/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "mads" } });
     fireEvent.change(screen.getByLabelText(/primary repo path/i), { target: { value: "/repo" } });
     fireEvent.change(screen.getByLabelText(/default provider/i), { target: { value: "claude-code" } });
     fireEvent.click(screen.getByText("Create workspace"));
 
-    // 5. Done
+    // 6. Done
     await waitFor(() => expect(screen.getByText("Go to Launchpad")).toBeTruthy());
     fireEvent.click(screen.getByText("Go to Launchpad"));
 
@@ -77,6 +82,7 @@ describe("FirstRunWizard", () => {
     const fetchMock = routedFetch({
       "GET /config": { ...fixtureConfig, onboarding_complete: false, default_provider: "fake" },
       "GET /preflight": fixturePreflightChecks,
+      "GET /imports/conversations": { providers: [], folders: [], total: 0, already_imported: 0, looked_for: [] },
       "GET /credentials": [],
       "GET /credentials/env-candidates": { candidates: [], looked_for: ["ANTHROPIC_API_KEY", "AWS_*"] },
       "GET /providers": fixtureProviders,
@@ -93,7 +99,10 @@ describe("FirstRunWizard", () => {
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
-    await waitFor(() => expect(screen.getByText(/nothing to import/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/nothing to import — mads didn.t find any existing/i)).toBeTruthy());
+    fireEvent.click(screen.getByText("Continue"));
+
+    await waitFor(() => expect(screen.getByText(/none of the variables mads looks for/i)).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
     await waitFor(() => expect(screen.getByLabelText(/name/i)).toBeTruthy());

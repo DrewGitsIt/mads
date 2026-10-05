@@ -10,7 +10,7 @@ export interface CredentialImportStepProps {
 }
 
 /**
- * Step 3/5: reuses useCredentials().envCandidates (HANDOFF §4/§6). Every
+ * Step 4/6: reuses useCredentials().envCandidates (HANDOFF §4/§6). Every
  * env-var value here is read server-side inside the Router process — only
  * NAMES ever reach this component, for both the candidate list and the
  * import call.
