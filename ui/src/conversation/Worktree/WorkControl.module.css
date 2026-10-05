@@ -1,0 +1,57 @@
+/* The header's Commit / Land control — docs/mockups/session-worktrees.html §1. */
+
+.work {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 11px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--bg2);
+  color: var(--text);
+  font: 600 var(--fs-sm) var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.work:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg4);
+  color: var(--text2);
+  font: 600 var(--fs-chip) var(--sans);
+}
+
+.commit {
+  border-color: var(--accent);
+}
+.commit:hover:not(:disabled) {
+  background: var(--bg3);
+}
+.commit .count {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.land {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.land:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.land .count {
+  background: color-mix(in srgb, var(--accent-ink) 18%, transparent);
+  color: var(--accent-ink);
+}
+
+.then {
+  font-weight: 500;
+  color: var(--text3);
+}

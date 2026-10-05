@@ -7,6 +7,8 @@ import type { Model, Session, SessionTrust, Usage } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
 import { trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
+import { WorkControl } from "../Worktree/WorkControl";
+import { isIsolated } from "../Worktree/workState";
 import { ContextMeter } from "./ContextMeter";
 import styles from "./ConversationHeader.module.css";
 
@@ -39,6 +41,17 @@ export interface ConversationHeaderProps {
    * Absent → the pill renders as a static chip (e.g. gallery renders).
    */
   onChangeTrust?: (trust: SessionTrust) => void;
+  /**
+   * Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4): the state-driven
+   * control at the row's right end, before Chat/Terminal. Absent → no
+   * control (e.g. gallery renders).
+   */
+  work?: {
+    onCommit: () => void;
+    onLand: () => void;
+    landing?: boolean;
+    committing?: boolean;
+  };
 }
 
 type PillField = "agent" | "model" | "trust";
@@ -59,6 +72,7 @@ export function ConversationHeader({
   onUpdateSession,
   onChangeModel,
   onChangeTrust,
+  work,
 }: ConversationHeaderProps) {
   const [openPill, setOpenPill] = useState<PillField | null>(null);
   const modelsByProvider = useProviderModels();
@@ -117,26 +131,45 @@ export function ConversationHeader({
           }
         />
 
-        {mode && onModeChange && (
-          <div className={styles.modeSwitch}>
-            <Chip tone="neutral" pressed={mode === "chat"} onClick={() => onModeChange("chat")}>
-              Chat
-            </Chip>
-            <Chip
-              tone="neutral"
-              pressed={mode === "terminal"}
-              onClick={() => onModeChange("terminal")}
-            >
-              Terminal
-            </Chip>
-          </div>
-        )}
+        <div className={styles.end}>
+          {work && (
+            <WorkControl
+              session={session}
+              onCommit={work.onCommit}
+              onLand={work.onLand}
+              landing={work.landing}
+              committing={work.committing}
+            />
+          )}
+          {mode && onModeChange && (
+            <div className={styles.modeSwitch}>
+              <Chip tone="neutral" pressed={mode === "chat"} onClick={() => onModeChange("chat")}>
+                Chat
+              </Chip>
+              <Chip
+                tone="neutral"
+                pressed={mode === "terminal"}
+                onClick={() => onModeChange("terminal")}
+              >
+                Terminal
+              </Chip>
+            </div>
+          )}
+        </div>
       </div>
 
-      {(workspaceName || session.worktree_branch) && (
+      {isIsolated(session) ? (
+        // An isolated session says where its work goes: its branch → the
+        // base it lands into.
         <div className={styles.subline}>
-          {[workspaceName, session.worktree_branch].filter(Boolean).join(" · ")}
+          {[workspaceName, `${session.worktree_branch} → ${session.worktree_base}`].filter(Boolean).join(" · ")}
         </div>
+      ) : (
+        (workspaceName || session.worktree_branch) && (
+          <div className={styles.subline}>
+            {[workspaceName, session.worktree_branch].filter(Boolean).join(" · ")}
+          </div>
+        )
       )}
     </div>
   );

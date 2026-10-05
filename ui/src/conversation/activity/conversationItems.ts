@@ -42,7 +42,18 @@ export interface MessageEntry {
   live?: boolean;
 }
 
-export type SourceEntry = MessageEntry | ActivityEntry;
+/**
+ * A system card the transcript interleaves by time — Commit/Land results
+ * (conversation/Worktree). Only its id travels through here; the renderer
+ * looks the card up, so this pass stays ignorant of what cards say.
+ */
+export interface CardEntry {
+  type: "card";
+  id: string;
+  timestamp?: string;
+}
+
+export type SourceEntry = MessageEntry | ActivityEntry | CardEntry;
 
 export interface PlanTodo {
   content: string;
@@ -53,7 +64,8 @@ export type ConversationItem =
   | { key: string; type: "message"; message: TranscriptMessage; live?: boolean }
   | { key: string; type: "activity"; entries: ActivityEntry[]; live?: boolean }
   | { key: string; type: "plan"; todos: PlanTodo[]; live?: boolean }
-  | { key: string; type: "task"; tool: ToolUse; timestamp?: string; live?: boolean };
+  | { key: string; type: "task"; tool: ToolUse; timestamp?: string; live?: boolean }
+  | { key: string; type: "card"; id: string };
 
 /** Parses a TodoWrite input into plan items; null when the shape is foreign. */
 export function parseTodos(input: unknown): PlanTodo[] | null {
@@ -103,7 +115,16 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
     currentGroup = undefined;
   };
 
-  entries.forEach((entry, i) => {
+  // Cards don't count toward positional keys, so one arriving mid-history
+  // never re-keys (and remounts) everything after it.
+  let n = 0;
+  entries.forEach((entry) => {
+    if (entry.type === "card") {
+      endGroup();
+      items.push({ key: `c-${entry.id}`, type: "card", id: entry.id });
+      return;
+    }
+    const i = n++;
     if (entry.type === "message") {
       endGroup();
       items.push({ key: `m-${i}`, type: "message", message: entry.message, live: entry.live });
@@ -189,6 +210,39 @@ export function mergeTranscript(
   // Whatever's left (later than every message, or timestamp-less) trails.
   for (const t of pending) entries.push({ type: "thinking", text: t.text, timestamp: t.timestamp });
   return entries;
+}
+
+/**
+ * Interleaves cards into the source sequence by time: each goes before the
+ * first entry stamped later than it, and before any live (in-flight)
+ * entry — a card that arrives mid-turn sits above the turn's stream, not
+ * inside it. Cards are expected in log order; unstamped ones trail.
+ */
+export function interleaveCards(
+  entries: SourceEntry[],
+  cards: { id: string; timestamp?: string }[],
+): SourceEntry[] {
+  if (cards.length === 0) return entries;
+  const pending = [...cards];
+  const out: SourceEntry[] = [];
+  const stampOf = (e: SourceEntry): string | undefined =>
+    e.type === "message" ? e.message.timestamp : e.timestamp;
+  for (const entry of entries) {
+    const live = entry.type !== "card" && entry.live;
+    const ts = stampOf(entry);
+    const at = ts ? Date.parse(ts) : NaN;
+    while (pending.length > 0) {
+      const c = pending[0];
+      const cAt = c.timestamp ? Date.parse(c.timestamp) : NaN;
+      if (Number.isNaN(cAt)) break;
+      if (!live && (Number.isNaN(at) || cAt > at)) break;
+      out.push({ type: "card", id: c.id, timestamp: c.timestamp });
+      pending.shift();
+    }
+    out.push(entry);
+  }
+  for (const c of pending) out.push({ type: "card", id: c.id, timestamp: c.timestamp });
+  return out;
 }
 
 // ---------------------------------------------------------------------------

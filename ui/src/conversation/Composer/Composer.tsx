@@ -40,6 +40,12 @@ export interface ComposerProps {
   onStop?: () => void;
   /** Seeds the textarea on first mount only — later changes to this prop are ignored. */
   initialValue?: string;
+  /**
+   * Replaces the textarea's text and focuses it, never sends — each new
+   * `nonce` applies once ("Ask the agent to resolve" drafts a message the
+   * user can read and edit before it goes).
+   */
+  prefill?: { text: string; nonce: number };
   /** Fires handleSend once on mount when `initialValue` is set — used to auto-send a session's opening goal. */
   autoSendInitial?: boolean;
   onSendError?: (message: string) => void;
@@ -92,6 +98,7 @@ export function Composer({
   busy,
   onStop,
   initialValue,
+  prefill,
   autoSendInitial,
   onSendError,
   onAutoSendStart,
@@ -268,6 +275,19 @@ export function Composer({
     setCursor(0);
     setInjected([]);
   }
+
+  useEffect(() => {
+    if (!prefill) return;
+    setValue(prefill.text);
+    setCursor(prefill.text.length);
+    setExpanded(false);
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(prefill.text.length, prefill.text.length);
+    });
+    // Keyed on the nonce alone: the same text asked for twice applies twice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.nonce]);
 
   const autoSentRef = useRef(false);
   useEffect(() => {

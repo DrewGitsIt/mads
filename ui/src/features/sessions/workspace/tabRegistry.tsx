@@ -22,7 +22,7 @@ export interface WorkspaceTabContext {
   onProvisioningDone?: () => void;
   pendingFirstMessage?: string;
   onPendingFirstMessageHandled?: () => void;
-  /** Open a touched file's diff — Conversation tab's rail calls it; the workspace routes to the Files tab. */
+  /** Open a touched file's diff — the Conversation tab's rail and Commit dialog call it; the workspace routes to the Files tab. */
   onOpenFile?: (path: string) => void;
   /** File to select in the Files tab's diff viewer, set when opened from the rail. */
   focusFilePath?: string;
@@ -62,6 +62,7 @@ function ConversationTabView({
           onProvisioningDone={onProvisioningDone}
           pendingFirstMessage={pendingFirstMessage}
           onPendingFirstMessageHandled={onPendingFirstMessageHandled}
+          onOpenFile={onOpenFile}
         />
       </div>
       <ContextRail

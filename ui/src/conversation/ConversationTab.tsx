@@ -3,7 +3,7 @@ import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
-import { TransportSwitchError } from "../router/client";
+import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
 import { contextWindowForModel } from "../router/modelDisplay";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../router/sessionEventTypes";
 import type {
   AgentState,
+  CommitError,
   QueueChanged,
   QueuedMessage,
   CompactStatus,
@@ -58,6 +59,9 @@ import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { ShellDock } from "./ShellDock/ShellDock";
+import { CommitDialog } from "./Worktree/CommitDialog";
+import { useCommitSettings } from "./Worktree/useCommitSettings";
+import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import styles from "./ConversationTab.module.css";
@@ -100,6 +104,8 @@ export interface ConversationTabProps {
   /** A goal/message to auto-send through the Composer once, on mount — set for a session just created from the Launchpad. */
   pendingFirstMessage?: string;
   onPendingFirstMessageHandled?: () => void;
+  /** Opens a file's diff in the Files tab — the Commit dialog's path links. */
+  onOpenFile?: (path: string) => void;
 }
 
 type DisplayMode = "chat" | "terminal";
@@ -144,6 +150,7 @@ export function ConversationTab({
   onProvisioningDone,
   pendingFirstMessage,
   onPendingFirstMessageHandled,
+  onOpenFile,
 }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -224,6 +231,19 @@ export function ConversationTab({
   const [streamBroken, setStreamBroken] = useState(false);
   const [streamGeneration, setStreamGeneration] = useState(0);
   const links = useSessionLinks([sessionId]);
+
+  // --- Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4–D6) ---
+  // Result cards from the event log plus the actions that make them; the
+  // header control reads its state off the session record's counts.
+  const worktree = useWorktreeCards(routerClient, sessionId);
+  const { commitAll, land } = worktree;
+  const commitSettings = useCommitSettings(routerClient);
+  // The Commit dialog, optionally opened on a one-click Commit's refusal
+  // (no Fast Model after all, a failing hook) so the user can see why and
+  // write the message themselves.
+  const [commitDialog, setCommitDialog] = useState<{ initialError?: CommitError } | null>(null);
+  // "Ask the agent to resolve" drafts into the composer; it never sends.
+  const [composerPrefill, setComposerPrefill] = useState<{ text: string; nonce: number }>();
 
   // --- Conversation-redesign state (T12–T17) ---
   // Out-of-band tool status changes (pkg/toolstatus synthesis:
@@ -516,6 +536,44 @@ export function ConversationTab({
         });
     },
     [routerClient, sessionId],
+  );
+
+  // Header Commit…: one click with "Write commit messages for me" on and a
+  // Fast Model to write them, else the dialog.
+  const handleCommit = useCallback(() => {
+    if (!(commitSettings.autoCommitMessages && commitSettings.fastModel)) {
+      setCommitDialog({});
+      return;
+    }
+    commitAll().catch((err: unknown) => {
+      if (err instanceof CommitRefusedError) setCommitDialog({ initialError: err.body });
+      else
+        setCommandToast({
+          tone: "bad",
+          message: err instanceof Error ? err.message : "Couldn't commit.",
+        });
+    });
+  }, [commitSettings, commitAll]);
+
+  // Header Land / a card's "Land again". The outcome is a card either way;
+  // only an unexpected failure (no card coming) is a toast.
+  const handleLand = useCallback(() => {
+    land().catch((err: unknown) => {
+      setCommandToast({
+        tone: "bad",
+        message: err instanceof Error ? err.message : "Couldn't land.",
+      });
+    });
+  }, [land]);
+
+  const worktreeActions = useMemo(
+    () => ({
+      onUndo: worktree.undo,
+      onAskAgent: (text: string) => setComposerPrefill((p) => ({ text, nonce: (p?.nonce ?? 0) + 1 })),
+      onLandAgain: handleLand,
+      landing: worktree.landing,
+    }),
+    [worktree.undo, worktree.landing, handleLand],
   );
 
   // Shares SessionWorkspace's session-scoped subscription (see
@@ -1195,6 +1253,23 @@ export function ConversationTab({
         onUpdateSession={handleUpdateSession}
         onChangeModel={handleChangeModel}
         onChangeTrust={handleChangeTrust}
+        work={{
+          onCommit: handleCommit,
+          onLand: handleLand,
+          landing: worktree.landing,
+          committing: worktree.committing,
+        }}
+      />
+
+      <CommitDialog
+        open={commitDialog !== null}
+        sessionId={sessionId}
+        routerClient={routerClient}
+        fastModel={commitSettings.fastModel}
+        initialError={commitDialog?.initialError}
+        onClose={() => setCommitDialog(null)}
+        onCommitted={worktree.noteCommit}
+        onOpenFile={onOpenFile}
       />
 
       <div className={styles.body}>
@@ -1207,7 +1282,7 @@ export function ConversationTab({
                 </div>
               )}
               <SessionSummaryCard session={session} />
-              {messages.length === 0 && !inChatTurn ? (
+              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
                 <div className={styles.emptyTranscript}>No conversation yet</div>
               ) : (
                 <ChatRenderer
@@ -1228,6 +1303,8 @@ export function ConversationTab({
                       tasksByToolUseMap.get(toolUseId)?.subagentType,
                     )
                   }
+                  worktreeCards={worktree.cards}
+                  worktreeActions={worktreeActions}
                 />
               )}
               {livePermissionRequests.map((req) => (
@@ -1342,6 +1419,7 @@ export function ConversationTab({
                 busy={inChatTurn}
                 onStop={() => void handleInterrupt()}
                 initialValue={pendingFirstMessage}
+                prefill={composerPrefill}
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {
                   if (session.activity !== "active") setWaking(true);

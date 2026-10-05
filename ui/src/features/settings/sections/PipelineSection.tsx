@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { useCredentials } from "../state/useCredentials";
 import { useFastModelStatus } from "../state/useFastModelStatus";
+import { effectiveFastModelMode } from "../../../router/fastModel";
 import type { UseConfig } from "../state/useConfig";
 import type {
   AgentSelectionMode,
@@ -41,15 +42,6 @@ const SLEEP_CAVEATS: Record<string, string> = {
   darwin: "Closing the lid on battery still sleeps your Mac. The run pauses and recovers when it wakes.",
   linux: "Closing a laptop lid may still suspend, depending on your desktop's lid settings.",
 };
-
-// effectiveFastModelMode mirrors pkg/contracts/config.go's
-// Config.FastModelEffectiveMode: an unset fast_model_mode (pre-mode-selector
-// install) resolves to endpoint if an endpoint was already configured, else
-// the new zero-config provider default.
-function effectiveFastModelMode(draft: Config): FastModelMode {
-  if (draft.fast_model_mode) return draft.fast_model_mode;
-  return draft.fast_model_base_url ? "endpoint" : "provider";
-}
 
 // fastModelStatusText is the Settings status line copy for each mode (spec
 // §11/§13): "provider" mode depends on the live GET /fast-model/status

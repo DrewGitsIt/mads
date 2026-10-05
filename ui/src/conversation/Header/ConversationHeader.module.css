@@ -13,13 +13,19 @@
   gap: var(--space-2);
 }
 
-/* Chat/Terminal switch lives at the right edge of the meta row so the
-   modality control is always in view — no longer pinned to the top of the
-   scrolling transcript. */
+/* The row's right end: the Commit/Land control, then the Chat/Terminal
+   switch — the modality control is always in view, no longer pinned to the
+   top of the scrolling transcript. */
+.end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 .modeSwitch {
   display: flex;
   gap: var(--space-1);
-  margin-left: auto;
 }
 
 .name {

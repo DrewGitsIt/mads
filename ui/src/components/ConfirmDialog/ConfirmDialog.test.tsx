@@ -114,4 +114,41 @@ describe("ConfirmDialog", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
+  it("routes Escape to onDismiss, not the cancel choice, when given", () => {
+    const onCancel = vi.fn();
+    const onDismiss = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Close it?"
+        description="x"
+        confirmLabel="Land and close"
+        cancelLabel="Keep for later"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onDismiss).toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Keep for later"));
+    expect(onCancel).toHaveBeenCalled();
+  });
+
+  it("can disable the confirm button", () => {
+    render(
+      <ConfirmDialog
+        open
+        title="Commit"
+        description="x"
+        confirmLabel="Commit 0 files"
+        confirmTone="primary"
+        confirmDisabled
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    expect((screen.getByText("Commit 0 files") as HTMLButtonElement).disabled).toBe(true);
+  });
 });

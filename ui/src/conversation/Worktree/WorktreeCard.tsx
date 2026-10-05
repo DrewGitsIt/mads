@@ -1,0 +1,195 @@
+import { useState, type ReactNode } from "react";
+import { Button } from "../../components/Button/Button";
+import type { UndoCommitResult } from "../../router/types";
+import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
+import type { WorktreeCardModel } from "./worktreeCards";
+import {
+  nameFiles,
+  plural,
+  refusalCopy,
+  refusalDetailIsGit,
+  resolveConflictPrompt,
+  shortHash,
+  undoRefusalCopy,
+  type CardTone,
+} from "./worktreeCopy";
+import styles from "./WorktreeCard.module.css";
+
+export interface WorktreeCardActions {
+  /** Takes back a one-click commit (POST /commit/undo). */
+  onUndo?: (hash: string) => Promise<UndoCommitResult>;
+  /** Puts an editable message in the composer — never sends on its own. */
+  onAskAgent?: (text: string) => void;
+  /** Runs Land again from a refusal the user has since fixed. */
+  onLandAgain?: () => void;
+  /** A Land is in flight: "Land again" waits. */
+  landing?: boolean;
+}
+
+/**
+ * One Commit/Land result in the transcript (docs/mockups/session-worktrees.html
+ * §3–§4): a system row in the session's history, not a chip on a side panel.
+ */
+export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; actions?: WorktreeCardActions }) {
+  const at = parseMessageTime(card.timestamp);
+  const when = at && (
+    <time className={styles.when} dateTime={at.toISOString()} title={at.toLocaleString()}>
+      {formatMessageTime(at)}
+    </time>
+  );
+
+  switch (card.kind) {
+    case "committed":
+      return <CommittedCard card={card} when={when} onUndo={actions.onUndo} />;
+    case "landed":
+      return (
+        <Shell tone="ok" title={`Landed into ${card.base ?? "its base"}`} when={when} kind="landed">
+          <div className={styles.body}>
+            {card.mergeCommit ? (
+              <>
+                Merge commit <span className={styles.hash}>{shortHash(card.mergeCommit)}</span>.{" "}
+              </>
+            ) : null}
+            This session keeps going on top of it.
+          </div>
+        </Shell>
+      );
+    case "conflicted": {
+      const base = card.base ?? "The base branch";
+      return (
+        <Shell
+          tone="warn"
+          title={`${base} moved on: ${plural(card.files.length, "file")} conflict${card.files.length === 1 ? "s" : ""}`}
+          when={when}
+          kind="conflicted"
+        >
+          <div className={styles.body}>
+            {card.files.length > 0 && (
+              <>
+                <span className={styles.mono}>{nameFiles(card.files, 4)}</span> changed on {base} too.{" "}
+              </>
+            )}
+            Nothing was merged, and your checkout is untouched.
+          </div>
+          {actions.onAskAgent && (
+            <div className={styles.acts}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => actions.onAskAgent!(resolveConflictPrompt(card.base, card.files))}
+              >
+                Ask the agent to resolve
+              </Button>
+            </div>
+          )}
+        </Shell>
+      );
+    }
+    case "refused": {
+      const copy = refusalCopy(card.reason, card.base, card.files);
+      const showDetail = Boolean(card.detail) && (refusalDetailIsGit(card.reason) || copy.title === "Land didn't run");
+      return (
+        <Shell tone={copy.tone} title={copy.title} when={when} kind="refused" reason={card.reason}>
+          <div className={styles.body}>{copy.body}</div>
+          {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
+          {copy.retry && card.latest && actions.onLandAgain && (
+            <div className={styles.acts}>
+              <Button variant="ghost" size="sm" disabled={actions.landing} onClick={actions.onLandAgain}>
+                {actions.landing ? "Landing…" : "Land again"}
+              </Button>
+            </div>
+          )}
+        </Shell>
+      );
+    }
+    case "ensured":
+      return (
+        <Shell tone="quiet" title={card.title} when={when} kind="ensured">
+          <div className={styles.body}>{card.body}</div>
+        </Shell>
+      );
+  }
+}
+
+function Shell({
+  tone,
+  title,
+  when,
+  kind,
+  reason,
+  children,
+}: {
+  tone: CardTone;
+  title: string;
+  when: ReactNode;
+  kind: string;
+  reason?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={[styles.card, styles[tone]].join(" ")}
+      role="note"
+      aria-label={title}
+      data-worktree-card={kind}
+      data-reason={reason}
+    >
+      <div className={styles.head}>
+        <span className={styles.stateDot} aria-hidden="true" />
+        <span className={styles.title}>{title}</span>
+        {when}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function CommittedCard({
+  card,
+  when,
+  onUndo,
+}: {
+  card: Extract<WorktreeCardModel, { kind: "committed" }>;
+  when: ReactNode;
+  onUndo?: (hash: string) => Promise<UndoCommitResult>;
+}) {
+  const [undoing, setUndoing] = useState(false);
+  const [undoError, setUndoError] = useState<string>();
+  const title = card.files ? `Committed ${plural(card.files, "file")}` : "Committed";
+  // Undo is offered only on a commit the Fast Model wrote without the
+  // dialog, and only while nothing has landed or been committed on top.
+  const canUndo = card.drafted && card.tip && !card.undone && onUndo;
+
+  async function undo() {
+    setUndoing(true);
+    setUndoError(undefined);
+    try {
+      const res = await onUndo!(card.hash);
+      if (!res.undone) setUndoError(undoRefusalCopy(res.reason));
+    } catch (err) {
+      setUndoError(err instanceof Error ? err.message : "Couldn't undo that commit.");
+    } finally {
+      setUndoing(false);
+    }
+  }
+
+  return (
+    <Shell tone={card.undone ? "quiet" : "ok"} title={title} when={when} kind="committed">
+      <div className={styles.body}>
+        <span className={[styles.hash, card.undone ? styles.struck : ""].filter(Boolean).join(" ")}>
+          {shortHash(card.hash)}
+        </span>{" "}
+        {card.subject}
+      </div>
+      {card.undone && <div className={styles.body}>Undone — its files are uncommitted again.</div>}
+      {undoError && <div className={styles.error}>{undoError}</div>}
+      {canUndo && (
+        <div className={styles.acts}>
+          <Button variant="ghost" size="sm" disabled={undoing} onClick={() => void undo()}>
+            {undoing ? "Undoing…" : "Undo"}
+          </Button>
+        </div>
+      )}
+    </Shell>
+  );
+}

@@ -5,11 +5,14 @@ import type { Link, ToolStatus, ToolUse, TranscriptMessage } from "../../router/
 import { ActivityGroup } from "../activity/ActivityGroup";
 import {
   buildItems,
+  interleaveCards,
   mergeTranscript,
   type SourceEntry,
   type TaskModel,
 } from "../activity/conversationItems";
 import { PlanWidget } from "../activity/PlanWidget";
+import { WorktreeCard, type WorktreeCardActions } from "../Worktree/WorktreeCard";
+import type { WorktreeCardModel } from "../Worktree/worktreeCards";
 import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
@@ -49,6 +52,9 @@ export interface ChatRendererProps {
   onOpenTool?: (tool: ToolUse) => void;
   /** Task card click → open the subagent's stream in the dock (keyed by spawning tool_use id). */
   onOpenTask?: (toolUseId: string, tool: ToolUse) => void;
+  /** Commit/Land result cards (event-log built), interleaved by time. */
+  worktreeCards?: WorktreeCardModel[];
+  worktreeActions?: WorktreeCardActions;
 }
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
@@ -95,6 +101,8 @@ export function ChatRenderer({
   selectedToolId,
   onOpenTool,
   onOpenTask,
+  worktreeCards = [],
+  worktreeActions,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   const folded = foldToolResults(messages);
@@ -109,7 +117,8 @@ export function ChatRenderer({
       entries.push({ type: "thinking", text: item.text, live: true });
     }
   }
-  const items = buildItems(entries);
+  const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
+  const items = buildItems(interleaveCards(entries, worktreeCards));
 
   // Collapse digest→NOOP pairs into quiet-check chips before rendering. A
   // completed (non-live) agent reply of exactly NOOP directly after a digest
@@ -168,6 +177,10 @@ export function ChatRenderer({
         }
         if (item.type === "plan") {
           return <PlanWidget key={item.key} todos={item.todos} />;
+        }
+        if (item.type === "card") {
+          const card = cardsById.get(item.id);
+          return card ? <WorktreeCard key={item.key} card={card} actions={worktreeActions} /> : null;
         }
         if (item.type === "task") {
           const model = item.tool.id ? tasks?.get(item.tool.id) : undefined;

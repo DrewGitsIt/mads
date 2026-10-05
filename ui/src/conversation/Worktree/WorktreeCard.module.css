@@ -1,0 +1,117 @@
+/* Commit and Land result cards — docs/mockups/session-worktrees.html §3–§4.
+   A system row in the transcript: full width, quiet unless it needs you. */
+
+.card {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-3);
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--bg1);
+}
+
+.ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.ok .stateDot {
+  background: var(--ok);
+}
+
+.warn {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+.warn .stateDot {
+  background: var(--warn);
+}
+
+.bad {
+  border-color: color-mix(in srgb, var(--bad) 40%, transparent);
+}
+.bad .stateDot {
+  background: var(--bad);
+}
+
+/* quiet: the defaults — a grey dot on the base card. */
+
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: 600 var(--fs-sm) var(--sans);
+  color: var(--text);
+}
+
+.title {
+  min-width: 0;
+}
+
+.stateDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text3);
+}
+
+.when {
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--text3);
+}
+
+/* Indented to clear the dot, so body and actions read as one block. */
+.body,
+.acts,
+.detail,
+.error {
+  margin-left: 16px;
+}
+
+.body {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  overflow-wrap: anywhere;
+}
+
+.acts {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: 2px;
+}
+
+.hash {
+  font: var(--fs-sm) var(--mono);
+  color: var(--accent);
+}
+
+.struck {
+  text-decoration: line-through;
+  color: var(--text3);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* git's own words, verbatim. */
+.detail {
+  margin-top: 0;
+  margin-bottom: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  font: var(--fs-sm) / 1.5 var(--mono);
+  color: var(--text2);
+  white-space: pre-wrap;
+}
+
+.error {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--bad-fg);
+}

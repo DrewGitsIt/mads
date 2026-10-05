@@ -1,0 +1,179 @@
+/* The Commit dialog's body — docs/mockups/session-worktrees.html §2. Dialog
+   chrome is ConfirmDialog's. */
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.files {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-3);
+  font: 500 var(--fs-sm) var(--mono);
+  color: var(--text2);
+}
+
+.file + .file {
+  border-top: 1px solid var(--line-soft);
+}
+
+.file input {
+  accent-color: var(--accent);
+}
+
+.path {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+}
+
+button.path {
+  cursor: pointer;
+}
+
+button.path:hover {
+  color: var(--text);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+
+.off {
+  color: var(--text3);
+}
+
+.off .path {
+  text-decoration: line-through;
+  text-decoration-color: var(--line);
+}
+
+.kind {
+  flex: none;
+  font: 600 var(--fs-chip) var(--sans);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kindAdded {
+  color: var(--ok-fg);
+}
+
+.kindModified {
+  color: var(--info-fg);
+}
+
+.kindDeleted {
+  color: var(--bad-fg);
+}
+
+.note {
+  flex: none;
+  font: 500 var(--fs-chip) var(--sans);
+  color: var(--warn-fg);
+}
+
+.notes {
+  margin: 0;
+  padding-left: var(--space-4);
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.msg {
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--text);
+  font: var(--fs-body) / 1.5 var(--sans);
+}
+
+.msgbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.linkbtn {
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.linkbtn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.muted {
+  color: var(--text3);
+  font: var(--fs-sm) var(--sans);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.hash {
+  font: var(--fs-sm) var(--mono);
+  color: var(--accent);
+}
+
+.partial {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--ok-fg);
+}
+
+.errorBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.error {
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--bad-fg);
+}
+
+/* git's own words, verbatim: a failing hook, "Please tell me who you are". */
+.detail {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  font: var(--fs-sm) / 1.5 var(--mono);
+  color: var(--text2);
+  white-space: pre-wrap;
+}

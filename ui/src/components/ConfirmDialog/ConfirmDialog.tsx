@@ -9,8 +9,16 @@ export interface ConfirmDialogProps {
   description: ReactNode;
   confirmLabel: string;
   cancelLabel?: string;
+  /** "danger" (the default) for destructive verbs; "primary" for the accent button a non-destructive action takes. */
+  confirmTone?: "danger" | "primary";
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * Escape and a backdrop click. Defaults to onCancel; set it when the cancel
+   * button is itself a choice ("Keep for later") that dismissing mustn't make.
+   */
+  onDismiss?: () => void;
 }
 
 export function ConfirmDialog({
@@ -19,22 +27,26 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   cancelLabel = "Cancel",
+  confirmTone = "danger",
+  confirmDisabled,
   onConfirm,
   onCancel,
+  onDismiss,
 }: ConfirmDialogProps) {
+  const dismiss = onDismiss ?? onCancel;
   useEffect(() => {
     if (!open) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") dismiss();
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [open, onCancel]);
+  }, [open, dismiss]);
 
   if (!open) return null;
 
   return (
-    <div className={styles.backdrop} onMouseDown={onCancel}>
+    <div className={styles.backdrop} onMouseDown={dismiss}>
       <div
         role="alertdialog"
         aria-modal="true"
@@ -50,7 +62,12 @@ export function ConfirmDialog({
           <Button variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant="primary" className={styles.confirmDanger} onClick={onConfirm}>
+          <Button
+            variant="primary"
+            className={confirmTone === "danger" ? styles.confirmDanger : undefined}
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </div>
