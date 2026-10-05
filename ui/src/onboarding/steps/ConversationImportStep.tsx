@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Button } from "../../components/Button/Button";
 import { ConversationsLookedFor } from "../../features/settings/ConversationsLookedFor";
+import { summarizeConversationScan } from "../../features/settings/conversationImportSummary";
 import { useConversationImport } from "../../features/settings/state/useConversationImport";
 import styles from "./ConversationImportStep.module.css";
 
@@ -9,26 +10,9 @@ export interface ConversationImportStepProps {
   onBack: () => void;
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  "claude-code": "Claude Code",
-};
-
-function providerLabel(name: string): string {
-  return PROVIDER_LABELS[name] ?? name;
-}
-
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
-}
-
-function joinNames(names: string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
-}
-
 /**
- * Step 3/6: reuses useConversationImport (the same hook a later Settings
- * entry point would use). The server only scans harnesses that are
+ * Step 3/6: reuses useConversationImport (the same hook Settings > General's
+ * ConversationImport uses). The server only scans harnesses that are
  * installed, so "Claude Code not installed" arrives as total 0 and gets the
  * same honest empty state as "installed but nothing to import".
  *
@@ -71,9 +55,7 @@ export function ConversationImportStep({ onNext, onBack }: ConversationImportSte
       {scan !== null && found && (
         <>
           <p className={styles.body}>
-            Found {plural(scan.total, "conversation", "conversations")} across{" "}
-            {plural(scan.folders.length, "folder", "folders")} from{" "}
-            {joinNames(scan.providers.map((p) => providerLabel(p.provider)))}.
+            Found {summarizeConversationScan(scan)}.
           </p>
           {scan.folders.length > 0 && (
             <ul className={styles.list} aria-label="Folders">
