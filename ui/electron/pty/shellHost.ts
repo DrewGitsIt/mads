@@ -1,0 +1,69 @@
+import type { MessagePortMain } from "electron";
+import { loadNodePty } from "./ptyHost";
+import { ShellHostCore, type ShellRequest } from "./shellHostCore";
+
+/**
+ * Entry point of the shell host — an Electron utilityProcess forked lazily by
+ * main.ts on the first shell request. It (alone, for docked shells) loads
+ * node-pty, so a chatty shell or a native crash costs only this process, not
+ * the main process's menus, dialogs and IPC. See docs/SHELL-DOCK-DESIGN.md D1.
+ *
+ * This file is only glue: main sends `{type: "connect", windowId}` with one
+ * end of a MessageChannelMain for each window (shell traffic then flows
+ * straight between the window's preload and this process), and
+ * `{type: "window-gone", windowId}` when that window reloads, crashes or
+ * closes. Everything else is ShellHostCore. Requests arrive on a window's
+ * port as `{id?, ...ShellRequest}` and are answered with `{id, ok, result}` or
+ * `{id, ok: false, error}`; the core's events are posted unsolicited.
+ *
+ * The shells die with this process (node-pty SIGHUPs them), and this process
+ * dies with the app.
+ */
+
+const core = new ShellHostCore({ loadPty: loadNodePty });
+const ports = new Map<number, MessagePortMain>();
+
+function dropPort(windowId: number): void {
+  core.disconnect(windowId);
+  ports.get(windowId)?.close();
+  ports.delete(windowId);
+}
+
+function connectWindow(windowId: number, port: MessagePortMain): void {
+  dropPort(windowId);
+  ports.set(windowId, port);
+  core.connect(windowId, (event) => port.postMessage(event));
+  port.on("message", (message) => {
+    const { id, ...request } = message.data as { id?: number } & ShellRequest;
+    // No id means fire-and-forget (write/resize): nobody is waiting for a reply.
+    core.handle(windowId, request as ShellRequest).then(
+      (result) => id !== undefined && port.postMessage({ id, ok: true, result }),
+      (error: unknown) =>
+        id !== undefined &&
+        port.postMessage({
+          id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+    );
+  });
+  // A renderer that goes away closes its end; treat that like window-gone,
+  // unless a newer connection for the same window id already replaced us.
+  port.on("close", () => {
+    if (ports.get(windowId) === port) dropPort(windowId);
+  });
+  port.start();
+}
+
+// process.parentPort exists only inside a utilityProcess; anywhere else
+// (vitest importing this by accident) this file stays inert.
+if (process.parentPort) {
+  process.parentPort.on("message", (event) => {
+    const message = event.data as { type: string; windowId: number };
+    if (message.type === "connect" && event.ports[0]) {
+      connectWindow(message.windowId, event.ports[0]);
+    } else if (message.type === "window-gone") {
+      dropPort(message.windowId);
+    }
+  });
+}

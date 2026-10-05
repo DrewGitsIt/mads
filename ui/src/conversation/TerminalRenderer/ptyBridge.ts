@@ -42,6 +42,55 @@ export interface ClipboardBridge {
   writeText(text: string): Promise<void>;
 }
 
+/** One live dock shell, as reported by the shell host's list(). */
+export interface ShellInfo {
+  sessionId: string;
+  shellId: string;
+  cwd: string | undefined;
+  pid: number | undefined;
+  /** Epoch milliseconds. */
+  startedAt: number;
+  /** Whether a window is attached; false for a hidden (detached) shell. */
+  attached: boolean;
+}
+
+/**
+ * Renderer-facing contract for the shell host (ui/electron/pty/shellHost.ts):
+ * one shell per session id that outlives whichever view is attached. This is
+ * the raw per-shell protocol (docs/SHELL-DOCK-DESIGN.md D2); the dock's
+ * PtyBridge adapter over it lives elsewhere. Only the attached window gets
+ * data/exit; the latest open wins and the loser gets onDetached.
+ */
+export interface ShellHostBridge {
+  /**
+   * Attaches to the session's live shell, or starts one (created=true).
+   * previousExit is set when the session's last shell exited on its own
+   * while no view was attached, so the dock can report it.
+   */
+  open(
+    sessionId: string,
+    options?: { cwd?: string; cols?: number; rows?: number },
+  ): Promise<{
+    shellId: string;
+    created: boolean;
+    previousExit?: { exitCode: number; exitedAt: number };
+  }>;
+  /** The view went away; the shell keeps running. */
+  detach(shellId: string): Promise<void>;
+  /** Kills the shell and forgets it. */
+  end(shellId: string): Promise<void>;
+  write(shellId: string, data: string): void;
+  resize(shellId: string, cols: number, rows: number): void;
+  list(): Promise<ShellInfo[]>;
+  /** Each returns an unsubscribe function. */
+  onData(shellId: string, listener: (data: string) => void): () => void;
+  onExit(shellId: string, listener: (exitCode: number) => void): () => void;
+  /** Another window opened this shell and took it over. */
+  onDetached(shellId: string, listener: () => void): () => void;
+  /** The shell host process died; every shell it held is gone. */
+  onHostExited(listener: () => void): () => void;
+}
+
 declare global {
   interface Window {
     mads?: {
@@ -52,6 +101,7 @@ declare global {
       };
       contextMenu?: TerminalContextMenu;
       clipboard?: ClipboardBridge;
+      shell?: ShellHostBridge;
     };
   }
 }

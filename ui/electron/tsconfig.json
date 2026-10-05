@@ -8,5 +8,7 @@
     "noEmit": false,
     "types": ["node"]
   },
-  "include": ["./**/*.ts"]
+  "include": ["./**/*.ts"],
+  // Tests are type-checked by tsconfig.test.json but must not ship.
+  "exclude": ["./**/*.test.ts", "./**/*.realtest.ts"]
 }

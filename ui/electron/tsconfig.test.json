@@ -1,0 +1,8 @@
+{
+  // Type-checks everything under electron/ including the tests that
+  // tsconfig.json leaves out of the build. Never emits.
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["./**/*.ts"],
+  "exclude": []
+}

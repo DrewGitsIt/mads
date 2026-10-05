@@ -6,7 +6,11 @@ import {
   ipcMain,
   Menu,
   MenuItemConstructorOptions,
+  MessageChannelMain,
   shell,
+  utilityProcess,
+  type UtilityProcess,
+  type WebContents,
 } from "electron";
 import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
@@ -90,6 +94,101 @@ function registerAppHandlers(): void {
   ipcMain.handle("clipboard:write-text", (_event, text: string) => {
     clipboard.writeText(text);
   });
+
+  registerPtyHandlers(ipcMain);
+
+  ipcMain.handle("badge:set-count", (_event, count: number) => {
+    app.setBadgeCount(count);
+  });
+
+  // Native folder chooser for every "where on disk" field (PathField). The
+  // renderer can't get an absolute path any other way: a browser directory
+  // input only ever exposes relative names.
+  ipcMain.handle(
+    "dialog:pick-directory",
+    async (event, options?: { title?: string; defaultPath?: string }) => {
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: options?.title,
+        defaultPath: options?.defaultPath,
+        properties: ["openDirectory", "createDirectory"],
+      };
+      const result = parent
+        ? await dialog.showOpenDialog(parent, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+  );
+
+  registerShellBroker();
+}
+
+// The shell host (docs/SHELL-DOCK-DESIGN.md D1) is a utilityProcess that owns
+// every dock shell and node-pty with it. Main only brokers: it forks the host
+// on first need and hands each window's preload one end of a MessageChannel
+// whose other end goes to the host, so shell traffic never passes through
+// main. A window asks for its port ("shell:connect") the first time its
+// preload uses window.mads.shell — after a reload that is a fresh preload, so
+// the reloaded page simply connects again.
+let shellHost: UtilityProcess | undefined;
+// Windows holding a port to the current host, by webContents id.
+const shellClients = new Map<number, WebContents>();
+// webContents whose lifecycle we already watch (hook once, not per connect).
+const watchedForShells = new WeakSet<WebContents>();
+
+function ensureShellHost(): UtilityProcess {
+  if (shellHost) return shellHost;
+  const host = utilityProcess.fork(join(__dirname, "pty", "shellHost.js"), [], {
+    serviceName: "mads-shell-host",
+  });
+  shellHost = host;
+  host.on("exit", () => {
+    if (shellHost !== host) return;
+    // Its shells died with it. Tell every window that held a port so the dock
+    // can say so; the next shell:connect forks a fresh host.
+    shellHost = undefined;
+    for (const wc of shellClients.values()) {
+      if (!wc.isDestroyed()) wc.send("shell:host-exited");
+    }
+    shellClients.clear();
+  });
+  return host;
+}
+
+/** Tells the host this window's view is gone: its shells detach but keep running. */
+function releaseShellWindow(windowId: number): void {
+  if (!shellClients.delete(windowId)) return;
+  shellHost?.postMessage({ type: "window-gone", windowId });
+}
+
+function watchShellWindow(wc: WebContents): void {
+  if (watchedForShells.has(wc)) return;
+  watchedForShells.add(wc);
+  const windowId = wc.id; // not readable once destroyed
+  // A main-frame navigation (including reload) unloads the page that was
+  // attached; same-document ones (hash/pushState) keep it.
+  wc.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) releaseShellWindow(windowId);
+  });
+  wc.on("render-process-gone", () => releaseShellWindow(windowId));
+  wc.on("destroyed", () => releaseShellWindow(windowId));
+}
+
+function registerShellBroker(): void {
+  ipcMain.handle("shell:connect", (event) => {
+    const wc = event.sender;
+    const host = ensureShellHost();
+    watchShellWindow(wc);
+    const { port1, port2 } = new MessageChannelMain();
+    shellClients.set(wc.id, wc);
+    host.postMessage({ type: "connect", windowId: wc.id }, [port1]);
+    wc.postMessage("shell:port", null, [port2]);
+  });
+
+  // Don't leave the host (and its shells) to the OS's mercy at quit.
+  app.on("before-quit", () => {
+    shellHost?.kill();
+  });
 }
 
 function createWindow(): void {
@@ -115,31 +214,6 @@ function createWindow(): void {
     if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-
-  registerPtyHandlers(ipcMain, win.webContents);
-
-  ipcMain.handle("badge:set-count", (_event, count: number) => {
-    app.setBadgeCount(count);
-  });
-
-  // Native folder chooser for every "where on disk" field (PathField). The
-  // renderer can't get an absolute path any other way: a browser directory
-  // input only ever exposes relative names.
-  ipcMain.handle(
-    "dialog:pick-directory",
-    async (event, options?: { title?: string; defaultPath?: string }) => {
-      const parent = BrowserWindow.fromWebContents(event.sender);
-      const dialogOptions: Electron.OpenDialogOptions = {
-        title: options?.title,
-        defaultPath: options?.defaultPath,
-        properties: ["openDirectory", "createDirectory"],
-      };
-      const result = parent
-        ? await dialog.showOpenDialog(parent, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
-      return result.canceled ? null : (result.filePaths[0] ?? null);
-    },
-  );
 
   // The Router serves the built UI same-origin (scripts/app.sh guarantees
   // it's already up before Electron launches), so this is always an http(s)

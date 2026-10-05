@@ -12,7 +12,7 @@
     "library": "vite --open /library.html",
     "pipeline": "vite --open /pipeline.html",
     "dashboard": "vite --open /dashboard.html",
-    "build": "tsc --noEmit -p tsconfig.json && vite build && tsc -p electron/tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p electron/tsconfig.test.json && vite build && tsc -p electron/tsconfig.json",
     "start": "npm run build && electron .",
     "lint": "eslint .",
     "test": "vitest run",
