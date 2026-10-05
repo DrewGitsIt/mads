@@ -61,7 +61,15 @@ func EnsureInstalled(ctx context.Context, dir string) error {
 	if err != nil {
 		return err
 	}
-	hooksDir := filepath.Join(dir, strings.TrimSpace(gitDir), "hooks")
+	// git prints the common dir relative to dir from a primary checkout but
+	// absolute from a linked worktree; joining an absolute path onto dir
+	// would plant a junk hooks tree inside the worktree, which then reads as
+	// uncommitted work.
+	common := strings.TrimSpace(gitDir)
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(dir, common)
+	}
+	hooksDir := filepath.Join(common, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return err
 	}
