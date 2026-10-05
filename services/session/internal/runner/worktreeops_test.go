@@ -268,3 +268,30 @@ func TestShutdownWaitsForLand(t *testing.T) {
 		})
 	}
 }
+
+// A session that joined another's folder (linked at start) leaves that
+// folder's hook stamp alone: it names the owner, whose commits are its own.
+func TestInstallHookLeavesAnotherSessionsFolderAlone(t *testing.T) {
+	ctx := context.Background()
+	cwd := t.TempDir()
+	initRepo(t, cwd)
+	owner, data, sess := newIsolatedRunner(t, cwd, t.TempDir())
+	stamp := func() string {
+		t.Helper()
+		return strings.TrimSpace(gitOut(t, sess.WorktreeDir, "config", "--worktree", "--get", "mads.sessionId"))
+	}
+	if got := stamp(); got != owner.sessionID {
+		t.Fatalf("owner's stamp = %q, want %q", got, owner.sessionID)
+	}
+
+	joiner := New("ses_joiner", data, provider.NewRegistry())
+	joiner.installHook(ctx, sess.WorktreeDir)
+	if got := stamp(); got != owner.sessionID {
+		t.Errorf("stamp after the joiner started = %q, want the owner's %q", got, owner.sessionID)
+	}
+	// Its own folder, or a plain checkout, it still stamps.
+	joiner.installHook(ctx, cwd)
+	if got := strings.TrimSpace(gitOut(t, cwd, "config", "--worktree", "--get", "mads.sessionId")); got != "ses_joiner" {
+		t.Errorf("checkout stamp = %q, want ses_joiner", got)
+	}
+}

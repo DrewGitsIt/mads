@@ -554,6 +554,9 @@ func recordedCwd(cwd string) string {
 // installHook installs the mads post-commit hook (spec §5) in the session's
 // working tree and points it at the Data Service, so interactive commits
 // report with session/task linkage the same way pipeline task commits do.
+// Not in another session's worktree (a linked session joined it): that
+// folder's stamp stays its owner's.
+//
 // Best-effort and silent on failure (logged, not returned): dir defaults to
 // "." for un-isolated sessions with no explicit -cwd, and installing
 // against "." would mutate whatever repo this process happens to have been
@@ -564,6 +567,14 @@ func (r *Runner) installHook(ctx context.Context, dir string) {
 		return
 	}
 	if err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--git-dir").Run(); err != nil {
+		return
+	}
+	// A session linked at start can join another session's folder
+	// (Router's validateStagedLinks). That folder's config names its owner,
+	// whose own commits the hook would otherwise start crediting to this
+	// session; the owner installed the hook there already.
+	if branch, err := sessionwt.CurrentBranch(ctx, dir); err == nil &&
+		strings.HasPrefix(branch, sessionwt.BranchPrefix) && branch != sessionwt.Branch(r.sessionID) {
 		return
 	}
 	if err := githook.EnsureInstalled(ctx, dir); err != nil {
