@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
-	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
 // landTries bounds how often Land starts over because the base moved
@@ -57,6 +56,7 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 		return res, nil
 	}
 	baseRef := "refs/heads/" + t.Base
+	cleanupMergeDriver(ctx, t.Primary)
 	for try := 0; try < landTries; try++ {
 		b, err := Git(ctx, t.Primary, "rev-parse", "--verify", baseRef+"^{commit}")
 		if err != nil {
@@ -65,21 +65,17 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 		b = strings.TrimSpace(b)
 
 		// Step 1, in the session's folder. It lands on the base in the end,
-		// so it carries the user's identity too. With mergiraf registered,
-		// a dry run first names the files plain git would conflict on: if
-		// the real merge then comes back clean, mergiraf resolved them, and
-		// Land stops here so the user can check its work before it reaches
-		// their checkout. A driver whose binary is gone is swapped for
-		// plain git rather than left to fail every file.
-		var resolvable []string
-		merge := []string{"merge", "--no-edit",
-			"-m", "Merge " + t.Base + " into " + t.Branch, "-m", trailer(t.SessionID), b}
-		switch mergeDriverIn(ctx, t.Folder) {
-		case driverActive:
-			resolvable, _ = plainConflicts(ctx, t.Folder, b)
-		case driverDangling:
-			merge = append(mergedriver.PlainText(), merge...)
-		}
+		// so it carries the user's identity too. With mergiraf installed the
+		// merge goes through it (per-command flags: mergiraf never reaches
+		// the user's own merges), and a dry run first names the files plain
+		// git would conflict on: if the real merge then comes back clean,
+		// mergiraf resolved them, and Land stops here so the user can check
+		// its work before it reaches their checkout. The dry run runs either
+		// way, so a mergiraf the user registered in the repository
+		// themselves is caught too.
+		resolvable, _ := plainConflicts(ctx, t.Folder, b)
+		merge := append(mergirafArgs(ctx, t, t.Folder), "merge", "--no-edit",
+			"-m", "Merge "+t.Base+" into "+t.Branch, "-m", trailer(t.SessionID), b)
 		out, err := userGit(ctx, t.Folder, merge...)
 		if err != nil {
 			conflicted, _ := Git(ctx, t.Folder, "diff", "--name-only", "--diff-filter=U")
@@ -156,8 +152,12 @@ func landInPrimary(ctx context.Context, t Target, b string, lockWait time.Durati
 		return false, res, nil
 	}
 
-	out, err := landGit(ctx, t.Primary, "merge", "--no-ff", "--no-edit",
+	// Step 1 already merged the base, so git has nothing for a merge
+	// driver to do here; mergiraf goes along all the same, so every merge
+	// Land makes is the same kind.
+	merge := append(mergirafArgs(ctx, t, t.Primary), "merge", "--no-ff", "--no-edit",
 		"-m", "Land "+landName(t), "-m", trailer(t.SessionID), "refs/heads/"+t.Branch)
+	out, err := landGit(ctx, t.Primary, merge...)
 	if err != nil {
 		abortMerge(ctx, t.Primary)
 		res.Outcome = contracts.LandRefused

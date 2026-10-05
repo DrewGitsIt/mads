@@ -256,10 +256,17 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		if cfg.Session != nil {
 			repo = cfg.Session.Target.Primary
 		}
+		// The attributes file mergiraf's per-merge flags name lives under
+		// $MADS_HOME; a run without one (tests) keeps it in its worktree
+		// root.
+		mergirafState := filepath.Join(cfg.WorktreeRoot, ".mergiraf")
+		if cfg.MadsHome != "" {
+			mergirafState = mergedriver.StateDir(cfg.MadsHome)
+		}
 		e.wt = &worktrees{
 			primary: cfg.Cwd, repo: repo, root: cfg.WorktreeRoot,
 			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
-			data: cfg.Data, mergirafPath: mergirafPath,
+			data: cfg.Data, mergirafPath: mergirafPath, mergirafState: mergirafState,
 		}
 	}
 	return e.run(ctx)

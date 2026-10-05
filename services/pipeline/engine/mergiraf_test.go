@@ -194,17 +194,73 @@ func TestMergirafAbsentFallsBackToPlainGit(t *testing.T) {
 	}
 }
 
-// Regression: ensureMergirafDriver used to join `git rev-parse
-// --git-common-dir`'s output onto w.primary unconditionally. That's only
-// correct when w.primary is a normal checkout, where --git-common-dir prints
-// a path relative to it (e.g. ".git"). When w.primary is ITSELF a linked
-// worktree — e.g. the pipeline's own workspace was created via `git worktree
-// add`, pointing at a main checkout elsewhere — --git-common-dir prints an
-// ABSOLUTE path, and joining that onto w.primary silently produced a bogus
-// nested path nobody ever reads: registration no-op'd without returning an
-// error, leaving the merge.attempted event's merge_driver field claiming
-// "mergiraf" while git never actually ran it.
-func TestEnsureMergirafDriverInLinkedWorktreeTopology(t *testing.T) {
+// mergirafRepoState is everything a merge-driver registration could write
+// to the repo: any merge.* config (the hook setup writes other config) and
+// the shared attributes file.
+func mergirafRepoState(t *testing.T, repo string) string {
+	t.Helper()
+	cfg, _ := exec.Command("git", "-C", repo, "config", "--local", "--get-regexp", `^merge\.`).Output()
+	attrs, _ := os.ReadFile(filepath.Join(repo, ".git", "info", "attributes"))
+	return string(cfg) + "\x00" + string(attrs)
+}
+
+// The pipeline's merges go through mergiraf as per-command flags only: the
+// repo's config and attributes are the same after the run, and the user's
+// own `git merge` of the same kind of adjacent edits is plain git's.
+func TestMergirafLeavesRepoStateAlone(t *testing.T) {
+	path := mergirafOrSkip(t)
+	h := newHarness(t)
+	seedAdjacentFixture(t, h)
+	f := mustScenario(t,
+		fake.Rule{Match: "Task: first", Reply: "done", Tools: []fake.ToolStep{
+			{Name: "write_file", Path: "sample.go", Content: mergirafAdjacentGoFirst},
+		}},
+		fake.Rule{Match: "Task: second", Reply: "done", DelayMs: 300, Tools: []fake.ToolStep{
+			{Name: "write_file", Path: "sample.go", Content: mergirafAdjacentGoSecond},
+		}},
+	)
+	h.seed(contracts.Task{Title: "first"}, contracts.Task{Title: "second"})
+	before := mergirafRepoState(t, h.cwd)
+	sum, _ := h.runIsolated(t, f, isolatedTemplate, 2, withMergiraf(path))
+	if len(sum.Done) != 2 || len(sum.Blocked) != 0 {
+		t.Fatalf("summary: %+v, want mergiraf to have merged both", sum)
+	}
+	if after := mergirafRepoState(t, h.cwd); after != before {
+		t.Errorf("the run wrote merge-driver state to the repo:\n%q\nwas\n%q", after, before)
+	}
+
+	git := func(args ...string) error {
+		cmd := exec.Command("git", append([]string{"-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		cmd.Dir = h.cwd
+		return cmd.Run()
+	}
+	if err := os.WriteFile(filepath.Join(h.cwd, "user.go"), []byte(mergirafAdjacentGo), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "add", "user.go")
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "user base")
+	gitRun(t, h.cwd, "checkout", "-q", "-b", "user-side")
+	if err := os.WriteFile(filepath.Join(h.cwd, "user.go"), []byte(mergirafAdjacentGoFirst), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-am", "user side")
+	gitRun(t, h.cwd, "checkout", "-q", "-")
+	if err := os.WriteFile(filepath.Join(h.cwd, "user.go"), []byte(mergirafAdjacentGoSecond), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, h.cwd, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-am", "trunk side")
+	if err := git("merge", "-q", "--no-edit", "user-side"); err == nil {
+		t.Error("the user's own git merge resolved adjacent edits: it went through mergiraf")
+	}
+	_ = git("merge", "--abort")
+}
+
+// What an earlier build registered in the shared repo is removed at setup
+// — including when the workspace is itself a linked worktree, where
+// --git-common-dir is ABSOLUTE and joining it onto the worktree path
+// would name a bogus nested path (the regression the old registration
+// test guarded against). The user's own attributes lines stay.
+func TestEnsureSetupCleansLegacyRegistrationInLinkedWorktree(t *testing.T) {
 	root := t.TempDir()
 	main := filepath.Join(root, "main")
 	if err := os.Mkdir(main, 0o755); err != nil {
@@ -212,33 +268,27 @@ func TestEnsureMergirafDriverInLinkedWorktreeTopology(t *testing.T) {
 	}
 	gitRun(t, main, "init", "-q", "-b", "main")
 	gitRun(t, main, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+	gitRun(t, main, "config", "merge.mergiraf.name", "mergiraf")
+	gitRun(t, main, "config", "merge.mergiraf.driver", "/opt/homebrew/bin/mergiraf merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L")
+	attrPath := filepath.Join(main, ".git", "info", "attributes")
+	if err := os.WriteFile(attrPath, []byte("*.png binary\n* merge=mergiraf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	linked := filepath.Join(root, "linked")
 	gitRun(t, main, "worktree", "add", "-q", "-b", "feature", linked)
 
-	w := &worktrees{primary: linked, mergirafPath: "mergiraf"}
-	if err := w.ensureMergirafDriver(context.Background()); err != nil {
-		t.Fatalf("ensureMergirafDriver: %v", err)
+	w := &worktrees{primary: linked, root: filepath.Join(root, "wt"), mergirafPath: "mergiraf"}
+	if err := w.ensureSetup(context.Background()); err != nil {
+		t.Fatalf("ensureSetup: %v", err)
 	}
-
-	// The attributes file must land in the REAL common dir (main/.git/info),
-	// not get lost under a bogus double-joined path.
-	attrPath := filepath.Join(main, ".git", "info", "attributes")
-	raw, err := os.ReadFile(attrPath)
-	if err != nil {
-		t.Fatalf("attributes file missing at the real common dir %s: %v", attrPath, err)
+	if raw, _ := os.ReadFile(attrPath); string(raw) != "*.png binary\n" {
+		t.Errorf("attributes at the real common dir = %q, want the user's line only", raw)
 	}
-	if !strings.Contains(string(raw), "* merge=mergiraf") {
-		t.Errorf("attributes file %s missing merge=mergiraf rule: %q", attrPath, raw)
+	if out, err := exec.Command("git", "-C", linked, "config", "--get", "merge.mergiraf.driver").Output(); err == nil {
+		t.Errorf("merge.mergiraf.driver still set: %q", out)
 	}
-
-	// The double-join bug's exact symptom: linked/<main>/.git/info.
 	bogus := filepath.Join(linked, main, ".git", "info")
 	if _, err := os.Stat(bogus); !os.IsNotExist(err) {
-		t.Errorf("bogus double-joined path exists (the regression this test guards against): %s", bogus)
-	}
-
-	driver := gitOut(t, linked, "config", "--get", "merge.mergiraf.driver")
-	if !strings.Contains(driver, "mergiraf merge --git") {
-		t.Errorf("merge.mergiraf.driver: %q", driver)
+		t.Errorf("bogus double-joined path exists: %s", bogus)
 	}
 }

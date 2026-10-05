@@ -414,18 +414,41 @@ Where the build differs from the decisions above, and why:
     `brew install mergiraf` or the release binary from
     <https://codeberg.org/mergiraf/mergiraf/releases>. Without it, nothing
     below happens and Land is exactly as described above.
-  - Detection and registration live in `pkg/mergedriver`, shared with the
-    pipeline engine. Ensure registers it for the repo whenever it's installed
-    (PATH, then Homebrew's prefixes and `~/.cargo/bin`), so Land gets it in
-    every repo, not only ones a pipeline touched. The registration is a
-    `merge.mergiraf.driver` config entry and a `* merge=mergiraf` line in
-    `<git-common-dir>/info/attributes`. Both are shared by the user's checkout
-    and every worktree of it, so the user's own merges there use mergiraf too.
-    It's idempotent and best-effort.
+  - Detection and routing live in `pkg/mergedriver`, shared with the
+    pipeline engine. Mergiraf is found per Land (`$MADS_MERGIRAF`, else PATH,
+    then Homebrew's prefixes and `~/.cargo/bin`), so Land gets it in every
+    repo, not only ones a pipeline touched.
+  - **Only mads's own merges use it (changed 2026-10-05).** Nothing is
+    written to the repo. Each merge Land runs (step 1 in the folder, step 2
+    in the user's checkout) carries the driver as `-c` flags:
+    `merge.mergiraf.name`, `merge.mergiraf.driver='<path> merge --git %O %A
+    %B -s %S -x %X -y %Y -p %P -l %L'`, and `core.attributesFile` pointing at
+    `$MADS_HOME/mergiraf/attributes-<hash>`, a mads-owned file holding
+    `* merge=mergiraf` (written once, named for its content). The user's own
+    `git merge` and `git rebase` in the same repo never see mergiraf.
+  - Precedence: `core.attributesFile` is git's lowest-priority attributes
+    source. A `merge=` the repo sets itself (`.gitattributes` or
+    `info/attributes`) keeps winning for its paths in mads's merges too. The
+    user's global attributes file, which the override would hide, is copied
+    into mads's file after the mergiraf rule, so it keeps applying.
+  - The first build registered mergiraf in the repo's shared git dir
+    instead: a `merge.mergiraf.*` config section and a `* merge=mergiraf`
+    line in `<git-common-dir>/info/attributes`. That sent the user's own
+    merges through mergiraf. Ensure and Land now remove those entries, once
+    per repo per process (`mergedriver.Cleanup`). Removed: the driver key
+    only when its value is mads's template behind an absolute path, plus
+    `name = mergiraf` beside it, and the section if nothing else is in it.
+    The attributes line goes alongside that driver, or when no mergiraf
+    driver is configured anywhere. A registration done by mergiraf's own
+    instructions (a bare `mergiraf` command) or any other line is kept. With
+    nothing to remove the check only reads. A linked-worktree checkout's
+    absolute `--git-common-dir` is handled.
   - **Land stops when mergiraf resolved anything.** Before step 1's merge, a
-    dry run (`git merge-tree --write-tree`, with the driver swapped for
-    `git merge-file`, git's own text merge) lists the files plain git would
-    leave conflicted. If the real merge then succeeds, mergiraf resolved
+    dry run (`git merge-tree --write-tree` without mads's flags, and with any
+    mergiraf driver the repo configures itself swapped for `git merge-file`,
+    git's own text merge) lists the files plain git would leave conflicted.
+    It runs whether or not mads found mergiraf, so a mergiraf the user
+    registered in the repo themselves is caught too. If the real merge then succeeds, mergiraf resolved
     exactly those files. Land keeps that merge commit in the session folder,
     records it (source `land_base`, so the Files tab can diff it), emits
     `merge.auto_resolved` with the files and the commit, and returns
@@ -438,12 +461,13 @@ Where the build differs from the decisions above, and why:
     resolve is still `conflicted`, as before.
   - Limits: detection needs git 2.38+ (`merge-tree --write-tree`); on older
     git the dry run can't answer and Land behaves as it did before this
-    change. Only a driver registered under the name `mergiraf` is recognised.
-    A driver left registered after mergiraf is uninstalled would fail every
-    file both sides changed, so Land merges with plain git when the
-    registered binary is gone.
-  - Pipeline task merges into a session folder (`engine/sessionmerge.go`) are
-    unchanged. They use mergiraf when it's registered, and don't stop.
+    change. Only a driver under the name `mergiraf` is recognised. A
+    registration the first build left for a since-uninstalled mergiraf
+    would fail every file both sides changed; cleanup removes it before
+    Land merges.
+  - Pipeline task merges into a session folder (`engine/sessionmerge.go`)
+    carry the same per-command flags when the engine found mergiraf, and
+    don't stop.
 
 **Deploying** needs the Data Service, Router, session and pipeline binaries
 rebuilt, and the Data Service and Router restarted, because of new routes:

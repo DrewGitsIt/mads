@@ -103,10 +103,10 @@ func (r EnsureResult) Payload(base string) map[string]any {
 //   - both gone: `worktree add -b <branch> <path> <Base>`, falling back to
 //     the primary's HEAD when Base is gone.
 //
-// Every ensure also registers mergiraf, when it's installed, as the
-// repository's merge driver (pkg/mergedriver), so Land can use it in any
-// repo a session works in. That write is to the shared git dir's config
-// and info/attributes, idempotent, and best-effort.
+// Every ensure also removes, once per repo per process, the mergiraf
+// registration earlier mads builds wrote to the repository's shared config
+// and info/attributes (pkg/mergedriver.Cleanup). Mergiraf now reaches only
+// mads's own merges, as per-command flags. Best-effort.
 //
 // The caller holds the session lock (WithSessionLock / EnsureWithLock).
 // Ensure never touches the primary checkout's files, so it doesn't need the
@@ -116,7 +116,7 @@ func Ensure(ctx context.Context, s Spec) (EnsureResult, error) {
 	if err != nil {
 		return res, err
 	}
-	registerMergeDriver(ctx, s.Primary)
+	cleanupMergeDriver(ctx, s.Primary)
 	if ok {
 		return res, nil
 	}
@@ -183,7 +183,7 @@ func Ensure(ctx context.Context, s Spec) (EnsureResult, error) {
 // the session lock (never the repo lock).
 func EnsureWithLock(ctx context.Context, s Spec) (EnsureResult, error) {
 	if res, ok, err := reuse(ctx, s); err == nil && ok {
-		registerMergeDriver(ctx, s.Primary)
+		cleanupMergeDriver(ctx, s.Primary)
 		return res, nil
 	}
 	var res EnsureResult

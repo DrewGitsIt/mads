@@ -45,17 +45,37 @@ output is exactly the prompt a resolving agent needs.
 
 Both the rebase-before-merge `git merge` and the trunk-side merge go through
 [mergiraf](https://mergiraf.org) — a syntax-aware structural merge tool —
-when it's available: `ensureSetup` registers it as a git merge driver
-(`merge.mergiraf.driver` config + `* merge=mergiraf` in the shared repo's
-`.git/info/attributes`, mergiraf's own documented integration, not a bespoke
-whole-tree invocation) once per run, through `pkg/mergedriver`, the same
-code session worktrees use to register it for Land, so adjacent, non-overlapping edits
-between two task branches resolve automatically instead of conflicting on
-shared diff context. Mergiraf's own conservative defaults still apply —
-genuinely overlapping edits are left conflicted and flow into the same
-`attributeConflict` path unchanged, diff3 markers and all. `Config.MergirafPath`
+when it's available, as git's own merge-driver mechanism (mergiraf's
+documented integration, not a bespoke whole-tree invocation) scoped to the
+one command: `pkg/mergedriver.Args` puts `-c merge.mergiraf.name=mergiraf
+-c merge.mergiraf.driver='<path> merge --git %O %A %B ...' -c
+core.attributesFile=$MADS_HOME/mergiraf/attributes-<hash>` (a mads-owned
+file holding `* merge=mergiraf`, written once) in front of each `git merge`
+the engine runs. Nothing is written to the repo, so the user's own `git
+merge`/`git rebase` there never go through mergiraf. Adjacent,
+non-overlapping edits between two task branches resolve automatically
+instead of conflicting on shared diff context. Mergiraf's own conservative
+defaults still apply — genuinely overlapping edits are left conflicted and
+flow into the same `attributeConflict` path unchanged, diff3 markers and
+all.
+
+Precedence: `core.attributesFile` is git's lowest-priority attributes
+source, so a `merge=` attribute the repo sets itself (`.gitattributes`,
+`.git/info/attributes`) still wins for its paths in mads's merges. The
+user's own global attributes file, which the override hides, is copied into
+mads's file after the mergiraf rule, so it keeps applying (and its `merge=`
+lines keep winning) too.
+
+Earlier builds registered mergiraf in the shared repo instead
+(`merge.mergiraf.*` config plus `* merge=mergiraf` in
+`<git-common-dir>/info/attributes`). `ensureSetup` removes exactly those
+entries once per run (`mergedriver.Cleanup`: the driver only when its value
+is mads's template with an absolute path, and the attributes line only
+alongside it or when no mergiraf driver is configured anywhere), leaving
+anything the user wrote. `Config.MergirafPath`
 picks the binary explicitly (falling back cleanly to plain git if it doesn't
-resolve to a real executable); empty means a `PATH` lookup for `mergiraf`, then
+resolve to a real executable); empty means `$MADS_MERGIRAF` if set (same
+rules), else a `PATH` lookup for `mergiraf`, then
 Homebrew's prefixes (`/opt/homebrew/bin`, `/usr/local/bin`,
 `/home/linuxbrew/.linuxbrew/bin`) and `~/.cargo/bin`; not found at all means
 plain `git merge`, silently and without error — either way, which driver ran
@@ -348,7 +368,10 @@ never a mock of either contract.
   back to plain `git merge` with no behavior change beyond losing the
   auto-resolution — the same adjacent-edit scenario conflicts instead:
   TestMergirafAbsentFallsBackToPlainGit. All three assert which driver ran
-  from the `merge.attempted` event's `merge_driver` field; these tests skip
+  from the `merge.attempted` event's `merge_driver` field. The run leaves
+  the repo's merge config and attributes exactly as they were, and the
+  user's own `git merge` of the same kind of edits still conflicts:
+  TestMergirafLeavesRepoStateAlone. The mergiraf tests skip
   (rather than fail) on a machine without mergiraf installed, since it's an
   external, optional binary (`MADS_TEST_MERGIRAF=/path/to/mergiraf` runs
   them against a binary that isn't on `PATH`).
