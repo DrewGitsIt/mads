@@ -37,6 +37,9 @@ export default async function globalSetup(): Promise<() => Promise<void>> {
   // above) — otherwise `mads run`'s output logs land somewhere the Pipeline
   // tab's drill-in endpoint can never find them (HANDOFF §3).
   process.env.MADS_HOME = topology.homeDir;
+  // Where the services look for mergiraf (session-worktrees.spec puts a
+  // stand-in there for one journey).
+  process.env.MADS_MERGIRAF = topology.mergirafPath;
 
   return async () => {
     await topology.teardown();

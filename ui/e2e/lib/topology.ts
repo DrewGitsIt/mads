@@ -150,6 +150,12 @@ export interface Topology {
   sessionBin: string;
   tmpDir: string;
   homeDir: string;
+  /**
+   * The services' $MADS_MERGIRAF: where they look for mergiraf instead of
+   * PATH. Nothing is there unless a spec puts a stand-in there, so merges
+   * are plain git by default whatever the machine has installed.
+   */
+  mergirafPath: string;
   teardown(): Promise<void>;
 }
 
@@ -185,6 +191,8 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
   // every commit the journeys make is refused with "Author identity unknown".
   writeFileSync(path.join(homeDir, ".gitconfig"), "[user]\n\tname = e2e user\n\temail = e2e@smoke.test\n");
   const env = cleanEnv(homeDir);
+  const mergirafPath = path.join(tmpDir, "mergiraf-standin", "mergiraf");
+  env.MADS_MERGIRAF = mergirafPath;
 
   const data = await spawnListening("data", [dataBin, "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
   const dataURL = `http://${data.addr}`;
@@ -222,5 +230,5 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
     rmSync(tmpDir, { recursive: true, force: true });
   };
 
-  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, teardown };
+  return { dataURL, routerURL, madsBin, sessionBin, tmpDir, homeDir, mergirafPath, teardown };
 }
