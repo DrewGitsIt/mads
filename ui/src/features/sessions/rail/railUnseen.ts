@@ -4,6 +4,9 @@ import type { Session } from "../../../router/types";
 /** localStorage key: a JSON array of the session ids the user has already met. */
 export const SEEN_KEY = "mads.sessionRail.seen";
 
+/** The tag the conversation import puts on every session it creates (services/router/internal/api/imports.go). */
+const IMPORTED_TAG = "imported";
+
 function readSeen(): Set<string> | null {
   try {
     const raw = localStorage.getItem(SEEN_KEY);
@@ -34,6 +37,10 @@ function writeSeen(seen: Set<string>): void {
  * does not light up an entire existing rail. `loaded` says the list is real:
  * seeding from the empty pre-load list would make every session that then
  * arrives look new. Absent, a non-empty list is taken to be loaded.
+ *
+ * Imported sessions are never seeded. A brand-new user's rail doesn't mount
+ * until they have a session, so its first load is typically the very import
+ * the first-run wizard just made — exactly the cards that should light up.
  */
 export function useUnseenSessions(
   sessions: Session[],
@@ -46,12 +53,16 @@ export function useUnseenSessions(
   // shows the whole rail unseen for a frame.
   let current = seen;
   if (current === null && loaded) {
-    current = new Set(sessions.map((s) => s.id));
+    current = new Set(
+      sessions.filter((s) => !s.tags?.includes(IMPORTED_TAG)).map((s) => s.id),
+    );
     setSeen(current);
   }
 
   const markSeen = useCallback((id: string) => {
-    setSeen((prev) => (prev === null || prev.has(id) ? prev : new Set(prev).add(id)));
+    setSeen((prev) =>
+      prev === null || prev.has(id) ? prev : new Set(prev).add(id),
+    );
   }, []);
 
   // Opening a card is at least as strong a signal as hovering it.
@@ -74,6 +85,7 @@ export function useUnseenSessions(
     if (current !== null) writeSeen(current);
   }, [current]);
 
-  const isUnseen = (id: string) => current !== null && !current.has(id) && id !== selectedId;
+  const isUnseen = (id: string) =>
+    current !== null && !current.has(id) && id !== selectedId;
   return { isUnseen, markSeen };
 }
