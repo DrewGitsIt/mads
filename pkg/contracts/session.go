@@ -203,6 +203,13 @@ type Session struct {
 	// start that dies before the fork exists re-forks from the untouched
 	// original.
 	ForkOnResume bool `json:"fork_on_resume,omitempty"`
+	// ImportedFrom is the provider-native id of the conversation this session
+	// was imported from — set once at import and never changed. ProviderRef
+	// can't answer "have I imported this already?" on its own: the first
+	// wake forks, and the fork's id replaces ProviderRef, so a re-run of the
+	// import would otherwise see the original id as unknown and import it
+	// again. The import dedupes on both fields.
+	ImportedFrom string `json:"imported_from,omitempty"`
 	// LastUsage is the most recent turn's token accounting (provider.Usage,
 	// mirrored as Usage above), persisted by the Runner on every turn end —
 	// the context meter's data source at wake time, before this process has

@@ -149,6 +149,11 @@ func (l *wireLine) model() string {
 type wireMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+	// Model and Usage ride on assistant messages: on a transcript line they
+	// are that one API call's own accounting (history.go reads them off the
+	// last assistant line).
+	Model string     `json:"model"`
+	Usage *wireUsage `json:"usage"`
 }
 
 type wireBlock struct {

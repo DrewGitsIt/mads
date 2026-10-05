@@ -48,6 +48,9 @@ type server struct {
 	// racing a job's WakeSession, or several signal jobs for one dormant
 	// session) start at most one child.
 	wakeLocks sync.Map
+	// importMu serializes conversation imports (imports.go): the scan-then-
+	// create is not atomic, so two at once would both import everything.
+	importMu sync.Mutex
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -247,6 +250,8 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("DELETE /credentials/{name}", s.handleDeleteCredential)
 	mux.HandleFunc("GET /credentials/env-candidates", s.handleCredentialEnvCandidates)
 	mux.HandleFunc("POST /credentials/import", s.handleImportCredentials)
+	mux.HandleFunc("GET /imports/conversations", s.handleScanConversationImports)
+	mux.HandleFunc("POST /imports/conversations", s.handleImportConversations)
 	mux.HandleFunc("GET /credentials/vault-sources", s.handleListVaultSources)
 	mux.HandleFunc("GET /credentials/vault-refs", s.handleListVaultRefs)
 	mux.HandleFunc("POST /credentials/vault-refs", s.handleSetVaultRef)

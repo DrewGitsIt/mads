@@ -258,6 +258,49 @@ type TranscriptReader interface {
 	Transcript(ctx context.Context, ref string) ([]Message, error)
 }
 
+// HistoryScanner is the optional capability of listing the conversations a
+// user already has in the provider's own native store, from before mads
+// existed or outside it — what the onboarding import turns into session
+// records that point at the native conversation (Session.ProviderRef) rather
+// than copying it. Not part of the Behavior matrix: callers detect it with a
+// type assertion, like Completer. A provider with no readable history store
+// simply doesn't implement it.
+type HistoryScanner interface {
+	// ScanHistory reads the native store and returns every conversation worth
+	// importing. Filtering what must never be imported (automation runs,
+	// conversations a live process still owns, empty ones) is the provider's
+	// call, since only it knows its store's markers; deduping against
+	// sessions mads already has is the caller's. A store that doesn't exist
+	// yields an empty scan, not an error.
+	ScanHistory(ctx context.Context) (HistoryScan, error)
+}
+
+// HistoryScan is one provider's native conversation history.
+type HistoryScan struct {
+	// LookedFor lists the places read (directories), so a caller can say what
+	// was looked at when the result is empty.
+	LookedFor     []string
+	Conversations []HistoryConversation
+}
+
+// HistoryConversation is one importable native conversation.
+type HistoryConversation struct {
+	// Ref is the provider-native handle: Session.ProviderRef, and what
+	// TranscriptReader.Transcript reads by.
+	Ref string
+	// Dir is the folder the conversation ran in, as the store itself recorded
+	// it. It may no longer exist.
+	Dir string
+	// Title is the provider's own name for the conversation, falling back to
+	// the first thing the user said. Never empty.
+	Title string
+	// CreatedAt and LastActiveAt are the first and last native timestamps.
+	CreatedAt    time.Time
+	LastActiveAt time.Time
+	// Usage is the last turn's token accounting, nil when the store has none.
+	Usage *Usage
+}
+
 // RefAnnouncer is the optional strategy for BehaviorRefAnnounce: a session
 // whose Ref() is already non-empty at Start-return needs no subscription —
 // callers must check Ref() first. Otherwise, if the session implements this

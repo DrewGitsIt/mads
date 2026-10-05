@@ -53,6 +53,10 @@ type Config struct {
 	// it runs first whenever the index has a usable entry; rung 2 (a direct
 	// transcript content scan) is the fallback when it doesn't.
 	HistoryFile string
+	// LiveSessionsDir is where running claude processes register themselves,
+	// one <pid>.json each (default ~/.claude/sessions) — ScanHistory skips
+	// conversations whose process is still alive (history.go).
+	LiveSessionsDir string
 	// Models pins the model list, short-circuiting live discovery
 	// (discover.go). Empty — the normal case — probes the binary instead.
 	Models []provider.Model
@@ -74,6 +78,11 @@ func New(cfg Config) *Provider {
 	if cfg.HistoryFile == "" {
 		if home, err := os.UserHomeDir(); err == nil {
 			cfg.HistoryFile = filepath.Join(home, ".claude", "history.jsonl")
+		}
+	}
+	if cfg.LiveSessionsDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.LiveSessionsDir = filepath.Join(home, ".claude", "sessions")
 		}
 	}
 	return &Provider{cfg: cfg}
