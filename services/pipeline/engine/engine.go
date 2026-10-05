@@ -27,6 +27,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
+	"github.com/drewkidwell/mads/pkg/mergedriver"
 	"github.com/drewkidwell/mads/pkg/procid"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/template"
@@ -155,8 +156,9 @@ type Config struct {
 	// genuinely overlapping edits still conflict for attribution. Empty
 	// (the default) skips detection: Run falls back to a PATH lookup for
 	// "mergiraf"; if that also fails, land attempts use plain git merge.
-	// Pinned version for this machine: mergiraf 0.18.0, installed via
-	// `cargo install --locked mergiraf` to ~/.cargo/bin/mergiraf.
+	// Detection and registration are shared with session worktrees
+	// (pkg/mergedriver). Install: `brew install mergiraf`, or the release
+	// binary from https://codeberg.org/mergiraf/mergiraf/releases.
 	MergirafPath string
 }
 
@@ -242,16 +244,9 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		if cfg.WorktreeRoot == "" {
 			return nil, errors.New("isolated runs require WorktreeRoot")
 		}
-		mergirafPath := cfg.MergirafPath
-		if mergirafPath == "" {
-			if found, err := exec.LookPath("mergiraf"); err == nil {
-				mergirafPath = found
-			}
-		} else if _, err := exec.LookPath(mergirafPath); err != nil {
-			// A configured-but-unusable path must fall back cleanly, same
-			// as no configuration at all — not surface as a broken driver.
-			mergirafPath = ""
-		}
+		// A configured-but-unusable path falls back cleanly, same as no
+		// configuration at all — not surface as a broken driver.
+		mergirafPath := mergedriver.Find(cfg.MergirafPath)
 		if mergirafPath != "" {
 			log.Printf("engine: land queue merge driver: mergiraf (%s)", mergirafPath)
 		} else {

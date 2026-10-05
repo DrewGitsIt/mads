@@ -24,6 +24,15 @@ var knownLocations = map[string][]string{
 		"/Applications/Goose.app/Contents/Resources/bin/goose",
 		"~/Applications/Goose.app/Contents/Resources/bin/goose",
 	},
+	// mergiraf (pkg/mergedriver): Homebrew's documented prefixes (Apple
+	// silicon, Intel macOS, Linuxbrew) and cargo's install directory. An
+	// app launched from the desktop often has none of them on PATH.
+	"mergiraf": {
+		"/opt/homebrew/bin/mergiraf",
+		"/usr/local/bin/mergiraf",
+		"/home/linuxbrew/.linuxbrew/bin/mergiraf",
+		"~/.cargo/bin/mergiraf",
+	},
 }
 
 // Find returns an absolute path to name: exec.LookPath's answer if it has

@@ -48,18 +48,28 @@ Both the rebase-before-merge `git merge` and the trunk-side merge go through
 when it's available: `ensureSetup` registers it as a git merge driver
 (`merge.mergiraf.driver` config + `* merge=mergiraf` in the shared repo's
 `.git/info/attributes`, mergiraf's own documented integration, not a bespoke
-whole-tree invocation) once per run, so adjacent, non-overlapping edits
+whole-tree invocation) once per run, through `pkg/mergedriver`, the same
+code session worktrees use to register it for Land, so adjacent, non-overlapping edits
 between two task branches resolve automatically instead of conflicting on
 shared diff context. Mergiraf's own conservative defaults still apply —
 genuinely overlapping edits are left conflicted and flow into the same
 `attributeConflict` path unchanged, diff3 markers and all. `Config.MergirafPath`
-picks the binary explicitly (falling back cleanly if it doesn't resolve to a
-real executable); empty falls back to a `PATH` lookup for `mergiraf`; not
-found at all means plain `git merge`, silently and without error — either
-way, which driver ran is on every `merge.attempted` event's `merge_driver`
-field ("mergiraf" or "git"). Pinned version for this machine: **mergiraf
-0.18.0**, installed via `cargo install --locked mergiraf` to
-`~/.cargo/bin/mergiraf`.
+picks the binary explicitly (falling back cleanly to plain git if it doesn't
+resolve to a real executable); empty means a `PATH` lookup for `mergiraf`, then
+Homebrew's prefixes (`/opt/homebrew/bin`, `/usr/local/bin`,
+`/home/linuxbrew/.linuxbrew/bin`) and `~/.cargo/bin`; not found at all means
+plain `git merge`, silently and without error — either way, which driver ran
+is on every `merge.attempted` event's `merge_driver` field ("mergiraf" or
+"git").
+
+Mergiraf is an optional runtime tool, never a build dependency: nothing in
+this repo builds it. Install it with `brew install mergiraf` (macOS, or
+Linux with Homebrew), or download the release binary for your platform from
+<https://codeberg.org/mergiraf/mergiraf/releases> and put it on `PATH`.
+Settings > General > Preflight (and the first-run wizard) shows whether it
+was found, its version and path. Tested against **mergiraf 0.20.0** (the
+aarch64 Linux release binary); to run the mergiraf tests without installing
+it, point `MADS_TEST_MERGIRAF` at a binary.
 
 **Wide concurrency, serialized integration.** `Config.Concurrency` (default
 5) caps how many tasks run their *agent* stages at once — it is not a
@@ -340,7 +350,8 @@ never a mock of either contract.
   TestMergirafAbsentFallsBackToPlainGit. All three assert which driver ran
   from the `merge.attempted` event's `merge_driver` field; these tests skip
   (rather than fail) on a machine without mergiraf installed, since it's an
-  external, optional binary.
+  external, optional binary (`MADS_TEST_MERGIRAF=/path/to/mergiraf` runs
+  them against a binary that isn't on `PATH`).
 - **`on_loop` validates, skips the happy path, and enters after a loop-back**
   — a template with a `merge_resolve` stage guarded by `when: on_loop` and
   wired as the merge stage's `loop_back` target: TestOnLoopValidatesSkipsThenEntersMergeResolve.

@@ -12,6 +12,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
 // worktrees owns per-task isolation (spec §6, §17): worktree + branch per
@@ -120,64 +121,22 @@ func (w *worktrees) setupDir() string {
 
 // mergirafDriverName is the git merge driver name mergiraf is registered
 // under (see ensureMergirafDriver).
-const mergirafDriverName = "mergiraf"
+const mergirafDriverName = mergedriver.Name
 
 // ensureMergirafDriver registers mergiraf as a git merge driver (spec: the
 // land queue's rebase step should resolve adjacent-edit conflicts
 // automatically while leaving genuinely overlapping edits conflicted).
-// This is git's native per-file merge-driver mechanism — a
-// `merge.mergiraf.driver` config command template plus a `merge=mergiraf`
-// gitattributes rule — not a bespoke whole-tree invocation: mergiraf's own
-// docs (mergiraf.org/usage.html) prescribe exactly this integration, and it
-// means rebaseBeforeMerge's plain `git merge` calls pick it up for free.
+// This is git's native per-file merge-driver mechanism, shared with session
+// worktrees in pkg/mergedriver — a `merge.mergiraf.driver` config command
+// template plus a `merge=mergiraf` gitattributes rule in the shared git
+// dir — so rebaseBeforeMerge's plain `git merge` calls pick it up for free.
 //
 // extensions.worktreeConfig (enabled by githook.EnsureInstalled above) makes
 // git config and .git/info/attributes shared across every task worktree, so
-// this only needs to run once against the primary repo's common git dir.
-//
-// The %S/%X/%Y label placeholders are only substituted by git 2.44+; on
-// older git they pass through to mergiraf as literal text, which is
-// harmless (mergiraf just uses them as conflict-marker labels on any
-// hunk it can't resolve) — see mergiraf.org/usage.html#with-a-driver.
+// this only needs to run once against the primary repo's common git dir
+// (mergedriver.Register resolves it correctly from a linked worktree too).
 func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
-	dir := w.setupDir()
-	if _, err := w.git(ctx, dir, "config", "merge.mergiraf.name", "mergiraf"); err != nil {
-		return err
-	}
-	driver := w.mergirafPath + " merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L"
-	if _, err := w.git(ctx, dir, "config", "merge.mergiraf.driver", driver); err != nil {
-		return err
-	}
-	gitDir, err := w.git(ctx, dir, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return err
-	}
-	gitDir = strings.TrimSpace(gitDir)
-	// --git-common-dir is relative to w.primary (typically ".git") when
-	// w.primary is a normal checkout, but ABSOLUTE — pointing at the main
-	// worktree's .git, elsewhere on disk entirely — when w.primary is itself
-	// a linked worktree (e.g. the pipeline's own workspace was created via
-	// `git worktree add`). Joining an absolute gitDir onto w.primary would
-	// silently produce a bogus nested path that git never reads, making this
-	// registration a no-op without ever returning an error.
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(dir, gitDir)
-	}
-	infoDir := filepath.Join(gitDir, "info")
-	if err := os.MkdirAll(infoDir, 0o755); err != nil {
-		return err
-	}
-	attrPath := filepath.Join(infoDir, "attributes")
-	if raw, err := os.ReadFile(attrPath); err == nil && strings.Contains(string(raw), "merge="+mergirafDriverName) {
-		return nil
-	}
-	f, err := os.OpenFile(attrPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	_, err = f.WriteString("* merge=mergiraf\n")
-	return err
+	return mergedriver.Register(ctx, w.setupDir(), w.mergirafPath)
 }
 
 // create makes the task's worktree and branch, records the fork point (trunk

@@ -13,16 +13,23 @@ import (
 	"github.com/drewkidwell/mads/providers/fake"
 )
 
-// mergirafOrSkip locates the mergiraf binary on PATH, or skips the test —
-// mergiraf is an external dependency (spec: "detect availability... fall
-// back cleanly when absent"), so tests exercising its auto-resolution can't
-// hard-require it in every environment. Pinned version for this machine:
-// mergiraf 0.18.0, installed via `cargo install --locked mergiraf`.
+// mergirafOrSkip locates the mergiraf binary — $MADS_TEST_MERGIRAF, else
+// PATH — or skips the test: mergiraf is an optional runtime tool (spec:
+// "detect availability... fall back cleanly when absent"), so tests
+// exercising its auto-resolution can't hard-require it in every
+// environment. Install it with `brew install mergiraf` or the release
+// binary from https://codeberg.org/mergiraf/mergiraf/releases.
 func mergirafOrSkip(t *testing.T) string {
 	t.Helper()
+	if p := os.Getenv("MADS_TEST_MERGIRAF"); p != "" {
+		if _, err := exec.LookPath(p); err != nil {
+			t.Fatalf("MADS_TEST_MERGIRAF=%s: %v", p, err)
+		}
+		return p
+	}
 	path, err := exec.LookPath("mergiraf")
 	if err != nil {
-		t.Skip("mergiraf not found on PATH; skipping (see mergiraf.org for install)")
+		t.Skip("mergiraf not found (set MADS_TEST_MERGIRAF or put it on PATH); skipping")
 	}
 	return path
 }
