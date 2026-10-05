@@ -288,14 +288,6 @@ func (o Ops) ensure(ctx context.Context, t Target) error {
 	return nil
 }
 
-// record posts a commit this package made to the Data Service (D5, D6
-// step 3): the hook can't be relied on for these — it is silenced for
-// Commit, and never fires for a merge. Best-effort; the commit exists
-// either way.
-func (o Ops) record(ctx context.Context, t Target, hash, message string) {
-	o.recordAs(ctx, t, hash, message, provenance{})
-}
-
 // provenance says which of this package's own operations made a recorded
 // commit (dataclient.CommitReport.Source and friends); zero for none.
 type provenance struct {
@@ -304,7 +296,10 @@ type provenance struct {
 	drafted bool
 }
 
-// recordAs is record with the commit's provenance attached.
+// recordAs posts a commit this package made to the Data Service (D5, D6
+// step 3, D8), with its provenance: the hook can't be relied on for these —
+// it is silenced for Commit and a pipeline's save, and never fires for a
+// merge. Best-effort; the commit exists either way.
 func (o Ops) recordAs(ctx context.Context, t Target, hash, message string, p provenance) {
 	if hash == "" {
 		return

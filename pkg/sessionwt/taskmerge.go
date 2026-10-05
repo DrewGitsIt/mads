@@ -167,7 +167,9 @@ func (m *TaskMerge) SaveEdits(ctx context.Context, files []string) (hash string,
 		return "", err
 	}
 	hash = strings.TrimSpace(out)
-	Ops{Store: m.Store}.record(ctx, m.Target, hash, SaveEditsMessage)
+	Ops{Store: m.Store}.recordAs(ctx, m.Target, hash, SaveEditsMessage, provenance{
+		source: contracts.CommitSourcePipelineSave, files: len(files),
+	})
 	return hash, nil
 }
 

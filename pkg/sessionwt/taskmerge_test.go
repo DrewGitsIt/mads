@@ -121,6 +121,9 @@ func TestSaveEditsCommitsOnlyThoseFilesAndRecordsOnce(t *testing.T) {
 	if len(s.store.commits) != 1 || s.store.commits[0].Hash != hash || s.store.commits[0].Message != SaveEditsMessage {
 		t.Errorf("recorded commits = %+v", s.store.commits)
 	}
+	if r := s.store.reports[0]; r.Source != contracts.CommitSourcePipelineSave || r.Files != 3 {
+		t.Errorf("report = %+v, want source pipeline_save over 3 files", r)
+	}
 }
 
 func TestWaitIdle(t *testing.T) {

@@ -69,11 +69,13 @@ type CommitRequest struct {
 }
 
 // CommitSource* name who made a commit mads recorded itself (commit.created
-// "source"): the Commit button, or Land's merge commit. Commits the agent
-// makes on its own (hook-reported) carry none.
+// "source"): the Commit button, Land's merge commit, or a pipeline saving
+// the agent's uncommitted edits before merging a task over them (D8).
+// Commits the agent makes on its own (hook-reported) carry none.
 const (
-	CommitSourceCommit = "commit"
-	CommitSourceLand   = "land"
+	CommitSourceCommit       = "commit"
+	CommitSourceLand         = "land"
+	CommitSourcePipelineSave = "pipeline_save"
 )
 
 // Commit per-path outcomes.
