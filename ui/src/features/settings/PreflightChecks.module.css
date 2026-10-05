@@ -1,0 +1,179 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.checks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: 400 var(--fs-body) var(--sans);
+  color: var(--text2);
+}
+
+.warnIcon {
+  color: var(--warn-fg);
+}
+
+.hint {
+  color: var(--warn-fg);
+  font: 400 var(--fs-sm) var(--sans);
+}
+
+.infoButton {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text2);
+  font: italic 650 11px/1 var(--sans);
+  cursor: pointer;
+}
+
+.infoButton:hover,
+.infoButton[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--text2);
+}
+
+.info {
+  min-width: 280px;
+}
+
+.infoTitle {
+  font: 650 var(--fs-sm) var(--sans);
+  color: var(--text);
+  margin-bottom: var(--space-2);
+}
+
+.probed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font: 400 var(--fs-sm) var(--sans);
+  color: var(--text2);
+}
+
+.probed li {
+  display: flex;
+  flex-wrap: wrap;
+  column-gap: var(--space-2);
+}
+
+.probedName {
+  color: var(--text);
+  font-weight: 650;
+}
+
+.probedHint {
+  flex-basis: 100%;
+  color: var(--text3);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: var(--content-narrow);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg1);
+}
+
+.emptyTitle {
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.emptyBody {
+  margin: 0;
+  font: 400 var(--fs-body) var(--sans);
+  color: var(--text2);
+}
+
+.options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.option {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font: 400 var(--fs-sm) var(--sans);
+}
+
+.optionHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.link {
+  color: var(--accent);
+}
+
+.link:hover {
+  color: var(--accent-hover);
+}
+
+.command {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+  background: var(--bg3);
+}
+
+.command code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font: 400 var(--fs-sm) var(--mono);
+  color: var(--text);
+}
+
+.copy {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: none;
+  background: transparent;
+  color: var(--text2);
+  font: 400 var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.copy:hover {
+  color: var(--text);
+}

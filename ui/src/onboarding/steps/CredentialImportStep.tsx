@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { EnvLookedFor } from "../../features/settings/EnvLookedFor";
 import { useCredentials } from "../../features/settings/state/useCredentials";
 import styles from "./CredentialImportStep.module.css";
 
@@ -17,9 +18,10 @@ export interface CredentialImportStepProps {
 export function CredentialImportStep({ onNext, onBack }: CredentialImportStepProps) {
   const credentials = useCredentials();
   const [selected, setSelected] = useState<string[]>([]);
+  const [scanned, setScanned] = useState(false);
 
   useEffect(() => {
-    void credentials.loadEnvCandidates();
+    void credentials.loadEnvCandidates().then(() => setScanned(true));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once on mount, credentials identity changes every render
   }, []);
 
@@ -33,36 +35,56 @@ export function CredentialImportStep({ onNext, onBack }: CredentialImportStepPro
     onNext();
   };
 
+  const found = credentials.envCandidates.length > 0;
+
   return (
     <div className={styles.step}>
       <h2 className={styles.title}>Import credentials</h2>
       <p className={styles.body}>
-        We detected these environment variables. Select the ones mads should use — only
-        the names are ever sent anywhere; values are read locally.
+        mads can reuse API keys and tokens already set in the environment it was started from, so you don&apos;t
+        have to paste them in. Values are read and stored on this machine; only the names appear here.
       </p>
-      <ul className={styles.list}>
-        {credentials.envCandidates.map((n) => (
-          <li key={n}>
-            <label>
-              <input type="checkbox" checked={selected.includes(n)} onChange={() => toggle(n)} />
-              {n}
-            </label>
-          </li>
-        ))}
-        {credentials.envCandidates.length === 0 && (
-          <li className={styles.empty}>No unimported env vars detected.</li>
-        )}
-      </ul>
+      {found ? (
+        <>
+          <p className={styles.body}>Found these — select the ones mads should use:</p>
+          <ul className={styles.list}>
+            {credentials.envCandidates.map((n) => (
+              <li key={n}>
+                <label>
+                  <input type="checkbox" checked={selected.includes(n)} onChange={() => toggle(n)} />
+                  {n}
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : (
+        scanned && (
+          <p className={styles.empty}>
+            Nothing to import — none of the variables mads looks for are set. That&apos;s normal: agent harnesses
+            sign in on their own, and you can add credentials any time in Settings → Credentials.
+          </p>
+        )
+      )}
+      <EnvLookedFor names={credentials.envLookedFor} />
       <div className={styles.actions}>
         <Button variant="ghost" onClick={onBack}>
           Back
         </Button>
-        <Button variant="ghost" onClick={onNext}>
-          Skip for now
-        </Button>
-        <Button variant="primary" onClick={() => void handleImport()} disabled={selected.length === 0}>
-          Import selected
-        </Button>
+        {found ? (
+          <>
+            <Button variant="ghost" onClick={onNext}>
+              Skip for now
+            </Button>
+            <Button variant="primary" onClick={() => void handleImport()} disabled={selected.length === 0}>
+              Import selected
+            </Button>
+          </>
+        ) : (
+          <Button variant="primary" onClick={onNext}>
+            Continue
+          </Button>
+        )}
       </div>
     </div>
   );

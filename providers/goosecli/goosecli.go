@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/agentenv"
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/providers/acprpc"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -28,8 +29,11 @@ import (
 // Config adapts the binary to its surroundings. The zero value targets a
 // stock install.
 type Config struct {
-	// Bin is the goose executable (default "goose"). Tests point this at a
-	// scripted stand-in.
+	// Bin is the goose executable. Empty resolves it per invocation via
+	// pkg/binlocate — PATH, then the CLI bundled inside goose Desktop — so
+	// a goose installed after the process started is picked up, and
+	// preflight's verdict matches what actually gets spawned. Tests point
+	// this at a scripted stand-in.
 	Bin string
 	// ExtraArgs are appended to every agent-spawn invocation (`acp`,
 	// `session` REPL). Bookkeeping subcommands (session export/list) omit
@@ -65,9 +69,6 @@ type Provider struct {
 }
 
 func New(cfg Config) *Provider {
-	if cfg.Bin == "" {
-		cfg.Bin = "goose"
-	}
 	if cfg.Builtins == nil {
 		cfg.Builtins = []string{"developer"}
 	}
@@ -75,6 +76,19 @@ func New(cfg Config) *Provider {
 }
 
 func (p *Provider) Name() string { return "goose" }
+
+// bin is the executable every invocation runs: Config.Bin if set, else
+// binlocate's answer, else the bare name so exec's "not found" error reads
+// as it always has.
+func (p *Provider) bin() string {
+	if p.cfg.Bin != "" {
+		return p.cfg.Bin
+	}
+	if path, err := binlocate.Find("goose"); err == nil {
+		return path
+	}
+	return "goose"
+}
 
 // gooseToolClassTable classifies goose's _meta tool identities onto the
 // ACP kind taxonomy for the engine's trust gate; anything unlisted is
@@ -129,7 +143,7 @@ func (p *Provider) engineConfig() acprpc.Config {
 	}
 	args = append(args, p.cfg.ExtraArgs...)
 	return acprpc.Config{
-		Bin:       p.cfg.Bin,
+		Bin:       p.bin(),
 		SpawnArgs: args,
 		// The engine appends Env after BaseEnv and StartOptions.Env after
 		// that, so the final composition is byte-identical to the direct

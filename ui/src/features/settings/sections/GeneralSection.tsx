@@ -3,6 +3,7 @@ import { Button } from "../../../components/Button/Button";
 import { PathField } from "../../../components/PathField/PathField";
 import { router } from "../../../router/client";
 import type { Workspace } from "../../../router/types";
+import { PreflightChecks } from "../PreflightChecks";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
 import { useProviderMatrix } from "../state/useProviderMatrix";
@@ -219,15 +220,9 @@ export function GeneralSection({ config }: GeneralSectionProps) {
       </div>
       <section className={styles.preflight}>
         <h3 className={styles.heading}>Preflight</h3>
-        <ul className={styles.checks}>
-          {preflight.checks.map((check) => (
-            <li key={check.name} className={styles.check}>
-              <span aria-hidden="true">{check.healthy ? "✓" : "✗"}</span>
-              {check.name}
-              {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
-            </li>
-          ))}
-        </ul>
+        <div className={styles.checks}>
+          <PreflightChecks checks={preflight.checks} loading={preflight.loading} onRerun={preflight.rerun} />
+        </div>
         <Button variant="ghost" size="sm" onClick={preflight.rerun} disabled={preflight.loading}>
           Run preflight
         </Button>

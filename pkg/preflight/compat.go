@@ -33,12 +33,15 @@ var compatMatrix = map[string]compatRange{
 	"goose": {Min: "1.46.0", Max: "1.49.0", Note: "proven against goose 1.46.0 (binary probes) and 1.48.0 (captures + source re-verification) — docs/GOOSE-ADAPTER-DESIGN.md"},
 }
 
-func (r compatRange) evaluate(version string) (ok bool, guidance string) {
+// evaluate reports whether version sits in the proven window. Below Min is
+// a known incompatibility; at or above Max is only unproven — likely fine,
+// so unproven=true lets the caller warn instead of fail.
+func (r compatRange) evaluate(version string) (ok, unproven bool, guidance string) {
 	if r.Min != "" && compareSemver(version, r.Min) < 0 {
-		return false, fmt.Sprintf("mads requires >= %s, detected %s — upgrade the provider", r.Min, version)
+		return false, false, fmt.Sprintf("mads requires >= %s, detected %s — upgrade the provider", r.Min, version)
 	}
 	if r.Max != "" && compareSemver(version, r.Max) >= 0 {
-		return false, fmt.Sprintf("mads has only been proven against < %s, detected %s — this version may include unproven breaking changes, check release notes before relying on it", r.Max, version)
+		return false, true, fmt.Sprintf("mads has only been proven against < %s, detected %s — this version may include unproven breaking changes, check release notes before relying on it", r.Max, version)
 	}
-	return true, ""
+	return true, false, ""
 }

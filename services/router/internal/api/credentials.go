@@ -94,6 +94,15 @@ func (s *server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// envCandidatesResponse is the import picklist plus the allowlist that
+// produced it, so the UI can say what it looked for — an empty picklist
+// otherwise reads as "nothing found" with no hint of what "anything" was.
+// Prefixes are rendered with a trailing "*" (e.g. "AWS_*").
+type envCandidatesResponse struct {
+	Candidates []string `json:"candidates"`
+	LookedFor  []string `json:"looked_for"`
+}
+
 // handleCredentialEnvCandidates lists process env-var NAMES that look like
 // credentials and aren't already stored — the first-run wizard's import
 // picklist. Values never appear in the response.
@@ -118,7 +127,11 @@ func (s *server) handleCredentialEnvCandidates(w http.ResponseWriter, _ *http.Re
 	if candidates == nil {
 		candidates = []string{}
 	}
-	writeJSON(w, http.StatusOK, candidates)
+	lookedFor := append([]string{}, knownCredentialEnvVars...)
+	for _, prefix := range knownCredentialEnvVarPrefixes {
+		lookedFor = append(lookedFor, prefix+"*")
+	}
+	writeJSON(w, http.StatusOK, envCandidatesResponse{Candidates: candidates, LookedFor: lookedFor})
 }
 
 // handleImportCredentials reads the named env vars server-side and stores

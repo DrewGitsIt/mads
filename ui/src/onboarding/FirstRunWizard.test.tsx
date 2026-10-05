@@ -33,7 +33,7 @@ describe("FirstRunWizard", () => {
       "GET /config": { ...fixtureConfig, onboarding_complete: false },
       "GET /preflight": fixturePreflightChecks,
       "GET /credentials": [],
-      "GET /credentials/env-candidates": [],
+      "GET /credentials/env-candidates": { candidates: [], looked_for: ["ANTHROPIC_API_KEY", "AWS_*"] },
       "GET /providers": fixtureProviders,
       "POST /workspaces": { id: "ws-1", name: "mads" },
       "PUT /config": { ...fixtureConfig, onboarding_complete: true },
@@ -51,8 +51,8 @@ describe("FirstRunWizard", () => {
     fireEvent.click(screen.getByText("Continue"));
 
     // 3. Credential import — skip
-    await waitFor(() => expect(screen.getByText(/no unimported env vars/i)).toBeTruthy());
-    fireEvent.click(screen.getByText("Skip for now"));
+    await waitFor(() => expect(screen.getByText(/nothing to import/i)).toBeTruthy());
+    fireEvent.click(screen.getByText("Continue"));
 
     // 4. First workspace
     await waitFor(() => expect(screen.getByLabelText(/name/i)).toBeTruthy());
@@ -78,7 +78,7 @@ describe("FirstRunWizard", () => {
       "GET /config": { ...fixtureConfig, onboarding_complete: false, default_provider: "fake" },
       "GET /preflight": fixturePreflightChecks,
       "GET /credentials": [],
-      "GET /credentials/env-candidates": [],
+      "GET /credentials/env-candidates": { candidates: [], looked_for: ["ANTHROPIC_API_KEY", "AWS_*"] },
       "GET /providers": fixtureProviders,
       "POST /workspaces": { id: "ws-1", name: "mads" },
       "PUT /config": { ...fixtureConfig, onboarding_complete: true, default_provider: "fake" },
@@ -93,8 +93,8 @@ describe("FirstRunWizard", () => {
     await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
-    await waitFor(() => expect(screen.getByText(/no unimported env vars/i)).toBeTruthy());
-    fireEvent.click(screen.getByText("Skip for now"));
+    await waitFor(() => expect(screen.getByText(/nothing to import/i)).toBeTruthy());
+    fireEvent.click(screen.getByText("Continue"));
 
     await waitFor(() => expect(screen.getByLabelText(/name/i)).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/name/i), { target: { value: "mads" } });

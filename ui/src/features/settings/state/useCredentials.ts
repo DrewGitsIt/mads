@@ -5,6 +5,8 @@ export interface UseCredentials {
   names: string[];
   loading: boolean;
   envCandidates: string[];
+  /** The allowlist the env scan matches against, prefixes as "AWS_*". */
+  envLookedFor: string[];
   add: (name: string, value: string) => Promise<void>;
   remove: (name: string) => Promise<void>;
   loadEnvCandidates: () => Promise<void>;
@@ -22,6 +24,7 @@ export interface UseCredentials {
 export function useCredentials(): UseCredentials {
   const [names, setNames] = useState<string[]>([]);
   const [envCandidates, setEnvCandidates] = useState<string[]>([]);
+  const [envLookedFor, setEnvLookedFor] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const mounted = useRef(true);
 
@@ -54,8 +57,11 @@ export function useCredentials(): UseCredentials {
   }, []);
 
   const loadEnvCandidates = useCallback(async () => {
-    const candidates = await router.listCredentialEnvCandidates();
-    if (mounted.current) setEnvCandidates(candidates);
+    const result = await router.listCredentialEnvCandidates();
+    if (mounted.current) {
+      setEnvCandidates(result.candidates);
+      setEnvLookedFor(result.looked_for);
+    }
   }, []);
 
   const importFromEnv = useCallback(async (namesToImport: string[]) => {
@@ -67,5 +73,5 @@ export function useCredentials(): UseCredentials {
     return result.imported;
   }, []);
 
-  return { names, loading, envCandidates, add, remove, loadEnvCandidates, importFromEnv };
+  return { names, loading, envCandidates, envLookedFor, add, remove, loadEnvCandidates, importFromEnv };
 }

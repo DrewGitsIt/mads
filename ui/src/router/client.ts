@@ -11,6 +11,7 @@ import type {
   CostMetrics,
   CreateSessionPayload,
   DiagnoseResult,
+  EnvCandidates,
   Envelope,
   FastModelStatus,
   FileChange,
@@ -201,7 +202,7 @@ export interface RouterClient {
   listCredentials(): Promise<string[]>;
   createCredential(name: string, value: string): Promise<{ name: string }>;
   deleteCredential(name: string): Promise<void>;
-  listCredentialEnvCandidates(): Promise<string[]>;
+  listCredentialEnvCandidates(): Promise<EnvCandidates>;
   importCredentials(names: string[]): Promise<{ imported: string[] }>;
 
   // --- Preflight ---
@@ -840,7 +841,7 @@ export class FetchRouterClient implements RouterClient {
     return routerDelete(this.baseUrl, `/credentials/${encodeURIComponent(name)}`);
   }
 
-  async listCredentialEnvCandidates(): Promise<string[]> {
+  async listCredentialEnvCandidates(): Promise<EnvCandidates> {
     return routerGet(this.baseUrl, "/credentials/env-candidates");
   }
 

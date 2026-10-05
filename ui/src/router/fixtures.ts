@@ -14,6 +14,7 @@ import type {
   Config,
   CostMetrics,
   DiagnoseResult,
+  EnvCandidates,
   Envelope,
   FastModelStatus,
   FileChange,
@@ -1262,7 +1263,7 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: deleteCredential");
   }
 
-  async listCredentialEnvCandidates(): Promise<string[]> {
+  async listCredentialEnvCandidates(): Promise<EnvCandidates> {
     throw new Error("not fixtured: listCredentialEnvCandidates");
   }
 
@@ -1685,11 +1686,22 @@ export const fixtureProviderBehaviors: BehaviorInfo[] = [
 export const fixturePreflightChecks: PreflightCheck[] = [
   { name: "git", healthy: true, detail: "git version 2.43.0" },
   { name: "data_service", healthy: true },
+  { name: "provider:claude-code", healthy: true, detail: "claude-code v2.1.3" },
   {
-    name: "provider:claude-code",
+    name: "provider:goose",
     healthy: false,
-    detail: "not found on PATH",
-    fix_hint: "install Claude Code and ensure `claude` is on PATH",
+    warning: true,
+    detail: "goose v1.50.1 detected",
+    fix_hint: "mads has only been proven against < 1.49.0, detected 1.50.1",
+  },
+  {
+    name: "provider:kiro-cli",
+    healthy: false,
+    not_installed: true,
+    detail: "kiro-cli not found on PATH or in known install locations",
+    fix_hint: "install Kiro CLI and ensure `kiro-cli` is on PATH",
+    install_url: "https://kiro.dev/docs/cli/",
+    install_command: "curl -fsSL https://cli.kiro.dev/install | bash",
   },
 ];
 

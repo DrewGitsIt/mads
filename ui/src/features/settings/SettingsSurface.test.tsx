@@ -19,7 +19,8 @@ function stubRouter() {
     "fetch",
     vi.fn().mockImplementation((input: URL | string) => {
       const url = input.toString();
-      if (url.includes("/credentials/env-candidates")) return Promise.resolve(jsonResponse([]));
+      if (url.includes("/credentials/env-candidates"))
+        return Promise.resolve(jsonResponse({ candidates: [], looked_for: [] }));
       if (url.includes("/credentials")) return Promise.resolve(jsonResponse([]));
       if (url.includes("/preflight")) return Promise.resolve(jsonResponse(fixturePreflightChecks));
       if (url.includes("/profiles")) return Promise.resolve(jsonResponse(fixtureProfiles));

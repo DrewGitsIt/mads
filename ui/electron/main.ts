@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, MenuItemConstructorOptions, shell } from "electron";
 import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
 
@@ -52,6 +52,15 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Links that open a new window (target="_blank" — e.g. preflight's
+  // vendor install guides) belong in the user's browser, never in a child
+  // BrowserWindow of the app; anything that isn't plain http(s) goes
+  // nowhere.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
   });
 
   registerPtyHandlers(ipcMain, win.webContents);
