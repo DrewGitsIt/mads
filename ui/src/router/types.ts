@@ -139,6 +139,8 @@ export interface SessionDefaults {
   dir: ResolvedSessionField;
   /** What's at `dir` on disk — "plain" means worktree isolation will run in the folder itself. */
   dir_status?: DirStatus;
+  /** The branch the checkout at `dir` has open — only for a git dir on a branch (absent when detached). */
+  dir_branch?: string;
   workspace?: string;
 }
 

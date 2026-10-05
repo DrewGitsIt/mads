@@ -32,7 +32,7 @@ func TestSessionDefaultsNoWorkspace(t *testing.T) {
 	if got.Dir != (contracts.ResolvedSessionField{Value: wd, Source: contracts.SessionDefaultSourceBuiltin}) {
 		t.Errorf("dir = %+v, want builtin %q", got.Dir, wd)
 	}
-	got.Dir, got.DirStatus = contracts.ResolvedSessionField{}, ""
+	got.Dir, got.DirStatus, got.DirBranch = contracts.ResolvedSessionField{}, "", ""
 
 	want := contracts.SessionDefaults{
 		Provider:  contracts.ResolvedSessionField{Value: "fake", Source: contracts.SessionDefaultSourceConfig},
@@ -282,6 +282,36 @@ func TestSessionDefaultsDirStatus(t *testing.T) {
 		if got := getDefaults(t, srv.URL, url.Values{"dir": {dir}}); got.DirStatus != want {
 			t.Errorf("dir_status(%s) = %q, want %q", dir, got.DirStatus, want)
 		}
+	}
+}
+
+// dir_branch names the checkout's open branch, so the conversation header
+// can say where an in-place session is working; a plain folder or a
+// detached HEAD has none.
+func TestSessionDefaultsDirBranch(t *testing.T) {
+	srv := newTestServer(t)
+	setDefaultProvider(t, srv.URL, "fake")
+	repo := t.TempDir()
+	gitRun := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", repo, "-c", "user.email=t@t", "-c", "user.name=t"}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	gitRun("init", "-q", "-b", "trunk")
+	gitRun("commit", "-q", "--allow-empty", "-m", "init")
+	gitRun("checkout", "-q", "-b", "feat/header")
+
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {repo}}); got.DirBranch != "feat/header" {
+		t.Errorf("dir_branch = %q, want feat/header", got.DirBranch)
+	}
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {t.TempDir()}}); got.DirBranch != "" {
+		t.Errorf("dir_branch for a plain folder = %q, want empty", got.DirBranch)
+	}
+	gitRun("checkout", "-q", "--detach")
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {repo}}); got.DirBranch != "" {
+		t.Errorf("dir_branch on a detached HEAD = %q, want empty", got.DirBranch)
 	}
 }
 

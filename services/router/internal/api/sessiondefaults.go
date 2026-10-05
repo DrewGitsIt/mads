@@ -12,6 +12,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -246,8 +247,14 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var status contracts.DirStatus
+	var branch string
 	if dir.Value != "" {
 		status = dirStatus(r.Context(), dir.Value)
+	}
+	if status == contracts.DirStatusGit {
+		// Best-effort: a detached HEAD (or any git hiccup) just leaves the
+		// branch unsaid rather than failing the whole preview.
+		branch, _ = sessionwt.CurrentBranch(r.Context(), dir.Value)
 	}
 	writeJSON(w, http.StatusOK, contracts.SessionDefaults{
 		Provider:  contracts.ResolvedSessionField{Value: sess.Provider, Source: src.Provider},
@@ -257,6 +264,7 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		Trust:     contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
 		Dir:       dir,
 		DirStatus: status,
+		DirBranch: branch,
 		Workspace: src.Workspace,
 	})
 }

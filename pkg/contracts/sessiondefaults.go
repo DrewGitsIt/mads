@@ -40,6 +40,12 @@ type SessionDefaults struct {
 	// Start: DirStatusGit, DirStatusPlain (worktree isolation will run in
 	// the folder itself) or DirStatusMissing. Empty when Dir is empty.
 	DirStatus DirStatus `json:"dir_status,omitempty"`
+	// DirBranch is the branch the checkout at Dir has open, when DirStatus
+	// is DirStatusGit and HEAD is on a branch — empty when detached. The
+	// conversation header shows it for a session working in place, whose
+	// record carries no branch of its own (only isolated sessions have
+	// worktree_branch).
+	DirBranch string `json:"dir_branch,omitempty"`
 	// Workspace is the workspace whose Defaults were consulted (explicit
 	// ?workspace= query param, or Config.DefaultWorkspace) — empty if none
 	// resolved (bad/missing key, or no workspace involved at all).
