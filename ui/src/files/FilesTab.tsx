@@ -16,6 +16,8 @@ export interface FilesTabProps {
   routerClient: RouterClient;
   /** Path to auto-select in the diff viewer — set when opened from the Context Rail's Changes list. */
   focusPath?: string;
+  /** A file in a recorded commit to auto-select — set by the auto-merged Land card's "See the changes". */
+  focusCommit?: { hash: string; path: string };
 }
 
 type Scope = "session" | "task";
@@ -29,7 +31,7 @@ type Selection = { source: "working"; path: string } | { source: "commit"; hash:
  * also works from a session-only caller; the session/task scope switch is
  * only interactive once a `taskId` is actually available (HANDOFF §2/§8).
  */
-export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTabProps) {
+export function FilesTab({ sessionId, taskId, routerClient, focusPath, focusCommit }: FilesTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [scope, setScope] = useState<Scope>("session");
   const [changes, setChanges] = useState<FileChange[]>([]);
@@ -55,6 +57,14 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
     setScope("session");
     setSelection({ source: "working", path: focusPath });
   }, [focusPath]);
+
+  // Opened on a commit's file (a fresh object per click). The commit may be
+  // newer than this tab's list, so the list refetches below too.
+  useEffect(() => {
+    if (!focusCommit) return;
+    setScope("session");
+    setSelection({ source: "commit", hash: focusCommit.hash, path: focusCommit.path });
+  }, [focusCommit]);
 
   useEffect(() => {
     let cancelled = false;
@@ -90,7 +100,7 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
     return () => {
       cancelled = true;
     };
-  }, [routerClient, sessionId, scopedTaskId]);
+  }, [routerClient, sessionId, scopedTaskId, focusCommit]);
 
   useEffect(() => {
     if (!selection) {

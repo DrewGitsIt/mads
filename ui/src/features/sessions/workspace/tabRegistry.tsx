@@ -26,6 +26,10 @@ export interface WorkspaceTabContext {
   onOpenFile?: (path: string) => void;
   /** File to select in the Files tab's diff viewer, set when opened from the rail. */
   focusFilePath?: string;
+  /** Open one file's diff in a recorded commit — the Conversation tab's auto-merged Land card; routes to the Files tab. */
+  onOpenCommitFile?: (hash: string, path: string) => void;
+  /** Commit file to select in the Files tab, set by onOpenCommitFile. A new object each time, so a repeat click re-selects. */
+  focusCommitFile?: { hash: string; path: string };
 }
 
 export interface WorkspaceTabDef {
@@ -49,6 +53,7 @@ function ConversationTabView({
   pendingFirstMessage,
   onPendingFirstMessageHandled,
   onOpenFile,
+  onOpenCommitFile,
 }: WorkspaceTabContext) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   return (
@@ -63,6 +68,7 @@ function ConversationTabView({
           pendingFirstMessage={pendingFirstMessage}
           onPendingFirstMessageHandled={onPendingFirstMessageHandled}
           onOpenFile={onOpenFile}
+          onOpenCommitFile={onOpenCommitFile}
         />
       </div>
       <ContextRail
@@ -80,10 +86,17 @@ function TasksTabView({ sessionId, routerClient, pipelineClient }: WorkspaceTabC
   return <TasksTab sessionId={sessionId} routerClient={routerClient} pipelineClient={pipelineClient} />;
 }
 
-function FilesTabView({ sessionId, routerClient, focusFilePath }: WorkspaceTabContext) {
+function FilesTabView({ sessionId, routerClient, focusFilePath, focusCommitFile }: WorkspaceTabContext) {
   // taskId intentionally omitted — this is the session-level mount, no
   // single task in scope; FilesTab already handles taskId being undefined.
-  return <FilesTab sessionId={sessionId} routerClient={routerClient} focusPath={focusFilePath} />;
+  return (
+    <FilesTab
+      sessionId={sessionId}
+      routerClient={routerClient}
+      focusPath={focusFilePath}
+      focusCommit={focusCommitFile}
+    />
+  );
 }
 
 function PipelineTabView({ sessionId, pipelineClient }: WorkspaceTabContext) {

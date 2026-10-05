@@ -967,7 +967,13 @@ export interface UndoCommitResult {
   detail?: string;
 }
 
-export type LandOutcome = "landed" | "conflicted" | "refused";
+/**
+ * auto_resolved: bringing the base into the session's branch merged cleanly
+ * only because mergiraf resolved files plain git would have conflicted on.
+ * That merge is committed in the session's folder (merge_commit) and Land
+ * stopped before the user's checkout; files names what mergiraf merged.
+ */
+export type LandOutcome = "landed" | "conflicted" | "refused" | "auto_resolved";
 
 /** Land refusal reasons — gates checked before anything runs, then what step 1/2 can refuse with. */
 export type LandRefusalReason =
@@ -987,7 +993,7 @@ export type LandRefusalReason =
   | "primary_refused"
   | "locked";
 
-/** POST /sessions/{id}/land — HTTP 200 for all three outcomes. */
+/** POST /sessions/{id}/land — HTTP 200 for every outcome. */
 export interface LandResult {
   outcome: LandOutcome;
   branch?: string;
@@ -1317,6 +1323,13 @@ export interface PreflightCheck {
   not_installed?: boolean;
   install_url?: string;
   install_command?: string;
+  /** A tool mads works without (mergiraf): absent is a warning with install guidance, never a failure. */
+  optional?: boolean;
+  /** What the optional tool is for, in plain words. */
+  purpose?: string;
+  /** The version and path found, when present. */
+  version?: string;
+  path?: string;
 }
 
 // Body for POST /agents/generate — moved here from useAgentGeneration.ts so

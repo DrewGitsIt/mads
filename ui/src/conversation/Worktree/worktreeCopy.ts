@@ -206,6 +206,27 @@ export function resolveConflictPrompt(base: string | undefined, files: string[] 
   return `Merge ${b} into this branch and resolve the conflicts${where}, keeping both sides' changes. Then commit the merge.`;
 }
 
+/**
+ * Land stopped after mergiraf merged files plain git would have left
+ * conflicted: the base is merged in the session's branch, not yet in the
+ * user's checkout. The title names the count, the body the files.
+ */
+export function autoResolvedCopy(base: string | undefined, files: string[]): { title: string; body: string } {
+  const b = base || "The base branch";
+  const named = nameFiles(files, 4);
+  return {
+    title: `${b} had moved on; mergiraf merged ${plural(files.length, "file")} automatically`,
+    body: `${named ? `${named}. ` : ""}Check ${files.length === 1 ? "it" : "them"}, then Land again. Nothing has reached your checkout yet.`,
+  };
+}
+
+/** The message "Ask the agent to check" puts in the composer: an ordinary, editable user turn. */
+export function checkResolutionsPrompt(base: string | undefined, files: string[] | undefined): string {
+  const b = base || "the base branch";
+  const what = files && files.length > 0 ? files.join(", ") : "the files it merged";
+  return `mergiraf just merged ${b} into this branch and resolved ${what} automatically. Check that each resolution is right (both sides' changes kept, the code still makes sense, it still builds and passes its tests), fix and commit anything that isn't, and tell me what you found.`;
+}
+
 /** Per-path reasons a Commit rejected a path (CommitPath.reason). */
 export function commitPathReason(status: string, reason?: string): string {
   if (status === "already_committed") return "already committed";

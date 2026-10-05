@@ -38,6 +38,15 @@ export type WorktreeCardModel =
       fastForwarded: boolean;
     })
   | (CardBase & { kind: "conflicted"; base?: string; files: string[]; latest: boolean })
+  /** Step 1 merged only thanks to mergiraf: the merge waits in the session's branch for the user to check it. */
+  | (CardBase & {
+      kind: "autoResolved";
+      base?: string;
+      files: string[];
+      /** The step-1 merge commit in the session's folder — what "See the changes" diffs. */
+      mergeCommit?: string;
+      latest: boolean;
+    })
   | (CardBase & {
       kind: "refused";
       base?: string;
@@ -53,10 +62,15 @@ export type WorktreeCardModel =
   /** A pipeline task merged into the folder after waiting out the agent's turn: these files changed under it. */
   | (CardBase & { kind: "pipelineMerged"; task?: string; files: string[] });
 
-export type LandCardModel = Extract<WorktreeCardModel, { kind: "landed" | "conflicted" | "refused" }>;
+export type LandCardModel = Extract<WorktreeCardModel, { kind: "landed" | "conflicted" | "refused" | "autoResolved" }>;
 
 function isLandCard(c: WorktreeCardModel): c is LandCardModel {
-  return c.kind === "landed" || c.kind === "conflicted" || c.kind === "refused";
+  return c.kind === "landed" || c.kind === "conflicted" || c.kind === "refused" || c.kind === "autoResolved";
+}
+
+/** Land outcomes that wait on the user — only the newest offers its actions. */
+function awaitsUser(c: WorktreeCardModel): c is Extract<WorktreeCardModel, { latest: boolean }> {
+  return c.kind === "conflicted" || c.kind === "refused" || c.kind === "autoResolved";
 }
 
 type Payload = Record<string, unknown>;
@@ -165,7 +179,8 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
       }
       case "merge.completed":
       case "merge.conflicted":
-      case "merge.refused": {
+      case "merge.refused":
+      case "merge.auto_resolved": {
         // The pipeline's own land queue reuses these types for task
         // branches; only a session Land says kind "land". A task merged
         // into the session's folder (D8) draws a card only when it touched
@@ -191,6 +206,17 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
           });
         } else if (env.type === "merge.conflicted") {
           cards.push({ ...base, kind: "conflicted", base: landBase, files: strs(p.files) ?? [], latest: false });
+        } else if (env.type === "merge.auto_resolved") {
+          // The step-1 merge commit is the session branch's new tip.
+          notTip();
+          cards.push({
+            ...base,
+            kind: "autoResolved",
+            base: landBase,
+            files: strs(p.files) ?? [],
+            mergeCommit: str(p.merge_commit),
+            latest: false,
+          });
         } else {
           cards.push({
             ...base,
@@ -219,10 +245,10 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
 function markLatest(cards: WorktreeCardModel[]) {
   let last: LandCardModel | undefined;
   for (const c of cards) {
-    if (c.kind === "conflicted" || c.kind === "refused") c.latest = false;
+    if (awaitsUser(c)) c.latest = false;
     if (isLandCard(c)) last = c;
   }
-  if (last && (last.kind === "conflicted" || last.kind === "refused")) last.latest = true;
+  if (last && awaitsUser(last)) last.latest = true;
 }
 
 /** A Land answer as the card its event would draw — for when the event hasn't arrived. */
@@ -240,6 +266,16 @@ export function landCardFromResult(result: LandResult, at: string): LandCardMode
   }
   if (result.outcome === "conflicted") {
     return { ...base, kind: "conflicted", base: result.base, files: result.files ?? [], latest: true };
+  }
+  if (result.outcome === "auto_resolved") {
+    return {
+      ...base,
+      kind: "autoResolved",
+      base: result.base,
+      files: result.files ?? [],
+      mergeCommit: result.merge_commit,
+      latest: true,
+    };
   }
   return {
     ...base,

@@ -22,6 +22,7 @@ export const SESSION_SHELL_REFETCH_EVENT_TYPES = [
   "merge.conflicted",
   "merge.completed",
   "merge.refused",
+  "merge.auto_resolved",
 ];
 
 /**
@@ -29,7 +30,7 @@ export const SESSION_SHELL_REFETCH_EVENT_TYPES = [
  * Conversation tab (ConversationTab), and its Pipeline tab's live run fold
  * (usePipelineRun) need between them: session lifecycle, a linked-session
  * inject/digest landing on the transcript, pipeline run status for the
- * tab's run-dot, Land's attempt/conflict/completion/refusal, and the
+ * tab's run-dot, Land's attempt/conflict/completion/refusal/auto-merge, and the
  * Pipeline tab's own
  * task/stage/file fold. ui/src/router/events.ts's bus unions subscribers'
  * `types` by content, not by array identity, so passing a differently
@@ -69,5 +70,6 @@ export const WORKTREE_CARD_EVENT_TYPES = [
   "merge.completed",
   "merge.conflicted",
   "merge.refused",
+  "merge.auto_resolved",
   "worktree.ensured",
 ];

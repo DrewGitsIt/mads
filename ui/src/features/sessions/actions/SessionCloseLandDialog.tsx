@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import type { RouterClient } from "../../../router/client";
 import type { Session } from "../../../router/types";
-import { nameFiles, plural, refusalCopy } from "../../../conversation/Worktree/worktreeCopy";
+import { autoResolvedCopy, nameFiles, plural, refusalCopy } from "../../../conversation/Worktree/worktreeCopy";
 import styles from "./SessionDeleteConfirmDialog.module.css";
 
 export interface SessionCloseLandDialogProps {
@@ -42,6 +42,9 @@ export function SessionCloseLandDialog({ session, routerClient, onClose, onDismi
         setOutcome(
           `${base} moved on and ${files.length > 0 ? nameFiles(files) : "some files"} conflict. Nothing was merged; ask the agent to resolve it from the conversation.`,
         );
+      } else if (res.outcome === "auto_resolved") {
+        const copy = autoResolvedCopy(res.base ?? session.worktree_base, res.files ?? []);
+        setOutcome(`${copy.title}. ${copy.body}`);
       } else {
         const copy = refusalCopy(res.reason ?? "", res.base ?? session.worktree_base, res.files);
         setOutcome(`${copy.title}. ${copy.body}`);

@@ -4,6 +4,8 @@ import type { UndoCommitResult } from "../../router/types";
 import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import type { WorktreeCardModel } from "./worktreeCards";
 import {
+  autoResolvedCopy,
+  checkResolutionsPrompt,
   nameFiles,
   pipelineMergedCopy,
   pipelineSavedCopy,
@@ -26,6 +28,8 @@ export interface WorktreeCardActions {
   onLandAgain?: () => void;
   /** A Land is in flight: "Land again" waits. */
   landing?: boolean;
+  /** Shows one file's diff in a recorded commit — the Files tab's commit view. */
+  onOpenCommitFile?: (hash: string, path: string) => void;
 }
 
 /**
@@ -82,6 +86,40 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
               >
                 Ask the agent to resolve
               </Button>
+            </div>
+          )}
+        </Shell>
+      );
+    }
+    case "autoResolved": {
+      const copy = autoResolvedCopy(card.base, card.files);
+      const first = card.files[0];
+      const canSee = Boolean(actions.onOpenCommitFile && card.mergeCommit && first);
+      const canLand = card.latest && Boolean(actions.onLandAgain);
+      return (
+        <Shell tone="warn" title={copy.title} when={when} kind="auto-resolved">
+          <div className={styles.body}>{copy.body}</div>
+          {(actions.onAskAgent || canSee || canLand) && (
+            <div className={styles.acts}>
+              {actions.onAskAgent && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => actions.onAskAgent!(checkResolutionsPrompt(card.base, card.files))}
+                >
+                  Ask the agent to check
+                </Button>
+              )}
+              {canSee && (
+                <Button variant="ghost" size="sm" onClick={() => actions.onOpenCommitFile!(card.mergeCommit!, first)}>
+                  See the changes
+                </Button>
+              )}
+              {canLand && (
+                <Button variant="ghost" size="sm" disabled={actions.landing} onClick={actions.onLandAgain}>
+                  {actions.landing ? "Landing…" : "Land again"}
+                </Button>
+              )}
             </div>
           )}
         </Shell>

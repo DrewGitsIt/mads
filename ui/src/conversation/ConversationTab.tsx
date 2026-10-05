@@ -108,6 +108,8 @@ export interface ConversationTabProps {
   onPendingFirstMessageHandled?: () => void;
   /** Opens a file's diff in the Files tab — the Commit dialog's path links. */
   onOpenFile?: (path: string) => void;
+  /** Opens one file's diff in a recorded commit in the Files tab — the auto-merged Land card's "See the changes". */
+  onOpenCommitFile?: (hash: string, path: string) => void;
 }
 
 type DisplayMode = "chat" | "terminal";
@@ -153,6 +155,7 @@ export function ConversationTab({
   pendingFirstMessage,
   onPendingFirstMessageHandled,
   onOpenFile,
+  onOpenCommitFile,
 }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -576,8 +579,9 @@ export function ConversationTab({
       onAskAgent: (text: string) => setComposerPrefill((p) => ({ text, nonce: (p?.nonce ?? 0) + 1 })),
       onLandAgain: handleLand,
       landing: worktree.landing,
+      onOpenCommitFile,
     }),
-    [worktree.undo, worktree.landing, handleLand],
+    [worktree.undo, worktree.landing, handleLand, onOpenCommitFile],
   );
 
   // Shares SessionWorkspace's session-scoped subscription (see

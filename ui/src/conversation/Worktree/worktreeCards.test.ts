@@ -133,3 +133,46 @@ describe("foldWorktreeEvents — a pipeline merging into the session (D8)", () =
     expect(new Set(cards.map((c) => c.id)).size).toBe(2);
   });
 });
+
+describe("auto-merged Land (merge.auto_resolved)", () => {
+  const auto = { ...land, files: ["a.go", "b.ts"], merge_commit: "9f8e7d6c5b" };
+
+  it("draws a card naming what mergiraf merged, offering its actions while it's the latest outcome", () => {
+    const cards = foldWorktreeEvents([
+      env("commit.created", { hash: "mine", source: "commit", message: "m", drafted: true }),
+      env("merge.auto_resolved", auto),
+    ]);
+    expect(cards[0]).toMatchObject({ kind: "committed", tip: false });
+    expect(cards[1]).toMatchObject({
+      kind: "autoResolved",
+      base: "main",
+      files: ["a.go", "b.ts"],
+      mergeCommit: "9f8e7d6c5b",
+      latest: true,
+    });
+  });
+
+  it("stops being the latest once the next Land lands", () => {
+    const cards = foldWorktreeEvents([
+      env("merge.auto_resolved", auto),
+      env("merge.completed", { ...land, merge_commit: "abc", fast_forwarded: true }),
+    ]);
+    expect(cards.map((c) => c.kind)).toEqual(["autoResolved", "landed"]);
+    expect(cards[0]).toMatchObject({ latest: false });
+  });
+
+  it("ignores the pipeline's task merges (no kind land)", () => {
+    expect(foldWorktreeEvents([env("merge.auto_resolved", { files: ["a.go"] })])).toEqual([]);
+  });
+
+  it("echoes a Land answer of auto_resolved until its event arrives", () => {
+    const card = landCardFromResult(
+      { outcome: "auto_resolved", base: "main", files: ["a.go"], merge_commit: "9f8e7d6c5b" },
+      "2026-10-05T10:01:00Z",
+    );
+    expect(card).toMatchObject({ kind: "autoResolved", files: ["a.go"], mergeCommit: "9f8e7d6c5b", latest: true });
+    expect(withEchoes([], { land: { afterSeq: 0, card }, commits: [] })).toHaveLength(1);
+    const logged = foldWorktreeEvents([env("merge.auto_resolved", auto, 500)]);
+    expect(withEchoes(logged, { land: { afterSeq: 0, card }, commits: [] })).toHaveLength(1);
+  });
+});

@@ -72,6 +72,20 @@ describe("FilesTab", () => {
     expect(editor.getAttribute("data-original")).toBe("func ingest() {\n\ttime.Sleep(retryDelay)\n}\n");
   });
 
+  it("auto-selects a commit's file for focusCommit (the auto-merged Land card)", async () => {
+    const client = new FakeRouterClient();
+    render(
+      <FilesTab
+        sessionId="session-files-clean"
+        routerClient={client}
+        focusCommit={{ hash: "a1b2c3d", path: "services/data/internal/backoff.go" }}
+      />,
+    );
+    // No click — the commit's diff is shown because focusCommit drove the selection.
+    const editor = await screen.findByTestId("fake-diff-editor");
+    expect(editor.getAttribute("data-modified")).toBe("func backoff() time.Duration {\n\treturn baseDelay\n}\n");
+  });
+
   // Merge-back moved to the conversation header (Commit / Land); the tab
   // no longer carries a target-branch box or a merge status chip.
   it("has no merge-back flow", async () => {

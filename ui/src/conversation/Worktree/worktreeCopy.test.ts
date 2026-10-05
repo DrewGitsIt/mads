@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { LandRefusalReason } from "../../router/types";
-import { commitPathReason, nameFiles, refusalCopy, resolveConflictPrompt, undoRefusalCopy } from "./worktreeCopy";
+import {
+  autoResolvedCopy,
+  checkResolutionsPrompt,
+  commitPathReason,
+  nameFiles,
+  refusalCopy,
+  resolveConflictPrompt,
+  undoRefusalCopy,
+} from "./worktreeCopy";
 
 const EVERY_REASON: LandRefusalReason[] = [
   "not_isolated",
@@ -88,3 +96,23 @@ describe("worktree copy helpers", () => {
     expect(commitPathReason("rejected", "outside_folder")).toBe("outside this session's folder");
   });
 });
+
+describe("autoResolvedCopy", () => {
+  it("names the base, the count and the files, and says what to do next", () => {
+    expect(autoResolvedCopy("main", ["a.go", "b.ts"])).toEqual({
+      title: "main had moved on; mergiraf merged 2 files automatically",
+      body: "a.go and b.ts. Check them, then Land again. Nothing has reached your checkout yet.",
+    });
+    expect(autoResolvedCopy(undefined, ["a.go"]).title).toBe(
+      "The base branch had moved on; mergiraf merged 1 file automatically",
+    );
+    expect(autoResolvedCopy("main", ["a.go"]).body).toContain("Check it, then Land again.");
+  });
+
+  it("asks the agent to check every file it names", () => {
+    const prompt = checkResolutionsPrompt("main", ["a.go", "b.ts"]);
+    expect(prompt).toContain("merged main into this branch");
+    expect(prompt).toContain("a.go, b.ts");
+  });
+});
+

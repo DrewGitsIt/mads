@@ -153,4 +153,54 @@ describe("WorktreeCard — pipeline merges into the session", () => {
     ).toBeTruthy();
     expect(document.querySelector('[data-worktree-card="pipeline-merged"]')?.className).toMatch(/warn/);
   });
+
+  describe("auto-merged Land", () => {
+    const auto = (latest = true): WorktreeCardModel => ({
+      kind: "autoResolved",
+      id: "a",
+      seq: 3,
+      timestamp: "2026-10-05T14:05:00Z",
+      base: "main",
+      files: ["internal/api/a.go", "ui/src/b.ts"],
+      mergeCommit: "9f8e7d6c5b",
+      latest,
+    });
+
+    it("says mergiraf merged the files, and that the checkout is untouched", () => {
+      render(<WorktreeCard card={auto()} />);
+      expect(screen.getByText("main had moved on; mergiraf merged 2 files automatically")).toBeTruthy();
+      expect(screen.getByText(/internal\/api\/a.go and ui\/src\/b.ts\. Check them, then Land again\./)).toBeTruthy();
+      expect(screen.getByRole("note").getAttribute("data-worktree-card")).toBe("auto-resolved");
+    });
+
+    it("asks the agent to check, opens the changes, and lands again", () => {
+      const onAskAgent = vi.fn();
+      const onOpenCommitFile = vi.fn();
+      const onLandAgain = vi.fn();
+      render(<WorktreeCard card={auto()} actions={{ onAskAgent, onOpenCommitFile, onLandAgain }} />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Ask the agent to check" }));
+      expect(onAskAgent).toHaveBeenCalledTimes(1);
+      expect(onAskAgent.mock.calls[0][0]).toContain("internal/api/a.go, ui/src/b.ts");
+
+      fireEvent.click(screen.getByRole("button", { name: "See the changes" }));
+      expect(onOpenCommitFile).toHaveBeenCalledWith("9f8e7d6c5b", "internal/api/a.go");
+
+      fireEvent.click(screen.getByRole("button", { name: "Land again" }));
+      expect(onLandAgain).toHaveBeenCalledTimes(1);
+    });
+
+    it("offers Land again only on the latest outcome, and no See the changes without a commit", () => {
+      const onLandAgain = vi.fn();
+      const onOpenCommitFile = vi.fn();
+      render(
+        <WorktreeCard
+          card={{ ...auto(false), mergeCommit: undefined } as WorktreeCardModel}
+          actions={{ onLandAgain, onOpenCommitFile }}
+        />,
+      );
+      expect(screen.queryByRole("button", { name: "Land again" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "See the changes" })).toBeNull();
+    });
+  });
 });

@@ -77,6 +77,7 @@ export function SessionWorkspace({
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
+  const [focusCommitFile, setFocusCommitFile] = useState<{ hash: string; path: string }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
 
   const refetchSession = useCallback(() => {
@@ -159,7 +160,16 @@ export function SessionWorkspace({
   // A touched-file click in the Conversation tab's rail routes here: surface
   // the Files tab (mounting it if unvisited) and hand it the file to diff.
   function openFileDiff(path: string) {
+    setFocusCommitFile(undefined);
     setFocusFilePath(path);
+    selectTab("files");
+  }
+
+  // The auto-merged Land card's "See the changes": a file as the step-1
+  // merge commit left it, against the session's branch before it.
+  function openCommitFileDiff(hash: string, path: string) {
+    setFocusFilePath(undefined);
+    setFocusCommitFile({ hash, path });
     selectTab("files");
   }
 
@@ -311,6 +321,8 @@ export function SessionWorkspace({
             onPendingFirstMessageHandled={onPendingFirstMessageHandled}
             onOpenFile={openFileDiff}
             focusFilePath={focusFilePath}
+            onOpenCommitFile={openCommitFileDiff}
+            focusCommitFile={focusCommitFile}
           />
         </div>
       ))}

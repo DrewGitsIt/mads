@@ -162,6 +162,11 @@ describe("ConversationTab — Commit and Land", () => {
     ["merge.completed", { merge_commit: "7be2d31aa", fast_forwarded: true }, "Landed into main"],
     ["merge.conflicted", { files: ["scripts/deploy.sh"], step: "base" }, "main moved on: 1 file conflicts"],
     ["merge.refused", { reason: "primary_dirty", files: ["scripts/deploy.sh"] }, "Your checkout has staged or uncommitted changes"],
+    [
+      "merge.auto_resolved",
+      { files: ["scripts/deploy.sh"], merge_commit: "9f8e7d6c5b" },
+      "main had moved on; mergiraf merged 1 file automatically",
+    ],
   ])("draws a live %s as its card", async (type, extra, title) => {
     const client = makeClient();
     await mount(client);
@@ -182,5 +187,25 @@ describe("ConversationTab — Commit and Land", () => {
       ),
     );
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("an auto-merged Land asks the agent to check, opens the changes, and lands again", async () => {
+    const client = makeClient();
+    const send = vi.spyOn(client, "sendMessage");
+    const onOpenCommitFile = vi.fn();
+    client.seedEvent(
+      envelope("merge.auto_resolved", { ...landPayload, files: ["scripts/deploy.sh"], merge_commit: "9f8e7d6c5b" }, 5),
+    );
+    render(<ConversationTab sessionId={SID} routerClient={client} onOpenCommitFile={onOpenCommitFile} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Ask the agent to check" }));
+    const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toContain("resolved scripts/deploy.sh automatically"));
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "See the changes" }));
+    expect(onOpenCommitFile).toHaveBeenCalledWith("9f8e7d6c5b", "scripts/deploy.sh");
+
+    fireEvent.click(screen.getByRole("button", { name: "Land again" }));
+    expect(await screen.findByText("Landed into main")).toBeTruthy();
   });
 });
