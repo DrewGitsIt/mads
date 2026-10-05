@@ -276,7 +276,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const refused = panel.locator('[data-worktree-card="refused"]').last();
     await expect(refused).toBeVisible();
     await expect(refused).toHaveAttribute("data-reason", "primary_dirty");
-    await expect(refused).toContainText("Your checkout has uncommitted changes");
+    await expect(refused).toContainText("Your checkout has staged or uncommitted changes");
     await expect(refused).toContainText(A);
     await shot(page, "07-refused-card.png", refused);
 

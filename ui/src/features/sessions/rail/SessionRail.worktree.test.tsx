@@ -107,7 +107,7 @@ describe("SessionRail — close with unlanded commits (D6)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
     fireEvent.click(screen.getByRole("button", { name: "Land into main and close" }));
     expect(await screen.findByText(/Didn't land — still open/)).toBeTruthy();
-    expect(screen.getByRole("alert").textContent).toContain("Landing would overwrite a.go in your checkout.");
+    expect(screen.getByRole("alert").textContent).toContain("Git won't land over a.go in your checkout.");
     expect(onClose).not.toHaveBeenCalled();
   });
 });

@@ -161,7 +161,7 @@ describe("ConversationTab — Commit and Land", () => {
   it.each<[string, Record<string, unknown>, string]>([
     ["merge.completed", { merge_commit: "7be2d31aa", fast_forwarded: true }, "Landed into main"],
     ["merge.conflicted", { files: ["scripts/deploy.sh"], step: "base" }, "main moved on: 1 file conflicts"],
-    ["merge.refused", { reason: "primary_dirty", files: ["scripts/deploy.sh"] }, "Your checkout has uncommitted changes"],
+    ["merge.refused", { reason: "primary_dirty", files: ["scripts/deploy.sh"] }, "Your checkout has staged or uncommitted changes"],
   ])("draws a live %s as its card", async (type, extra, title) => {
     const client = makeClient();
     await mount(client);
