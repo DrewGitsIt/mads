@@ -177,3 +177,50 @@
   /* hug the pills it annotates rather than float in the hero's section gap */
   margin: calc(var(--space-4) * -1) 0 0;
 }
+
+/* Folder problems the user should see before Start — warn, not error: the
+   session still starts (in place) for a plain folder. */
+.dirWarning {
+  align-self: center;
+  max-width: 100%;
+  margin: calc(var(--space-2) * -1) 0 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--warn-soft);
+  border-radius: var(--r-sm);
+  color: var(--warn-fg);
+  font: 500 var(--fs-sm) var(--sans);
+  overflow-wrap: anywhere;
+}
+
+/* quiet, link-weight: an offer, not a step in starting a session */
+.saveDefaults {
+  align-self: center;
+  margin: calc(var(--space-3) * -1) 0 0;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.saveDefaults:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.saveDefaults:disabled {
+  color: var(--text3);
+  cursor: default;
+}
+
+.defaultsSaved {
+  margin: calc(var(--space-3) * -1) 0 0;
+  padding: var(--space-1) 0;
+  color: var(--ok-fg);
+  font: 500 var(--fs-sm) var(--sans);
+}

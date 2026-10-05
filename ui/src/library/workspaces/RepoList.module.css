@@ -42,6 +42,11 @@
   gap: var(--space-1);
 }
 
+/* the PathField (input + Browse…) takes the row; Add repo keeps its size */
+.add > :first-child {
+  flex: 1;
+}
+
 .add input {
   flex: 1;
   background: var(--bg2);

@@ -51,4 +51,13 @@ const badge = {
   },
 };
 
-contextBridge.exposeInMainWorld("mads", { pty, badge });
+/**
+ * Renderer-facing dialog namespace — mirrors the DirectoryPicker interface in
+ * ui/src/platform/directoryPicker.ts. Resolves null when the user cancels.
+ */
+const dialog = {
+  pickDirectory: (options?: { title?: string; defaultPath?: string }): Promise<string | null> =>
+    ipcRenderer.invoke("dialog:pick-directory", options),
+};
+
+contextBridge.exposeInMainWorld("mads", { pty, badge, dialog });

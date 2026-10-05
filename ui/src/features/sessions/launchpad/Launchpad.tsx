@@ -7,6 +7,7 @@ import { FLAGS } from "../../../featureFlags";
 import { router } from "../../../router/client";
 import type {
   Agent,
+  Config,
   CreateSessionPayload,
   Link,
   LinkRequest,
@@ -16,7 +17,7 @@ import type {
 } from "../../../router/types";
 import { LinkChooserDialog } from "../rail/LinkChooserDialog";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
-import { WorkspacePill } from "./pills/WorkspacePill";
+import { FolderPill } from "./pills/FolderPill";
 import { AgentPill } from "./pills/AgentPill";
 import { ModelPill } from "./pills/ModelPill";
 import { TrustPill } from "./pills/TrustPill";
@@ -36,6 +37,72 @@ import styles from "./Launchpad.module.css";
  */
 export function deriveSessionName(text: string): string {
   return text.trim().split("\n")[0];
+}
+
+/** Folders past sessions started in, newest first, each once. */
+export function recentDirs(sessions: Session[]): string[] {
+  const seen = new Set<string>();
+  return [...sessions]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .map((s) => s.dir)
+    .filter((d): d is string => !!d && !seen.has(d) && !!seen.add(d));
+}
+
+/**
+ * Whether the staged pills differ from the user's saved Config defaults —
+ * the condition for offering "Save as my defaults". Compared against Config,
+ * not the resolved preview: once a pill is staged the preview reports the
+ * staged value, which says nothing about what's saved.
+ */
+export function differsFromSaved(
+  staged: StagedConfig,
+  workspace: Workspace | undefined,
+  cfg: Config,
+): boolean {
+  if (staged.dir !== undefined && (staged.dir !== cfg.default_dir || !!cfg.default_workspace)) {
+    return true;
+  }
+  if (
+    staged.workspace !== undefined &&
+    workspace &&
+    ((workspace.id !== cfg.default_workspace && workspace.name !== cfg.default_workspace) ||
+      !!cfg.default_dir)
+  ) {
+    return true;
+  }
+  return (
+    (staged.agent !== undefined && staged.agent !== cfg.default_agent) ||
+    (staged.provider !== undefined &&
+      (staged.provider !== cfg.default_provider || staged.model !== cfg.default_model)) ||
+    (staged.trust !== undefined && staged.trust !== cfg.default_trust) ||
+    (staged.isolation !== undefined && staged.isolation !== cfg.default_isolation)
+  );
+}
+
+/** The staged pills written over cfg — what "Save as my defaults" PUTs. */
+export function withStagedDefaults(
+  cfg: Config,
+  staged: StagedConfig,
+  workspace: Workspace | undefined,
+): Config {
+  const next = { ...cfg };
+  // Folder and workspace are one pill: saving either clears the other, or a
+  // saved workspace's primary repo would silently outrank a saved folder.
+  if (staged.dir !== undefined) {
+    next.default_dir = staged.dir;
+    next.default_workspace = "";
+  } else if (staged.workspace !== undefined && workspace) {
+    next.default_workspace = workspace.id;
+    next.default_dir = "";
+  }
+  if (staged.agent !== undefined) next.default_agent = staged.agent;
+  if (staged.provider !== undefined) {
+    next.default_provider = staged.provider;
+    next.default_model = staged.model;
+  }
+  if (staged.trust !== undefined) next.default_trust = staged.trust;
+  if (staged.isolation !== undefined) next.default_isolation = staged.isolation;
+  return next;
 }
 
 export interface LaunchpadProps {
@@ -59,6 +126,9 @@ export function Launchpad({
   const [selectedAgent, setSelectedAgent] = useState<Agent | undefined>();
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
+  const [savedConfig, setSavedConfig] = useState<Config | undefined>();
+  const [savingDefaults, setSavingDefaults] = useState(false);
+  const [defaultsSaved, setDefaultsSaved] = useState(false);
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
   const [stagedLinks, setStagedLinks] = useState<LinkRequest[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -78,7 +148,7 @@ export function Launchpad({
   useEffect(() => {
     let cancelled = false;
     router
-      .getSessionDefaults(staged.workspace)
+      .getSessionDefaults(staged.workspace, staged.dir)
       .then((r) => {
         if (!cancelled) setResolved(r);
       })
@@ -88,7 +158,47 @@ export function Launchpad({
     return () => {
       cancelled = true;
     };
-  }, [staged.workspace]);
+    // savedConfig: saving new defaults changes what an unstaged pill resolves to.
+  }, [staged.workspace, staged.dir, savedConfig]);
+
+  useEffect(() => {
+    let cancelled = false;
+    router
+      .getConfig()
+      .then((cfg) => {
+        if (!cancelled) setSavedConfig(cfg);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!defaultsSaved) return;
+    const t = setTimeout(() => setDefaultsSaved(false), 2500);
+    return () => clearTimeout(t);
+  }, [defaultsSaved]);
+
+  async function saveDefaults() {
+    setSavingDefaults(true);
+    try {
+      // Re-read rather than PUT the copy from mount: Settings may have
+      // changed other fields since, and PUT /config replaces the whole row.
+      const current = await router.getConfig();
+      const saved = await router.updateConfig(
+        withStagedDefaults(current, staged, selectedWorkspace),
+      );
+      setSavedConfig(saved);
+      // The pills now resolve to exactly what was staged, shown as defaults.
+      setStaged((prev) => ({ multiRepoPaths: prev.multiRepoPaths }));
+      setDefaultsSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingDefaults(false);
+    }
+  }
 
   async function submit() {
     const trimmed = text.trim();
@@ -99,13 +209,15 @@ export function Launchpad({
       const session = await createSession({
         name: deriveSessionName(trimmed),
         name_source: "derived",
+        dir: staged.dir,
         workspace: staged.workspace,
         agent: staged.agent,
         provider: staged.provider,
         model: staged.model,
         trust: staged.trust,
         isolation: staged.isolation,
-        ...(staged.agent === "auto" ? { opening_prompt: trimmed } : {}),
+        // A saved Auto default needs the prompt as much as a picked one.
+        ...((staged.agent ?? resolved?.agent?.value) === "auto" ? { opening_prompt: trimmed } : {}),
         ...(stagedLinks.length > 0 ? { links: stagedLinks } : {}),
       });
       setText("");
@@ -121,6 +233,20 @@ export function Launchpad({
       setSubmitting(false);
     }
   }
+
+  const effectiveIsolation = staged.isolation ?? resolved?.isolation?.value;
+  const dirShown = resolved?.dir?.value;
+  let dirWarning: string | null = null;
+  if (resolved?.dir_status === "missing") {
+    dirWarning = `${dirShown} doesn't exist on this machine — choose another folder to start in.`;
+  } else if (resolved?.dir_status === "plain" && effectiveIsolation === "worktree") {
+    dirWarning = `${dirShown} isn't a git repository, so there's no worktree to isolate this session — it will work in the folder directly.`;
+  }
+  // Never offer to save a folder that isn't there: every later Start would fail.
+  const canSaveDefaults =
+    !!savedConfig &&
+    resolved?.dir_status !== "missing" &&
+    differsFromSaved(staged, selectedWorkspace, savedConfig);
 
   function handleFilesSelected(e: ChangeEvent<HTMLInputElement>) {
     const files = e.target.files;
@@ -255,12 +381,19 @@ export function Launchpad({
         </div>
 
         <div className={styles.pills}>
-          <WorkspacePill
-            value={staged.workspace}
-            resolved={resolved?.workspace}
-            onChange={(ws) => {
+          <FolderPill
+            dir={staged.dir}
+            workspace={staged.workspace}
+            resolvedDir={resolved?.dir}
+            resolvedWorkspace={resolved?.workspace}
+            recent={recentDirs(sessions)}
+            onPickDir={(dir) => {
+              setSelectedWorkspace(undefined);
+              setStaged((prev) => ({ ...prev, dir, workspace: undefined }));
+            }}
+            onPickWorkspace={(ws) => {
               setSelectedWorkspace(ws);
-              setStaged((prev) => ({ ...prev, workspace: ws.name }));
+              setStaged((prev) => ({ ...prev, workspace: ws.name, dir: undefined }));
             }}
           />
           {/* Redesign §4/§6: the persona is an *override*, not a *selection* —
@@ -311,6 +444,29 @@ export function Launchpad({
             onRepoPathsChange={(paths) => setStaged((prev) => ({ ...prev, multiRepoPaths: paths }))}
           />
         </div>
+
+        {dirWarning && (
+          <p className={styles.dirWarning} role="status">
+            {dirWarning}
+          </p>
+        )}
+
+        {defaultsSaved ? (
+          <p className={styles.defaultsSaved} role="status">
+            Saved as your defaults
+          </p>
+        ) : (
+          canSaveDefaults && (
+            <button
+              type="button"
+              className={styles.saveDefaults}
+              disabled={savingDefaults}
+              onClick={() => void saveDefaults()}
+            >
+              Save as my defaults
+            </button>
+          )
+        )}
 
         {resolved?.workspace &&
           [resolved.agent, resolved.model, resolved.isolation].some(

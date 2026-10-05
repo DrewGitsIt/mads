@@ -50,6 +50,10 @@ export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   keybindings: "general",
   default_workspace: "general",
   default_provider: "general",
+  default_dir: "general",
+  default_model: "general",
+  default_agent: "general",
+  default_isolation: "general",
 
   synthesis_mode: "pipeline",
   agent_selection_mode: "pipeline",
@@ -77,6 +81,10 @@ export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
   keybindings: "Keybindings",
   default_workspace: "Default workspace",
   default_provider: "Default provider",
+  default_dir: "Default folder",
+  default_model: "Default model",
+  default_agent: "Default persona",
+  default_isolation: "Default isolation",
 
   synthesis_mode: "Synthesis mode",
   agent_selection_mode: "Agent selection mode",

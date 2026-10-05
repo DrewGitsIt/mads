@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { RepoList } from "./RepoList";
 
 describe("RepoList", () => {
@@ -7,12 +7,28 @@ describe("RepoList", () => {
     const onChange = vi.fn();
     render(<RepoList repos={[]} onChange={onChange} />);
 
-    fireEvent.change(screen.getByPlaceholderText("e.g. ./services/router"), {
+    fireEvent.change(screen.getByLabelText("Repo path"), {
       target: { value: "./services/router" },
     });
     fireEvent.click(screen.getByText("Add repo"));
 
     expect(onChange).toHaveBeenCalledWith([{ path: "./services/router", primary: true }]);
+  });
+
+  it("adds a folder chosen in the native dialog straight away", async () => {
+    window.mads = { dialog: { pickDirectory: vi.fn().mockResolvedValue("/home/me/repo/site") } };
+    const onChange = vi.fn();
+    render(<RepoList repos={[{ path: "~/repo/mads", primary: true }]} onChange={onChange} />);
+
+    fireEvent.click(screen.getByText("Browse…"));
+
+    await waitFor(() =>
+      expect(onChange).toHaveBeenCalledWith([
+        { path: "~/repo/mads", primary: true },
+        { path: "/home/me/repo/site", primary: false },
+      ]),
+    );
+    delete window.mads;
   });
 
   it("switches the primary repo", () => {

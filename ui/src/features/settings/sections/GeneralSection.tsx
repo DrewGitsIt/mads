@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
+import { PathField } from "../../../components/PathField/PathField";
+import { router } from "../../../router/client";
+import type { Workspace } from "../../../router/types";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
 import { useProviderMatrix } from "../state/useProviderMatrix";
@@ -30,8 +33,21 @@ export function GeneralSection({ config }: GeneralSectionProps) {
   const preflight = usePreflight();
   const { providers } = useProviderMatrix();
   const [saving, setSaving] = useState(false);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+
+  useEffect(() => {
+    router
+      .listWorkspaces()
+      .then(setWorkspaces)
+      .catch(() => setWorkspaces([]));
+  }, []);
 
   if (!draft) return null;
+
+  // default_workspace may hold an id or a name (the Router accepts either);
+  // label by whichever matches, and keep an unknown value visible.
+  const workspaceLabel = (ref: string) =>
+    workspaces.find((w) => w.id === ref || w.name === ref)?.name ?? ref;
 
   const restartVisible = dirtyRestartFields.length > 0;
 
@@ -138,12 +154,38 @@ export function GeneralSection({ config }: GeneralSectionProps) {
         <label className={styles.label} htmlFor="default-workspace">
           Default workspace
         </label>
-        <input
+        <select
           id="default-workspace"
-          type="text"
           className={styles.input}
           value={draft.default_workspace ?? ""}
           onChange={(e) => setDraft({ ...draft, default_workspace: e.target.value })}
+        >
+          <option value="">— none —</option>
+          {selectWith(
+            workspaces.map((w) => w.id),
+            draft.default_workspace ?? "",
+          )
+            .filter(Boolean)
+            .map((ref) => (
+              <option key={ref} value={ref}>
+                {workspaceLabel(ref)}
+              </option>
+            ))}
+        </select>
+      </div>
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="default-dir">
+          Default folder
+        </label>
+        {/* Where sessions start when neither the Launchpad nor a workspace
+            names a folder — a default workspace's primary repo wins. */}
+        <PathField
+          id="default-dir"
+          className={styles.input}
+          dialogTitle="Where should sessions start?"
+          placeholder="Where the Router runs"
+          value={draft.default_dir ?? ""}
+          onChange={(dir) => setDraft({ ...draft, default_dir: dir })}
         />
       </div>
       <div className={styles.row}>

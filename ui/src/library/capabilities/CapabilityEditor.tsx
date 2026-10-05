@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { PathField } from "../../components/PathField/PathField";
 import {
   SideSheet,
   SideSheetBody,
@@ -101,7 +102,7 @@ export function CapabilityEditor({
           {type === "skill" ? (
             <label className={styles.field}>
               Path
-              <input value={path} onChange={(e) => setPath(e.target.value)} />
+              <PathField value={path} onChange={setPath} dialogTitle="Choose the skill directory" />
             </label>
           ) : (
             <>

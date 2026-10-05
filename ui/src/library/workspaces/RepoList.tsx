@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { PathField } from "../../components/PathField/PathField";
 import type { WorkspaceRepo } from "../../router/types";
 import styles from "./RepoList.module.css";
 
@@ -12,8 +13,8 @@ export interface RepoListProps {
 export function RepoList({ repos, onChange }: RepoListProps) {
   const [draft, setDraft] = useState("");
 
-  function add() {
-    const path = draft.trim();
+  function add(raw: string = draft) {
+    const path = raw.trim();
     if (!path || repos.some((r) => r.path === path)) return;
     onChange([...repos, { path, primary: repos.length === 0 }]);
     setDraft("");
@@ -50,10 +51,14 @@ export function RepoList({ repos, onChange }: RepoListProps) {
         ))}
       </ul>
       <div className={styles.add}>
-        <input
+        <PathField
+          aria-label="Repo path"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="e.g. ./services/router"
+          onChange={setDraft}
+          // Choosing a folder in the dialog is the whole act — add it.
+          onPick={add}
+          dialogTitle="Add a repo"
+          placeholder="e.g. ~/repo/mads"
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -61,7 +66,7 @@ export function RepoList({ repos, onChange }: RepoListProps) {
             }
           }}
         />
-        <Button variant="secondary" size="sm" onClick={add}>
+        <Button variant="secondary" size="sm" onClick={() => add()}>
           Add repo
         </Button>
       </div>

@@ -25,6 +25,7 @@ function stubRouter() {
       if (url.includes("/profiles")) return Promise.resolve(jsonResponse(fixtureProfiles));
       if (url.includes("/providers/behaviors")) return Promise.resolve(jsonResponse(fixtureProviderBehaviors));
       if (url.includes("/providers")) return Promise.resolve(jsonResponse(fixtureProviders));
+      if (url.includes("/workspaces")) return Promise.resolve(jsonResponse([]));
       if (url.includes("/version")) return Promise.resolve(jsonResponse(fixtureVersionInfo));
       return Promise.resolve(jsonResponse(fixtureConfig));
     }),

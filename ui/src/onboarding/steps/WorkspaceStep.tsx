@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
+import { PathField } from "../../components/PathField/PathField";
 import { router } from "../../router/client";
 import type { Provider } from "../../router/types";
 import type { UseConfig } from "../../features/settings/state/useConfig";
@@ -71,11 +72,13 @@ export function WorkspaceStep({ onNext, onBack, config }: WorkspaceStepProps) {
         <label className={styles.label} htmlFor="workspace-path">
           Primary repo path
         </label>
-        <input
+        <PathField
           id="workspace-path"
           className={styles.input}
+          dialogTitle="Choose the primary repo"
+          placeholder="~/repo/my-project"
           value={path}
-          onChange={(e) => setPath(e.target.value)}
+          onChange={setPath}
         />
       </div>
       <div className={styles.row}>

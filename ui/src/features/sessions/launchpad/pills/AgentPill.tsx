@@ -26,7 +26,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
   // The staged value is the persona id (agt_…); a workspace default may be
   // either an id or a name. Always show the name the menu shows.
   const displayName = (ref: string) =>
-    agents.find((a) => a.id === ref || a.name === ref)?.name ?? ref;
+    ref === "auto" ? "Auto" : (agents.find((a) => a.id === ref || a.name === ref)?.name ?? ref);
   const isSelected = (agent: Agent) => value === agent.id || value === agent.name;
 
   const triggerLabel =

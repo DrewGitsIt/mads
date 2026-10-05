@@ -1,0 +1,14 @@
+.field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The host form styles the input (its own .input class arrives via
+   className); this only lets it take the row's remaining width. */
+.input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+}

@@ -29,6 +29,11 @@ function stubFetch() {
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
+      if (url.includes("/workspaces")) {
+        return Promise.resolve(
+          new Response(JSON.stringify([{ id: "ws-1", name: "core", defaults: {} }]), { status: 200 }),
+        );
+      }
       if (url.includes("/providers/behaviors")) {
         return Promise.resolve(new Response("[]", { status: 200 }));
       }
@@ -82,15 +87,32 @@ describe("GeneralSection", () => {
 
   it("renders default_workspace/default_provider empty when unset", () => {
     render(<GeneralSection config={makeConfig()} />);
-    expect((screen.getByLabelText(/default workspace/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText(/default workspace/i) as HTMLSelectElement).value).toBe("");
+    expect((screen.getByLabelText(/default folder/i) as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText(/default provider/i) as HTMLSelectElement).value).toBe("");
   });
 
-  it("editing default_workspace calls setDraft with the new value", () => {
+  it("picks the default workspace from a list, by id, instead of free text", async () => {
     const config = makeConfig();
     render(<GeneralSection config={config} />);
+    expect((screen.getByLabelText(/default workspace/i) as HTMLElement).tagName).toBe("SELECT");
+    await waitFor(() => expect(screen.getByRole("option", { name: "core" })).toBeTruthy());
     fireEvent.change(screen.getByLabelText(/default workspace/i), { target: { value: "ws-1" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_workspace: "ws-1" }));
+  });
+
+  it("keeps a saved workspace name selected rather than blanking it", async () => {
+    const config = makeConfig({ draft: { ...fixtureConfig, default_workspace: "core" } });
+    render(<GeneralSection config={config} />);
+    await waitFor(() => expect(screen.getAllByRole("option", { name: "core" }).length).toBeGreaterThan(0));
+    expect((screen.getByLabelText(/default workspace/i) as HTMLSelectElement).value).toBe("core");
+  });
+
+  it("edits the default folder", () => {
+    const config = makeConfig();
+    render(<GeneralSection config={config} />);
+    fireEvent.change(screen.getByLabelText(/default folder/i), { target: { value: "~/repo/mads" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_dir: "~/repo/mads" }));
   });
 
   it("selecting a default provider from the dropdown calls setDraft", async () => {

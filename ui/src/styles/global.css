@@ -56,6 +56,22 @@ textarea:focus-visible,
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+/* Custom scrollbars opt every resizable textarea out of the native grabber;
+   left unstyled, Chromium paints a plain white square in its place. Draw the
+   two-stroke grip in the theme's quiet text color instead. */
+::-webkit-resizer {
+  background: linear-gradient(
+    135deg,
+    transparent 0 52%,
+    var(--text3) 52% 58%,
+    transparent 58% 72%,
+    var(--text3) 72% 78%,
+    transparent 78%
+  );
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 code,
 pre,

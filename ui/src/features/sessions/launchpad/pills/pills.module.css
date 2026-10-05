@@ -101,3 +101,28 @@
 .intentNote {
   padding: var(--space-1) var(--space-2);
 }
+
+/* Folder pill: wide enough for a typed path, and long paths in the
+   shortcut list wrap rather than stretch the popover. */
+.folderMenu {
+  width: 320px;
+}
+
+.folderMenu .optionDescription {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.pathInput {
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+.pathInput:focus {
+  border-color: var(--accent);
+}

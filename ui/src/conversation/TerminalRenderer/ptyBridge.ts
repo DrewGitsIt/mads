@@ -29,6 +29,9 @@ declare global {
     mads?: {
       pty?: PtyBridge;
       badge?: { setCount(count: number): void };
+      dialog?: {
+        pickDirectory(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
+      };
     };
   }
 }

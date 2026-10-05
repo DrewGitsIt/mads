@@ -20,6 +20,12 @@ export interface Session {
   trust?: SessionTrust;
   worktree_dir?: string;
   worktree_branch?: string;
+  /**
+   * The directory the session asked to start in — the Launchpad's folder,
+   * else its workspace's primary repo, else Config.default_dir. Absent means
+   * nobody asked: the agent runs wherever the Router was started.
+   */
+  dir?: string;
   /** Absolute directory the agent runs in — the docked shell opens here so it shares the agent's context. */
   cwd?: string;
   summary?: string;
@@ -119,8 +125,15 @@ export interface SessionDefaults {
   agent: ResolvedSessionField;
   isolation: ResolvedSessionField;
   trust: ResolvedSessionField;
+  /** Where the session would start. Source "builtin" = the Router's own directory (nobody asked). */
+  dir: ResolvedSessionField;
+  /** What's at `dir` on disk — "plain" means worktree isolation will run in the folder itself. */
+  dir_status?: DirStatus;
   workspace?: string;
 }
+
+// mirrors pkg/contracts/sessiondefaults.go DirStatus.
+export type DirStatus = "git" | "plain" | "missing";
 
 // mirrors pkg/contracts/registry.go Quadrant/Quadrants — a closed 4-value
 // enum (W6.8, MADS-UX §3.5's quadrant tooltip).
@@ -1044,6 +1057,13 @@ export interface Config {
   default_workspace?: string;
   default_provider?: string;
   default_trust: SessionTrust;
+  /** Launchpad "Save as my defaults" — below a workspace's own defaults, above the builtins. */
+  default_dir?: string;
+  /** Only applies while the session's provider is default_provider. */
+  default_model?: string;
+  /** Persona id, or "auto". */
+  default_agent?: string;
+  default_isolation?: string;
   default_template?: string;
   fast_model?: string;
   fast_model_base_url?: string;

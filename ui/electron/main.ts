@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, MenuItemConstructorOptions } from "electron";
 import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
 
@@ -59,6 +59,25 @@ function createWindow(): void {
   ipcMain.handle("badge:set-count", (_event, count: number) => {
     app.setBadgeCount(count);
   });
+
+  // Native folder chooser for every "where on disk" field (PathField). The
+  // renderer can't get an absolute path any other way: a browser directory
+  // input only ever exposes relative names.
+  ipcMain.handle(
+    "dialog:pick-directory",
+    async (event, options?: { title?: string; defaultPath?: string }) => {
+      const parent = BrowserWindow.fromWebContents(event.sender);
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: options?.title,
+        defaultPath: options?.defaultPath,
+        properties: ["openDirectory", "createDirectory"],
+      };
+      const result = parent
+        ? await dialog.showOpenDialog(parent, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+  );
 
   // The Router serves the built UI same-origin (scripts/app.sh guarantees
   // it's already up before Electron launches), so this is always an http(s)

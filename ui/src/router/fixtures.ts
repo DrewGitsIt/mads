@@ -1610,6 +1610,8 @@ export const fixtureSessionDefaults: SessionDefaults = {
   agent: {},
   isolation: { value: "worktree", source: "builtin" },
   trust: { value: "limited", source: "config" },
+  dir: { value: "/home/user/repo/mads", source: "builtin" },
+  dir_status: "git",
 };
 
 export const fixtureProfile: Profile = {

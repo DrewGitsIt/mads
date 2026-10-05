@@ -32,7 +32,7 @@ describe("WorkspaceEditor", () => {
     fireEvent.change(screen.getByText("Name").closest("label")!.querySelector("input")!, {
       target: { value: "mads" },
     });
-    fireEvent.change(screen.getByPlaceholderText("e.g. ./services/router"), {
+    fireEvent.change(screen.getByLabelText("Repo path"), {
       target: { value: "./services/router" },
     });
     fireEvent.click(screen.getByText("Add repo"));

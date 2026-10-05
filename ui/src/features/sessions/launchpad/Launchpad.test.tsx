@@ -243,6 +243,7 @@ describe("Launchpad", () => {
       agent: { value: "backend-architect", source: "workspace" },
       isolation: {},
       trust: { value: "limited", source: "config" },
+      dir: {},
       workspace: "mads",
     });
     render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
@@ -274,6 +275,7 @@ describe("Launchpad", () => {
       agent: {},
       isolation: { value: "worktree", source: "builtin" },
       trust: { value: "limited", source: "config" },
+      dir: {},
       workspace: "mads",
     });
     render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);

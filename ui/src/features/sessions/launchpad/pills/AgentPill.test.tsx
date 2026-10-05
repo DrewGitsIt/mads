@@ -62,6 +62,15 @@ describe("AgentPill", () => {
     vi.unstubAllGlobals();
   });
 
+  it("reads a saved Auto default as Auto, not the raw value", () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
+    render(
+      <AgentPill resolved={{ value: "auto", source: "config" }} onChange={vi.fn()} onAuto={vi.fn()} />,
+    );
+    expect(screen.getByText("Auto (default)")).toBeTruthy();
+    vi.unstubAllGlobals();
+  });
+
   it("shows Auto as the trigger label when value is auto", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("[]", { status: 200 })));
     render(<AgentPill value="auto" onChange={vi.fn()} onAuto={vi.fn()} />);
