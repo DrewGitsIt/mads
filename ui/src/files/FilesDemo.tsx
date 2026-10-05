@@ -12,7 +12,7 @@ const DEMO_SESSIONS: { id: string; label: string; taskId?: string }[] = [
     label: "session-files-observed (unattributed observation)",
     taskId: "tsk_flaky-metrics",
   },
-  { id: "session-files-conflict", label: "session-files-conflict (conflicted merge)", taskId: "tsk_contract-rename" },
+  { id: "session-files-conflict", label: "session-files-conflict", taskId: "tsk_contract-rename" },
 ];
 
 export function FilesDemo() {

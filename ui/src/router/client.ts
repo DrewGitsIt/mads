@@ -7,6 +7,10 @@ import type {
   CapabilitySummary,
   CapabilityUsage,
   Commit,
+  CommitDraft,
+  CommitError,
+  CommitRequest,
+  CommitResult,
   Config,
   CostMetrics,
   CreateSessionPayload,
@@ -19,8 +23,8 @@ import type {
   GenerateAgentBody,
   Link,
   LinkRequest,
+  LandResult,
   Mentionable,
-  MergeResult,
   Model,
   ModelCatalog,
   Note,
@@ -49,9 +53,11 @@ import type {
   TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
+  UndoCommitResult,
   UpdateCheckResult,
   VersionInfo,
   Workspace,
+  WorktreeStatus,
 } from "./types";
 
 /**
@@ -157,7 +163,7 @@ export interface RouterClient {
   approveProposal(id: string): Promise<Proposal>;
   dismissProposal(id: string): Promise<Proposal>;
 
-  // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
+  // Files tab (W6.5) — see ui/src/files/HANDOFF.md §1/§3
   // for which of these are real Router routes today vs.
   // documented-but-unimplemented contracts this client is built ahead of.
   getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
@@ -173,7 +179,18 @@ export interface RouterClient {
    */
   getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null>;
   openInEditor(path: string): Promise<void>;
-  mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult>;
+
+  // Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D5, D6).
+  /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. */
+  getWorktreeStatus(sessionId: string): Promise<WorktreeStatus>;
+  /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
+  commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
+  /** Resolves for a refusal too (undone: false, with its reason) — only an unexpected failure throws. */
+  undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult>;
+  /** Throws CommitRefusedError (no_fast_model, draft_failed, …). */
+  draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft>;
+  /** Landed, conflicted and refused all resolve — each is a card. */
+  landSession(sessionId: string): Promise<LandResult>;
 
   // Batch (non-streaming) read of GET /events — a plain fetch (no explicit
   // Accept header) takes the Router's JSON branch instead of the SSE branch
@@ -361,6 +378,32 @@ export class SessionWakeError extends Error {
   ) {
     super(message);
   }
+}
+
+/**
+ * Thrown by `commitSession`/`draftCommitMessage` for a structured refusal
+ * (pkg/contracts CommitError): the Commit dialog renders `body` in place —
+ * git's verbatim output, per-path reasons — and keeps the selection.
+ */
+export class CommitRefusedError extends Error {
+  constructor(
+    readonly body: CommitError,
+    readonly status: number,
+  ) {
+    super(body.error);
+  }
+}
+
+/** A Commit route's answer: the body on 2xx, CommitRefusedError for a `{code, error}` refusal. */
+async function readCommitJSON<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = (await res
+      .clone()
+      .json()
+      .catch(() => null)) as CommitError | null;
+    if (body?.code) throw new CommitRefusedError(body, res.status);
+  }
+  return readJSON<T>(res);
 }
 
 // Thin fetch wrapper shared by every surface — no ad-hoc fetches in
@@ -729,7 +772,7 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, `/proposals/${id}/dismiss`);
   }
 
-  // Files tab / merge-back flow (W6.5) — see ui/src/files/HANDOFF.md §1/§3
+  // Files tab (W6.5) — see ui/src/files/HANDOFF.md §1/§3
   // for which of these are real Router routes today vs.
   // documented-but-unimplemented contracts this client is built ahead of.
   async getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]> {
@@ -766,13 +809,47 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, "/system/open-editor", { path });
   }
 
-  // Only the per-session, unproxied `POST /merge` exists today (HANDOFF
-  // §1); this hits the Router-proxied path MADS-UX §3.3's own "Actions"
-  // line documents.
-  async mergeSession(sessionId: string, targetBranch?: string): Promise<MergeResult> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/merge`, {
-      target_branch: targetBranch,
+  async getWorktreeStatus(sessionId: string): Promise<WorktreeStatus> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/worktree`);
+  }
+
+  async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
     });
+    return readCommitJSON<CommitResult>(res);
+  }
+
+  async undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commit/undo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hash }),
+    });
+    // A refusal is a 409 carrying the same shape, undone: false.
+    if (res.status === 409) {
+      const body = (await res
+        .clone()
+        .json()
+        .catch(() => null)) as UndoCommitResult | null;
+      if (body && body.undone === false) return body;
+    }
+    return readJSON<UndoCommitResult>(res);
+  }
+
+  async draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft> {
+    const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/commit/draft`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(paths?.length ? { paths } : {}),
+    });
+    return readCommitJSON<CommitDraft>(res);
+  }
+
+  async landSession(sessionId: string): Promise<LandResult> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/land`, {});
   }
 
   async getEvents(filter: { sessionId: string; since?: number; types?: string[] }): Promise<Envelope[]> {

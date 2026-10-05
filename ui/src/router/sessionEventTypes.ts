@@ -26,11 +26,11 @@ export const SESSION_SHELL_REFETCH_EVENT_TYPES = [
 
 /**
  * Every event type an open session workspace's shell (SessionWorkspace), its
- * Conversation tab (ConversationTab), its Files tab's merge-back flow
- * (MergeBackFlow), and its Pipeline tab's live run fold (usePipelineRun)
- * need between them: session lifecycle, a linked-session inject/digest
- * landing on the transcript, pipeline run status for the tab's run-dot,
- * merge-back attempt/conflict/completion status, and the Pipeline tab's own
+ * Conversation tab (ConversationTab), and its Pipeline tab's live run fold
+ * (usePipelineRun) need between them: session lifecycle, a linked-session
+ * inject/digest landing on the transcript, pipeline run status for the
+ * tab's run-dot, Land's attempt/conflict/completion/refusal, and the
+ * Pipeline tab's own
  * task/stage/file fold. ui/src/router/events.ts's bus unions subscribers'
  * `types` by content, not by array identity, so passing a differently
  * recombined-but-equivalent array no longer risks a second connection —
@@ -55,4 +55,19 @@ export const WORKSPACE_SESSION_EVENT_TYPES = [
   "stage.retried",
   "file.changed",
   "commit.undone",
+];
+
+/**
+ * Commit and Land's conversation cards (docs/SESSION-WORKTREES-DESIGN.md
+ * D5/D6, conversation/Worktree): replayed from the log at mount, then live.
+ * merge.* is shared with the pipeline's land queue — the cards keep only
+ * payloads with kind "land".
+ */
+export const WORKTREE_CARD_EVENT_TYPES = [
+  "commit.created",
+  "commit.undone",
+  "merge.completed",
+  "merge.conflicted",
+  "merge.refused",
+  "worktree.ensured",
 ];

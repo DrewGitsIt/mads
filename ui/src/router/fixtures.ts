@@ -1,5 +1,5 @@
 import type { RouterClient, SessionEventSource } from "./client";
-import { RouterValidationError } from "./client";
+import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
   QueuedMessage,
   SendResult,
@@ -11,6 +11,10 @@ import type {
   CapabilitySummary,
   CapabilityUsage,
   Commit,
+  CommitDraft,
+  CommitError,
+  CommitRequest,
+  CommitResult,
   Config,
   CostMetrics,
   DiagnoseResult,
@@ -22,8 +26,8 @@ import type {
   GenerateAgentBody,
   Link,
   LinkRequest,
+  LandResult,
   Mentionable,
-  MergeResult,
   Model,
   ModelCatalog,
   Note,
@@ -49,9 +53,11 @@ import type {
   TemplateValidationResult,
   ToolDiff,
   TranscriptMessage,
+  UndoCommitResult,
   UpdateCheckResult,
   VersionInfo,
   Workspace,
+  WorktreeStatus,
 } from "./types";
 import { PRESET_GRANTS } from "./types";
 
@@ -759,26 +765,43 @@ export const fixtureCommitFileDiffs: Record<string, FileDiff> = {
   },
 };
 
-export const fixtureCleanMerge: MergeResult = {
-  conflicted: false,
-  branch: "mads/tsk_retry-backoff",
+// An isolated session (docs/SESSION-WORKTREES-DESIGN.md D1) with work in
+// both states: files to commit and commits to land. Kept out of
+// fixtureSessions so lists that count those stay as they were.
+export const fixtureIsolatedSession: Session = {
+  id: "session-isolated",
+  created_at: "2026-10-05T00:00:00Z",
+  updated_at: "2026-10-05T00:00:00Z",
+  last_turn_at: "2026-10-05T00:00:00Z",
+  name: "Fix the deploy script on Ubuntu runners",
+  activity: "active",
+  workspace: "mads",
+  provider: "claudecode",
+  model: "claude-sonnet-5",
+  isolation: "worktree",
+  dir: "/home/user/repo/mads",
+  worktree_dir: "/home/user/.mads/session-worktrees/session-isolated",
+  worktree_branch: "mads/session/session-isolated",
+  worktree_base: "main",
+  cwd: "/home/user/.mads/session-worktrees/session-isolated",
+  uncommitted_count: 4,
+  unlanded_count: 3,
 };
 
-export const fixtureConflictedMerge: MergeResult = {
-  conflicted: true,
-  branch: "mads/tsk_contract-rename",
-  files: ["pkg/contracts/session.go", "services/data/internal/store/sessions.go"],
+export const fixtureWorktreeStatus: WorktreeStatus = {
+  isolated: true,
+  folder: "/home/user/.mads/session-worktrees/session-isolated",
+  branch: "mads/session/session-isolated",
+  base: "main",
+  files: [
+    { path: "scripts/deploy.sh", kind: "modified" },
+    { path: "scripts/lib/runner_detect.sh", kind: "added" },
+    { path: ".github/workflows/deploy.yml", kind: "modified" },
+    { path: "scripts/old_detect.sh", kind: "deleted" },
+  ],
+  uncommitted_count: 4,
+  unlanded_count: 3,
 };
-
-// A conflict-marker sample for the seed-only MergeEditor stub (HANDOFF §5) —
-// no real conflicted worktree content exists to point one at, so this is the
-// only content the stub is ever tested against.
-export const fixtureConflictMarkers = `<<<<<<< HEAD
-	TrustLevel string \`json:"trust_level"\`
-=======
-	Trust string \`json:"trust"\`
->>>>>>> mads/tsk_contract-rename
-`;
 
 /**
  * In-memory RouterClient for dev-mode demo mounting and component tests.
@@ -812,9 +835,6 @@ export class FakeRouterClient implements RouterClient {
     private readonly commits = fixtureCommits,
     private readonly fileDiffs = fixtureFileDiffs,
     private readonly commitFileDiffs = fixtureCommitFileDiffs,
-    private readonly mergeResults: Record<string, MergeResult> = {
-      "session-files-conflict": fixtureConflictedMerge,
-    },
     private readonly sessionDefaults: SessionDefaults = fixtureSessionDefaults,
     links: Link[] = fixtureLinks,
     proposals: Proposal[] = fixtureProposals,
@@ -1170,8 +1190,60 @@ export class FakeRouterClient implements RouterClient {
     this.openedPaths.push(path);
   }
 
-  async mergeSession(sessionId: string): Promise<MergeResult> {
-    return this.mergeResults[sessionId] ?? fixtureCleanMerge;
+  // --- Commit and Land: canned answers a test can swap, plus every call ---
+  worktreeStatus: WorktreeStatus = structuredClone(fixtureWorktreeStatus);
+  /** A CommitError makes commitSession throw it as CommitRefusedError; undefined commits whatever was asked. */
+  commitOutcome?: CommitResult | CommitError;
+  readonly commitCalls: { sessionId: string; req: CommitRequest }[] = [];
+  undoOutcome?: UndoCommitResult;
+  readonly undoCalls: { sessionId: string; hash: string }[] = [];
+  draftOutcome: CommitDraft | CommitError = { message: "deploy: detect Ubuntu 24.04 runners by codename" };
+  readonly draftCalls: { sessionId: string; paths?: string[] }[] = [];
+  /** A function lets a test hold the answer back (Landing… stays up until it resolves). */
+  landOutcome: LandResult | (() => Promise<LandResult>) = {
+    outcome: "landed",
+    branch: "mads/session/session-isolated",
+    base: "main",
+    merge_commit: "7be2d31aa0",
+    fast_forwarded: true,
+  };
+  readonly landCalls: string[] = [];
+
+  async getWorktreeStatus(_sessionId: string): Promise<WorktreeStatus> {
+    return structuredClone(this.worktreeStatus);
+  }
+
+  async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
+    this.commitCalls.push({ sessionId, req });
+    const out = this.commitOutcome;
+    if (out && "code" in out) throw new CommitRefusedError(out, out.code === "git_failed" ? 422 : 400);
+    if (out) return out;
+    const paths = req.paths?.length ? req.paths : this.worktreeStatus.files.map((f) => f.path);
+    return {
+      hash: "a41c09e5d2",
+      message: req.message || "drafted",
+      drafted: !req.message,
+      undoable: true,
+      paths: paths.map((path) => ({ path, status: "committed" })),
+    };
+  }
+
+  async undoCommit(sessionId: string, hash: string): Promise<UndoCommitResult> {
+    this.undoCalls.push({ sessionId, hash });
+    return this.undoOutcome ?? { undone: true, hash };
+  }
+
+  async draftCommitMessage(sessionId: string, paths?: string[]): Promise<CommitDraft> {
+    this.draftCalls.push({ sessionId, paths });
+    const out = this.draftOutcome;
+    if ("code" in out) throw new CommitRefusedError(out, 409);
+    return out;
+  }
+
+  async landSession(sessionId: string): Promise<LandResult> {
+    this.landCalls.push(sessionId);
+    const out = this.landOutcome;
+    return typeof out === "function" ? out() : out;
   }
 
   /** Seeded control-plane event log — empty by default so the Conversation tab's history-merge fetch (T17) is a no-op unless a test seeds envelopes via seedEvent. */

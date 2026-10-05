@@ -8,7 +8,6 @@ import { displayPath } from "./displayPath";
 import { ChangeList } from "./ChangeList/ChangeList";
 import { CommitList } from "./ChangeList/CommitList";
 import { DiffViewer } from "./DiffViewer/DiffViewer";
-import { MergeBackFlow } from "./MergeBack/MergeBackFlow";
 import styles from "./FilesTab.module.css";
 
 export interface FilesTabProps {
@@ -24,8 +23,9 @@ type Scope = "session" | "task";
 type Selection = { source: "working"; path: string } | { source: "commit"; hash: string; path: string };
 
 /**
- * Files tab (MADS-UX §3.3/§5/§17, W6.5). Composes the change/commit lists,
- * the diff viewer, and the merge-back flow. `taskId` is optional so this
+ * Files tab (MADS-UX §3.3/§5/§17, W6.5). Composes the change/commit lists
+ * and the diff viewer. Committing and landing the work are the conversation
+ * header's (docs/SESSION-WORKTREES-DESIGN.md D4), not this tab's. `taskId` is optional so this
  * also works from a session-only caller; the session/task scope switch is
  * only interactive once a `taskId` is actually available (HANDOFF §2/§8).
  */
@@ -180,12 +180,6 @@ export function FilesTab({ sessionId, taskId, routerClient, focusPath }: FilesTa
             )}
           </>
         )}
-
-        <MergeBackFlow
-          sessionId={sessionId}
-          routerClient={routerClient}
-          worktreeDir={session?.worktree_dir}
-        />
       </div>
 
       <DiffViewer

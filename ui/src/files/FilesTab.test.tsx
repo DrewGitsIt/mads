@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { FilesTab } from "./FilesTab";
 import { FakeRouterClient } from "../router/fixtures";
+import { FetchRouterClient } from "../router/client";
 import { FakeEventSource } from "../router/testFakeEventSource";
 
 vi.mock("@monaco-editor/react", () => ({
@@ -71,10 +72,21 @@ describe("FilesTab", () => {
     expect(editor.getAttribute("data-original")).toBe("func ingest() {\n\ttime.Sleep(retryDelay)\n}\n");
   });
 
-  it("renders the merge-back flow's status chip", async () => {
+  // Merge-back moved to the conversation header (Commit / Land); the tab
+  // no longer carries a target-branch box or a merge status chip.
+  it("has no merge-back flow", async () => {
     const client = new FakeRouterClient();
     render(<FilesTab sessionId="session-files-clean" routerClient={client} />);
-    expect(await screen.findByText("Not merged")).toBeTruthy();
+    await screen.findByText(/Committed/);
+    expect(screen.queryByText("Not merged")).toBeNull();
+    expect(screen.queryByLabelText("Target branch")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Merge back" })).toBeNull();
+  });
+
+  it("no longer ships the retired merge-back components or client call", () => {
+    expect(Object.keys(import.meta.glob("./MergeBack/**"))).toEqual([]);
+    expect("mergeSession" in new FakeRouterClient()).toBe(false);
+    expect("mergeSession" in FetchRouterClient.prototype).toBe(false);
   });
 
   it("hides the scope switch when no taskId is given", async () => {

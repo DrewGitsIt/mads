@@ -20,6 +20,16 @@ export interface Session {
   trust?: SessionTrust;
   worktree_dir?: string;
   worktree_branch?: string;
+  /** The branch the checkout had open when this session's worktree was made — the Land target. Absent for a session working in place. */
+  worktree_base?: string;
+  /**
+   * The header state (docs/SESSION-WORKTREES-DESIGN.md D4): this session's
+   * files git still reports changed, and its branch's commits the base
+   * lacks (always 0 in place). Recomputed server-side after file changes,
+   * Commit, Land and pipeline merges — read, never derived, here.
+   */
+  uncommitted_count?: number;
+  unlanded_count?: number;
   /**
    * The directory the session asked to start in — the Launchpad's folder,
    * else its workspace's primary repo, else Config.default_dir. Absent means
@@ -853,11 +863,127 @@ export interface Commit {
   files?: CommitFile[]; // Router-derived, best-effort, absent when unresolvable
 }
 
-// mirrors pkg/contracts/session.go MergeResult
-export interface MergeResult {
-  conflicted: boolean;
-  branch?: string;
+// --- Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D5, D6) ---
+// mirrors pkg/contracts/session_worktree.go
+
+export type WorktreeFileKind = "added" | "modified" | "deleted";
+
+/** One session file git still reports changed: a Commit dialog row. Path is relative to the session's folder. */
+export interface WorktreeFile {
+  path: string;
+  kind: WorktreeFileKind;
+}
+
+export interface WorktreeCommit {
+  hash: string;
+  subject: string;
+  undoable: boolean;
+}
+
+/** Why Land won't (or didn't) run. Reason is a LandRefusalReason; Detail is human text or git's own output. */
+export interface LandRefusal {
+  reason: string;
+  detail?: string;
   files?: string[];
+}
+
+/** GET /sessions/{id}/worktree — runs git per call, so fetched when a dialog opens, never per render. */
+export interface WorktreeStatus {
+  isolated: boolean;
+  folder?: string;
+  branch?: string;
+  base?: string;
+  files: WorktreeFile[];
+  uncommitted_count: number;
+  unlanded_count: number;
+  last_commit?: WorktreeCommit;
+  land_blocked?: LandRefusal;
+}
+
+export interface CommitRequest {
+  /** Relative to the session's folder; empty means every uncommitted session file. */
+  paths?: string[];
+  /** Empty asks the Fast Model to draft one (only when Config.auto_commit_messages is on). */
+  message?: string;
+}
+
+export interface CommitPath {
+  path: string;
+  status: "committed" | "already_committed" | "rejected";
+  /** Rejected paths only: "outside_folder", "not_session_file", "pipeline_task_file". */
+  reason?: string;
+}
+
+export interface CommitResult {
+  hash: string;
+  message: string;
+  drafted?: boolean;
+  undoable: boolean;
+  paths: CommitPath[];
+}
+
+export type CommitErrorCode =
+  | "invalid_paths"
+  | "nothing_to_commit"
+  | "message_required"
+  | "git_failed"
+  | "no_folder"
+  | "no_fast_model"
+  | "draft_failed";
+
+/** A refused POST /commit or /commit/draft: rendered in place, keeping the user's selection. */
+export interface CommitError {
+  code: CommitErrorCode | string;
+  error: string;
+  /** git's own output, verbatim (git_failed). */
+  detail?: string;
+  paths?: CommitPath[];
+  selection?: string[];
+}
+
+export interface CommitDraft {
+  message: string;
+  /** The diff was cut to fit, so the draft saw only part of the change. */
+  truncated?: boolean;
+}
+
+export interface UndoCommitResult {
+  undone: boolean;
+  hash: string;
+  /** "not_tip", "not_session_commit", "merge_commit", "already_landed", "mid_merge", "no_folder". */
+  reason?: string;
+  detail?: string;
+}
+
+export type LandOutcome = "landed" | "conflicted" | "refused";
+
+/** Land refusal reasons — gates checked before anything runs, then what step 1/2 can refuse with. */
+export type LandRefusalReason =
+  | "not_isolated"
+  | "busy"
+  | "pipeline"
+  | "mid_merge"
+  | "off_branch"
+  | "dirty"
+  | "base_not_checked_out"
+  | "primary_mid_merge"
+  | "nothing_to_land"
+  | "merge_failed"
+  | "base_moving"
+  | "primary_dirty"
+  | "primary_untracked"
+  | "primary_refused";
+
+/** POST /sessions/{id}/land — HTTP 200 for all three outcomes. */
+export interface LandResult {
+  outcome: LandOutcome;
+  branch?: string;
+  base?: string;
+  merge_commit?: string;
+  fast_forwarded?: boolean;
+  files?: string[];
+  reason?: string;
+  detail?: string;
 }
 
 // Matches the fileDiff response shared by GET
@@ -1054,9 +1180,9 @@ export interface Config {
   // Settings checkbox binds to its negation. Read once at run launch.
   allow_sleep_during_pipelines: boolean;
   // auto_commit_messages mirrors pkg/contracts/config.go's
-  // AutoCommitMessages — Settings' "Write commit messages for me": a session
-  // Commit with no message has the Fast Model draft one. Optional: the UI
-  // for it lands separately.
+  // AutoCommitMessages — Settings' "Write commit messages for me": the
+  // header's Commit skips the dialog and the Fast Model drafts the message.
+  // Optional: configs saved before it read as off.
   auto_commit_messages?: boolean;
 
   default_workspace?: string;

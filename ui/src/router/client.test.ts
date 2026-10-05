@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FetchRouterClient, RouterValidationError } from "./client";
+import { CommitRefusedError, FetchRouterClient, RouterValidationError } from "./client";
 import type { Agent } from "./types";
 
 function mockFetchOnce(body: unknown, ok = true, status = 200) {
@@ -154,18 +154,65 @@ describe("FetchRouterClient", () => {
     await expect(client.openInEditor("a.go")).rejects.toThrow(/500/);
   });
 
-  it("mergeSession POSTs to /sessions/:id/merge with the target branch", async () => {
-    const fetchMock = mockFetchOnce({ conflicted: false });
+  it("getWorktreeStatus GETs /sessions/:id/worktree", async () => {
+    const fetchMock = mockFetchOnce({ isolated: true, files: [], uncommitted_count: 0, unlanded_count: 2 });
     const client = new FetchRouterClient("http://router.local");
-    const result = await client.mergeSession("s1", "main");
+    const st = await client.getWorktreeStatus("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/worktree");
+    expect(st.unlanded_count).toBe(2);
+  });
+
+  it("commitSession POSTs paths and message to /sessions/:id/commit", async () => {
+    const fetchMock = mockFetchOnce({ hash: "abc", message: "m", undoable: true, paths: [] });
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.commitSession("s1", { paths: ["a.go"], message: "m" });
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://router.local/sessions/s1/merge",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ target_branch: "main" }),
-      }),
+      "http://router.local/sessions/s1/commit",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ paths: ["a.go"], message: "m" }) }),
     );
-    expect(result.conflicted).toBe(false);
+    expect(res.hash).toBe("abc");
+  });
+
+  it("commitSession throws CommitRefusedError carrying git's verbatim output", async () => {
+    mockFetchOnce(
+      { code: "git_failed", error: "git refused the commit.", detail: "pre-commit: lint failed", selection: ["a.go"] },
+      false,
+      422,
+    );
+    const client = new FetchRouterClient("http://router.local");
+    const err = await client.commitSession("s1", { message: "m" }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CommitRefusedError);
+    expect((err as CommitRefusedError).body.detail).toBe("pre-commit: lint failed");
+    expect((err as CommitRefusedError).status).toBe(422);
+  });
+
+  it("undoCommit resolves a 409 refusal instead of throwing", async () => {
+    mockFetchOnce({ undone: false, hash: "abc", reason: "not_tip" }, false, 409);
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.undoCommit("s1", "abc");
+    expect(res).toEqual({ undone: false, hash: "abc", reason: "not_tip" });
+  });
+
+  it("draftCommitMessage POSTs the selection to /sessions/:id/commit/draft", async () => {
+    const fetchMock = mockFetchOnce({ message: "Fix it", truncated: true });
+    const client = new FetchRouterClient("http://router.local");
+    const draft = await client.draftCommitMessage("s1", ["a.go"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/commit/draft",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ paths: ["a.go"] }) }),
+    );
+    expect(draft.truncated).toBe(true);
+  });
+
+  it("landSession POSTs to /sessions/:id/land and resolves every outcome", async () => {
+    const fetchMock = mockFetchOnce({ outcome: "refused", reason: "busy", base: "main" });
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.landSession("s1");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/land",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(res.reason).toBe("busy");
   });
 
   it("getEvents GETs /events with session_id, since, and types query params, no Accept header", async () => {
