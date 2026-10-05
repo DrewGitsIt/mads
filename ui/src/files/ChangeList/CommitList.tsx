@@ -18,19 +18,26 @@ export interface CommitListProps {
  * resolve them) the commit's file list — a separate list from ChangeList,
  * not a join (FileChange has no commit hash field, see HANDOFF §4). File
  * rows are selectable, same button idiom as ChangeList's rows.
+ *
+ * "Orphan" means a commit isn't linked to any of the session's tasks, which
+ * is only worth a warning when the session has tasks to link to. In a plain
+ * conversation every commit is unlinked by construction, so the chip is
+ * dropped there rather than flagging each one. taskTitles holds the
+ * session's tasks, so its size is that signal.
  */
 export function CommitList({ commits, taskTitles, selectedFile, onSelectFile }: CommitListProps) {
   if (commits.length === 0) {
     return <div className={styles.empty}>No commits linked to this session yet.</div>;
   }
 
+  const showOrphan = taskTitles.size > 0;
   return (
     <ul className={styles.list}>
       {commits.map((c) => (
         <li key={c.hash} className={styles.card}>
           <div className={styles.cardHeader}>
             <span className={styles.message}>{c.message.split("\n")[0]}</span>
-            <AttributionChip kind={attributionForCommit(c)} />
+            {(showOrphan || !c.orphan) && <AttributionChip kind={attributionForCommit(c)} />}
           </div>
           <div className={styles.cardMeta}>
             <span className={styles.hash}>{c.hash.slice(0, 7)}</span>

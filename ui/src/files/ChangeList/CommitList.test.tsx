@@ -37,6 +37,19 @@ describe("CommitList", () => {
     expect(screen.getByText("Orphan").className).toMatch(/warn/);
   });
 
+  it("drops the Orphan chip in a session with no tasks, where every commit is unlinked", () => {
+    render(
+      <CommitList
+        commits={fixtureCommits["session-files-observed"]}
+        taskTitles={new Map()}
+        onSelectFile={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Orphan")).toBeNull();
+    expect(screen.getByText("Session")).toBeTruthy();
+    expect(screen.getByText("Heuristic")).toBeTruthy();
+  });
+
   it("renders a task-title chip for a commit with a resolvable task_id, and none for the orphan commit", () => {
     render(
       <CommitList
