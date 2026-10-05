@@ -153,9 +153,33 @@ describe("statusOf", () => {
     });
   });
 
-  it("keeps the rail's existing amber puck for a sleeping session with blocked work", () => {
+  it("names the blocked tasks, in the needs tone, for a sleeping session with blocked work", () => {
     const sleeping = makeSession({ activity: "inactive" });
-    expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 })).dot).toBe("attn");
+    expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 }))).toEqual({
+      kind: "sleeping",
+      tone: "needs",
+      dot: "attn",
+      glyph: "◦",
+      label: "Sleeping · 1 blocked task",
+    });
+    expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 3 })).label).toBe(
+      "Sleeping · 3 blocked tasks",
+    );
+    // Running/ready work is calm progress: no amber, no count.
+    const calm = statusOf(sleeping, makeAgentState(), makeBreakdown({ running: 2, ready: 1 }));
+    expect(calm.tone).toBe("idle");
+    expect(calm.label).toBe("Sleeping · wakes on send");
+  });
+
+  it("leaves dotState() — which the palette's attention badge counts — agreeing with the label", () => {
+    const sleeping = makeSession({ activity: "inactive" });
+    expect(dotState(sleeping, makeBreakdown({ blocked: 2 }))).toBe("attn");
+    expect(dotState(sleeping, makeBreakdown({}))).toBe("off");
+    expect(dotState(makeSession({ activity: "active" }), makeBreakdown({ blocked: 2 }))).toBe("on");
+    // An awake session's blocked work is not announced on the status line.
+    expect(
+      statusOf(makeSession({ activity: "active" }), makeAgentState(), makeBreakdown({ blocked: 2 })).label,
+    ).toBe("Ready");
   });
 
   it("says what the agent is actually doing, from the server-built clause", () => {

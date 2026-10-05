@@ -17,14 +17,20 @@ import styles from "./SessionRail.module.css";
  *
  *   x 21  the card's left border (so the head's tip lands on it)
  *   x 10  the trunk, 11px clear of the card
- *   y 24  the status dot's centre (1px border + 8px padding + 5px dot margin
- *         + half the 8px dot = 18 from the card's top, + the 7px this box
- *         starts above it)
+ *   y 23.5 the vertical centre of the name's first line (1px border + 8px
+ *         padding + half the name's 16.875px line box — 12.5px at 1.35 — is
+ *         17.44 from the card's top; less the 1px border, plus the 7px this
+ *         box starts above the card, is 23.44, rounded to the half pixel).
+ *         It used to aim at the status dot, which is gone (shell-dock D9).
+ *         The first line, not the card's middle: the name clamps to two lines
+ *         and a card's height varies, so only the top is a stable target.
  *
  * The continuation below a subject that has another after it is still a
  * border (.subjects .row:not(:last-child)::after) — it is a straight line
  * with nothing to curve, and one element beats one per row.
  */
+export const LINK_ANCHOR_Y = 23.5;
+
 export function LinkConnector({ watched }: { watched: boolean }) {
   return (
     <svg
@@ -39,7 +45,7 @@ export function LinkConnector({ watched }: { watched: boolean }) {
           where it leaves the holder and horizontal where it meets the card: a
           quarter circle of radius 14, where a border-radius elbow managed 7. */}
       <path
-        d="M6 0 L6 10 Q6 24 21 24"
+        d={`M6 0 L6 10 Q6 ${LINK_ANCHOR_Y} 21 ${LINK_ANCHOR_Y}`}
         stroke="currentColor"
         strokeWidth="2.6"
         strokeLinecap="round"
@@ -48,14 +54,14 @@ export function LinkConnector({ watched }: { watched: boolean }) {
         // Open, and heavier than the line it ends. A monitor reads its
         // subject; the solid head is reserved for the one that drives it.
         <path
-          d="M22 18.8 L28 24 L22 29.2"
+          d={`M22 ${LINK_ANCHOR_Y - 5.2} L28 ${LINK_ANCHOR_Y} L22 ${LINK_ANCHOR_Y + 5.2}`}
           stroke="currentColor"
           strokeWidth="3"
           strokeLinecap="round"
           strokeLinejoin="round"
         />
       ) : (
-        <path d="M29.5 24 L20.5 19 L20.5 29 Z" fill="currentColor" />
+        <path d={`M29.5 ${LINK_ANCHOR_Y} L20.5 ${LINK_ANCHOR_Y - 5} L20.5 ${LINK_ANCHOR_Y + 5} Z`} fill="currentColor" />
       )}
     </svg>
   );

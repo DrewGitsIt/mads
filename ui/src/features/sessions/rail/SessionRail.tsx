@@ -948,7 +948,6 @@ function SessionRow({
     >
       {nested && <LinkConnector watched={linkBadge === "WATCHED"} />}
       <div className={styles.rowTop}>
-        <span className={[styles.dot, styles[`dot-${status.dot}`]].join(" ")} aria-hidden="true" />
         <span className={styles.name}>{name}</span>
         {work && (
           <span

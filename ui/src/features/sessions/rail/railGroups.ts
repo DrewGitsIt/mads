@@ -123,10 +123,11 @@ export const WORKING_STALE_AFTER_MS = 30 * 60 * 1000;
  * mockup's precedence: the first state that applies wins, so an approval park
  * always beats "working" and a crash always beats everything.
  *
- * The three calm states defer to dotState() for their dot rather than hard-
- * coding the mockup's on/off, so a sleeping session with blocked work keeps
- * today's amber puck — which is also what the command palette's attention
- * badge counts (attentionCount.ts), and the two must not disagree.
+ * The three calm states defer to dotState() for their `dot` rather than hard-
+ * coding the mockup's on/off. The card no longer draws it, but the filter
+ * chips (filterBucketOf) and the command palette's attention badge
+ * (attentionCount.ts) still count a sleeper with blocked work, and they must
+ * not disagree with the label that says so.
  */
 export function statusOf(
   session: Session,
@@ -205,6 +206,18 @@ export function statusOf(
   }
   if (session.activity === "active") {
     return { kind: "ready", tone: "idle", dot, glyph: "◦", label: "Ready" };
+  }
+  // The dot used to carry this alone: amber for blocked work on a sleeper. It
+  // is gone from the card, so the status line says it — in the needs tone,
+  // which is the amber the dot was.
+  if (dot === "attn") {
+    return {
+      kind: "sleeping",
+      tone: "needs",
+      dot,
+      glyph: "◦",
+      label: `Sleeping · ${plural(breakdown.blocked, "blocked task")}`,
+    };
   }
   return { kind: "sleeping", tone: "idle", dot, glyph: "◦", label: "Sleeping · wakes on send" };
 }

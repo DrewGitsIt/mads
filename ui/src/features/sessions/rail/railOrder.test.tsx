@@ -32,9 +32,9 @@ function ghost() {
   return screen.queryByRole("button", { name: /session[s]? moved/ });
 }
 
-function hasDot(name: string, state: "on" | "attn" | "off"): boolean {
+function isSleeping(name: string): boolean {
   const row = screen.getByText(name).closest('[role="button"]')!;
-  return Boolean(row.querySelector(`[class*="dot-${state}"]`));
+  return (row.querySelector('[role="status"]')?.textContent ?? "").includes("Sleeping");
 }
 
 const alpha = makeSession({ id: "a", name: "alpha", last_turn_at: "2026-07-01T10:00:00Z" });
@@ -65,7 +65,7 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(hasDot("bravo", "off")).toBe(true);
+    expect(isSleeping("bravo")).toBe(true);
     expect(ghost()).toBeNull();
   });
 
@@ -85,7 +85,7 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(hasDot("alpha", "off")).toBe(true);
+    expect(isSleeping("alpha")).toBe(true);
     expect(ghost()).toBeNull();
 
     fireEvent.mouseLeave(rail());

@@ -56,7 +56,7 @@ describe("SessionRail", () => {
     ]);
   });
 
-  it("shows an amber attention dot for a recent session with blocked work", () => {
+  it("says 'Sleeping · N blocked tasks' in the needs tone for a sleeper with blocked work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "needs work" })]}
@@ -64,11 +64,14 @@ describe("SessionRail", () => {
       />,
     );
     const row = screen.getByText("needs work").closest('[role="button"]')!;
-    expect(row.querySelector('[class*="dot-attn"]')).toBeTruthy();
+    const status = row.querySelector('[role="status"]')!;
+    expect(status.textContent).toBe("◦Sleeping · 1 blocked task");
+    expect(status.className).toMatch(/status-needs/);
+    expect(row.querySelector('[class*="dot"]')).toBeNull();
     expect(screen.getByText("1 blocked")).toBeTruthy();
   });
 
-  it("does not show an attention dot for a recent session that only has running/ready work", () => {
+  it("keeps 'wakes on send' in the idle tone for a sleeper that only has running/ready work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "steady work" })]}
@@ -76,8 +79,9 @@ describe("SessionRail", () => {
       />,
     );
     const row = screen.getByText("steady work").closest('[role="button"]')!;
-    expect(row.querySelector('[class*="dot-off"]')).toBeTruthy();
-    expect(row.querySelector('[class*="dot-attn"]')).toBeNull();
+    const status = row.querySelector('[role="status"]')!;
+    expect(status.textContent).toBe("◦Sleeping · wakes on send");
+    expect(status.className).toMatch(/status-idle/);
   });
 
   it("renders only non-zero buckets, in running / ready / blocked order", () => {
@@ -88,7 +92,7 @@ describe("SessionRail", () => {
       />,
     );
     const row = screen.getByText("mixed work").closest('[role="button"]') as HTMLElement;
-    const buckets = within(row).getAllByText(/running|ready|blocked/);
+    const buckets = within(row).getAllByText(/^\d+ (running|ready|blocked)$/);
     expect(buckets.map((b) => b.textContent)).toEqual(["2 running", "2 ready", "1 blocked"]);
   });
 
@@ -1102,7 +1106,7 @@ describe("SessionRail status line", () => {
     expect(status.className).toMatch(/status-bad/);
   });
 
-  it("paints the leading dot from the status: bad for a crash, accent while working", () => {
+  it("draws no status dot on any card", () => {
     const { unmount } = render(
       <SessionRail
         sessions={[live]}
@@ -1110,15 +1114,11 @@ describe("SessionRail status line", () => {
         agentStates={{ s1: { subagents: 0, crashed: true } }}
       />,
     );
-    expect(
-      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-bad"]'),
-    ).toBeTruthy();
+    expect(screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot"]')).toBeNull();
     unmount();
 
     renderWith({ workingSince: inFlight() });
-    expect(
-      screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot-work"]'),
-    ).toBeTruthy();
+    expect(screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot"]')).toBeNull();
   });
 
   it("holds the documented precedence — crash over approval over working over done", () => {

@@ -249,7 +249,6 @@
   align-items: center;
   gap: var(--space-1) var(--space-2);
   min-width: 0;
-  padding-left: 16px;
 }
 
 .rowMeta {
@@ -292,47 +291,17 @@
   margin-left: auto;
   padding-left: var(--space-2);
   color: var(--text3);
-  font: 500 var(--fs-chip) var(--mono);
+  font: 500 var(--fs-chip) var(--sans);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
 }
 
 .summary {
-  padding-left: 16px;
   color: var(--text3);
   font: 500 var(--fs-chip) var(--sans);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.dot {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-top: 5px;
-  background: var(--text3);
-}
-
-.dot-on {
-  background: var(--ok);
-}
-
-.dot-attn {
-  background: var(--warn);
-}
-
-.dot-off {
-  background: var(--text3);
-}
-
-.dot-bad {
-  background: var(--bad);
-}
-
-.dot-work {
-  background: var(--accent);
 }
 
 /* ── the status line (mockup §1) ─────────────────────────────────────────
@@ -344,7 +313,6 @@
   gap: 6px;
   min-width: 0;
   min-height: 15px;
-  padding-left: 16px;
   color: var(--text3);
   font: 500 var(--fs-chip) var(--sans);
 }
