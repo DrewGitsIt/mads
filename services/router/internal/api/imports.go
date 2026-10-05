@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -28,6 +29,37 @@ type importScan struct {
 	candidates      []importCandidate
 	alreadyImported int
 	lookedFor       []string
+	// windows is the context window each provider's runtime last reported
+	// per model (see knownWindows), the only trustworthy window an imported
+	// usage record can be judged against.
+	windows map[windowKey]int
+}
+
+// windowKey names a model as one provider runs it: the same model id can
+// have a different window under a different harness.
+type windowKey struct{ provider, model string }
+
+// knownWindows collects, from sessions mads already has, the context window
+// the provider itself reported at runtime for each model — the most recently
+// updated session wins. A native transcript records token counts but never
+// the window they were measured against, and that window isn't a property of
+// the model id alone (claude-opus-5-5 runs at 1M for some accounts; the static
+// table assumes 200k), so this is the only honest source an import has.
+func knownWindows(sessions []contracts.Session) map[windowKey]int {
+	out := map[windowKey]int{}
+	seen := map[windowKey]time.Time{}
+	for _, sess := range sessions {
+		u := sess.LastUsage
+		if u == nil || u.ContextWindow <= 0 || u.Model == "" {
+			continue
+		}
+		k := windowKey{sess.Provider, u.Model}
+		if at, ok := seen[k]; ok && !sess.UpdatedAt.After(at) {
+			continue
+		}
+		out[k], seen[k] = u.ContextWindow, sess.UpdatedAt
+	}
+	return out
 }
 
 // importableProviders lists the registered providers that can scan their own
@@ -67,6 +99,7 @@ func (s *server) scanImports(ctx context.Context) (importScan, error) {
 	if err != nil {
 		return out, err
 	}
+	out.windows = knownWindows(sessions)
 	known := map[string]bool{}
 	for _, sess := range sessions {
 		if sess.ProviderRef != "" {
@@ -196,7 +229,11 @@ func (s *server) handleImportConversations(w http.ResponseWriter, r *http.Reques
 			trust = contracts.TrustLimited
 		}
 		for _, c := range scan.candidates {
-			sess := importedSession(c, trust, workspaceFor(workspaces, c.Dir))
+			window := 0
+			if c.Usage != nil {
+				window = scan.windows[windowKey{c.provider, c.Usage.Model}]
+			}
+			sess := importedSession(c, trust, workspaceFor(workspaces, c.Dir), window)
 			if err := s.data.CreateSession(ctx, &sess); err != nil {
 				writeError(w, err)
 				return
@@ -212,7 +249,14 @@ func (s *server) handleImportConversations(w http.ResponseWriter, r *http.Reques
 // and the native id is kept in both provider_ref (the transcript pointer) and
 // imported_from (the dedupe record that survives the first wake's fork).
 // Name_source generated keeps the title job's hands off it.
-func importedSession(c importCandidate, trust contracts.SessionTrust, workspace string) contracts.Session {
+//
+// The last turn's usage is kept only when window (knownWindows) says what to
+// judge it against. Without one, the UI's meter and the Runner's resume
+// compaction both fall back to the static 200k table, which overstates a 1M
+// session's occupancy fivefold — enough for a first continue to auto-compact
+// a conversation that is a fifth full. No usage is the honest "unknown": the
+// meter stays empty and nothing compacts until the first turn reports both.
+func importedSession(c importCandidate, trust contracts.SessionTrust, workspace string, window int) contracts.Session {
 	sess := contracts.Session{
 		Name:         c.Title,
 		NameSource:   contracts.SessionNameSourceGenerated,
@@ -232,7 +276,7 @@ func importedSession(c importCandidate, trust contracts.SessionTrust, workspace 
 		at := c.LastActiveAt.UTC()
 		sess.LastTurnAt = &at
 	}
-	if u := c.Usage; u != nil {
+	if u := c.Usage; u != nil && window > 0 {
 		sess.LastUsage = &contracts.Usage{
 			InputTokens:              u.InputTokens,
 			OutputTokens:             u.OutputTokens,
@@ -240,7 +284,7 @@ func importedSession(c importCandidate, trust contracts.SessionTrust, workspace 
 			CacheReadInputTokens:     u.CacheReadInputTokens,
 			Model:                    u.Model,
 			ContextTokens:            u.ContextTokens,
-			ContextWindow:            u.ContextWindow,
+			ContextWindow:            window,
 		}
 	}
 	return sess

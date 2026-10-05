@@ -121,9 +121,11 @@ func (f *importFixture) populate(t *testing.T) {
 	reg("live.json", "running", os.Getpid())
 	reg("stale.json", "stale-reg", 2147483646)
 
-	// mads already has "dupe" as a session's provider_ref.
+	// mads already has "dupe" as a session's provider_ref — a session that has
+	// run, so the runtime told mads its model's real window.
 	if err := f.data.CreateSession(context.Background(), &contracts.Session{
 		Name: "already here", Provider: "claude-code", ProviderRef: "dupe", Activity: contracts.SessionInactive,
+		LastUsage: &contracts.Usage{Model: "claude-opus-5", ContextTokens: 5000, ContextWindow: 1_000_000},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +253,10 @@ func TestImportConversationsCreatesDormantRecords(t *testing.T) {
 	if n.LastTurnAt == nil || !n.LastTurnAt.Equal(last) {
 		t.Errorf("last_turn_at = %v, want %v", n.LastTurnAt, last)
 	}
-	if u := n.LastUsage; u == nil || u.Model != "claude-opus-5" || u.OutputTokens != 9 || u.ContextTokens != 1054 {
+	// The window is the one the runtime reported for this model on the
+	// "dupe" session, not the static 200k table.
+	if u := n.LastUsage; u == nil || u.Model != "claude-opus-5" || u.OutputTokens != 9 || u.ContextTokens != 1054 ||
+		u.ContextWindow != 1_000_000 {
 		t.Errorf("last_usage = %+v", u)
 	}
 	// Untitled conversations are named from the first user message.
@@ -287,6 +292,29 @@ func TestImportConversationsCreatesDormantRecords(t *testing.T) {
 		if s.Activity != contracts.SessionInactive {
 			t.Errorf("session %s activity = %q, want inactive", s.ID, s.Activity)
 		}
+	}
+}
+
+// With no session that has reported this model's window, an import can't
+// know what the native token counts are out of — the 200k fallback would
+// overstate a 1M session fivefold and auto-compact it on its first continue.
+// So it records no usage at all: unknown, not wrong.
+func TestImportConversationsWithoutKnownWindowRecordsNoUsage(t *testing.T) {
+	f := newImportFixture(t)
+	f.native(t, "-repo", "lone", convo(f.repo, "cli", "a conversation from before mads")...)
+
+	if res := f.importAll(t); res["imported"] != 1 {
+		t.Fatalf("POST = %v, want imported 1", res)
+	}
+	all, err := f.data.Sessions(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].ProviderRef != "lone" {
+		t.Fatalf("sessions = %+v, want just the imported one", all)
+	}
+	if all[0].LastUsage != nil {
+		t.Errorf("last_usage = %+v, want none without a runtime-reported window", all[0].LastUsage)
 	}
 }
 
