@@ -139,13 +139,8 @@ Terminal mode does exactly that today (see Follow-ups).
 - **If the shell exits on its own** (`exit`, or a crash), the dock shows
   `[process exited]` with a **Start new shell** button. Hiding and reopening
   also starts a fresh one.
-- **A live, hidden shell is visible in two places:** a small terminal glyph on
-  the session's rail card and a dot on the dock toggle. "Hidden" is the only
-  state that needs flagging. A visible dock speaks for itself.
-  The rail glyph is a terminal mark (`>_`), never a dot: the card already
-  carries the worktree work marker (a hollow accent dot for uncommitted
-  changes, filled for commits to land), and a second circle would read as
-  the same thing.
+- **A live shell shows in two places:** its session's rail card restyles
+  (D9), and the dock toggle carries a dot while the shell is hidden.
 
 ### D5. What's running
 
@@ -195,6 +190,40 @@ section, so it has no profile diff or restart badge.
   one-line notice in the dock: "9 shells are running · Manage". Manage links
   to the inventory.
 
+### D9. The rail card: no status dot, and a shell card reads as a terminal
+
+**Mockup:** [`docs/mockups/shell-rail-card.html`](mockups/shell-rail-card.html),
+variant C. The card was already crowded with standalone marks, and the status
+line already says what the dot says. So instead of adding a `>_` mark, a card
+with a live shell changes style, and the dot goes from every card.
+
+- **No status dot on any card.** The status line moves left into the dot's
+  gutter (`.status`, `.summary` and `.detail` lose their 16px indent).
+- **The dot's one unique signal moves into the status line.** A sleeping
+  session with blocked tasks shows an amber dot today, and its status line
+  says only "Sleeping · wakes on send". It becomes **"Sleeping · N blocked
+  tasks"** in the `needs` tone. `dotState()` stays, because the command
+  palette's attention badge (`attentionCount.ts`) still counts it.
+- **A card whose session has a live shell, hidden or visible:**
+  - `>_` sits in front of the name (mono, bold, 11px), coloured with the
+    status line's tone. The status line indents to sit under the name.
+  - The name and timestamp switch to the mono face.
+  - Nothing blinks. On the rail, only a card that's actually working moves.
+  - The tooltip gains a clause: "Shell open", or "Shell hidden · running:
+    `sudo python3 -m http.server 8099`" (D5).
+- **The timestamp uses the name's font on every card:** sans on an ordinary
+  card, mono on a shell card. It's mono everywhere today. Keep
+  `tabular-nums` so "20m" and "3d" don't jitter.
+- **Card height doesn't change** between the shell and plain styles. The
+  name's line-height is fixed, and the rail's rule is that a state change
+  repaints and never reflows. Mono names are wider, so they hit the 2-line
+  clamp sooner. That's accepted.
+- **Linked cards:** `LinkConnector` draws its line to the dot's centre
+  (`LinkConnector.tsx:20`). It needs a new anchor, the name's first line.
+- **Data:** the rail learns which sessions have a live shell from a small
+  renderer store fed by the shell host's `list()` and its open/end events
+  (D2). No Router or Data Service change.
+
 ## Non-goals (v1)
 
 - Surviving a mads restart or crash (tmux or a real terminal does that).
@@ -216,6 +245,8 @@ section, so it has no profile diff or restart badge.
 
 ## Decomposition (dependency order)
 
+Seedable as [`docs/shell-dock-tasks.yaml`](shell-dock-tasks.yaml) (steps 1–7; step 8 needs Drew).
+
 1. **Shell host.** `ui/electron/pty/shellHost.ts` (the utilityProcess entry),
    the D2 protocol, and the MessagePort broker in `main.ts`. Move node-pty out
    of main. Register every handler once (fixes macOS `activate`). Unit tests
@@ -228,9 +259,13 @@ section, so it has no profile diff or restart badge.
    window-reload reattach.
 4. **Busy and End.** D5 on Linux and macOS, the D4 End dialog, D7 quit
    confirmation, `session.deleted` and the delete-dialog line.
-5. **Visibility.** The rail glyph and the dock-toggle dot.
-6. **Inventory.** D8 Settings section and the soft-limit notice.
-7. **Manual pass in the real app** (Playwright runs in a browser and has no
+5. **Rail card without the dot** (D9's first two bullets, the timestamp
+   font and the connector anchor). Independent of everything above; it can
+   land first.
+6. **Shell cards and the dock-toggle dot.** D9's shell style and tooltip,
+   fed by the shell host. Needs 3 and 5.
+7. **Inventory.** D8 Settings section and the soft-limit notice.
+8. **Manual pass in the real app** (Playwright runs in a browser and has no
    pty). Drive the running Electron app with the CDP probe:
    - **W1:** open, `git log`, resize, switch sessions, come back (same
      contents and size), ×. No prompt; the inventory is empty.
@@ -240,6 +275,9 @@ section, so it has no profile diff or restart badge.
    - Reload the window (Ctrl+R) and confirm the dock reattaches.
    - `kill` the shell host and confirm the message and restart.
    - Quit with a busy shell and confirm the prompt.
+   - Rail: both shell cards styled, plain cards dotless, a sleeping session
+     with blocked tasks reads amber on its status line, linked cards'
+     connectors still meet their card.
 
 ## Follow-ups (not this design)
 
@@ -265,4 +303,7 @@ section, so it has no profile diff or restart badge.
   (CPU isolation and crash isolation).
 - 2026-10-05: a Settings shell inventory replaces any automatic cap.
 - 2026-10-05: no "Shells…" palette command. Finding a hidden shell is the rail
-  glyph's job, and cleanup is rare enough for Settings.
+  card's job, and cleanup is rare enough for Settings.
+- 2026-10-05: rail variant C (D9). A shell restyles its card instead of adding
+  a mark, the status dot goes from every card, and the timestamp follows the
+  name's font.

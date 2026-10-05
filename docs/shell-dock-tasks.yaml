@@ -1,0 +1,204 @@
+# Shell dock: shells that outlive the view — seed with:
+#   SES=$(bin/mads new-session -name "Shell dock")
+#   bin/mads seed -session $SES -file docs/shell-dock-tasks.yaml
+#
+# Design doc: docs/SHELL-DOCK-DESIGN.md (D-numbers below refer to it).
+# Rail mockup: docs/mockups/shell-rail-card.html, variant C.
+# Already landed: a0ba437 (shell env, absolute cwd, copy/paste), a551016
+# (no convertEol on real ptys).
+#
+# EXECUTION HOST: the pipeline runs on Linux and cannot drive the Electron
+# app. Every task must be verifiable with unit tests (vitest, a fake pty)
+# plus `npm --prefix ui run test:pty` where a real pty matters. No task may
+# claim it ran anything in the live app. Never `pkill`/`killall` vite,
+# electron or node: other sessions' processes share this machine, and a
+# pipeline executor's prompt sits in its argv.
+#
+# NOT SEEDED — needs Drew in the real app, after the tasks land:
+#   Design doc Decomposition step 8 (manual pass): W1, W2, window reload,
+#   killing the shell host, quit prompt, and the rail checks.
+#
+# Parallelism:
+#   Rail track:   "Rail card without the status dot" — independent, land first.
+#   Shell track:  shell host → mirror → dock wiring → busy/End → inventory.
+#   Join:         "Shell cards on the rail" waits on both tracks.
+
+tasks:
+  - title: "Rail card without the status dot"
+    description: >
+      Design doc D9, first two bullets plus the timestamp and connector
+      bullets; mockup docs/mockups/shell-rail-card.html variant C. In
+      ui/src/features/sessions/rail/: remove the status dot (`.dot`, the
+      `<span className={styles.dot…}>` in SessionRail.tsx) from every card.
+      The status line, `.summary` and `.detail` lose their 16px left indent.
+      A sleeping session with blocked tasks (today: dotState() === "attn"
+      with activity !== "active") gets the status label
+      "Sleeping · N blocked task(s)" in the `needs` tone instead of
+      "Sleeping · wakes on send" (railGroups.ts statusOf). Keep dotState()
+      and its export: command-palette/state/attentionCount.ts still counts
+      it, and the two must not disagree. The timestamp (`.when`) uses the
+      name's font (var(--sans)) instead of var(--mono); keep
+      font-variant-numeric: tabular-nums. LinkConnector.tsx anchors its line
+      to the dot's centre (see its geometry comment); re-anchor it to the
+      vertical centre of the name's first line and update that comment.
+      Card height must not change in any state.
+    acceptance_criteria: >
+      No card renders a status dot. railGroups tests cover the new
+      blocked-tasks sleeping label and tone, and that dotState() is
+      unchanged. SessionRail tests updated for the removed dot. A linked
+      card's connector test (or a new one) asserts the new anchor
+      offset. make check passes.
+    labels: [ui, rail]
+
+  - title: "Shell host: dock shells in a utilityProcess with attach/detach/end"
+    description: >
+      Design doc D1 and D2. Today ui/electron/pty/ptyHost.ts runs node-pty
+      in Electron's main process, and registerPtyHandlers (plus the badge
+      and dialog ipcMain handlers) registers inside createWindow in
+      ui/electron/main.ts, which throws on macOS when `activate` re-creates
+      the window. Build a shell host: a utilityProcess entry (e.g.
+      ui/electron/pty/shellHost.ts) that alone loads node-pty and keeps one
+      shell per session id. Protocol: open(sessionId, {cwd, cols, rows}) →
+      {shellId, created} (attach or start), detach, end, write, resize,
+      list, and data/exit events delivered only to the attached window;
+      the latest open wins and the previous window gets `detached`. Keep
+      shellEnv() and resolveCwd() from a0ba437 for spawning. In main, fork
+      the host lazily, broker a MessageChannelMain between the host and
+      each window's preload, and handle host exit by notifying windows.
+      Detach a window's shells on did-start-navigation,
+      render-process-gone and destroyed. Move every ipcMain.handle in
+      main.ts to a once-at-whenReady registration. Keep the existing
+      window.mads.pty bridge working for anything that still uses it until
+      the dock wiring task switches the dock over. Update the electron
+      build (tsc -p electron/tsconfig.json) so the host entry is emitted
+      to dist-electron.
+    acceptance_criteria: >
+      Unit tests against the host's message handler with a fake pty
+      module: open starts once per session and re-open attaches; detach
+      keeps the process; end kills it; data reaches only the attached
+      port; latest open wins. A *.realtest.ts round trip (run via
+      `npm --prefix ui run test:pty`) forks the real host and echoes
+      through a real shell. No ipcMain.handle call remains inside
+      createWindow. `npm --prefix ui run build` succeeds. make check
+      passes.
+    labels: [ui, electron, shell]
+
+  - title: "Shell host mirror: restore the screen on reattach"
+    description: >
+      Design doc D3. In the shell host, give each shell an @xterm/headless
+      terminal (5.5.x, matching @xterm/xterm) fed every byte whether or not
+      a window is attached, with scrollback 1000 (same constant used by the
+      dock's xterm). On open of an existing shell, serialize the mirror
+      with @xterm/addon-serialize, send it as the first data chunk, then
+      resume live output, all synchronously so nothing drops or doubles.
+      Then resize the pty to the attaching view's size so full-screen
+      programs repaint. While attached, batch data per ~16 ms. Add the two
+      packages to ui/package.json and the lockfile.
+    acceptance_criteria: >
+      Tests with a fake pty: write A, attach, write B, detach, write C,
+      re-attach → the snapshot contains A, B and C exactly once, and live
+      data after it isn't duplicated. A test that re-attach at a new size
+      calls pty.resize with that size. Batching test with fake timers.
+      make check passes.
+    depends_on:
+      - "Shell host: dock shells in a utilityProcess with attach/detach/end"
+    labels: [ui, electron, shell]
+
+  - title: "Dock wiring: ShellBridge, per-session dock state, hide vs End"
+    description: >
+      Design doc D2 (ShellBridge) and D4. Add a dock-only ShellBridge
+      implementing the PtyBridge interface
+      (ui/src/conversation/TerminalRenderer/ptyBridge.ts) over the shell
+      host port exposed by preload: spawn → open(sessionId), kill → detach,
+      plus a new end(). TerminalView must not change behaviour for the
+      agent's Terminal mode or the pipeline drill-in. Replace
+      ConversationTab's useState shellOpen with a small per-session store
+      {open, height} persisted to localStorage, so the dock survives
+      session switches (SessionsSurface keys SessionWorkspace by session)
+      and window reloads. Ctrl+` and a new chevron in the dock header
+      hide/show and never kill; Ctrl+` starts a shell when there is none.
+      A new × ends the shell (the busy confirmation comes in the next
+      task; here × always ends). Opening the activity dock hides the shell
+      dock instead of unmounting the shell. When the shell exits on its
+      own, show "[process exited]" and a Start new shell button. A shell
+      host exit shows "[shell host exited]" with a restart. The dock-toggle
+      shows a dot while the session's shell is alive and hidden. Retire the
+      old window.mads.pty dock path once nothing uses it.
+    acceptance_criteria: >
+      Vitest with a fake ShellBridge: switching sessions and back reattaches
+      (open called again, no end); Ctrl+` toggles visibility without end;
+      × calls end; opening the activity dock hides without end; exited
+      state renders the restart button; stored height is restored. Agent
+      Terminal mode and pipeline drill-in tests unchanged and passing.
+      make check passes.
+    depends_on:
+      - "Shell host mirror: restore the screen on reattach"
+    labels: [ui, shell]
+
+  - title: "Busy shells: End confirmation, quit prompt, session delete"
+    description: >
+      Design doc D5, D6, D7. In the shell host, answer "busy, and with
+      what" on demand (list(), end requests, quit): node-pty's `process`
+      for the foreground, plus a descendant walk — Linux via
+      /proc/<pid>/task/<pid>/children recursively, macOS via one
+      `ps -A -o pid=,ppid=,comm=` snapshot behind an injectable seam so the
+      parsing is unit-tested on Linux. Report truncated command lines, a
+      count and summed RSS. The dock's × on a busy shell shows the D4
+      dialog (list the processes, the nohup/setsid caveat, [Keep running,
+      hide] and [End shell]); an idle shell ends without asking. On
+      before-quit, list(); if any shell is busy, show one native
+      confirmation listing them by session ([Quit and end them] / Cancel);
+      idle shells end quietly. On session.deleted, end that session's
+      shell; the session delete dialog gains a line when its shell is busy.
+    acceptance_criteria: >
+      Unit tests: /proc walk against a fixture tree; ps parsing against a
+      captured fixture; busy vs idle classification; × routes to dialog
+      only when busy; Keep running hides without end; quit handler
+      prevents quit and prompts only when busy; session.deleted ends the
+      shell. make check passes.
+    depends_on:
+      - "Dock wiring: ShellBridge, per-session dock state, hide vs End"
+    labels: [ui, electron, shell]
+
+  - title: "Shell cards on the rail"
+    description: >
+      Design doc D9, shell-card bullets; mockup
+      docs/mockups/shell-rail-card.html variant C. Add a renderer store of
+      live shells fed by the shell host's list() and open/end events (no
+      Router change). A card whose session has a live shell, hidden or
+      visible: `>_` in front of the name (mono, bold, 11px) coloured with
+      the status line's tone; the status line indents to sit under the
+      name; the name and the timestamp switch to var(--mono). Nothing
+      animates. The card's tooltip gains "Shell open" or "Shell hidden ·
+      running: <cmd>" (from D5, when busy). Card height must not change
+      between the plain and shell styles.
+    acceptance_criteria: >
+      SessionRail tests: a session in the live-shell store renders the
+      prompt with the status tone's class, mono name and timestamp, and
+      the tooltip clause; removing it from the store reverts the card;
+      the row's computed height class is the same in both. make check
+      passes.
+    depends_on:
+      - "Rail card without the status dot"
+      - "Busy shells: End confirmation, quit prompt, session delete"
+    labels: [ui, rail, shell]
+
+  - title: "Settings → Shells inventory and the soft-limit notice"
+    description: >
+      Design doc D8. A new Shells section in Settings
+      (ui/src/features/settings/sections.ts and SettingsSurface). It is not
+      a Config section: no profile diff, no restart badge. Rows: session
+      (link, or "session gone"), folder, started, hidden/visible, what's
+      running (D5) or "idle", memory. Actions: End per row (the same busy
+      dialog as the dock) and End all idle. Poll list() every 5 s only
+      while the section is visible. When a ninth shell opens, the dock
+      shows a one-line notice "9 shells are running · Manage" linking to
+      this section. Never kill a shell automatically.
+    acceptance_criteria: >
+      Vitest with a fake shell host: rows render from list(); End on a
+      busy row opens the dialog; End all idle skips busy shells; polling
+      starts and stops with the section's visibility; the notice appears
+      at 9 and links to Settings → Shells. make check passes.
+    depends_on:
+      - "Busy shells: End confirmation, quit prompt, session delete"
+    labels: [ui, settings, shell]

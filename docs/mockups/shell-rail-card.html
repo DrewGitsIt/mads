@@ -1,0 +1,176 @@
+<!doctype html>
+<!--
+  mads — rail card with a live shell
+  ==================================
+
+  Companion to docs/SHELL-DOCK-DESIGN.md D4. Instead of another standalone
+  marker, a session with a live dock shell (hidden or visible) restyles its
+  card: the status dot's slot becomes a ">_" prompt header and the name
+  switches to the mono face. The status line already says what the dot says,
+  so this is also a trial of the rail without the dot.
+
+  CHOSEN (Drew, 2026-10-05): C. The dot goes from every card; a sleeping
+  session's blocked tasks move into its status line; the >_ takes the status
+  line's tone; the timestamp uses the name's font (sans, or mono on a shell
+  card). A and B stay below for the record.
+
+  Card geometry and tokens copied from
+  ui/src/features/sessions/rail/SessionRail.module.css and
+  ui/src/tokens/tokens.css (clay, dark). Same five sessions in every column.
+  Shell sessions: #2 (selected, dock open) and #4 (dock hidden, a sudo'd
+  service running).
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — rail card with a live shell</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15);
+    --ok:#7cb389; --ok-fg:#7cb389; --warn:#d3af5e; --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-fg:#dd7a66;
+    --sans:-apple-system,"SF Pro Text",BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r-sm:6px; --fs-chip:10.5px; --fs-sm:12.5px;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:24px; background:var(--bg0); color:var(--text); font:500 13px var(--sans); }
+  h1 { font-size:16px; margin:0 0 4px; }
+  .lede { color:var(--text2); max-width:110ch; margin:0 0 20px; line-height:1.5; }
+  .cols { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+  .col { width:280px; }
+  .col h2 { font-size:13px; margin:0 0 2px; }
+  .col .note { color:var(--text3); font-size:11.5px; line-height:1.45; margin:0 0 10px; min-height:66px; }
+  .rail { background:var(--bg1); border:1px solid var(--line-soft); border-radius:8px; padding:8px; }
+
+  /* ── card, verbatim geometry ── */
+  .row { position:relative; display:flex; flex-direction:column; gap:4px; padding:8px 12px; margin-bottom:2px;
+         background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); font:500 var(--fs-sm) var(--sans); }
+  .row:hover { background:var(--bg2); }
+  .row.selected { background:var(--bg3); border-color:var(--line); }
+  .top { display:flex; align-items:flex-start; gap:8px; }
+  .dot { flex:none; width:8px; height:8px; border-radius:50%; margin-top:5px; background:var(--text3); }
+  .dot.on { background:var(--ok); } .dot.attn { background:var(--warn); } .dot.work { background:var(--accent); }
+  .name { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; }
+  .workMark { flex:none; width:7px; height:7px; border-radius:50%; margin-top:5px; border:1.5px solid var(--accent); }
+  .harness { flex:none; width:14px; height:14px; margin-top:3px; display:inline-flex; align-items:center; justify-content:center;
+             border-radius:4px; background:var(--bg3); color:var(--text3); font:700 9px var(--sans); }
+  .when { flex:none; margin-left:auto; padding-left:8px; color:var(--text3); font:500 var(--fs-chip) var(--mono); line-height:1.35; }
+  .status { display:flex; align-items:center; gap:6px; min-height:15px; padding-left:16px; color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .status .g { width:9px; text-align:center; font-size:9px; }
+  .spin { width:9px; height:9px; border-radius:50%; border:1.5px solid var(--accent); border-right-color:transparent; animation:s 1s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg); } }
+  .t-working { color:var(--accent); } .t-needs { color:var(--warn-fg); } .t-done { color:var(--ok-fg); } .t-bad { color:var(--bad-fg); }
+  .lbl { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .elapsed { font-family:var(--mono); opacity:.8; }
+
+  /* ── the shell treatment ── */
+  .prompt { flex:none; width:16px; margin-top:1px; font:700 11px/1.35 var(--mono); letter-spacing:-1px; color:var(--text3); }
+  .prompt.on { color:var(--ok); } .prompt.attn { color:var(--warn); } .prompt.work { color:var(--accent); }
+  .row.shell .top { gap:6px; }
+  .row.shell .status { padding-left:22px; }
+  .shellName { font-family:var(--mono); font-size:12px; letter-spacing:-.1px; }
+
+  /* B: the card itself reads as a terminal pane */
+  .term { background:var(--bg0); border-color:var(--line); box-shadow:inset 2px 0 0 var(--accent); }
+  .term:hover { background:#17130d; }
+  .term.selected { background:#0d0b07; border-color:var(--accent); }
+
+  /* C: no dot anywhere; the status line takes the gutter */
+  .nodot .status { padding-left:0; }
+  .nodot .row.shell .status { padding-left:22px; }
+  .nodot .when { font-family:var(--sans); font-variant-numeric:tabular-nums; }
+  .nodot .row.shell .when { font-family:var(--mono); }
+  .prompt.t-done { color:var(--ok-fg); } .prompt.t-idle { color:var(--text3); }
+</style>
+</head>
+<body>
+<h1>Rail card with a live shell</h1>
+<p class="lede">
+  Sessions #2 and #4 have a live dock shell. #2 is open and selected; #4 is hidden, with a sudo'd service running.
+  The <code>&gt;_</code> takes the status dot's slot and keeps its colour, so no status information is lost.
+  Nothing blinks: on the rail, only a card that is actually working moves.
+  Hover a shell card for its tooltip.
+</p>
+
+<div class="cols">
+
+  <!-- ─────────────── Today ─────────────── -->
+  <div class="col">
+    <h2>Today</h2>
+    <p class="note">No shell indication. The dot repeats the status line, except on #3: amber means a sleeping session with blocked tasks, which the status line doesn't say.</p>
+    <div class="rail">
+      <div class="row"><div class="top"><span class="dot work"></span><span class="name">Folder picker and defaults UI</span><span class="harness">C</span><span class="when">now</span></div>
+        <div class="status t-working"><span class="spin"></span><span class="lbl">Running bash · npm test</span><span class="elapsed">2m</span></div></div>
+      <div class="row selected"><div class="top"><span class="dot on"></span><span class="name">Shell dock: shells that outlive the view</span><span class="workMark" title="uncommitted changes"></span><span class="harness">C</span><span class="when">1m</span></div>
+        <div class="status t-done"><span class="g">✓</span><span class="lbl">Done · your turn</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">DGX Spark relay flapping debug</span><span class="harness">C</span><span class="when">3d</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Sleeping · wakes on send</span></div></div>
+      <div class="row"><div class="top"><span class="dot on"></span><span class="name">Monitor event-driven redesign</span><span class="harness">C</span><span class="when">20m</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Ready</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="harness">C</span><span class="when">4m</span></div>
+        <div class="status t-needs"><span class="g">▲</span><span class="lbl">Needs approval · Bash</span><span class="elapsed">4m</span></div></div>
+    </div>
+  </div>
+
+  <!-- ─────────────── A ─────────────── -->
+  <div class="col">
+    <h2>A · prompt header</h2>
+    <p class="note"><code>&gt;_</code> replaces the dot, in the dot's colour, and the name switches to mono. Otherwise it's the same card. Easy to spot when you scan for it, quiet when you don't.</p>
+    <div class="rail">
+      <div class="row"><div class="top"><span class="dot work"></span><span class="name">Folder picker and defaults UI</span><span class="harness">C</span><span class="when">now</span></div>
+        <div class="status t-working"><span class="spin"></span><span class="lbl">Running bash · npm test</span><span class="elapsed">2m</span></div></div>
+      <div class="row shell selected" title="Shell open · ~/.mads/session-worktrees/ses_ed0e…"><div class="top"><span class="prompt on">&gt;_</span><span class="name shellName">Shell dock: shells that outlive the view</span><span class="workMark" title="uncommitted changes"></span><span class="harness">C</span><span class="when">1m</span></div>
+        <div class="status t-done"><span class="g">✓</span><span class="lbl">Done · your turn</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">DGX Spark relay flapping debug</span><span class="harness">C</span><span class="when">3d</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Sleeping · wakes on send</span></div></div>
+      <div class="row shell" title="Shell hidden · running: sudo python3 -m http.server 8099"><div class="top"><span class="prompt on">&gt;_</span><span class="name shellName">Monitor event-driven redesign</span><span class="harness">C</span><span class="when">20m</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Ready</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="harness">C</span><span class="when">4m</span></div>
+        <div class="status t-needs"><span class="g">▲</span><span class="lbl">Needs approval · Bash</span><span class="elapsed">4m</span></div></div>
+    </div>
+  </div>
+
+  <!-- ─────────────── B ─────────────── -->
+  <div class="col">
+    <h2>B · A + terminal surface</h2>
+    <p class="note">The card also turns into a little terminal pane: the darkest surface, a copper left rule, and a copper border when selected. Hard to miss. The cost is that a different background competes with the selected-card highlight.</p>
+    <div class="rail">
+      <div class="row"><div class="top"><span class="dot work"></span><span class="name">Folder picker and defaults UI</span><span class="harness">C</span><span class="when">now</span></div>
+        <div class="status t-working"><span class="spin"></span><span class="lbl">Running bash · npm test</span><span class="elapsed">2m</span></div></div>
+      <div class="row shell term selected" title="Shell open · ~/.mads/session-worktrees/ses_ed0e…"><div class="top"><span class="prompt on">&gt;_</span><span class="name shellName">Shell dock: shells that outlive the view</span><span class="workMark" title="uncommitted changes"></span><span class="harness">C</span><span class="when">1m</span></div>
+        <div class="status t-done"><span class="g">✓</span><span class="lbl">Done · your turn</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">DGX Spark relay flapping debug</span><span class="harness">C</span><span class="when">3d</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Sleeping · wakes on send</span></div></div>
+      <div class="row shell term" title="Shell hidden · running: sudo python3 -m http.server 8099"><div class="top"><span class="prompt on">&gt;_</span><span class="name shellName">Monitor event-driven redesign</span><span class="harness">C</span><span class="when">20m</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Ready</span></div></div>
+      <div class="row"><div class="top"><span class="dot attn"></span><span class="name">Land link-cadence-on-signal</span><span class="harness">C</span><span class="when">4m</span></div>
+        <div class="status t-needs"><span class="g">▲</span><span class="lbl">Needs approval · Bash</span><span class="elapsed">4m</span></div></div>
+    </div>
+  </div>
+
+  <!-- ─────────────── C ─────────────── -->
+  <div class="col nodot">
+    <h2>C · A, and no dot anywhere ✓ chosen</h2>
+    <p class="note">The trial run without the dot. Ordinary cards drop it, and the status line moves left into the gutter. #3's blocked-tasks signal moves into the status line. Only shell cards keep anything in front of the name. The <code>&gt;_</code> takes the status line's tone, and the timestamp uses the name's font.</p>
+    <div class="rail">
+      <div class="row"><div class="top"><span class="name">Folder picker and defaults UI</span><span class="harness">C</span><span class="when">now</span></div>
+        <div class="status t-working"><span class="spin"></span><span class="lbl">Running bash · npm test</span><span class="elapsed">2m</span></div></div>
+      <div class="row shell selected" title="Shell open · ~/.mads/session-worktrees/ses_ed0e…"><div class="top"><span class="prompt t-done">&gt;_</span><span class="name shellName">Shell dock: shells that outlive the view</span><span class="workMark" title="uncommitted changes"></span><span class="harness">C</span><span class="when">1m</span></div>
+        <div class="status t-done"><span class="g">✓</span><span class="lbl">Done · your turn</span></div></div>
+      <div class="row"><div class="top"><span class="name">DGX Spark relay flapping debug</span><span class="harness">C</span><span class="when">3d</span></div>
+        <div class="status t-needs"><span class="g">◦</span><span class="lbl">Sleeping · 2 blocked tasks</span></div></div>
+      <div class="row shell" title="Shell hidden · running: sudo python3 -m http.server 8099"><div class="top"><span class="prompt t-idle">&gt;_</span><span class="name shellName">Monitor event-driven redesign</span><span class="harness">C</span><span class="when">20m</span></div>
+        <div class="status"><span class="g">◦</span><span class="lbl">Ready</span></div></div>
+      <div class="row"><div class="top"><span class="name">Land link-cadence-on-signal</span><span class="harness">C</span><span class="when">4m</span></div>
+        <div class="status t-needs"><span class="g">▲</span><span class="lbl">Needs approval · Bash</span><span class="elapsed">4m</span></div></div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
