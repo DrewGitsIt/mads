@@ -154,6 +154,20 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintf(w, `{"model":%q}`, model)
 	})
+	// The session's worktree routes (Commit, Land): each answers with a
+	// marker naming the route, the query the Router attached and the body
+	// it forwarded, so router tests can tell a forwarded call from one the
+	// Router ran itself.
+	for _, route := range []string{"GET /worktree", "POST /commit", "POST /commit/undo", "POST /land"} {
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"via": "child", "route": route, "query": r.URL.RawQuery, "body": string(body),
+			})
+		})
+	}
 	mux.HandleFunc("GET /transport", func(w http.ResponseWriter, r *http.Request) {
 		transportMu.Lock()
 		mode := transportMode

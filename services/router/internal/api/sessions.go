@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 )
 
 func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
@@ -392,9 +393,16 @@ func writeWakeError(w http.ResponseWriter, err error) {
 //
 // Still failable, just not refusable: a terminate that errors leaves the
 // child alive, so the session must not be deleted out from under it.
+//
+// Once the record is gone, an isolated session's worktree folder and
+// branch go too (docs/SESSION-WORKTREES-DESIGN.md D7) — after the child,
+// since git removes a folder even with a process working in it, and after
+// the record, so a failed delete never loses work. Best-effort: a cleanup
+// problem is logged and never fails the delete.
 func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, err := s.data.Session(r.Context(), id); err != nil {
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
 		writeError(w, err) // 404 for an unknown id, before terminating anything
 		return
 	}
@@ -402,10 +410,15 @@ func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeErrMsg(w, http.StatusBadGateway, "delete session: terminate: ", err)
 		return
 	}
+	// The child may have written its worktree only now, at its first start.
+	if cur, err := s.data.Session(r.Context(), id); err == nil {
+		sess = cur
+	}
 	if err := s.data.DeleteSession(r.Context(), id); err != nil {
 		writeError(w, err)
 		return
 	}
+	sessionwt.Cleanup(context.WithoutCancel(r.Context()), sess)
 	w.WriteHeader(http.StatusNoContent)
 }
 
