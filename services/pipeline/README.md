@@ -109,9 +109,12 @@ the session's `agent_state` to go idle, up to the merge stage's timeout,
 then commits those files as `mads-session` ("Save session edits before
 pipeline merge", `Session:` trailer, recorded on the Data Service once), and
 starts the round over so the task branch absorbs that commit in its own
-worktree. `merge.completed` then carries `auto_committed`/`auto_commits`, and
-`waited_out` plus `files` when the merge went ahead with the agent still
-working; the session's header counts are refreshed after every merge.
+worktree. `merge.completed` then carries `task_title`,
+`auto_committed`/`auto_commits`, and `waited_out` plus `files` when the merge
+went ahead with the agent still working; the session's header counts are
+refreshed after every merge. A folder left mid-merge or mid-rebase (the agent
+resolving a Land conflict) is waited out the same way, never merged over or
+aborted: past the timeout the merge fails saying the folder is mid-merge.
 
 **A post-rebase gate failure is triaged, not taken at face value.** Rebase
 conflicts (above) are the land queue's one deterministic failure mode; a gate

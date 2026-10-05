@@ -40,7 +40,11 @@ export type WorktreeCardModel =
       /** The most recent Land outcome — the only one that offers "Land again". */
       latest: boolean;
     })
-  | (CardBase & { kind: "ensured"; title: string; body: string });
+  | (CardBase & { kind: "ensured"; title: string; body: string })
+  /** A pipeline task merging into the session's folder (D8) committed the agent's overlapping edits first. */
+  | (CardBase & { kind: "pipelineSaved"; task?: string; files: string[] })
+  /** A pipeline task merged into the folder after waiting out the agent's turn: these files changed under it. */
+  | (CardBase & { kind: "pipelineMerged"; task?: string; files: string[] });
 
 export type LandCardModel = Extract<WorktreeCardModel, { kind: "landed" | "conflicted" | "refused" }>;
 
@@ -156,8 +160,17 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
       case "merge.conflicted":
       case "merge.refused": {
         // The pipeline's own land queue reuses these types for task
-        // branches; only a session Land says kind "land".
-        if (str(p.kind) !== "land") break;
+        // branches; only a session Land says kind "land". A task merged
+        // into the session's folder (D8) draws a card only when it touched
+        // the agent's work: saved its edits, or merged mid-turn.
+        if (str(p.kind) !== "land") {
+          if (env.type !== "merge.completed") break;
+          const task = str(p.task_title);
+          const saved = strs(p.auto_committed) ?? [];
+          if (saved.length > 0) cards.push({ ...base, id: `${base.id}-saved`, kind: "pipelineSaved", task, files: saved });
+          if (p.waited_out === true) cards.push({ ...base, kind: "pipelineMerged", task, files: strs(p.files) ?? [] });
+          break;
+        }
         const landBase = str(p.base) ?? str(p.target_branch);
         if (env.type === "merge.completed") {
           notTip();
@@ -183,8 +196,6 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
         if (copy) cards.push({ ...base, kind: "ensured", ...copy });
         break;
       }
-      // A pipeline merging its results into the session (D8) lands here
-      // once it has an event of its own.
     }
   }
   markLatest(cards);

@@ -107,3 +107,29 @@ describe("withEchoes", () => {
     expect(withEchoes(logged, { commits: [echo] })).toHaveLength(1);
   });
 });
+
+describe("foldWorktreeEvents — a pipeline merging into the session (D8)", () => {
+  const task = { branch: "mads/tsk_x", target_branch: "mads/session/ses", fork_sha: "f", trunk_head: "t" };
+
+  it("stays quiet for a task merge that didn't touch the agent's work", () => {
+    expect(foldWorktreeEvents([env("merge.completed", { ...task, task_title: "Add docs" })])).toEqual([]);
+  });
+
+  it("says when it saved the agent's edits, and when it merged mid-turn", () => {
+    const cards = foldWorktreeEvents([
+      env("commit.created", { hash: "save1", source: "pipeline_save", message: "Save session edits before pipeline merge" }),
+      env("merge.completed", {
+        ...task,
+        task_title: "Add docs",
+        auto_committed: ["notes.txt"],
+        auto_commits: ["save1"],
+        waited_out: true,
+        files: ["notes.txt", "docs/a.md"],
+      }),
+    ]);
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({ kind: "pipelineSaved", task: "Add docs", files: ["notes.txt"] });
+    expect(cards[1]).toMatchObject({ kind: "pipelineMerged", task: "Add docs", files: ["notes.txt", "docs/a.md"] });
+    expect(new Set(cards.map((c) => c.id)).size).toBe(2);
+  });
+});

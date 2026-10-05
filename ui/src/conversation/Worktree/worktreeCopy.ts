@@ -207,3 +207,18 @@ export function commitPathReason(status: string, reason?: string): string {
       return status === "rejected" ? "not committed" : "";
   }
 }
+
+function taskName(task: string | undefined): string {
+  return task ? `“${task}”` : "a task";
+}
+
+/** The quiet card for D8's safety commit: the agent's edits went into a commit so a task could merge. */
+export function pipelineSavedCopy(files: string[], task?: string): string {
+  return `Pipeline saved your edits to ${nameFiles(files, 4) || "some files"} before merging ${taskName(task)}.`;
+}
+
+/** The warning for a task merge that went ahead mid-turn, naming what changed under the agent. */
+export function pipelineMergedCopy(files: string[], task?: string): string {
+  const changed = nameFiles(files, 6);
+  return `A pipeline merged ${taskName(task)} into this folder while the agent was working${changed ? ` — changed: ${changed}` : ""}.`;
+}

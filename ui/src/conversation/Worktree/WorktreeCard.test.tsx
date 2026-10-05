@@ -122,3 +122,22 @@ describe("WorktreeCard", () => {
     expect(screen.getByRole("note", { name: "Recreated this session's folder" })).toBeTruthy();
   });
 });
+
+describe("WorktreeCard — pipeline merges into the session", () => {
+  it("quietly says which edits a pipeline saved, and for which task", () => {
+    render(<WorktreeCard card={{ kind: "pipelineSaved", id: "p", seq: 4, task: "Add docs", files: ["notes.txt"] }} />);
+    expect(screen.getByText("Pipeline saved your edits to notes.txt before merging “Add docs”.")).toBeTruthy();
+    expect(document.querySelector('[data-worktree-card="pipeline-saved"]')?.className).toMatch(/quiet/);
+  });
+
+  it("warns which files changed under a working agent", () => {
+    render(
+      <WorktreeCard card={{ kind: "pipelineMerged", id: "m", seq: 5, task: "Add docs", files: ["notes.txt", "docs/a.md"] }} />,
+    );
+    expect(screen.getByText("A pipeline merged while the agent was working")).toBeTruthy();
+    expect(
+      screen.getByText("A pipeline merged “Add docs” into this folder while the agent was working — changed: notes.txt and docs/a.md."),
+    ).toBeTruthy();
+    expect(document.querySelector('[data-worktree-card="pipeline-merged"]')?.className).toMatch(/warn/);
+  });
+});

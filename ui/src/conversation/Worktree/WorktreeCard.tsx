@@ -5,6 +5,8 @@ import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime
 import type { WorktreeCardModel } from "./worktreeCards";
 import {
   nameFiles,
+  pipelineMergedCopy,
+  pipelineSavedCopy,
   plural,
   refusalCopy,
   refusalDetailIsGit,
@@ -106,6 +108,18 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
       return (
         <Shell tone="quiet" title={card.title} when={when} kind="ensured">
           <div className={styles.body}>{card.body}</div>
+        </Shell>
+      );
+    case "pipelineSaved":
+      return (
+        <Shell tone="quiet" title="Pipeline saved your edits" when={when} kind="pipeline-saved">
+          <div className={styles.body}>{pipelineSavedCopy(card.files, card.task)}</div>
+        </Shell>
+      );
+    case "pipelineMerged":
+      return (
+        <Shell tone="warn" title="A pipeline merged while the agent was working" when={when} kind="pipeline-merged">
+          <div className={styles.body}>{pipelineMergedCopy(card.files, card.task)}</div>
         </Shell>
       );
   }

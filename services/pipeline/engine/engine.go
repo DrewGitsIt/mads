@@ -1144,6 +1144,8 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 		"branch": run.branch, "target_branch": target, "fork_sha": forkSHA, "trunk_head": trunkHead,
 	}
 	if into != nil {
+		// The conversation's card names the task it merged.
+		done["task_title"] = task.Title
 		into.annotate(done)
 		if rerr := e.cfg.Session.Refresh(ctx); rerr != nil {
 			log.Printf("engine: refresh session counts after merging %s: %v", task.ID, rerr)

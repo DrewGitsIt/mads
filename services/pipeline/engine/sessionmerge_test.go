@@ -272,7 +272,7 @@ func TestSessionMergeSavesOverlappingEditsWhenIdle(t *testing.T) {
 		t.Fatalf("merge.completed events: %d", len(evs))
 	}
 	p := payload(t, evs[0])
-	if fmt.Sprint(p["auto_committed"]) != "[notes.txt]" || fmt.Sprint(p["auto_commits"]) != "["+hash+"]" || p["waited_out"] != nil {
+	if fmt.Sprint(p["auto_committed"]) != "[notes.txt]" || fmt.Sprint(p["auto_commits"]) != "["+hash+"]" || p["waited_out"] != nil || p["task_title"] != "notes" {
 		t.Errorf("merge.completed = %v", p)
 	}
 }
