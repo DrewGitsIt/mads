@@ -48,6 +48,10 @@ export interface Session {
   fork_on_resume?: boolean;
   /** Native conversation id this session was imported from; survives the first wake's fork, which replaces provider_ref. Set once by the import. */
   imported_from?: string;
+  /** The folder this session was recorded in before the Runner found it gone and re-rooted it to the default workspace (dir is now the new folder, tags has "rerooted"). */
+  rerooted_from?: string;
+  /** True until the agent has been told about the re-root (a note prepended to its first turn). */
+  reroot_note_pending?: boolean;
   /** Most recent turn's token accounting, persisted by the Runner on every turn end — the context meter's data source at wake time, before this process has seen a turn_end of its own. */
   last_usage?: Usage;
   /**

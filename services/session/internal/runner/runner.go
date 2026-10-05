@@ -293,6 +293,11 @@ type Runner struct {
 	// taken first.
 	forkFrom string
 
+	// rerootNote is the note still owed to the agent after a re-root
+	// (rerootMissingDir), "" once claimed by the first turn sent. Guarded by
+	// mu. Session.RerootNotePending is its durable twin.
+	rerootNote string
+
 	// prov and baseOpts are captured once at the end of Start and reused by
 	// SwitchTransport, which only overrides Mode/Resume — switching
 	// transport doesn't redo worktree creation, hook install, or capability
@@ -380,8 +385,16 @@ func (r *Runner) Start(ctx context.Context) error {
 	// primary repo, Config.DefaultDir — resolved by the Router at create)
 	// replaces -cwd as the starting point for everything below, merge-back
 	// included: it is the primary the worktree branches from.
-	if sess.Dir != "" {
-		r.Cwd = sess.Dir
+	//
+	// A folder that no longer exists is replaced first (rerootMissingDir),
+	// so isolation below branches from the folder the session will really
+	// run in.
+	startDir, err := r.rerootMissingDir(ctx, &sess)
+	if err != nil {
+		return err
+	}
+	if startDir != "" {
+		r.Cwd = startDir
 	}
 	cwd, err := r.isolate(ctx, &sess)
 	if err != nil {
@@ -534,6 +547,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.mode = opts.Mode
 	r.lastRef = provSess.Ref()
 	r.forkFrom = forkFrom
+	if sess.RerootNotePending {
+		r.rerootNote = rerootNote(sess.RerootedFrom, cwd)
+	}
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
 	r.mu.Unlock()
@@ -852,22 +868,30 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	}
 	r.deliverLocked(nil)
 	sess := r.sess
+	// The user's own words go to the synthesis engine and digest; the
+	// provider (and the locator, which matches the transcript's first
+	// message) gets them with any owed re-root note in front.
+	wire, note := r.claimRerootNoteLocked(text)
 	r.mu.Unlock()
 
 	if armed {
-		go r.locateProviderRef(prov, mode, cwd, spawnedAt, text)
+		go r.locateProviderRef(prov, mode, cwd, spawnedAt, wire)
 	}
 
 	r.synthEngine.OnUserSend(text)
 	r.digest.recordUser(text, false)
 
 	r.markAgentWorking(text)
-	if err := sess.Send(ctx, text); err != nil {
+	if err := sess.Send(ctx, wire); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.restoreRerootNote(note)
 		r.markAgentIdle()
 		return err
+	}
+	if note != "" {
+		r.noteDelivered(ctx)
 	}
 	return nil
 }
@@ -893,6 +917,7 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	}
 	r.deliverLocked(&attribution)
 	sess := r.sess
+	wire, note := r.claimRerootNoteLocked(text)
 	r.mu.Unlock()
 
 	r.synthEngine.OnUserSend(text)
@@ -900,12 +925,16 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 	r.recordInjectionAudit(ctx, attribution, text)
 
 	r.markAgentWorking(text)
-	if err := sess.Send(ctx, text); err != nil {
+	if err := sess.Send(ctx, wire); err != nil {
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.restoreRerootNote(note)
 		r.markAgentIdle()
 		return err
+	}
+	if note != "" {
+		r.noteDelivered(ctx)
 	}
 	return nil
 }
@@ -1014,8 +1043,10 @@ func (r *Runner) deliverNextLocked() {
 		r.deliverLocked(&next.attribution)
 	}
 	sess := r.sess
+	wire, note := r.claimRerootNoteLocked(next.text)
 	r.mu.Unlock()
 	if sess == nil {
+		r.restoreRerootNote(note)
 		return
 	}
 
@@ -1026,15 +1057,18 @@ func (r *Runner) deliverNextLocked() {
 	}
 
 	r.markAgentWorking(next.text)
-	if err := sess.Send(context.Background(), next.text); err != nil {
+	if err := sess.Send(context.Background(), wire); err != nil {
 		log.Printf("runner: deliver queued message: %v", err)
 		r.mu.Lock()
 		r.busy = false
 		r.mu.Unlock()
+		r.restoreRerootNote(note)
 		r.markAgentIdle()
 		if delivered != nil {
 			r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
 		}
+	} else if note != "" {
+		r.noteDelivered(context.Background())
 	}
 	// orchestrateRefreshPending and pendingModel, if set, are left
 	// untouched here — both are only drained once the queue is truly
