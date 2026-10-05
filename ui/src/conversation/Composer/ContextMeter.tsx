@@ -15,7 +15,7 @@ export interface ContextMeterProps {
 }
 
 /**
- * Compact usage gauge. The occupancy arithmetic (and the reason it prefers
+ * Compact usage gauge, beside the composer's Send. The occupancy arithmetic (and the reason it prefers
  * usage.context_tokens over the summed billing aggregate, which used to peg
  * this meter at 100% on tool-heavy turns) lives in contextOccupancy, shared
  * with the session rail's tooltip. Undefined-safe: renders nothing without
@@ -31,7 +31,11 @@ export function ContextMeter({ usage, contextWindow }: ContextMeterProps) {
   const tone = pct >= 90 ? styles.bad : pct >= 70 ? styles.warn : styles.ok;
 
   return (
-    <div className={styles.meter} title={`${used.toLocaleString()} / ${window.toLocaleString()} tokens`}>
+    <div
+      className={styles.meter}
+      data-testid="context-meter"
+      title={`Context window: ${used.toLocaleString()} / ${window.toLocaleString()} tokens`}
+    >
       <div className={styles.track}>
         <div className={[styles.fill, tone].join(" ")} style={{ width: `${pct}%` }} />
       </div>

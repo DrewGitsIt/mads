@@ -3,13 +3,15 @@ import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import { Popover } from "../../components/Popover/Popover";
-import type { Model, Session, SessionTrust, Usage } from "../../router/types";
+import type { Model, Session, SessionTrust } from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
 import { modelDisplayName } from "../../router/modelDisplay";
+import { UNKNOWN_AGENT, agentNameForRef } from "../../router/agentRef";
+import type { AgentIndex } from "../../router/agentRef";
+import { sessionLocation } from "../../router/sessionLocation";
 import { trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
 import { WorkControl } from "../Worktree/WorkControl";
 import { isIsolated } from "../Worktree/workState";
-import { ContextMeter } from "./ContextMeter";
 import styles from "./ConversationHeader.module.css";
 
 export interface ConversationHeaderProps {
@@ -21,8 +23,17 @@ export interface ConversationHeaderProps {
    * workspace rather than a `wsp_...` id.
    */
   workspaceName?: string;
-  usage?: Usage;
-  contextWindow?: number;
+  /**
+   * Personas by id and name (router/useAgentIndex.ts), so the persona pill
+   * names the persona rather than printing the `agt_…` reference the record
+   * stores. Undefined while loading.
+   */
+  agents?: AgentIndex;
+  /**
+   * The checkout's open branch for a session working in place
+   * (useCheckoutBranch) — an isolated session's branch is on its record.
+   */
+  checkoutBranch?: string;
   /** Active display modality. When set, the Chat/Terminal switch renders here. */
   mode?: "chat" | "terminal";
   onModeChange?: (mode: "chat" | "terminal") => void;
@@ -57,16 +68,16 @@ export interface ConversationHeaderProps {
 type PillField = "agent" | "model" | "trust";
 
 /**
- * Conversation-tab meta strip: context meter + agent/model pills + workspace/
- * branch subline. The session name, activity chip, and lifecycle/tools kebab
- * live once in the SessionWorkspace bar above — this strip carries only what's
- * specific to the conversation, so nothing here duplicates the bar.
+ * Conversation-tab meta strip: persona/model/trust pills + a `location /
+ * branch` subline. The session name and lifecycle/tools kebab live once in
+ * the SessionWorkspace bar above, and the context meter sits in the composer
+ * — this strip carries only what's specific to the conversation.
  */
 export function ConversationHeader({
   session,
   workspaceName,
-  usage,
-  contextWindow,
+  agents,
+  checkoutBranch,
   mode,
   onModeChange,
   onUpdateSession,
@@ -91,11 +102,10 @@ export function ConversationHeader({
   return (
     <div className={styles.header}>
       <div className={styles.row}>
-        <ContextMeter usage={usage} contextWindow={contextWindow} />
-
         {session.agent && (
           <PillPopover
             value={session.agent}
+            label={personaLabel(session.agent, agents)}
             open={openPill === "agent"}
             onOpen={() => setOpenPill("agent")}
             onCommit={(v) => commitPill("agent", v)}
@@ -158,19 +168,51 @@ export function ConversationHeader({
         </div>
       </div>
 
-      {isIsolated(session) ? (
-        // An isolated session says where its work goes: its branch → the
-        // base it lands into.
-        <div className={styles.subline}>
-          {[workspaceName, `${session.worktree_branch} → ${session.worktree_base}`].filter(Boolean).join(" · ")}
-        </div>
-      ) : (
-        (workspaceName || session.worktree_branch) && (
-          <div className={styles.subline}>
-            {[workspaceName, session.worktree_branch].filter(Boolean).join(" · ")}
-          </div>
-        )
+      <Subline session={session} workspaceName={workspaceName} checkoutBranch={checkoutBranch} />
+    </div>
+  );
+}
+
+/**
+ * The persona pill's text: the persona's name, never the stored `agt_…` id.
+ * While the persona list is still loading an id reads as a neutral "Agent"
+ * rather than flashing "Unknown agent" at something about to resolve.
+ */
+function personaLabel(ref: string, agents: AgentIndex | undefined): string {
+  return agentNameForRef(ref, agents ?? new Map()) ?? (agents ? UNKNOWN_AGENT : "Agent");
+}
+
+/**
+ * `{workspace or folder} / {branch}` — the same location rule as the rail
+ * card (router/sessionLocation.ts). An isolated session's branch carries the
+ * base it lands into; one working in place shows the checkout's branch when
+ * the caller could read it. Hover gives the full folder, and for an isolated
+ * session the worktree the agent actually runs in.
+ */
+function Subline({
+  session,
+  workspaceName,
+  checkoutBranch,
+}: Pick<ConversationHeaderProps, "session" | "workspaceName" | "checkoutBranch">) {
+  const where = sessionLocation(session, workspaceName);
+  const branch = isIsolated(session)
+    ? `${session.worktree_branch} → ${session.worktree_base}`
+    : session.worktree_branch || checkoutBranch;
+  if (!where.name && !branch) return null;
+  const title = [
+    where.folder && `Folder: ${where.folder}`,
+    where.worktree && `Worktree: ${where.worktree}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <div className={styles.subline} title={title || undefined} data-testid="conversation-subline">
+      {where.name && <span className={styles.location}>{where.name}</span>}
+      {where.name && branch && (
+        // Spaced in the text too, so a copied subline reads "mads / main".
+        <span className={styles.sublineSep}>{" / "}</span>
       )}
+      {branch && <span className={styles.branch}>{branch}</span>}
     </div>
   );
 }
@@ -197,15 +239,20 @@ function PillPopover({ value: rawValue, label, open, onOpen, onCommit, onClose }
 
   return (
     <div className={styles.pillWrap}>
-      <Chip
-        tone="info"
+      <button
+        type="button"
+        className={styles.pill}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title="Agent"
         onClick={() => {
           setValue(rawValue);
           onOpen();
         }}
       >
         {label ?? rawValue}
-      </Chip>
+        <span className={styles.caret} aria-hidden="true">▾</span>
+      </button>
       {open && (
         <Panel className={styles.pillMenu}>
           <PanelBody>
@@ -249,10 +296,10 @@ interface TrustPickerPillProps {
 function TrustPickerPill({ trust, open, onOpen, onClose, onSelect }: TrustPickerPillProps) {
   const levels = trustLevels();
   const current = trust ?? "limited";
-  const label = `trust: ${levels.find((l) => l.value === current)?.label ?? current}`;
+  const label = `Trust: ${levels.find((l) => l.value === current)?.label ?? current}`;
 
   if (!onSelect) {
-    return <Chip tone="info">{label}</Chip>;
+    return <span className={styles.pillStatic}>{label}</span>;
   }
 
   return (
@@ -262,7 +309,7 @@ function TrustPickerPill({ trust, open, onOpen, onClose, onSelect }: TrustPicker
       anchor={
         <button
           type="button"
-          className={styles.modelTrigger}
+          className={styles.pill}
           aria-haspopup="listbox"
           aria-expanded={open}
           onClick={() => (open ? onClose() : onOpen())}
@@ -311,7 +358,7 @@ function ModelPickerPill({ provider, model, models, open, onOpen, onClose, onSel
   const label = modelDisplayName(model, models) ?? model;
 
   if (models.length === 0) {
-    return <Chip tone="info">{label}</Chip>;
+    return <span className={styles.pillStatic}>{label}</span>;
   }
 
   return (
@@ -321,7 +368,7 @@ function ModelPickerPill({ provider, model, models, open, onOpen, onClose, onSel
       anchor={
         <button
           type="button"
-          className={styles.modelTrigger}
+          className={styles.pill}
           aria-haspopup="listbox"
           aria-expanded={open}
           onClick={() => (open ? onClose() : onOpen())}

@@ -31,6 +31,8 @@ import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
+import { useCheckoutBranch } from "./Header/useCheckoutBranch";
+import { useAgentIndex } from "../router/useAgentIndex";
 import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
 import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
@@ -169,6 +171,8 @@ export function ConversationTab({
   // subline prints — resolved here, off the session this tab already holds, and
   // kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
+  const agents = useAgentIndex(routerClient);
+  const checkoutBranch = useCheckoutBranch(routerClient, session);
   // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
   // the ordered items; enqueue/finish/reset are stable across renders.
   const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed(routerClient)));
@@ -180,7 +184,7 @@ export function ConversationTab({
     finish: pacerFinish,
     reset: pacerReset,
   } = pacer;
-  // Last completed turn's usage, for the header context meter. Populated from
+  // Last completed turn's usage, for the composer context meter. Populated from
   // the stream's turn_end frame (the only place usage is reported); undefined
   // until this session view sees a turn finish.
   const [lastUsage, setLastUsage] = useState<Usage>();
@@ -344,7 +348,7 @@ export function ConversationTab({
       .then((s) => {
         if (!cancelled) {
           setSession(s);
-          // Seeds the header meter from the session record's last-known
+          // Seeds the composer meter from the session record's last-known
           // usage at wake time — before this mount has seen a turn_end of
           // its own (services/session/internal/runner's persistUsage).
           if (s.last_usage) setLastUsage(s.last_usage);
@@ -923,7 +927,7 @@ export function ConversationTab({
     };
     const onTurnEnd = (ev: MessageEvent<string>) => {
       // turn_end carries this turn's usage — the only place it's reported, so
-      // it feeds the header context meter.
+      // it feeds the composer context meter.
       if (typeof ev.data === "string") {
         try {
           const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -1218,7 +1222,7 @@ export function ConversationTab({
       task: model,
     };
   }
-  // Compact-suggestion input, derived locally from the same usage the header
+  // Compact-suggestion input, derived locally from the same usage the composer
   // meter reads (session.last_usage at mount, turn_end frames after) — no
   // extra stream event or server round-trip, and no race against the
   // Runner's own Start-time trigger, which only fires near the window limit.
@@ -1246,8 +1250,8 @@ export function ConversationTab({
       <ConversationHeader
         session={session}
         workspaceName={sessionWorkspace?.name ?? undefined}
-        usage={lastUsage}
-        contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
+        agents={agents}
+        checkoutBranch={checkoutBranch}
         mode={activeMode}
         onModeChange={(m) => void handleToggle(m)}
         onUpdateSession={handleUpdateSession}
@@ -1415,6 +1419,8 @@ export function ConversationTab({
                 sessionId={sessionId}
                 agentId={session.agent}
                 provider={session.provider}
+                usage={lastUsage}
+                contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
                 disabled={transport.status !== "idle" || waking}
                 busy={inChatTurn}
                 onStop={() => void handleInterrupt()}

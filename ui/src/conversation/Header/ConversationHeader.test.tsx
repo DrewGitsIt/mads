@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ConversationHeader } from "./ConversationHeader";
-import { fixtureSessions } from "../../router/fixtures";
+import { fixtureIsolatedSession, fixtureSessions } from "../../router/fixtures";
+import { agentIndex } from "../../router/agentRef";
 import { resetProviderModelCache } from "../../router/useProviderModels";
 
 function stubProviderModels(models: { id: string; name: string; default?: boolean }[]) {
@@ -13,6 +14,10 @@ function stubProviderModels(models: { id: string; name: string; default?: boolea
     return Promise.resolve(new Response(JSON.stringify({ models }), { status: 200 }));
   });
   vi.stubGlobal("fetch", fetchMock);
+}
+
+function subline(): string | null {
+  return screen.queryByTestId("conversation-subline")?.textContent?.replace(/\s+/g, " ").trim() ?? null;
 }
 
 describe("ConversationHeader", () => {
@@ -43,17 +48,18 @@ describe("ConversationHeader", () => {
     await waitFor(() => expect(screen.getByText("claude-sonnet-5")).toBeTruthy());
   });
 
-  it("renders the workspace/branch line but not a duplicate name or status chip", () => {
+  it("renders the location / branch line but not a duplicate name or status chip", () => {
     render(<ConversationHeader session={fixtureSessions["session-active"]} workspaceName="mads" />);
 
-    // Name + activity now live only in the SessionWorkspace bar above.
+    // The name lives only in the SessionWorkspace bar above; the activity
+    // chip is gone altogether.
     expect(screen.queryByText("Add retry backoff to the ingest worker")).toBeNull();
-    expect(screen.queryByText("active")).toBeNull();
-    expect(screen.getByText("mads · mads/tsk_retry-backoff")).toBeTruthy();
+    expect(screen.queryByText(/^active$/i)).toBeNull();
+    expect(subline()).toBe("mads / mads/tsk_retry-backoff");
   });
 
   // session.workspace is an id-or-name reference the caller resolves; the
-  // subline prints the resolved name or nothing, never `wsp_...`.
+  // subline prints the resolved name or the folder, never `wsp_...`.
   it("never prints the session's raw workspace reference", () => {
     render(
       <ConversationHeader
@@ -62,7 +68,81 @@ describe("ConversationHeader", () => {
     );
 
     expect(screen.queryByText(/wsp_/)).toBeNull();
-    expect(screen.getByText("mads/tsk_retry-backoff")).toBeTruthy();
+    expect(subline()).toBe("mads/tsk_retry-backoff");
+  });
+
+  it("names an isolated session by its workspace, then branch → base, with both paths on hover", () => {
+    render(<ConversationHeader session={fixtureIsolatedSession} workspaceName="mads" />);
+
+    expect(subline()).toBe("mads / mads/session/session-isolated → main");
+    expect(screen.getByTestId("conversation-subline").getAttribute("title")).toBe(
+      "Folder: /home/user/repo/mads\nWorktree: /home/user/.mads/session-worktrees/session-isolated",
+    );
+  });
+
+  // Same rule as the rail card: no workspace → the chosen folder's basename,
+  // and for an isolated session never the worktree's own (session-id) name.
+  it("falls back to the folder name when there is no workspace", () => {
+    render(<ConversationHeader session={{ ...fixtureIsolatedSession, workspace: undefined }} />);
+    expect(subline()).toBe("mads / mads/session/session-isolated → main");
+  });
+
+  it("shows the checkout's branch for a session working in place", () => {
+    const inPlace = {
+      ...fixtureSessions["session-active"],
+      workspace: undefined,
+      worktree_branch: undefined,
+      dir: "/home/user/scratch/notes",
+    };
+    render(<ConversationHeader session={inPlace} checkoutBranch="main" />);
+    expect(subline()).toBe("notes / main");
+    expect(screen.getByTestId("conversation-subline").getAttribute("title")).toBe(
+      "Folder: /home/user/scratch/notes",
+    );
+  });
+
+  it("shows just the location when no branch is known", () => {
+    const inPlace = {
+      ...fixtureSessions["session-active"],
+      worktree_branch: undefined,
+      dir: "/home/user/scratch/notes",
+    };
+    render(<ConversationHeader session={inPlace} workspaceName="mads" />);
+    expect(subline()).toBe("mads");
+  });
+
+  describe("persona pill", () => {
+    const byId = { ...fixtureSessions["session-active"], agent: "agt_3212544bb2e37c92" };
+    const partner = {
+      id: "agt_3212544bb2e37c92",
+      name: "mads-coding-partner",
+      prompt: "",
+      created_at: "",
+      updated_at: "",
+    };
+
+    it("names the persona an agt_ reference points at", () => {
+      render(<ConversationHeader session={byId} agents={agentIndex([partner])} />);
+      expect(screen.getByRole("button", { name: "mads-coding-partner" })).toBeTruthy();
+      expect(screen.queryByText(/agt_/i)).toBeNull();
+    });
+
+    it("reads an unresolvable id as Unknown agent, never the id", () => {
+      render(<ConversationHeader session={byId} agents={agentIndex([])} />);
+      expect(screen.getByRole("button", { name: "Unknown agent" })).toBeTruthy();
+      expect(screen.queryByText(/agt_/i)).toBeNull();
+    });
+
+    it("shows a neutral label, not the id, while personas are loading", () => {
+      render(<ConversationHeader session={byId} />);
+      expect(screen.getByRole("button", { name: "Agent" })).toBeTruthy();
+      expect(screen.queryByText(/agt_/i)).toBeNull();
+    });
+
+    it("passes a name reference through", () => {
+      render(<ConversationHeader session={fixtureSessions["session-active"]} agents={agentIndex([])} />);
+      expect(screen.getByRole("button", { name: "autonomous-executor" })).toBeTruthy();
+    });
   });
 
   // onChangeModel, not onUpdateSession: a model switch persists and
@@ -98,12 +178,12 @@ describe("ConversationHeader", () => {
     // fixtureSessions["session-active"] has no trust — the backend's builtin
     // default is limited, so the pill must not claim anything stronger.
     render(<ConversationHeader session={fixtureSessions["session-active"]} />);
-    expect(screen.getByText("trust: Limited")).toBeTruthy();
+    expect(screen.getByText("Trust: Limited")).toBeTruthy();
 
     render(
       <ConversationHeader session={{ ...fixtureSessions["session-active"], trust: "full" }} />,
     );
-    expect(screen.getByText("trust: Full access")).toBeTruthy();
+    expect(screen.getByText("Trust: Full access")).toBeTruthy();
   });
 
   it("changes trust from the dropdown via onChangeTrust", () => {
@@ -115,7 +195,7 @@ describe("ConversationHeader", () => {
       />,
     );
 
-    fireEvent.click(screen.getByText("trust: Limited"));
+    fireEvent.click(screen.getByText("Trust: Limited"));
     fireEvent.click(screen.getByRole("option", { name: "Full access" }));
 
     expect(onChangeTrust).toHaveBeenCalledWith("full");
@@ -124,7 +204,7 @@ describe("ConversationHeader", () => {
   it("renders trust as a static chip when no onChangeTrust handler is wired", () => {
     render(<ConversationHeader session={{ ...fixtureSessions["session-active"], trust: "full" }} />);
 
-    const chip = screen.getByText("trust: Full access");
+    const chip = screen.getByText("Trust: Full access");
     fireEvent.click(chip);
     expect(screen.queryByRole("listbox", { name: "Trust level" })).toBeNull();
   });
@@ -161,14 +241,9 @@ describe("ConversationHeader", () => {
     expect(screen.queryByRole("button", { name: /^terminal$/i })).toBeNull();
   });
 
-  it("renders the context meter when usage numbers are supplied", () => {
-    render(
-      <ConversationHeader
-        session={fixtureSessions["session-active"]}
-        usage={{ input_tokens: 50000, output_tokens: 0 }}
-        contextWindow={200000}
-      />,
-    );
-    expect(screen.getByText("25%")).toBeTruthy();
+  // The meter moved to the composer, beside Send.
+  it("no longer carries the context meter", () => {
+    render(<ConversationHeader session={fixtureSessions["session-active"]} />);
+    expect(screen.queryByTestId("context-meter")).toBeNull();
   });
 });

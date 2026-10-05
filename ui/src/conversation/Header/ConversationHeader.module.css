@@ -10,7 +10,10 @@
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
+  /* The pills' own padding would indent their text past the subline below;
+     pull the row back so both start on one edge. */
+  margin-left: -6px;
 }
 
 /* The row's right end: the Commit/Land control, then the Chat/Terminal
@@ -62,9 +65,33 @@
   flex: 1;
 }
 
+/* `location / branch`: the location in the UI face, the branch in mono, the
+   separator quieter than either. */
 .subline {
-  font: var(--fs-sm) var(--mono);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font: var(--fs-sm) var(--sans);
   color: var(--text3);
+  white-space: nowrap;
+}
+
+.location {
+  flex: none;
+  color: var(--text2);
+}
+
+.sublineSep {
+  flex: none;
+  opacity: 0.6;
+}
+
+.branch {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
 }
 
 .kebabWrap,
@@ -129,28 +156,49 @@
   width: 160px;
 }
 
-/* model dropdown trigger — reads as a chip but with a caret so it's clearly a
-   picker, not a label */
-.modelTrigger {
+/* Persona / model / trust controls. Quiet by default — muted text, no
+   outline, normal case — so the header reads as context rather than as three
+   buttons; the caret, hover fill and focus ring are what say "editable". */
+.pill,
+.pillStatic {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--info);
-  background: var(--info-soft);
-  color: var(--info-fg);
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text2);
   font: 500 var(--fs-sm) var(--sans);
-  cursor: pointer;
+  white-space: nowrap;
 }
 
-.modelTrigger:hover {
+.pill {
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.pill:hover,
+.pill[aria-expanded="true"] {
   background: var(--bg3);
+  color: var(--text);
+}
+
+.pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* No handler or no choices: same face, nothing to click. */
+.pillStatic {
+  color: var(--text3);
 }
 
 .caret {
   font-size: 9px;
-  opacity: 0.8;
+  color: var(--text3);
 }
 
 .modelMenu {

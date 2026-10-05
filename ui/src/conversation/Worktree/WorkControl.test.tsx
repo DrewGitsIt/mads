@@ -80,9 +80,9 @@ describe("header Commit / Land control (D4)", () => {
     expect(screen.queryByRole("button", { name: /Land into/ })).toBeNull();
   });
 
-  it("subtitles an isolated session with workspace · branch → base", () => {
+  it("subtitles an isolated session with workspace / branch → base", () => {
     renderHeader(fixtureIsolatedSession);
-    expect(screen.getByText("mads · mads/session/session-isolated → main")).toBeTruthy();
+    expect(screen.getByTestId("conversation-subline").textContent).toBe("mads / mads/session/session-isolated → main");
   });
 
   it("re-renders from a live record update", () => {

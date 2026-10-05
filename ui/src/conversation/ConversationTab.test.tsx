@@ -669,6 +669,9 @@ describe("ConversationTab", () => {
     // carries as context (regression test: previously summed input+output+
     // cache, which would have read 50%).
     await waitFor(() => expect(screen.getByText("49%")).toBeTruthy());
+    // The meter sits in the composer, beside the message box — not the header.
+    const composerRow = screen.getByPlaceholderText(/Message the agent/).parentElement!;
+    expect(composerRow.contains(screen.getByTestId("context-meter"))).toBe(true);
   });
 
   it("names the tool in the working indicator, then clears it once text starts streaming", async () => {

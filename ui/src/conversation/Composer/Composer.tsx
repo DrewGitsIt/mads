@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
-import type { QueuedMessage, Session } from "../../router/types";
+import type { QueuedMessage, Session, Usage } from "../../router/types";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
 import { getDraft, setDraft } from "./composerDrafts";
+import { ContextMeter } from "./ContextMeter";
 import { formatShortcut } from "../../platform/shortcut";
 import styles from "./Composer.module.css";
 
@@ -18,6 +19,12 @@ export interface ComposerProps {
   agentId?: string;
   /** The session's current provider — resolves the "/model" command's candidate list. */
   provider?: string;
+  /**
+   * The last turn's usage and the model's fallback window, for the context
+   * meter beside Send — next to the thing that adds to it. Absent → no meter.
+   */
+  usage?: Usage;
+  contextWindow?: number;
   onSent?: (text: string, mentions: string[]) => void;
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
@@ -93,6 +100,8 @@ export function Composer({
   sessionId,
   agentId,
   provider,
+  usage,
+  contextWindow,
   onSent,
   disabled,
   busy,
@@ -359,6 +368,7 @@ export function Composer({
             disabled={disabled}
           />
           <div className={styles.actions}>
+            <ContextMeter usage={usage} contextWindow={contextWindow} />
             <Button
               type="button"
               variant="ghost"
@@ -420,6 +430,7 @@ export function Composer({
             onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={handleKeyDown}
           />
+          <ContextMeter usage={usage} contextWindow={contextWindow} />
           <Button
             type="button"
             variant="ghost"
