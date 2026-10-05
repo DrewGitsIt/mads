@@ -133,6 +133,14 @@ type Session struct {
 	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
 	// Empty means the session works directly in its configured directory.
 	WorktreeDir string `json:"worktree_dir,omitempty"`
+	// Dir is the directory the session was asked to start in — absolute,
+	// "~" already expanded: the Launchpad's folder pick, else the
+	// workspace's primary repo, else Config.DefaultDir (resolved by the
+	// Router at create). The Session runner starts from here, isolating
+	// into a worktree on top when Isolation asks for one and Dir is a git
+	// repo. Empty means no directory was asked for: the runner keeps its
+	// own -cwd, which is wherever the Router itself was started.
+	Dir string `json:"dir,omitempty"`
 	// Cwd is the absolute directory the agent actually runs in — the worktree
 	// for worktree isolation, otherwise the session's configured directory.
 	// Set by the Session runner at start so clients (e.g. the docked shell) can

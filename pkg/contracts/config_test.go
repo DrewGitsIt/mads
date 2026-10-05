@@ -165,6 +165,20 @@ func TestValidateConfigEnvMode(t *testing.T) {
 	}
 }
 
+func TestValidateConfigDefaultIsolation(t *testing.T) {
+	base := DefaultConfig()
+	for _, ok := range []string{"", IsolationWorktree, IsolationCurrentDir} {
+		base.DefaultIsolation = ok
+		if verr := ValidateConfig(&base); !verr.Empty() {
+			t.Fatalf("default_isolation %q should be valid: %+v", ok, verr.Errors)
+		}
+	}
+	base.DefaultIsolation = "bogus"
+	if verr := ValidateConfig(&base); verr.Empty() {
+		t.Fatal("unknown default_isolation should be invalid")
+	}
+}
+
 // TestConfigCredentialFieldsCarryNamesNotValues guards spec §13's
 // names-only cross-service-boundary property: credential_bindings and
 // env_passthrough are the only Config fields naming mads-bound credentials,

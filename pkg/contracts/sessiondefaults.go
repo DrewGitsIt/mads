@@ -31,8 +31,26 @@ type SessionDefaults struct {
 	Agent     ResolvedSessionField `json:"agent"`
 	Isolation ResolvedSessionField `json:"isolation"`
 	Trust     ResolvedSessionField `json:"trust"`
+	// Dir is the directory the session would start in. Source "builtin"
+	// means nothing asked for one and Value is the Router's own working
+	// directory — reported for the preview only, never written onto a
+	// session (see Session.Dir).
+	Dir ResolvedSessionField `json:"dir"`
+	// DirStatus describes Dir on disk so the Launchpad can warn before
+	// Start: DirStatusGit, DirStatusPlain (worktree isolation will run in
+	// the folder itself) or DirStatusMissing. Empty when Dir is empty.
+	DirStatus DirStatus `json:"dir_status,omitempty"`
 	// Workspace is the workspace whose Defaults were consulted (explicit
 	// ?workspace= query param, or Config.DefaultWorkspace) — empty if none
 	// resolved (bad/missing key, or no workspace involved at all).
 	Workspace string `json:"workspace,omitempty"`
 }
+
+// DirStatus is what GET /sessions/defaults found at the resolved Dir.
+type DirStatus string
+
+const (
+	DirStatusGit     DirStatus = "git"
+	DirStatusPlain   DirStatus = "plain"
+	DirStatusMissing DirStatus = "missing"
+)

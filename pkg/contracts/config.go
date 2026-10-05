@@ -201,8 +201,19 @@ type Config struct {
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`
 	DefaultTrust     SessionTrust `json:"default_trust"`
-	DefaultTemplate  string       `json:"default_template,omitempty"`
-	FastModel        string       `json:"fast_model,omitempty"`
+	// DefaultDir, DefaultModel, DefaultAgent and DefaultIsolation complete
+	// the set the Launchpad's "Save as my defaults" writes in one go — every
+	// pill under the hero prompt has a Config fallback, below a workspace's
+	// own Defaults and above the builtins (resolveSessionDefaultsSourced).
+	// DefaultModel only applies while the resolved provider is
+	// DefaultProvider: a model id is meaningless to any other harness.
+	// DefaultAgent may be "auto". Empty means "no default" for each.
+	DefaultDir       string `json:"default_dir,omitempty"`
+	DefaultModel     string `json:"default_model,omitempty"`
+	DefaultAgent     string `json:"default_agent,omitempty"`
+	DefaultIsolation string `json:"default_isolation,omitempty"`
+	DefaultTemplate  string `json:"default_template,omitempty"`
+	FastModel        string `json:"fast_model,omitempty"`
 
 	// FastModelBaseURL/FastModelAPIKeyEnv configure the Settings-driven Fast
 	// Model backend (spec §11/§13): an OpenAI-compatible endpoint the Router
@@ -340,6 +351,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.DefaultTrust != "" && !c.DefaultTrust.Valid() {
 		v.Add("default_trust", "must be one of: full, limited, read_only")
+	}
+	if c.DefaultIsolation != "" && c.DefaultIsolation != IsolationWorktree && c.DefaultIsolation != IsolationCurrentDir {
+		v.Add("default_isolation", "must be one of: worktree, current_dir")
 	}
 	if c.EnvMode != "" && !c.EnvMode.Valid() {
 		v.Add("env_mode", "must be one of: inherit, isolated")

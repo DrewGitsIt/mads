@@ -350,6 +350,13 @@ func (r *Runner) Start(ctx context.Context) error {
 		return fmt.Errorf("runner: provider %q: %w", sess.Provider, err)
 	}
 
+	// A directory the session asked for (Launchpad folder, workspace
+	// primary repo, Config.DefaultDir — resolved by the Router at create)
+	// replaces -cwd as the starting point for everything below, merge-back
+	// included: it is the primary the worktree branches from.
+	if sess.Dir != "" {
+		r.Cwd = sess.Dir
+	}
 	cwd := r.Cwd
 	if r.WorktreeRoot != "" && sess.Isolation != contracts.IsolationCurrentDir {
 		switch {

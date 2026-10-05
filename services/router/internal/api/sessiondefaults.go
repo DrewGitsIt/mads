@@ -3,7 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -20,12 +25,14 @@ type sessionDefaultSources struct {
 	Agent     contracts.SessionDefaultSource
 	Isolation contracts.SessionDefaultSource
 	Trust     contracts.SessionDefaultSource
+	Dir       contracts.SessionDefaultSource
 	Workspace string // resolved workspace *name* whose Defaults were consulted; "" if none
 }
 
-// resolveSessionDefaults fills provider/model/agent/isolation/trust on sess
-// from, in order: the session itself (already set), the named workspace's
-// Defaults (spec §10: workspace overrides global), then global Config. Best
+// resolveSessionDefaults fills provider/model/agent/isolation/trust/dir on
+// sess from, in order: the session itself (already set), the named
+// workspace's Defaults (spec §10: workspace overrides global) — for dir, its
+// primary repo — then global Config. Best
 // effort on workspace lookup — a stale/missing Config.DefaultWorkspace or an
 // explicit sess.Workspace that no longer exists degrades to "no workspace
 // defaults available", not a failed create (Workspace is optional on Session
@@ -51,6 +58,7 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 	}
 
 	var wsDefaults contracts.WorkspaceDefaults
+	var wsDir string
 	if wsKey := sess.Workspace; wsKey != "" || cfg.DefaultWorkspace != "" {
 		if wsKey == "" {
 			wsKey = cfg.DefaultWorkspace
@@ -59,6 +67,7 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 		switch {
 		case err == nil:
 			wsDefaults = ws.Defaults
+			wsDir, _ = ws.PrimaryRepo()
 			src.Workspace = ws.Name
 			sess.Workspace = ws.ID
 		case errors.Is(err, dataclient.ErrNotFound):
@@ -81,10 +90,22 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 			src.Agent = contracts.SessionDefaultSourceWorkspace
 		}
 	}
+	if sess.Agent == "" {
+		sess.Agent = cfg.DefaultAgent
+		if sess.Agent != "" {
+			src.Agent = contracts.SessionDefaultSourceConfig
+		}
+	}
 	if sess.Isolation == "" {
 		sess.Isolation = wsDefaults.Isolation
 		if sess.Isolation != "" {
 			src.Isolation = contracts.SessionDefaultSourceWorkspace
+		}
+	}
+	if sess.Isolation == "" {
+		sess.Isolation = cfg.DefaultIsolation
+		if sess.Isolation != "" {
+			src.Isolation = contracts.SessionDefaultSourceConfig
 		}
 	}
 	if sess.Isolation == "" {
@@ -113,6 +134,15 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 			src.Model = contracts.SessionDefaultSourceWorkspace
 		}
 	}
+	// A Config model was saved alongside Config's provider; under any other
+	// provider it names nothing, so it falls through to that harness's own
+	// default instead.
+	if sess.Model == "" && sess.Provider != "" && sess.Provider == cfg.DefaultProvider {
+		sess.Model = cfg.DefaultModel
+		if sess.Model != "" {
+			src.Model = contracts.SessionDefaultSourceConfig
+		}
+	}
 	if sess.Model == "" && sess.Provider != "" {
 		for _, m := range s.discoveredModels(ctx, sess.Provider) {
 			if m.Default {
@@ -123,7 +153,54 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 		}
 	}
 
+	// Dir: session -> the workspace's primary repo -> Config. No builtin is
+	// written here: an empty Dir is the runner's "nobody asked" signal, and
+	// it treats that differently from a directory someone chose.
+	if sess.Dir == "" && wsDir != "" {
+		sess.Dir = wsDir
+		src.Dir = contracts.SessionDefaultSourceWorkspace
+	}
+	if sess.Dir == "" && cfg.DefaultDir != "" {
+		sess.Dir = cfg.DefaultDir
+		src.Dir = contracts.SessionDefaultSourceConfig
+	}
+	sess.Dir = contracts.ExpandHome(sess.Dir)
+
 	return src, nil
+}
+
+// errDirNotADirectory rejects a create whose resolved Dir is not a
+// directory on this machine — failing at Start beats a session whose
+// provider child dies on chdir.
+var errDirNotADirectory = errors.New("not a directory")
+
+// checkSessionDir validates a resolved, home-expanded Dir. Empty passes
+// (nothing was asked for); a relative path is refused because it would
+// resolve against the Session Service's cwd, not anything the user saw.
+func checkSessionDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("directory %q must be an absolute path", dir)
+	}
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("directory %q: %w", dir, errDirNotADirectory)
+	}
+	return nil
+}
+
+// dirStatus reports what is at dir for the Launchpad's pre-Start warning.
+func dirStatus(ctx context.Context, dir string) contracts.DirStatus {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return contracts.DirStatusMissing
+	}
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	if err == nil && strings.TrimSpace(string(out)) == "true" {
+		return contracts.DirStatusGit
+	}
+	return contracts.DirStatusPlain
 }
 
 // discoveredModels reads a provider's catalog WITHOUT spawning. Defaults
@@ -153,11 +230,24 @@ func (s *server) discoveredModels(ctx context.Context, name string) []provider.M
 }
 
 func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
-	sess := contracts.Session{Workspace: r.URL.Query().Get("workspace")}
+	q := r.URL.Query()
+	sess := contracts.Session{Workspace: q.Get("workspace"), Dir: q.Get("dir")}
 	src, err := s.resolveSessionDefaultsSourced(r.Context(), &sess)
 	if err != nil {
 		writeError(w, err)
 		return
+	}
+	dir := contracts.ResolvedSessionField{Value: sess.Dir, Source: src.Dir}
+	if dir.Value == "" {
+		// Nobody asked for a directory, so the session will run where the
+		// Router runs — say so instead of showing nothing.
+		if wd, err := os.Getwd(); err == nil {
+			dir = contracts.ResolvedSessionField{Value: wd, Source: contracts.SessionDefaultSourceBuiltin}
+		}
+	}
+	var status contracts.DirStatus
+	if dir.Value != "" {
+		status = dirStatus(r.Context(), dir.Value)
 	}
 	writeJSON(w, http.StatusOK, contracts.SessionDefaults{
 		Provider:  contracts.ResolvedSessionField{Value: sess.Provider, Source: src.Provider},
@@ -165,6 +255,8 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		Agent:     contracts.ResolvedSessionField{Value: sess.Agent, Source: src.Agent},
 		Isolation: contracts.ResolvedSessionField{Value: sess.Isolation, Source: src.Isolation},
 		Trust:     contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
+		Dir:       dir,
+		DirStatus: status,
 		Workspace: src.Workspace,
 	})
 }

@@ -58,6 +58,10 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if err := checkSessionDir(sess.Dir); err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
+		return
+	}
 	if sess.Agent == "auto" {
 		if err := s.resolveAutoAgent(r.Context(), sess, req.OpeningPrompt); err != nil {
 			writeErrMsg(w, http.StatusBadGateway, "create session: resolve auto agent: ", err)

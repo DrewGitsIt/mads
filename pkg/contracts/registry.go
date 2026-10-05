@@ -284,12 +284,18 @@ type WorkspaceRepo struct {
 // exec.Cmd.Dir, not git -C — so any consumer that touches the filesystem
 // must go through this, not Path.
 func (r WorkspaceRepo) AbsPath() string {
-	if r.Path == "~" || strings.HasPrefix(r.Path, "~/") {
+	return ExpandHome(r.Path)
+}
+
+// ExpandHome expands a leading "~" in a user-typed path to the user's home
+// directory, leaving every other path as given.
+func ExpandHome(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, r.Path[1:])
+			return filepath.Join(home, path[1:])
 		}
 	}
-	return r.Path
+	return path
 }
 
 // WorkspaceDefaults are the settings sessions inherit from their workspace

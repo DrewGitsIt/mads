@@ -84,6 +84,10 @@ func (s *server) handleRetroFollowUpSession(w http.ResponseWriter, r *http.Reque
 		writeError(w, err)
 		return
 	}
+	if err := checkSessionDir(sess.Dir); err != nil {
+		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
+		return
+	}
 	if _, err := s.providers.Get(sess.Provider); err != nil {
 		writeErrMsg(w, http.StatusBadRequest, "create session: ", err)
 		return
