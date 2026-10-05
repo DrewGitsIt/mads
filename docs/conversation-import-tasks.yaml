@@ -1,0 +1,198 @@
+# Conversation import v1 — bring a new user's existing Claude Code
+# conversations into mads at onboarding, so they can read and continue them.
+# Not yet seeded. To seed:
+#   bin/mads seed -session <ses_id> -file docs/conversation-import-tasks.yaml
+#
+# Source: conversation-import design session (2026-10-02 → 2026-10-05).
+# Decisions already made with Drew — don't reopen in architect stages:
+#   - v1 is Claude Code only. goose/kiro/Codex come later; Codex needs a
+#     provider first (none exists; see docs/DECLARATIVE-PROVIDERS-DESIGN.md).
+#   - mads POINTS at the native transcript (Session.ProviderRef → the
+#     provider's TranscriptReader); it never copies history into mads
+#     (REBUILD-SPEC §1.9: provider transcripts live in provider storage).
+#   - Continuing an imported conversation FORKS it; the user's native
+#     original is never appended to.
+#   - Import is all-or-nothing: one confirm, no per-session picker.
+#   - Every folder must work, including `/`, `~`, and non-git dirs.
+#   - A conversation whose folder no longer exists is still imported and
+#     re-rooted to the default workspace (never `~` — that would quietly
+#     widen an agent's reach to the whole home dir). Re-rooting must be
+#     harness-agnostic: an explicit note to the agent, not reliance on the
+#     provider tolerating a cwd change.
+#   - Display fidelity gaps (thinking, subagent sidechains, rewound
+#     parentUuid branches, the 500-event cap on GET /events, images) are
+#     deliberately deferred until v1 is in hand — don't prescribe UX now.
+#
+# Verified 2026-10-05 against Claude Code 2.1.289 (`-p` mode only; the
+# stream-json and PTY modes mads uses were NOT tested):
+#   `claude --resume <id> --fork-session` run from a different folder works
+#   even with the original folder deleted. The fork gets a new id, lands in
+#   the NEW folder's ~/.claude/projects dir, and every copied line's `cwd`
+#   is rewritten to the new folder — so the original path must be kept on
+#   the mads session record; the forked native file no longer has it.
+#   Without --fork-session, a cross-folder resume keeps the id and appends
+#   to the ORIGINAL file.
+#
+# The session-folder fix has landed (docs/SESSION-WORKTREES-DESIGN.md):
+# contracts.Session.Dir is the folder a session starts in, set at create
+# (Launchpad pick → workspace primary repo → Config.DefaultDir); the runner
+# starts from it (runner.go `if sess.Dir != ""`). A session may have a Dir
+# and no workspace — the rail labels it by the folder's basename — so import
+# does NOT create workspaces. Wave 1 (shadow non-repo baseline, Claude fork)
+# is merged.
+tasks:
+  - title: "Shadow store: don't eagerly baseline folders that aren't repos"
+    description: >
+      runner.Start baselines the session folder in the background
+      (`go r.shadowStore.Baseline(cwd)`, services/session/internal/runner/
+      runner.go:503), which is a `git add -A` of the whole folder into the
+      per-session shadow git store (services/session/shadow/shadow.go). Fine
+      for a repo; for `~` or `/` it copies the home dir or the filesystem,
+      bounded only by a 30-minute timeout and a short build-dir exclude
+      list. Once sessions really run in their own folder, any session rooted
+      at `~` or `/` hits this — imported or not. Skip the eager baseline when
+      the folder isn't inside a git repo and rely on per-capture pre-images
+      (Store.Capture already treats a non-git directory as its own root).
+      Decide and document what the diff view shows for non-repo roots
+      (changes made outside captured tool calls, e.g. by shell commands,
+      won't appear); update docs/SHADOW-GIT-DIFFS-ADR.md to match.
+    acceptance_criteria: >
+      Starting a session whose folder is `~`, `/`, or any non-git directory
+      does no whole-folder baseline (test asserts no baseline commit / no
+      bulk object write for a non-git root). Edits made through tool calls
+      in a non-git folder still show a correct diff. Repo-rooted sessions
+      baseline exactly as before. The ADR states the non-repo behavior.
+    labels: [session, shadow]
+
+  - title: "Claude Code: fork an imported session on its first resume"
+    description: >
+      Add a fork option to provider.StartOptions (providers/provider/
+      provider.go:59-68; today it has only Resume) and implement it in
+      providers/claudecode for both the stream and PTY modes as
+      `--resume <ref> --fork-session`. Mark claude-code's BehaviorBranching
+      accordingly in its matrix (providers/provider/matrix.go — currently
+      Optional and unimplemented everywhere). Add a session field (working
+      name `fork_on_resume`) that the runner turns into the fork option on
+      start. Clear it in the same write that persists the forked ref — the
+      wire session_id already overwrites the ref (claudecode/session.go:
+      190-191) and the runner persists it (runner.go:443-451) — so a
+      crashed first wake re-forks from the untouched original rather than
+      appending to it. Verify the --fork-session behavior noted in this
+      file's header holds in stream and PTY modes, not just `-p`.
+    acceptance_criteria: >
+      A session with fork_on_resume set and provider_ref = X starts the
+      agent with the fork flag; after the first turn provider_ref is a new
+      id, fork_on_resume is false, and X's native file is byte-identical to
+      before. A later wake resumes the fork without forking again. Covered
+      for both modes (fake-binary tests asserting argv, plus one manual
+      check against a real claude recorded in the PR).
+    labels: [providers, claudecode, session]
+
+  - title: "Session runner: re-root a session whose folder is gone"
+    description: >
+      Harness-agnostic, and not import-specific. When a session starts and
+      its recorded folder no longer exists, run it in the default
+      workspace's primary repo instead (config default_workspace →
+      Workspace.PrimaryRepo().AbsPath()), never `~`. Keep the original path
+      on the session record (needed because a Claude fork rewrites `cwd` in
+      the native file) and tag the session `rerooted`; point
+      Session.Workspace at the default workspace. Deliver a note to the
+      agent with the first user turn, e.g. "This conversation began in
+      <old>, which no longer exists. You're now working in <new>. Don't
+      recreate files under the old path." The history is full of old
+      absolute paths, and without the note the agent can write back into
+      them, outside anything mads tracks. Prefer prepending the note to the
+      user's first message over a separate Inject turn (which would spend a
+      whole agent turn). Mind the runner's "no mads preamble, ever" system-
+      prompt rule (runner.go:389): the note is a visible part of the
+      conversation, not a hidden system prompt. If there is no default
+      workspace, fail the wake with a clear error rather than guessing.
+      Hook point: runner.Start's `if sess.Dir != ""` — today it takes Dir
+      unchecked. Re-rooting replaces Session.Dir with the new folder and
+      records the old one in a new field (working name `rerooted_from`),
+      which is also what marks the note as owed.
+    acceptance_criteria: >
+      A session whose folder was deleted starts in the default workspace's
+      folder; its record keeps the original path, carries the `rerooted`
+      tag, and names the default workspace. The agent's first turn includes
+      the note exactly once (not on later turns or later wakes). A session
+      whose folder exists is unaffected. No default workspace → a clear
+      error, no spawn in an arbitrary folder.
+    labels: [session, runner]
+
+  - title: "Router: scan and import Claude Code conversations"
+    description: >
+      Two endpoints, mirroring the credentials import (services/router/
+      internal/api/credentials.go: scan returns candidates plus what was
+      looked at; the client sends a decision, the server re-reads disk
+      itself). GET returns a summary — counts by provider and by folder,
+      plus `looked_for` (the dirs read, e.g. ~/.claude/projects) — and POST
+      imports all of it. Put the scanning behind an optional provider
+      interface (e.g. a HistoryScanner next to TranscriptReader in
+      providers/provider) so goose etc. slot in later; implement it for
+      claudecode, reusing candidateTranscripts / the history.jsonl index
+      (providers/claudecode/transcript.go, locate.go). Take the folder from
+      the `cwd` stamped on transcript lines, never by decoding the
+      dash-encoded project dir name (lossy); it becomes Session.Dir. Skip: subagent files
+      (<session>/subagents/), sessions with no user message, Claude-SDK runs
+      (`entrypoint: sdk-cli` — other tools' automation, including mads's own
+      spawned agents), sessions currently running (~/.claude/sessions/
+      <pid>.json), and any provider_ref mads already has, so re-running is a
+      no-op. Workspaces: never created by import (a session with only a Dir
+      is first-class). Set Session.Workspace only when an existing
+      workspace's repo contains the folder (compare via
+      WorkspaceRepo.AbsPath; there is no lookup-by-path route, so list and
+      match). Missing folders are included as-is; their sessions are
+      re-rooted at first wake (see the runner task). Create
+      sessions directly in the data service without spawning a child
+      (handleCreateSession always spawns, sessions.go:85): activity
+      inactive, isolation current_dir (a worktree would change the folder),
+      provider claude-code, provider_ref = native id, fork_on_resume true,
+      tag `imported`, name from the last `ai-title` record (fallback: first
+      user message) with name_source `generated` so the title job doesn't
+      rename it or send its content to the Fast Model, last_turn_at = last
+      native timestamp, last_usage from the last assistant `usage`, and
+      Dir = the native cwd. store.Sessions.Create overwrites CreatedAt
+      (services/data/internal/store/sessions.go:79-80) — let an import
+      supply the native first timestamp.
+    acceptance_criteria: >
+      Against a fixture ~/.claude tree (normal, subagent, empty, sdk-cli,
+      running, missing-folder, `/`-rooted, `~`-rooted, and two sessions in
+      one repo's subfolders), GET reports the right counts and looked_for,
+      and POST creates exactly the expected sessions, and no workspaces, with the
+      fields above; nothing spawns. Re-running POST creates nothing new.
+      Opening an imported session shows its history through the existing
+      dormant transcript path, and the rail orders it by its native
+      timestamp.
+    labels: [router, data, providers, claudecode]
+    depends_on:
+      - "Claude Code: fork an imported session on its first resume"
+      - "Session runner: re-root a session whose folder is gone"
+
+  - title: "Onboarding: import existing conversations step"
+    description: >
+      A new FirstRunWizard step (ui/src/onboarding/FirstRunWizard.tsx) in
+      the order Drew set: detect installed providers (existing Preflight
+      step) → find existing conversations → ask to import → find env vars →
+      ask to import (existing CredentialImportStep). So it sits between
+      Preflight and CredentialImport; bump STEP_COUNT. Mirror
+      CredentialImportStep's pattern: scan on mount, show what was found as
+      counts ("N conversations across M folders from Claude Code"), a
+      "What does mads look for?" disclosure fed by looked_for, one Import
+      action for everything (all-or-nothing) and Skip, and an honest empty
+      state with a single Continue. Only scan when Claude Code was detected.
+      Scanning reads conversation files on disk, but nothing leaves the
+      machine; the copy must say exactly that — no more, no less (see commit
+      b913a18 for the bar). Keep the wizard step and any later entry point
+      on one shared hook, as useCredentials does for credentials.
+    acceptance_criteria: >
+      With Claude Code detected and conversations on disk, the step shows
+      the counts and looked_for; Import creates the sessions and the wizard
+      continues to credentials; the imported sessions are in the rail after
+      the wizard finishes. Skip imports nothing. No conversations found, or
+      Claude Code not installed → the empty state, no error. Vitest covers
+      found / empty / skip / import-failure; one Playwright run through the
+      wizard with a fixture ~/.claude.
+    labels: [ui, onboarding]
+    depends_on:
+      - "Router: scan and import Claude Code conversations"
