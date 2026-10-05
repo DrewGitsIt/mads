@@ -1,0 +1,351 @@
+<!doctype html>
+<!--
+  mads — session worktrees: Commit and Land
+  =========================================
+
+  Companion to docs/SESSION-WORKTREES-DESIGN.md (revised after review 2026-10-05).
+  Users never manage worktrees;
+  they decide what happens to the session's work with two click-only verbs.
+
+    Commit — save this session's files on its branch (or on the checked-out
+             branch, for a session working in place). Dialog lists only files
+             this session changed (the file-change ledger).
+    Land   — move an isolated session's commits into the branch it came from.
+             Conflicts are resolved in the session worktree, never in the
+             user's checkout; the folder stays and the branch fast-forwards.
+
+  Shell, tokens and dialog geometry copied from session-delete-confirm.html
+  (itself verbatim from ConfirmDialog.module.css). Header layout follows
+  ui/src/conversation/Header/ConversationHeader.tsx: title + pills +
+  Chat/Terminal on one row, workspace · branch subline.
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — session worktrees: Commit and Land</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1180px; margin:0 auto; padding:var(--space-6) var(--space-5) 120px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:86ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.warn { color:var(--warn-fg); background:var(--warn-soft); }
+  .block > h2 .tag.bad { color:var(--bad-fg); background:var(--bad-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:94ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:94ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); }
+  .rowlabel.good { color:var(--ok-fg); } .rowlabel.bad { color:var(--bad-fg); } .rowlabel.warn { color:var(--warn-fg); }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); } td b { color:var(--text); font-weight:600; }
+  td.mono, .mono { font-family:var(--mono); }
+
+  .grid2 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:var(--space-5); align-items:start; }
+  @media (max-width:1000px) { .grid2 { grid-template-columns:1fr; } }
+
+  /* ── verbatim from ConfirmDialog.module.css ───────────────────────────── */
+  .dialog { display:flex; flex-direction:column; gap:var(--space-3); width:420px; max-width:100%;
+            background:var(--bg1); border:1px solid var(--line); border-radius:var(--r);
+            box-shadow:var(--shadow); padding:var(--space-4); }
+  .dialog .title { font:650 var(--fs-ui) var(--sans); color:var(--text); }
+  .dialog .description { font:var(--fs-body) var(--sans); color:var(--text2); display:flex; flex-direction:column; gap:var(--space-3); }
+  .dialog .actions { display:flex; justify-content:flex-end; gap:var(--space-2); }
+  .btn { font:500 var(--fs-body) var(--sans); border-radius:var(--r-sm); padding:6px 14px; border:1px solid transparent; cursor:pointer; }
+  .btn.ghost { background:transparent; border-color:var(--line); color:var(--text2); }
+  .btn.ghost:hover { color:var(--text); background:var(--bg2); }
+  .btn.danger { background:var(--bad); color:#fff; }
+  .btn.danger:hover { background:var(--bad-fg); box-shadow:0 2px 10px var(--bad-soft); }
+
+  
+  /* ── conversation header (ConversationHeader.module.css, approximated) ── */
+  .hdr { display:flex; flex-direction:column; gap:var(--space-1); padding:var(--space-3);
+         border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .hdr .row { display:flex; align-items:center; gap:var(--space-2); flex-wrap:wrap; }
+  .hdr .name { font:650 var(--fs-ui) var(--sans); margin-right:auto; }
+  .chip { font:500 var(--fs-sm) var(--sans); border-radius:999px; padding:2px 10px; border:1px solid var(--line); color:var(--text2); background:var(--bg2); }
+  .chip.info { color:var(--info-fg); background:var(--info-soft); border-color:transparent; }
+  .chip.on { color:var(--text); background:var(--bg3); }
+  .hdr .subline { font:500 var(--fs-sm) var(--mono); color:var(--text3); }
+  .hdr + .caption { margin-bottom:var(--space-4); }
+
+  /* the new control: one button, state-driven */
+  .work { display:inline-flex; align-items:center; gap:6px; font:600 var(--fs-sm) var(--sans);
+          border-radius:var(--r-sm); padding:4px 11px; cursor:pointer; border:1px solid var(--line); background:var(--bg2); color:var(--text); }
+  .work .count { font:600 var(--fs-chip) var(--sans); border-radius:999px; padding:0 6px; background:var(--bg4); color:var(--text2); }
+  .work.commit { border-color:var(--accent); }
+  .work.commit .count { background:var(--accent-soft); color:var(--accent); }
+  .work.land { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .work.land .count { background:rgba(36,19,5,.18); color:var(--accent-ink); }
+  .work .then { font-weight:500; color:var(--text3); }
+
+  /* rail marker */
+  .railcard { width:280px; padding:var(--space-2) var(--space-3); border-radius:var(--r-sm); background:var(--bg2); border:1px solid var(--line-soft); }
+  .railcard .t { font:600 var(--fs-body) var(--sans); display:flex; align-items:center; gap:6px; }
+  .railcard .s { font:500 var(--fs-sm) var(--sans); color:var(--text3); }
+  .mark { width:7px; height:7px; border-radius:50%; background:var(--accent); flex:none; }
+  .mark.hollow { background:transparent; border:1.5px solid var(--accent); }
+
+  /* dialog extras */
+  .btn.primary { background:var(--accent); color:var(--accent-ink); font-weight:600; }
+  .btn.primary:hover { background:var(--accent-hover); }
+  .btn.small { padding:3px 10px; font-size:var(--fs-sm); }
+  .files { display:flex; flex-direction:column; border:1px solid var(--line-soft); border-radius:var(--r-sm); background:var(--bg2); }
+  .file { display:flex; align-items:center; gap:var(--space-2); padding:6px var(--space-3); font:500 var(--fs-sm) var(--mono); color:var(--text2); }
+  .file + .file { border-top:1px solid var(--line-soft); }
+  .file input { accent-color:var(--accent); }
+  .file .path { flex:1; overflow-wrap:anywhere; }
+  .file .kind { font:600 var(--fs-chip) var(--sans); letter-spacing:.05em; text-transform:uppercase; }
+  .kind.a { color:var(--ok-fg); } .kind.m { color:var(--info-fg); } .kind.d { color:var(--bad-fg); }
+  .file.off { color:var(--text3); text-decoration:line-through; text-decoration-color:var(--line); }
+  .msg { width:100%; min-height:84px; resize:vertical; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm);
+         color:var(--text); font:var(--fs-body)/1.5 var(--sans); padding:var(--space-2) var(--space-3); }
+  .msgbar { display:flex; justify-content:space-between; align-items:center; }
+  .linkbtn { background:none; border:none; color:var(--text2); font:500 var(--fs-sm) var(--sans); text-decoration:underline;
+             text-decoration-color:var(--line); text-underline-offset:3px; cursor:pointer; padding:0; }
+  .muted { color:var(--text3); font-size:var(--fs-sm); }
+
+  /* conversation result cards (system rows in the transcript) */
+  .convo { display:flex; flex-direction:column; gap:var(--space-3); padding:var(--space-4); background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r); }
+  .bubble { align-self:flex-end; max-width:70%; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r); padding:var(--space-2) var(--space-3); color:var(--text); }
+  .reply { color:var(--text2); max-width:80%; }
+  .card { display:flex; flex-direction:column; gap:6px; border-radius:var(--r-sm); padding:var(--space-3); border:1px solid var(--line-soft); background:var(--bg1); }
+  .card .h { display:flex; align-items:center; gap:var(--space-2); font:600 var(--fs-sm) var(--sans); }
+  .card .h .when { margin-left:auto; font-weight:500; color:var(--text3); }
+  .card .b { font:500 var(--fs-sm) var(--sans); color:var(--text2); padding-left:16px; }
+  .card .acts { display:flex; gap:var(--space-2); padding-left:16px; margin-top:2px; }
+  .card.ok { border-color:rgba(124,179,137,.35); } .card.ok .stateDot { background:var(--ok); }
+  .card.warn { border-color:var(--warn); background:var(--warn-soft); } .card.warn .stateDot { background:var(--warn); }
+  .card.bad { border-color:rgba(210,96,74,.4); } .card.bad .stateDot { background:var(--bad); }
+  .stateDot { flex:none; width:8px; height:8px; border-radius:50%; background:var(--text3); }
+  .hash { font:var(--fs-sm) var(--mono); color:var(--accent); }
+
+  .statePanel { display:flex; flex-direction:column; gap:6px; padding:var(--space-3);
+                border-radius:var(--r-sm); border:1px solid var(--warn); background:var(--warn-soft); }
+  .stateHead { display:flex; align-items:center; gap:var(--space-2); font:600 var(--fs-sm) var(--sans); color:var(--text); }
+  .stateLine { font:500 var(--fs-sm) var(--sans); color:var(--text2); padding-left:16px; }
+
+  .toggle { display:flex; gap:var(--space-3); align-items:flex-start; padding:var(--space-3); border:1px solid var(--line-soft); border-radius:var(--r-sm); background:var(--bg2); max-width:560px; }
+  .switch { flex:none; width:30px; height:17px; border-radius:999px; background:var(--accent); position:relative; margin-top:2px; }
+  .switch::after { content:""; position:absolute; right:2px; top:2px; width:13px; height:13px; border-radius:50%; background:var(--accent-ink); }
+  .stack { display:flex; flex-direction:column; gap:var(--space-4); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Session worktrees: Commit and Land</h1>
+  <p>Companion to <code>docs/SESSION-WORKTREES-DESIGN.md</code>. A session in a git repo works on its own branch in its own folder,
+  and the user never sees the word "worktree". Two click-only verbs decide what happens to the work: <b>Commit</b> saves this
+  session's files, and <b>Land</b> moves an isolated session's commits into the branch it came from.</p>
+</header>
+
+<!-- ─────────────────────────────────────────────────────────────── 1 -->
+<section class="block">
+  <h2>1 · One header control, driven by state <span class="tag">D4</span><span class="sub">right end of the header row, before Chat/Terminal</span></h2>
+  <div class="body">
+    <div class="rowlabel">Uncommitted session files</div>
+    <div class="hdr"><div class="row">
+      <span class="name">Fix the deploy script on Ubuntu runners</span>
+      <span class="chip info">Claude Sonnet 5 · claude-code</span><span class="chip info">Limited</span>
+      <button class="work commit">Commit… <span class="count">4 files</span></button>
+      <span class="chip on">Chat</span><span class="chip">Terminal</span>
+    </div><div class="subline">mads · mads/session/ses_86fc → main</div></div>
+    <p class="caption">Opens the Commit dialog (§2), or with "Write commit messages for me" on, commits straight away (§3).</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Clean, branch ahead of base (isolated sessions only)</div>
+    <div class="hdr"><div class="row">
+      <span class="name">Fix the deploy script on Ubuntu runners</span>
+      <span class="chip info">Claude Sonnet 5 · claude-code</span><span class="chip info">Limited</span>
+      <button class="work land">Land into main <span class="count">3 commits</span></button>
+      <span class="chip on">Chat</span><span class="chip">Terminal</span>
+    </div><div class="subline">mads · mads/session/ses_86fc → main</div></div>
+    <p class="caption">The target is <b>recorded</b> (<code>worktree_base</code>, the branch the checkout was on when the session started). There's no branch box.</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Both</div>
+    <div class="hdr"><div class="row">
+      <span class="name">Fix the deploy script on Ubuntu runners</span>
+      <span class="chip info">Claude Sonnet 5 · claude-code</span><span class="chip info">Limited</span>
+      <button class="work commit">Commit… <span class="count">2 files</span> <span class="then">then land 3</span></button>
+      <span class="chip on">Chat</span><span class="chip">Terminal</span>
+    </div><div class="subline">mads · mads/session/ses_86fc → main</div></div>
+    <p class="caption">Land needs a clean folder, so Commit comes first. Land never makes a commit you didn't ask for. "main" in these examples is the session's recorded base branch.</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Working in place (isolation: Current directory)</div>
+    <div class="hdr"><div class="row">
+      <span class="name">Tidy the README</span>
+      <span class="chip info">Claude Sonnet 5 · claude-code</span><span class="chip info">Full access</span>
+      <button class="work commit">Commit… <span class="count">1 file</span></button>
+      <span class="chip on">Chat</span><span class="chip">Terminal</span>
+    </div><div class="subline">~/repo/mads · main</div></div>
+    <p class="caption">Commit lands directly on the checked-out branch. There's no Land, because there's nothing to land. Clean and not ahead: the control is hidden. Not a git repo: hidden.</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Rail marker</div>
+    <div class="grid2">
+      <div class="railcard"><div class="t"><span class="mark hollow"></span>Fix the deploy script</div><div class="s">uncommitted changes · 2h</div></div>
+      <div class="railcard"><div class="t"><span class="mark"></span>Fix the deploy script</div><div class="s">3 commits to land · 2h</div></div>
+    </div>
+    <p class="caption">Quiet, no badge counts. Nothing prompts mid-conversation: the work is safe on its branch indefinitely. Header and rail read counts stored on the session record, recomputed after file changes, commits, lands and pipeline merges, never per render (D4).</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────── 2 -->
+<section class="block">
+  <h2>2 · Commit dialog <span class="tag">D5</span><span class="sub">only files this session changed</span></h2>
+  <div class="body grid2">
+    <div class="dialog">
+      <div class="title">Commit this session's changes</div>
+      <div class="description">
+        <div class="files">
+          <label class="file"><input type="checkbox" checked><span class="path">scripts/deploy.sh</span><span class="kind m">modified</span></label>
+          <label class="file"><input type="checkbox" checked><span class="path">scripts/lib/runner_detect.sh</span><span class="kind a">added</span></label>
+          <label class="file"><input type="checkbox" checked><span class="path">.github/workflows/deploy.yml</span><span class="kind m">modified</span></label>
+          <label class="file off"><input type="checkbox"><span class="path">scripts/old_detect.sh</span><span class="kind d">deleted</span></label>
+        </div>
+        <textarea class="msg">deploy: detect Ubuntu 24.04 runners by codename, not version
+
+The new runners report VERSION_ID with a point release, which the
+numeric compare in deploy.sh rejected.</textarea>
+        <div class="msgbar">
+          <button class="linkbtn">Draft with Fast Model</button>
+          <span class="muted">on <span class="mono">mads/session/ses_86fc</span> · as Drew</span>
+        </div>
+      </div>
+      <div class="actions"><button class="btn ghost">Cancel</button><button class="btn primary">Commit 3 files</button></div>
+    </div>
+    <div>
+      <p class="note"><b>The list is the session's file-change ledger,</b> not <code>git status</code> and not other sessions. Everything is checked by default. Clicking a path opens its diff, the same view as the Files tab.</p>
+      <p class="note"><b>Identity:</b> the user's own git config. If git can't commit as you (no <code>user.name</code>, signing needs a passphrase), the card shows git's error. It never falls back to the <code>mads-session</code> identity. The commit carries a <code>Session:</code> trailer for people reading the log, and Commit records the hash itself rather than relying on the hook.</p>
+      <p class="note"><b>"Draft with Fast Model"</b> fills the box from the checked files' diff. It's hidden when no Fast Model is configured.</p>
+      <p class="note"><b>Server-side,</b> only paths in the session's change list are accepted, resolved with symlinks followed, and they must stay inside the session's folder. A file a pipeline already committed is reported as "already committed", not as a failure. Whole files only, no hunk staging (v1).</p>
+      <p class="note"><b>Known gap:</b> files created only as a side effect of a shell command may not be in the ledger. Accepted for v1.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────── 3 -->
+<section class="block">
+  <h2>3 · Results are cards in the conversation <span class="tag">D5 · D6</span><span class="sub">part of the session's history, not a side panel</span></h2>
+  <div class="body grid2">
+    <div class="convo">
+      <div class="bubble">Looks good, the detection works on both runners now.</div>
+      <div class="card ok"><div class="h"><span class="stateDot"></span>Committed 3 files <span class="when">14:02</span></div>
+        <div class="b"><span class="hash">a41c09e</span> deploy: detect Ubuntu 24.04 runners by codename, not version</div>
+        <div class="acts"><button class="btn ghost small">Undo</button></div></div>
+      <div class="card ok"><div class="h"><span class="stateDot"></span>Landed 3 commits into main <span class="when">14:05</span></div>
+        <div class="b">Merge commit <span class="hash">7be2d31</span> in <span class="mono">~/repo/mads</span>. This session keeps going on top of it.</div></div>
+      <div class="reply">Next: want me to add a smoke test for the runner detection?</div>
+    </div>
+    <div class="stack">
+      <p class="note"><b>Undo</b> appears only on a commit the Fast Model made without the dialog ("Write commit messages for me"), and only while it's still the branch tip. It's a <code>reset --soft</code>, so the files go back to uncommitted.</p>
+      <p class="note"><b>After Land the folder stays.</b> The session branch tries to fast-forward to the base's new tip, so the next message continues on top of the landed work. That step is best-effort: the branch is already 0 ahead after a <code>--no-ff</code> land. Land records the merge commit's hash itself, because <code>git merge</code> doesn't fire the post-commit hook.</p>
+      <div class="toggle"><span class="switch"></span><div><b>Write commit messages for me</b><div class="muted">The Commit button skips the dialog: the Fast Model writes the message and commits all of this session's files. You can undo from the result. Needs a Fast Model.</div></div></div>
+      <p class="caption">Settings → General, next to the session defaults. Off by default.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────── 4 -->
+<section class="block">
+  <h2>4 · When Land can't finish <span class="tag warn">D6</span><span class="sub">a conflict never touches your checkout</span></h2>
+  <div class="body grid2">
+    <div class="convo">
+      <div class="card warn"><div class="h"><span class="stateDot"></span>main moved on: 2 files conflict <span class="when">14:05</span></div>
+        <div class="b"><span class="mono">scripts/deploy.sh</span>, <span class="mono">.github/workflows/deploy.yml</span> changed on main too. Nothing was merged, and your checkout is untouched.</div>
+        <div class="acts"><button class="btn primary small">Ask the agent to resolve</button></div></div>
+      <div class="bubble">Bring in main and resolve the conflicts in scripts/deploy.sh and .github/workflows/deploy.yml, keeping both changes. Then commit.</div>
+      <div class="reply">Merged main into this branch. Kept the new runner matrix from main and our codename check…</div>
+      <div class="card warn"><div class="h"><span class="stateDot"></span>Can't land while the agent is working <span class="when">14:08</span></div>
+        <div class="b">Land waits for the current turn to finish (or the running pipeline). Nothing changed.</div></div>
+      <div class="card bad"><div class="h"><span class="stateDot"></span>Your checkout has uncommitted changes <span class="when">14:11</span></div>
+        <div class="b">Landing would overwrite <span class="mono">scripts/deploy.sh</span> in <span class="mono">~/repo/mads</span>. Commit or stash it there, then Land again.</div>
+        <div class="acts"><button class="btn ghost small">Land again</button></div></div>
+    </div>
+    <div>
+      <p class="note"><b>Before anything runs,</b> Land refuses while the agent is mid-turn, a pipeline is running, the folder is mid-merge, or the folder isn't completely clean. User messages queue behind a running Land.</p>
+      <p class="note"><b>Step 1, in the session folder:</b> merge main into the session branch. A conflict aborts there, and "Ask the agent to resolve" sends the message shown: an ordinary user turn the user can read and edit.</p>
+
+      <p class="note"><b>Step 2, in your checkout:</b> first re-check the base. If it moved since step 1, go back to step 1. Then <code>git merge --no-ff mads/session/&lt;id&gt;</code>. It can't conflict, but it can be refused: your uncommitted edits to the same files, untracked files the branch would add, a merge hook, an in-progress rebase. <b>Any</b> failure runs <code>merge --abort</code>, so your checkout is never left mid-merge, and the card gives the reason.</p>
+      <p class="note">If main isn't checked out in <code>~/repo/mads</code>, the card says so. v1 doesn't land into a branch nobody has checked out.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────── 5 -->
+<section class="block">
+  <h2>5 · Natural endings: close and delete <span class="tag">D6 · D7</span></h2>
+  <div class="body grid2">
+    <div class="dialog">
+      <div class="title">Close "Fix the deploy script"?</div>
+      <div class="description">
+        <span>This session has <b>3 commits</b> that aren't in main yet. They're safe on the session's branch either way.</span>
+      </div>
+      <div class="actions"><button class="btn ghost">Keep for later</button><button class="btn primary">Land into main and close</button></div>
+    </div>
+    <div class="dialog">
+      <div class="title">Delete "Fix the deploy script"?</div>
+      <div class="description">
+        <div class="statePanel"><div class="stateHead"><span class="stateDot" style="background:var(--warn)"></span>Work that isn't in main</div>
+          <div class="stateLine">3 unlanded commits and 2 uncommitted files will be discarded.</div></div>
+        <span class="muted">The conversation, its tasks and this session's folder go too. The agent is stopped first. This can't be undone.</span>
+      </div>
+      <div class="actions"><button class="btn ghost">Cancel</button><button class="btn danger">Delete</button></div>
+    </div>
+  </div>
+  <div class="body" style="padding-top:0">
+    <p class="note"><b>Close asks only when there's unlanded work,</b> and never discards anything. Delete removes the folder and the branch. It warns in words, and there's no "keep the branch" option: keeping work is what Land and Keep for later are for. The delete panel extends <code>session-delete-confirm.html</code>'s state panel.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────────────────────────────────────── 6 -->
+<section class="block">
+  <h2>6 · Lifecycle, end to end <span class="tag">D1 · D2 · D3 · D8</span><span class="sub">every step that needs the folder calls ensure first</span></h2>
+  <div class="body">
+    <table>
+      <tr><th>Moment</th><th>Folder <span class="mono">$MADS_HOME/session-worktrees/&lt;id&gt;</span></th><th>Branch <span class="mono">mads/session/&lt;id&gt;</span></th></tr>
+      <tr><td><b>First start</b> in a git repo, isolation New worktree</td><td>created from the checked-out branch, recorded as the base, <b>saved before the agent starts</b></td><td>created</td></tr>
+      <tr><td><b>First start fails</b> after creating the folder</td><td>reused by ensure on the next start</td><td>reused</td></tr>
+      <tr><td><b>Resume</b> of a session that predates this</td><td>unchanged: runs where it always has</td><td>none</td></tr>
+      <tr><td><b>Commit</b></td><td>unchanged</td><td>+1 commit</td></tr>
+      <tr><td><b>Pipeline</b> from this session</td><td>its working folder; tasks branch from the session branch</td><td>task results merge in</td></tr>
+      <tr><td><b>Land</b> (agent idle, no pipeline, folder clean)</td><td>stays</td><td>base merged in, merged into base with <code>--no-ff</code>, then best-effort fast-forward</td></tr>
+      <tr><td><b>Folder deleted by hand</b>, then any step</td><td>recreated from the branch at the same path</td><td>unchanged</td></tr>
+      <tr><td><b>Folder and branch deleted by hand</b>, then any step</td><td>recreated fresh from base; next card says so</td><td>recreated</td></tr>
+      <tr><td><b>Delete session</b></td><td>removed</td><td>deleted</td></tr>
+    </table>
+    <p class="caption">Session, pipeline and Router share one per-repo lock (<code>mads-land.lock</code>, the pipeline's existing flock). A pipeline checks for overlapping uncommitted agent edits <i>before</i> each task merge, commits those files (safety identity, recorded), and waits for the agent to be idle before merging. A fresh worktree has no ignored files (<code>node_modules</code>, <code>.env</code>); that's accepted for v1.</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
