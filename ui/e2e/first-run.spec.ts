@@ -29,7 +29,11 @@ test("first run wizard onboards a fresh install", async ({ page }) => {
 
   await page.getByRole("button", { name: "Get started" }).click();
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByRole("button", { name: "Skip for now" }).click();
+  // The credentials step offers "Skip for now" only when it found env vars
+  // to import, and a plain "Continue" when it found none — which depends on
+  // the environment the suite runs in, so accept either.
+  await expect(page.getByRole("heading", { name: "Import credentials" })).toBeVisible();
+  await page.getByRole("button", { name: /^(Skip for now|Continue)$/ }).click();
 
   await page.locator("#workspace-name").fill("e2e first-run workspace");
   await page.locator("#workspace-path").fill(workspaceDir);

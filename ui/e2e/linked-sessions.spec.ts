@@ -24,8 +24,14 @@ test.describe("linked sessions: link UI behind the flag", () => {
 
     leaderName = `e2e linked-sessions leader ${Date.now()}`;
     workerName = `e2e linked-sessions worker ${Date.now()}`;
-    const leader = await createSession(routerURL, { name: leaderName, provider: "fake" });
-    const worker = await createSession(routerURL, { name: workerName, provider: "fake" });
+    // In place, not isolated: the default workspace is a git repo, so by
+    // default each session would get its own worktree — and linking two
+    // existing sessions that each have their own copy is refused by design
+    // (linked sessions must share one tree; the last test below covers
+    // that refusal). This journey is about the link UI, so both work in
+    // the shared checkout.
+    const leader = await createSession(routerURL, { name: leaderName, provider: "fake", isolation: "current_dir" });
+    const worker = await createSession(routerURL, { name: workerName, provider: "fake", isolation: "current_dir" });
     leaderId = leader.id;
     workerId = worker.id;
   });
@@ -81,12 +87,15 @@ test.describe("linked sessions: link UI behind the flag", () => {
 
     await expect(dialog).not.toBeVisible();
 
-    // The name span sits in .rowTop and the badge in the sibling .rowMeta,
-    // so the shared ancestor is two levels up from the name text.
-    const leaderRow = rail.getByText(leaderName, { exact: true }).locator("../..");
-    await expect(leaderRow.getByText("LEADER", { exact: true })).toBeVisible();
-    const workerRow = rail.getByText(workerName, { exact: true }).locator("../..");
-    await expect(workerRow.getByText("LINKED", { exact: true })).toBeVisible();
+    // The LEADER / LINKED pills are gone: the rail now states the
+    // relationship by nesting the subject under its holder with a drawn
+    // connector, and moves the link controls into each card's action
+    // cluster — the holder's "who I lead" menu, the subject's link options.
+    // Those controls exist only on a linked pair, so they are the assertion.
+    await rail.getByText(leaderName, { exact: true }).hover();
+    await expect(rail.getByLabel(`Linked sessions held by ${leaderName}`)).toBeVisible();
+    await rail.getByText(workerName, { exact: true }).hover();
+    await expect(rail.getByLabel(`Link options for ${workerName}`)).toBeVisible();
 
     // Subject session's conversation: an injected message from the leader
     // renders as an attributed chip, never the subject's own bubble.
@@ -157,3 +166,73 @@ test.describe("linked sessions: link UI behind the flag", () => {
     await expect(dialog).not.toBeVisible();
   });
 });
+
+test.describe("linked sessions: two isolated sessions can't be linked", () => {
+  test.describe.configure({ mode: "serial" });
+
+  let aId: string;
+  let aName: string;
+  let bName: string;
+
+  test.beforeAll(async () => {
+    const routerURL = process.env.MADS_ROUTER_URL!;
+    await setConfig(routerURL, { feature_flags: { linked_sessions: true } });
+    aName = `e2e isolated link a ${Date.now()}`;
+    bName = `e2e isolated link b ${Date.now()}`;
+    // Default isolation in the (git) default workspace: each gets its own
+    // worktree. The Data Service refuses a link between them only once both
+    // records carry worktree_dir, which the child writes before its
+    // provider starts — wait for that rather than racing the spawn.
+    const a = await createSession(routerURL, { name: aName, provider: "fake" });
+    const b = await createSession(routerURL, { name: bName, provider: "fake" });
+    aId = a.id;
+    for (const id of [a.id, b.id]) await pollWorktreeDir(routerURL, id);
+  });
+
+  test("the link is refused with a sentence that says what to do instead", async ({ page, routerURL }) => {
+    // The refusal is a 422 from POST /links — expected here.
+    page.allowStatus("/links");
+    await page.goto(routerURL);
+    const rail = page.locator('[aria-label="Session list"]');
+
+    await rail.getByText(aName, { exact: true }).hover();
+    await rail.getByLabel(`Add ${aName} to link selection`).click();
+    await rail.getByText(bName, { exact: true }).click();
+    await rail.getByRole("button", { name: "Choose mode" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Link sessions" });
+    await expect(dialog).toBeVisible();
+    await dialog.getByText("Monitor", { exact: true }).click();
+    await dialog.getByRole("radio", { name: new RegExp(`^${aName} ⟶`) }).check();
+
+    const [res] = await Promise.all([
+      page.waitForResponse((r) => r.request().method() === "POST" && r.url().endsWith("/links")),
+      dialog.getByRole("button", { name: "Create 1 link" }).click(),
+    ]);
+    expect(res.status()).toBeGreaterThanOrEqual(400);
+    expect(res.status()).toBeLessThan(500);
+
+    // The dialog stays open and says, in words, why and what to do.
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/each have their own isolated copy of the repo/)).toBeVisible();
+    await expect(dialog.getByText(/link them when starting the second session/)).toBeVisible();
+    // No developer field key in front of the sentence.
+    await expect(dialog.getByText(/^worktree:/)).toHaveCount(0);
+    // Nothing was linked.
+    const links = (await (await fetch(`${routerURL}/sessions/${aId}/links`)).json()) as unknown[];
+    expect(links).toEqual([]);
+  });
+});
+
+async function pollWorktreeDir(routerURL: string, id: string, timeoutMs = 15_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await fetch(`${routerURL}/sessions/${id}`);
+    if (res.ok) {
+      const s = (await res.json()) as { worktree_dir?: string };
+      if (s.worktree_dir) return s.worktree_dir;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`session ${id} never got a worktree_dir`);
+}
