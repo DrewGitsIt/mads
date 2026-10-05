@@ -1,5 +1,5 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -179,6 +179,11 @@ export async function bootTopology(opts: BootTopologyOptions): Promise<Topology>
   const dataDir = path.join(tmpDir, "data");
   mkdirSync(homeDir, { recursive: true });
   mkdirSync(dataDir, { recursive: true });
+  // The scratch HOME stands in for a user who has git set up: Commit and
+  // Land commit as the user's own identity and deliberately never fall back
+  // to a made-up one (docs/SESSION-WORKTREES-DESIGN.md D5), so without this
+  // every commit the journeys make is refused with "Author identity unknown".
+  writeFileSync(path.join(homeDir, ".gitconfig"), "[user]\n\tname = e2e user\n\temail = e2e@smoke.test\n");
   const env = cleanEnv(homeDir);
 
   const data = await spawnListening("data", [dataBin, "-addr", "127.0.0.1:0", "-data-dir", dataDir], env);
