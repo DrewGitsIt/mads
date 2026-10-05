@@ -61,7 +61,20 @@ type CommitRequest struct {
 	// Config.AutoCommitMessages is on, in which case the Fast Model drafts
 	// one first.
 	Message string `json:"message,omitempty"`
+	// Drafted is the Router's to set, never a client's: the Fast Model
+	// wrote Message (the header's one-click Commit). It rides along to
+	// whoever runs the commit so its commit.created says so — the
+	// conversation offers Undo only on such a commit.
+	Drafted bool `json:"drafted,omitempty"`
 }
+
+// CommitSource* name who made a commit mads recorded itself (commit.created
+// "source"): the Commit button, or Land's merge commit. Commits the agent
+// makes on its own (hook-reported) carry none.
+const (
+	CommitSourceCommit = "commit"
+	CommitSourceLand   = "land"
+)
 
 // Commit per-path outcomes.
 const (

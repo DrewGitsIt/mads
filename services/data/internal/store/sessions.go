@@ -527,6 +527,12 @@ type CommitReport struct {
 	Commit           contracts.Commit
 	TrailerTaskID    string
 	HeuristicTaskIDs []string
+	// Source is set for a commit mads made itself (contracts.CommitSource*),
+	// with Files and Drafted describing it. Not stored: they ride on
+	// commit.created only, which is what the conversation's cards replay.
+	Source  string
+	Files   int
+	Drafted bool
 }
 
 // RecordCommit stores a commit, resolving its task linkage through the §5
@@ -586,7 +592,17 @@ func (s *Sessions) RecordCommit(ctx context.Context, rep *CommitReport, actor st
 		); err != nil {
 			return fmt.Errorf("commits: insert %s: %w", c.Hash, err)
 		}
-		payload, _ := json.Marshal(map[string]any{"hash": c.Hash, "orphan": c.Orphan})
+		p := map[string]any{"hash": c.Hash, "orphan": c.Orphan}
+		if rep.Source != "" {
+			p["source"], p["message"] = rep.Source, c.Message
+			if rep.Files > 0 {
+				p["files"] = rep.Files
+			}
+			if rep.Drafted {
+				p["drafted"] = true
+			}
+		}
+		payload, _ := json.Marshal(p)
 		if err := tx.Append(&contracts.Envelope{
 			Type: contracts.CommitCreated, SessionID: c.SessionID, TaskID: c.TaskID,
 			Actor: actor, Payload: payload,

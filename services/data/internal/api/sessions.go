@@ -154,6 +154,9 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 			contracts.Commit
 			TrailerTaskID    string   `json:"trailer_task_id"`
 			HeuristicTaskIDs []string `json:"heuristic_task_ids"`
+			Source           string   `json:"source"`
+			Files            int      `json:"files"`
+			Drafted          bool     `json:"drafted"`
 		}
 		if !decode(w, r, &body) {
 			return
@@ -163,6 +166,9 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 			Commit:           body.Commit,
 			TrailerTaskID:    body.TrailerTaskID,
 			HeuristicTaskIDs: body.HeuristicTaskIDs,
+			Source:           body.Source,
+			Files:            body.Files,
+			Drafted:          body.Drafted,
 		}, actor(r))
 		if err != nil {
 			writeStoreError(w, err)

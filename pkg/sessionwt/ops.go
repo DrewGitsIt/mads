@@ -122,9 +122,23 @@ func (o Ops) Commit(ctx context.Context, sessionID string, req contracts.CommitR
 	if err != nil {
 		return contracts.CommitResult{}, err
 	}
-	o.record(ctx, t, res.Hash, res.Message)
+	res.Drafted = req.Drafted
+	o.recordAs(ctx, t, res.Hash, res.Message, provenance{
+		source: contracts.CommitSourceCommit, files: committedCount(res.Paths), drafted: req.Drafted,
+	})
 	o.refresh(ctx, t)
 	return res, nil
+}
+
+// committedCount is how many paths a Commit actually took.
+func committedCount(paths []contracts.CommitPath) int {
+	n := 0
+	for _, p := range paths {
+		if p.Status == contracts.CommitPathCommitted {
+			n++
+		}
+	}
+	return n
 }
 
 // Undo is POST /sessions/{id}/commit/undo. An undone commit's record goes
@@ -203,7 +217,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 	}
 	switch res.Outcome {
 	case contracts.LandLanded:
-		o.record(ctx, t, res.MergeCommit, "Land "+landName(t))
+		o.recordAs(ctx, t, res.MergeCommit, "Land "+landName(t), provenance{source: contracts.CommitSourceLand})
 		o.event(ctx, t, contracts.MergeCompleted, map[string]any{
 			"merge_commit": res.MergeCommit, "fast_forwarded": res.FastForwarded,
 		})
@@ -279,6 +293,19 @@ func (o Ops) ensure(ctx context.Context, t Target) error {
 // Commit, and never fires for a merge. Best-effort; the commit exists
 // either way.
 func (o Ops) record(ctx context.Context, t Target, hash, message string) {
+	o.recordAs(ctx, t, hash, message, provenance{})
+}
+
+// provenance says which of this package's own operations made a recorded
+// commit (dataclient.CommitReport.Source and friends); zero for none.
+type provenance struct {
+	source  string
+	files   int
+	drafted bool
+}
+
+// recordAs is record with the commit's provenance attached.
+func (o Ops) recordAs(ctx context.Context, t Target, hash, message string, p provenance) {
 	if hash == "" {
 		return
 	}
@@ -292,6 +319,7 @@ func (o Ops) record(ctx context.Context, t Target, hash, message string) {
 	}
 	if _, err := o.Store.RecordCommit(context.WithoutCancel(ctx), &dataclient.CommitReport{
 		Commit: contracts.Commit{Hash: hash, SessionID: t.SessionID, Repo: repo, Message: Subject(message)},
+		Source: p.source, Files: p.files, Drafted: p.drafted,
 	}); err != nil {
 		log.Printf("sessionwt: record commit %s: %v", hash, err)
 	}

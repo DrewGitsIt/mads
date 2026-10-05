@@ -22,6 +22,7 @@ type memStore struct {
 	sess    contracts.Session
 	rows    []contracts.FileChange
 	commits []contracts.Commit
+	reports []dataclient.CommitReport
 	deleted []string
 	patches []contracts.SessionWorktreePatch
 	events  []contracts.Envelope
@@ -43,6 +44,7 @@ func (m *memStore) RecordCommit(_ context.Context, rep *dataclient.CommitReport)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.commits = append(m.commits, rep.Commit)
+	m.reports = append(m.reports, *rep)
 	return rep.Commit, nil
 }
 
@@ -251,6 +253,9 @@ func TestCommitHappyPath(t *testing.T) {
 	c := s.store.commits[0]
 	if c.Hash != res.Hash || c.Message != "Add a" || !samePath(c.Repo, s.primary) || c.SessionID != "ses_test" {
 		t.Errorf("recorded %+v", c)
+	}
+	if r := s.store.reports[0]; r.Source != contracts.CommitSourceCommit || r.Files != 1 || r.Drafted {
+		t.Errorf("provenance = %q, %d files, drafted %v; want commit, 1, false", r.Source, r.Files, r.Drafted)
 	}
 	if u, l := s.store.lastCounts(t); u != 1 || l != 1 {
 		t.Errorf("counts = %d uncommitted, %d unlanded; want 1, 1", u, l)
@@ -490,6 +495,9 @@ func TestLandHappyPath(t *testing.T) {
 	last := s.store.commits[len(s.store.commits)-1]
 	if last.Hash != res.MergeCommit || last.Message != "Land fix the thing" || !samePath(last.Repo, s.primary) {
 		t.Errorf("recorded %+v", last)
+	}
+	if r := s.store.reports[len(s.store.reports)-1]; r.Source != contracts.CommitSourceLand {
+		t.Errorf("merge commit source = %q, want land", r.Source)
 	}
 	if got := strings.Join(s.store.eventTypes(), ","); got != "merge.attempted,merge.completed" {
 		t.Errorf("events = %s", got)

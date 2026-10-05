@@ -346,6 +346,14 @@ type CommitReport struct {
 	contracts.Commit
 	TrailerTaskID    string   `json:"trailer_task_id,omitempty"`
 	HeuristicTaskIDs []string `json:"heuristic_task_ids,omitempty"`
+	// Source, Files and Drafted describe a commit mads made itself
+	// (contracts.CommitSource*: how many files a Commit took, and whether
+	// the Fast Model wrote its message). The Data Service echoes them on
+	// commit.created, so the conversation draws a card for exactly these
+	// and not for the agent's own commits.
+	Source  string `json:"source,omitempty"`
+	Files   int    `json:"files,omitempty"`
+	Drafted bool   `json:"drafted,omitempty"`
 }
 
 // RecordCommit reports one commit for linkage resolution. rep.SessionID

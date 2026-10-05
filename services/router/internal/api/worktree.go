@@ -114,6 +114,7 @@ func (s *server) handleSessionCommit(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Message, drafted = msg, true
 	}
+	req.Drafted = drafted // the Router's word, never the client's
 	s.worktreeRoute(w, r, func(addr string) {
 		status, raw, err := callChild(r.Context(), addr, http.MethodPost, "/commit", req)
 		if err != nil {

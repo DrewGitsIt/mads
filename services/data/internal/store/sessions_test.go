@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -504,5 +505,41 @@ func TestDeleteCommit(t *testing.T) {
 	}
 	if len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"undo"`) {
 		t.Errorf("commit.undone events = %+v", evs)
+	}
+}
+
+// A commit mads made itself says so on commit.created — source, subject,
+// file count, drafted — so the conversation can draw its card; a
+// hook-reported commit carries none of it.
+func TestRecordCommitProvenance(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{})
+	if _, err := s.RecordCommit(ctx, &CommitReport{
+		Commit: contracts.Commit{Hash: "mine", SessionID: sess.ID, Message: "Fix the thing"},
+		Source: contracts.CommitSourceCommit, Files: 3, Drafted: true,
+	}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordCommit(ctx, &CommitReport{
+		Commit: contracts.Commit{Hash: "agent", SessionID: sess.ID, Message: "Agent's own"},
+	}, "test"); err != nil {
+		t.Fatal(err)
+	}
+	evs, err := l.Query(ctx, Filter{SessionID: sess.ID, Types: []string{string(contracts.CommitCreated)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("commit.created events = %d, want 2", len(evs))
+	}
+	var mine, agent map[string]any
+	_ = json.Unmarshal(evs[0].Payload, &mine)
+	_ = json.Unmarshal(evs[1].Payload, &agent)
+	if mine["source"] != "commit" || mine["message"] != "Fix the thing" || mine["files"] != float64(3) || mine["drafted"] != true {
+		t.Errorf("mads commit payload = %v", mine)
+	}
+	if _, ok := agent["source"]; ok {
+		t.Errorf("hook commit payload = %v, want no source", agent)
 	}
 }
