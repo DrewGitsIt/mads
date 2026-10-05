@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
 type fakeData struct{ err error }
@@ -175,5 +178,56 @@ func TestNearestExistingAncestor(t *testing.T) {
 	}
 	if got := nearestExistingAncestor(base); got != base {
 		t.Errorf("nearestExistingAncestor(%q) = %q, want %q", base, got, base)
+	}
+}
+
+// mergiraf is optional: absent, its row is a warning with install guidance
+// and says what it's for; present, it names the version and path found.
+func TestCheckMergiraf(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir()) // no ~/.cargo/bin/mergiraf either
+	if p := mergedriver.Find(""); p != "" {
+		t.Skipf("mergiraf installed at %s, a system location this test can't hide", p)
+	}
+	absent := checkMergiraf(context.Background())
+	if absent.Name != "mergiraf" || absent.Healthy || !absent.Warning || !absent.Optional {
+		t.Errorf("absent mergiraf = %+v, want an optional warning", absent)
+	}
+	if absent.Purpose == "" || absent.InstallCommand != "brew install mergiraf" || absent.InstallURL != "https://codeberg.org/mergiraf/mergiraf/releases" {
+		t.Errorf("absent mergiraf guidance = %+v", absent)
+	}
+	if !strings.Contains(absent.FixHint, "brew install mergiraf") || !strings.Contains(absent.FixHint, "codeberg.org/mergiraf/mergiraf/releases") {
+		t.Errorf("absent mergiraf fix hint = %q", absent.FixHint)
+	}
+
+	bin := t.TempDir()
+	script := filepath.Join(bin, "mergiraf")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho 'mergiraf 0.20.0'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	found := checkMergiraf(context.Background())
+	if !found.Healthy || found.Warning || found.Version != "mergiraf 0.20.0" || found.Path != script {
+		t.Errorf("found mergiraf = %+v", found)
+	}
+	if found.Detail != "mergiraf 0.20.0 at "+script {
+		t.Errorf("found mergiraf detail = %q", found.Detail)
+	}
+}
+
+// A missing mergiraf never fails the run: Run still reports it, as a
+// warning, alongside the required checks.
+func TestRun_MergirafRowIsOptional(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	if p := mergedriver.Find(""); p != "" {
+		t.Skipf("mergiraf installed at %s, a system location this test can't hide", p)
+	}
+	checks, err := New(Deps{Data: fakeData{}, Providers: fakeProviders{}, MadsHome: t.TempDir()}).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := findCheck(t, checks, "mergiraf"); !m.Warning || !m.Optional {
+		t.Errorf("mergiraf row = %+v", m)
 	}
 }

@@ -48,6 +48,7 @@ func (c *realChecker) Run(ctx context.Context) ([]Check, error) {
 		checkGit(ctx),
 		checkDiskSpace(c.deps.MadsHome),
 		checkDataService(ctx, c.deps.Data),
+		checkMergiraf(ctx),
 	}
 	for _, name := range c.deps.Providers.Names() {
 		if bin, ok := knownProviderBinaries[name]; ok {

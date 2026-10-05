@@ -503,6 +503,16 @@ creation with default config on first run; `mads uninstall` with explicit confir
 `--keep-data` (§14.7); homebrew tap as stretch.
 **Done when:** install → first-run → uninstall smoke green on macOS and Linux runners.
 **Depends:** W0.1 (builds), W6.10 (first-run)
+**Note (Drew, 2026-10-05): offer mergiraf after install.** Add a post-install setup step
+that checks whether [mergiraf](https://mergiraf.org) is on the system (the same lookup
+`pkg/mergedriver` uses: PATH, Homebrew's prefixes, `~/.cargo/bin`). If it isn't, ask the
+user whether to install it, saying what it's for: it lets Land and pipelines merge code
+edits that touch the same file automatically. On yes, install with `brew install
+mergiraf` where Homebrew is available, else download the release binary for the platform
+from <https://codeberg.org/mergiraf/mergiraf/releases>. Never install it silently, and
+never make it a build dependency: mads works without it. W7.3's preflight already reports
+it as an optional row (version and path, or this install guidance); this step is the
+installer-time counterpart. Not built yet.
 
 ### W7.3 Preflight & provider compatibility
 **Includes:** on-demand health check of binaries, dependencies, services with fix guidance
@@ -510,6 +520,9 @@ creation with default config on first run; `mads uninstall` with explicit confir
 surfaced in Settings and the first-run wizard.
 **Done when:** a seeded broken dependency reports what's broken and how to fix it.
 **Depends:** W4.1
+**Note (2026-10-05):** preflight has an optional `mergiraf` row, a warning when absent
+(never a blocker) with `brew install mergiraf` and the release-binary link. The installer
+prompt to install it is recorded under W7.2.
 
 ### W7.4 Credentials: env import & vault integration
 **Includes:** environment-variable scan + import flow (§13.7); vault sources (1Password CLI,

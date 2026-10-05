@@ -1775,6 +1775,18 @@ export const fixturePreflightChecks: PreflightCheck[] = [
     install_url: "https://kiro.dev/docs/cli/",
     install_command: "curl -fsSL https://cli.kiro.dev/install | bash",
   },
+  {
+    name: "mergiraf",
+    healthy: false,
+    warning: true,
+    optional: true,
+    purpose: "Lets Land and pipelines merge code edits that touch the same file automatically.",
+    detail: "not installed — merges use plain git, which stops on any two edits to the same lines or next to each other",
+    fix_hint:
+      "Optional. Install with `brew install mergiraf`, or download the release binary for your system from https://codeberg.org/mergiraf/mergiraf/releases and put it on your PATH.",
+    install_url: "https://codeberg.org/mergiraf/mergiraf/releases",
+    install_command: "brew install mergiraf",
+  },
 ];
 
 export const fixtureVersionInfo: VersionInfo = { version: "0.1.0-dev" };

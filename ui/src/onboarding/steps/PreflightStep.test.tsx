@@ -44,4 +44,17 @@ describe("PreflightStep", () => {
     fireEvent.click(screen.getByText("Continue"));
     expect(onNext).toHaveBeenCalledTimes(1);
   });
+
+  it("shows mergiraf as an optional warning with install guidance, and still allows Continue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixturePreflightChecks), { status: 200 })),
+    );
+    const onNext = vi.fn();
+    render(<PreflightStep onNext={onNext} onBack={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("brew install mergiraf")).toBeTruthy());
+    expect(screen.getByText(/merge code edits that touch the same file automatically/)).toBeTruthy();
+    fireEvent.click(screen.getByText("Continue"));
+    expect(onNext).toHaveBeenCalledTimes(1);
+  });
 });

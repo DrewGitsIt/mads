@@ -23,10 +23,19 @@ type Check struct {
 	// consumer that only reads Healthy still flags it.
 	Warning bool `json:"warning,omitempty"`
 	// InstallURL and InstallCommand are the vendor's own install page and
-	// documented one-line installer, set on provider rows only — the UI's
-	// "nothing detected" state offers them as the way forward.
+	// documented one-line installer, set on provider rows — the UI's
+	// "nothing detected" state offers them as the way forward — and on an
+	// absent optional tool's row.
 	InstallURL     string `json:"install_url,omitempty"`
 	InstallCommand string `json:"install_command,omitempty"`
+	// Optional marks a tool mads works without (mergiraf): when absent
+	// the row is a Warning with install guidance, never a failure, and
+	// the UI says what the tool is for (Purpose) and, when present, which
+	// one it found (Version, Path).
+	Optional bool   `json:"optional,omitempty"`
+	Purpose  string `json:"purpose,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Path     string `json:"path,omitempty"`
 }
 
 // Checker runs the wizard's environment checks.

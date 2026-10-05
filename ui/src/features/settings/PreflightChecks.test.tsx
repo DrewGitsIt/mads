@@ -71,4 +71,44 @@ describe("PreflightChecks", () => {
     render(<PreflightChecks checks={[{ name: "git", healthy: true }]} loading={false} onRerun={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Providers checked" })).toBeNull();
   });
+
+  describe("mergiraf (an optional tool)", () => {
+    const absent = fixturePreflightChecks.find((c) => c.name === "mergiraf")!;
+    const found: PreflightCheck = {
+      name: "mergiraf",
+      healthy: true,
+      optional: true,
+      purpose: "Lets Land and pipelines merge code edits that touch the same file automatically.",
+      version: "mergiraf 0.20.0",
+      path: "/opt/homebrew/bin/mergiraf",
+      detail: "mergiraf 0.20.0 at /opt/homebrew/bin/mergiraf",
+    };
+
+    function row() {
+      return document.querySelector('[data-preflight-check="mergiraf"]') as HTMLElement;
+    }
+
+    it("when absent, warns (never fails), says what it's for, and how to install it", () => {
+      render(<PreflightChecks checks={[{ name: "git", healthy: true }, absent]} loading={false} onRerun={vi.fn()} />);
+      const r = within(row());
+      expect(row().textContent).toContain("⚠");
+      expect(row().textContent).not.toContain("✗");
+      expect(r.getByText("optional")).toBeTruthy();
+      expect(r.getByText(/merge code edits that touch the same file automatically/)).toBeTruthy();
+      expect(r.getByText("brew install mergiraf")).toBeTruthy();
+      expect(r.getByRole("button", { name: "Copy" })).toBeTruthy();
+      expect(r.getByRole("link").getAttribute("href")).toBe("https://codeberg.org/mergiraf/mergiraf/releases");
+      // Not a provider: the "no agent harness" panel and the provider disclosure ignore it.
+      expect(screen.queryByRole("region", { name: "No agent harness detected" })).toBeNull();
+    });
+
+    it("when found, shows the version and the path", () => {
+      render(<PreflightChecks checks={[found]} loading={false} onRerun={vi.fn()} />);
+      const r = within(row());
+      expect(row().textContent).toContain("✓");
+      expect(r.getByText(/mergiraf 0.20.0/)).toBeTruthy();
+      expect(r.getByText("/opt/homebrew/bin/mergiraf")).toBeTruthy();
+      expect(r.queryByText("brew install mergiraf")).toBeNull();
+    });
+  });
 });

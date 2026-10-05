@@ -20,6 +20,8 @@ export interface PreflightChecksProps {
  * probed, detected or not. When none was detected, the list is followed by
  * each supported provider's own install page and documented installer, in
  * alphabetical order so no one harness reads as the recommendation.
+ * Optional tools (mergiraf) get a fuller row: what they're for, what was
+ * found, or how to install them — a warning when absent, never a failure.
  */
 export function PreflightChecks({ checks, loading, onRerun }: PreflightChecksProps) {
   const [infoOpen, setInfoOpen] = useState(false);
@@ -31,13 +33,17 @@ export function PreflightChecks({ checks, loading, onRerun }: PreflightChecksPro
     <div className={styles.root}>
       <div className={styles.row}>
         <ul className={styles.checks}>
-          {shown.map((check) => (
-            <li key={check.name} className={styles.check}>
-              <StatusIcon check={check} />
-              {check.name}
-              {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
-            </li>
-          ))}
+          {shown.map((check) =>
+            check.optional ? (
+              <OptionalTool key={check.name} check={check} />
+            ) : (
+              <li key={check.name} className={styles.check}>
+                <StatusIcon check={check} />
+                {check.name}
+                {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
+              </li>
+            ),
+          )}
         </ul>
         {probed.length > 0 && (
           <Popover
@@ -89,6 +95,53 @@ function StatusIcon({ check }: { check: PreflightCheck }) {
   return <span aria-hidden="true">✗</span>;
 }
 
+/**
+ * An optional tool's row: name and an "optional" tag, what it's for, then
+ * the version and path found — or, when absent, how to install it.
+ */
+function OptionalTool({ check }: { check: PreflightCheck }) {
+  return (
+    <li className={styles.optionalTool} data-preflight-check={check.name}>
+      <div className={styles.check}>
+        <StatusIcon check={check} />
+        {check.name}
+        <span className={styles.optionalTag}>optional</span>
+      </div>
+      <div className={styles.toolBody}>
+        {check.purpose && <span>{check.purpose}</span>}
+        {check.healthy ? (
+          <span className={styles.toolFound}>
+            {check.version ?? "Found"}
+            {check.path ? (
+              <>
+                {" at "}
+                <code>{check.path}</code>
+              </>
+            ) : null}
+          </span>
+        ) : (
+          <>
+            {check.detail && <span className={styles.hint}>{capitalize(check.detail)}.</span>}
+            {check.install_command && <CopyCommand command={check.install_command} />}
+            {check.install_url && (
+              <span>
+                Or download the release binary:{" "}
+                <a href={check.install_url} target="_blank" rel="noreferrer" className={styles.link}>
+                  {check.install_url.replace(/^https:\/\//, "")} ↗
+                </a>
+              </span>
+            )}
+          </>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 function providerName(check: PreflightCheck): string {
   return check.name.slice(PROVIDER_PREFIX.length);
 }
@@ -120,17 +173,7 @@ function NoProviderDetected({ providers, loading, onRerun }: NoProviderDetectedP
 }
 
 function InstallOption({ check }: { check: PreflightCheck }) {
-  const [copied, setCopied] = useState(false);
   const command = check.install_command;
-
-  function copyCommand() {
-    if (!command) return;
-    void navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
   return (
     <li className={styles.option}>
       <div className={styles.optionHead}>
@@ -141,14 +184,28 @@ function InstallOption({ check }: { check: PreflightCheck }) {
           </a>
         )}
       </div>
-      {command && (
-        <div className={styles.command}>
-          <code>{command}</code>
-          <button type="button" className={styles.copy} onClick={copyCommand}>
-            {copied ? "Copied" : "Copy"}
-          </button>
-        </div>
-      )}
+      {command && <CopyCommand command={command} />}
     </li>
+  );
+}
+
+/** A one-line install command with a Copy button. */
+function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function copyCommand() {
+    void navigator.clipboard.writeText(command).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <div className={styles.command}>
+      <code>{command}</code>
+      <button type="button" className={styles.copy} onClick={copyCommand}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
   );
 }
