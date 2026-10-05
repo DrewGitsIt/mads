@@ -71,6 +71,26 @@ func (r EnsureResult) Notable() bool {
 	return r.Action != ActionReused || r.StaleMovedTo != "" || r.Head != ""
 }
 
+// Payload is the worktree.ensured event payload for this result (see
+// contracts.WorktreeEnsured); base is the session's WorktreeBase.
+func (r EnsureResult) Payload(base string) map[string]any {
+	p := map[string]any{"action": string(r.Action), "dir": r.Dir, "branch": r.Branch}
+	for k, v := range map[string]string{
+		"base": base, "stale_moved_to": r.StaleMovedTo, "start_point": r.StartPoint, "head": r.Head,
+	} {
+		if v != "" {
+			p[k] = v
+		}
+	}
+	if r.UnlockedStale {
+		p["unlocked_stale"] = true
+	}
+	if r.BaseMissing {
+		p["base_missing"] = true
+	}
+	return p
+}
+
 // Ensure makes the session's folder usable, following D2's table:
 //
 //   - the folder is a worktree of this repo: use it;

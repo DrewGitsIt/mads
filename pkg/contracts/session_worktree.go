@@ -158,6 +158,7 @@ const (
 	LandBusy              = "busy"
 	LandPipeline          = "pipeline"
 	LandMidMerge          = "mid_merge"
+	LandOffBranch         = "off_branch"
 	LandDirty             = "dirty"
 	LandBaseNotCheckedOut = "base_not_checked_out"
 	LandPrimaryMidMerge   = "primary_mid_merge"

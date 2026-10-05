@@ -69,40 +69,11 @@ func CountUncommitted(ctx context.Context, dir string, files []string) (int, err
 	if err != nil {
 		return 0, err
 	}
-	changed := map[string]bool{}
-	for chunk := range slices.Chunk(files, countChunk) {
-		args := append([]string{
-			"--no-optional-locks", "--literal-pathspecs",
-			"status", "--porcelain", "-z", "--untracked-files=all", "--",
-		}, chunk...)
-		out, err := Git(ctx, top, args...)
-		if err != nil {
-			return 0, err
-		}
-		for _, p := range parsePorcelainZ(out) {
-			changed[p] = true
-		}
+	changed, err := changes(ctx, top, files)
+	if err != nil {
+		return 0, err
 	}
 	return len(changed), nil
-}
-
-// parsePorcelainZ returns the paths in `git status --porcelain -z` output. A
-// rename or copy entry carries its source path as an extra NUL-terminated
-// field, which is skipped: the destination is the file that changed.
-func parsePorcelainZ(out string) []string {
-	var paths []string
-	fields := strings.Split(out, "\x00")
-	for i := 0; i < len(fields); i++ {
-		f := fields[i]
-		if len(f) < 4 {
-			continue
-		}
-		paths = append(paths, f[3:])
-		if f[0] == 'R' || f[0] == 'C' {
-			i++
-		}
-	}
-	return paths
 }
 
 // CountUnlanded counts commits on branch that base doesn't have: `git

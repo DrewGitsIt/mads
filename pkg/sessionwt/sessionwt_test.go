@@ -400,11 +400,14 @@ func TestSessionFiles(t *testing.T) {
 	}
 }
 
-func TestParsePorcelainZ(t *testing.T) {
-	out := " M a.txt\x00R  new.txt\x00old.txt\x00?? dir/n.txt\x00 D gone.txt\x00"
-	got := strings.Join(parsePorcelainZ(out), ",")
-	if want := "a.txt,new.txt,dir/n.txt,gone.txt"; got != want {
-		t.Errorf("paths = %s, want %s", got, want)
+func TestParseStatusZ(t *testing.T) {
+	out := " M a.txt\x00R  new.txt\x00old.txt\x00?? dir/n.txt\x00 D gone.txt\x00A  staged.txt\x00"
+	var got []string
+	for _, e := range parseStatusZ(out) {
+		got = append(got, e.path+":"+e.kind())
+	}
+	if want := "a.txt:modified,new.txt:modified,dir/n.txt:added,gone.txt:deleted,staged.txt:added"; strings.Join(got, ",") != want {
+		t.Errorf("entries = %s, want %s", strings.Join(got, ","), want)
 	}
 }
 

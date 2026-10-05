@@ -11,10 +11,12 @@
 // session's folder is.
 //
 // Functions that change the repository assume the caller holds a lock (see
-// lock.go for the two tiers and their order): Ensure and CommitStray the
-// session lock; Merge and Remove, which write the primary, the session lock
-// and then the repo lock. Functions that only read (IsGitRepo,
-// CurrentBranch, Prefix, Count*) take no lock.
+// lock.go for the two tiers and their order): Ensure, CommitFiles,
+// UndoCommit and LandSteps the session lock — LandSteps then takes the repo
+// lock itself for its write to the primary. Ops runs the user-facing
+// actions (Commit, Undo, Land) end to end, locks included, and Cleanup
+// takes its own. Functions that only read (IsGitRepo, CurrentBranch,
+// Prefix, Count*, Status, LandGate, DraftDiff) take no lock.
 package sessionwt
 
 import (
@@ -44,9 +46,8 @@ func Path(root, sessionID string) string { return filepath.Join(root, sessionID)
 var ErrDetachedHEAD = errors.New("sessionwt: primary is on a detached HEAD")
 
 // Git runs one git command in dir. Commits it makes carry the mads-session
-// safety identity, never the user's config: only the automatic paths
-// (CommitStray, Merge) commit through here, and the user's own commits go
-// through their own identity elsewhere.
+// safety identity, never the user's config, so only automatic paths may
+// commit through here; the user's own Commit and Land go through userGit.
 func Git(ctx context.Context, dir string, args ...string) (string, error) {
 	return git(ctx, dir, nil, args...)
 }
@@ -125,18 +126,27 @@ func commonDir(ctx context.Context, dir string) (string, error) {
 // samePath compares two absolute paths after resolving symlinks where they
 // exist, so a temp dir reached through /var and git's /private/var spelling
 // of it (macOS) still compare equal. A path that doesn't exist resolves
-// through its parent.
+// through its nearest existing ancestor.
 func samePath(a, b string) bool {
 	return resolve(a) == resolve(b)
 }
 
+// resolve is p with every symlink in it followed. The part of p that
+// doesn't exist (a deleted file, or a deleted directory and its files) is
+// joined back on unchanged below its nearest existing ancestor, which is
+// resolved.
 func resolve(p string) string {
 	p = filepath.Clean(p)
-	if r, err := filepath.EvalSymlinks(p); err == nil {
-		return r
+	rest := ""
+	for cur := p; ; {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(r, rest)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = filepath.Join(filepath.Base(cur), rest)
+		cur = parent
 	}
-	if r, err := filepath.EvalSymlinks(filepath.Dir(p)); err == nil {
-		return filepath.Join(r, filepath.Base(p))
-	}
-	return p
 }
