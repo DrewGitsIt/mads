@@ -3,8 +3,11 @@ package api
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 )
 
 // validateStagedLinks pre-checks staged link entries before the session
@@ -12,10 +15,19 @@ import (
 // must carry contracts.NewSessionPlaceholder on exactly one endpoint and an
 // existing session on the other; everything else (preset resolution, one
 // orchestrate holder per subject, ...) stays with the Data Service at create
-// time. Must run after resolveSessionDefaults — the worktree check reads the
-// Isolation/Workspace it fills in.
+// time. Must run after resolveSessionDefaults — the join below reads the
+// Dir/Workspace it fills in.
+//
+// Linked sessions must share one tree (docs/LINKED-SESSIONS-DESIGN.md), and
+// with isolation on by default nearly every counterpart has its own
+// worktree. So a new session staged against a counterpart isolated in the
+// same repo joins it rather than being refused: it works in place inside
+// the counterpart's folder (Dir set there, Isolation current_dir), its
+// commits land on the counterpart's branch, and the counterpart lands
+// everything. A new session can join one such folder, not two.
 func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Session, links []contracts.LinkRequest) error {
 	var v contracts.ValidationError
+	join := ""
 	for i, l := range links {
 		field := fmt.Sprintf("links[%d]", i)
 		grantingNew := l.GrantingSessionID == contracts.NewSessionPlaceholder
@@ -40,22 +52,46 @@ func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Sessio
 		if err != nil {
 			return err // not-found → 404 via writeError, before any session is created
 		}
-		// The store's worktreeConflict can't catch this for a staged link: it
-		// short-circuits on empty WorktreeDir, and the new session's
-		// WorktreeDir is only written by the child at boot — after link
-		// creation. Worktree paths are per-session (<root>/<sessionID>), so a
-		// fresh worktree in the counterpart's workspace is a guaranteed
-		// different-worktree pair. Same known gap as the store: an unspawned
-		// counterpart (empty WorktreeDir) isn't caught.
-		if sess.Isolation == contracts.IsolationWorktree && counterpart.Workspace != "" &&
-			counterpart.Workspace == sess.Workspace && counterpart.WorktreeDir != "" {
-			v.Add(field+".worktree", "sessions are isolated in different worktrees of the same workspace — linked sessions must not operate in different worktrees of the same repo")
+		if counterpart.WorktreeDir == "" || !s.sameRepoAs(ctx, sess, counterpart) {
+			continue
+		}
+		switch {
+		case join != "" && join != counterpart.WorktreeDir:
+			v.Add(field+".worktree", "these sessions each have their own isolated copy of the repo, and a new session can work in only one of them — link it to sessions that share one copy")
+		case !dirExists(counterpart.WorktreeDir):
+			v.Add(field+".worktree", fmt.Sprintf("session %q works in an isolated copy of the repo that is missing on disk — open it once to restore its folder, then link to it", counterpart.Name))
+		default:
+			join = counterpart.WorktreeDir
 		}
 	}
 	if !v.Empty() {
 		return &v
 	}
+	if join != "" {
+		dir := join
+		// Started from a subdirectory of the repo: the same subdirectory of
+		// the shared folder.
+		if prefix, err := sessionwt.Prefix(ctx, sess.Dir); err == nil && prefix != "" && dirExists(filepath.Join(join, prefix)) {
+			dir = filepath.Join(join, prefix)
+		}
+		sess.Dir, sess.Isolation = dir, contracts.IsolationCurrentDir
+	}
 	return nil
+}
+
+// sameRepoAs reports whether the new session would work in the same repo
+// as counterpart: the same workspace, or a Dir in the repo counterpart's
+// worktree belongs to.
+func (s *server) sameRepoAs(ctx context.Context, sess *contracts.Session, counterpart contracts.Session) bool {
+	if sess.Workspace != "" && sess.Workspace == counterpart.Workspace {
+		return true
+	}
+	return sess.Dir != "" && dirExists(counterpart.WorktreeDir) && sessionwt.SameRepo(ctx, sess.Dir, counterpart.WorktreeDir)
+}
+
+func dirExists(dir string) bool {
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
 }
 
 // createStagedLinks substitutes the placeholder with the new session's ID

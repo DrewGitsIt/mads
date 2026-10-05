@@ -118,7 +118,7 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 		}
 
 		if worktreeConflict(granting, subject) {
-			v.Add("worktree", "sessions are isolated in different worktrees of the same workspace — linked sessions must not operate in different worktrees of the same repo")
+			v.Add("worktree", "these sessions each have their own isolated copy of the repo, and linked sessions must share one — link them when starting the second session (it then works in the first one's copy), or land one session's work and link from a new session")
 		}
 
 		existing, err := pairLinkInTx(tx, link.GrantingSessionID, link.SubjectSessionID)
