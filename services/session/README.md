@@ -4,7 +4,8 @@ One process per active session, hosting that session's provider session (spec §
 or resumes it, relays user turns onto it, streams its events back out, and keeps the Data
 Service's session record (`Activity`, `ProviderRef`) in sync. Spawned and supervised by the
 Router on an ephemeral port. It does NOT persist state directly — every write goes through
-the Data Service. It owns worktree-per-session isolation and merge-back (spec §6, §17),
+the Data Service. It owns worktree-per-session isolation and the live session's Commit and
+Land (spec §6, §17; docs/SESSION-WORKTREES-DESIGN.md),
 tracks the files the agent's tools touch, and installs the mads post-commit hook (spec §5)
 in its working tree, so interactive commits report to the Data Service with task linkage
 the same way pipeline task commits do — see "File observation & commit linkage" below. It
@@ -58,12 +59,16 @@ One process, one session — no `:id` in any path.
 - `DELETE /queue/{id}` — drop one before it's delivered; 204, or 404 if it isn't queued
   (it may have just gone out).
 - `POST /interrupt` — stops the in-flight turn, if any. 503 if not ready.
-- `POST /merge` — `{"target_branch": "..."}` (target_branch optional; empty merges into
-  whatever's currently checked out on the primary). 409 if the session has no isolated
-  worktree (`runner.ErrNoWorktree`). Otherwise always 200 with a
-  `contracts.MergeResult`: `{"conflicted": bool, "branch": "...", "files": ["..."]}`.
-  A conflict is a structured, success-shaped response for the UI's resolution flow — not a
-  failure status; the UI branches on `conflicted`, not the HTTP status.
+- `GET /worktree`, `POST /commit`, `POST /commit/undo`, `POST /land` — the session's
+  Commit and Land while it is live (docs/SESSION-WORKTREES-DESIGN.md D3, D5, D6), forwarded
+  by the Router, which adds `?pipeline=1` when a pipeline run is active. Bodies are the
+  `contracts.WorktreeStatus` / `CommitRequest` / `CommitResult` / `UndoCommitRequest` /
+  `LandResult` shapes; the git work is `pkg/sessionwt.Ops`, the same code the Router runs
+  for an inactive session. A commit refusal is a `contracts.CommitError` with its status
+  (400/409/422); an undo refusal is a 409 `UndoCommitResult`; Land answers 200 for landed,
+  conflicted and refused alike, each a card in the conversation. Land is refused mid-turn,
+  holds user messages and injections in the queue while it runs, and `Shutdown` waits for
+  it (bounded by the shutdown grace).
 - `GET /output` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
   Ephemeral for chat events: no replay/cursor, just whatever the connected UI catches live.
   Durable history (transcript, activity) is the Data Service's job, not this stream's.
@@ -217,38 +222,29 @@ Counterparties (spec §15: exactly two):
   - Both `CredStore` and `MCPRegistry` are nil-safe: unset (as in every pre-existing test),
     `setupCapabilities` is a no-op and returns `nil` — existing callers are unaffected.
 
-## Worktree isolation & merge-back (spec §6, §17)
+## Worktree isolation, Commit and Land (spec §6, §17)
 
-A session gets its own git worktree and branch on demand, mirroring the pipeline engine's
-per-task isolation (`services/pipeline/engine/worktree.go`) via a separate, copy-adapted
-package (`internal/worktree`) rather than a shared one — the two services' release timing
-isn't coupled. The exception is the post-commit hook: that is a wire contract with the
-Data Service, so both services install the one true copy from `pkg/githook` rather than
-carrying their own. For an *un-isolated* session (no `-worktree-root`), hook installation
-only fires once `Cwd` has been pointed at an actual session-specific git repo (i.e. isn't
-left at its default `"."`) — see `Runner.installHook`.
+The design is docs/SESSION-WORKTREES-DESIGN.md; the git mechanics live in `pkg/sessionwt`,
+shared with the Router (inactive sessions, delete cleanup) and the pipeline service (task
+merges into a session folder). The post-commit hook is `pkg/githook`, a wire contract with
+the Data Service. For an *un-isolated* session, hook installation only fires once `Cwd` has
+been pointed at an actual session-specific git repo (i.e. isn't left at its default `"."`),
+and never in another session's worktree (a linked session that joined it) — see
+`Runner.installHook`.
 
-- **Opt-in via `-worktree-root`** — empty (the default) disables isolation entirely, so
-  every existing deployment and test is unaffected until the Router is updated to pass it.
-  When set, `Start` isolates into a worktree under it the first time a session with
-  `Isolation` unset or `"worktree"` starts, unless `Cwd` isn't a git repo (isolation is
-  primary-repo-only; a session opened on a plain document folder just runs in `Cwd`
-  directly, silently) or `Isolation` is `"current_dir"` (explicit opt-out).
-- **`Session.WorktreeDir`/`WorktreeBranch`** — set once isolation kicks in, persisted
-  alongside `ProviderRef`. A resumed (bounced) session reuses the existing `WorktreeDir`
-  rather than recreating it. Non-empty `WorktreeBranch` is the UI's signal that the
-  session — active or inactive — has isolated work not yet merged back; there's no separate
-  bool, since one would only ever drift out of sync with it.
-- **`POST /merge`** — attempts the merge (see API contract above). A clean merge commits any
-  stray uncommitted changes first, lands the branch on the primary with `git merge --no-ff`,
-  removes the worktree and branch, and clears the session's worktree fields. A conflicted
-  merge aborts (`git merge --abort`) leaving the primary untouched, and keeps the worktree
-  and branch for a retry or manual resolution.
-- **Events** — `merge.attempted` (before the attempt), then either `merge.completed` (clean)
-  or `merge.conflicted` (aborted, includes the conflicting file list), scoped to the session.
-- **Known gap, not solved here** — a clean merge removes the worktree directory that the
-  live provider process may still have as its cwd; if the agent is mid-turn when merge-back
-  runs, later relative-path operations in that process could fail. Restarting the provider
-  session pointed at the primary tree post-merge would fix this properly but is out of scope
-  for W4.5.
-
+- **Where** — `$MADS_HOME/session-worktrees/<id>` on branch `mads/session/<id>`, derived
+  from `-mads-home` when `-worktree-root` is empty (`"off"` disables isolation). `Start`
+  isolates a session on its first start only (no `ProviderRef` yet), when `Isolation` isn't
+  `"current_dir"` and `Cwd` is a git repo on a branch; that branch is recorded as
+  `Session.WorktreeBase`, the Land target. The worktree fields are persisted before the
+  provider starts, and every start re-ensures the folder (`sessionwt.EnsureWithLock`).
+- **Commit** — commits the selected session files with the user's own identity and a
+  `Session:` trailer, and records the commit itself rather than relying on the hook.
+- **Land** — merges the base into the session branch in its folder, then `git merge
+  --no-ff` the branch into the user's checkout (in its own process group, so a group kill of
+  this process can't stop it mid-write), aborting on any failure. The folder stays; the
+  branch fast-forwards to the landed base when it can.
+- **Events** — `commit.created`, `commit.undone`, `merge.attempted`, then `merge.completed`,
+  `merge.conflicted` or `merge.refused` (payload `kind: "land"`), and `worktree.ensured`
+  when a start repaired or couldn't create the folder; the header counts
+  (`uncommitted_count`, `unlanded_count`) are republished after each change.

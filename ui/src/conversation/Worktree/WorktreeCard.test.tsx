@@ -50,11 +50,23 @@ describe("WorktreeCard", () => {
 
   it("shows a landed merge commit", () => {
     render(
-      <WorktreeCard card={{ kind: "landed", id: "l", seq: 2, base: "main", mergeCommit: "7be2d31aa" }} />,
+      <WorktreeCard
+        card={{ kind: "landed", id: "l", seq: 2, base: "main", mergeCommit: "7be2d31aa", fastForwarded: true }}
+      />,
     );
     expect(screen.getByText("Landed into main")).toBeTruthy();
     expect(screen.getByText("7be2d31")).toBeTruthy();
     expect(screen.getByText(/keeps going on top of it/)).toBeTruthy();
+  });
+
+  it("only says the session keeps going on top when its branch moved up", () => {
+    render(
+      <WorktreeCard
+        card={{ kind: "landed", id: "l", seq: 2, base: "main", mergeCommit: "7be2d31aa", fastForwarded: false }}
+      />,
+    );
+    expect(screen.getByText("Landed into main")).toBeTruthy();
+    expect(screen.queryByText(/keeps going on top of it/)).toBeNull();
   });
 
   it("names conflicted files and asks the agent with an editable message", () => {

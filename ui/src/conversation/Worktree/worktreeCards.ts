@@ -29,7 +29,14 @@ export type WorktreeCardModel =
       /** No later commit or land since — Undo can still apply. The server is the final word. */
       tip: boolean;
     })
-  | (CardBase & { kind: "landed"; base?: string; branch?: string; mergeCommit?: string })
+  | (CardBase & {
+      kind: "landed";
+      base?: string;
+      branch?: string;
+      mergeCommit?: string;
+      /** The session's branch moved up to the landed base, so it carries on from there. */
+      fastForwarded: boolean;
+    })
   | (CardBase & { kind: "conflicted"; base?: string; files: string[]; latest: boolean })
   | (CardBase & {
       kind: "refused";
@@ -174,7 +181,14 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
         const landBase = str(p.base) ?? str(p.target_branch);
         if (env.type === "merge.completed") {
           notTip();
-          cards.push({ ...base, kind: "landed", base: landBase, branch: str(p.branch), mergeCommit: str(p.merge_commit) });
+          cards.push({
+            ...base,
+            kind: "landed",
+            base: landBase,
+            branch: str(p.branch),
+            mergeCommit: str(p.merge_commit),
+            fastForwarded: p.fast_forwarded === true,
+          });
         } else if (env.type === "merge.conflicted") {
           cards.push({ ...base, kind: "conflicted", base: landBase, files: strs(p.files) ?? [], latest: false });
         } else {
@@ -215,7 +229,14 @@ function markLatest(cards: WorktreeCardModel[]) {
 export function landCardFromResult(result: LandResult, at: string): LandCardModel {
   const base = { id: `land-echo-${at}`, seq: Number.POSITIVE_INFINITY, timestamp: at };
   if (result.outcome === "landed") {
-    return { ...base, kind: "landed", base: result.base, branch: result.branch, mergeCommit: result.merge_commit };
+    return {
+      ...base,
+      kind: "landed",
+      base: result.base,
+      branch: result.branch,
+      mergeCommit: result.merge_commit,
+      fastForwarded: result.fast_forwarded === true,
+    };
   }
   if (result.outcome === "conflicted") {
     return { ...base, kind: "conflicted", base: result.base, files: result.files ?? [], latest: true };

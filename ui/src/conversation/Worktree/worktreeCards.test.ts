@@ -48,7 +48,7 @@ describe("foldWorktreeEvents", () => {
       env("merge.refused", { ...land, reason: "busy" }),
     ]);
     expect(cards.map((c) => c.kind)).toEqual(["landed", "conflicted", "refused"]);
-    expect(cards[0]).toMatchObject({ base: "main", mergeCommit: "7be2d31" });
+    expect(cards[0]).toMatchObject({ base: "main", mergeCommit: "7be2d31", fastForwarded: true });
     // Only the newest Land outcome offers to go again.
     expect(cards[1]).toMatchObject({ latest: false });
     expect(cards[2]).toMatchObject({ latest: true, reason: "busy" });

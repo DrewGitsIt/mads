@@ -239,16 +239,6 @@ type SessionWorktreePatch struct {
 	UnlandedCount    *int    `json:"unlanded_count,omitempty"`
 }
 
-// MergeResult is the response to a session's merge-back request. A
-// conflicted merge is a normal, structured outcome — not a Go error — so
-// the API can hand it straight to the UI's resolution flow: Branch names
-// the (still-existing) worktree branch, Files names the conflicted paths.
-type MergeResult struct {
-	Conflicted bool     `json:"conflicted"`
-	Branch     string   `json:"branch,omitempty"`
-	Files      []string `json:"files,omitempty"`
-}
-
 // ChangeOrigin is how a file change was noticed (spec §5).
 type ChangeOrigin string
 

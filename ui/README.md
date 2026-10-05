@@ -14,7 +14,7 @@ the same pattern: one entry in `App.tsx`'s `SURFACES` map
 that map is the single app-shell registration point, kept to a one-line diff
 per surface so concurrent surface work doesn't collide on a shared file.
 
-The package also owns the Files tab & merge-back flow (W6.5; MADS-UX
+The package also owns the Files tab (W6.5; MADS-UX
 §3.3/§5/§17 — see `src/files/` and the `files` demo mount below, not yet an
 entry in `SURFACES`), the Conversation tab (W6.3; MADS-UX §3.3), the Retro
 surface (W6.7; MADS-UX §3.4 — see `src/features/retro/`, registered as
@@ -245,26 +245,21 @@ the full pane width rather than a centered max-width column.
 
 `FilesTab` composes a change list (`ChangeList`) and commit list
 (`CommitList`) with attribution chips (trailer/session/heuristic/orphan/
-unattributed — `src/files/ChangeList/attribution.ts`), a `DiffViewer`, and
-the `MergeBackFlow`. The diff viewer and the seed-only embedded merge editor
-both lazy-load `@monaco-editor/react` (`React.lazy` + `Suspense`) so Monaco
-never lands in the initial bundle and never has to mount under happy-dom in
-tests — component tests mock `@monaco-editor/react` instead of loading real
-Monaco (see `DiffViewer.test.tsx`/`ConflictResolution.test.tsx`).
+unattributed — `src/files/ChangeList/attribution.ts`) and a `DiffViewer`.
+The diff viewer lazy-loads `@monaco-editor/react` (`React.lazy` +
+`Suspense`) so Monaco never lands in the initial bundle and never has to
+mount under happy-dom in tests — component tests mock
+`@monaco-editor/react` instead of loading real Monaco (see
+`DiffViewer.test.tsx`).
 
-The merge-back flow's status (attempting/conflicted/completed) is driven
-entirely by parsed `merge.*` control-plane events from `subscribeToEvents`
-(`src/router/events.ts`), not by the `mergeSession()` promise result —
-`MergeBackFlow.test.tsx` drives this against `FakeEventSource`
-(`src/router/testFakeEventSource.ts`), the fake backing the window's one
-`/events` connection.
-Conflict resolution has one real, usable action (open the session's
-worktree in an external editor) and one seed-only stub (`MergeEditor`, a
-raw-text Monaco instance over a fixture conflict-marker string) — there is
-currently no backend path that leaves real conflict-marker content in the
-tree to point an embedded editor at, since `Manager.Merge` aborts the merge
-on conflict. See `src/files/HANDOFF.md` §5 for the full reasoning and the
-follow-up this needs on the Session Service side.
+A session's Commit and Land (docs/SESSION-WORKTREES-DESIGN.md) live in the
+conversation, not the Files tab: `src/conversation/Worktree/` has the
+header control (`WorkControl`), the `CommitDialog`, and the result cards
+(`WorktreeCard`) folded from the event log (`worktreeCards.ts`,
+`useWorktreeCards.ts`) — Commit, Undo, Land outcomes, a recreated folder,
+and a pipeline saving or merging into the folder — with every sentence in
+`worktreeCopy.ts`. The rail marker and the delete dialog read the same
+`uncommitted_count`/`unlanded_count` fields from the session record.
 
 ## Library
 

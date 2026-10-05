@@ -52,7 +52,7 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
                 Merge commit <span className={styles.hash}>{shortHash(card.mergeCommit)}</span>.{" "}
               </>
             ) : null}
-            This session keeps going on top of it.
+            {card.fastForwarded ? "This session keeps going on top of it." : null}
           </div>
         </Shell>
       );
