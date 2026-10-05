@@ -96,8 +96,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorCostReporting:  provider.Native,
 		provider.BehaviorACP:            provider.Native,
 		provider.BehaviorPTY:            provider.Native,
-		provider.BehaviorBranching:      provider.Unsupported,
-		provider.BehaviorCwdReroot:      provider.Unsupported,
+		// Fork-on-resume only: StartOptions.Fork becomes `--resume <ref>
+		// --fork-session` (fork.go) on both transports. Forking at an
+		// earlier turn (rewind) is not supported — claude has no scriptable
+		// flag for it.
+		provider.BehaviorBranching: provider.Native,
+		provider.BehaviorCwdReroot: provider.Unsupported,
 		// --disallowedTools removes tools from the model's palette entirely
 		// (confirmed against `claude --help`) — the same flag on both
 		// transports, see README.

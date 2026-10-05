@@ -195,6 +195,14 @@ type Session struct {
 	// StartOptions.Resume to reattach after a bounce. Also the transcript
 	// pointer: TranscriptReader.Transcript(ctx, ref) reads by this same value.
 	ProviderRef string `json:"provider_ref,omitempty"`
+	// ForkOnResume marks ProviderRef as someone else's native conversation
+	// (an imported transcript) that must never be appended to: the next
+	// start passes it as StartOptions.Resume with Fork set, and the Runner
+	// clears this in the same write that replaces ProviderRef with the fork's
+	// own ref. While ProviderRef is still the original it stays set, so a
+	// start that dies before the fork exists re-forks from the untouched
+	// original.
+	ForkOnResume bool `json:"fork_on_resume,omitempty"`
 	// LastUsage is the most recent turn's token accounting (provider.Usage,
 	// mirrored as Usage above), persisted by the Runner on every turn end —
 	// the context meter's data source at wake time, before this process has

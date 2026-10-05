@@ -285,6 +285,14 @@ type Runner struct {
 	recordMu     sync.Mutex
 	persistedRef string
 
+	// forkFrom is the original native ref this run is forking from while
+	// the fork's own ref is still unknown — "" for an ordinary session and
+	// again once the fork's ref has been persisted (persistProviderRef
+	// clears it in the same write that clears Session.ForkOnResume).
+	// Guarded by mu; where it is held together with recordMu, recordMu is
+	// taken first.
+	forkFrom string
+
 	// prov and baseOpts are captured once at the end of Start and reused by
 	// SwitchTransport, which only overrides Mode/Resume — switching
 	// transport doesn't redo worktree creation, hook install, or capability
@@ -403,8 +411,12 @@ func (r *Runner) Start(ctx context.Context) error {
 		Cwd:          cwd,
 		SystemPrompt: effectivePersonaPrompt(agent, agentOK), // "" when no persona — no mads preamble, ever
 		Resume:       sess.ProviderRef,
-		Env:          capEnv,
-		Trust:        provider.Trust(sess.Trust),
+		// ForkOnResume: ProviderRef is a native conversation mads must not
+		// append to (an import), so this start forks it. The flag stays set
+		// on the record until the fork's own ref is persisted.
+		Fork:  sess.ForkOnResume && sess.ProviderRef != "",
+		Env:   capEnv,
+		Trust: provider.Trust(sess.Trust),
 	}
 	// Persona-level tool-intent policy (agent-concept redesign §2). The
 	// persona's Allowlist/Denylist fold through EffectiveToolIntents,
@@ -456,6 +468,18 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Persist the resume handle before returning success, so a crash right
 	// after this point still leaves a resumable ref recorded.
 	sess.ProviderRef = provSess.Ref()
+	if opts.Fork {
+		// A forked session's Ref() is empty until the fork exists (see
+		// StartOptions.Fork), and an empty one must not overwrite the
+		// original: a crash before the new ref lands re-forks from it. A
+		// ref that is already the fork's own is persisted here together
+		// with the cleared flag, like in persistProviderRef.
+		if ref := provSess.Ref(); ref == "" || ref == opts.Resume {
+			sess.ProviderRef = opts.Resume
+		} else {
+			sess.ForkOnResume = false
+		}
+	}
 	sess.Activity = contracts.SessionActive
 	sess.Cwd = recordedCwd(cwd) // where the agent actually runs — the docked shell opens here
 	r.recordMu.Lock()
@@ -465,6 +489,10 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 	r.persistedRef = sess.ProviderRef
 	r.recordMu.Unlock()
+	forkFrom := ""
+	if opts.Fork && sess.ForkOnResume {
+		forkFrom = opts.Resume
+	}
 
 	if orchestrateErr != nil {
 		r.markOrchestrateLinks(ctx, contracts.OrchestrateFailed, orchestrateErr.Error())
@@ -505,6 +533,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.baseOpts = opts
 	r.mode = opts.Mode
 	r.lastRef = provSess.Ref()
+	r.forkFrom = forkFrom
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
 	r.mu.Unlock()
@@ -810,7 +839,10 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 	var mode provider.Mode
 	var cwd string
 	var spawnedAt time.Time
-	if !r.locateArmed && r.lastRef == "" && r.sentTurns == 0 {
+	// A fork's ref is deterministic — the provider confirms its own new id
+	// (RefAnnouncer) — so the locator, which correlates on the first user
+	// message and would see the original conversation's, stays off.
+	if !r.locateArmed && r.lastRef == "" && r.sentTurns == 0 && r.forkFrom == "" {
 		r.locateArmed = true
 		armed = true
 		prov = r.prov
@@ -1220,6 +1252,12 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 	if old != nil {
 		resumeRef = old.Ref()
 	}
+	// A fork whose own ref is still unknown re-forks from the untouched
+	// original; once the ref is known, resuming it is a plain resume.
+	fork := false
+	if resumeRef == "" && r.forkFrom != "" {
+		resumeRef, fork = r.forkFrom, true
+	}
 	if resumeRef == "" && requireResumable {
 		r.mu.Unlock()
 		return "", ErrNoResumeRef
@@ -1240,6 +1278,7 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 
 	opts.Mode = mode
 	opts.Resume = resumeRef
+	opts.Fork = fork
 	opts.MCPServers = mcp
 	opts.Model = model
 
@@ -1306,6 +1345,13 @@ func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 		return
 	}
 	r.mu.Lock()
+	if ref == r.forkFrom {
+		// Never the fork's own ref: the original must not be adopted as
+		// (or written back into the live session as) the new session's.
+		r.mu.Unlock()
+		return
+	}
+	forkFrom := r.forkFrom
 	r.lastRef = ref
 	if setter, ok := r.sess.(provider.RefSetter); ok {
 		setter.SetRef(ref)
@@ -1323,11 +1369,24 @@ func (r *Runner) persistProviderRef(ctx context.Context, ref string) {
 		return
 	}
 	cur.ProviderRef = ref
+	if forkFrom != "" {
+		// The fork's own ref replaces the original in this one write, so
+		// there is no state in which the flag is cleared while the record
+		// still points at the original, or vice versa.
+		cur.ForkOnResume = false
+	}
 	if err := r.data.UpdateSession(ctx, &cur); err != nil {
 		log.Printf("runner: persist provider ref: %v", err)
 		return
 	}
 	r.persistedRef = ref
+	if forkFrom != "" {
+		r.mu.Lock()
+		if r.forkFrom == forkFrom {
+			r.forkFrom = ""
+		}
+		r.mu.Unlock()
+	}
 }
 
 // syncProviderRef re-checks sess's provider-native ref and persists it if it

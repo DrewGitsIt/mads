@@ -67,6 +67,17 @@ type StartOptions struct {
 	SystemPrompt string   // the agent definition's prompt (registry, spec §9)
 	Resume       string   // provider session ref to reattach to
 	Env          []string // extra environment, KEY=value
+	// Fork, only meaningful with Resume, continues the conversation in a NEW
+	// provider session seeded from Resume's history instead of appending to
+	// Resume itself: the original stays byte-for-byte untouched (an imported
+	// native conversation must never be written to). The new session's ref
+	// is not Resume — Ref() must not return Resume for a forked session, and
+	// stays "" until the fork actually exists (RefAnnouncer, or the turn-end
+	// sync), so a caller never persists a handle that resolves to nothing. A
+	// provider that cannot fork (BehaviorBranching unsupported) must fail
+	// Start with ErrUnsupported rather than silently resume in place; Fork
+	// without Resume is ignored, there being nothing to fork from.
+	Fork bool
 	// Trust gates which tools the session may use (spec §11, linked-sessions
 	// design decision 3). Zero value "" behaves exactly like TrustFull in
 	// every provider — existing call sites that don't set it never regress.

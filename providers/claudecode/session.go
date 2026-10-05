@@ -29,9 +29,8 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if opts.Resume != "" {
-		args = append(args, "--resume", opts.Resume)
-	}
+	resume, forkID := resumeArgs(opts)
+	args = append(args, resume...)
 	args = append(args, trustArgs(opts.Trust)...)
 	// Persona-level allow/deny (agent-concept redesign §2): merged on
 	// top of trustArgs's native set. personaDisallowedTools returns ""
@@ -92,7 +91,14 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	for _, srv := range opts.MCPServers {
 		s.launchMCP[srv.Name] = true
 	}
-	if opts.Resume != "" {
+	switch {
+	case forkID != "":
+		// A fork's ref is the new id, which exists only once claude
+		// confirms it on the wire (handleLine) — announcing Resume here
+		// would hand the Runner the original to persist and then append to.
+		s.ref = ""
+		s.forkFrom = opts.Resume
+	case opts.Resume != "":
 		s.refFired = true
 		s.announced <- opts.Resume
 	}
@@ -116,6 +122,7 @@ type streamSession struct {
 	mu          sync.Mutex
 	stdin       io.WriteCloser
 	ref         string
+	forkFrom    string // original's id on a fork: never adopted as ref
 	model       string
 	interrupted bool // an interrupt was requested this turn
 	// turnOpen is set from Send until the turn's own (origin-less) result
@@ -187,7 +194,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		return
 	}
 	s.mu.Lock()
-	if l.SessionID != "" {
+	if l.SessionID != "" && l.SessionID != s.forkFrom {
 		s.ref = l.SessionID
 	}
 	if !s.refFired && s.ref != "" {

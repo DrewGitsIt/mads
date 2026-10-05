@@ -25,6 +25,12 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 	if opts.Mode != provider.ModeACP {
 		return nil, fmt.Errorf("mode %q: %w", opts.Mode, provider.ErrUnsupported)
 	}
+	// The engine has no fork mapping (ACP session/fork is unstable and no
+	// shipped adapter declares BehaviorBranching): fail rather than let
+	// session/load resume the original in place.
+	if opts.Fork && opts.Resume != "" {
+		return nil, fmt.Errorf("fork on resume: %w", provider.ErrUnsupported)
+	}
 	// goose (and ACP in general) require an absolute cwd in session/new
 	// (goose 1.51: -32602 "cwd must be an absolute path"); claude-code and
 	// kiro tolerate a relative one. Absolutize here so every caller gets a

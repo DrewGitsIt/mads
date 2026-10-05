@@ -185,7 +185,11 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 
 	// No functional probes yet — declaration validity only. They harden as
 	// the first adapter claiming them lands.
-	c.add(provider.BehaviorBranching, nil, "not probed: no functional probe defined yet")
+	if m[provider.BehaviorBranching].Works() {
+		c.add(provider.BehaviorBranching, nil, "not probed: fork needs a real prior session to copy")
+	} else {
+		c.add(provider.BehaviorBranching, c.forkRefused(), "")
+	}
 	c.add(provider.BehaviorCwdReroot, nil, "not probed: no functional probe defined yet")
 
 	c.add(provider.BehaviorMCPServers, c.mcpServers(), "")
@@ -621,6 +625,25 @@ func (c *checker) resumeRefused() error {
 		return errors.New("declared unsupported but Start with Resume succeeded")
 	case !errors.Is(err, provider.ErrUnsupported):
 		return fmt.Errorf("declared unsupported: resume must return ErrUnsupported, got: %v", err)
+	}
+	return nil
+}
+
+// forkRefused checks the unsupported declaration is honest: resuming with
+// Fork set must fail with ErrUnsupported, never silently resume in place —
+// that would append to a conversation the caller asked to leave untouched.
+func (c *checker) forkRefused() error {
+	mode := provider.ModeACP
+	if !c.m[provider.BehaviorACP].Works() {
+		mode = provider.ModePTY
+	}
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: mode, Resume: "some-ref", Fork: true})
+	switch {
+	case err == nil:
+		_ = sess.Close()
+		return errors.New("declared unsupported but Start with Resume+Fork succeeded")
+	case !errors.Is(err, provider.ErrUnsupported):
+		return fmt.Errorf("declared unsupported: fork must return ErrUnsupported, got: %v", err)
 	}
 	return nil
 }

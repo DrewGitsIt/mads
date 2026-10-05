@@ -32,6 +32,8 @@ type fcArgs struct {
 	outputFormat      string
 	inputFormat       string
 	resume            string
+	forkSession       bool
+	sessionID         string
 	model             string
 	disallowedTools   []string
 	permissionMode    string
@@ -61,6 +63,11 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--resume":
 			i++
 			a.resume = argv[i]
+		case "--fork-session":
+			a.forkSession = true
+		case "--session-id":
+			i++
+			a.sessionID = argv[i]
 		case "--model":
 			i++
 			a.model = argv[i]
@@ -341,15 +348,12 @@ func fcEmitListModels(requestID string) {
 // interrupt lands mid-"slow"-turn.
 func fcStream(a fcArgs) {
 	dir := os.Getenv("MADS_FAKE_CLAUDE_DIR")
-	id := a.resume
-	if id == "" {
-		id = fmt.Sprintf("fc-%d", os.Getpid())
-	}
+	id := fcSessionID(a)
 	transcript := ""
 	var history []string
 	if dir != "" {
 		transcript = filepath.Join(dir, "proj", id+".jsonl")
-		history = fcLoadHistory(transcript)
+		history = fcLoadHistory(filepath.Join(dir, "proj", a.resume+".jsonl"))
 	}
 
 	fcEmit(map[string]any{
@@ -416,8 +420,16 @@ func fcStream(a fcArgs) {
 			prompt += b.Text
 		}
 		history = append(history, prompt)
+		fcForkSeed(dir, a)
 		fcAppendTranscript(transcript, "user", prompt, "")
 
+		if prompt == "fork-echo" {
+			reply := fcForkEcho(a)
+			fcEmitText(id, reply)
+			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+			continue
+		}
 		if prompt == "mcp-echo" {
 			reply := fcMCPEcho(a)
 			if len(dynamic) > 0 {
@@ -540,10 +552,7 @@ func fcTerminal(a fcArgs) {
 	// only once the first prompt is submitted, never at process spawn — a
 	// fresh id since the terminal transport never announces one to resume.
 	dir := os.Getenv("MADS_FAKE_CLAUDE_DIR")
-	id := a.resume
-	if id == "" {
-		id = fmt.Sprintf("fc-%d", os.Getpid())
-	}
+	id := fcSessionID(a)
 	transcript := ""
 	if dir != "" {
 		transcript = filepath.Join(dir, "proj", id+".jsonl")
@@ -551,6 +560,12 @@ func fcTerminal(a fcArgs) {
 	sc := bufio.NewScanner(os.Stdin)
 	for sc.Scan() {
 		text := strings.TrimSpace(sc.Text())
+		if text == "fork-echo" {
+			fcForkSeed(dir, a)
+			fcAppendTranscript(transcript, "user", text, "")
+			fmt.Printf("%s\r\n> ", fcForkEcho(a))
+			continue
+		}
 		if text == "mcp-echo" {
 			fmt.Printf("%s\r\n> ", fcMCPEcho(a))
 			continue
@@ -567,6 +582,43 @@ func fcTerminal(a fcArgs) {
 		fcAppendTranscript(transcript, "assistant", reply, "")
 		fmt.Printf("%s\r\n> ", reply)
 	}
+}
+
+// fcSessionID is the id the stand-in session runs under: the pinned
+// --session-id for a fork, else the resumed id (same file, appended to in
+// place), else a fresh one.
+func fcSessionID(a fcArgs) string {
+	switch {
+	case a.forkSession && a.sessionID != "":
+		return a.sessionID
+	case a.resume != "":
+		return a.resume
+	}
+	return fmt.Sprintf("fc-%d", os.Getpid())
+}
+
+// fcForkSeed mirrors what a real fork does on the first prompt: the new
+// session's transcript is created as a copy of the original's, which is left
+// untouched. A no-op unless --fork-session was passed.
+func fcForkSeed(dir string, a fcArgs) {
+	if !a.forkSession || dir == "" {
+		return
+	}
+	dst := filepath.Join(dir, "proj", fcSessionID(a)+".jsonl")
+	if _, err := os.Stat(dst); err == nil {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "proj", a.resume+".jsonl"))
+	if err != nil {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(dst), 0o755)
+	_ = os.WriteFile(dst, raw, 0o644)
+}
+
+// fcForkEcho reports the resume/fork flags the adapter passed.
+func fcForkEcho(a fcArgs) string {
+	return fmt.Sprintf("resume=%s fork=%v session_id=%s", a.resume, a.forkSession, a.sessionID)
 }
 
 // fcAppendTranscript writes claude's on-disk transcript format — string

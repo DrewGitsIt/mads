@@ -44,6 +44,8 @@ export interface Session {
   retro_id?: string;
   synthesis_mode?: string;
   provider_ref?: string;
+  /** provider_ref is an imported native conversation: the next start forks it into a new ref (then clears this) instead of appending to it. */
+  fork_on_resume?: boolean;
   /** Most recent turn's token accounting, persisted by the Runner on every turn end — the context meter's data source at wake time, before this process has seen a turn_end of its own. */
   last_usage?: Usage;
   /**

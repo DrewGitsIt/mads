@@ -175,6 +175,11 @@ func (p *Provider) Models(ctx context.Context) ([]provider.Model, error) {
 }
 
 func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
+	// BehaviorBranching is Unsupported: refuse rather than resume in place
+	// (the PTY transport would otherwise append to the original).
+	if opts.Fork && opts.Resume != "" {
+		return nil, fmt.Errorf("fork on resume: %w", provider.ErrUnsupported)
+	}
 	switch opts.Mode {
 	case provider.ModeACP:
 		return p.startACP(ctx, opts)
