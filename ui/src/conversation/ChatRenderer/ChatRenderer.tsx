@@ -202,6 +202,17 @@ export function ChatRenderer({
         // The wire's Attribution shape is identical for a leader's inject
         // and a monitor's digest; resolve which one this is by comparing
         // the attributed link against the session being viewed (decision 4).
+        // A notice from mads itself rather than a linked session (no link):
+        // e.g. a pipeline telling the agent which files a merge changed
+        // under it. Never the user's voice, and not gated on linking.
+        if (message.attribution && !message.attribution.link_id) {
+          return (
+            <div key={item.key} className={styles.injected}>
+              <Chip tone="info">⇄ from {message.attribution.source_name || "mads"}</Chip>
+              <Markdown className={styles.prose} text={message.text ?? ""} />
+            </div>
+          );
+        }
         if (message.attribution && FLAGS.linkedSessions) {
           const link = linksById.get(message.attribution.link_id);
           if (link && viewedSessionId === link.granting_session_id) {

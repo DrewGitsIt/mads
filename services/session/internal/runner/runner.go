@@ -872,7 +872,11 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 // must not block delivery, since the message has already been queued or
 // sent by the time this runs.
 func (r *Runner) recordInjectionAudit(ctx context.Context, attribution contracts.Attribution, text string) {
-	client := dataclient.New(r.data.BaseURL(), "link-"+attribution.LinkID)
+	actor := "link-" + attribution.LinkID
+	if attribution.LinkID == "" {
+		actor = "router" // a notice from the Router itself, not over a link
+	}
+	client := dataclient.New(r.data.BaseURL(), actor)
 	env := contracts.Envelope{
 		Type:      contracts.LinkMessageInjected,
 		SessionID: r.sessionID,

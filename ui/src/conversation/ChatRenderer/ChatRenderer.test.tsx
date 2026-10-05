@@ -110,6 +110,23 @@ describe("ChatRenderer", () => {
   });
 });
 
+describe("ChatRenderer — a notice from mads itself", () => {
+  it("renders an attributed message with no link as a notice, never the user's bubble, flag or not", () => {
+    const messages: TranscriptMessage[] = [
+      {
+        role: "user",
+        text: "A pipeline task merged into your folder while you were working",
+        attribution: { link_id: "", source_name: "your pipeline run" },
+      },
+    ];
+    const { container } = render(<ChatRenderer messages={messages} />);
+    expect(screen.getByText(/from your pipeline run/)).toBeTruthy();
+    const wrapper = container.querySelector('[class*="stream"]')?.firstElementChild;
+    expect(wrapper?.className).toMatch(/injected/);
+    expect(wrapper?.className).not.toMatch(/_user_/);
+  });
+});
+
 describe("ChatRenderer — linked sessions (flag-gated)", () => {
   afterEach(() => {
     FLAGS.linkedSessions = false;

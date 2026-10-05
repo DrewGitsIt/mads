@@ -1,6 +1,6 @@
-// Package digestwatch bridges two Data Service events to the Router's job
+// Package digestwatch bridges Data Service events to the Router's job
 // pipeline via its global event stream — the Router has no other way to
-// observe either happening inside a live child, so both ride the existing
+// observe any of them happening inside a live child, so all ride the existing
 // generic stream rather than adding per-child watchers:
 //
 //   - Watcher: session.turn_ended (appended by a watched session's own
@@ -21,6 +21,9 @@
 //     half (no per-turn digests, only these wakes), and also how a
 //     session's implicit hand-raiser (decision 6) hears about its own
 //     pipeline run's task terminals.
+//   - MergeWatcher: merge.completed for a pipeline task that merged into an
+//     isolated session's folder with its agent still working — spawns a
+//     NotifyFolderChanged job telling the live agent what changed under it.
 package digestwatch
 
 import (

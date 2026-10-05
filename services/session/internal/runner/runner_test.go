@@ -1799,3 +1799,38 @@ func TestRecordedCwdLeavesAChosenDirectoryAlone(t *testing.T) {
 		}
 	}
 }
+
+// A notice from the Router itself (no link, e.g. a pipeline saying which
+// files changed under the agent) is delivered like any injection, and its
+// audit event is the Router's, not a link's.
+func TestInjectWithoutLinkAuditsAsRouter(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := New(sess.ID, data, reg)
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	ch, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	if err := r.Inject(ctx, "echo files changed", contracts.Attribution{SourceName: "your pipeline run"}); err != nil {
+		t.Fatalf("inject: %v", err)
+	}
+	if got := drainText(t, ch); got != "you said files changed" {
+		t.Fatalf("reply = %q", got)
+	}
+	evs, err := data.Events(ctx, 0, sess.ID, []string{string(contracts.LinkMessageInjected)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || evs[0].Actor != "router" {
+		t.Fatalf("audit events = %+v, want one by router", evs)
+	}
+}
