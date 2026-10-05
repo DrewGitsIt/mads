@@ -8,6 +8,11 @@
   "model": "claude-opus-5",
   "isolation": "worktree",
   "trust": "limited",
+  "worktree_dir": "/home/u/.mads/session-worktrees/ses_01hq3k",
+  "worktree_branch": "mads/session/ses_01hq3k",
+  "worktree_base": "main",
+  "uncommitted_count": 2,
+  "unlanded_count": 3,
   "provider_ref": "sess_abc123",
   "last_usage": {
     "input_tokens": 1200,

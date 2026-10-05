@@ -555,9 +555,8 @@ func hasGrant(grants []contracts.Grant, g contracts.Grant) bool {
 // (docs/LINKED-SESSIONS-DESIGN.md "Unchanged from §1.12": linked sessions
 // must not operate in different worktrees of the same repo). contracts.Session
 // has no persisted "which repo is this" field — WorktreeDir is the isolated
-// worktree path (<root>/<sessionID>, see
-// services/session/internal/worktree/worktree.go), not the origin repo, and
-// the origin repo path is never written back onto the session record.
+// worktree path (<root>/<sessionID>, see pkg/sessionwt), not the origin repo,
+// and the origin repo path is never written back onto the session record.
 // Workspace (the declared workspace name) is the closest available proxy for
 // "same repo": two sessions from the same workspace share that workspace's
 // pinned primary repo (spec §17: "exactly one repo must be primary"). Known

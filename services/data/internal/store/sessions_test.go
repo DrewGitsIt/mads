@@ -414,3 +414,56 @@ func TestSessionUpdateKeepsRunnerFields(t *testing.T) {
 		t.Errorf("AgentState = %+v, want the live working state", got.AgentState)
 	}
 }
+
+// TestSetWorktreeScopedWrite: the isolation fields land through their own
+// scoped write, an unchanged recount is not announced, and a stale full PUT
+// can't erase the worktree or roll the counts back.
+func TestSetWorktreeScopedWrite(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Isolated"})
+	stale, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir, branch, base, two, three := "/wt/x", "mads/session/x", "main", 2, 3
+	patch := contracts.SessionWorktreePatch{
+		WorktreeDir: &dir, WorktreeBranch: &branch, WorktreeBase: &base,
+		UncommittedCount: &two, UnlandedCount: &three,
+	}
+	if err := s.SetWorktree(ctx, sess.ID, patch, "session"); err != nil {
+		t.Fatal(err)
+	}
+	updates := func() int {
+		return len(eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"session.updated"}}))
+	}
+	n := updates()
+	if err := s.SetWorktree(ctx, sess.ID, patch, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if updates() != n {
+		t.Error("an unchanged patch announced session.updated")
+	}
+
+	stale.Name = "Renamed"
+	if err := s.Update(ctx, stale, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Renamed" || got.WorktreeDir != dir || got.WorktreeBranch != branch || got.WorktreeBase != base ||
+		got.UncommittedCount != 2 || got.UnlandedCount != 3 {
+		t.Errorf("after stale PUT: %+v, want the rename and every isolation field", got)
+	}
+
+	zero, empty := 0, ""
+	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{UncommittedCount: &zero, WorktreeDir: &empty}, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); got.UncommittedCount != 0 || got.WorktreeDir != "" || got.UnlandedCount != 3 || got.WorktreeBranch != branch {
+		t.Errorf("partial patch: %+v, want uncommitted and dir cleared, the rest kept", got)
+	}
+}

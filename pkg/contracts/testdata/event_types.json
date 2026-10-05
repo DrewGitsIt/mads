@@ -84,6 +84,7 @@
   "merge.completed",
   "land.retried",
   "land.autofixed",
+  "worktree.ensured",
   "usage.recorded",
   "capability.invoked",
   "stage.attempt_ref",

@@ -102,6 +102,20 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Scoped isolation-state write (contracts.SessionWorktreePatch): the
+	// worktree fields before the provider starts, and D4's counts after.
+	mux.HandleFunc("PATCH /sessions/{id}/worktree", func(w http.ResponseWriter, r *http.Request) {
+		var patch contracts.SessionWorktreePatch
+		if !decode(w, r, &patch) {
+			return
+		}
+		if err := s.SetWorktree(r.Context(), r.PathValue("id"), patch, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	mux.HandleFunc("DELETE /sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Delete(r.Context(), r.PathValue("id"), actor(r)); err != nil {
 			writeStoreError(w, err)

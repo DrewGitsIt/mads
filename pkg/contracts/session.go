@@ -130,8 +130,11 @@ type Session struct {
 	// Trust is the session's trust level (MADS-UX §3.2 Trust pill).
 	Trust SessionTrust `json:"trust,omitempty"`
 	// WorktreeDir is the absolute path of this session's isolated worktree
-	// (spec §17), set when Isolation is "worktree" and Cwd is a git repo.
-	// Empty means the session works directly in its configured directory.
+	// (spec §17; docs/SESSION-WORKTREES-DESIGN.md D1), set at its first start
+	// when Isolation is "worktree" and Dir is a git repo. Empty means the
+	// session works directly in its configured directory. Like
+	// WorktreeBranch and WorktreeBase, written only through the scoped
+	// PATCH /sessions/{id}/worktree; a full-record PUT leaves it as it was.
 	WorktreeDir string `json:"worktree_dir,omitempty"`
 	// Dir is the directory the session was asked to start in — absolute,
 	// "~" already expanded: the Launchpad's folder pick, else the
@@ -146,10 +149,25 @@ type Session struct {
 	// Set by the Session runner at start so clients (e.g. the docked shell) can
 	// open in the same context as the agent instead of guessing.
 	Cwd string `json:"cwd,omitempty"`
-	// WorktreeBranch is the branch backing WorktreeDir. Non-empty means the
-	// session has isolated work not yet merged back — the UI's signal to flag
-	// the session, active or inactive, as needing merge-back.
+	// WorktreeBranch is the branch backing WorktreeDir, always
+	// mads/session/<id>. It lives as long as the session does; whether it
+	// holds work not yet landed is UnlandedCount's to say.
 	WorktreeBranch string `json:"worktree_branch,omitempty"`
+	// WorktreeBase is the branch the primary had checked out when the
+	// session's worktree was created: where its branch started, what its
+	// unlanded commits are counted against, and the Land target
+	// (docs/SESSION-WORKTREES-DESIGN.md D1). Empty for sessions that work in
+	// place.
+	WorktreeBase string `json:"worktree_base,omitempty"`
+	// UncommittedCount and UnlandedCount are the header state (D4): how many
+	// of the session's files git still reports changed, and how many commits
+	// its branch has that WorktreeBase doesn't (always 0 in place). Computed
+	// by whoever just changed them — the live runner at start and turn end —
+	// never per render, and written only through the scoped
+	// PATCH /sessions/{id}/worktree (SessionWorktreePatch), so a full-record
+	// PUT carrying an older read can't roll them back.
+	UncommittedCount int `json:"uncommitted_count,omitempty"`
+	UnlandedCount    int `json:"unlanded_count,omitempty"`
 	// ShadowDir is the absolute base path of this session's shadow git store
 	// (docs/SHADOW-GIT-DIFFS-ADR.md; services/session/shadow) — one shadow
 	// git dir per touched root underneath it, plus the capture index. Set by
@@ -205,6 +223,20 @@ type Session struct {
 	LastTurnAt *time.Time `json:"last_turn_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+// SessionWorktreePatch is a scoped write of a session's isolation state:
+// nil leaves a field alone, a non-nil zero value clears it. The Data Service
+// applies it inside one transaction (store.Sessions.SetWorktree), so writers
+// of these fields — the session runner, and later the Router and the
+// pipeline child — can't drop each other's or anyone else's fields the way
+// a Session-then-UpdateSession round trip can.
+type SessionWorktreePatch struct {
+	WorktreeDir      *string `json:"worktree_dir,omitempty"`
+	WorktreeBranch   *string `json:"worktree_branch,omitempty"`
+	WorktreeBase     *string `json:"worktree_base,omitempty"`
+	UncommittedCount *int    `json:"uncommitted_count,omitempty"`
+	UnlandedCount    *int    `json:"unlanded_count,omitempty"`
 }
 
 // MergeResult is the response to a session's merge-back request. A

@@ -319,6 +319,17 @@ const (
 	// "trunk_head": the trunk state this land attempt gated and landed
 	// against.
 	MergeCompleted EventType = "merge.completed"
+	// WorktreeEnsured fires when the session runner had to do something to
+	// give a session its isolated folder, or decided not to isolate it
+	// (docs/SESSION-WORKTREES-DESIGN.md D1/D2: nothing heals silently). A
+	// quiet reuse of a healthy folder emits nothing. Payload: {"action":
+	// "created"|"reattached"|"reused"|"not_isolated", "dir": string,
+	// "branch": string, "base": string, "reason": string (not_isolated:
+	// "detached_head"), "stale_moved_to": string, "unlocked_stale": bool,
+	// "base_missing": bool, "start_point": string, "head": string (reused
+	// on another branch, or "HEAD" when detached)}. Every key but action is
+	// omitted when empty.
+	WorktreeEnsured EventType = "worktree.ensured"
 	// LandRetried fires when a post-rebase gate failure is triaged as a flake
 	// (an isolation rerun of the failing portion went green) and the land
 	// attempt retries — bounded, never unbounded, per land (spec: flaky
@@ -421,6 +432,7 @@ var EventTypes = []EventType{
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
 	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried, LandAutofixed,
+	WorktreeEnsured,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,
 	SynthesisProposalCreated, SynthesisProposalApproved, SynthesisProposalDismissed,

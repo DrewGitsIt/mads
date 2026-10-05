@@ -27,6 +27,12 @@ func sampleSession() contracts.Session {
 		Isolation:   contracts.IsolationWorktree,
 		Trust:       contracts.TrustLimited,
 		ProviderRef: "sess_abc123",
+		// Isolated, with work to commit and land (D4's header state).
+		WorktreeDir:      "/home/u/.mads/session-worktrees/ses_01hq3k",
+		WorktreeBranch:   "mads/session/ses_01hq3k",
+		WorktreeBase:     "main",
+		UncommittedCount: 2,
+		UnlandedCount:    3,
 		LastUsage: &contracts.Usage{
 			InputTokens:   1200,
 			OutputTokens:  340,

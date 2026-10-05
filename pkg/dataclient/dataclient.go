@@ -280,6 +280,14 @@ func (c *Client) RecordSessionTurnEnd(ctx context.Context, id string, usage *con
 		map[string]any{"usage": usage, "at": at}, nil)
 }
 
+// SetSessionWorktree applies a scoped write of the session's isolation
+// state (worktree folder/branch/base, D4 counts) in one atomic round trip;
+// nil fields are left alone. Like RecordSessionTurnEnd, it can't drop a field
+// another writer landed between a read and a write.
+func (c *Client) SetSessionWorktree(ctx context.Context, id string, patch contracts.SessionWorktreePatch) error {
+	return c.do(ctx, http.MethodPatch, "/sessions/"+url.PathEscape(id)+"/worktree", patch, nil)
+}
+
 func (c *Client) DeleteSession(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(id), nil, nil)
 }

@@ -110,6 +110,16 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		// one.
 		sess.AgentState = old.AgentState
 		sess.LastTurnAt = old.LastTurnAt
+		// The isolation state is the same kind of field, written only
+		// through SetWorktree: the counts are recomputed at every turn end,
+		// and a rename that read the record before the runner persisted its
+		// worktree would otherwise erase it — and with it the only record
+		// of where the session's work lives.
+		sess.WorktreeDir = old.WorktreeDir
+		sess.WorktreeBranch = old.WorktreeBranch
+		sess.WorktreeBase = old.WorktreeBase
+		sess.UncommittedCount = old.UncommittedCount
+		sess.UnlandedCount = old.UnlandedCount
 		sess.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, sess); err != nil {
 			return err
@@ -246,6 +256,45 @@ func (s *Sessions) RecordTurnEnd(ctx context.Context, id string, usage *contract
 			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})
 	})
+}
+
+// SetWorktree applies a scoped write of a session's isolation state — its
+// worktree folder, branch and base, and D4's header counts — inside one
+// transaction, for the reason SetActivity gives. Nil fields are left alone.
+// Emits session.updated only when something actually changed: the runner
+// re-sends its counts at every turn end, and an unchanged count is not news
+// to anyone listening. UpdatedAt is left alone for the same reason
+// SetAgentState leaves it: a recount isn't a user-visible edit.
+func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.SessionWorktreePatch, actor string) error {
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		before := *sess
+		setIf(&sess.WorktreeDir, p.WorktreeDir)
+		setIf(&sess.WorktreeBranch, p.WorktreeBranch)
+		setIf(&sess.WorktreeBase, p.WorktreeBase)
+		setIf(&sess.UncommittedCount, p.UncommittedCount)
+		setIf(&sess.UnlandedCount, p.UnlandedCount)
+		if sess.WorktreeDir == before.WorktreeDir && sess.WorktreeBranch == before.WorktreeBranch &&
+			sess.WorktreeBase == before.WorktreeBase && sess.UncommittedCount == before.UncommittedCount &&
+			sess.UnlandedCount == before.UnlandedCount {
+			return nil
+		}
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
+		})
+	})
+}
+
+func setIf[T any](dst *T, v *T) {
+	if v != nil {
+		*dst = *v
+	}
 }
 
 // Delete hard-deletes a session and all its orchestration artifacts (spec §1):
