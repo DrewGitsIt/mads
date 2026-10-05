@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -843,5 +844,50 @@ func TestDraftDiff(t *testing.T) {
 	short, truncated, _ := DraftDiff(context.Background(), s.folder, []string{"README.md", "new.txt"}, 20)
 	if !truncated || len(short) != 20 {
 		t.Errorf("cut diff = %d bytes, truncated %v", len(short), truncated)
+	}
+}
+
+// With LockWait set, Commit, Undo and Land refuse "locked" instead of
+// waiting on a lock someone else holds: the session's (a pipeline merge),
+// or the repo's for Land's step 2 (another Land in the same repo).
+func TestOpsLockWaitRefusesLocked(t *testing.T) {
+	ctx := context.Background()
+	s := newIsolated(t)
+	s.work(t, map[string]string{"feature.txt": "f\n"})
+	first := s.commit(t, contracts.CommitRequest{Message: "Feature", Drafted: true})
+	s.work(t, map[string]string{"more.txt": "m\n"})
+	ops := Ops{Store: s.store, LockWait: 100 * time.Millisecond}
+
+	release, err := AcquireSessionLock(ctx, s.primary, "ses_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ops.Commit(ctx, "ses_test", contracts.CommitRequest{Message: "More"})
+	var r *CommitRefusal
+	if !errors.As(err, &r) || r.Body.Code != contracts.CommitLocked || r.HTTPStatus() != 409 {
+		t.Errorf("commit under a held session lock = %v", err)
+	}
+	if undo, err := ops.Undo(ctx, "ses_test", first.Hash); err != nil || undo.Undone || undo.Reason != "locked" {
+		t.Errorf("undo under a held session lock = %+v, %v", undo, err)
+	}
+	res, err := ops.Land(ctx, "ses_test", Gates{})
+	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandLocked {
+		t.Errorf("land under a held session lock = %+v, %v", res, err)
+	}
+	release()
+
+	s.commit(t, contracts.CommitRequest{Paths: []string{"more.txt"}, Message: "More"})
+	releaseRepo, err := AcquireLock(ctx, s.primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseRepo()
+	before := cleanTree(t, s.primary)
+	res, err = ops.Land(ctx, "ses_test", Gates{})
+	if err != nil || res.Outcome != contracts.LandRefused || res.Reason != contracts.LandLocked {
+		t.Errorf("land under a held repo lock = %+v, %v", res, err)
+	}
+	if cleanTree(t, s.primary) != before {
+		t.Error("a locked Land touched the checkout")
 	}
 }

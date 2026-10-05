@@ -17,6 +17,7 @@ const EVERY_REASON: LandRefusalReason[] = [
   "primary_dirty",
   "primary_untracked",
   "primary_refused",
+  "locked",
 ];
 
 describe("refusalCopy", () => {
@@ -81,6 +82,7 @@ describe("worktree copy helpers", () => {
 
   it("explains undo refusals and per-path commit outcomes", () => {
     expect(undoRefusalCopy("not_tip")).toMatch(/newer commits/);
+    expect(undoRefusalCopy("locked")).toMatch(/try again in a moment/i);
     expect(undoRefusalCopy("already_pushed")).toBe("Can't undo: it has already been pushed.");
     expect(commitPathReason("already_committed")).toBe("already committed");
     expect(commitPathReason("rejected", "outside_folder")).toBe("outside this session's folder");

@@ -2,7 +2,9 @@ package sessionwt
 
 import (
 	"context"
+	"errors"
 	"strings"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
@@ -35,6 +37,14 @@ var afterStep1 func()
 // (LandSteps takes it); it records the merge commit. Only unexpected git
 // failures are errors.
 func LandSteps(ctx context.Context, t Target) (contracts.LandResult, error) {
+	return landSteps(ctx, t, 0)
+}
+
+// landSteps is LandSteps, waiting no longer than lockWait (zero: as long
+// as ctx allows) for the repo lock: a wait that runs out is a "locked"
+// refusal. Step 1 may have merged the base into the session branch by
+// then, which is harmless — the session carries on from it.
+func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts.LandResult, error) {
 	res := contracts.LandResult{Branch: t.Branch, Base: t.Base}
 	refuse := func(reason, detail string, files []string) (contracts.LandResult, error) {
 		res.Outcome, res.Reason, res.Detail, res.Files = contracts.LandRefused, reason, detail, files
@@ -66,7 +76,7 @@ func LandSteps(ctx context.Context, t Target) (contracts.LandResult, error) {
 			afterStep1()
 		}
 		// Step 2, in the user's checkout, under the repo lock.
-		landed, result, err := landInPrimary(ctx, t, b)
+		landed, result, err := landInPrimary(ctx, t, b, lockWait)
 		if err != nil {
 			return contracts.LandResult{}, err
 		}
@@ -87,9 +97,15 @@ func LandSteps(ctx context.Context, t Target) (contracts.LandResult, error) {
 
 // landInPrimary is step 2. landed false with an empty Outcome means the
 // base moved off b and step 1 must run again.
-func landInPrimary(ctx context.Context, t Target, b string) (landed bool, res contracts.LandResult, err error) {
+func landInPrimary(ctx context.Context, t Target, b string, lockWait time.Duration) (landed bool, res contracts.LandResult, err error) {
 	res = contracts.LandResult{Branch: t.Branch, Base: t.Base}
-	release, err := AcquireLock(ctx, t.Primary)
+	release, err := acquireWithin(ctx, lockWait, func(ctx context.Context) (func(), error) {
+		return AcquireLock(ctx, t.Primary)
+	})
+	if errors.Is(err, ErrLocked) {
+		res.Outcome, res.Reason, res.Detail = contracts.LandRefused, contracts.LandLocked, LockedDetail
+		return false, res, nil
+	}
 	if err != nil {
 		return false, res, err
 	}

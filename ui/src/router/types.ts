@@ -938,7 +938,8 @@ export type CommitErrorCode =
   | "git_failed"
   | "no_folder"
   | "no_fast_model"
-  | "draft_failed";
+  | "draft_failed"
+  | "locked";
 
 /** A refused POST /commit or /commit/draft: rendered in place, keeping the user's selection. */
 export interface CommitError {
@@ -959,7 +960,7 @@ export interface CommitDraft {
 export interface UndoCommitResult {
   undone: boolean;
   hash: string;
-  /** "not_tip", "not_session_commit", "merge_commit", "already_landed", "already_pushed", "mid_merge", "no_folder". */
+  /** "not_tip", "not_session_commit", "merge_commit", "already_landed", "already_pushed", "mid_merge", "no_folder", "locked". */
   reason?: string;
   detail?: string;
 }
@@ -981,7 +982,8 @@ export type LandRefusalReason =
   | "base_moving"
   | "primary_dirty"
   | "primary_untracked"
-  | "primary_refused";
+  | "primary_refused"
+  | "locked";
 
 /** POST /sessions/{id}/land — HTTP 200 for all three outcomes. */
 export interface LandResult {

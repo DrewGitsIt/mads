@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -30,15 +31,26 @@ import (
 // With a live child, status, commit, undo and land go to it: only it knows
 // whether the agent is mid-turn, and it holds the user's messages back
 // while a Land runs. With none, the Router runs the same sessionwt.Ops
-// itself, holding the session's wake lock so nothing can start the child
-// (and an agent turn) underneath it. Either way the bodies are the
+// itself: commit, undo and land holding the session's wake lock so nothing
+// can start the child (and an agent turn) underneath them, and waiting only
+// briefly for git's locks (routerLockWait); status, read-only, without it.
+// Either way the bodies are the
 // contracts.* shapes; the active-pipeline gate is the Router's to add,
 // since only its supervisor knows. Drafting needs no live state and always
 // runs here, where the Fast Model is.
 
+// routerLockWait bounds how long a Router-direct Commit, Undo or Land
+// waits for the session's or the repo's lock. It runs holding the
+// session's wake lock, so a long wait (a pipeline merge, another session's
+// Land running its git) would hold up waking the session too; past this it
+// refuses "locked" and the user tries again.
+const routerLockWait = 5 * time.Second
+
 // worktreeOps is sessionwt.Ops over the Router's own Data Service client:
 // the inactive-session path.
-func (s *server) worktreeOps() sessionwt.Ops { return sessionwt.Ops{Store: s.data} }
+func (s *server) worktreeOps() sessionwt.Ops {
+	return sessionwt.Ops{Store: s.data, LockWait: routerLockWait}
+}
 
 // worktreeRoute runs a worktree route against the live child when there is
 // one, else directly under the session's wake lock, re-checking for a
@@ -75,9 +87,17 @@ func (s *server) childPath(id, path string) string {
 // handleSessionWorktree is the session's worktree status, plus what only
 // the Router knows: who else works in the folder, and whether a pipeline
 // run is active — either keeps the folder through a delete.
+//
+// Read-only and lock-free, so it takes no wake lock: git status on a large
+// checkout can take seconds, and a wake shouldn't wait on it. A child
+// starting meanwhile is harmless — the answer is a snapshot either way.
 func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	s.worktreeRoute(w, r, func(addr string) {
+	if _, err := s.data.Session(r.Context(), id); err != nil {
+		writeError(w, err) // 404 before anything else
+		return
+	}
+	if addr, ok := s.sup.SessionAddr(id); ok {
 		status, raw, err := callChild(r.Context(), addr, http.MethodGet, s.childPath(id, "/worktree"), nil)
 		if err != nil {
 			writeErrMsg(w, http.StatusBadGateway, "session child: ", err)
@@ -87,19 +107,19 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 			raw = s.withFolderKeepers(r.Context(), id, raw)
 		}
 		writeRaw(w, status, raw)
-	}, func() {
-		st, err := s.worktreeOps().Status(r.Context(), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
-		if err != nil {
-			writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
-			return
-		}
-		raw, err := json.Marshal(st)
-		if err != nil {
-			writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
-			return
-		}
-		writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
-	})
+		return
+	}
+	st, err := s.worktreeOps().Status(r.Context(), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
+	if err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
+		return
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
+		return
+	}
+	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 }
 
 // withFolderKeepers adds shared_with and pipeline_running to a worktree

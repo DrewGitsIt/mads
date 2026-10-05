@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -353,5 +354,46 @@ func TestDeleteSessionKeepsFolderARunningPipelineUses(t *testing.T) {
 	}
 	if out := wtGit(t, repo, "branch", "--list", owner.WorktreeBranch); out == "" {
 		t.Error("branch deleted under the running pipeline")
+	}
+}
+
+// A Router-direct Land waits only briefly for a lock someone else holds
+// (a pipeline merging into the folder, say), then refuses "locked"; and
+// status, read-only, answers meanwhile rather than queue behind it.
+func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	sess, repo := isolatedRecord(t, data, "Busy folder")
+	agentWrote(t, data, sess, "feature.txt", "f\n")
+	url := srv.URL + "/sessions/" + sess.ID
+	if resp := postJSON(t, url+"/commit", contracts.CommitRequest{Message: "Feature"}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("commit: status %d", resp.StatusCode)
+	}
+	release, err := sessionwt.AcquireSessionLock(context.Background(), repo, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	landed := make(chan contracts.LandResult, 1)
+	go func() {
+		resp := postJSON(t, url+"/land", struct{}{})
+		landed <- decodeJSON[contracts.LandResult](t, resp)
+	}()
+	time.Sleep(200 * time.Millisecond) // Land is waiting on the lock, holding the wake lock
+	start := time.Now()
+	resp, err := http.Get(url + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := decodeJSON[contracts.WorktreeStatus](t, resp); st.UnlandedCount != 1 || time.Since(start) > 3*time.Second {
+		t.Errorf("status during a waiting Land = %+v after %s", st, time.Since(start))
+	}
+	select {
+	case res := <-landed:
+		if res.Outcome != contracts.LandRefused || res.Reason != contracts.LandLocked {
+			t.Errorf("land = %+v, want refused locked", res)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("Land waited on the lock without bound")
 	}
 }

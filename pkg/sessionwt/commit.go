@@ -37,7 +37,7 @@ func (r *CommitRefusal) HTTPStatus() int {
 		return http.StatusUnprocessableEntity
 	case contracts.CommitDraftFailed:
 		return http.StatusBadGateway
-	default: // nothing_to_commit, no_folder, no_fast_model
+	default: // nothing_to_commit, no_folder, no_fast_model, locked
 		return http.StatusConflict
 	}
 }

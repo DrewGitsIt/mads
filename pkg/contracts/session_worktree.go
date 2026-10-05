@@ -127,6 +127,7 @@ const (
 	CommitNoFolder        = "no_folder"
 	CommitNoFastModel     = "no_fast_model"
 	CommitDraftFailed     = "draft_failed"
+	CommitLocked          = "locked"
 )
 
 // CommitError is a refused POST /sessions/{id}/commit (or /commit/draft):
@@ -199,6 +200,9 @@ const (
 	LandPrimaryDirty     = "primary_dirty"
 	LandPrimaryUntracked = "primary_untracked"
 	LandPrimaryRefused   = "primary_refused"
+	// Another operation held the session's folder or the user's checkout
+	// past the Router's short wait; try again.
+	LandLocked = "locked"
 )
 
 // LandRefusal is why Land won't (or didn't) run.

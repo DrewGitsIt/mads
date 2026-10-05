@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -36,6 +37,45 @@ type Ops struct {
 	// session child passes its own, which serializes with its other record
 	// writes.
 	Refresh func(ctx context.Context) error
+	// LockWait, when set, bounds how long Commit, Undo and Land wait for
+	// the session lock and Land for the repo lock; past it they refuse
+	// with reason "locked" rather than wait. The Router sets it: it runs
+	// these holding the session's wake lock, which must not wait behind a
+	// pipeline's merge or another Land. Zero waits as long as ctx allows.
+	LockWait time.Duration
+}
+
+// ErrLocked is a lock not had within Ops.LockWait.
+var ErrLocked = errors.New("sessionwt: another operation holds the lock")
+
+// LockedDetail is the words for a "locked" refusal.
+const LockedDetail = "Another operation is using this session's folder or your checkout — try again in a moment."
+
+// acquireWithin runs acquire with wait as its deadline (none when zero),
+// turning a wait that ran out into ErrLocked.
+func acquireWithin(ctx context.Context, wait time.Duration, acquire func(context.Context) (func(), error)) (func(), error) {
+	if wait <= 0 {
+		return acquire(ctx)
+	}
+	lctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	release, err := acquire(lctx)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return nil, ErrLocked
+	}
+	return release, err
+}
+
+// withSessionLock is WithSessionLock, waiting no longer than LockWait.
+func (o Ops) withSessionLock(ctx context.Context, t Target, fn func() error) error {
+	release, err := acquireWithin(ctx, o.LockWait, func(ctx context.Context) (func(), error) {
+		return AcquireSessionLock(ctx, t.Primary, t.SessionID)
+	})
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
 }
 
 func (o Ops) load(ctx context.Context, sessionID string) (contracts.Session, Target, []contracts.FileChange, error) {
@@ -112,13 +152,18 @@ func (o Ops) Commit(ctx context.Context, sessionID string, req contracts.CommitR
 		return contracts.CommitResult{}, err
 	}
 	var res contracts.CommitResult
-	err = WithSessionLock(ctx, t.Primary, sessionID, func() error {
+	err = o.withSessionLock(ctx, t, func() error {
 		if err := o.ensure(ctx, t); err != nil {
 			return err
 		}
 		res, err = CommitFiles(ctx, t, rows, req)
 		return err
 	})
+	if errors.Is(err, ErrLocked) {
+		r := refuseCommit(contracts.CommitLocked, LockedDetail)
+		r.Body.Selection = req.Paths
+		return contracts.CommitResult{}, r
+	}
 	if err != nil {
 		return contracts.CommitResult{}, err
 	}
@@ -152,11 +197,14 @@ func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCo
 		return contracts.UndoCommitResult{}, err
 	}
 	var res contracts.UndoCommitResult
-	err = WithSessionLock(ctx, t.Primary, sessionID, func() error {
+	err = o.withSessionLock(ctx, t, func() error {
 		var err error
 		res, err = UndoCommit(ctx, t, hash)
 		return err
 	})
+	if errors.Is(err, ErrLocked) {
+		return contracts.UndoCommitResult{Hash: hash, Reason: "locked", Detail: LockedDetail}, nil
+	}
 	if err != nil || !res.Undone {
 		return res, err
 	}
@@ -188,7 +236,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 
 	var res contracts.LandResult
 	attempted := false
-	err = WithSessionLock(ctx, t.Primary, sessionID, func() error {
+	err = o.withSessionLock(ctx, t, func() error {
 		if err := o.ensure(ctx, t); err != nil {
 			return err
 		}
@@ -206,9 +254,12 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		}
 		o.event(ctx, t, contracts.MergeAttempted, nil)
 		attempted = true
-		res, err = LandSteps(ctx, t)
+		res, err = landSteps(ctx, t, o.LockWait)
 		return err
 	})
+	if errors.Is(err, ErrLocked) {
+		return o.refused(ctx, t, &contracts.LandRefusal{Reason: contracts.LandLocked, Detail: LockedDetail}), nil
+	}
 	if err != nil {
 		return contracts.LandResult{}, err
 	}

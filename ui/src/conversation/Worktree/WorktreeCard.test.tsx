@@ -86,6 +86,7 @@ describe("WorktreeCard", () => {
     "primary_dirty",
     "primary_untracked",
     "primary_refused",
+    "locked",
   ])("renders a refusal card for %s", (reason) => {
     render(
       <WorktreeCard

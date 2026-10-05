@@ -120,6 +120,13 @@ export function refusalCopy(
         tone: "bad",
         retry: true,
       };
+    case "locked":
+      return {
+        title: "Land is busy right now",
+        body: "Another operation is using this session's folder or your checkout. Nothing was merged — try again in a moment.",
+        tone: "warn",
+        retry: true,
+      };
     case "base_moving":
       return {
         title: `${b} kept moving`,
@@ -180,6 +187,8 @@ export function undoRefusalCopy(reason: string | undefined): string {
       return "Can't undo: it has already been pushed.";
     case "mid_merge":
       return "Can't undo while the session's folder is mid-merge.";
+    case "locked":
+      return "Can't undo right now: another operation is using this session's folder. Try again in a moment.";
     case "merge_commit":
     case "not_session_commit":
       return "Can't undo: that isn't a commit this session made with Commit.";
