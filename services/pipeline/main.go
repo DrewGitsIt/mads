@@ -1,6 +1,6 @@
 // Command mads-pipeline is the Pipeline Engine child: spawned by the Router
 // (SpawnPipeline) with a run id, session id, and template name, it resolves
-// the session's workspace/provider/concurrency and runs pkg/pipelinerun to
+// the session's folder/provider/concurrency and runs pkg/pipelinerun to
 // completion — the same engine package `mads run` (cmd/mads/run.go) drives,
 // so the two launch paths can never diverge.
 package main
@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/pipelinerun"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/fake"
 	"github.com/drewkidwell/mads/providers/goosecli"
@@ -144,7 +146,110 @@ func resolveStageTimeout(cfg contracts.Config) time.Duration {
 	return time.Duration(minutes) * time.Minute
 }
 
-// run resolves the session's workspace, template, provider, and concurrency,
+// placement is where a run works: the directory its tasks fork from and
+// merge into, and, for an isolated session, the session-folder side of
+// those merges.
+type placement struct {
+	cwd     string
+	session *sessionwt.TaskMerge
+}
+
+// place decides where a session's pipeline runs
+// (docs/SESSION-WORKTREES-DESIGN.md D8):
+//
+//   - an isolated session (its record names a worktree): in that worktree,
+//     ensured back into existence first if it was lost, so tasks branch
+//     from and merge into the session branch and the user's checkout is
+//     never touched;
+//   - a session working in place with a folder of its own (Dir): the top of
+//     the repo that folder is in — never the workspace's repo, which may be
+//     a different one entirely (problem 6);
+//   - otherwise the workspace's primary repo, as before sessions had
+//     folders.
+func place(ctx context.Context, client *dataclient.Client, sess contracts.Session) (placement, error) {
+	if sess.WorktreeDir != "" && sess.WorktreeBranch != "" {
+		t, err := sessionwt.TargetFor(ctx, sess)
+		if errors.Is(err, sessionwt.ErrNoFolder) {
+			// No folder of its own to find the repo by, and the worktree
+			// is gone too: the workspace names the repo to re-create it in.
+			t, err = workspaceTarget(ctx, client, sess)
+		}
+		if err != nil {
+			return placement{}, fmt.Errorf("session %s: %w", sess.ID, err)
+		}
+		res, err := sessionwt.EnsureWithLock(ctx, sessionwt.Spec{
+			Primary: t.Primary, Root: t.Root, SessionID: sess.ID, Base: t.Base,
+		})
+		if err != nil {
+			return placement{}, fmt.Errorf("session %s: ensure its worktree: %w", sess.ID, err)
+		}
+		if res.Notable() {
+			raw, _ := json.Marshal(res.Payload(t.Base))
+			if err := client.Append(ctx, &contracts.Envelope{
+				Type: contracts.WorktreeEnsured, SessionID: sess.ID, Payload: raw,
+			}); err != nil {
+				log.Printf("pipeline: append worktree.ensured: %v", err)
+			}
+		}
+		t.Folder = res.Dir
+		return placement{cwd: t.Folder, session: &sessionwt.TaskMerge{Store: client, Target: t}}, nil
+	}
+	if !implicitDir(sess.Dir) {
+		top, err := sessionwt.Toplevel(ctx, sess.Dir)
+		if err == nil {
+			return placement{cwd: top}, nil
+		}
+		if sess.Isolation != contracts.IsolationCurrentDir {
+			return placement{}, fmt.Errorf("session %s: folder %s is not in a git repository, so its tasks can't get worktrees: %w", sess.ID, sess.Dir, err)
+		}
+		return placement{cwd: sess.Dir}, nil
+	}
+	repo, err := workspaceRepo(ctx, client, sess)
+	if err != nil {
+		return placement{}, err
+	}
+	return placement{cwd: repo}, nil
+}
+
+// workspaceRepo is the session's workspace's primary repo.
+func workspaceRepo(ctx context.Context, client *dataclient.Client, sess contracts.Session) (string, error) {
+	if sess.Workspace == "" {
+		return "", fmt.Errorf("session %s has no folder and no workspace", sess.ID)
+	}
+	ws, err := client.Workspace(ctx, sess.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("workspace %s: %w", sess.Workspace, err)
+	}
+	repo, ok := ws.PrimaryRepo()
+	if !ok {
+		return "", fmt.Errorf("workspace %s has no primary repo configured", ws.Name)
+	}
+	return repo, nil
+}
+
+// workspaceTarget is an isolated session's Target with its workspace's
+// primary repo standing in for the folder it can no longer be found by.
+func workspaceTarget(ctx context.Context, client *dataclient.Client, sess contracts.Session) (sessionwt.Target, error) {
+	repo, err := workspaceRepo(ctx, client, sess)
+	if err != nil {
+		return sessionwt.Target{}, err
+	}
+	top, err := sessionwt.Toplevel(ctx, repo)
+	if err != nil {
+		return sessionwt.Target{}, fmt.Errorf("workspace repo %s: %w", repo, err)
+	}
+	return sessionwt.Target{
+		SessionID: sess.ID, Name: sess.Name, Folder: sess.WorktreeDir, Primary: top,
+		Branch: sess.WorktreeBranch, Base: sess.WorktreeBase, Root: filepath.Dir(sess.WorktreeDir),
+	}, nil
+}
+
+// implicitDir reports a folder nobody chose ("" or "."), which says nothing
+// about where to run — the same rule the session service applies.
+func implicitDir(dir string) bool { return dir == "" || dir == "." || dir == "./" }
+
+// run resolves where the session's pipeline runs (place), its template,
+// provider, and concurrency,
 // then hands off to pipelinerun.Run — the child-mode equivalent of
 // cmd/mads/run.go's own resolution chain.
 func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome string) error {
@@ -154,16 +259,9 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 	if err != nil {
 		return fmt.Errorf("session %s: %w", sessionID, err)
 	}
-	if sess.Workspace == "" {
-		return fmt.Errorf("session %s has no workspace", sessionID)
-	}
-	ws, err := client.Workspace(ctx, sess.Workspace)
+	where, err := place(ctx, client, sess)
 	if err != nil {
-		return fmt.Errorf("workspace %s: %w", sess.Workspace, err)
-	}
-	repo, ok := ws.PrimaryRepo()
-	if !ok {
-		return fmt.Errorf("workspace %s has no primary repo configured", ws.Name)
+		return err
 	}
 
 	tpl, tplVersion, err := pipelinerun.LoadTemplate(ctx, client, tplName)
@@ -193,7 +291,7 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 		return err
 	}
 
-	isolated := sess.Isolation != contracts.IsolationCurrentDir
+	isolated := sess.Isolation != contracts.IsolationCurrentDir || where.session != nil
 	var worktreeRoot string
 	if isolated {
 		worktreeRoot = filepath.Join(madsHome, "worktrees", sessionID)
@@ -201,15 +299,15 @@ func run(ctx context.Context, runID, sessionID, tplName, dataURL, madsHome strin
 
 	stageTimeout := resolveStageTimeout(cfg)
 
-	log.Printf("pipeline: run=%s session=%s template=%s provider=%s workspace=%s isolated=%v concurrency=%d stage_timeout=%s",
-		runID, sessionID, tpl.Name, providerName, repo, isolated, cfg.ConcurrencyLimit, stageTimeout)
+	log.Printf("pipeline: run=%s session=%s template=%s provider=%s cwd=%s session_worktree=%v isolated=%v concurrency=%d stage_timeout=%s",
+		runID, sessionID, tpl.Name, providerName, where.cwd, where.session != nil, isolated, cfg.ConcurrencyLimit, stageTimeout)
 
 	_, err = pipelinerun.Run(ctx, pipelinerun.Options{
 		Data: client, Provider: prov, SessionID: sessionID, RunID: runID,
-		Template: tpl, TemplateVersion: tplVersion, Cwd: repo, Concurrency: cfg.ConcurrencyLimit,
+		Template: tpl, TemplateVersion: tplVersion, Cwd: where.cwd, Concurrency: cfg.ConcurrencyLimit,
 		Model: sess.Model, StageTimeout: stageTimeout,
 		DisableSleepInhibit: pipelinerun.SleepInhibitDisabled(cfg),
-		Isolated:            isolated, WorktreeRoot: worktreeRoot,
+		Isolated:            isolated, WorktreeRoot: worktreeRoot, Session: where.session,
 		DataURL: dataURL, MadsHome: madsHome,
 		// This binary is only ever spawned by the Router (see package doc
 		// above) — its Supervisor owns deactivating sessionID on exit

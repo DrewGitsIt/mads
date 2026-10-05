@@ -93,6 +93,26 @@ with their path in the note. A post-commit hook installed in the workspace
 repo reports every commit — task context read from per-worktree git config —
 to the Data Service (§5).
 
+**Inside a session's isolation** (docs/SESSION-WORKTREES-DESIGN.md D8). The
+child runs where the session works (`place` in `main.go`): an isolated
+session's own worktree, ensured back if it was lost; else the top of the
+repo containing the session's folder (`Session.dir`); else the workspace's
+primary repo. With a session worktree as `Cwd` (`Config.Session`), trunk *is*
+the session branch: tasks fork from it and merge into it, and the user's
+checkout is never touched — their work reaches it through the session's Land.
+Such a merge takes the per-session lock, not the repo's `mads-land.lock`, and
+only around the write itself, not the gate, so neither a Land elsewhere in
+the repo nor the gate's runtime holds the other up. Before merging, the engine
+intersects the folder's `git status` with what the task branch changed: if
+the agent has uncommitted edits to the same files it waits (no lock held) for
+the session's `agent_state` to go idle, up to the merge stage's timeout,
+then commits those files as `mads-session` ("Save session edits before
+pipeline merge", `Session:` trailer, recorded on the Data Service once), and
+starts the round over so the task branch absorbs that commit in its own
+worktree. `merge.completed` then carries `auto_committed`/`auto_commits`, and
+`waited_out` plus `files` when the merge went ahead with the agent still
+working; the session's header counts are refreshed after every merge.
+
 **A post-rebase gate failure is triaged, not taken at face value.** Rebase
 conflicts (above) are the land queue's one deterministic failure mode; a gate
 ("verify") failure this late is exactly as likely to be flake/load

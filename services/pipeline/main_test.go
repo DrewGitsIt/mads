@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -315,5 +316,160 @@ func TestChildReleasesLeaseOnCancel(t *testing.T) {
 		if l.TaskID == task.ID {
 			t.Fatalf("task %s still leased by %q after child exited on cancel", task.ID, l.Holder)
 		}
+	}
+}
+
+// gitRepo makes a repo on main with one commit and a repo-local identity
+// (CI has no global one).
+func gitRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Makefile"), []byte("test:\n\t@true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q", "-b", "main", "."},
+		{"config", "user.email", "t@t"},
+		{"config", "user.name", "t"},
+		{"add", "."},
+		{"commit", "-q", "-m", "init"},
+	} {
+		cmd := exec.Command("git", args...) //nolint:gosec // test helper, fixed argv
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	return dir
+}
+
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...) //nolint:gosec // test helper, fixed argv
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return string(out)
+}
+
+// seedRun creates a template whose one command stage leaves a file named
+// after the run in whatever directory the stage runs in, and one ready
+// task for sess.
+func seedRun(t *testing.T, client *dataclient.Client, sess *contracts.Session, src string) *contracts.Template {
+	t.Helper()
+	ctx := context.Background()
+	tpl := &contracts.Template{Name: "where-" + sess.Name, Source: src}
+	if err := client.CreateTemplate(ctx, tpl); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.CreateSession(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	task := &contracts.Task{SessionID: sess.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"}
+	if err := client.CreateTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	return tpl
+}
+
+// Problem 6: a session started in a folder of its own runs its pipeline
+// there — in the top of that folder's repo — never in the default
+// workspace's repo.
+func TestRunUsesSessionDirNotWorkspaceRepo(t *testing.T) {
+	base := datatest.Start(t)
+	client := dataclient.New(base, "test")
+	ctx := context.Background()
+
+	wsRepo, dirRepo := gitRepo(t), gitRepo(t)
+	sub := filepath.Join(dirRepo, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ws := &contracts.Workspace{Name: "ws1", Repos: []contracts.WorkspaceRepo{{Path: wsRepo, Primary: true}}}
+	if err := client.CreateWorkspace(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name string
+		sess contracts.Session
+	}{
+		{"with a workspace", contracts.Session{Name: "s1", Workspace: ws.ID, Dir: sub, Provider: "fake", Isolation: contracts.IsolationCurrentDir}},
+		{"without one", contracts.Session{Name: "s2", Dir: sub, Provider: "fake", Isolation: contracts.IsolationCurrentDir}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			marker := "ran-" + strings.ReplaceAll(tc.name, " ", "-")
+			tpl := seedRun(t, client, &tc.sess, "name: where-"+tc.sess.Name+"\nstages:\n  - name: verify\n    command: touch "+marker+"\n")
+			if err := run(ctx, "run_1", tc.sess.ID, tpl.ID, base, t.TempDir()); err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dirRepo, marker)); err != nil {
+				t.Errorf("the stage didn't run at the top of the session folder's repo")
+			}
+			if _, err := os.Stat(filepath.Join(wsRepo, marker)); err == nil {
+				t.Errorf("the stage ran in the workspace's repo")
+			}
+		})
+	}
+}
+
+// D8 end to end through run(): an isolated session whose worktree was lost
+// gets it back, its task lands on the session branch, and the user's
+// checkout is untouched.
+func TestRunIsolatedSessionLandsOnSessionBranch(t *testing.T) {
+	base := datatest.Start(t)
+	client := dataclient.New(base, "test")
+	ctx := context.Background()
+
+	primary := gitRepo(t)
+	headBefore := gitIn(t, primary, "rev-parse", "HEAD")
+	sess := contracts.Session{Name: "iso", Dir: primary, Provider: "fake", Isolation: contracts.IsolationWorktree}
+	tpl := seedRun(t, client, &sess, `name: where-iso
+stages:
+  - name: implement
+    command: echo hi > piped.txt
+  - name: merge
+    command: git merge --no-ff
+  - name: verify
+    command: make test
+`)
+	folder := filepath.Join(t.TempDir(), "session-worktrees", sess.ID)
+	branch, baseBranch := "mads/session/"+sess.ID, "main"
+	if err := client.SetSessionWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{
+		WorktreeDir: &folder, WorktreeBranch: &branch, WorktreeBase: &baseBranch,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := run(ctx, "run_1", sess.ID, tpl.ID, base, t.TempDir()); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(folder, "piped.txt")); err != nil {
+		t.Errorf("the task's work isn't in the session folder: %v", err)
+	}
+	if got := gitIn(t, primary, "rev-parse", "HEAD"); got != headBefore {
+		t.Errorf("the user's checkout moved: %s -> %s", headBefore, got)
+	}
+	if st := gitIn(t, primary, "status", "--porcelain"); strings.TrimSpace(st) != "" {
+		t.Errorf("the user's checkout is dirty:\n%s", st)
+	}
+	if n := strings.TrimSpace(gitIn(t, primary, "rev-list", "--count", "main.."+branch)); n == "0" {
+		t.Errorf("the session branch has nothing unlanded")
+	}
+	evs, err := client.Events(ctx, 0, sess.ID, []string{"worktree.ensured"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 {
+		t.Errorf("worktree.ensured events = %d, want 1 for the re-created folder", len(evs))
+	}
+	got, err := client.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.UnlandedCount == 0 {
+		t.Errorf("unlanded_count wasn't refreshed after the merge")
 	}
 }
