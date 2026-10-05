@@ -11,6 +11,13 @@ export interface TerminalViewProps {
   spawnOptions?: PtySpawnOptions;
   className?: string;
   /**
+   * Translate bare LF to CRLF. Only for plain-text sources (pipeline agent
+   * output). A real pty already emits CRLF, and full-screen programs use a
+   * bare LF to move the cursor down one row — converting it also jumps the
+   * cursor to column 0 and smears their redraws.
+   */
+  convertEol?: boolean;
+  /**
    * Fires on ⌘E/Ctrl+E — captured via xterm's attachCustomKeyEventHandler
    * before xterm processes the keystroke, so no stray bytes reach the pty
    * when the compose overlay opens (ConversationTab renders TerminalComposer).
@@ -30,7 +37,7 @@ export interface TerminalViewHandle {
  * caller supplies its own bridge/pty id (HANDOFF.md §4).
  */
 export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
-  function TerminalView({ bridge, spawnOptions, className, onComposeOpen }, ref) {
+  function TerminalView({ bridge, spawnOptions, className, convertEol = false, onComposeOpen }, ref) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     // Re-registering attachCustomKeyEventHandler on every onComposeOpen
@@ -64,7 +71,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       const container = containerRef.current;
       if (!container) return;
 
-      const term = new Terminal({ convertEol: true });
+      const term = new Terminal({ convertEol });
       termRef.current = term;
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);

@@ -17,5 +17,5 @@ export interface AgentOutputViewProps {
 export function AgentOutputView({ source }: AgentOutputViewProps) {
   const bridgeRef = useRef<PipelineOutputBridge>();
   bridgeRef.current ??= new PipelineOutputBridge(source);
-  return <TerminalView bridge={bridgeRef.current} />;
+  return <TerminalView bridge={bridgeRef.current} convertEol />;
 }
