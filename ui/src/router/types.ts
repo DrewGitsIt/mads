@@ -1053,6 +1053,11 @@ export interface Config {
   // means "prevent sleep" for every stored config predating it; the
   // Settings checkbox binds to its negation. Read once at run launch.
   allow_sleep_during_pipelines: boolean;
+  // auto_commit_messages mirrors pkg/contracts/config.go's
+  // AutoCommitMessages — Settings' "Write commit messages for me": a session
+  // Commit with no message has the Fast Model draft one. Optional: the UI
+  // for it lands separately.
+  auto_commit_messages?: boolean;
 
   default_workspace?: string;
   default_provider?: string;

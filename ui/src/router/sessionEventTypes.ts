@@ -21,6 +21,7 @@ export const SESSION_SHELL_REFETCH_EVENT_TYPES = [
   "merge.attempted",
   "merge.conflicted",
   "merge.completed",
+  "merge.refused",
 ];
 
 /**
@@ -53,4 +54,5 @@ export const WORKSPACE_SESSION_EVENT_TYPES = [
   "stage.skipped",
   "stage.retried",
   "file.changed",
+  "commit.undone",
 ];
