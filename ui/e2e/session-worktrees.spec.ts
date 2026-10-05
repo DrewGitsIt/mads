@@ -72,6 +72,32 @@ async function shot(page: Page, name: string, focus?: Locator): Promise<void> {
   }
 }
 
+/**
+ * shot, for a card that must really be in the picture: the conversation
+ * may still be settling its own scroll when the card arrives (its Land
+ * echo is swapped for the logged event's card), so scroll it in and wait
+ * until it sits wholly inside the viewport before the screenshot.
+ */
+async function shotInView(page: Page, name: string, focus: Locator): Promise<void> {
+  try {
+    const viewport = page.viewportSize();
+    await expect
+      .poll(
+        async () => {
+          await focus.evaluate((el) => el.scrollIntoView({ block: "center" }));
+          await page.waitForTimeout(300);
+          const box = await focus.boundingBox();
+          return Boolean(box && viewport && box.y >= 0 && box.y + box.height <= viewport.height);
+        },
+        { timeout: 5_000 },
+      )
+      .toBe(true);
+    await shot(page, name);
+  } catch {
+    // scaffolding only
+  }
+}
+
 /** Has git in dir got a merge in progress? */
 function midMerge(dir: string): boolean {
   return existsSync(path.join(git(dir, "rev-parse", "--absolute-git-dir"), "MERGE_HEAD"));
@@ -353,7 +379,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       await expect(auto).toBeVisible();
       await expect(auto).toContainText(`${base} had moved on; mergiraf merged 1 file automatically`);
       await expect(auto).toContainText(`${M}. Check it, then Land again.`);
-      await shot(page, "11-auto-resolved-card.png", auto);
+      await shotInView(page, "11-auto-resolved-card.png", auto);
 
       // Disk: merged and committed in the session's folder only.
       expect(git(primary, "rev-parse", "HEAD")).toBe(baseHead);
