@@ -471,6 +471,19 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 			tools:  []ToolStep{{Name: "write_file", Path: "trust-probe.txt", Content: "should not exist under read_only"}},
 			chunks: []string{"wrote it"},
 		}
+	case strings.HasPrefix(prompt, "write-file "):
+		// "write-file <path> <content…>": a real, tracked file write of the
+		// caller's choosing — lets an e2e journey drive the agent's edits
+		// (path and content) without a scenario file, which the session
+		// service has no flag for.
+		path, content, _ := strings.Cut(strings.TrimPrefix(prompt, "write-file "), " ")
+		if path == "" || content == "" {
+			return turnPlan{chunks: []string{"write-file needs a path and content"}}
+		}
+		return turnPlan{
+			tools:  []ToolStep{{Name: "write_file", Path: path, Content: content + "\n"}},
+			chunks: []string{"wrote " + path},
+		}
 	case prompt == "attempt-command":
 		return turnPlan{
 			tools:  []ToolStep{{Name: "run_command", Command: true}},

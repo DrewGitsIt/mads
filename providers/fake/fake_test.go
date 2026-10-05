@@ -648,6 +648,40 @@ func TestTrustFullAllowsEverything(t *testing.T) {
 	}
 }
 
+// "write-file <path> <content>" really writes the caller's file under the
+// session cwd and reports it as a mutating tool use on that path.
+func TestWriteFileDialect(t *testing.T) {
+	cwd := t.TempDir()
+	sess, err := fake.New().Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Cwd: cwd})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "write-file notes/a.txt hello there"); err != nil {
+		t.Fatal(err)
+	}
+	events, ended := collect(t, sess)
+	if !ended {
+		t.Fatal("stream closed without turn end")
+	}
+	var tool *provider.ToolUse
+	for _, ev := range events {
+		if ev.Kind == provider.EventToolUse {
+			tool = ev.Tool
+		}
+	}
+	if tool == nil || tool.Path != "notes/a.txt" || !tool.Mutates {
+		t.Fatalf("tool event = %+v, want a mutating write of notes/a.txt", tool)
+	}
+	got, err := os.ReadFile(filepath.Join(cwd, "notes", "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello there\n" {
+		t.Fatalf("file = %q, want %q", got, "hello there\n")
+	}
+}
+
 // Usage is deterministic — the same exchange always costs the same.
 func TestDeterministicUsage(t *testing.T) {
 	f := fake.New()
