@@ -1,6 +1,7 @@
 # Session worktrees: isolation, Commit, Land
 
-**Status:** Proposed. Revised after critical review on 2026-10-05; see Review log.
+**Status:** Implemented on `feat/session-worktrees` (2026-10-05). Revised after
+critical review; see Review log and Implementation notes.
 **Date:** 2026-10-05. **Driver:** Drew wants "agent, do your work in an isolated
 space because I have other stuff rolling" to actually happen, without making
 worktrees one more thing users have to manage.
@@ -359,3 +360,59 @@ Kept as the reviewer recommended: two-step Land with conflicts confined to the
 worktree, the folder kept, no `checkout` in the user's tree, `--no-ff`, click-only
 commits, path checks against the change list, the separate root, first-start-only
 isolation, and retiring the free-text target box.
+
+## Implementation notes (2026-10-05)
+
+Where the build differs from the decisions above, and why:
+
+- **Two locks, not one.** Using `mads-land.lock` for everything made a first
+  session start wait behind a pipeline's whole landing step. Work inside a
+  session's own folder now takes a per-session lock,
+  `<git-common-dir>/mads-session-<id>.lock`. The repo lock is only for writes to
+  the user's checkout: the engine's lands, and step 2 of Land. Order is session
+  lock, then repo lock.
+- **Linked sessions share one folder.** Spec §1.12 says linked sessions must
+  never work in different worktrees. So a session started with a link to an
+  isolated session in the same repo **joins its folder**: `dir` is the
+  counterpart's worktree, isolation is `current_dir`, and the counterpart lands
+  everything. Linking two existing sessions that each have their own folder is
+  refused, with a plain sentence. Delete keeps a folder another session is
+  working in, and keeps one a running pipeline is merging into. The dialog says
+  so.
+- **The uncommitted count includes untracked files** the session created, not
+  only modified tracked files.
+- **A folder on the wrong branch is reused, not moved aside.** If it's still a
+  worktree of the repo, moving a live folder away would be the worse surprise.
+  Land then refuses it as `off_branch`.
+- **Sessions with no folder (`.`) are never isolated.** That avoids branching
+  from whatever repo the Router happened to start in.
+- **Commit and Land record their own commits,** with `source`, subject, files and
+  `drafted` on `commit.created`, which is how cards are drawn. The mads hook is
+  silenced for those commits (`-c mads.sessionId=`), so nothing is recorded
+  twice. The user's own hooks still run.
+- **Router-direct operations wait at most 5s for a lock,** then refuse with
+  `locked`. The status read never takes the wake lock.
+- **Land's writes to your checkout run in their own process group,** and session
+  shutdown waits for a Land in flight. Killing the session mid-Land can't leave
+  your checkout half-merged.
+- **Pipelines:**
+  - They take the session lock only around their write.
+  - Mid-merge folders and the agent being busy are both waited out, never
+    aborted.
+  - Any staged change counts as overlap, because git refuses to merge over any
+    staged change.
+  - When the wait times out, the Router (a merge watcher plus a
+    `folder_notice` job) sends the agent a message naming the files that
+    changed under it.
+- **Undo refuses a commit already on the branch's upstream** (`already_pushed`).
+- **A pre-existing bug** in `githook.EnsureInstalled` planted files inside linked
+  worktrees. It's fixed, because otherwise every isolated folder would read as
+  dirty.
+
+**Deploying** needs the Data Service, Router, session and pipeline binaries
+rebuilt, and the Data Service and Router restarted, because of new routes:
+`PATCH /sessions/{id}/worktree` and `DELETE /sessions/{id}/commits/{hash}`. The
+built-in isolation default is still `worktree`. So after deploy, every new
+session started in a git repo is isolated. Existing sessions keep running where
+they always have.
+
