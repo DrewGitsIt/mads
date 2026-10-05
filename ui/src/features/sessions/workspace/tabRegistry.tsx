@@ -1,6 +1,5 @@
 import type { ComponentType } from "react";
 import { ConversationTab } from "../../../conversation/ConversationTab";
-import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { ContextRail } from "../../../context-rail/ContextRail";
 import { FilesTab } from "../../../files/FilesTab";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
@@ -16,7 +15,6 @@ export interface WorkspaceTabContext {
   sessionId: string;
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
-  ptyBridge?: PtyBridge;
   /** Set for a session just created from the Launchpad — only ConversationTabView consumes these. */
   provisioning?: boolean;
   onProvisioningDone?: () => void;
@@ -47,7 +45,6 @@ export interface WorkspaceTabDef {
 function ConversationTabView({
   sessionId,
   routerClient,
-  ptyBridge,
   provisioning,
   onProvisioningDone,
   pendingFirstMessage,
@@ -62,7 +59,6 @@ function ConversationTabView({
         <ConversationTab
           sessionId={sessionId}
           routerClient={routerClient}
-          ptyBridge={ptyBridge}
           provisioning={provisioning}
           onProvisioningDone={onProvisioningDone}
           pendingFirstMessage={pendingFirstMessage}

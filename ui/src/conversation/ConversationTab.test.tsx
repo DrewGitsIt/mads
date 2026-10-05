@@ -10,7 +10,8 @@ import { FakeEventSource } from "../router/testFakeEventSource";
 import { requestStreamReattach } from "./streamReattachSignal";
 import { TransportSwitchError, SessionWakeError } from "../router/client";
 import { FLAGS } from "../featureFlags";
-import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
+import { makeFakeShellHost } from "./ShellDock/fakeShellHost";
+import { resetShellDockCache } from "./ShellDock/dockState";
 import type { Link } from "../router/types";
 
 // Same fake-Monaco precedent as Composer.test.tsx/TerminalComposer.test.tsx —
@@ -76,16 +77,14 @@ if (typeof window.ResizeObserver === "undefined") {
   } as unknown as typeof ResizeObserver;
 }
 
-function makeStubBridge(): PtyBridge {
-  return {
-    spawn: vi.fn(async () => "pty-1"),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-    onData: vi.fn(() => () => {}),
-    onExit: vi.fn(() => () => {}),
-  };
+/** Installs a fake shell host as window.mads.shell, the transport the Shell dock opens its shell over. */
+function installShellHost() {
+  const fake = makeFakeShellHost();
+  window.mads = { shell: fake.host };
+  return fake;
 }
+
+const toggleShell = () => act(() => void window.dispatchEvent(new Event("mads:toggle-shell")));
 
 describe("ConversationTab", () => {
   beforeEach(() => {
@@ -95,9 +94,12 @@ describe("ConversationTab", () => {
     // in-flight request; without this a case can join the PREVIOUS case's
     // still-unresolved fetch and see its stubbed models.
     resetProviderModelCache();
+    window.localStorage.clear();
+    resetShellDockCache();
   });
 
   afterEach(() => {
+    delete (window as { mads?: unknown }).mads;
     vi.unstubAllGlobals();
     vi.useRealTimers();
     FLAGS.linkedSessions = false;
@@ -113,16 +115,13 @@ describe("ConversationTab", () => {
     expect(screen.getByText(/Add retry backoff to the ingest worker, please/)).toBeTruthy();
   });
 
-  // Terminal display mode now drives the session's own transport
+  // Terminal display mode drives the session's own transport
   // (SessionTerminalBridge, backed by switchTransport/streamSession), not the
-  // Electron ptyBridge prop — that prop is ShellDock-only now (see
-  // ShellDock.test.tsx for its own spawn coverage).
-  it("switches to terminal display mode using the session's own transport, not the Electron pty bridge", async () => {
+  // shell host — that is the Shell dock's alone (see ShellDock.test.tsx).
+  it("switches to terminal display mode using the session's own transport, not the shell host", async () => {
     const client = new FakeRouterClient();
-    const bridge = makeStubBridge();
-    render(
-      <ConversationTab sessionId="session-active" routerClient={client} ptyBridge={bridge} />,
-    );
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
@@ -132,7 +131,7 @@ describe("ConversationTab", () => {
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
     );
-    expect(bridge.spawn).not.toHaveBeenCalled();
+    expect(host.open).not.toHaveBeenCalled();
   });
 
   it("shows a switching indicator and disables the composer while the transport switch is pending", async () => {
@@ -345,37 +344,151 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
   });
 
+  const shellVisible = () => screen.queryByRole("button", { name: "End shell" }) !== null;
+  const waitForChat = () =>
+    waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy());
+
   it("toggles the Shell dock via the cross-tree toggle signal", async () => {
     const client = new FakeRouterClient();
-    const bridge = makeStubBridge();
-    render(
-      <ConversationTab sessionId="session-active" routerClient={client} ptyBridge={bridge} />,
-    );
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    expect(document.querySelector('[data-testid="resize-handle"]')).toBeNull();
+    await waitForChat();
+    expect(shellVisible()).toBe(false);
 
-    act(() => {
-      window.dispatchEvent(new Event("mads:toggle-shell"));
+    toggleShell();
+    await waitFor(() => expect(shellVisible()).toBe(true));
+    await waitFor(() => expect(host.open).toHaveBeenCalledTimes(1));
+
+    // Ctrl+` hides; it never ends the shell.
+    toggleShell();
+    await waitFor(() => expect(shellVisible()).toBe(false));
+    expect(host.end).not.toHaveBeenCalled();
+    await waitFor(() => expect(host.detach).toHaveBeenCalledWith("shell-session-active"));
+
+    // Showing again re-attaches (open), still without ending anything.
+    toggleShell();
+    await waitFor(() => expect(host.open).toHaveBeenCalledTimes(2));
+    expect(host.end).not.toHaveBeenCalled();
+  });
+
+  it("the chevron hides the shell without ending it", async () => {
+    const client = new FakeRouterClient();
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitForChat();
+    toggleShell();
+    await waitFor(() => expect(shellVisible()).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide shell" }));
+
+    await waitFor(() => expect(shellVisible()).toBe(false));
+    expect(host.end).not.toHaveBeenCalled();
+  });
+
+  it("× ends the shell and closes the dock", async () => {
+    const client = new FakeRouterClient();
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitForChat();
+    toggleShell();
+    await waitFor(() => expect(host.open).toHaveBeenCalled());
+    await waitFor(() => expect(host.onData).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", { name: "End shell" }));
+
+    expect(host.end).toHaveBeenCalledWith("shell-session-active");
+    await waitFor(() => expect(shellVisible()).toBe(false));
+  });
+
+  it("switching sessions and back re-attaches the same shell and never ends it", async () => {
+    const client = new FakeRouterClient();
+    const { host } = installShellHost();
+    const first = render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitForChat();
+    toggleShell();
+    await waitFor(() => expect(host.open).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(host.onData).toHaveBeenCalled());
+
+    // SessionWorkspace is keyed by session id: a switch unmounts the tab.
+    first.unmount();
+    expect(host.detach).toHaveBeenCalledWith("shell-session-active");
+
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    // The dock's state outlived the tab, so it comes back showing.
+    await waitFor(() => expect(shellVisible()).toBe(true));
+    await waitFor(() => expect(host.open).toHaveBeenCalledTimes(2));
+    expect(host.end).not.toHaveBeenCalled();
+  });
+
+  it("keeps dock state per session id and across a reload", async () => {
+    const client = new FakeRouterClient();
+    installShellHost();
+    const a = render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitForChat();
+    toggleShell();
+    await waitFor(() => expect(shellVisible()).toBe(true));
+    a.unmount();
+
+    // Another session has its own state.
+    const other = render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
+    await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
+    expect(shellVisible()).toBe(false);
+    other.unmount();
+
+    // A reload forgets memory but not localStorage.
+    resetShellDockCache();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(shellVisible()).toBe(true));
+  });
+
+  it("restores the stored height and saves a new one when the resize ends", async () => {
+    const client = new FakeRouterClient();
+    installShellHost();
+    window.localStorage.setItem(
+      "mads.shellDock.session-active",
+      JSON.stringify({ open: true, height: 360 }),
+    );
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(shellVisible()).toBe(true));
+
+    const panel = screen.getByRole("button", { name: "End shell" }).closest("[style]") as HTMLElement;
+    expect(panel.style.height).toBe("360px");
+
+    const handle = panel.querySelector('[data-testid="resize-handle"]')!;
+    fireEvent.mouseDown(handle, { clientY: 600 });
+    fireEvent.mouseMove(window, { clientY: 580 });
+    fireEvent.mouseUp(window);
+
+    expect(JSON.parse(window.localStorage.getItem("mads.shellDock.session-active")!)).toEqual({
+      open: true,
+      height: 380,
     });
+  });
 
-    await waitFor(() =>
-      expect(document.querySelector('[data-testid="resize-handle"]')).toBeTruthy(),
-    );
+  it("opening a tool's detail hides the shell dock without ending the shell", async () => {
+    const client = new FakeRouterClient();
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitForChat();
+    toggleShell();
+    await waitFor(() => expect(shellVisible()).toBe(true));
+
+    // Expand the activity group; a row's click opens the activity dock.
+    fireEvent.click(await screen.findByText(/2 actions/));
+    const rowButton = (await screen.findAllByTestId("activity-row"))
+      .map((row) => row.querySelector("button"))
+      .find((b) => b !== null);
+    fireEvent.click(rowButton!);
+
+    await waitFor(() => expect(shellVisible()).toBe(false));
+    expect(host.end).not.toHaveBeenCalled();
   });
 
   it("spawns the shell dock in the session's worktree_dir when set", async () => {
     const client = new FakeRouterClient();
-    const bridge = makeStubBridge();
-    render(
-      <ConversationTab
-        sessionId="session-files-clean"
-        routerClient={client}
-        ptyBridge={bridge}
-      />,
-    );
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-files-clean" routerClient={client} />);
 
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
@@ -385,7 +498,8 @@ describe("ConversationTab", () => {
     });
 
     await waitFor(() =>
-      expect(bridge.spawn).toHaveBeenCalledWith(
+      expect(host.open).toHaveBeenCalledWith(
+        "session-files-clean",
         expect.objectContaining({
           cwd: "/home/drew/.mads/worktrees/ses_x/tsk_retry-backoff",
         }),
@@ -405,10 +519,8 @@ describe("ConversationTab", () => {
       cwd: "/home/drew/repo/mads",
     });
     vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
-    const bridge = makeStubBridge();
-    render(
-      <ConversationTab sessionId="session-cwd" routerClient={client} ptyBridge={bridge} />,
-    );
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-cwd" routerClient={client} />);
 
     await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
     act(() => {
@@ -417,7 +529,8 @@ describe("ConversationTab", () => {
 
     // The agent's real cwd — never the workspace *name* ("mads") as if it were a path.
     await waitFor(() =>
-      expect(bridge.spawn).toHaveBeenCalledWith(
+      expect(host.open).toHaveBeenCalledWith(
+        "session-cwd",
         expect.objectContaining({ cwd: "/home/drew/repo/mads" }),
       ),
     );
@@ -433,22 +546,16 @@ describe("ConversationTab", () => {
       activity: "active",
     });
     vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
-    const bridge = makeStubBridge();
-    render(
-      <ConversationTab
-        sessionId="session-no-workspace"
-        routerClient={client}
-        ptyBridge={bridge}
-      />,
-    );
+    const { host } = installShellHost();
+    render(<ConversationTab sessionId="session-no-workspace" routerClient={client} />);
 
     await waitFor(() => expect(screen.getByText("No conversation yet")).toBeTruthy());
     act(() => {
       window.dispatchEvent(new Event("mads:toggle-shell"));
     });
 
-    await waitFor(() => expect(bridge.spawn).toHaveBeenCalled());
-    expect(vi.mocked(bridge.spawn).mock.calls[0][0]?.cwd).toBeUndefined();
+    await waitFor(() => expect(host.open).toHaveBeenCalled());
+    expect(host.open.mock.calls[0][1]?.cwd).toBeUndefined();
   });
 
   it("shows an error card when getSession rejects, and Retry refetches", async () => {

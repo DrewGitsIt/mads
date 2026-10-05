@@ -97,6 +97,34 @@ describe("TerminalView (renderer contract)", () => {
     expect(bridge.write).not.toHaveBeenCalled();
   });
 
+  it("Ctrl+` writes nothing to the pty and bubbles to the document (so it can hide the shell dock)", async () => {
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+    const onDocumentKey = vi.fn();
+    document.addEventListener("keydown", onDocumentKey);
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "`", code: "Backquote", keyCode: 192, ctrlKey: true });
+    document.removeEventListener("keydown", onDocumentKey);
+
+    expect(onDocumentKey).toHaveBeenCalledTimes(1);
+    expect(onDocumentKey.mock.calls[0][0].ctrlKey).toBe(true);
+    expect(bridge.write).not.toHaveBeenCalled();
+  });
+
+  it("reports a process exit through onExit after printing the exit line", async () => {
+    const { bridge, exitListeners } = makeStubBridge();
+    const onExit = vi.fn();
+    render(<TerminalView bridge={bridge} onExit={onExit} />);
+    await waitFor(() => expect(exitListeners.get("pty-1")?.size).toBe(1));
+
+    exitListeners.get("pty-1")!.forEach((l) => l(3));
+
+    expect(onExit).toHaveBeenCalledWith(3);
+  });
+
   it("lets other keys reach the pty as usual — only ⌘E/Ctrl+E is captured", async () => {
     const { bridge } = makeStubBridge();
     const onComposeOpen = vi.fn();

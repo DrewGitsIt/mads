@@ -6,7 +6,7 @@ import type { PtyBridge } from "./ptyBridge";
  * Adapts the session's real backend transport into the `PtyBridge` shape
  * `TerminalView` expects (HANDOFF.md), so the Conversation tab's Terminal
  * display mode drives the agent's *own* provider process instead of
- * Electron's `ptyBridge` (that prop is now `ShellDock`-only). Direct prior
+ * the dock's shell (ShellBridge). Direct prior
  * art: `pipeline/DrillIn/pipelineOutputBridge.ts`'s `PipelineOutputBridge`,
  * but read/write instead of read-only.
  */

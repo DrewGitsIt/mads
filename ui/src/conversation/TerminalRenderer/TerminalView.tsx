@@ -23,6 +23,10 @@ export interface TerminalViewProps {
    * when the compose overlay opens (ConversationTab renders TerminalComposer).
    */
   onComposeOpen?: () => void;
+  /** The pty's process ended (after "[process exited]" is printed). Only a real exit — never an unmount. */
+  onExit?: (exitCode: number) => void;
+  /** Lines of history xterm keeps; omitted means xterm's default. The dock sets it to match the shell host's mirror. */
+  scrollback?: number;
 }
 
 export interface TerminalViewHandle {
@@ -34,10 +38,15 @@ export interface TerminalViewHandle {
  * xterm.js mounted over a PtyBridge. Used both for the Conversation tab's
  * terminal display mode (bound to the agent's own PTY session) and
  * ShellDock's docked general-purpose shell (bound to a separate pty) — each
- * caller supplies its own bridge/pty id (HANDOFF.md §4).
+ * caller supplies its own bridge/pty id (HANDOFF.md §4). Unmounting calls
+ * bridge.kill, which a bridge whose process outlives the view (ShellBridge,
+ * SessionTerminalBridge) turns into a detach or a no-op.
  */
 export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
-  function TerminalView({ bridge, spawnOptions, className, convertEol = false, onComposeOpen }, ref) {
+  function TerminalView(
+    { bridge, spawnOptions, className, convertEol = false, onComposeOpen, onExit, scrollback },
+    ref,
+  ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const termRef = useRef<Terminal | null>(null);
     // Re-registering attachCustomKeyEventHandler on every onComposeOpen
@@ -45,6 +54,8 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     // ref lets the mount-only effect below always call the latest callback.
     const onComposeOpenRef = useRef(onComposeOpen);
     onComposeOpenRef.current = onComposeOpen;
+    const onExitRef = useRef(onExit);
+    onExitRef.current = onExit;
 
     // Both of these read `window.mads`, which preload sets up once before
     // the renderer ever mounts, so their identity is effectively static —
@@ -71,7 +82,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       const container = containerRef.current;
       if (!container) return;
 
-      const term = new Terminal({ convertEol });
+      const term = new Terminal({ convertEol, ...(scrollback !== undefined && { scrollback }) });
       termRef.current = term;
       const fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
@@ -122,6 +133,15 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       term.attachCustomKeyEventHandler((e) => {
         if (e.type !== "keydown") return true;
         const key = e.key.toLowerCase();
+
+        // Ctrl+` toggles the shell dock (App.tsx's document listener). xterm
+        // would consume it — sending a NUL byte and cancelling the event —
+        // so with focus inside a terminal the dock could never be hidden.
+        // Returning false hands it to xterm untouched: no byte reaches the
+        // pty and the event bubbles on to the document. Applies in the
+        // agent's Terminal mode too, where the chord toggles the same dock
+        // and a stray NUL would be noise.
+        if (e.ctrlKey && e.key === "`") return false;
 
         if ((e.metaKey || e.ctrlKey) && key === "e") {
           onComposeOpenRef.current?.();
@@ -194,8 +214,9 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           }
           ptyId = id;
           unsubData = bridge.onData(id, (data) => term.write(data));
-          unsubExit = bridge.onExit(id, () => {
+          unsubExit = bridge.onExit(id, (exitCode) => {
             term.write("\r\n[process exited]\r\n");
+            onExitRef.current?.(exitCode);
           });
         })
         .catch((err: unknown) => {

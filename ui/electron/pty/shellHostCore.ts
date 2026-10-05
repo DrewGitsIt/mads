@@ -35,7 +35,7 @@ export type ShellRequest =
   | { type: "resize"; shellId: string; cols: number; rows: number }
   | { type: "list" };
 
-/** Pushed to a window's port. `data`/`exit` only ever reach the attached window. */
+/** Pushed to a window's port; only ever reaches the attached window. */
 export type ShellEvent =
   | { event: "data"; shellId: string; data: string }
   | { event: "exit"; shellId: string; exitCode: number }
@@ -85,6 +85,13 @@ export interface ShellHostDeps {
   newId?: () => string;
   /** The screen mirror factory; defaults to a real @xterm/headless one. */
   createMirror?: CreateMirror;
+  /**
+   * Called with the current list whenever a shell is created, ended or exits.
+   * The glue relays it to main, which caches it for every window — windows
+   * never hear it over their ports, so asking "which shells exist" doesn't
+   * require connecting to (and forking) this host.
+   */
+  onShellsChanged?: (shells: ShellInfo[]) => void;
   /** Runs `fn` after `ms` and returns a canceller; defaults to setTimeout. */
   schedule?: (fn: () => void, ms: number) => () => void;
 }
@@ -264,6 +271,7 @@ export class ShellHostCore {
     };
     this.bySession.set(entry.sessionId, entry);
     this.byId.set(entry.shellId, entry);
+    this.broadcastShellsChanged();
 
     proc.onData((data) => {
       // The mirror sees every byte; the window only what arrives while it is attached.
@@ -286,6 +294,7 @@ export class ShellHostCore {
         this.sendToAttached(entry, { event: "exit", shellId: entry.shellId, exitCode });
       }
       this.remove(entry);
+      this.broadcastShellsChanged();
     });
     const previousExit = this.tombstones.get(request.sessionId);
     this.tombstones.delete(request.sessionId);
@@ -389,6 +398,7 @@ export class ShellHostCore {
     entry.heldExit = undefined;
     this.clearPending(entry);
     entry.proc.kill();
+    this.broadcastShellsChanged();
   }
 
   /** Ends every shell, e.g. when the host is shutting down. */
@@ -437,6 +447,11 @@ export class ShellHostCore {
     entry.cancelFlush?.();
     entry.cancelFlush = undefined;
     entry.pending = [];
+  }
+
+  /** A shell started, ended or exited (not attach/detach: those don't change what exists). */
+  private broadcastShellsChanged(): void {
+    this.deps.onShellsChanged?.(this.list());
   }
 
   private sendToAttached(entry: ShellEntry, event: ShellEvent): void {

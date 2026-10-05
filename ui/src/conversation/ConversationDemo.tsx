@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
-import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
+import type { ShellDockBridge } from "./ShellDock/shellBridge";
 import styles from "./ConversationDemo.module.css";
 
 const client = new FakeRouterClient();
@@ -12,7 +12,7 @@ const sessionIds = Object.keys(fixtureSessions);
  * mode and the Shell dock are visually reviewable outside Electron, without
  * pulling in node-pty (HANDOFF.md §8 — demo mount, not a real shell).
  */
-function makeDemoPtyBridge(): PtyBridge {
+function makeDemoPtyBridge(): ShellDockBridge {
   const dataListeners = new Map<string, Set<(data: string) => void>>();
   let nextId = 1;
 
@@ -39,6 +39,13 @@ function makeDemoPtyBridge(): PtyBridge {
       return () => set.delete(listener);
     },
     onExit() {
+      return () => {};
+    },
+    end() {},
+    onDetached() {
+      return () => {};
+    },
+    onHostExited() {
       return () => {};
     },
   };
@@ -68,7 +75,7 @@ export function ConversationDemo() {
           key={sessionId}
           sessionId={sessionId}
           routerClient={client}
-          ptyBridge={demoBridge}
+          shellBridge={demoBridge}
         />
       </div>
     </div>

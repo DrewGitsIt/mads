@@ -2,9 +2,11 @@
  * Renderer-side contract for a PTY transport. `TerminalView` and everything
  * under ui/src/conversation/ talk only to this interface — never to
  * node-pty or Electron IPC directly (see ui/src/conversation/HANDOFF.md
- * §5). Two call sites (the Conversation tab's terminal display mode and
- * ShellDock's general shell) each get their own PtyBridge instance / pty
- * id; never share one pty between them.
+ * §5). Three call sites implement it: the Conversation tab's terminal
+ * display mode (SessionTerminalBridge), pipeline drill-in
+ * (PipelineOutputBridge) and ShellDock's general shell (ShellBridge, over
+ * the shell host). Each gets its own instance / pty id; never share one pty
+ * between them.
  */
 export interface PtySpawnOptions {
   cwd?: string;
@@ -88,10 +90,17 @@ export interface ShellHostBridge {
   end(shellId: string): Promise<void>;
   write(shellId: string, data: string): void;
   resize(shellId: string, cols: number, rows: number): void;
+  /** Every live shell. Answered by main's cache, so it never forks the host (see useLiveShells). */
   list(): Promise<ShellInfo[]>;
   /** Each returns an unsubscribe function. */
   onData(shellId: string, listener: (data: string) => void): () => void;
   onExit(shellId: string, listener: (exitCode: number) => void): () => void;
+  /**
+   * The set of live shells changed (one started, ended or exited, or the host
+   * died): fires in every window with the new list. It comes through main,
+   * so listening never connects to the host.
+   */
+  onShellsChanged(listener: (shells: ShellInfo[]) => void): () => void;
   /** Another window opened this shell and took it over. */
   onDetached(shellId: string, listener: () => void): () => void;
   /** The shell host process died; every shell it held is gone. */
@@ -101,7 +110,6 @@ export interface ShellHostBridge {
 declare global {
   interface Window {
     mads?: {
-      pty?: PtyBridge;
       badge?: { setCount(count: number): void };
       dialog?: {
         pickDirectory(options?: { title?: string; defaultPath?: string }): Promise<string | null>;
@@ -111,16 +119,6 @@ declare global {
       shell?: ShellHostBridge;
     };
   }
-}
-
-/**
- * Reads the PtyBridge the preload script exposed on `window.mads.pty`.
- * Returns undefined outside Electron (e.g. the `npm run dev` renderer-only
- * server, or any vitest environment) — callers must handle that case, they
- * never get a node-pty import transitively through this module.
- */
-export function useElectronPtyBridge(): PtyBridge | undefined {
-  return typeof window !== "undefined" ? window.mads?.pty : undefined;
 }
 
 /**

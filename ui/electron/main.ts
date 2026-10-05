@@ -13,7 +13,8 @@ import {
   type WebContents,
 } from "electron";
 import { join } from "node:path";
-import { registerPtyHandlers } from "./pty/ptyHost";
+import { ShellRegistryCache } from "./pty/shellRegistryCache";
+import type { ShellInfo } from "./pty/shellHostCore";
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 // Same env var the renderer's own RouterClient reads (see ui/src/router/client.ts)
@@ -95,8 +96,6 @@ function registerAppHandlers(): void {
     clipboard.writeText(text);
   });
 
-  registerPtyHandlers(ipcMain);
-
   ipcMain.handle("badge:set-count", (_event, count: number) => {
     app.setBadgeCount(count);
   });
@@ -136,14 +135,29 @@ const shellClients = new Map<number, WebContents>();
 // webContents whose lifecycle we already watch (hook once, not per connect).
 const watchedForShells = new WeakSet<WebContents>();
 
+// Which shells exist, as last reported by the host. Windows read it from here
+// (shell:list) and hear changes as shell:changed, so asking never forks the
+// host: no host means no shells.
+const shellRegistry = new ShellRegistryCache((shells: ShellInfo[]) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) win.webContents.send("shell:changed", shells);
+  }
+});
+
 function ensureShellHost(): UtilityProcess {
   if (shellHost) return shellHost;
   const host = utilityProcess.fork(join(__dirname, "pty", "shellHost.js"), [], {
     serviceName: "mads-shell-host",
   });
   shellHost = host;
+  host.on("message", (message: { type?: string; shells?: ShellInfo[] }) => {
+    if (shellHost === host && message.type === "shells-changed" && message.shells) {
+      shellRegistry.set(message.shells);
+    }
+  });
   host.on("exit", () => {
     if (shellHost !== host) return;
+    shellRegistry.clear();
     // Its shells died with it. Tell every window that held a port so the dock
     // can say so; the next shell:connect forks a fresh host.
     shellHost = undefined;
@@ -175,6 +189,8 @@ function watchShellWindow(wc: WebContents): void {
 }
 
 function registerShellBroker(): void {
+  ipcMain.handle("shell:list", () => shellRegistry.get());
+
   ipcMain.handle("shell:connect", (event) => {
     const wc = event.sender;
     const host = ensureShellHost();

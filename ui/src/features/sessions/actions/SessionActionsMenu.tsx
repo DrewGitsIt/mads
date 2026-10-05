@@ -4,6 +4,18 @@ import type { SessionActivity } from "../../../router/types";
 import { closeState, resumeState, deleteState } from "./sessionLifecycle";
 import styles from "./SessionActionsMenu.module.css";
 
+/**
+ * Where the session's shell stands, for the toggle's label: no live shell
+ * ("none": the toggle starts one), alive but its dock hidden ("hidden"), or
+ * its dock showing ("visible").
+ */
+export type ShellMenuState = "none" | "hidden" | "visible";
+
+export function shellMenuState(dockOpen: boolean, shellAlive: boolean): ShellMenuState {
+  if (dockOpen) return "visible";
+  return shellAlive ? "hidden" : "none";
+}
+
 export interface SessionActionsMenuProps {
   sessionId: string;
   activity: SessionActivity;
@@ -19,6 +31,8 @@ export interface SessionActionsMenuProps {
    * lifecycle-only.
    */
   onToggleShell?: () => void;
+  /** Labels the shell item; omitted reads as no live shell. */
+  shellState?: ShellMenuState;
   onRestartAgent?: () => void;
   /** True while a bounce triggered from onRestartAgent is in flight — disables the item so a slow bounce can't be double-fired. */
   restartingAgent?: boolean;
@@ -34,6 +48,7 @@ export function SessionActionsMenu({
   onDeleteRequest,
   onUnlinkRequest,
   onToggleShell,
+  shellState = "none",
   onRestartAgent,
   restartingAgent,
   className,
@@ -59,7 +74,11 @@ export function SessionActionsMenu({
               {onToggleShell && (
                 <li>
                   <button type="button" className={styles.menuItem} onClick={onToggleShell}>
-                    Shell
+                    {shellState === "visible" ? "Hide shell" : shellState === "hidden" ? "Show shell" : "Open shell"}
+                    {shellState === "hidden" && (
+                      // A hidden shell is still running; the dot is the reminder.
+                      <span className={styles.liveDot} role="img" aria-label="shell is running" />
+                    )}
                   </button>
                 </li>
               )}

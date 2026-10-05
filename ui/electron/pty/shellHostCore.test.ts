@@ -87,6 +87,9 @@ async function screenText(data: string, cols = 80, rows = 24): Promise<string> {
   return lines.join("\n");
 }
 
+// What the host reported to main via onShellsChanged, one entry per report.
+let reported: string[][];
+
 function connectWindow(windowId: number): ShellEvent[] {
   const events: ShellEvent[] = [];
   core.connect(windowId, (e) => events.push(e));
@@ -94,6 +97,7 @@ function connectWindow(windowId: number): ShellEvent[] {
 }
 
 beforeEach(() => {
+  reported = [];
   spawned = [];
   ids = 0;
   timers = [];
@@ -112,6 +116,7 @@ beforeEach(() => {
     now: () => 4242,
     newId: () => `shell-${++ids}`,
     createMirror: hookedMirror,
+    onShellsChanged: (shells) => reported.push(shells.map((x) => x.sessionId)),
     schedule: (fn, ms) => {
       const timer = { fn, ms, live: true };
       timers.push(timer);
@@ -250,6 +255,43 @@ describe("ShellHostCore", () => {
     expect(events).toEqual([{ event: "exit", shellId, exitCode: 7 }]);
     expect(core.list()).toEqual([]);
     expect((await open(1, "ses_a")).created).toBe(true);
+  });
+
+  it("reports the current list to main when a shell is created, ended or exits", async () => {
+    connectWindow(1);
+
+    const { shellId } = await open(1, "ses_a");
+    expect(reported).toEqual([["ses_a"]]);
+
+    // Re-open and detach change no shell's existence.
+    await open(1, "ses_a");
+    await core.handle(1, { type: "detach", shellId });
+    expect(reported).toHaveLength(1);
+
+    await open(1, "ses_b");
+    expect(reported.at(-1)).toEqual(["ses_a", "ses_b"]);
+
+    await core.handle(1, { type: "end", shellId });
+    expect(reported.at(-1)).toEqual(["ses_b"]);
+
+    spawned[1].emitExit(0);
+    expect(reported.at(-1)).toEqual([]);
+    expect(reported).toHaveLength(4);
+  });
+
+  it("an exit that nobody was watching is reported too", async () => {
+    connectWindow(1);
+    const { shellId } = await open(1, "ses_a");
+    await core.handle(1, { type: "detach", shellId });
+    spawned[0].emitExit(0);
+    expect(reported.at(-1)).toEqual([]);
+  });
+
+  it("sends nothing over window ports for a change in the shell set", async () => {
+    const other = connectWindow(2);
+    connectWindow(1);
+    await open(1, "ses_a");
+    expect(other).toEqual([]);
   });
 
   it("exit of a detached shell removes it silently", async () => {

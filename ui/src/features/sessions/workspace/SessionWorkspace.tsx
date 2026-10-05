@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Toast } from "../../../components/Toast/Toast";
-import type { PtyBridge } from "../../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../../pipeline/client/pipelineClient";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
@@ -16,8 +15,10 @@ import {
   type OpenTaskBreakdown,
   type SessionAgentState,
 } from "../rail/railGroups";
-import { SessionActionsMenu } from "../actions/SessionActionsMenu";
+import { SessionActionsMenu, shellMenuState } from "../actions/SessionActionsMenu";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
+import { useShellDockState } from "../../../conversation/ShellDock/dockState";
+import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
@@ -28,7 +29,6 @@ export interface SessionWorkspaceProps {
   sessionId: string;
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
-  ptyBridge?: PtyBridge;
   /** This session's open work, computed once by the caller (SessionsSurface already runs useOpenTaskCounts) — not refetched here. Bucketed, not a bare count, because the delete dialog names the buckets. */
   openTaskBreakdown?: OpenTaskBreakdown;
   /** This session's live agent state (useSessionAgentState) — only the delete dialog reads it, and only to say what the turn in flight is doing. */
@@ -54,7 +54,6 @@ export function SessionWorkspace({
   sessionId,
   routerClient,
   pipelineClient,
-  ptyBridge,
   openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
   agentState,
   initialTab,
@@ -70,6 +69,9 @@ export function SessionWorkspace({
     () => new Set([initialTab ?? "conversation"]),
   );
   const [menuOpen, setMenuOpen] = useState(false);
+  // The shell menu item reads "Open"/"Show"/"Hide" from these two: the host knows whether a shell lives, the dock store whether it is showing.
+  const shellDock = useShellDockState(sessionId);
+  const liveShells = useLiveShells();
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [running, setRunning] = useState(false);
@@ -266,6 +268,7 @@ export function SessionWorkspace({
               className={styles.menu}
               sessionId={sessionId}
               activity={session.activity}
+              shellState={shellMenuState(shellDock.open, liveShells.some((s) => s.sessionId === sessionId))}
               onToggleShell={() => {
                 setMenuOpen(false);
                 // Shell lives in the (possibly hidden) Conversation tab — surface
@@ -314,7 +317,6 @@ export function SessionWorkspace({
             sessionId={sessionId}
             routerClient={routerClient}
             pipelineClient={pipelineClient}
-            ptyBridge={ptyBridge}
             provisioning={provisioning}
             onProvisioningDone={onProvisioningDone}
             pendingFirstMessage={pendingFirstMessage}

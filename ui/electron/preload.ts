@@ -1,46 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-interface PtySpawnOptions {
-  cwd?: string;
-  cols?: number;
-  rows?: number;
-  shell?: string;
-}
-
-/**
- * Renderer-facing pty namespace — mirrors the PtyBridge interface in
- * ui/src/conversation/TerminalRenderer/ptyBridge.ts. Wraps ipcRenderer so no
- * raw ipcRenderer/node-pty ever crosses into the renderer (contextIsolation
- * stays on in main.ts).
- */
-const pty = {
-  spawn: (options?: PtySpawnOptions): Promise<string> =>
-    ipcRenderer.invoke("pty:spawn", options),
-  write: (id: string, data: string): void => {
-    void ipcRenderer.invoke("pty:write", { id, data });
-  },
-  resize: (id: string, cols: number, rows: number): void => {
-    void ipcRenderer.invoke("pty:resize", { id, cols, rows });
-  },
-  kill: (id: string): void => {
-    void ipcRenderer.invoke("pty:kill", { id });
-  },
-  onData: (id: string, listener: (data: string) => void): (() => void) => {
-    const handler = (_event: unknown, payload: { id: string; data: string }) => {
-      if (payload.id === id) listener(payload.data);
-    };
-    ipcRenderer.on("pty:data", handler);
-    return () => ipcRenderer.removeListener("pty:data", handler);
-  },
-  onExit: (id: string, listener: (exitCode: number) => void): (() => void) => {
-    const handler = (_event: unknown, payload: { id: string; exitCode: number }) => {
-      if (payload.id === id) listener(payload.exitCode);
-    };
-    ipcRenderer.on("pty:exit", handler);
-    return () => ipcRenderer.removeListener("pty:exit", handler);
-  },
-};
-
 /**
  * Renderer-facing badge namespace — mirrors the BadgeBridge interface in
  * ui/src/features/command-palette/badgeBridge.ts.
@@ -227,17 +186,24 @@ const shellBridge = {
   resize: (shellId: string, cols: number, rows: number): void => {
     shellSend({ type: "resize", shellId, cols, rows });
   },
-  list: (): Promise<ShellInfo[]> => shellRequest({ type: "list" }),
+  // Through main, not the port: main caches the host's list, so asking never
+  // connects to (and so never forks) the host for a window that has no shell.
+  list: (): Promise<ShellInfo[]> => ipcRenderer.invoke("shell:list"),
   onData: (shellId: string, listener: (data: string) => void): (() => void) =>
     shellSubscribe(shellListeners.data, shellId, listener),
   onExit: (shellId: string, listener: (exitCode: number) => void): (() => void) =>
     shellSubscribe(shellListeners.exit, shellId, listener),
   onDetached: (shellId: string, listener: () => void): (() => void) =>
     shellSubscribe(shellListeners.detached, shellId, listener),
+  onShellsChanged: (listener: (shells: ShellInfo[]) => void): (() => void) => {
+    const handler = (_event: unknown, shells: ShellInfo[]) => listener(shells);
+    ipcRenderer.on("shell:changed", handler);
+    return () => ipcRenderer.removeListener("shell:changed", handler);
+  },
   onHostExited: (listener: () => void): (() => void) => {
     shellListeners.hostExited.add(listener);
     return () => shellListeners.hostExited.delete(listener);
   },
 };
 
-contextBridge.exposeInMainWorld("mads", { pty, badge, dialog, contextMenu, clipboard, shell: shellBridge });
+contextBridge.exposeInMainWorld("mads", { badge, dialog, contextMenu, clipboard, shell: shellBridge });

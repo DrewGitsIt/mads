@@ -21,7 +21,12 @@ import { ShellHostCore, type ShellRequest } from "./shellHostCore";
  * dies with the app.
  */
 
-const core = new ShellHostCore({ loadPty: loadNodePty });
+// Which shells exist goes to main (not to window ports) so windows can learn
+// it without connecting to this process — see shellRegistryCache.ts.
+const core = new ShellHostCore({
+  loadPty: loadNodePty,
+  onShellsChanged: (shells) => process.parentPort?.postMessage({ type: "shells-changed", shells }),
+});
 const ports = new Map<number, MessagePortMain>();
 
 function dropPort(windowId: number): void {

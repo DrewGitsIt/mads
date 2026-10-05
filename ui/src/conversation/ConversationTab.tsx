@@ -28,7 +28,6 @@ import type {
 import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
-import type { PtyBridge } from "./TerminalRenderer/ptyBridge";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
 import { ConversationHeader } from "./Header/ConversationHeader";
 import { useCheckoutBranch } from "./Header/useCheckoutBranch";
@@ -61,6 +60,8 @@ import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { ShellDock } from "./ShellDock/ShellDock";
+import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
+import { getShellDockState, setShellDockState, useShellDockState } from "./ShellDock/dockState";
 import { CommitDialog } from "./Worktree/CommitDialog";
 import { useCommitSettings } from "./Worktree/useCommitSettings";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
@@ -93,13 +94,13 @@ export interface ConversationTabProps {
   sessionId: string;
   routerClient: RouterClient;
   /**
-   * Undefined outside Electron (e.g. `npm run dev`'s renderer-only server,
-   * or any vitest environment) — terminal mode and the Shell dock both
-   * degrade to a plain notice rather than importing node-pty (HANDOFF.md
-   * §5). The same bridge is used for both; each spawns its own pty id, so
-   * they never actually share a pty.
+   * The Shell dock's transport. Defaults to a ShellBridge over the Electron
+   * shell host (window.mads.shell) for this session; undefined outside
+   * Electron (e.g. `npm run dev`'s renderer-only server), where the dock
+   * degrades to a plain notice rather than importing node-pty (HANDOFF.md §5).
+   * Passed explicitly only by the in-memory demo.
    */
-  ptyBridge?: PtyBridge;
+  shellBridge?: ShellDockBridge;
   /** Shows the ProvisioningStrip until the session goes active — set for a session just created from the Launchpad. */
   provisioning?: boolean;
   onProvisioningDone?: () => void;
@@ -149,7 +150,7 @@ type TurnPhase = "idle" | "live";
 export function ConversationTab({
   sessionId,
   routerClient,
-  ptyBridge,
+  shellBridge: shellBridgeProp,
   provisioning,
   onProvisioningDone,
   pendingFirstMessage,
@@ -162,7 +163,15 @@ export function ConversationTab({
   const [loadError, setLoadError] = useState(false);
   const [retryToken, setRetryToken] = useState(0);
   const [transport, setTransport] = useState<TransportState>({ status: "idle", mode: "chat" });
-  const [shellOpen, setShellOpen] = useState(false);
+  // Per-session and outside React state, so hiding the dock and switching
+  // sessions (which remounts this tab) don't lose it. Hide is not end: the
+  // shell lives in the shell host, this only says whether it is showing.
+  const { open: shellOpen, height: shellHeight } = useShellDockState(sessionId);
+  const shellHost = typeof window !== "undefined" ? window.mads?.shell : undefined;
+  const shellBridge = useMemo(
+    () => shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined),
+    [shellBridgeProp, shellHost, sessionId],
+  );
   const [terminalComposerOpen, setTerminalComposerOpen] = useState(false);
   const terminalViewRef = useRef<TerminalViewHandle>(null);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
@@ -295,17 +304,18 @@ export function ConversationTab({
   );
 
   useEffect(() => {
-    const handler = () =>
-      setShellOpen((x) => {
-        const next = !x;
-        // Two bottom surfaces never stack: opening the Shell dock closes
-        // the activity dock (and vice versa — see the open handlers below).
-        if (next) setDockTarget(null);
-        return next;
-      });
+    // Ctrl+` hides or shows; it never ends the shell. Showing a dock with no
+    // shell behind it is what starts one (TerminalView's mount opens it).
+    const handler = () => {
+      const next = !getShellDockState(sessionId).open;
+      // Two bottom surfaces never stack: opening the Shell dock closes
+      // the activity dock (and vice versa — see the open handlers below).
+      if (next) setDockTarget(null);
+      setShellDockState(sessionId, { open: next });
+    };
     window.addEventListener(SHELL_TOGGLE_EVENT, handler);
     return () => window.removeEventListener(SHELL_TOGGLE_EVENT, handler);
-  }, []);
+  }, [sessionId]);
 
   // A successful "Conversation compacted." is a transient confirmation, not
   // standing state — auto-dismiss it (it used to sit until session switch).
@@ -1190,11 +1200,11 @@ export function ConversationTab({
       return { model, op };
     });
   const openTool = (tool: ToolUse) => {
-    setShellOpen(false); // never both bottom surfaces at once
+    setShellDockState(sessionId, { open: false }); // never both bottom surfaces at once (hides; the shell keeps running)
     setDockTarget({ type: "tool", toolId: tool.id, tool });
   };
   const openSubagent = (parentToolUseId: string, title: string, subtype?: string) => {
-    setShellOpen(false);
+    setShellDockState(sessionId, { open: false });
     setDockTarget({ type: "subagent", parentToolUseId, title, subtype });
   };
   // Resolve the open dock target against the freshest data every render, so
@@ -1481,8 +1491,19 @@ export function ConversationTab({
         </div>
 
         {shellOpen &&
-          (ptyBridge ? (
-            <ShellDock bridge={ptyBridge} cwd={session.cwd ?? session.worktree_dir} />
+          (shellBridge ? (
+            <ShellDock
+              bridge={shellBridge}
+              cwd={session.cwd ?? session.worktree_dir}
+              height={shellHeight}
+              onHeightChange={(height) => setShellDockState(sessionId, { height })}
+              onHide={() => setShellDockState(sessionId, { open: false })}
+              onEnd={() => {
+                // The busy-confirmation dialog (docs/SHELL-DOCK-DESIGN.md D4) is a later step.
+                shellBridge.end();
+                setShellDockState(sessionId, { open: false });
+              }}
+            />
           ) : (
             <div className={styles.ptyUnavailable}>
               Shell requires the Electron shell.

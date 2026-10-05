@@ -58,3 +58,14 @@
 .idRow:hover {
   color: var(--text);
 }
+
+/* A hidden shell is still running: a small dot after its "Show shell" label. */
+.liveDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: var(--space-2);
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}

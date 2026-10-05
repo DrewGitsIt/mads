@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useBusHealth } from "../../router/useBusHealth";
-import { useElectronPtyBridge } from "../../conversation/TerminalRenderer/ptyBridge";
 import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { useAgents } from "../../library/agents/useAgents";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
@@ -65,7 +64,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
   const [pendingFirstMessage, setPendingFirstMessage] =
     useState<{ sessionId: string; text: string }>();
-  const ptyBridge = useElectronPtyBridge();
 
   useEffect(() => {
     if (jumpToSessionId) {
@@ -159,7 +157,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             sessionId={selectedId}
             routerClient={router}
             pipelineClient={pipelineClient}
-            ptyBridge={ptyBridge}
             openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
             agentState={agentStates[selectedId]}
             initialTab={initialTab}

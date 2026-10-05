@@ -1,3 +1,75 @@
 .dock {
   border-top: 1px solid var(--line-soft);
 }
+
+/* ResizablePanel pads its content; the dock fills it edge to edge instead. */
+.dock > :last-child {
+  padding: 0;
+  overflow: hidden;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  padding: var(--space-1) var(--space-2);
+  color: var(--text3);
+  font: var(--fs-body) var(--sans);
+}
+
+.title {
+  flex: 1;
+}
+
+.headerButton {
+  border: none;
+  background: none;
+  color: var(--text3);
+  cursor: pointer;
+  line-height: 1;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--r-sm);
+}
+.headerButton:hover {
+  color: var(--text);
+  background: var(--bg2);
+}
+
+/* The terminal takes what the header and notice leave. */
+.terminal {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text3);
+  font: var(--fs-body) var(--mono);
+  border-top: 1px solid var(--line-soft);
+}
+
+.noticeButton {
+  border: 1px solid var(--line-soft);
+  background: var(--bg2);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+  font: var(--fs-body) var(--sans);
+}
+.noticeButton:hover {
+  border-color: var(--accent);
+}

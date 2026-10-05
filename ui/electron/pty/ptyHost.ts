@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import os from "node:os";
-import type { IpcMain, WebContents } from "electron";
-import { shellEnv } from "./shellEnv";
 
 /**
- * PTY lifecycle, shared by the in-process pty:* handlers and the shell host.
+ * node-pty loading and spawn helpers for the shell host (shellHostCore.ts).
  * node-pty is a native addon compiled against a specific Node ABI —
  * Electron's main process runs its own bundled Node, distinct from whatever
  * Node runs vitest. This file is the ONLY place that
@@ -50,13 +47,6 @@ export function loadNodePty(): Promise<NodePtyModule | undefined> {
   return nodePtyPromise;
 }
 
-export interface PtySpawnOptions {
-  cwd?: string;
-  cols?: number;
-  rows?: number;
-  shell?: string;
-}
-
 export function defaultShell(): string {
   if (process.platform === "win32") return "powershell.exe";
   // Prefer $SHELL (set when the app is launched from a terminal), but fall back
@@ -76,85 +66,4 @@ export function defaultShell(): string {
 export function resolveCwd(cwd: string | undefined): string | undefined {
   if (cwd && isAbsolute(cwd)) return cwd;
   return process.env.HOME;
-}
-
-/**
- * Registers the pty:* IPC handlers the preload/renderer talk to. Call it
- * ONCE at app startup (ipcMain.handle throws on a duplicate channel, and
- * macOS re-runs createWindow from "activate"), so nothing here may capture a
- * window: each pty remembers the webContents that spawned it (event.sender)
- * and streams data back to that one. The host tracks its own set of live
- * ptys, keyed by a generated id — the renderer never sees anything node-pty
- * specific.
- *
- * This in-process path is what ShellDock uses until it moves to the shell
- * host (see shellHost.ts and docs/SHELL-DOCK-DESIGN.md).
- */
-export function registerPtyHandlers(ipcMain: IpcMain): void {
-  const ptys = new Map<string, PtyProcess>();
-  // One "destroyed" hook per webContents, however many ptys it spawns.
-  const hooked = new WeakSet<WebContents>();
-  const ownedBy = new Map<WebContents, Set<string>>();
-
-  const send = (target: WebContents, channel: string, payload: unknown) => {
-    if (!target.isDestroyed()) target.send(channel, payload);
-  };
-
-  ipcMain.handle("pty:spawn", async (event, options?: PtySpawnOptions) => {
-    const nodePty = await loadNodePty();
-    if (!nodePty) {
-      throw new Error("node-pty is unavailable on this machine");
-    }
-    const sender = event.sender;
-    const shell = options?.shell ?? defaultShell();
-    const proc = nodePty.spawn(shell, [], {
-      name: "xterm-256color",
-      cols: options?.cols ?? 80,
-      rows: options?.rows ?? 24,
-      cwd: resolveCwd(options?.cwd),
-      env: shellEnv(process.env),
-    });
-    const id = randomUUID();
-    ptys.set(id, proc);
-    let owned = ownedBy.get(sender);
-    if (!owned) ownedBy.set(sender, (owned = new Set()));
-    owned.add(id);
-    if (!hooked.has(sender)) {
-      hooked.add(sender);
-      // A closed window must not leave its shells running.
-      sender.once("destroyed", () => {
-        for (const ownedId of ownedBy.get(sender) ?? []) {
-          ptys.get(ownedId)?.kill();
-          ptys.delete(ownedId);
-        }
-        ownedBy.delete(sender);
-      });
-    }
-    proc.onData((data) => {
-      send(sender, "pty:data", { id, data });
-    });
-    proc.onExit(({ exitCode }) => {
-      send(sender, "pty:exit", { id, exitCode });
-      ptys.delete(id);
-      ownedBy.get(sender)?.delete(id);
-    });
-    return id;
-  });
-
-  ipcMain.handle("pty:write", (_event, { id, data }: { id: string; data: string }) => {
-    ptys.get(id)?.write(data);
-  });
-
-  ipcMain.handle(
-    "pty:resize",
-    (_event, { id, cols, rows }: { id: string; cols: number; rows: number }) => {
-      ptys.get(id)?.resize(cols, rows);
-    },
-  );
-
-  ipcMain.handle("pty:kill", (_event, { id }: { id: string }) => {
-    ptys.get(id)?.kill();
-    ptys.delete(id);
-    for (const owned of ownedBy.values()) owned.delete(id);
-  });
 }

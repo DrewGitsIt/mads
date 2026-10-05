@@ -4,6 +4,8 @@ import { SessionWorkspace, openTasksTitle } from "./SessionWorkspace";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { makeFakeShellHost } from "../../../conversation/ShellDock/fakeShellHost";
+import { resetShellDockCache } from "../../../conversation/ShellDock/dockState";
 
 const SESSION_ID = "session-active";
 
@@ -27,6 +29,9 @@ describe("SessionWorkspace", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    delete (window as { mads?: unknown }).mads;
+    window.localStorage.clear();
+    resetShellDockCache();
   });
 
   it("defaults to the Conversation tab, lazy-mounting the other three", async () => {
@@ -160,7 +165,7 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    expect(screen.getByRole("button", { name: "Shell" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open shell" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Restart Agent" }));
     expect(bounce).toHaveBeenCalledWith(SESSION_ID);
@@ -259,11 +264,25 @@ describe("SessionWorkspace", () => {
       await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
       fireEvent.click(screen.getByLabelText("Workspace actions"));
-      fireEvent.click(screen.getByRole("button", { name: "Shell" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open shell" }));
       expect(onToggle).toHaveBeenCalled();
     } finally {
       window.removeEventListener("mads:toggle-shell", onToggle);
     }
+  });
+
+  it("shell menu item says Show shell (with a dot) for a live shell whose dock is hidden", async () => {
+    const fake = makeFakeShellHost();
+    fake.setShells([
+      { sessionId: SESSION_ID, shellId: "s1", cwd: "/", pid: 1, startedAt: 0, attached: false },
+    ]);
+    window.mads = { shell: fake.host };
+    renderWorkspace();
+    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+    fireEvent.click(screen.getByLabelText("Workspace actions"));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: /Show shell/ })).toBeTruthy());
   });
 
   it("kebab always shows all three actions; while active only Resume is disabled, since deleting now closes the session itself", async () => {

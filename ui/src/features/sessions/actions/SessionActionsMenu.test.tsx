@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { SessionActionsMenu } from "./SessionActionsMenu";
+import { SessionActionsMenu, shellMenuState } from "./SessionActionsMenu";
 
 function renderMenu(props: Partial<Parameters<typeof SessionActionsMenu>[0]> = {}) {
   return render(
@@ -49,5 +49,31 @@ describe("SessionActionsMenu", () => {
     expect(onClose).not.toHaveBeenCalled();
     // The menu itself stays mounted — no unmount/close side effect from the copy.
     expect(screen.getByRole("button", { name: /^Resume/ })).toBeTruthy();
+  });
+
+  describe("shell item", () => {
+    it("reads Open shell when the session has no live shell", () => {
+      renderMenu({ onToggleShell: vi.fn(), shellState: "none" });
+      expect(screen.getByRole("button", { name: "Open shell" })).toBeTruthy();
+      expect(screen.queryByRole("img", { name: "shell is running" })).toBeNull();
+    });
+
+    it("reads Show shell with a dot when the shell lives but its dock is hidden", () => {
+      renderMenu({ onToggleShell: vi.fn(), shellState: "hidden" });
+      const item = screen.getByRole("button", { name: /Show shell/ });
+      expect(item.querySelector('[role="img"]')).toBeTruthy();
+    });
+
+    it("reads Hide shell when the dock is showing", () => {
+      renderMenu({ onToggleShell: vi.fn(), shellState: "visible" });
+      expect(screen.getByRole("button", { name: "Hide shell" })).toBeTruthy();
+    });
+
+    it("derives the state from dock visibility and shell liveness", () => {
+      expect(shellMenuState(true, true)).toBe("visible");
+      expect(shellMenuState(true, false)).toBe("visible"); // an exited shell's dock is still showing
+      expect(shellMenuState(false, true)).toBe("hidden");
+      expect(shellMenuState(false, false)).toBe("none");
+    });
   });
 });
