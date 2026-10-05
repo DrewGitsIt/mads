@@ -13,6 +13,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -50,8 +51,12 @@ type Options struct {
 	SleepInhibitor inhibit.Locker
 	Isolated       bool
 	WorktreeRoot   string
-	DataURL        string
-	MadsHome       string
+	// Session maps onto engine.Config.Session: set when Cwd is an isolated
+	// session's own worktree, so task merges go into the session branch
+	// under the session's lock (docs/SESSION-WORKTREES-DESIGN.md D8).
+	Session  *sessionwt.TaskMerge
+	DataURL  string
+	MadsHome string
 	// FastModel powers agent:auto stages' generation fallback when no
 	// candidate agent survives selection; nil disables generation, and such
 	// a stage blocks with a clear reason instead (see engine.Config.FastModel).
@@ -151,6 +156,7 @@ func Run(ctx context.Context, opts Options) (*engine.Summary, error) {
 		SleepInhibitor:      opts.SleepInhibitor,
 		Isolated:            opts.Isolated,
 		WorktreeRoot:        opts.WorktreeRoot,
+		Session:             opts.Session,
 		DataURL:             opts.DataURL,
 		MadsHome:            opts.MadsHome,
 		FastModel:           opts.FastModel,

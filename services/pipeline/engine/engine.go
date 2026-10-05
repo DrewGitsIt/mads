@@ -28,6 +28,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/inhibit"
 	"github.com/drewkidwell/mads/pkg/procid"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -138,6 +139,16 @@ type Config struct {
 	// clear reason instead of generating.
 	FastModel *fastmodel.Runner
 
+	// Session, when set, says Cwd is an isolated session's own worktree
+	// (docs/SESSION-WORKTREES-DESIGN.md D8): tasks branch from the session
+	// branch and merge back into it, under the session's lock rather than
+	// the repo's, after a pre-merge check that saves the agent's
+	// overlapping edits (waiting for it to go idle first, up to the merge
+	// stage's timeout). Counts on the session record are refreshed after
+	// each merge. Nil (the default) merges into Cwd as the user's own
+	// checkout, under the repo lock. Used only with Isolated.
+	Session *sessionwt.TaskMerge
+
 	// MergirafPath is the path to the mergiraf binary (mergiraf.org),
 	// registered as the land queue's git merge driver so adjacent-edit
 	// conflicts between parallel task branches resolve automatically while
@@ -246,8 +257,12 @@ func Run(ctx context.Context, cfg Config) (*Summary, error) {
 		} else {
 			log.Printf("engine: land queue merge driver: git (mergiraf not found)")
 		}
+		repo := cfg.Cwd
+		if cfg.Session != nil {
+			repo = cfg.Session.Target.Primary
+		}
 		e.wt = &worktrees{
-			primary: cfg.Cwd, root: cfg.WorktreeRoot,
+			primary: cfg.Cwd, repo: repo, root: cfg.WorktreeRoot,
 			dataURL: cfg.DataURL, sessionID: cfg.SessionID,
 			data: cfg.Data, mergirafPath: mergirafPath,
 		}
@@ -656,9 +671,17 @@ func (e *engine) runTask(ctx context.Context, task contracts.Task) contracts.Tas
 			// acquireWorkspaceLock extends that across processes, so a CLI
 			// `mads run` and a Router-spawned pipeline child on the same
 			// workspace never interleave a land attempt either.
+			//
+			// A session folder target (Config.Session) is the exception:
+			// nothing here writes the user's checkout, so the repo lock
+			// isn't taken at all, and landAttempt holds the session lock
+			// only around the write itself (mergeIntoSession) — never
+			// across the gate, which would stall the user's Commit for
+			// as long as the gate runs.
 			release := e.wt.land.acquire()
-			wsRelease, wsErr := acquireWorkspaceLock(ctx, e.wt)
-			if wsErr != nil {
+			if e.cfg.Session != nil {
+				err = e.landAttempt(ctx, st, stages, &run, task)
+			} else if wsRelease, wsErr := acquireWorkspaceLock(ctx, e.wt); wsErr != nil {
 				err = wsErr
 			} else {
 				err = e.landAttempt(ctx, st, stages, &run, task)
@@ -1068,13 +1091,72 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 	if e.wt.mergirafPath != "" {
 		mergeDriver = mergirafDriverName
 	}
+	target := "trunk"
+	var into *sessionMerge
+	if e.cfg.Session != nil {
+		target = e.cfg.Session.Target.Branch
+		into = &sessionMerge{deadline: time.Now().Add(e.stageTimeout(st))}
+	}
 	e.event(ctx, contracts.MergeAttempted, task.ID, map[string]any{
-		"branch": run.branch, "target_branch": "trunk", "fork_sha": forkSHA,
+		"branch": run.branch, "target_branch": target, "fork_sha": forkSHA,
 		"merge_driver": mergeDriver,
 	})
 
 	err := e.wt.commitStray(ctx, run.dir, task)
 	var trunkHead string
+	// Each round is rebase -> gate -> merge. Merging into the user's
+	// checkout takes one round: the repo lock has been held throughout, so
+	// trunk can't have moved. A session folder is only locked for the merge
+	// itself (mergeIntoSession), so when its branch moved after the gate —
+	// a Commit, or the safety commit of the agent's overlapping edits — the
+	// round starts over and the task branch absorbs the move in its own
+	// worktree, where a conflict is resolvable, rather than in the folder
+	// the agent works in.
+	for round := 0; err == nil; round++ {
+		trunkHead, err = e.rebaseAndGate(ctx, stages, run, task, forkSHA)
+		if err != nil {
+			break
+		}
+		if into == nil {
+			err = e.wt.merge(ctx, st.Command, task, run.branch, trunkHead)
+			break
+		}
+		var again bool
+		again, err = e.mergeIntoSession(ctx, st, task, run, trunkHead, round >= maxSessionMergeRounds-1, into)
+		if !again {
+			break
+		}
+	}
+	if err != nil {
+		var ce *ConflictError
+		if errors.As(err, &ce) {
+			e.event(ctx, contracts.MergeConflicted, task.ID, map[string]any{
+				"branch": run.branch, "target_branch": target, "files": ce.Files,
+				"hunks": ce.Hunks, "landed_task_ids": ce.LandedTaskIDs,
+				"fork_sha": forkSHA, "trunk_head": trunkHead,
+			})
+		}
+		return err
+	}
+	run.dir = e.cfg.Cwd // post-merge stages run on the merged tree
+	run.merged = true
+	done := map[string]any{
+		"branch": run.branch, "target_branch": target, "fork_sha": forkSHA, "trunk_head": trunkHead,
+	}
+	if into != nil {
+		into.annotate(done)
+		if rerr := e.cfg.Session.Refresh(ctx); rerr != nil {
+			log.Printf("engine: refresh session counts after merging %s: %v", task.ID, rerr)
+		}
+	}
+	e.event(ctx, contracts.MergeCompleted, task.ID, done)
+	return nil
+}
+
+// rebaseAndGate is one land round's rebase -> gate, retried on a triaged
+// flake (see landAttempt): it brings trunk into the task branch and runs
+// the gate against the result, returning the trunk HEAD it gated against.
+func (e *engine) rebaseAndGate(ctx context.Context, stages []template.Stage, run *taskRun, task contracts.Task, forkSHA string) (trunkHead string, err error) {
 	for attempt := 0; err == nil; attempt++ {
 		var rebased bool
 		rebased, trunkHead, err = e.wt.rebaseBeforeMerge(ctx, run.dir, task)
@@ -1165,26 +1247,7 @@ func (e *engine) landAttempt(ctx context.Context, st template.Stage, stages []te
 		})
 		err = &gateFailure{err: gfErr}
 	}
-	if err == nil {
-		err = e.wt.merge(ctx, st.Command, task, run.branch, trunkHead)
-	}
-	if err != nil {
-		var ce *ConflictError
-		if errors.As(err, &ce) {
-			e.event(ctx, contracts.MergeConflicted, task.ID, map[string]any{
-				"branch": run.branch, "target_branch": "trunk", "files": ce.Files,
-				"hunks": ce.Hunks, "landed_task_ids": ce.LandedTaskIDs,
-				"fork_sha": forkSHA, "trunk_head": trunkHead,
-			})
-		}
-		return err
-	}
-	run.dir = e.cfg.Cwd // post-merge stages run on the merged tree
-	run.merged = true
-	e.event(ctx, contracts.MergeCompleted, task.ID, map[string]any{
-		"branch": run.branch, "target_branch": "trunk", "fork_sha": forkSHA, "trunk_head": trunkHead,
-	})
-	return nil
+	return trunkHead, err
 }
 
 // stageTimeoutPoll is how often the wall-clock timeout watchdog checks

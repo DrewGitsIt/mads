@@ -19,7 +19,8 @@ import (
 // attempt (rebase → gate → merge, spec's "Not Rocket Science Rule") at a
 // time back into the primary, cleanup after a clean merge.
 type worktrees struct {
-	primary   string // the workspace repo
+	primary   string // where task branches fork from and merge into: the workspace repo, or an isolated session's folder
+	repo      string // the user's own checkout, where repo-wide setup (hook, merge driver) is written; == primary unless merging into a session folder
 	root      string // where task worktrees live
 	dataURL   string
 	sessionID string
@@ -94,7 +95,11 @@ func (w *worktrees) ensureSetup(ctx context.Context) error {
 			return
 		}
 		defer release()
-		if w.setupEr = githook.EnsureInstalled(ctx, w.primary); w.setupEr != nil {
+		// The main checkout, not primary: githook resolves the hooks
+		// directory by joining dir and --git-common-dir, which is absolute
+		// (and so joins to nonsense) when dir is a linked worktree such as
+		// a session folder.
+		if w.setupEr = githook.EnsureInstalled(ctx, w.setupDir()); w.setupEr != nil {
 			return
 		}
 		if w.mergirafPath != "" {
@@ -102,6 +107,15 @@ func (w *worktrees) ensureSetup(ctx context.Context) error {
 		}
 	})
 	return w.setupEr
+}
+
+// setupDir is where ensureSetup writes repo-wide config: the user's checkout
+// (repo), falling back to primary for a worktrees value built without one.
+func (w *worktrees) setupDir() string {
+	if w.repo != "" {
+		return w.repo
+	}
+	return w.primary
 }
 
 // mergirafDriverName is the git merge driver name mergiraf is registered
@@ -126,14 +140,15 @@ const mergirafDriverName = "mergiraf"
 // harmless (mergiraf just uses them as conflict-marker labels on any
 // hunk it can't resolve) — see mergiraf.org/usage.html#with-a-driver.
 func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
-	if _, err := w.git(ctx, w.primary, "config", "merge.mergiraf.name", "mergiraf"); err != nil {
+	dir := w.setupDir()
+	if _, err := w.git(ctx, dir, "config", "merge.mergiraf.name", "mergiraf"); err != nil {
 		return err
 	}
 	driver := w.mergirafPath + " merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L"
-	if _, err := w.git(ctx, w.primary, "config", "merge.mergiraf.driver", driver); err != nil {
+	if _, err := w.git(ctx, dir, "config", "merge.mergiraf.driver", driver); err != nil {
 		return err
 	}
-	gitDir, err := w.git(ctx, w.primary, "rev-parse", "--git-common-dir")
+	gitDir, err := w.git(ctx, dir, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return err
 	}
@@ -146,7 +161,7 @@ func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
 	// silently produce a bogus nested path that git never reads, making this
 	// registration a no-op without ever returning an error.
 	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(w.primary, gitDir)
+		gitDir = filepath.Join(dir, gitDir)
 	}
 	infoDir := filepath.Join(gitDir, "info")
 	if err := os.MkdirAll(infoDir, 0o755); err != nil {
