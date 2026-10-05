@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -53,6 +54,11 @@ func (s *sessionMerge) annotate(p map[string]any) {
 // mergeIntoSession is landAttempt's merge step for a session folder (D8),
 // under the session lock:
 //
+//  0. If the folder is mid-merge or rebase (the agent finishing a Land
+//     conflict, say), release the lock and wait for that to settle, up to
+//     s.deadline; past it, fail. That state is the agent's: a task merge
+//     on top of it would fail and its abort would throw the agent's
+//     resolution away.
 //  1. If the session branch moved since the gate ran against trunkHead,
 //     release and ask for another round (again), so the task branch takes
 //     the move in through its own worktree first.
@@ -73,6 +79,17 @@ func (e *engine) mergeIntoSession(ctx context.Context, st template.Stage, task c
 		release, err := sm.Lock(ctx)
 		if err != nil {
 			return false, err
+		}
+		if op := sessionwt.MidOperation(ctx, folder); op != "" {
+			release()
+			still, werr := sm.WaitSettled(ctx, s.deadline)
+			if werr != nil {
+				return false, werr
+			}
+			if still != "" {
+				return false, fmt.Errorf("session folder is mid-%s: the agent is in the middle of a %s there, and a task merge on top of it would undo that work; merge %s once it finishes", still, still, run.branch)
+			}
+			continue
 		}
 		head, err := e.wt.git(ctx, folder, "rev-parse", "HEAD")
 		if err != nil {

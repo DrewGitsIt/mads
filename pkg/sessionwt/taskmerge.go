@@ -122,6 +122,32 @@ func (m *TaskMerge) WaitIdle(ctx context.Context, deadline time.Time) (idle bool
 	}
 }
 
+// WaitSettled polls the folder until it is no longer mid-merge, rebase,
+// cherry-pick or revert (MidOperation) or deadline passes, returning the
+// operation still under way then, or "" once there is none. Such a state
+// is the agent's (finishing a Land conflict, say), so a task merge waits
+// it out and never aborts it. Like WaitIdle, the caller holds no lock.
+func (m *TaskMerge) WaitSettled(ctx context.Context, deadline time.Time) (op string, err error) {
+	poll := m.Poll
+	if poll <= 0 {
+		poll = DefaultAgentPoll
+	}
+	for {
+		if op = MidOperation(ctx, m.Target.Folder); op == "" {
+			return "", nil
+		}
+		left := time.Until(deadline)
+		if left <= 0 {
+			return op, nil
+		}
+		select {
+		case <-ctx.Done():
+			return op, ctx.Err()
+		case <-time.After(min(poll, left)):
+		}
+	}
+}
+
 // SaveEdits commits files (relative to the folder's top) as they stand in
 // the folder, so a task merge that touches them can run (D8). Only those
 // files: anything else staged stays staged and out of the commit.

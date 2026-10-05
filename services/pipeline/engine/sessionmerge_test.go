@@ -3,8 +3,10 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -424,5 +426,100 @@ func TestSessionMergeLockChoice(t *testing.T) {
 				t.Error("alpha.txt didn't land in the session folder")
 			}
 		})
+	}
+}
+
+// The agent is mid-merge in the session folder (resolving a Land conflict):
+// the task merge waits for that to settle and, when it doesn't by the
+// stage timeout, fails saying so — it never aborts the agent's merge, so
+// MERGE_HEAD and the agent's half-done resolution survive.
+func TestSessionMergeWaitsOutAgentMidMerge(t *testing.T) {
+	w := newSessionWorld(t)
+	id := []string{"-c", "user.email=t@t", "-c", "user.name=t"}
+	w.commit(t, "clash.txt", "base\n")
+	gitRun(t, w.folder, "branch", "side")
+	w.commit(t, "clash.txt", "session\n")
+	gitRun(t, w.folder, "checkout", "-q", "side")
+	if err := os.WriteFile(filepath.Join(w.folder, "clash.txt"), []byte("side\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, w.folder, append(id, "commit", "-qam", "side")...)
+	gitRun(t, w.folder, "checkout", "-q", w.branch)
+	cmd := exec.Command("git", append(id, "merge", "side")...)
+	cmd.Dir = w.folder
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("merge did not conflict:\n%s", out)
+	}
+	resolution := "session and side, by the agent\n"
+	if err := os.WriteFile(filepath.Join(w.folder, "clash.txt"), []byte(resolution), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	w.setAgent(t, contracts.AgentIdle)
+
+	tpl := strings.Replace(isolatedTemplate, "command: git merge --no-ff", "command: git merge --no-ff\n    timeout: 500ms", 1)
+	seeded := w.seed(contracts.Task{Title: "alpha"})
+	f := mustScenario(t, fake.Rule{Match: "Task: alpha", Reply: "done",
+		Tools: []fake.ToolStep{{Name: "write_file", Path: "alpha.txt", Content: "alpha\n"}}})
+	sum := w.start(t, w.config(t, f, tpl))()
+	if len(sum.Done) != 0 || w.task(t, seeded[0].ID).Status == contracts.StatusDone {
+		t.Fatalf("merged into a folder mid-merge: %+v", sum)
+	}
+	if _, err := os.Stat(filepath.Join(w.folder, "alpha.txt")); err == nil {
+		t.Error("the task's file reached the folder")
+	}
+	gitRun(t, w.folder, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	if got, _ := os.ReadFile(filepath.Join(w.folder, "clash.txt")); string(got) != resolution {
+		t.Errorf("clash.txt = %q, want the agent's resolution kept", got)
+	}
+	said := false
+	for _, ev := range w.events(t, "stage.failed") {
+		said = said || strings.Contains(string(ev.Payload), "mid-merge")
+	}
+	if !said {
+		t.Errorf("no stage.failed saying the folder is mid-merge: %v", w.events(t, "stage.failed"))
+	}
+}
+
+// A merge into a tree someone else left mid-merge is refused by git, and
+// worktrees.merge must not abort the merge it didn't start.
+func TestMergeLeavesSomeoneElsesMergeAlone(t *testing.T) {
+	h := newHarness(t)
+	id := []string{"-c", "user.email=t@t", "-c", "user.name=t"}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(h.cwd, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("clash.txt", "base\n")
+	gitRun(t, h.cwd, "add", "clash.txt")
+	gitRun(t, h.cwd, append(id, "commit", "-qm", "base")...)
+	gitRun(t, h.cwd, "branch", "side")
+	gitRun(t, h.cwd, "branch", "task")
+	write("clash.txt", "main\n")
+	gitRun(t, h.cwd, append(id, "commit", "-qam", "main")...)
+	gitRun(t, h.cwd, "checkout", "-q", "side")
+	write("clash.txt", "side\n")
+	gitRun(t, h.cwd, append(id, "commit", "-qam", "side")...)
+	gitRun(t, h.cwd, "checkout", "-q", "-")
+	cmd := exec.Command("git", append(id, "merge", "side")...)
+	cmd.Dir = h.cwd
+	if _, err := cmd.CombinedOutput(); err == nil {
+		t.Fatal("merge did not conflict")
+	}
+	write("clash.txt", "resolved\n")
+
+	wt := &worktrees{primary: h.cwd, root: t.TempDir()}
+	head := strings.TrimSpace(gitOut(t, h.cwd, "rev-parse", "HEAD"))
+	err := wt.merge(context.Background(), "git merge --no-ff", contracts.Task{ID: "t1", Title: "t"}, "task", head)
+	if err == nil {
+		t.Fatal("merged on top of someone else's merge")
+	}
+	var ce *ConflictError
+	if errors.As(err, &ce) {
+		t.Errorf("reported their conflict as ours: %v", ce.Files)
+	}
+	gitRun(t, h.cwd, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	if got, _ := os.ReadFile(filepath.Join(h.cwd, "clash.txt")); string(got) != "resolved\n" {
+		t.Errorf("clash.txt = %q, want the resolution kept", got)
 	}
 }

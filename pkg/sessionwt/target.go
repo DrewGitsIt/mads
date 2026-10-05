@@ -284,8 +284,11 @@ func LandGate(ctx context.Context, t Target, g Gates, unlanded int, folderPresen
 	return nil, nil
 }
 
-// midOperation names the merge, rebase, cherry-pick or revert dir is in
+// MidOperation names the merge, rebase, cherry-pick or revert dir is in
 // the middle of, or "" when it is in none.
+func MidOperation(ctx context.Context, dir string) string { return midOperation(ctx, dir) }
+
+// midOperation is MidOperation.
 func midOperation(ctx context.Context, dir string) string {
 	for _, op := range []struct{ ref, name string }{
 		{"MERGE_HEAD", "merge"}, {"REBASE_HEAD", "rebase"},

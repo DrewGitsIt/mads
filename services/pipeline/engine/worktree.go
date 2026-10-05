@@ -249,7 +249,15 @@ func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.T
 	// shell-composed (a backtick or $() in a task title must never reach a
 	// shell).
 	args := append(strings.Fields(mergeCmd)[1:], branch, "-m", subject, "-m", "Task: "+task.ID)
+	// A merge someone else left in progress here is theirs: git refuses
+	// ours on top of it, and its conflicted files are not ours to report
+	// or abort.
+	_, preErr := w.git(ctx, w.primary, "rev-parse", "-q", "--verify", "MERGE_HEAD")
+	theirs := preErr == nil
 	if _, err := w.git(ctx, w.primary, args...); err != nil {
+		if theirs {
+			return fmt.Errorf("merge refused: %s is already in the middle of a merge: %w", w.primary, err)
+		}
 		conflicts, _ := w.git(ctx, w.primary, "diff", "--name-only", "--diff-filter=U")
 		files := splitLines(conflicts)
 		var hunks []ConflictHunk
@@ -258,7 +266,9 @@ func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.T
 			// below discards them.
 			hunks = w.attributeConflict(ctx, w.primary, files, trunkHead)
 		}
-		_, _ = w.git(ctx, w.primary, "merge", "--abort")
+		if _, err := w.git(ctx, w.primary, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err == nil {
+			_, _ = w.git(ctx, w.primary, "merge", "--abort")
+		}
 		if len(files) == 0 {
 			return fmt.Errorf("merge failed: %w", err)
 		}
