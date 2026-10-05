@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
@@ -196,5 +197,74 @@ func writeTestFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Shutdown waits for a Land in flight before tearing the session down, so
+// the Land gets to finish (or abort) its merge in the user's checkout —
+// but only for as long as its context allows.
+func TestShutdownWaitsForLand(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		bounded bool
+	}{{"until it finishes", false}, {"bounded", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			cwd := t.TempDir()
+			initRepo(t, cwd)
+			r, _, sess := newIsolatedRunner(t, cwd, t.TempDir())
+			writeTestFile(t, filepath.Join(sess.WorktreeDir, "feature.txt"), "f\n")
+			r.recordFileChange("feature.txt")
+			if _, err := r.Commit(ctx, contracts.CommitRequest{Message: "Feature"}); err != nil {
+				t.Fatal(err)
+			}
+			inLand, release := make(chan struct{}), make(chan struct{})
+			landHook = func() {
+				close(inLand)
+				<-release
+			}
+			t.Cleanup(func() { landHook = nil })
+			landed := make(chan contracts.LandResult, 1)
+			go func() {
+				res, _ := r.Land(ctx, false)
+				landed <- res
+			}()
+			<-inLand
+
+			sctx, cancel := context.WithCancel(ctx)
+			if tc.bounded {
+				sctx, cancel = context.WithTimeout(ctx, 200*time.Millisecond)
+			}
+			defer cancel()
+			shut := make(chan struct{})
+			go func() {
+				_ = r.Shutdown(sctx)
+				close(shut)
+			}()
+			if tc.bounded {
+				select {
+				case <-shut:
+				case <-time.After(10 * time.Second):
+					t.Fatal("Shutdown waited past its context")
+				}
+				close(release)
+				<-landed
+				return
+			}
+			select {
+			case <-shut:
+				t.Fatal("Shutdown didn't wait for the Land")
+			case <-time.After(300 * time.Millisecond):
+			}
+			close(release)
+			if res := <-landed; res.Outcome != contracts.LandLanded {
+				t.Errorf("land = %+v", res)
+			}
+			select {
+			case <-shut:
+			case <-time.After(10 * time.Second):
+				t.Fatal("Shutdown never returned after the Land finished")
+			}
+		})
 	}
 }

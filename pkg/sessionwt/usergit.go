@@ -31,9 +31,29 @@ func (e *GitError) Error() string {
 // shared checkout names whichever session started there last, and these
 // callers record their commits themselves instead.
 func userGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return runUserGit(ctx, dir, false, args)
+}
+
+// landGit is userGit in a process group of its own (ownGroup), for Land's
+// writes to the user's checkout: the merge there and its abort must run to
+// the end even if the session child that started them is killed.
+func landGit(ctx context.Context, dir string, args ...string) (string, error) {
+	return runUserGit(ctx, dir, true, args)
+}
+
+// landCmd is a test seam, handed each landGit command before it starts.
+var landCmd func(*exec.Cmd)
+
+func runUserGit(ctx context.Context, dir string, own bool, args []string) (string, error) {
 	full := append([]string{"-c", "mads.sessionId="}, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
 	cmd.Dir = dir
+	if own {
+		ownGroup(cmd)
+		if landCmd != nil {
+			landCmd(cmd)
+		}
+	}
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_MERGE_AUTOEDIT=no", "GIT_EDITOR=true")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

@@ -112,7 +112,7 @@ func landInPrimary(ctx context.Context, t Target, b string) (landed bool, res co
 		return false, res, nil
 	}
 
-	out, err := userGit(ctx, t.Primary, "merge", "--no-ff", "--no-edit",
+	out, err := landGit(ctx, t.Primary, "merge", "--no-ff", "--no-edit",
 		"-m", "Land "+landName(t), "-m", trailer(t.SessionID), "refs/heads/"+t.Branch)
 	if err != nil {
 		abortMerge(ctx, t.Primary)
@@ -140,10 +140,11 @@ func landName(t Target) string {
 // abortMerge undoes a merge git left half-done in dir. Only called right
 // after a merge this package started, in a tree checked not to be mid-merge
 // before it, so the merge it aborts is always its own; a refused merge
-// that never started leaves no MERGE_HEAD and nothing to abort.
+// that never started leaves no MERGE_HEAD and nothing to abort. Like the
+// merge in the user's checkout, it runs in its own process group.
 func abortMerge(ctx context.Context, dir string) {
 	if _, err := Git(ctx, dir, "rev-parse", "-q", "--verify", "MERGE_HEAD"); err == nil {
-		_, _ = Git(ctx, dir, "merge", "--abort")
+		_, _ = landGit(ctx, dir, "merge", "--abort")
 	}
 }
 

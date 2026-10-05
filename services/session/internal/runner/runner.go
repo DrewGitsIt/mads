@@ -217,6 +217,9 @@ type Runner struct {
 	// so Send refuses, and SendOrQueue and Inject queue behind it exactly
 	// as they queue behind a turn. endLanding releases the queue.
 	landing bool
+	// landDone is closed when the Land holding landing ends; Shutdown
+	// waits on it (bounded by its context) before tearing anything down.
+	landDone chan struct{}
 
 	// mode is the transport mode last successfully established — set
 	// alongside sess in Start and SwitchTransport, and read back by Mode().
@@ -1518,7 +1521,20 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	r.closing = true
 	close(r.shutdownCh)
 	sess := r.sess
+	landDone := r.landDone
 	r.mu.Unlock()
+
+	// A Land in flight finishes first, bounded by ctx (the shutdown grace,
+	// inside the Router's own before it kills the process group): its
+	// merge in the user's checkout is in a process group of its own, but
+	// the abort after a refused merge is this process's to run.
+	if landDone != nil {
+		select {
+		case <-landDone:
+		case <-ctx.Done():
+			log.Printf("runner: shutdown: a Land is still running: %v", ctx.Err())
+		}
+	}
 
 	var closeErr error
 	if sess != nil {

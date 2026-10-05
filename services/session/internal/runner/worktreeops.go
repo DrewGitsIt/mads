@@ -47,7 +47,8 @@ func (r *Runner) UndoCommit(ctx context.Context, hash string) (contracts.UndoCom
 // turn is in flight; otherwise no turn can start until it finishes —
 // messages sent meanwhile queue, and go out once it's done. It runs to the
 // end even if the caller goes away: stopping git half-way through a merge
-// is the one outcome worse than either result.
+// is the one outcome worse than either result, so Shutdown waits for it
+// too.
 func (r *Runner) Land(ctx context.Context, pipeline bool) (contracts.LandResult, error) {
 	ctx = context.WithoutCancel(ctx)
 	if !r.beginLanding() {
@@ -61,22 +62,25 @@ func (r *Runner) Land(ctx context.Context, pipeline bool) (contracts.LandResult,
 }
 
 // beginLanding sets the landing flag unless a turn is in flight (or
-// another Land holds it).
+// another Land holds it, or the session is shutting down).
 func (r *Runner) beginLanding() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.busy || r.landing {
+	if r.busy || r.landing || r.closing {
 		return false
 	}
 	r.landing = true
+	r.landDone = make(chan struct{})
 	return true
 }
 
-// endLanding clears the landing flag and delivers whatever queued behind
-// it, as a turn end would have.
+// endLanding clears the landing flag, tells a waiting Shutdown, and
+// delivers whatever queued behind it, as a turn end would have.
 func (r *Runner) endLanding() {
 	r.mu.Lock()
 	r.landing = false
+	close(r.landDone)
+	r.landDone = nil
 	if !r.busy && !r.closing && len(r.pending) > 0 {
 		r.deliverNextLocked()
 		return
