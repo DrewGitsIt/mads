@@ -93,7 +93,7 @@ func (r *Runner) CompactNow(ctx context.Context) error {
 		r.mu.Unlock()
 		return ErrNotReady
 	}
-	if r.busy {
+	if r.busy || r.landing {
 		r.mu.Unlock()
 		return ErrTurnInFlight
 	}

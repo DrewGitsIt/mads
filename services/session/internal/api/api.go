@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/runner"
 )
@@ -32,7 +33,10 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /inject", s.handleInject)
 	mux.HandleFunc("POST /interrupt", s.handleInterrupt)
 	mux.HandleFunc("POST /compact", s.handleCompact)
-	mux.HandleFunc("POST /merge", s.handleMerge)
+	mux.HandleFunc("GET /worktree", s.handleWorktreeStatus)
+	mux.HandleFunc("POST /commit", s.handleCommit)
+	mux.HandleFunc("POST /commit/undo", s.handleUndoCommit)
+	mux.HandleFunc("POST /land", s.handleLand)
 	mux.HandleFunc("GET /output", s.handleStream)
 	mux.HandleFunc("POST /model", s.handleSetModel)
 	mux.HandleFunc("POST /transport", s.handleTransport)
@@ -140,24 +144,70 @@ func (s *server) handleCompact(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
-// handleMerge attempts to merge the session's isolated worktree branch back
-// into target_branch (the primary's current branch if omitted). Both a
-// clean merge and a conflicted merge answer 200 — a conflict is a
-// structured, success-shaped response the UI branches on via
-// result.conflicted, not a failure status (spec §6, §17).
-func (s *server) handleMerge(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		TargetBranch string `json:"target_branch"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	result, err := s.runner.Merge(r.Context(), body.TargetBranch)
+// The worktree routes are the live half of the session's Commit and Land
+// (docs/SESSION-WORKTREES-DESIGN.md D3): the Router forwards them here
+// while this child runs, with ?pipeline=1 when a pipeline run is active for
+// the session — the one gate only the Router can see. Bodies and statuses
+// are the Router's own contract for these routes (services/router/
+// internal/api/worktree.go), which passes them through untouched.
+
+func pipelineActive(r *http.Request) bool { return r.URL.Query().Get("pipeline") == "1" }
+
+func (s *server) handleWorktreeStatus(w http.ResponseWriter, r *http.Request) {
+	st, err := s.runner.WorktreeStatus(r.Context(), pipelineActive(r))
 	if err != nil {
 		writeRunnerError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, st)
+}
+
+func (s *server) handleCommit(w http.ResponseWriter, r *http.Request) {
+	var req contracts.CommitRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	res, err := s.runner.Commit(r.Context(), req)
+	if err != nil {
+		writeCommitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *server) handleUndoCommit(w http.ResponseWriter, r *http.Request) {
+	var req contracts.UndoCommitRequest
+	if !decode(w, r, &req) {
+		return
+	}
+	res, err := s.runner.UndoCommit(r.Context(), req.Hash)
+	if err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, sessionwt.UndoStatus(res), res)
+}
+
+// handleLand answers 200 for every outcome — landed, conflicted, refused —
+// since each is a card, not a failure; only an unexpected error isn't.
+func (s *server) handleLand(w http.ResponseWriter, r *http.Request) {
+	res, err := s.runner.Land(r.Context(), pipelineActive(r))
+	if err != nil {
+		writeRunnerError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// writeCommitError writes a Commit refusal as its structured body, and
+// anything else as an ordinary error.
+func writeCommitError(w http.ResponseWriter, err error) {
+	var refusal *sessionwt.CommitRefusal
+	if errors.As(err, &refusal) {
+		writeJSON(w, refusal.HTTPStatus(), refusal.Body)
+		return
+	}
+	writeRunnerError(w, err)
 }
 
 // handleStream is the data plane's live event feed (spec §15): every
@@ -468,8 +518,6 @@ func writeRunnerError(w http.ResponseWriter, err error) {
 	case errors.Is(err, runner.ErrNotReady):
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
 	case errors.Is(err, runner.ErrTurnInFlight):
-		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-	case errors.Is(err, runner.ErrNoWorktree):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, runner.ErrSwitchBusy):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})

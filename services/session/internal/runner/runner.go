@@ -43,10 +43,6 @@ var ErrNotReady = errors.New("runner: session not ready")
 // streaming).
 var ErrTurnInFlight = errors.New("runner: turn already in flight")
 
-// ErrNoWorktree is returned by Merge when the session has no isolated
-// worktree to merge back.
-var ErrNoWorktree = errors.New("runner: session has no isolated worktree to merge")
-
 // ErrSwitchBusy is returned by SwitchTransport when a turn is in flight —
 // single-writer discipline: the caller must Interrupt before switching.
 var ErrSwitchBusy = errors.New("runner: cannot switch transport mid-turn")
@@ -216,6 +212,11 @@ type Runner struct {
 	providerName string // sess's provider name, set alongside sess so Transcript can look the provider back up
 	busy         bool   // a turn is in flight (Send called, no EventTurnEnd yet)
 	closing      bool   // Shutdown has started tearing this session down
+
+	// landing is set while Land runs (worktreeops.go): no turn may start,
+	// so Send refuses, and SendOrQueue and Inject queue behind it exactly
+	// as they queue behind a turn. endLanding releases the queue.
+	landing bool
 
 	// mode is the transport mode last successfully established — set
 	// alongside sess in Start and SwitchTransport, and read back by Mode().
@@ -654,7 +655,7 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 		sess.WorktreeDir, sess.WorktreeBranch, sess.WorktreeBase = res.Dir, res.Branch, spec.Base
 	}
 	if res.Notable() {
-		r.appendWorktreeEvent(ctx, worktreePayload(res, spec.Base))
+		r.appendWorktreeEvent(ctx, res.Payload(spec.Base))
 	}
 	r.mu.Lock()
 	r.wt = worktreeState{dir: res.Dir, branch: res.Branch, base: spec.Base}
@@ -669,25 +670,6 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 		}
 	}
 	return cwd, nil
-}
-
-// worktreePayload is the worktree.ensured payload for an Ensure result.
-func worktreePayload(res sessionwt.EnsureResult, base string) map[string]any {
-	p := map[string]any{"action": string(res.Action), "dir": res.Dir, "branch": res.Branch}
-	for k, v := range map[string]string{
-		"base": base, "stale_moved_to": res.StaleMovedTo, "start_point": res.StartPoint, "head": res.Head,
-	} {
-		if v != "" {
-			p[k] = v
-		}
-	}
-	if res.UnlockedStale {
-		p["unlocked_stale"] = true
-	}
-	if res.BaseMissing {
-		p["base_missing"] = true
-	}
-	return p
 }
 
 // appendWorktreeEvent records what isolation did, so it shows as a card
@@ -783,98 +765,6 @@ func (r *Runner) refreshCountsAsync() {
 	}()
 }
 
-// Merge attempts to merge the session's isolated worktree branch back into
-// targetBranch (the primary's current branch if targetBranch is empty). A
-// clean merge lands the work on the primary and cleans up the worktree and
-// branch; a conflicted merge aborts, keeps the branch, and returns
-// structured conflict data for the UI's resolution flow (spec §6, §17).
-//
-// Known gap, not solved here: the cleanup below removes the worktree
-// directory that the live provider process may still have as its cwd. If
-// the interactive agent is mid-turn when merge-back runs, later
-// relative-path operations in that process could fail. Restarting the
-// provider session pointed at the primary tree post-merge (reusing
-// ProviderRef the way Start already resumes it) would fix this properly,
-// but it's out of scope for W4.5's acceptance criteria.
-func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.MergeResult, error) {
-	sess, err := r.data.Session(ctx, r.sessionID)
-	if err != nil {
-		return contracts.MergeResult{}, fmt.Errorf("runner: load session: %w", err)
-	}
-	if sess.WorktreeBranch == "" {
-		return contracts.MergeResult{}, ErrNoWorktree
-	}
-
-	// The merge-back writes both the session's worktree and the primary
-	// checkout, so it holds both locks for its whole run — session lock
-	// first, then the repo lock, the only order sessionwt allows — and can't
-	// interleave with an Ensure of this session or a pipeline land (D3).
-	releaseSession, err := sessionwt.AcquireSessionLock(ctx, r.Cwd, r.sessionID)
-	if err != nil {
-		return contracts.MergeResult{}, fmt.Errorf("runner: %w", err)
-	}
-	defer releaseSession()
-	releaseRepo, err := sessionwt.AcquireLock(ctx, r.Cwd)
-	if err != nil {
-		return contracts.MergeResult{}, fmt.Errorf("runner: %w", err)
-	}
-	defer releaseRepo()
-
-	if targetBranch != "" {
-		if _, err := sessionwt.Git(ctx, r.Cwd, "checkout", targetBranch); err != nil {
-			return contracts.MergeResult{}, fmt.Errorf("runner: checkout %s: %w", targetBranch, err)
-		}
-	}
-	actualTarget, _ := sessionwt.Git(ctx, r.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
-	actualTarget = strings.TrimSpace(actualTarget)
-
-	if err := r.data.Append(ctx, &contracts.Envelope{
-		Type: contracts.MergeAttempted, SessionID: r.sessionID,
-		Payload: mustJSON(map[string]string{"branch": sess.WorktreeBranch, "target_branch": actualTarget}),
-	}); err != nil {
-		log.Printf("runner: append merge.attempted: %v", err)
-	}
-
-	if err := sessionwt.CommitStray(ctx, sess.WorktreeDir, r.sessionID, sess.Name); err != nil {
-		return contracts.MergeResult{}, fmt.Errorf("runner: commit stray changes: %w", err)
-	}
-	result, err := sessionwt.Merge(ctx, r.Cwd, "git merge --no-ff", r.sessionID, sess.Name, sess.WorktreeBranch)
-	if err != nil {
-		return contracts.MergeResult{}, err
-	}
-
-	if result.Conflicted {
-		if err := r.data.Append(ctx, &contracts.Envelope{
-			Type: contracts.MergeConflicted, SessionID: r.sessionID,
-			Payload: mustJSON(map[string]any{"branch": result.Branch, "target_branch": actualTarget, "files": result.Files}),
-		}); err != nil {
-			log.Printf("runner: append merge.conflicted: %v", err)
-		}
-		return result, nil // branch/worktree untouched — session stays flagged unmerged
-	}
-
-	sessionwt.Remove(context.WithoutCancel(ctx), r.Cwd, sess.WorktreeDir, sess.WorktreeBranch)
-	empty := ""
-	r.recordMu.Lock()
-	err = r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
-		WorktreeDir: &empty, WorktreeBranch: &empty, WorktreeBase: &empty,
-	})
-	r.recordMu.Unlock()
-	if err != nil {
-		return contracts.MergeResult{}, fmt.Errorf("runner: clear worktree fields: %w", err)
-	}
-	r.mu.Lock()
-	r.wt = worktreeState{}
-	r.mu.Unlock()
-	if err := r.data.Append(ctx, &contracts.Envelope{
-		Type: contracts.MergeCompleted, SessionID: r.sessionID,
-		Payload: mustJSON(map[string]string{"branch": result.Branch, "target_branch": actualTarget}),
-	}); err != nil {
-		log.Printf("runner: append merge.completed: %v", err)
-	}
-	return result, nil
-}
-
 // deliverLocked marks a turn as in-flight and records its ordinal — and,
 // for an injected turn, the Attribution Transcript will later attach to the
 // resulting user-role message. Must be called with r.mu held; the caller
@@ -895,7 +785,7 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		r.mu.Unlock()
 		return ErrNotReady
 	}
-	if r.busy {
+	if r.busy || r.landing {
 		r.mu.Unlock()
 		return ErrTurnInFlight
 	}
@@ -947,7 +837,7 @@ func (r *Runner) Inject(ctx context.Context, text string, attribution contracts.
 		r.mu.Unlock()
 		return ErrNotReady
 	}
-	if r.busy {
+	if r.busy || r.landing {
 		r.pending = append(r.pending, pendingInjection{text: text, attribution: attribution})
 		r.mu.Unlock()
 		r.recordInjectionAudit(ctx, attribution, text)
@@ -1017,46 +907,8 @@ func (r *Runner) onTurnEnd() {
 
 	r.mu.Lock()
 	r.busy = false
-	if len(r.pending) > 0 {
-		next := r.drainNextLocked()
-		var delivered *contracts.QueuedMessage
-		var remaining []contracts.QueuedMessage
-		if next.userID != "" {
-			r.deliverLocked(nil)
-			delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
-			remaining = r.queuedLocked()
-		} else {
-			r.deliverLocked(&next.attribution)
-		}
-		sess := r.sess
-		r.mu.Unlock()
-		if sess == nil {
-			return
-		}
-
-		r.synthEngine.OnUserSend(next.text)
-		r.digest.recordUser(next.text, next.attribution.DigestAttributed)
-		if delivered != nil {
-			r.publishQueue(contracts.QueueChanged{Queued: remaining, Delivered: delivered})
-		}
-
-		r.markAgentWorking(next.text)
-		if err := sess.Send(context.Background(), next.text); err != nil {
-			log.Printf("runner: deliver queued message: %v", err)
-			r.mu.Lock()
-			r.busy = false
-			r.mu.Unlock()
-			r.markAgentIdle()
-			if delivered != nil {
-				r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
-			}
-		}
-		// orchestrateRefreshPending and pendingModel, if set, are left
-		// untouched here — both are only drained once the queue is truly
-		// empty (below), so a refresh or model switch requested
-		// mid-queue-drain retries at the next real turn boundary instead of
-		// cycling the provider process out from under this queued
-		// injection's own in-flight turn.
+	if len(r.pending) > 0 && !r.landing {
+		r.deliverNextLocked()
 		return
 	}
 	refreshPending := r.orchestrateRefreshPending
@@ -1093,6 +945,51 @@ func (r *Runner) onTurnEnd() {
 			}
 		}()
 	}
+}
+
+// deliverNextLocked starts the next queued message (or coalesced digest
+// run, see drainNextLocked) as a turn. Called with r.mu held and
+// r.pending non-empty, by onTurnEnd and endLanding; it unlocks r.mu.
+func (r *Runner) deliverNextLocked() {
+	next := r.drainNextLocked()
+	var delivered *contracts.QueuedMessage
+	var remaining []contracts.QueuedMessage
+	if next.userID != "" {
+		r.deliverLocked(nil)
+		delivered = &contracts.QueuedMessage{ID: next.userID, Text: next.text, QueuedAt: next.queuedAt}
+		remaining = r.queuedLocked()
+	} else {
+		r.deliverLocked(&next.attribution)
+	}
+	sess := r.sess
+	r.mu.Unlock()
+	if sess == nil {
+		return
+	}
+
+	r.synthEngine.OnUserSend(next.text)
+	r.digest.recordUser(next.text, next.attribution.DigestAttributed)
+	if delivered != nil {
+		r.publishQueue(contracts.QueueChanged{Queued: remaining, Delivered: delivered})
+	}
+
+	r.markAgentWorking(next.text)
+	if err := sess.Send(context.Background(), next.text); err != nil {
+		log.Printf("runner: deliver queued message: %v", err)
+		r.mu.Lock()
+		r.busy = false
+		r.mu.Unlock()
+		r.markAgentIdle()
+		if delivered != nil {
+			r.publishQueue(contracts.QueueChanged{Queued: r.QueuedMessages(), Failed: delivered, Error: err.Error()})
+		}
+	}
+	// orchestrateRefreshPending and pendingModel, if set, are left
+	// untouched here — both are only drained once the queue is truly
+	// empty (onTurnEnd), so a refresh or model switch requested
+	// mid-queue-drain retries at the next real turn boundary instead of
+	// cycling the provider process out from under this queued
+	// injection's own in-flight turn.
 }
 
 // drainNextLocked pops the next queued injection(s) to deliver as one

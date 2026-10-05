@@ -10,9 +10,10 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 )
 
-// SendOrQueue relays one user turn, or — if a turn is already in flight —
-// queues it behind that turn, FIFO with any queued injections, for onTurnEnd
-// to deliver. It returns the queued entry when it queued, nil when it sent.
+// SendOrQueue relays one user turn, or — if a turn is already in flight,
+// or a Land is running — queues it behind that, FIFO with any queued
+// injections, for onTurnEnd (or endLanding) to deliver. It returns the
+// queued entry when it queued, nil when it sent.
 //
 // The queue lives here rather than in the UI so a message queued in one
 // session is still delivered after the user navigates to another (or
@@ -28,7 +29,7 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 			r.mu.Unlock()
 			return nil, ErrNotReady
 		}
-		if r.busy {
+		if r.busy || r.landing {
 			q := contracts.QueuedMessage{ID: newQueueID(), Text: text, QueuedAt: time.Now().UTC()}
 			r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt})
 			snapshot := r.queuedLocked()
