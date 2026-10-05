@@ -243,3 +243,37 @@ func TestPicksUpBuildThatLandsAfterConstruction(t *testing.T) {
 		t.Fatalf("GET / after build lands body = %q, want the built index.html", body)
 	}
 }
+
+// A rebuilt UI must reach a window that has already loaded an older one: the
+// shell (index.html), wherever it is served from, is always rechecked, while
+// the content-hashed bundles under assets/ are safe to keep forever.
+func TestCacheControl(t *testing.T) {
+	srv := httptest.NewServer(static.New(writeUIDist(t)))
+	defer srv.Close()
+
+	cases := []struct {
+		path, accept, want string
+	}{
+		{"/", "", "no-cache"},
+		{"/sessions/ses_1", "text/html", "no-cache"},
+		{"/index.html", "", "no-cache"},
+		{"/assets/app.js", "", "public, max-age=31536000, immutable"},
+	}
+	for _, c := range cases {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+c.path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.accept != "" {
+			req.Header.Set("Accept", c.accept)
+		}
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Cache-Control"); got != c.want {
+			t.Errorf("GET %s Cache-Control = %q, want %q", c.path, got, c.want)
+		}
+	}
+}

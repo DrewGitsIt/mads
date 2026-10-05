@@ -49,6 +49,7 @@ func New(distDir string) http.Handler {
 		// browser navigating, so a plain curl/health-check GET (Accept
 		// "*/*", not "text/html") must 200 here the same as a browser.
 		if r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			w.Header().Set("Cache-Control", revalidate)
 			http.ServeFile(w, r, index)
 			return
 		}
@@ -57,15 +58,33 @@ func New(distDir string) http.Handler {
 		// starts with "/") can't climb above root.
 		fsPath := filepath.Join(distDir, filepath.Clean(r.URL.Path))
 		if info, err := os.Stat(fsPath); err == nil && !info.IsDir() {
+			w.Header().Set("Cache-Control", cacheControl(r.URL.Path))
 			fileServer.ServeHTTP(w, r)
 			return
 		}
 		if isNavigationRequest(r) {
+			w.Header().Set("Cache-Control", revalidate)
 			http.ServeFile(w, r, index)
 			return
 		}
 		writeNotFoundJSON(w, r)
 	})
+}
+
+// revalidate makes the browser check with the Router before reusing its copy.
+// The check is cheap: ServeFile answers it with a 304 from Last-Modified when
+// nothing changed.
+const revalidate = "no-cache"
+
+// cacheControl is the Cache-Control for a real file under the dist dir. Vite
+// names everything under assets/ by content hash, so a rebuilt file is a new
+// URL and the old one can be kept forever; anything else (index.html, icons
+// copied from public/) keeps its name across builds and must be rechecked.
+func cacheControl(urlPath string) string {
+	if strings.HasPrefix(urlPath, "/assets/") {
+		return "public, max-age=31536000, immutable"
+	}
+	return revalidate
 }
 
 // isNavigationRequest reports whether r looks like a browser navigating to a
