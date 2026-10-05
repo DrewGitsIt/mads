@@ -84,6 +84,7 @@
   "merge.conflicted",
   "merge.completed",
   "merge.refused",
+  "merge.auto_resolved",
   "land.retried",
   "land.autofixed",
   "worktree.ensured",

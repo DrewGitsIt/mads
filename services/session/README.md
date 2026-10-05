@@ -66,7 +66,7 @@ One process, one session — no `:id` in any path.
   `LandResult` shapes; the git work is `pkg/sessionwt.Ops`, the same code the Router runs
   for an inactive session. A commit refusal is a `contracts.CommitError` with its status
   (400/409/422); an undo refusal is a 409 `UndoCommitResult`; Land answers 200 for landed,
-  conflicted and refused alike, each a card in the conversation. Land is refused mid-turn,
+  conflicted, refused and auto_resolved alike, each a card in the conversation. Land is refused mid-turn,
   holds user messages and injections in the queue while it runs, and `Shutdown` waits for
   it (bounded by the shutdown grace).
 - `GET /output` — SSE feed of `provider.Event` (`id: <seq>\nevent: <kind>\ndata: <json>`).
@@ -243,8 +243,11 @@ and never in another session's worktree (a linked session that joined it) — se
 - **Land** — merges the base into the session branch in its folder, then `git merge
   --no-ff` the branch into the user's checkout (in its own process group, so a group kill of
   this process can't stop it mid-write), aborting on any failure. The folder stays; the
-  branch fast-forwards to the landed base when it can.
+  branch fast-forwards to the landed base when it can. When mergiraf (`pkg/mergedriver`,
+  registered by every ensure if installed) resolved files plain git would have conflicted
+  on, Land keeps that merge in the folder and stops as `auto_resolved`, before touching the
+  user's checkout; the next Land carries on.
 - **Events** — `commit.created`, `commit.undone`, `merge.attempted`, then `merge.completed`,
-  `merge.conflicted` or `merge.refused` (payload `kind: "land"`), and `worktree.ensured`
+  `merge.conflicted`, `merge.refused` or `merge.auto_resolved` (payload `kind: "land"`), and `worktree.ensured`
   when a start repaired or couldn't create the folder; the header counts
   (`uncommitted_count`, `unlanded_count`) are republished after each change.

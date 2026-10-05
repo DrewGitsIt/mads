@@ -337,6 +337,14 @@ const (
 	// contracts.Land* reason code), "detail": string, "files": []string}.
 	// Empty keys are omitted.
 	MergeRefused EventType = "merge.refused"
+	// MergeAutoResolved fires when a session's Land stopped after step 1
+	// because mergiraf (pkg/mergedriver) merged files that plain git would
+	// have left conflicted: the base is merged and committed in the
+	// session's folder, the user's checkout is untouched, and the next Land
+	// carries on from there. Payload: Land's common fields plus {"files":
+	// []string (the files mergiraf resolved), "merge_commit": string (the
+	// step-1 merge commit in the session's folder)}.
+	MergeAutoResolved EventType = "merge.auto_resolved"
 	// WorktreeEnsured fires when the session runner had to do something to
 	// give a session its isolated folder, or decided not to isolate it
 	// (docs/SESSION-WORKTREES-DESIGN.md D1/D2: nothing heals silently). A
@@ -449,7 +457,7 @@ var EventTypes = []EventType{
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
-	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, LandRetried, LandAutofixed,
+	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, MergeAutoResolved, LandRetried, LandAutofixed,
 	WorktreeEnsured,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,

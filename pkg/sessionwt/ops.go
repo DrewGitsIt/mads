@@ -218,8 +218,8 @@ func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCo
 // Land is POST /sessions/{id}/land: the gates, then LandSteps, under the
 // session lock (LandSteps adds the repo lock for step 2). Every outcome is
 // a LandResult and a conversation event: merge.refused for a gate or a
-// refusing checkout, else merge.attempted then merge.completed or
-// merge.conflicted.
+// refusing checkout, else merge.attempted then merge.completed,
+// merge.conflicted or merge.auto_resolved.
 func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.LandResult, error) {
 	_, t, _, err := o.load(ctx, sessionID)
 	if errors.Is(err, ErrNoFolder) {
@@ -274,6 +274,15 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		})
 	case contracts.LandConflicted:
 		o.event(ctx, t, contracts.MergeConflicted, map[string]any{"files": res.Files, "step": "base"})
+	case contracts.LandAutoResolved:
+		// Recorded so the Files tab lists the merge and can diff each
+		// resolved file against what the session had before it.
+		o.recordAs(ctx, t, res.MergeCommit, "Merge "+t.Base+" into "+t.Branch, provenance{
+			source: contracts.CommitSourceLandBase, files: len(res.Files),
+		})
+		o.event(ctx, t, contracts.MergeAutoResolved, map[string]any{
+			"files": res.Files, "merge_commit": res.MergeCommit,
+		})
 	case contracts.LandRefused:
 		o.refused(ctx, t, &contracts.LandRefusal{Reason: res.Reason, Detail: res.Detail, Files: res.Files})
 	}

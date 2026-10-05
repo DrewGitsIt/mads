@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
 // landTries bounds how often Land starts over because the base moved
@@ -24,7 +25,12 @@ var afterStep1 func()
 //  1. In the session's folder, record B = the base's commit and merge it
 //     into the session branch. A conflict aborts the merge and comes back
 //     as outcome conflicted with the files: the user's checkout is never
-//     touched, and the agent can be asked to do this merge itself.
+//     touched, and the agent can be asked to do this merge itself. A merge
+//     that came out clean only because mergiraf resolved files plain git
+//     would have conflicted on is kept (committed in the folder) and comes
+//     back as outcome auto_resolved with those files, again before the
+//     user's checkout is touched: the next Land finds the base already
+//     merged and carries on.
 //  2. Under the repo lock, re-check the base is still B (if not, release
 //     and start over from step 1), then `git merge --no-ff` the session
 //     branch in the user's checkout with the user's identity. Any non-zero
@@ -59,9 +65,22 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 		b = strings.TrimSpace(b)
 
 		// Step 1, in the session's folder. It lands on the base in the end,
-		// so it carries the user's identity too.
-		out, err := userGit(ctx, t.Folder, "merge", "--no-edit",
-			"-m", "Merge "+t.Base+" into "+t.Branch, "-m", trailer(t.SessionID), b)
+		// so it carries the user's identity too. With mergiraf registered,
+		// a dry run first names the files plain git would conflict on: if
+		// the real merge then comes back clean, mergiraf resolved them, and
+		// Land stops here so the user can check its work before it reaches
+		// their checkout. A driver whose binary is gone is swapped for
+		// plain git rather than left to fail every file.
+		var resolvable []string
+		merge := []string{"merge", "--no-edit",
+			"-m", "Merge " + t.Base + " into " + t.Branch, "-m", trailer(t.SessionID), b}
+		switch mergeDriverIn(ctx, t.Folder) {
+		case driverActive:
+			resolvable, _ = plainConflicts(ctx, t.Folder, b)
+		case driverDangling:
+			merge = append(mergedriver.PlainText(), merge...)
+		}
+		out, err := userGit(ctx, t.Folder, merge...)
 		if err != nil {
 			conflicted, _ := Git(ctx, t.Folder, "diff", "--name-only", "--diff-filter=U")
 			abortMerge(ctx, t.Folder)
@@ -70,6 +89,15 @@ func landSteps(ctx context.Context, t Target, lockWait time.Duration) (contracts
 				return res, nil
 			}
 			return refuse(contracts.LandMergeFailed, gitOutput(out, err), nil)
+		}
+
+		if len(resolvable) > 0 {
+			head, err := Git(ctx, t.Folder, "rev-parse", "HEAD")
+			if err != nil {
+				return contracts.LandResult{}, err
+			}
+			res.Outcome, res.Files, res.MergeCommit = contracts.LandAutoResolved, resolvable, strings.TrimSpace(head)
+			return res, nil
 		}
 
 		if afterStep1 != nil {

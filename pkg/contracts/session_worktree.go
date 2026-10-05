@@ -82,13 +82,16 @@ type CommitRequest struct {
 }
 
 // CommitSource* name who made a commit mads recorded itself (commit.created
-// "source"): the Commit button, Land's merge commit, or a pipeline saving
-// the agent's uncommitted edits before merging a task over them (D8).
+// "source"): the Commit button, Land's merge commit, a pipeline saving
+// the agent's uncommitted edits before merging a task over them (D8), or
+// Land's step-1 merge of the base into the session branch when mergiraf
+// resolved files in it (recorded so the Files tab can show the result).
 // Commits the agent makes on its own (hook-reported) carry none.
 const (
 	CommitSourceCommit       = "commit"
 	CommitSourceLand         = "land"
 	CommitSourcePipelineSave = "pipeline_save"
+	CommitSourceLandBase     = "land_base"
 )
 
 // Commit per-path outcomes.
@@ -178,6 +181,12 @@ const (
 	LandLanded     = "landed"
 	LandConflicted = "conflicted"
 	LandRefused    = "refused"
+	// LandAutoResolved: bringing the base into the session branch (step 1)
+	// merged cleanly only because mergiraf resolved files plain git would
+	// have left conflicted. The merge is committed in the session's folder
+	// (MergeCommit) and Land stopped there, before the user's checkout, so
+	// the user can check the resolutions; the next Land carries on.
+	LandAutoResolved = "auto_resolved"
 )
 
 // Land refusal reasons (LandRefusal.Reason, LandResult.Reason).
@@ -216,17 +225,19 @@ type LandRefusal struct {
 }
 
 // LandResult is POST /sessions/{id}/land's answer — always HTTP 200 for
-// these three outcomes; only an unexpected failure is an error status.
+// these four outcomes; only an unexpected failure is an error status.
 type LandResult struct {
 	Outcome string `json:"outcome"`
 	Branch  string `json:"branch,omitempty"`
 	Base    string `json:"base,omitempty"`
-	// MergeCommit is the --no-ff merge commit on the base (landed).
+	// MergeCommit is the --no-ff merge commit on the base (landed), or the
+	// step-1 merge commit in the session's folder (auto_resolved).
 	MergeCommit string `json:"merge_commit,omitempty"`
 	// FastForwarded: the session branch caught up with the base afterwards
 	// (best-effort; false is not an error).
 	FastForwarded bool `json:"fast_forwarded,omitempty"`
-	// Files: the conflicted files (conflicted), or LandRefusal.Files.
+	// Files: the conflicted files (conflicted), the files mergiraf
+	// resolved (auto_resolved), or LandRefusal.Files.
 	Files  []string `json:"files,omitempty"`
 	Reason string   `json:"reason,omitempty"`
 	Detail string   `json:"detail,omitempty"`

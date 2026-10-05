@@ -408,10 +408,48 @@ Where the build differs from the decisions above, and why:
 - **A pre-existing bug** in `githook.EnsureInstalled` planted files inside linked
   worktrees. It's fixed, because otherwise every isolated folder would read as
   dirty.
+- **Mergiraf in Land (added 2026-10-05).**
+  - [mergiraf](https://mergiraf.org) is a syntax-aware git merge driver. It
+    stays an optional runtime tool, never a build dependency. Install it with
+    `brew install mergiraf` or the release binary from
+    <https://codeberg.org/mergiraf/mergiraf/releases>. Without it, nothing
+    below happens and Land is exactly as described above.
+  - Detection and registration live in `pkg/mergedriver`, shared with the
+    pipeline engine. Ensure registers it for the repo whenever it's installed
+    (PATH, then Homebrew's prefixes and `~/.cargo/bin`), so Land gets it in
+    every repo, not only ones a pipeline touched. The registration is a
+    `merge.mergiraf.driver` config entry and a `* merge=mergiraf` line in
+    `<git-common-dir>/info/attributes`. Both are shared by the user's checkout
+    and every worktree of it, so the user's own merges there use mergiraf too.
+    It's idempotent and best-effort.
+  - **Land stops when mergiraf resolved anything.** Before step 1's merge, a
+    dry run (`git merge-tree --write-tree`, with the driver swapped for
+    `git merge-file`, git's own text merge) lists the files plain git would
+    leave conflicted. If the real merge then succeeds, mergiraf resolved
+    exactly those files. Land keeps that merge commit in the session folder,
+    records it (source `land_base`, so the Files tab can diff it), emits
+    `merge.auto_resolved` with the files and the commit, and returns
+    `auto_resolved`. It stops before the repo lock, so the user's checkout is
+    untouched. The card says "main had moved on; mergiraf merged N files
+    automatically", and offers **Ask the agent to check**, **See the changes**
+    (the Files tab, on the merge commit) and **Land again**. The next Land
+    finds the base already merged and goes straight to step 2.
+  - Plain-git clean merges still land in one click. A conflict mergiraf can't
+    resolve is still `conflicted`, as before.
+  - Limits: detection needs git 2.38+ (`merge-tree --write-tree`); on older
+    git the dry run can't answer and Land behaves as it did before this
+    change. Only a driver registered under the name `mergiraf` is recognised.
+    A driver left registered after mergiraf is uninstalled would fail every
+    file both sides changed, so Land merges with plain git when the
+    registered binary is gone.
+  - Pipeline task merges into a session folder (`engine/sessionmerge.go`) are
+    unchanged. They use mergiraf when it's registered, and don't stop.
 
 **Deploying** needs the Data Service, Router, session and pipeline binaries
 rebuilt, and the Data Service and Router restarted, because of new routes:
-`PATCH /sessions/{id}/worktree` and `DELETE /sessions/{id}/commits/{hash}`. The
+`PATCH /sessions/{id}/worktree` and `DELETE /sessions/{id}/commits/{hash}`.
+The Data Service must also know the `merge.auto_resolved` event type before
+any Land can emit it. The
 built-in isolation default is still `worktree`. So after deploy, every new
 session started in a git repo is isolated. Existing sessions keep running where
 they always have.
