@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -14,49 +13,6 @@ import (
 	"github.com/drewkidwell/mads/pkg/template"
 	"github.com/drewkidwell/mads/providers/fake"
 )
-
-// TestAcquireWorkspaceFlockBlocksUntilReleased exercises the raw lock
-// primitive directly: a second acquire on the same path blocks until the
-// first releases, proving cross-process exclusion (not just in-process,
-// which landQueue already provides).
-func TestAcquireWorkspaceFlockBlocksUntilReleased(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("acquireWorkspaceFlock is a no-op on non-unix hosts")
-	}
-	path := filepath.Join(t.TempDir(), "mads-land.lock")
-
-	release1, err := acquireWorkspaceFlock(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	acquired := make(chan struct{})
-	go func() {
-		release2, err := acquireWorkspaceFlock(path)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		close(acquired)
-		_ = release2()
-	}()
-
-	select {
-	case <-acquired:
-		t.Fatal("second acquire succeeded while the first still held the lock")
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	if err := release1(); err != nil {
-		t.Fatal(err)
-	}
-
-	select {
-	case <-acquired:
-	case <-time.After(2 * time.Second):
-		t.Fatal("second acquire never unblocked after release")
-	}
-}
 
 // TestCrossEngineWorkspaceLockSerializesLandAttempts runs two independent
 // engine.Run invocations concurrently — two "engine processes" in every way
