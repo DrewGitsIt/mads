@@ -1,4 +1,13 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, MenuItemConstructorOptions, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  MenuItemConstructorOptions,
+  shell,
+} from "electron";
 import { join } from "node:path";
 import { registerPtyHandlers } from "./pty/ptyHost";
 
@@ -38,6 +47,50 @@ const menuTemplate: MenuItemConstructorOptions[] = [
 ];
 
 Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+
+// App-wide, registered once: ipcMain.handle throws on a second registration
+// for the same channel, so anything here must not live in createWindow
+// (macOS re-runs it from "activate" after the last window closes).
+function registerAppHandlers(): void {
+  // Native right-click menu for the docked/terminal shell (TerminalView).
+  // Resolves the clicked item, or null if the menu was dismissed without one
+  // — the renderer performs the actual copy/paste/select/clear since only it
+  // holds the xterm Terminal instance and the text under selection.
+  ipcMain.handle(
+    "contextMenu:terminal",
+    (event, state: { hasSelection: boolean }) =>
+      new Promise<"copy" | "paste" | "selectAll" | "clear" | null>((resolve) => {
+        // Menu.popup's callback always fires once the menu closes, including
+        // right after a successful item click — guard against resolving twice.
+        let settled = false;
+        const resolveOnce = (action: "copy" | "paste" | "selectAll" | "clear" | null) => {
+          if (settled) return;
+          settled = true;
+          resolve(action);
+        };
+        const template: MenuItemConstructorOptions[] = [
+          { label: "Copy", enabled: state.hasSelection, click: () => resolveOnce("copy") },
+          { label: "Paste", click: () => resolveOnce("paste") },
+          { type: "separator" },
+          { label: "Select All", click: () => resolveOnce("selectAll") },
+          { label: "Clear", click: () => resolveOnce("clear") },
+        ];
+        const parent = BrowserWindow.fromWebContents(event.sender);
+        Menu.buildFromTemplate(template).popup({
+          window: parent ?? undefined,
+          callback: () => resolveOnce(null),
+        });
+      }),
+  );
+
+  // Clipboard access for the terminal's copy/paste, routed through main's
+  // (unsandboxed) `clipboard` module — see preload.ts's `clipboard` namespace
+  // for why this isn't just called directly from the preload script.
+  ipcMain.handle("clipboard:read-text", () => clipboard.readText());
+  ipcMain.handle("clipboard:write-text", (_event, text: string) => {
+    clipboard.writeText(text);
+  });
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -95,7 +148,10 @@ function createWindow(): void {
   win.loadURL(DEV_SERVER_URL ?? ROUTER_BASE_URL);
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  registerAppHandlers();
+  createWindow();
+});
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {

@@ -1,8 +1,9 @@
 import { createRef } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, fireEvent, waitFor } from "@testing-library/react";
+import { Terminal } from "@xterm/xterm";
 import { TerminalView, type TerminalViewHandle } from "./TerminalView";
-import type { PtyBridge } from "./ptyBridge";
+import type { PtyBridge, TerminalMenuAction } from "./ptyBridge";
 
 /** In-memory PtyBridge stub — no Electron, no IPC, no node-pty. */
 function makeStubBridge() {
@@ -147,5 +148,183 @@ describe("TerminalView (renderer contract)", () => {
     // from the new bridge and stale reads from the old one could both fire.
     expect(stub1.dataListeners.get("pty-1")?.size ?? 0).toBe(0);
     expect(stub2.dataListeners.get("pty-1")?.size ?? 0).toBe(1);
+  });
+});
+
+describe("TerminalView (copy/paste)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (window as { mads?: unknown }).mads;
+  });
+
+  it("plain Ctrl+C still sends SIGINT down the pty (ETX) rather than copying", async () => {
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "c", code: "KeyC", keyCode: 67, which: 67, ctrlKey: true });
+
+    await waitFor(() => expect(bridge.write).toHaveBeenCalledWith("pty-1", "\u0003"));
+  });
+
+  it("Ctrl+Shift+C copies the selection via the Electron clipboard bridge and writes nothing to the pty", async () => {
+    vi.spyOn(Terminal.prototype, "getSelection").mockReturnValue("hello world");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    (window as { mads?: unknown }).mads = { clipboard: { writeText, readText: vi.fn() } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("hello world"));
+    expect(bridge.write).not.toHaveBeenCalled();
+  });
+
+  it("Cmd+C (no shift) also copies on macOS, via the same bridge", async () => {
+    vi.spyOn(Terminal.prototype, "getSelection").mockReturnValue("hello world");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    (window as { mads?: unknown }).mads = { clipboard: { writeText, readText: vi.fn() } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "c", code: "KeyC", metaKey: true });
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("hello world"));
+  });
+
+  it("a Ctrl+Shift+C with no selection is a no-op — never clobbers the clipboard with an empty string", async () => {
+    vi.spyOn(Terminal.prototype, "getSelection").mockReturnValue("");
+    const writeText = vi.fn();
+    (window as { mads?: unknown }).mads = { clipboard: { writeText, readText: vi.fn() } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
+
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+Shift+V pastes clipboard text into the pty via the Electron bridge", async () => {
+    const readText = vi.fn().mockResolvedValue("pasted text");
+    (window as { mads?: unknown }).mads = { clipboard: { writeText: vi.fn(), readText } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "V", code: "KeyV", ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(bridge.write).toHaveBeenCalledWith("pty-1", "pasted text"));
+  });
+
+  it("falls back to navigator.clipboard outside Electron (no window.mads)", async () => {
+    vi.spyOn(Terminal.prototype, "getSelection").mockReturnValue("hello world");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText, readText: vi.fn().mockResolvedValue("") },
+      configurable: true,
+    });
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    textarea.focus();
+    fireEvent.keyDown(textarea, { key: "C", code: "KeyC", ctrlKey: true, shiftKey: true });
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("hello world"));
+  });
+});
+
+describe("TerminalView (context menu)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (window as { mads?: unknown }).mads;
+  });
+
+  it("has no custom context menu when window.mads is absent — leaves the platform default alone", async () => {
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const terminal = container.querySelector('[data-testid="terminal-view"]') as HTMLElement;
+    const notPrevented = fireEvent.contextMenu(terminal);
+
+    expect(notPrevented).toBe(true);
+  });
+
+  it("asks main for a native menu with hasSelection, and performs the returned action", async () => {
+    vi.spyOn(Terminal.prototype, "getSelection").mockReturnValue("hello world");
+    vi.spyOn(Terminal.prototype, "hasSelection").mockReturnValue(true);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const showTerminal = vi.fn<(state: { hasSelection: boolean }) => Promise<TerminalMenuAction | null>>(
+      () => Promise.resolve("copy"),
+    );
+    (window as { mads?: unknown }).mads = {
+      contextMenu: { showTerminal },
+      clipboard: { writeText, readText: vi.fn() },
+    };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const terminal = container.querySelector('[data-testid="terminal-view"]') as HTMLElement;
+    const notPrevented = fireEvent.contextMenu(terminal);
+
+    expect(notPrevented).toBe(false);
+    expect(showTerminal).toHaveBeenCalledWith({ hasSelection: true });
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("hello world"));
+  });
+
+  it("performs 'clear' when that's the action main resolves with", async () => {
+    const clear = vi.spyOn(Terminal.prototype, "clear").mockImplementation(() => {});
+    const showTerminal = vi.fn<(state: { hasSelection: boolean }) => Promise<TerminalMenuAction | null>>(
+      () => Promise.resolve("clear"),
+    );
+    (window as { mads?: unknown }).mads = { contextMenu: { showTerminal } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const terminal = container.querySelector('[data-testid="terminal-view"]') as HTMLElement;
+    fireEvent.contextMenu(terminal);
+
+    await waitFor(() => expect(clear).toHaveBeenCalled());
+  });
+
+  it("does nothing when the menu is dismissed without an action (resolves null)", async () => {
+    const showTerminal = vi.fn<(state: { hasSelection: boolean }) => Promise<TerminalMenuAction | null>>(
+      () => Promise.resolve(null),
+    );
+    (window as { mads?: unknown }).mads = { contextMenu: { showTerminal } };
+
+    const { bridge } = makeStubBridge();
+    const { container } = render(<TerminalView bridge={bridge} />);
+    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+    const terminal = container.querySelector('[data-testid="terminal-view"]') as HTMLElement;
+    fireEvent.contextMenu(terminal);
+
+    await waitFor(() => expect(showTerminal).toHaveBeenCalled());
+    expect(bridge.write).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { isAbsolute } from "node:path";
 import os from "node:os";
 import type { IpcMain, WebContents } from "electron";
+import { shellEnv } from "./shellEnv";
 
 /**
  * Main-process PTY lifecycle. node-pty is a native addon compiled against a
@@ -62,6 +64,19 @@ function defaultShell(): string {
 }
 
 /**
+ * Resolves the cwd a spawn request asked for. Only an absolute path is
+ * honored: a relative one (notably the cwd "." that sessions started before
+ * recordedCwd in services/session/internal/runner still carry) would resolve against
+ * Electron main's own process.cwd(), which is wherever `npm --prefix ui
+ * start` launched from (the checkout's ui/ dir), not anywhere the user would
+ * recognize. Falling back to HOME matches a plain terminal's own default.
+ */
+export function resolveCwd(cwd: string | undefined): string | undefined {
+  if (cwd && isAbsolute(cwd)) return cwd;
+  return process.env.HOME;
+}
+
+/**
  * Registers the pty:* IPC handlers this window's preload/renderer talk to.
  * One instance of this host tracks its own set of live ptys, keyed by a
  * generated id — the renderer never sees anything node-pty specific.
@@ -79,8 +94,8 @@ export function registerPtyHandlers(ipcMain: IpcMain, webContents: WebContents):
       name: "xterm-256color",
       cols: options?.cols ?? 80,
       rows: options?.rows ?? 24,
-      cwd: options?.cwd ?? process.env.HOME,
-      env: process.env,
+      cwd: resolveCwd(options?.cwd),
+      env: shellEnv(process.env),
     });
     const id = randomUUID();
     ptys.set(id, proc);

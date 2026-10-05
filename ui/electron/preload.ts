@@ -60,4 +60,30 @@ const dialog = {
     ipcRenderer.invoke("dialog:pick-directory", options),
 };
 
-contextBridge.exposeInMainWorld("mads", { pty, badge, dialog });
+type TerminalMenuAction = "copy" | "paste" | "selectAll" | "clear";
+
+/**
+ * Renderer-facing context-menu namespace — mirrors the TerminalContextMenu
+ * interface in ui/src/conversation/TerminalRenderer/ptyBridge.ts. Main pops
+ * the native menu and resolves which item (if any) was clicked; the renderer
+ * carries out the action itself since only it holds the Terminal instance.
+ */
+const contextMenu = {
+  showTerminal: (state: { hasSelection: boolean }): Promise<TerminalMenuAction | null> =>
+    ipcRenderer.invoke("contextMenu:terminal", state),
+};
+
+/**
+ * Renderer-facing clipboard namespace — mirrors the ClipboardBridge interface
+ * in ptyBridge.ts. Routed through main rather than calling the `clipboard`
+ * module here directly: this window's BrowserWindow uses Electron's default
+ * `sandbox: true`, and a sandboxed preload's restricted `require('electron')`
+ * doesn't include `clipboard` (only contextBridge/ipcRenderer/a handful of
+ * others) — main is unsandboxed and always has it.
+ */
+const clipboard = {
+  readText: (): Promise<string> => ipcRenderer.invoke("clipboard:read-text"),
+  writeText: (text: string): Promise<void> => ipcRenderer.invoke("clipboard:write-text", text),
+};
+
+contextBridge.exposeInMainWorld("mads", { pty, badge, dialog, contextMenu, clipboard });
