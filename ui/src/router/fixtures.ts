@@ -18,6 +18,8 @@ import type {
   Config,
   CostMetrics,
   DiagnoseResult,
+  ConversationImportResult,
+  ConversationImportScan,
   EnvCandidates,
   Envelope,
   FastModelStatus,
@@ -1337,6 +1339,14 @@ export class FakeRouterClient implements RouterClient {
 
   async listCredentialEnvCandidates(): Promise<EnvCandidates> {
     throw new Error("not fixtured: listCredentialEnvCandidates");
+  }
+
+  async scanConversationImports(): Promise<ConversationImportScan> {
+    throw new Error("not fixtured: scanConversationImports");
+  }
+
+  async importConversations(): Promise<ConversationImportResult> {
+    throw new Error("not fixtured: importConversations");
   }
 
   async importCredentials(): Promise<{ imported: string[] }> {
