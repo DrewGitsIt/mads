@@ -361,8 +361,10 @@ func RefreshCounts(ctx context.Context, store Store, t Target) error {
 // Cleanup removes a deleted session's worktree and branch (D7), under the
 // session lock, then the lock file itself. Best-effort and logged: it
 // never blocks the delete, and does nothing for a session that was never
-// isolated. Call it only once the session's child is gone — git removes a
-// worktree even with a process working inside it.
+// isolated, or whose folder has some other branch checked out. Call it
+// only once the session's child is gone — git removes a worktree even with
+// a process working inside it — and only once nothing else works in the
+// folder (the Router checks for joined sessions and a running pipeline).
 func Cleanup(ctx context.Context, sess contracts.Session) {
 	if sess.WorktreeDir == "" {
 		return
@@ -385,7 +387,17 @@ func Cleanup(ctx context.Context, sess contracts.Session) {
 	if branch == "" {
 		branch = Branch(sess.ID)
 	}
+	kept := false
 	err := WithSessionLock(ctx, repo, sess.ID, func() error {
+		// Only ever this session's own folder: one on some other branch
+		// (or none git can name) is not ours to throw away.
+		if exists(sess.WorktreeDir) {
+			if on, err := CurrentBranch(ctx, sess.WorktreeDir); err != nil || on != branch {
+				log.Printf("sessionwt: cleanup %s: %s does not have %s checked out (%q, %v); keeping it and the branch", sess.ID, sess.WorktreeDir, branch, on, err)
+				kept = true
+				return nil
+			}
+		}
 		// Twice --force: removes it even if locked, as a deleted session's
 		// folder may be.
 		if out, err := Git(ctx, repo, "worktree", "remove", "--force", "--force", sess.WorktreeDir); err != nil && exists(sess.WorktreeDir) {
@@ -401,6 +413,9 @@ func Cleanup(ctx context.Context, sess contracts.Session) {
 	})
 	if err != nil {
 		log.Printf("sessionwt: cleanup %s: %v", sess.ID, err)
+		return
+	}
+	if kept {
 		return
 	}
 	if p, err := SessionLockPath(ctx, repo, sess.ID); err == nil {

@@ -49,6 +49,19 @@ type WorktreeStatus struct {
 	// LandBlocked says why Land would be refused right now; nil when it
 	// would run. Same reason codes as LandResult.
 	LandBlocked *LandRefusal `json:"land_blocked,omitempty"`
+	// SharedWith are the other sessions working inside this session's
+	// folder (a linked session that joined it at start), and
+	// PipelineRunning is whether a pipeline run for this session is
+	// active. Either one means delete keeps the folder and branch. The
+	// Router's to set; the delete dialog says so.
+	SharedWith      []WorktreeTenant `json:"shared_with,omitempty"`
+	PipelineRunning bool             `json:"pipeline_running,omitempty"`
+}
+
+// WorktreeTenant names another session working in a session's folder.
+type WorktreeTenant struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // CommitRequest is POST /sessions/{id}/commit.

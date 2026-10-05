@@ -257,3 +257,101 @@ func TestDeleteSessionRemovesWorktree(t *testing.T) {
 		t.Error("delete touched the user's checkout")
 	}
 }
+
+// deleteSession deletes a session through the Router, wanting 204.
+func deleteSession(t *testing.T, url, id string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url+"/sessions/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: status %d", resp.StatusCode)
+	}
+}
+
+// A linked session that joined the folder still works in it: status names
+// it, and delete keeps the folder and branch.
+func TestDeleteSessionKeepsFolderAJoinedSessionUses(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	owner, repo := isolatedRecord(t, data, "owner")
+	joiner := contracts.Session{Name: "joiner", Provider: "fake", Dir: owner.WorktreeDir, Isolation: contracts.IsolationCurrentDir}
+	if err := data.CreateSession(context.Background(), &joiner); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + owner.ID + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := decodeJSON[contracts.WorktreeStatus](t, resp)
+	if len(st.SharedWith) != 1 || st.SharedWith[0].ID != joiner.ID || st.SharedWith[0].Name != "joiner" || st.PipelineRunning {
+		t.Errorf("status shared_with = %+v, pipeline %v", st.SharedWith, st.PipelineRunning)
+	}
+
+	deleteSession(t, srv.URL, owner.ID)
+	if _, err := os.Stat(filepath.Join(owner.WorktreeDir, "README.md")); err != nil {
+		t.Errorf("folder removed under the joined session: %v", err)
+	}
+	if out := wtGit(t, repo, "branch", "--list", owner.WorktreeBranch); out == "" {
+		t.Error("branch deleted under the joined session")
+	}
+}
+
+// A pipeline run for the session merges into its folder: status says so,
+// and delete keeps the folder and branch.
+func TestDeleteSessionKeepsFolderARunningPipelineUses(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	ctx := context.Background()
+	repo := wtRepo(t)
+	ws := &contracts.Workspace{Name: "ws", Repos: []contracts.WorkspaceRepo{{Path: repo, Primary: true}}}
+	if err := data.CreateWorkspace(ctx, ws); err != nil {
+		t.Fatal(err)
+	}
+	owner := contracts.Session{Name: "owner", Provider: "fake", Workspace: ws.ID, Dir: repo, Isolation: contracts.IsolationWorktree}
+	if err := data.CreateSession(ctx, &owner); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sessionwt.EnsureWithLock(ctx, sessionwt.Spec{Primary: repo, Root: t.TempDir(), SessionID: owner.ID, Base: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.SetSessionWorktree(ctx, owner.ID, contracts.SessionWorktreePatch{WorktreeDir: &res.Dir, WorktreeBranch: &res.Branch}); err != nil {
+		t.Fatal(err)
+	}
+	owner.WorktreeDir, owner.WorktreeBranch = res.Dir, res.Branch
+	task := &contracts.Task{SessionID: owner.ID, Title: "t1", Status: contracts.StatusReady, Source: "user"}
+	if err := data.CreateTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	tpl := &contracts.Template{Name: "nightly", Source: "name: nightly\nstages:\n  - name: verify\n    command: make test\n"}
+	if err := data.CreateTemplate(context.Background(), tpl); err != nil {
+		t.Fatal(err)
+	}
+	resp := postJSON(t, srv.URL+"/pipelines", map[string]string{"session_id": owner.ID, "template_id": tpl.ID})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("start pipeline: status %d", resp.StatusCode)
+	}
+	_ = resp.Body.Close()
+
+	resp, err = http.Get(srv.URL + "/sessions/" + owner.ID + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := decodeJSON[contracts.WorktreeStatus](t, resp); !st.PipelineRunning || len(st.SharedWith) != 0 {
+		t.Errorf("status pipeline_running = %v, shared_with %+v", st.PipelineRunning, st.SharedWith)
+	}
+
+	deleteSession(t, srv.URL, owner.ID)
+	if _, err := os.Stat(filepath.Join(owner.WorktreeDir, "README.md")); err != nil {
+		t.Errorf("folder removed under the running pipeline: %v", err)
+	}
+	if out := wtGit(t, repo, "branch", "--list", owner.WorktreeBranch); out == "" {
+		t.Error("branch deleted under the running pipeline")
+	}
+}

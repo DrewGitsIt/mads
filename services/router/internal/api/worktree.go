@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -70,18 +72,100 @@ func (s *server) childPath(id, path string) string {
 	return path
 }
 
+// handleSessionWorktree is the session's worktree status, plus what only
+// the Router knows: who else works in the folder, and whether a pipeline
+// run is active — either keeps the folder through a delete.
 func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	s.worktreeRoute(w, r, func(addr string) {
-		s.forwardToChild(w, r, addr, http.MethodGet, s.childPath(id, "/worktree"), nil)
+		status, raw, err := callChild(r.Context(), addr, http.MethodGet, s.childPath(id, "/worktree"), nil)
+		if err != nil {
+			writeErrMsg(w, http.StatusBadGateway, "session child: ", err)
+			return
+		}
+		if status == http.StatusOK {
+			raw = s.withFolderKeepers(r.Context(), id, raw)
+		}
+		writeRaw(w, status, raw)
 	}, func() {
 		st, err := s.worktreeOps().Status(r.Context(), id, sessionwt.Gates{Pipeline: s.sup.HasPipeline(id)})
 		if err != nil {
 			writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
 			return
 		}
-		writeJSON(w, http.StatusOK, st)
+		raw, err := json.Marshal(st)
+		if err != nil {
+			writeErrMsg(w, http.StatusInternalServerError, "worktree status: ", err)
+			return
+		}
+		writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 	})
+}
+
+// withFolderKeepers adds shared_with and pipeline_running to a worktree
+// status body. Added into the body as sent, so nothing the child said is
+// lost in a round trip through the Router's types; a body it can't read
+// goes out unchanged.
+func (s *server) withFolderKeepers(ctx context.Context, id string, raw []byte) []byte {
+	sess, err := s.data.Session(ctx, id)
+	if err != nil {
+		return raw
+	}
+	tenants, pipeline := s.folderKeepers(ctx, sess)
+	if len(tenants) == 0 && !pipeline {
+		return raw
+	}
+	var body map[string]json.RawMessage
+	if json.Unmarshal(raw, &body) != nil || body == nil {
+		return raw
+	}
+	if len(tenants) > 0 {
+		body["shared_with"], _ = json.Marshal(tenants)
+	}
+	if pipeline {
+		body["pipeline_running"] = json.RawMessage("true")
+	}
+	out, err := json.Marshal(body)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// folderKeepers is what still works in sess's worktree folder besides sess
+// itself: other sessions whose Dir or Cwd is inside it (a linked session
+// joins its counterpart's folder at start, validateStagedLinks), and a
+// pipeline run for sess, which merges its tasks there. Either one means the
+// folder and branch must outlive sess's delete. A failed session listing
+// counts as a tenant, so a Data Service blip never costs anyone a folder.
+func (s *server) folderKeepers(ctx context.Context, sess contracts.Session) (tenants []contracts.WorktreeTenant, pipeline bool) {
+	pipeline = s.sup.HasPipeline(sess.ID)
+	if sess.WorktreeDir == "" {
+		return nil, pipeline
+	}
+	all, err := s.data.Sessions(ctx, "")
+	if err != nil {
+		log.Printf("router: list sessions for %s's folder: %v", sess.ID, err)
+		return []contracts.WorktreeTenant{{Name: "another session"}}, pipeline
+	}
+	for _, o := range all {
+		if o.ID == sess.ID {
+			continue
+		}
+		if within(sess.WorktreeDir, o.Dir) || within(sess.WorktreeDir, o.Cwd) {
+			tenants = append(tenants, contracts.WorktreeTenant{ID: o.ID, Name: o.Name})
+		}
+	}
+	return tenants, pipeline
+}
+
+// within reports whether p is root or below it.
+func within(root, p string) bool {
+	if p == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 // handleSessionCommit commits session files. An empty message is drafted

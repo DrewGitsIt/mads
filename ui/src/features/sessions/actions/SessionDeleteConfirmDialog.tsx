@@ -9,7 +9,7 @@ import {
 } from "../rail/railGroups";
 import type { OpenTaskBreakdown, RailStatus, SessionAgentState } from "../rail/railGroups";
 import type { RouterClient } from "../../../router/client";
-import type { Session } from "../../../router/types";
+import type { Session, WorktreeTenant } from "../../../router/types";
 import { isIsolated } from "../../../conversation/Worktree/workState";
 import {
   formatAbsoluteStamp,
@@ -216,12 +216,21 @@ function DeleteDescription({
 /**
  * What deleting an isolated session's folder and branch throws away (D7,
  * mockup docs/mockups/session-worktrees.html §5), recounted when the
- * dialog opens; the record's counts stand in until then.
+ * dialog opens; the record's counts stand in until then. When another
+ * session works in that folder, or a pipeline run merges into it, delete
+ * keeps the folder and branch, and this says so instead.
  */
 function UnlandedWork({ session, routerClient }: { session: Session; routerClient?: RouterClient }) {
-  const [counts, setCounts] = useState({
+  const [counts, setCounts] = useState<{
+    unlanded: number;
+    uncommitted: number;
+    sharedWith: WorktreeTenant[];
+    pipeline: boolean;
+  }>({
     unlanded: session.unlanded_count ?? 0,
     uncommitted: session.uncommitted_count ?? 0,
+    sharedWith: [],
+    pipeline: false,
   });
   useEffect(() => {
     if (!routerClient) return;
@@ -229,13 +238,30 @@ function UnlandedWork({ session, routerClient }: { session: Session; routerClien
     routerClient
       .getWorktreeStatus(session.id)
       .then((st) => {
-        if (!cancelled) setCounts({ unlanded: st.unlanded_count, uncommitted: st.uncommitted_count });
+        if (!cancelled)
+          setCounts({
+            unlanded: st.unlanded_count,
+            uncommitted: st.uncommitted_count,
+            sharedWith: st.shared_with ?? [],
+            pipeline: st.pipeline_running ?? false,
+          });
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [routerClient, session.id]);
+  if (counts.sharedWith.length > 0 || counts.pipeline) {
+    return (
+      <div className={styles.statePanel} data-delete-work="kept">
+        <div className={styles.stateHead}>
+          <span className={styles.stateDot} aria-hidden="true" />
+          {keptSentence(counts.sharedWith, counts.pipeline)}
+        </div>
+        <div className={styles.stateLine}>Its folder and branch {session.worktree_branch} are kept.</div>
+      </div>
+    );
+  }
   if (counts.unlanded === 0 && counts.uncommitted === 0) return null;
   const parts = [
     counts.unlanded > 0 ? plural(counts.unlanded, "unlanded commit") : "",
@@ -252,6 +278,16 @@ function UnlandedWork({ session, routerClient }: { session: Session; routerClien
       </div>
     </div>
   );
+}
+
+/** Why delete keeps the folder: who is working in it, a session or a pipeline run. */
+export function keptSentence(sharedWith: WorktreeTenant[], pipeline: boolean): string {
+  if (sharedWith.length > 0) {
+    const names = sharedWith.map((t) => `“${t.name || "Untitled session"}”`);
+    const who = names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    return `Its folder stays: ${who} ${names.length === 1 ? "is" : "are"} working in it.`;
+  }
+  return pipeline ? "Its folder stays: a pipeline run is still merging into it." : "";
 }
 
 /** The turn's elapsed counter, on the rail's own 1s clock. */

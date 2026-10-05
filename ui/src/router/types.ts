@@ -898,6 +898,15 @@ export interface WorktreeStatus {
   unlanded_count: number;
   last_commit?: WorktreeCommit;
   land_blocked?: LandRefusal;
+  /** Router-added: other sessions working inside this folder (a linked session that joined it). Delete keeps the folder while any do. */
+  shared_with?: WorktreeTenant[];
+  /** Router-added: a pipeline run for this session is active. Delete keeps the folder then too. */
+  pipeline_running?: boolean;
+}
+
+export interface WorktreeTenant {
+  id: string;
+  name: string;
 }
 
 export interface CommitRequest {

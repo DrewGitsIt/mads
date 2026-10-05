@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -398,7 +399,9 @@ func writeWakeError(w http.ResponseWriter, err error) {
 // branch go too (docs/SESSION-WORKTREES-DESIGN.md D7) — after the child,
 // since git removes a folder even with a process working in it, and after
 // the record, so a failed delete never loses work. Best-effort: a cleanup
-// problem is logged and never fails the delete.
+// problem is logged and never fails the delete. The folder and branch stay
+// while anything else works in that folder (folderKeepers); the dialog says
+// so beforehand.
 func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	sess, err := s.data.Session(r.Context(), id)
@@ -418,7 +421,14 @@ func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	sessionwt.Cleanup(context.WithoutCancel(r.Context()), sess)
+	// Not while anything else still works in the folder: a linked session
+	// that joined it, or this session's pipeline run.
+	ctx := context.WithoutCancel(r.Context())
+	if tenants, pipeline := s.folderKeepers(ctx, sess); len(tenants) > 0 || pipeline {
+		log.Printf("router: delete %s: keeping its folder %s and branch: other sessions work in it %v, pipeline running %v", id, sess.WorktreeDir, tenants, pipeline)
+	} else {
+		sessionwt.Cleanup(ctx, sess)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

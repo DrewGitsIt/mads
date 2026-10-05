@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { SessionDeleteConfirmDialog, sessionDeleteState } from "./SessionDeleteConfirmDialog";
+import { SessionDeleteConfirmDialog, keptSentence, sessionDeleteState } from "./SessionDeleteConfirmDialog";
 import { SessionRail } from "../rail/SessionRail";
 import { SessionWorkspace } from "../workspace/SessionWorkspace";
 import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf } from "../rail/railGroups";
@@ -300,6 +300,40 @@ describe("SessionDeleteConfirmDialog — an isolated session's work (D7)", () =>
     render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
     await waitFor(() => expect(spy).toHaveBeenCalledWith("s1"));
     expect(screen.queryByText(/will be discarded/)).toBeNull();
+  });
+
+  it("says the folder stays while a joined session works in it", async () => {
+    const client = new FakeRouterClient();
+    client.worktreeStatus = {
+      ...client.worktreeStatus,
+      unlanded_count: 2,
+      shared_with: [{ id: "s2", name: "Reviewer" }],
+    };
+    render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByText("Its folder stays: “Reviewer” is working in it.")).toBeTruthy();
+    expect(screen.getByText("Its folder and branch mads/session/s1 are kept.")).toBeTruthy();
+    expect(screen.queryByText(/will be discarded/)).toBeNull();
+  });
+
+  it("says the folder stays while a pipeline run merges into it", async () => {
+    const client = new FakeRouterClient();
+    client.worktreeStatus = { ...client.worktreeStatus, uncommitted_count: 1, pipeline_running: true };
+    render(<SessionDeleteConfirmDialog open session={isolated} routerClient={client} onConfirm={vi.fn()} onCancel={vi.fn()} />);
+    expect(await screen.findByText("Its folder stays: a pipeline run is still merging into it.")).toBeTruthy();
+    expect(screen.queryByText(/will be discarded/)).toBeNull();
+  });
+
+  it("names every session working in the folder", () => {
+    expect(
+      keptSentence(
+        [
+          { id: "a", name: "A" },
+          { id: "b", name: "" },
+          { id: "c", name: "C" },
+        ],
+        true,
+      ),
+    ).toBe("Its folder stays: “A”, “Untitled session” and “C” are working in it.");
   });
 
   it("doesn't ask git about a session working in place — its folder isn't deleted", () => {

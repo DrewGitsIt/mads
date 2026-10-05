@@ -769,6 +769,20 @@ func TestCleanup(t *testing.T) {
 	}
 }
 
+// Cleanup removes only the session's own folder: one with some other
+// branch checked out is kept, with the session's branch.
+func TestCleanupKeepsFolderOnAnotherBranch(t *testing.T) {
+	s := newIsolated(t)
+	gitOut(t, s.folder, "checkout", "-q", "-b", "elsewhere")
+	Cleanup(context.Background(), s.store.sess)
+	if _, err := os.Stat(filepath.Join(s.folder, "README.md")); err != nil {
+		t.Errorf("folder removed: %v", err)
+	}
+	if !refExists(context.Background(), s.primary, "refs/heads/mads/session/ses_test") {
+		t.Error("branch deleted")
+	}
+}
+
 // The draft's diff covers tracked changes and new files, and is cut to
 // the limit.
 func TestDraftDiff(t *testing.T) {
