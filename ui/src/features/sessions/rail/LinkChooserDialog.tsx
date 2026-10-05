@@ -313,10 +313,11 @@ export function LinkChooserDialog({
         {generalError && <p className={styles.error}>{generalError}</p>}
         {fieldErrors.length > 0 && (
           <ul className={styles.fieldErrors}>
+            {/* The message alone: the field is a wire key ("worktree",
+                "direction"), and every refusal a person can reach from here
+                is already a whole sentence about the sessions they picked. */}
             {fieldErrors.map((fe, i) => (
-              <li key={i}>
-                {fe.field}: {fe.message}
-              </li>
+              <li key={i}>{fe.message.charAt(0).toUpperCase() + fe.message.slice(1)}</li>
             ))}
           </ul>
         )}

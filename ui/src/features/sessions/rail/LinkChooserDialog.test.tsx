@@ -176,6 +176,8 @@ describe("LinkChooserDialog", () => {
     fireEvent.click(screen.getByText("Create 1 link"));
 
     await waitFor(() => expect(screen.getByText(/opposite direction/)).toBeTruthy());
+    // A sentence, not "direction: a link already…" — the wire field key stays off screen.
+    expect(screen.getByText(/opposite direction/).textContent).toMatch(/^A link already exists/);
     expect(onCreated).not.toHaveBeenCalled();
   });
 
