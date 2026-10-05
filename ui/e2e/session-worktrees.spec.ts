@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
@@ -8,8 +9,9 @@ import { test, expect } from "./fixtures";
  * Session worktrees, end to end (docs/SESSION-WORKTREES-DESIGN.md): a
  * session started in the default (git) workspace works in its own folder
  * and branch; Commit and Land move its work into the user's checkout, with
- * every outcome a card in the conversation; a lost folder comes back; delete
- * takes the folder and branch with it.
+ * every outcome a card in the conversation; a lost folder comes back; a base
+ * change mergiraf merged stops Land for a check; delete takes the folder and
+ * branch with it.
  *
  * The agent's edits are real tool writes by the fake provider: its built-in
  * "write-file <path> <content>" verb (providers/fake/fake.go) writes the
@@ -86,6 +88,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
   const A = `wt-a-${token}.txt`;
   const C = `conflict-${token}.txt`;
   const G = `g-${token}.txt`;
+  const M = `mergiraf-${token}.txt`;
   const goal = `write-file ${A} alpha ${token}`;
   let id: string;
   let name: string;
@@ -315,7 +318,79 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     expect(midMerge(primary)).toBe(false);
   });
 
-  test("g. delete warns about unsaved work, then takes the folder and branch", async ({
+  test("g. a base change mergiraf merged: Land stops for a check, shows the changes, then lands", async ({
+    page,
+    routerURL,
+  }) => {
+    // A file both sides start from, landed so the base and the session share it.
+    await agentWrites(routerURL, id, M, "common line");
+    await waitForSession(routerURL, id, (s) => (s.uncommitted_count ?? 0) === 1);
+    await commitAll(routerURL, id, `Add ${M}`);
+    await landViaAPI(routerURL, id, "landed");
+
+    // The session changes it; so does the user, on the base: plain git conflicts.
+    await agentWrites(routerURL, id, M, "from the session");
+    await waitForSession(routerURL, id, (s) => (s.uncommitted_count ?? 0) === 1);
+    await commitAll(routerURL, id, `Session's ${M}`);
+    writeFileSync(path.join(primary, M), "from the base\n");
+    git(primary, "add", M);
+    git(primary, "commit", "-q", "-m", `Base's ${M}`);
+    const baseHead = git(primary, "rev-parse", "HEAD");
+
+    // mergiraf isn't on this topology's PATH, so a stand-in with its calling
+    // convention is registered for the repo the way pkg/mergedriver does it.
+    // It resolves the conflict by keeping both sides' lines.
+    const unregister = registerStandInMergiraf(primary);
+    try {
+      await page.goto(routerURL);
+      await page.locator('[aria-label="Session list"]').getByText(name, { exact: true }).click();
+      const work = page.locator("[data-work-state]");
+      await expect(work).toHaveAttribute("data-work-state", "land");
+      await work.click();
+
+      const panel = page.locator("#workspace-panel-conversation");
+      const auto = panel.locator('[data-worktree-card="auto-resolved"]');
+      await expect(auto).toBeVisible();
+      await expect(auto).toContainText(`${base} had moved on; mergiraf merged 1 file automatically`);
+      await expect(auto).toContainText(`${M}. Check it, then Land again.`);
+      await shot(page, "11-auto-resolved-card.png", auto);
+
+      // Disk: merged and committed in the session's folder only.
+      expect(git(primary, "rev-parse", "HEAD")).toBe(baseHead);
+      expect(midMerge(primary)).toBe(false);
+      expect(git(folder, "log", "-1", "--format=%P").split(" ")).toContain(baseHead);
+      expect(git(folder, "status", "--porcelain")).toBe("");
+
+      // Ask the agent drafts a message, and sends nothing.
+      await auto.getByRole("button", { name: "Ask the agent to check" }).click();
+      const composer = page.getByPlaceholder(COMPOSER);
+      await expect(composer).toHaveValue(new RegExp(`resolved ${M.replace(/\./g, "\\.")} automatically`));
+      await composer.fill("");
+
+      // See the changes: the Files tab, on the merge commit's file.
+      await auto.getByRole("button", { name: "See the changes" }).click();
+      const files = page.locator("#workspace-panel-files");
+      await expect(files).toBeVisible();
+      await expect(files).toContainText(`Merge ${base} into mads/session/${id}`);
+      await expect(files).toContainText(M);
+      await expect(files.locator(".monaco-diff-editor").first()).toBeVisible({ timeout: 15_000 });
+      const mergeCommit = git(folder, "rev-parse", "--short=7", "HEAD");
+      await expect(files.getByText(`Diff from commit ${mergeCommit}`)).toBeVisible();
+      await shot(page, "12-auto-resolved-changes.png");
+
+      // Back in the conversation, Land again lands it.
+      await page.locator("#workspace-tab-conversation").click();
+      await auto.getByRole("button", { name: "Land again" }).click();
+      await expect(panel.locator('[data-worktree-card="landed"]')).toHaveCount(4);
+      expect(readFileSync(path.join(primary, M), "utf8")).toMatch(/from the (session|base)\nfrom the (base|session)\n/);
+      expect(midMerge(primary)).toBe(false);
+      expect((await getSession(routerURL, id)).unlanded_count ?? 0).toBe(0);
+    } finally {
+      unregister();
+    }
+  });
+
+  test("h. delete warns about unsaved work, then takes the folder and branch", async ({
     page,
     routerURL,
   }) => {
@@ -359,6 +434,40 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     await shot(page, "10-settings-toggle.png");
   });
 });
+
+/** POST /sessions/{id}/land — setup, where the card isn't under test. */
+async function landViaAPI(routerURL: string, id: string, want: string): Promise<void> {
+  const res = await fetch(`${routerURL}/sessions/${id}/land`, { method: "POST" });
+  if (!res.ok) throw new Error(`land: ${res.status} ${await res.text()}`);
+  const body = (await res.json()) as { outcome: string };
+  if (body.outcome !== want) throw new Error(`land: ${JSON.stringify(body)}, want ${want}`);
+}
+
+/**
+ * Registers a stand-in for mergiraf as dir's repository merge driver, the
+ * way pkg/mergedriver registers the real one: merge.mergiraf.driver plus
+ * "* merge=mergiraf" in the shared git dir's info/attributes. The stand-in
+ * takes mergiraf's arguments and resolves every conflict by keeping both
+ * sides' lines (git merge-file --union). Returns the undo.
+ */
+function registerStandInMergiraf(dir: string): () => void {
+  const binDir = mkdtempSync(path.join(tmpdir(), "mergiraf-standin-"));
+  const bin = path.join(binDir, "mergiraf");
+  writeFileSync(bin, '#!/bin/sh\nexec git merge-file --union "$4" "$3" "$5"\n', { mode: 0o755 });
+  git(dir, "config", "merge.mergiraf.name", "mergiraf");
+  git(dir, "config", "merge.mergiraf.driver", `${bin} merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L`);
+  const common = path.resolve(dir, git(dir, "rev-parse", "--git-common-dir"));
+  const attrs = path.join(common, "info", "attributes");
+  mkdirSync(path.dirname(attrs), { recursive: true });
+  const before = existsSync(attrs) ? readFileSync(attrs, "utf8") : undefined;
+  writeFileSync(attrs, `${before ?? ""}* merge=mergiraf\n`);
+  return () => {
+    git(dir, "config", "--remove-section", "merge.mergiraf");
+    if (before === undefined) rmSync(attrs, { force: true });
+    else writeFileSync(attrs, before);
+    rmSync(binDir, { recursive: true, force: true });
+  };
+}
 
 /** POST /sessions/{id}/commit with every uncommitted session file — setup, where the dialog isn't under test. */
 async function commitAll(routerURL: string, id: string, message: string): Promise<void> {
