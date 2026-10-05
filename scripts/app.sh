@@ -6,8 +6,51 @@
 # THIS checkout (their /health reports it), since the Router serves the UI
 # from its own cwd's ui/dist: a Router left running by another checkout would
 # show that checkout's UI and backend with no hint. MADS_REUSE_SERVICES=1
-# reuses whatever is running anyway.
+# reuses whatever is running anyway; --restart stops whatever is running and
+# starts fresh services from this checkout. See usage() below.
 set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/app.sh [--restart]
+
+Start the Data Service and Router (built from this checkout) if they aren't
+running, then launch the Electron app. Services this script starts are
+stopped again when the app exits.
+
+A service already answering on its port is reused only if its /health says it
+was launched from this checkout (it is not rebuilt; restart it to pick up Go
+changes). One from another checkout, or an older build that doesn't say, is
+refused.
+
+Options:
+  --restart   First stop whatever is listening on the Router and Data Service
+              ports (any checkout, any build; SIGTERM, Router first), then
+              build and start fresh ones from this checkout. Stopping the
+              Router cuts off any agent turn in progress; sessions start
+              again on their next message.
+  -h, --help  Show this help.
+
+Environment:
+  MADS_REUSE_SERVICES=1  Reuse running services even if they come from
+                         another checkout or an older build.
+  MADS_DATA_ADDR         Data Service address (default localhost:17374).
+  MADS_ROUTER_ADDR       Router address (default localhost:17373).
+USAGE
+}
+
+restart=0
+for arg in "$@"; do
+  case "$arg" in
+    --restart) restart=1 ;;
+    -h | --help) usage; exit 0 ;;
+    *)
+      echo "app.sh: unknown argument: $arg" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 # Physical path (-P): services report os.Getwd(), and the comparison below
 # must not trip over a symlinked checkout.
@@ -100,10 +143,58 @@ check_reuse() { # <addr> <display name> <extra stop note>
   {
     echo "app.sh: $where."
     echo "$why"
-    echo "Quit the app and stop that $name${pid:+ (pid $pid)} first${note}, or set MADS_REUSE_SERVICES=1 to use it anyway."
+    echo "Run scripts/app.sh --restart to stop it and start this checkout's services${note}, or quit the app and stop that $name${pid:+ (pid $pid)} yourself, or set MADS_REUSE_SERVICES=1 to use it anyway."
   } >&2
   exit 1
 }
+
+ROUTER_STOP_NOTE="stopping the Router also ends the agent sessions and pipeline runs it is running: a turn in progress is cut off, and sessions start again on their next message"
+
+# --restart: SIGTERM whatever LISTENS on addr's port — by port, never by
+# process name — and wait for the port to free. SIGTERM only: the Router
+# needs it to shut its session/pipeline children down cleanly, so a process
+# that won't go is reported, not SIGKILLed.
+stop_listener() { # <addr> <display name>
+  local addr="$1" name="$2" pid body root started i
+  if ! command -v lsof >/dev/null 2>&1; then
+    if up "http://$addr/health"; then
+      echo "app.sh: --restart needs lsof to find the $name listening on $addr; stop it yourself and run app.sh again." >&2
+      exit 1
+    fi
+    return 0
+  fi
+  pid="$(listener_pid "$addr")"
+  if [ -z "$pid" ]; then
+    if up "http://$addr/health"; then
+      echo "app.sh: something answers on $addr but lsof shows no listening pid for it (another user's process?); stop it yourself and run app.sh again." >&2
+      exit 1
+    fi
+    return 0
+  fi
+  body="$(curl -sf "http://$addr/health" 2>/dev/null || true)"
+  root="$(health_field "$body" root)"
+  started="$(health_field "$body" started_at)"
+  [ -n "$root" ] || root="$(pid_cwd "$pid")"
+  if ! kill -TERM "$pid" 2>/dev/null; then
+    echo "app.sh: could not signal the $name (pid $pid) on $addr; stop it yourself and run app.sh again." >&2
+    exit 1
+  fi
+  for ((i = 0; i < 50; i++)); do # 50 * 0.2s = 10s
+    if [ -z "$(listener_pid "$addr")" ]; then
+      echo "app.sh: stopped $name pid $pid${root:+ from $root}${started:+ (started $started)}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "app.sh: the $name (pid $pid) on $addr is still running 10s after SIGTERM; stop it yourself and run app.sh again." >&2
+  exit 1
+}
+
+if [ "$restart" = 1 ]; then
+  # Router first, so it never runs against a missing Data Service.
+  stop_listener "$ROUTER_ADDR" "Router"
+  stop_listener "$DATA_ADDR" "Data Service"
+fi
 
 # Check both before starting either, so a refusal leaves nothing behind.
 data_running=0 router_running=0
@@ -113,8 +204,7 @@ if up "http://$DATA_ADDR/health"; then
 fi
 if up "http://$ROUTER_ADDR/health"; then
   router_running=1
-  check_reuse "$ROUTER_ADDR" "Router" \
-    " (stopping it also ends the agent sessions and pipeline runs it is running: a turn in progress is cut off, and sessions wake again on your next message)"
+  check_reuse "$ROUTER_ADDR" "Router" " ($ROUTER_STOP_NOTE)"
 fi
 
 if [ "$data_running" = 0 ]; then
@@ -128,7 +218,7 @@ fi
 if [ "$router_running" = 0 ]; then
   go build -o bin/router ./services/router
   go build -o bin/session ./services/session
-  ./bin/router -addr "$ROUTER_ADDR" -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
+  ./bin/router -addr "$ROUTER_ADDR" -data-url "http://$DATA_ADDR" -session-cmd ./bin/session >> /tmp/mads-router.log 2>&1 &
   started+=($!)
   wait_up "http://$ROUTER_ADDR/health" "$!" "router" /tmp/mads-router.log
   echo "app.sh: started router ($ROUTER_ADDR)"

@@ -63,7 +63,12 @@ If a Data Service or Router is already answering on its port, `app.sh` reuses it
 its `/health` `root` is this checkout (and says so, noting it was not rebuilt — restart it
 to pick up Go changes); one started from another checkout, or an older build that doesn't
 report `root`, makes it stop with the owning path and pid instead of silently showing
-that checkout's UI. `MADS_REUSE_SERVICES=1` reuses whatever is running anyway.
+that checkout's UI. `scripts/app.sh --restart` first SIGTERMs whatever listens on the Router
+then Data Service ports (by port, any checkout or build; it fails rather than SIGKILL if
+one doesn't exit within ~10s) and starts fresh ones from this checkout — stopping the
+Router cuts off agent turns in progress; sessions start again on their next message.
+`MADS_REUSE_SERVICES=1` reuses whatever is running anyway. `scripts/app.sh --help` has
+the details.
 `VITE_DEV_SERVER_URL` (set by `npm run dev`'s tooling) still takes priority when present,
 for the Vite dev-server loop.
 
