@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -89,5 +90,20 @@ func TestResolveAgentEnv_IsolatedSelectsBoundCredentialsFromParentEnv(t *testing
 	want := []string{"MADS_CRED_A=secret-value"}
 	if !reflect.DeepEqual(credEnv, want) {
 		t.Fatalf("credEnv = %v, want %v", credEnv, want)
+	}
+}
+
+// Isolation is on by default, rooted beside (not inside) the pipeline's own
+// $MADS_HOME/worktrees, and "off" is the explicit way out.
+func TestResolveWorktreeRoot(t *testing.T) {
+	cases := map[string]string{
+		"":           filepath.Join("/h/.mads", "session-worktrees"),
+		"off":        "",
+		"/elsewhere": "/elsewhere",
+	}
+	for in, want := range cases {
+		if got := resolveWorktreeRoot(in, "/h/.mads"); got != want {
+			t.Errorf("resolveWorktreeRoot(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

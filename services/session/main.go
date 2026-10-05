@@ -110,13 +110,29 @@ func buildProviderRegistry(mode agentenv.Mode, passthrough, credEnv []string) (*
 	return registry, nil
 }
 
+// resolveWorktreeRoot turns -worktree-root into Runner.WorktreeRoot. Empty
+// derives $MADS_HOME/session-worktrees from -mads-home, the way the pipeline
+// derives its own task-worktree root, so isolation needs no Router plumbing
+// and e2e (a temporary MADS_HOME) isolates exactly like production. It is a
+// sibling of the pipeline's $MADS_HOME/worktrees/<session>/<task>, never
+// inside it: both are keyed by session ID. "off" disables isolation.
+func resolveWorktreeRoot(flagValue, madsHome string) string {
+	switch flagValue {
+	case "off":
+		return ""
+	case "":
+		return filepath.Join(madsHome, "session-worktrees")
+	}
+	return flagValue
+}
+
 func main() {
 	addr := flag.String("addr", "localhost:0", "listen address")
 	sessionID := flag.String("session-id", "", "session ID this process serves (required)")
 	dataURL := flag.String("data-url", "http://localhost:17374", "Data Service base URL")
 	routerURL := flag.String("router-url", "http://localhost:17373", "Router base URL (used by session-scoped capabilities, e.g. the orchestrate MCP server)")
 	cwd := flag.String("cwd", ".", "provider session working directory")
-	worktreeRoot := flag.String("worktree-root", "", "root dir for session worktrees (git repos only; empty disables isolation)")
+	worktreeRoot := flag.String("worktree-root", "", `root dir for session worktrees (git repos only; empty: <mads-home>/session-worktrees; "off" disables isolation)`)
 	shadowRoot := flag.String("shadow-root", shadow.DefaultRoot(), "base dir for per-session shadow git stores (docs/SHADOW-GIT-DIFFS-ADR.md; empty disables shadowing)")
 	fastModelProvider := flag.String("fast-model", "fake", "registered provider to use for the Fast Model tier (synthesis, etc.)")
 	madsHome := flag.String("mads-home", defaultMadsHome(), "local state root for credentials + MCP server registry (env MADS_HOME)")
@@ -151,7 +167,7 @@ func main() {
 
 	r := runner.New(*sessionID, data, registry)
 	r.Cwd = *cwd
-	r.WorktreeRoot = *worktreeRoot
+	r.WorktreeRoot = resolveWorktreeRoot(*worktreeRoot, *madsHome)
 	r.ShadowRoot = *shadowRoot
 	r.RouterURL = *routerURL
 	// Empty means "resolve it yourself": setupOrchestrate falls back to

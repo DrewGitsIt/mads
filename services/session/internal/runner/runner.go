@@ -26,12 +26,12 @@ import (
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/githook"
+	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
-	"github.com/drewkidwell/mads/services/session/internal/worktree"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
@@ -72,12 +72,13 @@ type Runner struct {
 	// Cwd is the provider session's working directory. Defaults to ".";
 	// callers set it (from -cwd) before calling Start. When WorktreeRoot is
 	// set and Cwd is a git repo, Start isolates the session into a worktree
-	// under WorktreeRoot instead of running directly on Cwd (spec §17).
+	// under WorktreeRoot instead of running directly on Cwd (spec §17,
+	// docs/SESSION-WORKTREES-DESIGN.md D1).
 	Cwd string
 
-	// WorktreeRoot is where session worktrees are created (outside Cwd).
-	// Empty (the default) disables isolation entirely, keeping every
-	// existing caller — which never sets this — on today's behavior.
+	// WorktreeRoot is where session worktrees live (outside Cwd): main.go
+	// sets $MADS_HOME/session-worktrees. Empty disables isolation, which is
+	// what every test that doesn't set it gets.
 	WorktreeRoot string
 
 	// ShadowRoot is the base dir for per-session shadow git stores
@@ -146,7 +147,20 @@ type Runner struct {
 	permPending map[string]*pendingPermission
 	permSeq     int
 
-	wt *worktree.Manager // built lazily the first time isolation is needed
+	// wt is where this session's work lives for the header counts (D4),
+	// set once in Start; zero when there is nowhere to count (a plain
+	// folder, an implicit cwd). Guarded by mu.
+	wt worktreeState
+
+	// countsMu guards countsRunning/countsAgain, which coalesce turn-end
+	// recounts (refreshCountsAsync) into at most one running and one queued.
+	// countsWG lets Shutdown wait out the one running, so it never writes
+	// to the record after the session is marked inactive.
+	countsMu      sync.Mutex
+	countsRunning bool
+	countsAgain   bool
+	countsClosed  bool
+	countsWG      sync.WaitGroup
 
 	// shadowStore is this session's shadow git store, built in Start when
 	// ShadowRoot is set (nil otherwise). Every shadow.Store method is
@@ -357,22 +371,12 @@ func (r *Runner) Start(ctx context.Context) error {
 	if sess.Dir != "" {
 		r.Cwd = sess.Dir
 	}
-	cwd := r.Cwd
-	if r.WorktreeRoot != "" && sess.Isolation != contracts.IsolationCurrentDir {
-		switch {
-		case sess.WorktreeDir != "":
-			cwd = sess.WorktreeDir // resuming (bounce): reuse, don't recreate
-		case worktree.IsGitRepo(ctx, r.Cwd):
-			dir, branch, err := r.manager().Create(ctx, r.sessionID, sess.Name)
-			if err != nil {
-				return fmt.Errorf("runner: create worktree: %w", err)
-			}
-			sess.WorktreeDir, sess.WorktreeBranch = dir, branch
-			cwd = dir
-		}
+	cwd, err := r.isolate(ctx, &sess)
+	if err != nil {
+		return err
 	}
-	// Isolated worktrees get the hook via Manager.Create; this covers the
-	// non-isolated case where the session works directly on a real repo.
+	// Stamps this session into the worktree's own config for the hook — or,
+	// working in place, into the user's checkout.
 	r.installHook(ctx, cwd)
 
 	// Shadow store provisioning (docs/SHADOW-GIT-DIFFS-ADR.md): record the
@@ -511,6 +515,9 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	go r.pump(provSess)
 	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
+	// Counted in the background: `git status` on a large checkout takes
+	// seconds, and provisioning must not wait on the header.
+	r.refreshCountsAsync()
 	return nil
 }
 
@@ -567,19 +574,211 @@ func (r *Runner) installHook(ctx context.Context, dir string) {
 	}
 }
 
-// manager lazily builds the worktree.Manager the first time isolation is
-// needed, so a Runner that never isolates (WorktreeRoot == "") never touches
-// git at all.
-func (r *Runner) manager() *worktree.Manager {
-	if r.wt == nil {
-		r.wt = &worktree.Manager{
-			Primary:   r.Cwd,
-			Root:      r.WorktreeRoot,
-			DataURL:   r.data.BaseURL(),
-			SessionID: r.sessionID,
+// worktreeState is where the header counts are taken (D4): the session's
+// worktree and branch when isolated, or the folder it works in (branch
+// empty) when not.
+type worktreeState struct {
+	dir    string
+	branch string
+	base   string
+}
+
+// implicitDir reports a cwd nobody chose: "." is wherever the Router was
+// started. installHook and the shadow store refuse to act on it, and so does
+// isolation — branching a worktree off whatever repo the Router happens to
+// run in is not something the user asked for.
+func implicitDir(dir string) bool {
+	return dir == "" || dir == "." || dir == "./"
+}
+
+// isolate decides where the agent runs (docs/SESSION-WORKTREES-DESIGN.md
+// D1) and returns that directory. A session is isolated when it didn't ask
+// for the current directory, its folder is a git repo, and either it already
+// has a worktree (resume) or it has never started (no ProviderRef). A
+// session that has run in place before stays in place: claude-code finds a
+// conversation to resume by its starting folder, so moving it would strand
+// the conversation.
+//
+// The worktree comes from sessionwt.EnsureWithLock, which works from the
+// deterministic path and branch and repairs a lost or blocked folder (D2).
+// Its fields are persisted here, before the provider starts, so a provider
+// that fails to start leaves a record the next start reuses instead of
+// tripping over its own branch.
+func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, error) {
+	inPlace := func() (string, error) {
+		if !implicitDir(r.Cwd) && sessionwt.IsGitRepo(ctx, r.Cwd) {
+			r.mu.Lock()
+			r.wt = worktreeState{dir: r.Cwd}
+			r.mu.Unlock()
+		}
+		return r.Cwd, nil
+	}
+	if r.WorktreeRoot == "" || sess.Isolation == contracts.IsolationCurrentDir || implicitDir(r.Cwd) {
+		return inPlace()
+	}
+	if sess.WorktreeDir == "" && sess.ProviderRef != "" {
+		return inPlace() // ran in place before isolation existed: stays there
+	}
+	if !sessionwt.IsGitRepo(ctx, r.Cwd) {
+		return inPlace()
+	}
+
+	spec := sessionwt.Spec{Primary: r.Cwd, Root: r.WorktreeRoot, SessionID: r.sessionID, Base: sess.WorktreeBase}
+	if sess.WorktreeDir == "" {
+		base, err := sessionwt.CurrentBranch(ctx, r.Cwd)
+		if errors.Is(err, sessionwt.ErrDetachedHEAD) {
+			// No branch to land into, so nothing to isolate against.
+			r.appendWorktreeEvent(ctx, map[string]any{"action": "not_isolated", "reason": "detached_head"})
+			return inPlace()
+		}
+		if err != nil {
+			return "", fmt.Errorf("runner: read primary branch: %w", err)
+		}
+		spec.Base = base
+	}
+	res, err := sessionwt.EnsureWithLock(ctx, spec)
+	if err != nil {
+		return "", fmt.Errorf("runner: ensure worktree: %w", err)
+	}
+	if sess.WorktreeDir != res.Dir || sess.WorktreeBranch != res.Branch || sess.WorktreeBase != spec.Base {
+		r.recordMu.Lock()
+		err := r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
+			WorktreeDir: &res.Dir, WorktreeBranch: &res.Branch, WorktreeBase: &spec.Base,
+		})
+		r.recordMu.Unlock()
+		if err != nil {
+			return "", fmt.Errorf("runner: persist worktree: %w", err)
+		}
+		sess.WorktreeDir, sess.WorktreeBranch, sess.WorktreeBase = res.Dir, res.Branch, spec.Base
+	}
+	if res.Notable() {
+		r.appendWorktreeEvent(ctx, worktreePayload(res, spec.Base))
+	}
+	r.mu.Lock()
+	r.wt = worktreeState{dir: res.Dir, branch: res.Branch, base: spec.Base}
+	r.mu.Unlock()
+
+	// A session asked to start in a subdirectory of the repo starts in the
+	// same subdirectory of its worktree.
+	cwd := res.Dir
+	if prefix, err := sessionwt.Prefix(ctx, r.Cwd); err == nil && prefix != "" {
+		if fi, err := os.Stat(filepath.Join(res.Dir, prefix)); err == nil && fi.IsDir() {
+			cwd = filepath.Join(res.Dir, prefix)
 		}
 	}
-	return r.wt
+	return cwd, nil
+}
+
+// worktreePayload is the worktree.ensured payload for an Ensure result.
+func worktreePayload(res sessionwt.EnsureResult, base string) map[string]any {
+	p := map[string]any{"action": string(res.Action), "dir": res.Dir, "branch": res.Branch}
+	for k, v := range map[string]string{
+		"base": base, "stale_moved_to": res.StaleMovedTo, "start_point": res.StartPoint, "head": res.Head,
+	} {
+		if v != "" {
+			p[k] = v
+		}
+	}
+	if res.UnlockedStale {
+		p["unlocked_stale"] = true
+	}
+	if res.BaseMissing {
+		p["base_missing"] = true
+	}
+	return p
+}
+
+// appendWorktreeEvent records what isolation did, so it shows as a card
+// rather than healing silently (D2). Best effort, like the other session
+// events Start appends.
+func (r *Runner) appendWorktreeEvent(ctx context.Context, payload map[string]any) {
+	if err := r.data.Append(ctx, &contracts.Envelope{
+		Type: contracts.WorktreeEnsured, SessionID: r.sessionID, Payload: mustJSON(payload),
+	}); err != nil {
+		log.Printf("runner: append worktree.ensured: %v", err)
+	}
+}
+
+// RefreshWorktreeCounts recomputes the header counts (D4) — session files
+// git still reports changed, and commits on the session branch its base
+// doesn't have — and writes them onto the record through the scoped
+// worktree write, so nothing else on the record can be clobbered. Runs at
+// Start and turn end (refreshCountsAsync); Commit, Land and pipeline merges
+// call it directly once they exist. A no-op for a session with nowhere to
+// count.
+func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
+	r.mu.Lock()
+	wt := r.wt
+	r.mu.Unlock()
+	if wt.dir == "" {
+		return nil
+	}
+	top, err := sessionwt.Toplevel(ctx, wt.dir)
+	if err != nil {
+		return err
+	}
+	rows, err := r.data.FileChanges(ctx, r.sessionID)
+	if err != nil {
+		return fmt.Errorf("load session files: %w", err)
+	}
+	c, err := sessionwt.Count(ctx, sessionwt.CountTarget{
+		Dir: top, Files: sessionwt.SessionFiles(top, rows), Branch: wt.branch, Base: wt.base,
+	})
+	if err != nil {
+		return err
+	}
+	r.recordMu.Lock()
+	defer r.recordMu.Unlock()
+	return r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
+		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded,
+	})
+}
+
+// refreshCountsAsync runs RefreshWorktreeCounts off the caller's goroutine
+// — the pump must not stall a turn's events behind a `git status`. Calls
+// that land while one is running coalesce into a single rerun, which still
+// sees everything they would have.
+func (r *Runner) refreshCountsAsync() {
+	r.countsMu.Lock()
+	if r.countsClosed {
+		r.countsMu.Unlock()
+		return
+	}
+	if r.countsRunning {
+		r.countsAgain = true
+		r.countsMu.Unlock()
+		return
+	}
+	r.countsRunning = true
+	r.countsWG.Add(1)
+	r.countsMu.Unlock()
+	go func() {
+		defer r.countsWG.Done()
+		// Shutdown cancels a recount mid-flight rather than waiting out a
+		// slow `git status`.
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-r.shutdownCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+		for {
+			if err := r.RefreshWorktreeCounts(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("runner: refresh worktree counts: %v", err)
+			}
+			r.countsMu.Lock()
+			if !r.countsAgain || ctx.Err() != nil {
+				r.countsRunning = false
+				r.countsMu.Unlock()
+				return
+			}
+			r.countsAgain = false
+			r.countsMu.Unlock()
+		}
+	}()
 }
 
 // Merge attempts to merge the session's isolated worktree branch back into
@@ -604,13 +803,20 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 		return contracts.MergeResult{}, ErrNoWorktree
 	}
 
-	m := r.manager()
+	// The whole merge-back runs under the repo lock, so it can't interleave
+	// with a pipeline land or another session's worktree work (D3).
+	release, err := sessionwt.AcquireLock(ctx, r.Cwd)
+	if err != nil {
+		return contracts.MergeResult{}, fmt.Errorf("runner: %w", err)
+	}
+	defer release()
+
 	if targetBranch != "" {
-		if _, err := m.Git(ctx, r.Cwd, "checkout", targetBranch); err != nil {
+		if _, err := sessionwt.Git(ctx, r.Cwd, "checkout", targetBranch); err != nil {
 			return contracts.MergeResult{}, fmt.Errorf("runner: checkout %s: %w", targetBranch, err)
 		}
 	}
-	actualTarget, _ := m.Git(ctx, r.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
+	actualTarget, _ := sessionwt.Git(ctx, r.Cwd, "rev-parse", "--abbrev-ref", "HEAD")
 	actualTarget = strings.TrimSpace(actualTarget)
 
 	if err := r.data.Append(ctx, &contracts.Envelope{
@@ -620,10 +826,10 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 		log.Printf("runner: append merge.attempted: %v", err)
 	}
 
-	if err := m.CommitStray(ctx, sess.WorktreeDir, r.sessionID, sess.Name); err != nil {
+	if err := sessionwt.CommitStray(ctx, sess.WorktreeDir, r.sessionID, sess.Name); err != nil {
 		return contracts.MergeResult{}, fmt.Errorf("runner: commit stray changes: %w", err)
 	}
-	result, err := m.Merge(ctx, "git merge --no-ff", r.sessionID, sess.Name, sess.WorktreeBranch)
+	result, err := sessionwt.Merge(ctx, r.Cwd, "git merge --no-ff", r.sessionID, sess.Name, sess.WorktreeBranch)
 	if err != nil {
 		return contracts.MergeResult{}, err
 	}
@@ -638,19 +844,19 @@ func (r *Runner) Merge(ctx context.Context, targetBranch string) (contracts.Merg
 		return result, nil // branch/worktree untouched — session stays flagged unmerged
 	}
 
-	m.Remove(context.WithoutCancel(ctx), sess.WorktreeDir, sess.WorktreeBranch)
-	sess.WorktreeDir, sess.WorktreeBranch = "", ""
+	sessionwt.Remove(context.WithoutCancel(ctx), r.Cwd, sess.WorktreeDir, sess.WorktreeBranch)
+	empty := ""
 	r.recordMu.Lock()
-	// sess was loaded before this lock; don't let this write revert a ref
-	// that persistProviderRef landed in the meantime.
-	if r.persistedRef != "" {
-		sess.ProviderRef = r.persistedRef
-	}
-	err = r.data.UpdateSession(ctx, &sess)
+	err = r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
+		WorktreeDir: &empty, WorktreeBranch: &empty, WorktreeBase: &empty,
+	})
 	r.recordMu.Unlock()
 	if err != nil {
 		return contracts.MergeResult{}, fmt.Errorf("runner: clear worktree fields: %w", err)
 	}
+	r.mu.Lock()
+	r.wt = worktreeState{}
+	r.mu.Unlock()
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type: contracts.MergeCompleted, SessionID: r.sessionID,
 		Payload: mustJSON(map[string]string{"branch": result.Branch, "target_branch": actualTarget}),
@@ -1412,6 +1618,12 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	if sess != nil {
 		closeErr = sess.Close()
 	}
+	// shutdownCh (closed above) cancels a recount in flight; let it finish
+	// unwinding before the record is marked inactive, and start no more.
+	r.countsMu.Lock()
+	r.countsClosed = true
+	r.countsMu.Unlock()
+	r.countsWG.Wait()
 
 	r.recordMu.Lock()
 	if cur, err := r.data.Session(ctx, r.sessionID); err != nil {
@@ -1462,6 +1674,7 @@ func (r *Runner) pump(sess provider.Session) {
 			r.onTurnEnd()
 			r.syncProviderRef(context.Background(), sess)
 			r.persistTurnEnd(context.Background(), ev.Usage)
+			r.refreshCountsAsync()
 		}
 		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 			// Pre-image capture first: on providers that announce tool_use
@@ -1540,6 +1753,7 @@ func (r *Runner) pumpPTY(sess provider.PTYSession) {
 					r.onTurnEnd()
 					r.syncProviderRef(context.Background(), sess)
 					r.persistTurnEnd(context.Background(), ev.Usage)
+					r.refreshCountsAsync()
 				}
 				if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Path != "" && ev.Tool.Mutates {
 					r.shadowCapture(ev.Tool)
