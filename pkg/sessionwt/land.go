@@ -153,8 +153,11 @@ func abortMerge(ctx context.Context, dir string) {
 func classifyPrimaryRefusal(out string) (reason, detail string, files []string) {
 	switch {
 	case strings.Contains(out, "Your local changes to the following files would be overwritten"):
+		// Git says this both for edits the land would overwrite and for any
+		// staged change at all (it won't merge while the index differs from
+		// HEAD), so the files it names needn't be ones this session touched.
 		return contracts.LandPrimaryDirty,
-			"Your uncommitted changes in your checkout touch files this session changed. Commit or stash them there, then land.",
+			"Your checkout has staged or uncommitted changes git won't land over. Commit or stash them there, then land.",
 			indentedFiles(out, "would be overwritten")
 	case strings.Contains(out, "untracked working tree files would be overwritten"):
 		return contracts.LandPrimaryUntracked,
@@ -165,8 +168,9 @@ func classifyPrimaryRefusal(out string) (reason, detail string, files []string) 
 	}
 }
 
-// indentedFiles reads the tab-indented file list git prints after the
-// line containing header.
+// indentedFiles reads the indented file list git prints after the line
+// containing header: tab-indented for the working tree, space-indented
+// when it is the index that differs from HEAD.
 func indentedFiles(out, header string) []string {
 	var files []string
 	in := false
@@ -174,7 +178,7 @@ func indentedFiles(out, header string) []string {
 		switch {
 		case strings.Contains(line, header):
 			in = true
-		case in && strings.HasPrefix(line, "\t"):
+		case in && (strings.HasPrefix(line, "\t") || strings.HasPrefix(line, "  ")):
 			files = append(files, strings.TrimSpace(line))
 		case in:
 			in = false

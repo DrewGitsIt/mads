@@ -627,6 +627,14 @@ func TestLandPrimaryRefusals(t *testing.T) {
 			reason: contracts.LandPrimaryDirty, files: []string{"README.md"},
 		},
 		{
+			name: "staged, unrelated",
+			setup: func(t *testing.T, s *isolated) {
+				writeFile(t, filepath.Join(s.primary, "notes.txt"), "user's own\n")
+				gitRun(t, s.primary, "add", "notes.txt")
+			},
+			reason: contracts.LandPrimaryDirty, files: []string{"notes.txt"}, detail: "staged or uncommitted",
+		},
+		{
 			name: "untracked in the way",
 			setup: func(t *testing.T, s *isolated) {
 				writeFile(t, filepath.Join(s.primary, "feature.txt"), "user's scratch\n")

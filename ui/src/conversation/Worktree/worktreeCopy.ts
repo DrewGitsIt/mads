@@ -129,10 +129,12 @@ export function refusalCopy(
       };
     case "primary_dirty":
       return {
-        title: "Your checkout has uncommitted changes",
+        // Git names files the land would overwrite and, as well, any staged
+        // file at all: it won't merge while the index differs from HEAD.
+        title: "Your checkout has staged or uncommitted changes",
         body: named
-          ? `Landing would overwrite ${named} in your checkout. Commit or stash ${files!.length === 1 ? "it" : "them"} there, then Land again.`
-          : "Landing would overwrite uncommitted edits in your checkout. Commit or stash them there, then Land again.",
+          ? `Git won't land over ${named} in your checkout. Commit or stash ${files!.length === 1 ? "it" : "them"} there, then Land again.`
+          : "Git won't land over staged or uncommitted changes in your checkout. Commit or stash them there, then Land again.",
         tone: "bad",
         retry: true,
       };

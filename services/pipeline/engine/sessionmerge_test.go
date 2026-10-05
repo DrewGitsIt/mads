@@ -523,3 +523,29 @@ func TestMergeLeavesSomeoneElsesMergeAlone(t *testing.T) {
 		t.Errorf("clash.txt = %q, want the resolution kept", got)
 	}
 }
+
+// A staged file the task never touched still stops git's merge (the index
+// must match HEAD), so it is saved like an overlapping edit and the task
+// merges.
+func TestSessionMergeSavesUnrelatedStagedFile(t *testing.T) {
+	w := newSessionWorld(t)
+	if err := os.WriteFile(filepath.Join(w.folder, "staged.txt"), []byte("agent\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitRun(t, w.folder, "add", "staged.txt")
+	w.setAgent(t, contracts.AgentIdle)
+
+	w.seed(contracts.Task{Title: "alpha"})
+	f := mustScenario(t, fake.Rule{Match: "Task: alpha", Reply: "done",
+		Tools: []fake.ToolStep{{Name: "write_file", Path: "alpha.txt", Content: "alpha\n"}}})
+	sum := w.start(t, w.config(t, f, isolatedTemplate))()
+	if len(sum.Done) != 1 {
+		t.Fatalf("summary: %+v; events: %v", sum, w.events(t, "stage.failed", "merge.conflicted"))
+	}
+	if _, err := os.Stat(filepath.Join(w.folder, "alpha.txt")); err != nil {
+		t.Errorf("the task didn't merge: %v", err)
+	}
+	if p := payload(t, w.events(t, "merge.completed")[0]); fmt.Sprint(p["auto_committed"]) != "[staged.txt]" {
+		t.Errorf("merge.completed = %v, want staged.txt saved", p)
+	}
+}

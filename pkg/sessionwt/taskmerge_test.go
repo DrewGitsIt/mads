@@ -50,12 +50,16 @@ func TestOverlap(t *testing.T) {
 	gitRun(t, s.folder, "add", "staged.txt")
 	gitRun(t, s.folder, "mv", "old.txt", "moved.txt")
 	writeFile(t, filepath.Join(s.folder, "mine.txt"), "agent\n")
+	// Staged, though the task never touched it: git refuses any merge
+	// while the index differs from HEAD, so it must be saved too.
+	writeFile(t, filepath.Join(s.folder, "added.txt"), "agent\n")
+	gitRun(t, s.folder, "add", "added.txt")
 
 	got, err := Overlap(context.Background(), s.folder, branch)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := "README.md,new.txt,old.txt,staged.txt"; strings.Join(got, ",") != want {
+	if want := "README.md,added.txt,moved.txt,new.txt,old.txt,staged.txt"; strings.Join(got, ",") != want {
 		t.Errorf("overlap = %v, want %s", got, want)
 	}
 

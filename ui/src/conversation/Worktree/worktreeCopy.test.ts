@@ -41,7 +41,7 @@ describe("refusalCopy", () => {
 
   it("names the files that block the checkout", () => {
     expect(refusalCopy("primary_dirty", "main", ["scripts/deploy.sh"]).body).toBe(
-      "Landing would overwrite scripts/deploy.sh in your checkout. Commit or stash it there, then Land again.",
+      "Git won't land over scripts/deploy.sh in your checkout. Commit or stash it there, then Land again.",
     );
     expect(refusalCopy("primary_untracked", "main", ["a", "b"]).body).toContain("a and b, which aren't tracked");
     expect(refusalCopy("dirty", "main", ["x.go"]).body).toBe("Commit x.go first. Land only moves committed work.");

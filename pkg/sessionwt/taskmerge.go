@@ -45,25 +45,34 @@ func (m *TaskMerge) Lock(ctx context.Context) (release func(), err error) {
 // over, worked out before merging rather than read from git's error (D8):
 // what `git status` reports in the folder, staged, unstaged or untracked,
 // intersected with what branch changed since it left folder's HEAD
-// (`git diff --name-only HEAD...branch`). Both sides of a rename count.
-// Sorted. Read-only; call it under the session lock so the answer still
-// holds when the merge runs.
+// (`git diff --name-only HEAD...branch`) — plus every staged path, whatever
+// the branch changed, since git refuses a merge while the index differs
+// from HEAD at all. Both sides of a rename count. Sorted. Read-only; call it
+// under the session lock so the answer still holds when the merge runs.
 func Overlap(ctx context.Context, folder, branch string) ([]string, error) {
 	raw, err := Git(ctx, folder, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all")
 	if err != nil {
 		return nil, err
 	}
 	dirty := map[string]bool{}
+	var out []string
 	fields := strings.Split(raw, "\x00")
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
 		if len(f) < 4 {
 			continue
 		}
-		dirty[f[3:]] = true
+		staged := f[0] != ' ' && f[0] != '?'
+		paths := []string{f[3:]}
 		if (f[0] == 'R' || f[0] == 'C') && i+1 < len(fields) {
 			i++
-			dirty[fields[i]] = true
+			paths = append(paths, fields[i])
+		}
+		for _, p := range paths {
+			dirty[p] = true
+			if staged {
+				out = append(out, p)
+			}
 		}
 	}
 	if len(dirty) == 0 {
@@ -73,7 +82,6 @@ func Overlap(ctx context.Context, folder, branch string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var out []string
 	for _, p := range strings.Split(changed, "\x00") {
 		if p != "" && dirty[p] {
 			out = append(out, p)
@@ -150,7 +158,8 @@ func (m *TaskMerge) WaitSettled(ctx context.Context, deadline time.Time) (op str
 
 // SaveEdits commits files (relative to the folder's top) as they stand in
 // the folder, so a task merge that touches them can run (D8). Only those
-// files: anything else staged stays staged and out of the commit.
+// files: anything else staged stays staged and out of the commit (Overlap
+// includes every staged path, so for a merge there is nothing else).
 //
 // It is an automatic commit, so it carries the mads-session safety
 // identity (Git), never the user's, with a Session: trailer. It skips
