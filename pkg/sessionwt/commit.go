@@ -260,6 +260,7 @@ func UndoCommit(ctx context.Context, t Target, hash string) (contracts.UndoCommi
 			"merge_commit":       "This is a merge commit; Undo only takes back a single commit.",
 			"no_parent":          "This is the repository's first commit; there is nothing to go back to.",
 			"already_landed":     "This commit has already landed in " + t.Base + ".",
+			"already_pushed":     "This commit has already been pushed to the branch's upstream.",
 		}[reason])
 	}
 	if op := midOperation(ctx, t.Folder); op != "" {
@@ -293,6 +294,12 @@ func undoRefusal(ctx context.Context, t Target, hash, parents, body string) stri
 		if _, err := Git(ctx, t.Folder, "merge-base", "--is-ancestor", hash, "refs/heads/"+t.Base); err == nil {
 			return "already_landed"
 		}
+	}
+	// Pushed already (an in-place session on a tracking branch, say):
+	// taking it back would rewrite published history. No upstream fails
+	// to resolve, which is no objection.
+	if _, err := Git(ctx, t.Folder, "merge-base", "--is-ancestor", hash, "@{upstream}"); err == nil {
+		return "already_pushed"
 	}
 	return ""
 }

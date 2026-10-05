@@ -455,6 +455,41 @@ func TestUndo(t *testing.T) {
 	}
 }
 
+// Undo refuses a commit already on the branch's upstream: an in-place
+// session committing on a tracking branch that has since been pushed.
+func TestUndoRefusesPushedCommit(t *testing.T) {
+	remote := t.TempDir()
+	gitRun(t, remote, "init", "-q", "--bare", ".")
+	primary := initRepo(t)
+	gitRun(t, primary, "remote", "add", "origin", remote)
+	gitRun(t, primary, "push", "-q", "-u", "origin", "main")
+	writeFile(t, filepath.Join(primary, "x.txt"), "x\n")
+	st := &memStore{sess: contracts.Session{ID: "ses_inplace", Dir: primary}}
+	st.rows = []contracts.FileChange{{Repo: primary, Path: "x.txt"}}
+	ops := Ops{Store: st}
+	res, err := ops.Commit(context.Background(), "ses_inplace", contracts.CommitRequest{Message: "Add x", Drafted: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := ops.Status(context.Background(), "ses_inplace", Gates{})
+	if err != nil || status.LastCommit == nil || !status.LastCommit.Undoable {
+		t.Fatalf("before pushing: status = %+v, %v; want undoable", status.LastCommit, err)
+	}
+
+	gitRun(t, primary, "push", "-q", "origin", "main")
+	status, err = ops.Status(context.Background(), "ses_inplace", Gates{})
+	if err != nil || status.LastCommit == nil || status.LastCommit.Undoable {
+		t.Errorf("after pushing: status = %+v, %v; want not undoable", status.LastCommit, err)
+	}
+	undo, err := ops.Undo(context.Background(), "ses_inplace", res.Hash)
+	if err != nil || undo.Undone || undo.Reason != "already_pushed" {
+		t.Fatalf("undo = %+v, %v; want refused already_pushed", undo, err)
+	}
+	if head(t, primary, "main") != res.Hash {
+		t.Error("the pushed commit was taken back")
+	}
+}
+
 // Land: a --no-ff merge commit in the user's checkout with the user's
 // identity and the trailer, recorded; the session branch fast-forwards
 // after, so nothing is left unlanded.

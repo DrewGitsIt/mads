@@ -959,7 +959,7 @@ export interface CommitDraft {
 export interface UndoCommitResult {
   undone: boolean;
   hash: string;
-  /** "not_tip", "not_session_commit", "merge_commit", "already_landed", "mid_merge", "no_folder". */
+  /** "not_tip", "not_session_commit", "merge_commit", "already_landed", "already_pushed", "mid_merge", "no_folder". */
   reason?: string;
   detail?: string;
 }

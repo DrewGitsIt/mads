@@ -174,6 +174,8 @@ export function undoRefusalCopy(reason: string | undefined): string {
       return "Can't undo: newer commits sit on top of it.";
     case "already_landed":
       return "Can't undo: it has already landed.";
+    case "already_pushed":
+      return "Can't undo: it has already been pushed.";
     case "mid_merge":
       return "Can't undo while the session's folder is mid-merge.";
     case "merge_commit":
