@@ -58,7 +58,7 @@ export function ConversationImportStep({ onNext, onBack }: ConversationImportSte
     <div className={styles.step}>
       <h2 className={styles.title}>Import conversations</h2>
       <p className={styles.body}>
-        mads can bring in conversations you&apos;ve already had with your agent harnesses, so you can read them here.
+        mads can bring in conversations you&apos;ve already had with your agent harnesses, so you can pick them up where you left off.
         Scanning reads the conversation files on this machine; importing creates mads sessions that point at those
         files. Nothing is uploaded or copied anywhere.
       </p>
