@@ -138,6 +138,10 @@ const (
 
 	CommitCreated EventType = "commit.created"
 	CommitLinked  EventType = "commit.linked"
+	// CommitUndone fires when a session's Commit is taken back (POST
+	// /sessions/{id}/commit/undo: `git reset --soft HEAD~1`) and its record
+	// removed, so a commit card can drop it. Payload: {"hash": string}.
+	CommitUndone EventType = "commit.undone"
 
 	PipelineStarted   EventType = "pipeline.started"
 	PipelinePaused    EventType = "pipeline.paused"
@@ -319,6 +323,20 @@ const (
 	// "trunk_head": the trunk state this land attempt gated and landed
 	// against.
 	MergeCompleted EventType = "merge.completed"
+	// MergeRefused fires when a session's Land is refused — a gate said no
+	// before anything ran, or the user's checkout refused the merge and it
+	// was aborted (docs/SESSION-WORKTREES-DESIGN.md D6). Nothing changed in
+	// either tree.
+	//
+	// Land's payloads, for all four merge.* types: {"kind": "land",
+	// "branch": string, "base": string, "target_branch": string (= base,
+	// for older readers)}, plus merge.completed {"merge_commit": string,
+	// "fast_forwarded": bool}, merge.conflicted {"files": []string,
+	// "step": "base" (the base merging into the session folder conflicted,
+	// and was aborted)}, merge.refused {"reason": string (a
+	// contracts.Land* reason code), "detail": string, "files": []string}.
+	// Empty keys are omitted.
+	MergeRefused EventType = "merge.refused"
 	// WorktreeEnsured fires when the session runner had to do something to
 	// give a session its isolated folder, or decided not to isolate it
 	// (docs/SESSION-WORKTREES-DESIGN.md D1/D2: nothing heals silently). A
@@ -418,7 +436,7 @@ var EventTypes = []EventType{
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,
-	CommitCreated, CommitLinked,
+	CommitCreated, CommitLinked, CommitUndone,
 	PipelineStarted, PipelinePaused, PipelineResumed, PipelineCancelled, PipelineCompleted, PipelineFailed,
 	StageStarted, StageCompleted, StageFailed, StageSkipped, StageRateLimited, StageRateLimitCleared, StageRetried,
 	RetroStarted, RetroProgress, RetroCompleted, RetroFailed,
@@ -431,7 +449,7 @@ var EventTypes = []EventType{
 	TemplateCreated, TemplateUpdated, TemplateDeleted,
 	ProfileCreated, ProfileUpdated, ProfileDeleted, ConfigUpdated,
 	AttachmentAdded,
-	MergeAttempted, MergeConflicted, MergeCompleted, LandRetried, LandAutofixed,
+	MergeAttempted, MergeConflicted, MergeCompleted, MergeRefused, LandRetried, LandAutofixed,
 	WorktreeEnsured,
 	UsageRecorded, CapabilityInvoked,
 	StageAttemptRef, StageCapabilitiesMounted,

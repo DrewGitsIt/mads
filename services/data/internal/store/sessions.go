@@ -608,6 +608,28 @@ func (s *Sessions) RecordCommit(ctx context.Context, rep *CommitReport, actor st
 	return &c, nil
 }
 
+// DeleteCommit removes one of sessionID's commit records and appends
+// commit.undone — the record side of a Commit the user took back (`git
+// reset --soft`), so no card goes on naming a commit no branch holds. A
+// hash this session didn't record is ErrNotFound.
+func (s *Sessions) DeleteCommit(ctx context.Context, sessionID, hash string, actor string) error {
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		res, err := tx.Exec(`DELETE FROM commits WHERE session_id = ? AND hash = ?`, sessionID, hash)
+		if err != nil {
+			return fmt.Errorf("commits: delete %s: %w", hash, err)
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("commits: %s in session %s: %w", hash, sessionID, ErrNotFound)
+		}
+		payload, _ := json.Marshal(map[string]string{"hash": hash})
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.CommitUndone, SessionID: sessionID, Actor: actor, Payload: payload,
+		})
+	})
+}
+
 // Commits returns a session's commits, oldest first.
 func (s *Sessions) Commits(ctx context.Context, sessionID string) ([]contracts.Commit, error) {
 	rows, err := s.log.db.QueryContext(ctx,

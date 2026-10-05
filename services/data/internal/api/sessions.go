@@ -171,6 +171,14 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusCreated, rec)
 	})
 
+	mux.HandleFunc("DELETE /sessions/{id}/commits/{hash}", func(w http.ResponseWriter, r *http.Request) {
+		if err := s.DeleteCommit(r.Context(), r.PathValue("id"), r.PathValue("hash"), actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("GET /sessions/{id}/commits", func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.Commits(r.Context(), r.PathValue("id"))
 		if err != nil {

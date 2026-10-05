@@ -357,6 +357,13 @@ func (c *Client) RecordCommit(ctx context.Context, rep *CommitReport) (contracts
 	return out, err
 }
 
+// DeleteCommit removes one of sessionID's commit records (an undone
+// Commit); the Data Service appends commit.undone. ErrNotFound when the
+// session never recorded hash.
+func (c *Client) DeleteCommit(ctx context.Context, sessionID, hash string) error {
+	return c.do(ctx, http.MethodDelete, "/sessions/"+url.PathEscape(sessionID)+"/commits/"+url.PathEscape(hash), nil, nil)
+}
+
 // Commits lists every commit recorded for sessionID, with linkage.
 func (c *Client) Commits(ctx context.Context, sessionID string) ([]contracts.Commit, error) {
 	var list []contracts.Commit

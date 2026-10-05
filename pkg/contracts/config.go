@@ -197,6 +197,13 @@ type Config struct {
 	// the UI and CLI launch paths); runs already in progress are unaffected.
 	AllowSleepDuringPipelines bool `json:"allow_sleep_during_pipelines"`
 
+	// AutoCommitMessages is Settings' "Write commit messages for me"
+	// (docs/SESSION-WORKTREES-DESIGN.md D5): a session Commit sent with no
+	// message has the Fast Model draft one and commits every uncommitted
+	// session file — the header's one-click path. Off by default, which is
+	// also what every stored config predating it decodes to.
+	AutoCommitMessages bool `json:"auto_commit_messages"`
+
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`

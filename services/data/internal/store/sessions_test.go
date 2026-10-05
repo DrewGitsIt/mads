@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -465,5 +466,43 @@ func TestSetWorktreeScopedWrite(t *testing.T) {
 	}
 	if got, _ := s.Get(ctx, sess.ID); got.UncommittedCount != 0 || got.WorktreeDir != "" || got.UnlandedCount != 3 || got.WorktreeBranch != branch {
 		t.Errorf("partial patch: %+v, want uncommitted and dir cleared, the rest kept", got)
+	}
+}
+
+// An undone Commit drops its record and says so on the event log; a hash
+// the session never recorded (or another session's) is not found.
+func TestDeleteCommit(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{})
+	other := mkSession(t, s, contracts.Session{})
+	for _, c := range []contracts.Commit{
+		{Hash: "keep", SessionID: sess.ID, Message: "a"},
+		{Hash: "undo", SessionID: sess.ID, Message: "b"},
+		{Hash: "theirs", SessionID: other.ID, Message: "c"},
+	} {
+		if _, err := s.RecordCommit(ctx, &CommitReport{Commit: c}, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.DeleteCommit(ctx, sess.ID, "theirs", "test"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("delete another session's commit: err = %v, want ErrNotFound", err)
+	}
+	if err := s.DeleteCommit(ctx, sess.ID, "undo", "test"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Commits(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Hash != "keep" {
+		t.Errorf("commits after undo = %+v, want only keep", got)
+	}
+	evs, err := l.Query(ctx, Filter{SessionID: sess.ID, Types: []string{string(contracts.CommitUndone)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"undo"`) {
+		t.Errorf("commit.undone events = %+v", evs)
 	}
 }
