@@ -1,6 +1,6 @@
 # Shell dock: shells that outlive the view
 
-**Status:** Proposed (2026-10-05). Not started.
+**Status:** Implemented on `mads/session/ses_ed0e2db3f870b730` (2026-10-06), tasks 1–7 (91753d9…4f08cf7). Step 8, Drew's manual pass, is still open.
 **Date:** 2026-10-05. **Driver:** Drew wants the Ctrl+` shell to stay open,
 with its contents, while he moves between sessions. He also wants to hide it
 without killing it while a sudo'd service runs in it.
