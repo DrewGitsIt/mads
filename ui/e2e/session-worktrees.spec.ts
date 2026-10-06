@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
@@ -363,10 +362,11 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     git(primary, "commit", "-q", "-m", `Base's ${M}`);
     const baseHead = git(primary, "rev-parse", "HEAD");
 
-    // mergiraf isn't on this topology's PATH, so a stand-in with its calling
-    // convention is registered for the repo the way pkg/mergedriver does it.
-    // It resolves the conflict by keeping both sides' lines.
-    const unregister = registerStandInMergiraf(primary);
+    // The services look for mergiraf at $MADS_MERGIRAF; a stand-in with its
+    // calling convention goes there for this journey. It resolves the
+    // conflict by keeping both sides' lines.
+    const repoBefore = mergeDriverState(primary);
+    const uninstall = installStandInMergiraf();
     try {
       await page.goto(routerURL);
       await page.locator('[aria-label="Session list"]').getByText(name, { exact: true }).click();
@@ -411,8 +411,11 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       expect(readFileSync(path.join(primary, M), "utf8")).toMatch(/from the (session|base)\nfrom the (base|session)\n/);
       expect(midMerge(primary)).toBe(false);
       expect((await getSession(routerURL, id)).unlanded_count ?? 0).toBe(0);
+      // mergiraf reached only Land's own merges: nothing was registered in
+      // the repo, where the user's own merges would pick it up.
+      expect(mergeDriverState(primary)).toBe(repoBefore);
     } finally {
-      unregister();
+      uninstall();
     }
   });
 
@@ -470,29 +473,29 @@ async function landViaAPI(routerURL: string, id: string, want: string): Promise<
 }
 
 /**
- * Registers a stand-in for mergiraf as dir's repository merge driver, the
- * way pkg/mergedriver registers the real one: merge.mergiraf.driver plus
- * "* merge=mergiraf" in the shared git dir's info/attributes. The stand-in
- * takes mergiraf's arguments and resolves every conflict by keeping both
- * sides' lines (git merge-file --union). Returns the undo.
+ * Puts a stand-in for mergiraf where the services look for it
+ * ($MADS_MERGIRAF, set by the topology). It takes mergiraf's arguments and
+ * resolves every conflict by keeping both sides' lines (git merge-file
+ * --union). Returns the undo.
  */
-function registerStandInMergiraf(dir: string): () => void {
-  const binDir = mkdtempSync(path.join(tmpdir(), "mergiraf-standin-"));
-  const bin = path.join(binDir, "mergiraf");
+function installStandInMergiraf(): () => void {
+  const bin = process.env.MADS_MERGIRAF!;
+  mkdirSync(path.dirname(bin), { recursive: true });
   writeFileSync(bin, '#!/bin/sh\nexec git merge-file --union "$4" "$3" "$5"\n', { mode: 0o755 });
-  git(dir, "config", "merge.mergiraf.name", "mergiraf");
-  git(dir, "config", "merge.mergiraf.driver", `${bin} merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L`);
+  return () => rmSync(bin, { force: true });
+}
+
+/** dir's repository's merge.* config and shared attributes file: where a merge driver registration would show. */
+function mergeDriverState(dir: string): string {
+  let config = "";
+  try {
+    config = git(dir, "config", "--local", "--get-regexp", "^merge\\.");
+  } catch {
+    // none
+  }
   const common = path.resolve(dir, git(dir, "rev-parse", "--git-common-dir"));
   const attrs = path.join(common, "info", "attributes");
-  mkdirSync(path.dirname(attrs), { recursive: true });
-  const before = existsSync(attrs) ? readFileSync(attrs, "utf8") : undefined;
-  writeFileSync(attrs, `${before ?? ""}* merge=mergiraf\n`);
-  return () => {
-    git(dir, "config", "--remove-section", "merge.mergiraf");
-    if (before === undefined) rmSync(attrs, { force: true });
-    else writeFileSync(attrs, before);
-    rmSync(binDir, { recursive: true, force: true });
-  };
+  return `${config}\0${existsSync(attrs) ? readFileSync(attrs, "utf8") : ""}`;
 }
 
 /** POST /sessions/{id}/commit with every uncommitted session file — setup, where the dialog isn't under test. */

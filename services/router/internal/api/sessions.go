@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
@@ -43,6 +44,10 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	}
 	sess := &req.Session
 	sess.ID = ""
+	// Creation time and import provenance are the Data Service's to stamp
+	// (and the import's to supply): a client can't backdate a new session.
+	sess.CreatedAt = time.Time{}
+	sess.ImportedFrom = ""
 	if len(req.Links) > 0 {
 		// Unlike requireLinkedSessions (which 404s whole routes), only the
 		// links field is refused flag-off — POST /sessions must keep working.

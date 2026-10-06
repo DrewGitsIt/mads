@@ -9,7 +9,7 @@ export interface PreflightStepProps {
 }
 
 /**
- * Step 2/5: shares usePreflight with Settings > General (HANDOFF §4/§6).
+ * Step 2/6: shares usePreflight with Settings > General (HANDOFF §4/§6).
  * "Continue" is never gated on preflight results — this is an informational
  * health check with fix guidance (spec §14.8-14.9), not a hard gate; a user
  * with a real environment problem still needs to reach Settings to see the

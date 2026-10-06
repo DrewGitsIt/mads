@@ -10,7 +10,10 @@
 // the root's absolute path (RootKey) and the actual path is recorded in the
 // shadow dir's git config (`mads.root`) for reverse lookup. Roots are
 // discovered lazily from captured paths (`git rev-parse --show-toplevel`,
-// cached); a non-git directory counts as its own root. Every path entering
+// cached); a non-git directory counts as its own root, but a root that
+// isn't a repo is never tree-baselined or tree-committed — it may be ~ or /,
+// and `add -A` there would copy the filesystem into git objects. Non-repo
+// roots keep only their per-capture pre-image blobs. Every path entering
 // the package is canonicalized first (RealPath) — git reports roots
 // physically, so an unresolved path would key a second, parallel root and
 // break every root-relative lookup against it. Tool_use_id → blob
@@ -139,7 +142,7 @@ type Store struct {
 
 	mu        sync.Mutex
 	roots     map[string]*rootState // abs root path → state
-	rootByDir map[string]string     // abs dir → abs root path (rev-parse cache)
+	rootByDir map[string]dirRoot    // abs dir → containing root (rev-parse cache)
 
 	indexMu sync.Mutex // serializes appends to the JSONL index
 
@@ -158,9 +161,22 @@ func (s *Store) Wait() {
 	s.wg.Wait()
 }
 
+// dirRoot is the cached answer to "which root holds this directory": the
+// git toplevel (repo=true) or, for a non-git directory, the directory itself.
+type dirRoot struct {
+	root string
+	repo bool
+}
+
 type rootState struct {
 	path   string // abs root path
 	gitDir string // <store.dir>/<RootKey(path)>
+
+	// repo is whether path is inside a git repo. Only repo roots get tree
+	// operations (baseline, turn commits): a non-repo root is "its own
+	// root" purely so captured blobs have a home, and its tree is
+	// unbounded — it can be ~ or /.
+	repo bool
 
 	// mu serializes tree operations (baseline, turn commit) in this root's
 	// shadow git dir. Blob captures don't take it: the object store is
@@ -182,7 +198,7 @@ func New(shadowRoot, sessionID string) *Store {
 	return &Store{
 		dir:       dir,
 		roots:     map[string]*rootState{},
-		rootByDir: map[string]string{},
+		rootByDir: map[string]dirRoot{},
 	}
 }
 
@@ -216,12 +232,19 @@ func (s *Store) Dir() string {
 // root already baselined (including by a previous process for the same
 // session — bounce/resume) is a cheap no-op. Synchronous — callers on the
 // provisioning path run it in a goroutine (measured 6.3s on a 39 GB
-// checkout; must never block provisioning).
+// checkout; must never block provisioning). A root that isn't inside a git
+// repo is not baselined at all (see rootState.repo): the session may be
+// rooted at ~ or /, and the files it changes there are covered by
+// per-capture pre-images instead.
 func (s *Store) Baseline(root string) {
 	if s == nil || root == "" {
 		return
 	}
-	rs := s.rootState(RealPath(root))
+	root = RealPath(root)
+	if _, repo := s.lookupDir(root); !repo {
+		return
+	}
+	rs := s.rootState(root)
 	if rs == nil {
 		return
 	}
@@ -246,13 +269,17 @@ func (s *Store) Capture(toolUseID, absPath string) {
 	if rs == nil {
 		return
 	}
-	// First-touch baseline for roots other than the provisioning-time
+	// First-touch baseline for repo roots other than the provisioning-time
 	// primary — backgrounded, never on the hot path. No-op if already done.
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
-		s.baselineRoot(rs)
-	}()
+	// Not for a non-repo root: its "root" is just the file's directory,
+	// which can be ~ itself.
+	if rs.repo {
+		s.wg.Add(1)
+		go func() {
+			defer s.wg.Done()
+			s.baselineRoot(rs)
+		}()
+	}
 
 	rec := Record{
 		Kind:      RecordCapture,
@@ -315,7 +342,11 @@ func (s *Store) commitTurn() {
 
 	for _, rs := range roots {
 		rs.mu.Lock()
-		if !rs.baselined {
+		if !rs.repo || !rs.baselined {
+			// Non-repo roots are never baselined, so they land here too:
+			// `add -A` on one would be the whole-directory scan Baseline
+			// refuses to do.
+			//
 			// Baseline still running (or failed): committing now would race
 			// it or produce a bogus first commit. This turn's changes are
 			// still caught — the eventual baseline snapshots the tree as it
@@ -351,40 +382,49 @@ func (s *Store) commitTurn() {
 // directory. A non-git directory (rev-parse fails, including a directory
 // that doesn't exist yet) counts as its own root.
 func (s *Store) rootFor(absPath string) string {
-	dir := filepath.Dir(absPath)
+	root, _ := s.lookupDir(filepath.Dir(absPath))
+	return root
+}
+
+// lookupDir is rootFor's worker, keyed by directory: it also reports whether
+// the root is a git repo (false → dir is its own, non-repo root).
+func (s *Store) lookupDir(dir string) (root string, repo bool) {
 	s.mu.Lock()
-	if root, ok := s.rootByDir[dir]; ok {
+	if dr, ok := s.rootByDir[dir]; ok {
 		s.mu.Unlock()
-		return root
+		return dr.root, dr.repo
 	}
 	s.mu.Unlock()
 
-	root := dir
+	root = dir
 	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
 	if err == nil {
 		if top := strings.TrimSpace(string(out)); top != "" {
-			root = top
+			root, repo = top, true
 		}
 	}
 
 	s.mu.Lock()
-	s.rootByDir[dir] = root
+	s.rootByDir[dir] = dirRoot{root: root, repo: repo}
 	s.mu.Unlock()
-	return root
+	return root, repo
 }
 
 // rootState returns (creating and git-initializing if needed) the state for
 // an absolute root path. Returns nil when the shadow git dir can't be
 // initialized — the caller's signal to silently skip.
 func (s *Store) rootState(root string) *rootState {
+	// Resolved before taking s.mu (lookupDir locks it). For a repo root this
+	// is a second rev-parse, from the toplevel itself; once per root.
+	_, repo := s.lookupDir(root)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rs, ok := s.roots[root]; ok {
 		return rs
 	}
-	rs := &rootState{path: root, gitDir: filepath.Join(s.dir, RootKey(root))}
+	rs := &rootState{path: root, gitDir: filepath.Join(s.dir, RootKey(root)), repo: repo}
 	if err := s.initGitDir(rs); err != nil {
 		logf("shadow: init shadow git dir for %s: %v", root, err)
 		return nil
@@ -434,11 +474,12 @@ func (s *Store) initGitDir(rs *rootState) error {
 
 // baselineRoot creates the root's baseline commit if it doesn't exist yet.
 // Holds the root's tree lock for the duration, so turn commits queue behind
-// it rather than racing.
+// it rather than racing. Never baselines a non-repo root (belt and braces:
+// the callers already filter).
 func (s *Store) baselineRoot(rs *rootState) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if rs.baselined {
+	if rs.baselined || !rs.repo {
 		return
 	}
 	// A previous process (bounce/resume) may have baselined already.

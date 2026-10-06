@@ -174,9 +174,9 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorCostReporting:  provider.Native,
 		provider.BehaviorACP:            provider.Native,
 		provider.BehaviorPTY:            provider.Native,
-		// Honest until the platform defines their interfaces; the fake
-		// grows them alongside the first probe.
-		provider.BehaviorBranching:     provider.Unsupported,
+		// Branching is fork-on-resume only (StartOptions.Fork). CwdReroot
+		// stays honest until the platform defines its interface.
+		provider.BehaviorBranching:     provider.Native,
 		provider.BehaviorCwdReroot:     provider.Unsupported,
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
@@ -197,7 +197,19 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	f.mu.Lock()
 	f.starts = append(f.starts, opts)
 	ref := opts.Resume
-	if ref == "" {
+	forked := opts.Fork && opts.Resume != ""
+	if forked {
+		// Fork: the new session starts from a copy of the original's
+		// history under a fresh ref; the original is never written to.
+		src, known := f.histories[ref]
+		if !known {
+			f.mu.Unlock()
+			return nil, fmt.Errorf("resume: unknown session ref %q", ref)
+		}
+		f.seq++
+		ref = fmt.Sprintf("fake-%d", f.seq)
+		f.histories[ref] = append([]provider.Message{}, src...)
+	} else if ref == "" {
 		f.seq++
 		ref = fmt.Sprintf("fake-%d", f.seq)
 		// Register the ref as known immediately, even with no messages
@@ -229,7 +241,9 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	// once the first turn begins (see Send), never leaves it unknown
 	// forever (models PTY discovery giving up).
 	timing := f.scenario.RefAnnounce
-	announced := opts.Resume != "" || timing == RefAnnounceOnConnect
+	// A fork's ref is new, so it follows the fresh-session timing even
+	// though Resume is set.
+	announced := (opts.Resume != "" && !forked) || timing == RefAnnounceOnConnect
 	refCh := make(chan string, 1)
 	switch {
 	case announced:

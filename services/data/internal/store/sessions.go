@@ -59,6 +59,11 @@ func validateSession(s *contracts.Session) *contracts.ValidationError {
 
 // Create stores a new session (implicit on first message, spec §1) and
 // announces it. Activity defaults to active, isolation to worktree.
+//
+// A non-zero CreatedAt is kept: an imported conversation carries the time it
+// was really started, which the rail's age reads. Every other creator leaves
+// it zero and gets now. (The Router's POST /sessions clears whatever a client
+// sent, so only code that calls the Data Service directly can set it.)
 func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor string) error {
 	if sess.Activity == "" {
 		sess.Activity = contracts.SessionActive
@@ -77,7 +82,10 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 			sess.ID = NewID("ses")
 		}
 		now := time.Now().UTC()
-		sess.CreatedAt, sess.UpdatedAt = now, now
+		if sess.CreatedAt.IsZero() {
+			sess.CreatedAt = now
+		}
+		sess.UpdatedAt = now
 		if err := s.write(tx, sess); err != nil {
 			return err
 		}
@@ -101,6 +109,9 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 			return err
 		}
 		sess.CreatedAt = old.CreatedAt
+		// ImportedFrom is set once at import; a full-record PUT from a client
+		// that predates the field must not erase the dedupe record.
+		sess.ImportedFrom = old.ImportedFrom
 		// AgentState and LastTurnAt are runner-owned and reach the record
 		// only through their own scoped writers below. A full-record PUT
 		// carries whatever its client read a round trip earlier, which is

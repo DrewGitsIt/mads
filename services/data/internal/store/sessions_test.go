@@ -66,6 +66,35 @@ func TestSessionLifecycleEvents(t *testing.T) {
 	}
 }
 
+// An import supplies the conversation's real start time; an ordinary create
+// (zero CreatedAt) is stamped now, and an update never moves it.
+func TestSessionCreateHonorsSuppliedCreatedAt(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	past := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+
+	imported := mkSession(t, s, contracts.Session{CreatedAt: past})
+	if !imported.CreatedAt.Equal(past) {
+		t.Errorf("CreatedAt = %v, want the supplied %v", imported.CreatedAt, past)
+	}
+	if imported.UpdatedAt.Before(past.Add(24 * time.Hour)) {
+		t.Errorf("UpdatedAt = %v, want now", imported.UpdatedAt)
+	}
+	ordinary := mkSession(t, s, contracts.Session{})
+	if time.Since(ordinary.CreatedAt) > time.Minute {
+		t.Errorf("ordinary CreatedAt = %v, want now", ordinary.CreatedAt)
+	}
+
+	imported.CreatedAt = time.Now()
+	imported.Name = "renamed"
+	if err := s.Update(ctx, &imported, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if !imported.CreatedAt.Equal(past) {
+		t.Errorf("CreatedAt after update = %v, want it kept at %v", imported.CreatedAt, past)
+	}
+}
+
 func TestSessionDeleteCascades(t *testing.T) {
 	s, tasks, l := newSessionStore(t)
 	ctx := context.Background()

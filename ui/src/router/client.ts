@@ -15,6 +15,8 @@ import type {
   CostMetrics,
   CreateSessionPayload,
   DiagnoseResult,
+  ConversationImportResult,
+  ConversationImportScan,
   EnvCandidates,
   Envelope,
   FastModelStatus,
@@ -221,6 +223,10 @@ export interface RouterClient {
   deleteCredential(name: string): Promise<void>;
   listCredentialEnvCandidates(): Promise<EnvCandidates>;
   importCredentials(names: string[]): Promise<{ imported: string[] }>;
+
+  // --- Conversation import ---
+  scanConversationImports(): Promise<ConversationImportScan>;
+  importConversations(): Promise<ConversationImportResult>;
 
   // --- Preflight ---
   getPreflightChecks(): Promise<PreflightCheck[]>;
@@ -920,6 +926,14 @@ export class FetchRouterClient implements RouterClient {
 
   async listCredentialEnvCandidates(): Promise<EnvCandidates> {
     return routerGet(this.baseUrl, "/credentials/env-candidates");
+  }
+
+  async scanConversationImports(): Promise<ConversationImportScan> {
+    return routerGet(this.baseUrl, "/imports/conversations");
+  }
+
+  async importConversations(): Promise<ConversationImportResult> {
+    return routerPost(this.baseUrl, "/imports/conversations", {});
   }
 
   async importCredentials(names: string[]): Promise<{ imported: string[] }> {

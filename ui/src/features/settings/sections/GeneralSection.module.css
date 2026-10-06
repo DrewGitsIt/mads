@@ -56,7 +56,8 @@
   margin: 0 0 var(--space-2);
 }
 
-.preflight {
+.preflight,
+.conversations {
   margin-top: var(--space-4);
   padding-top: var(--space-4);
   border-top: 1px solid var(--line-soft);

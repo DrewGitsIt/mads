@@ -43,7 +43,11 @@ const (
 	// BehaviorPTY — the terminal transport. At least one of acp/pty must be
 	// supported; PTY-only providers render in terminal mode only (§11).
 	BehaviorPTY Behavior = "pty"
-	// BehaviorBranching — fork a session into alternatives. Optional.
+	// BehaviorBranching — fork a session into alternatives: StartOptions.Fork
+	// with Resume starts a new, independent session seeded from the resumed
+	// one's history, leaving the original untouched. Forking at an earlier
+	// turn (rewind) is a distinct, not-yet-modeled surface — Native here
+	// means fork-on-resume only. Optional.
 	BehaviorBranching Behavior = "branching"
 	// BehaviorCwdReroot — move a live session to a different working
 	// directory. Optional.

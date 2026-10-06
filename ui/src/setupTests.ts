@@ -40,4 +40,7 @@ for (const name of ["localStorage", "sessionStorage"] as const) {
 
 afterEach(() => {
   cleanup();
+  // One in-memory store for the whole file: without this, state a test persisted
+  // (the rail's seen-session ids, say) decides what the next test renders.
+  localStorage.clear();
 });

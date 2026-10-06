@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,6 +53,10 @@ func TestShadowProvisioning(t *testing.T) {
 
 	r := New(sess.ID, data, reg)
 	r.Cwd = shadowCwd(t)
+	// A repo: only repo roots are baselined and turn-committed.
+	if out, err := exec.Command("git", "-C", r.Cwd, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
 	r.ShadowRoot = t.TempDir()
 	if err := r.Start(ctx); err != nil {
 		t.Fatalf("start: %v", err)
@@ -97,6 +102,43 @@ func TestShadowProvisioning(t *testing.T) {
 		}
 		return false
 	})
+}
+
+// TestShadowProvisioningSkipsNonRepoCwd: a session whose folder isn't a git
+// repo (~ and / look like this) gets no primary-root baseline — Start must
+// not bulk-copy the folder into the shadow store.
+func TestShadowProvisioningSkipsNonRepoCwd(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+
+	reg := provider.NewRegistry()
+	if err := reg.Register(fake.New()); err != nil {
+		t.Fatalf("register fake: %v", err)
+	}
+	r := New(sess.ID, data, reg)
+	r.Cwd = shadowCwd(t)
+	if err := os.WriteFile(filepath.Join(r.Cwd, "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r.ShadowRoot = t.TempDir()
+	if err := r.Start(ctx); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { _ = r.Shutdown(ctx) })
+	t.Cleanup(r.shadowStore.Wait)
+
+	// The baseline would run in a goroutine off Start; give it time to
+	// (wrongly) land, then check that nothing was written for this root.
+	time.Sleep(300 * time.Millisecond)
+	shadowDir := filepath.Join(r.ShadowRoot, sess.ID)
+	if _, err := os.Stat(filepath.Join(shadowDir, shadow.RootKey(r.Cwd))); !os.IsNotExist(err) {
+		t.Errorf("non-repo cwd got a shadow git dir (stat err = %v), want none", err)
+	}
+	if _, ok := shadow.BaselineOriginal(ctx, shadowDir, r.Cwd, "a.txt"); ok {
+		t.Error("non-repo cwd has a baseline commit")
+	}
 }
 
 // TestShadowCaptureRecordsPreImage drives shadowCapture directly (the fake

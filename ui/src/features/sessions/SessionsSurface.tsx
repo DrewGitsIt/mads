@@ -122,6 +122,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             links={links}
             workspaces={workspaces}
             agents={agents}
+            sessionsLoaded={!loading}
             routerClient={router}
             selectedId={selectedId}
             onSelect={(id) => {

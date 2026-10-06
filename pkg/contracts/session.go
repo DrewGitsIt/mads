@@ -195,6 +195,34 @@ type Session struct {
 	// StartOptions.Resume to reattach after a bounce. Also the transcript
 	// pointer: TranscriptReader.Transcript(ctx, ref) reads by this same value.
 	ProviderRef string `json:"provider_ref,omitempty"`
+	// ForkOnResume marks ProviderRef as someone else's native conversation
+	// (an imported transcript) that must never be appended to: the next
+	// start passes it as StartOptions.Resume with Fork set, and the Runner
+	// clears this in the same write that replaces ProviderRef with the fork's
+	// own ref. While ProviderRef is still the original it stays set, so a
+	// start that dies before the fork exists re-forks from the untouched
+	// original.
+	ForkOnResume bool `json:"fork_on_resume,omitempty"`
+	// ImportedFrom is the provider-native id of the conversation this session
+	// was imported from — set once at import and never changed. ProviderRef
+	// can't answer "have I imported this already?" on its own: the first
+	// wake forks, and the fork's id replaces ProviderRef, so a re-run of the
+	// import would otherwise see the original id as unknown and import it
+	// again. The import dedupes on both fields.
+	ImportedFrom string `json:"imported_from,omitempty"`
+	// RerootedFrom is the folder this session was recorded in before the
+	// Runner found it gone and moved the session to the default workspace's
+	// primary repo (Dir now holds the new folder, Tags carries "rerooted").
+	// Kept because the history still names the old path — and a Claude fork
+	// rewrites the native file's cwd, so nothing else remembers it. Empty
+	// for a session that was never re-rooted.
+	RerootedFrom string `json:"rerooted_from,omitempty"`
+	// RerootNotePending is true from the re-root until the agent has been
+	// told about it: the Runner prepends a note to the first turn it sends
+	// and clears this afterwards. A wake that finds it still set (the
+	// process died before the clear landed, or only terminal input arrived)
+	// sends the note again — at least once, never zero.
+	RerootNotePending bool `json:"reroot_note_pending,omitempty"`
 	// LastUsage is the most recent turn's token accounting (provider.Usage,
 	// mirrored as Usage above), persisted by the Runner on every turn end —
 	// the context meter's data source at wake time, before this process has

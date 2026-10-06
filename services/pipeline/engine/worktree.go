@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,10 +31,13 @@ type worktrees struct {
 	// mergirafPath is the mergiraf binary's path, or "" if unavailable — set
 	// once at engine start (Config.MergirafPath or a PATH lookup). Rebase/
 	// merge behavior is otherwise identical either way: this only gates
-	// whether ensureSetup registers mergiraf as the primary repo's merge
-	// driver (spec: "detect availability at engine start and fall back
-	// cleanly to plain git rebase when absent").
+	// whether the land queue's merges carry mergiraf's per-command driver
+	// flags (mergeArgs; spec: "detect availability at engine start and fall
+	// back cleanly to plain git rebase when absent").
 	mergirafPath string
+	// mergirafState is where mergedriver.Args keeps its attributes file:
+	// $MADS_HOME/mergiraf.
+	mergirafState string
 
 	setup   sync.Once
 	setupEr error
@@ -81,8 +85,8 @@ func (w *worktrees) git(ctx context.Context, dir string, args ...string) (string
 }
 
 // ensureSetup enables per-worktree config and installs the post-commit hook,
-// and — when a mergiraf binary was detected — registers it as the git merge
-// driver for the shared repo, once per run. Both writes land in the shared
+// and removes the mergiraf registration earlier builds wrote to the shared
+// repo (cleanupMergeDriver), once per run. These writes land in the shared
 // primary repo's .git/config (via `git config`, which takes its own
 // config.lock with no retry), so a second engine process racing this same
 // one-time setup against the same workspace can otherwise fail outright
@@ -103,9 +107,7 @@ func (w *worktrees) ensureSetup(ctx context.Context) error {
 		if w.setupEr = githook.EnsureInstalled(ctx, w.setupDir()); w.setupEr != nil {
 			return
 		}
-		if w.mergirafPath != "" {
-			w.setupEr = w.ensureMergirafDriver(ctx)
-		}
+		w.cleanupMergeDriver(ctx)
 	})
 	return w.setupEr
 }
@@ -119,24 +121,46 @@ func (w *worktrees) setupDir() string {
 	return w.primary
 }
 
-// mergirafDriverName is the git merge driver name mergiraf is registered
-// under (see ensureMergirafDriver).
+// mergirafDriverName is the git merge driver name mergiraf runs under (see
+// mergeArgs).
 const mergirafDriverName = mergedriver.Name
 
-// ensureMergirafDriver registers mergiraf as a git merge driver (spec: the
-// land queue's rebase step should resolve adjacent-edit conflicts
-// automatically while leaving genuinely overlapping edits conflicted).
-// This is git's native per-file merge-driver mechanism, shared with session
-// worktrees in pkg/mergedriver — a `merge.mergiraf.driver` config command
-// template plus a `merge=mergiraf` gitattributes rule in the shared git
-// dir — so rebaseBeforeMerge's plain `git merge` calls pick it up for free.
-//
-// extensions.worktreeConfig (enabled by githook.EnsureInstalled above) makes
-// git config and .git/info/attributes shared across every task worktree, so
-// this only needs to run once against the primary repo's common git dir
-// (mergedriver.Register resolves it correctly from a linked worktree too).
-func (w *worktrees) ensureMergirafDriver(ctx context.Context) error {
-	return mergedriver.Register(ctx, w.setupDir(), w.mergirafPath)
+// cleanupMergeDriver removes what earlier builds wrote to register mergiraf
+// in the shared repo — a `merge.mergiraf.driver` config entry and a
+// `* merge=mergiraf` line in the common git dir's info/attributes — which
+// sent the user's own merges and rebases there through mergiraf too
+// (mergedriver.Cleanup removes exactly mads's entries, nothing the user
+// wrote). Best-effort: a failure is logged, and the run merges the same
+// either way.
+func (w *worktrees) cleanupMergeDriver(ctx context.Context) {
+	removed, err := mergedriver.Cleanup(ctx, w.setupDir())
+	if err != nil {
+		log.Printf("engine: clean up mergiraf registration in %s: %v", w.setupDir(), err)
+		return
+	}
+	if len(removed) > 0 {
+		log.Printf("engine: removed the mergiraf registration an earlier mads wrote to %s: %s", w.setupDir(), strings.Join(removed, ", "))
+	}
+}
+
+// mergeArgs is the `-c` flags that route one land-queue merge in dir
+// through mergiraf (spec: the land queue's rebase step should resolve
+// adjacent-edit conflicts automatically while leaving genuinely overlapping
+// edits conflicted), to go between `git` and `merge`; nil means plain git.
+// This is git's native per-file merge-driver mechanism, mergiraf's own
+// documented integration, scoped to the one command (mergedriver.Args):
+// nothing is written to the repo, so the user's own merges there never see
+// mergiraf.
+func (w *worktrees) mergeArgs(ctx context.Context, dir string) []string {
+	if w.mergirafPath == "" {
+		return nil
+	}
+	args, err := mergedriver.Args(ctx, dir, w.mergirafState, w.mergirafPath)
+	if err != nil {
+		log.Printf("engine: merging in %s without mergiraf: %v", dir, err)
+		return nil
+	}
+	return args
 }
 
 // create makes the task's worktree and branch, records the fork point (trunk
@@ -207,7 +231,8 @@ func (w *worktrees) merge(ctx context.Context, mergeCmd string, task contracts.T
 	// task-derived and must stay separate argv elements, never
 	// shell-composed (a backtick or $() in a task title must never reach a
 	// shell).
-	args := append(strings.Fields(mergeCmd)[1:], branch, "-m", subject, "-m", "Task: "+task.ID)
+	args := append(w.mergeArgs(ctx, w.primary), strings.Fields(mergeCmd)[1:]...)
+	args = append(args, branch, "-m", subject, "-m", "Task: "+task.ID)
 	// A merge someone else left in progress here is theirs: git refuses
 	// ours on top of it, and its conflicted files are not ours to report
 	// or abort.
@@ -275,7 +300,8 @@ func (w *worktrees) rebaseBeforeMerge(ctx context.Context, dir string, task cont
 	}
 
 	subject := fmt.Sprintf("Merge trunk into %s (pipeline rebase-before-merge)", task.ID)
-	if _, err := w.git(ctx, dir, "merge", trunkHead, "-m", subject); err == nil {
+	merge := append(w.mergeArgs(ctx, dir), "merge", trunkHead, "-m", subject)
+	if _, err := w.git(ctx, dir, merge...); err == nil {
 		return true, trunkHead, nil
 	}
 	conflicts, _ := w.git(ctx, dir, "diff", "--name-only", "--diff-filter=U")

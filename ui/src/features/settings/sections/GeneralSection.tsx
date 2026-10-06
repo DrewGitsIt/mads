@@ -4,6 +4,7 @@ import { PathField } from "../../../components/PathField/PathField";
 import { router } from "../../../router/client";
 import { fastModelAvailable } from "../../../router/fastModel";
 import type { Workspace } from "../../../router/types";
+import { ConversationImport } from "../ConversationImport";
 import { PreflightChecks } from "../PreflightChecks";
 import { RestartBadge } from "../RestartBadge";
 import { usePreflight } from "../state/usePreflight";
@@ -256,6 +257,10 @@ export function GeneralSection({ config }: GeneralSectionProps) {
         <Button variant="ghost" size="sm" onClick={preflight.rerun} disabled={preflight.loading}>
           Run preflight
         </Button>
+      </section>
+      <section className={styles.conversations}>
+        <h3 className={styles.heading}>Import conversations</h3>
+        <ConversationImport />
       </section>
     </div>
   );

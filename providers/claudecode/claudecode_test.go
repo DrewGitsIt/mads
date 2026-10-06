@@ -1227,6 +1227,65 @@ func TestStreamSessionNotificationWithoutUnpromptedOutputIsNoTurn(t *testing.T) 
 	}
 }
 
+// streamFixtureEvents replays a fixture through a streamSession's handleLine,
+// the stateful path the live transport runs (fixtureEvents is per-line).
+func streamFixtureEvents(t *testing.T, name string) []provider.Event {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	s := &streamSession{events: make(chan provider.Event, 256), announced: make(chan string, 1)}
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(ln) != "" {
+			s.handleLine([]byte(ln))
+		}
+	}
+	var evs []provider.Event
+	for {
+		select {
+		case ev := <-s.events:
+			evs = append(evs, ev)
+		default:
+			return evs
+		}
+	}
+}
+
+// A run_in_background Bash call gets the same task_* lifecycle lines a
+// subagent does (only task_started says task_type "local_bash"). None of
+// them may become EventTask, or the UI shows the command as a running
+// subagent: on live sessions 84 of 94 persisted "subagent" tasks were Bash.
+// The call itself still comes through as an ordinary tool.
+func TestStreamSessionBackgroundBashIsNoTask(t *testing.T) {
+	var bash bool
+	for _, ev := range streamFixtureEvents(t, "stream-task-bash.jsonl") {
+		if ev.Kind == provider.EventTask {
+			t.Errorf("background Bash produced EventTask: %+v", ev.Task)
+		}
+		if ev.Kind == provider.EventToolUse && ev.Tool != nil && ev.Tool.Name == "Bash" {
+			bash = true
+		}
+	}
+	if !bash {
+		t.Error("background Bash tool_use missing")
+	}
+}
+
+// The filter is keyed by task_type, so a subagent's lifecycle still comes
+// through whole — including the phases that carry no task_type of their own.
+func TestStreamSessionSubagentTaskKept(t *testing.T) {
+	var phases []string
+	for _, ev := range streamFixtureEvents(t, taskFixture) {
+		if ev.Kind == provider.EventTask {
+			phases = append(phases, ev.Task.Phase)
+		}
+	}
+	if got := strings.Join(phases, ","); got != "started,progress,updated,notification" {
+		t.Errorf("subagent task phases = %s, want all four", got)
+	}
+}
+
 // The CLI's <task-notification> user line (a background task finished) is
 // the harness talking to the model. It must not come back as a user message
 // full of raw XML; it becomes one "notification" entry carrying the summary.

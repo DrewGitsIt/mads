@@ -75,7 +75,30 @@ Roots are discovered lazily from ledger paths (`git rev-parse --show-toplevel` o
 each new path prefix, cached; a non-git directory counts as its own root). The
 session's primary cwd root is baselined at provisioning (backgrounded); any other
 root is baselined on first touch. Turn-end commits run only in roots dirtied that
-turn. `root_key` is a hash of the root's absolute path, with the path recorded in
+turn.
+
+**Non-repo roots get no baseline and no turn commits.** A directory that isn't inside
+a git repo still counts as its own root, but only so captured blobs have a shadow dir
+to live in. Baselining it would `add -A` an unbounded tree — and a session can be
+rooted at `~` or `/` (imported conversations live in any folder, and a file edited
+directly in `~` makes `~` the root) — copying the home directory or filesystem into git
+objects, bounded only by the 30-minute timeout and the short exclude list. So for a
+non-repo root the store records per-capture pre-image blobs and nothing else:
+
+- **Per-tool diff**: unchanged for the old side (the recorded blob). The new side comes
+  from the next capture of the same path, else the file on disk (there is no turn
+  commit to read it from), so a later out-of-band edit can leak into an earlier tool's
+  "after".
+- **Working diff**: "original" is the pre-image captured before the session's first
+  tool call on that file (`shadow.FirstCaptureOriginal`), empty for a file the tool
+  created.
+- **Not shown**: any change not made through a captured tool call — shell commands
+  (`sed -i`, `mv`, build output), edits by the user — has no pre-image and no tree
+  diff, so it doesn't appear in the diff view. This is the same "Bash gets turn-level
+  diffs only" limitation, minus the turn-level part. The file ledger still lists those
+  paths; only the before-side is unavailable.
+
+`root_key` is a hash of the root's absolute path, with the path recorded in
 the shadow dir's config for reverse lookup.
 
 The **runner** (session service) writes captures and commits — it owns the event

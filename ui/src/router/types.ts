@@ -44,6 +44,14 @@ export interface Session {
   retro_id?: string;
   synthesis_mode?: string;
   provider_ref?: string;
+  /** provider_ref is an imported native conversation: the next start forks it into a new ref (then clears this) instead of appending to it. */
+  fork_on_resume?: boolean;
+  /** Native conversation id this session was imported from; survives the first wake's fork, which replaces provider_ref. Set once by the import. */
+  imported_from?: string;
+  /** The folder this session was recorded in before the Runner found it gone and re-rooted it to the default workspace (dir is now the new folder, tags has "rerooted"). */
+  rerooted_from?: string;
+  /** True until the agent has been told about the re-root (a note prepended to its first turn). */
+  reroot_note_pending?: boolean;
   /** Most recent turn's token accounting, persisted by the Runner on every turn end — the context meter's data source at wake time, before this process has seen a turn_end of its own. */
   last_usage?: Usage;
   /**
@@ -1311,6 +1319,25 @@ export interface BehaviorInfo {
 export interface EnvCandidates {
   candidates: string[];
   looked_for: string[];
+}
+
+// GET /imports/conversations — what POST would import (conversations mads
+// doesn't already have): counts by provider and by folder, never the
+// conversations themselves. looked_for names the places read, so an empty
+// result can say what was looked at.
+export interface ConversationImportScan {
+  providers: { provider: string; count: number }[];
+  /** exists=false: the folder is gone; the conversation is still imported and re-rooted when it first wakes. */
+  folders: { dir: string; count: number; exists: boolean }[];
+  total: number;
+  already_imported: number;
+  looked_for: string[];
+}
+
+// POST /imports/conversations
+export interface ConversationImportResult {
+  imported: number;
+  skipped_existing: number;
 }
 
 // mirrors pkg/preflight/preflight.go Check

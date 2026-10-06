@@ -18,6 +18,8 @@ import type {
   Config,
   CostMetrics,
   DiagnoseResult,
+  ConversationImportResult,
+  ConversationImportScan,
   EnvCandidates,
   Envelope,
   FastModelStatus,
@@ -1339,6 +1341,14 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: listCredentialEnvCandidates");
   }
 
+  async scanConversationImports(): Promise<ConversationImportScan> {
+    return fixtureConversationImportScan;
+  }
+
+  async importConversations(): Promise<ConversationImportResult> {
+    return { imported: fixtureConversationImportScan.total, skipped_existing: 0 };
+  }
+
   async importCredentials(): Promise<{ imported: string[] }> {
     throw new Error("not fixtured: importCredentials");
   }
@@ -1754,6 +1764,19 @@ export const fixtureProviderBehaviors: BehaviorInfo[] = [
   { behavior: "branching", level: "optional" },
   { behavior: "cwd_reroot", level: "optional" },
 ];
+
+// What the onboarding import step shows against fixtures: Claude Code history
+// in two folders, one of which no longer exists.
+export const fixtureConversationImportScan: ConversationImportScan = {
+  providers: [{ provider: "claude-code", count: 5 }],
+  folders: [
+    { dir: "/home/dev/work/app", count: 3, exists: true },
+    { dir: "/home/dev/old-experiment", count: 2, exists: false },
+  ],
+  total: 5,
+  already_imported: 0,
+  looked_for: ["/home/dev/.claude/projects", "/home/dev/.claude/sessions"],
+};
 
 export const fixturePreflightChecks: PreflightCheck[] = [
   { name: "git", healthy: true, detail: "git version 2.43.0" },

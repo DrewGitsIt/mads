@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
-	"github.com/drewkidwell/mads/pkg/mergedriver"
 )
 
 // TestMain pins mergiraf to "not installed" for the whole package, so a
@@ -60,78 +59,94 @@ func realMergirafOrSkip(t *testing.T) string {
 	return p
 }
 
-func attributes(t *testing.T, repo string) string {
+// repoState is everything a merge-driver registration could write to the
+// repository: its config and the shared attributes file.
+func repoState(t *testing.T, repo string) string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(repo, ".git", "info", "attributes"))
-	if err != nil && !os.IsNotExist(err) {
-		t.Fatal(err)
+	read := func(p string) string {
+		raw, err := os.ReadFile(p)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return string(raw)
 	}
-	return string(raw)
+	return read(filepath.Join(repo, ".git", "config")) + "\x00" + read(filepath.Join(repo, ".git", "info", "attributes"))
 }
 
-// Ensure registers mergiraf for the repo when it's installed, and doing it
-// again (a later ensure, another process's ensure) changes nothing.
-func TestEnsureRegistersMergeDriver(t *testing.T) {
-	driver := fakeMergiraf(t)
-	withMergiraf(t, driver)
-	s := newSpec(t)
-	res := ensure(t, s)
-
-	if got := mergedriver.Registered(context.Background(), s.Primary); got != mergedriver.Command(driver) {
-		t.Errorf("driver = %q, want %q", got, mergedriver.Command(driver))
-	}
-	if got := mergedriver.Registered(context.Background(), res.Dir); got != mergedriver.Command(driver) {
-		t.Errorf("the session folder sees driver %q, want the repo's", got)
-	}
-	if got := attributes(t, s.Primary); got != "* merge=mergiraf\n" {
-		t.Errorf("attributes = %q", got)
-	}
-
-	registered.Delete(strings.TrimSpace(gitOut(t, s.Primary, "rev-parse", "--path-format=absolute", "--git-common-dir")))
-	if _, err := Ensure(context.Background(), s); err != nil {
+// legacyRegister writes what earlier builds wrote to register mergiraf at
+// path: the driver config and the shared attributes rule.
+func legacyRegister(t *testing.T, repo, path string) {
+	t.Helper()
+	gitRun(t, repo, "config", "merge.mergiraf.name", "mergiraf")
+	gitRun(t, repo, "config", "merge.mergiraf.driver", path+" merge --git %O %A %B -s %S -x %X -y %Y -p %P -l %L")
+	attr := filepath.Join(repo, ".git", "info", "attributes")
+	if err := os.MkdirAll(filepath.Dir(attr), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if got := attributes(t, s.Primary); got != "* merge=mergiraf\n" {
-		t.Errorf("attributes after a second ensure = %q, want the rule once", got)
+	if err := os.WriteFile(attr, []byte("* merge=mergiraf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func forgetCleaned(t *testing.T, repo string) {
+	t.Helper()
+	cleaned.Delete(strings.TrimSpace(gitOut(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))
+}
+
+// Ensure writes nothing to the repository, mergiraf installed or not.
+func TestEnsureWritesNoMergeDriver(t *testing.T) {
+	withMergiraf(t, fakeMergiraf(t))
+	s := newSpec(t)
+	before := repoState(t, s.Primary)
+	res := ensure(t, s)
+	if repoState(t, s.Primary) != before {
+		t.Errorf("ensure wrote to the repo:\n%q", repoState(t, s.Primary))
 	}
 	if st := gitOut(t, res.Dir, "status", "--porcelain"); st != "" {
-		t.Errorf("registration dirtied the session folder: %q", st)
+		t.Errorf("ensure dirtied the session folder: %q", st)
 	}
 }
 
-// The user's own checkout may itself be a linked worktree: the driver
-// still lands in the shared git dir, not under a bogus joined path.
-func TestEnsureRegistersMergeDriverFromLinkedCheckout(t *testing.T) {
-	driver := fakeMergiraf(t)
-	withMergiraf(t, driver)
+// Ensure removes what an earlier build registered, once; the user's own
+// lines stay.
+func TestEnsureCleansLegacyRegistration(t *testing.T) {
+	withMergiraf(t, fakeMergiraf(t))
+	s := newSpec(t)
+	legacyRegister(t, s.Primary, "/opt/homebrew/bin/mergiraf")
+	attr := filepath.Join(s.Primary, ".git", "info", "attributes")
+	if err := os.WriteFile(attr, []byte("*.bin binary\n* merge=mergiraf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	forgetCleaned(t, s.Primary)
+	ensure(t, s)
+
+	if out, err := Git(context.Background(), s.Primary, "config", "--get-regexp", `^merge\.mergiraf\.`); err == nil {
+		t.Errorf("mergiraf config left: %s", out)
+	}
+	if raw, _ := os.ReadFile(attr); string(raw) != "*.bin binary\n" {
+		t.Errorf("attributes = %q", raw)
+	}
+	if got := strings.TrimSpace(gitOut(t, s.Primary, "check-attr", "merge", "--", "x.go")); got != "x.go: merge: unspecified" {
+		t.Errorf("check-attr = %q", got)
+	}
+}
+
+// The user's own checkout may itself be a linked worktree: cleanup still
+// reaches the shared git dir, not a bogus joined path.
+func TestEnsureCleansLegacyRegistrationFromLinkedCheckout(t *testing.T) {
 	main := initRepo(t)
+	legacyRegister(t, main, "/usr/local/bin/mergiraf")
 	linked := filepath.Join(t.TempDir(), "linked")
 	gitRun(t, main, "worktree", "add", "-q", "-b", "feature", linked)
+	forgetCleaned(t, main)
 
-	s := Spec{Primary: linked, Root: t.TempDir(), SessionID: "ses_linked", Base: "feature"}
-	ensure(t, s)
+	ensure(t, Spec{Primary: linked, Root: t.TempDir(), SessionID: "ses_linked", Base: "feature"})
 
-	if got := attributes(t, main); got != "* merge=mergiraf\n" {
-		t.Errorf("attributes in the main checkout's .git = %q", got)
+	if _, err := os.Stat(filepath.Join(main, ".git", "info", "attributes")); !os.IsNotExist(err) {
+		t.Errorf("attributes in the main checkout's .git still there: %v", err)
 	}
-	if got := mergedriver.Registered(context.Background(), main); got != mergedriver.Command(driver) {
-		t.Errorf("driver seen from the main checkout = %q", got)
-	}
-	bogus := filepath.Join(linked, main, ".git", "info")
-	if _, err := os.Stat(bogus); !os.IsNotExist(err) {
-		t.Errorf("attributes went to a double-joined path: %s", bogus)
-	}
-}
-
-// Without mergiraf, ensure writes nothing: today's behaviour exactly.
-func TestEnsureWithoutMergirafRegistersNothing(t *testing.T) {
-	s := newSpec(t)
-	ensure(t, s)
-	if got := mergedriver.Registered(context.Background(), s.Primary); got != "" {
-		t.Errorf("driver = %q, want none", got)
-	}
-	if got := attributes(t, s.Primary); got != "" {
-		t.Errorf("attributes = %q, want none", got)
+	if out, err := Git(context.Background(), main, "config", "--get", "merge.mergiraf.driver"); err == nil {
+		t.Errorf("driver seen from the main checkout = %q", out)
 	}
 }
 
@@ -163,7 +178,9 @@ func TestPlainConflicts(t *testing.T) {
 		t.Error("the dry run changed the session folder")
 	}
 
-	gitRun(t, s.folder, "merge", "-q", "main") // the fake driver resolves it
+	t2 := Target{Root: filepath.Dir(s.folder)}
+	merge := append(mergirafArgs(context.Background(), t2, s.folder), "merge", "-q", "main")
+	gitRun(t, s.folder, merge...) // the fake driver resolves it
 	if files, ok := plainConflicts(context.Background(), s.folder, "main"); !ok || len(files) != 0 {
 		t.Errorf("after merging, plainConflicts = %v, %v; want none", files, ok)
 	}
@@ -177,6 +194,7 @@ func TestLandStopsOnAutoResolved(t *testing.T) {
 	s := newIsolated(t)
 	conflictingWork(t, s)
 	primaryBefore := cleanTree(t, s.primary)
+	repoBefore := repoState(t, s.primary)
 
 	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
 	if err != nil {
@@ -224,6 +242,20 @@ func TestLandStopsOnAutoResolved(t *testing.T) {
 	if string(got) != "session\nbase\n" && string(got) != "base\nsession\n" {
 		t.Errorf("landed shared.txt = %q, want the resolved merge", got)
 	}
+	if repoState(t, s.primary) != repoBefore {
+		t.Errorf("Land wrote to the repo's config or attributes:\n%q", repoState(t, s.primary))
+	}
+
+	// The user's own merge of the same kind of change, in the same repo,
+	// is plain git's: it conflicts.
+	gitRun(t, s.primary, "checkout", "-q", "-b", "user-side")
+	commitFile(t, s.primary, "shared.txt", "user\n")
+	gitRun(t, s.primary, "checkout", "-q", "main")
+	commitFile(t, s.primary, "shared.txt", "main again\n")
+	if out, err := Git(context.Background(), s.primary, "merge", "-q", "--no-edit", "user-side"); err == nil {
+		t.Errorf("the user's own git merge came back clean, through the driver: %s", out)
+	}
+	gitRun(t, s.primary, "merge", "--abort")
 }
 
 // A base that merges cleanly under plain git still lands in one click with
@@ -267,13 +299,13 @@ func TestLandConflictWithDriverStillConflicts(t *testing.T) {
 	}
 }
 
-// A driver registered by a mergiraf that has since been uninstalled would
-// fail every file both sides changed; Land merges those with plain git.
-func TestLandDanglingDriverFallsBackToPlainGit(t *testing.T) {
+// A driver an earlier build registered for a mergiraf since uninstalled
+// would fail every file both sides changed; Land cleans it up first and
+// merges with plain git.
+func TestLandCleansDanglingLegacyDriver(t *testing.T) {
 	s := newIsolated(t)
-	if err := mergedriver.Register(context.Background(), s.primary, filepath.Join(t.TempDir(), "gone", "mergiraf")); err != nil {
-		t.Fatal(err)
-	}
+	legacyRegister(t, s.primary, filepath.Join(t.TempDir(), "gone", "mergiraf"))
+	forgetCleaned(t, s.primary)
 	commitFile(t, s.primary, "shared.txt", "a\nb\nc\nd\ne\nf\n")
 	gitRun(t, s.folder, "-c", "merge.mergiraf.driver=git merge-file %A %O %B", "merge", "-q", "main")
 	s.work(t, map[string]string{"shared.txt": "A\nb\nc\nd\ne\nf\n"})
@@ -289,6 +321,30 @@ func TestLandDanglingDriverFallsBackToPlainGit(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(s.primary, "shared.txt")); string(got) != "A\nb\nc\nd\ne\nF\n" {
 		t.Errorf("landed shared.txt = %q", got)
+	}
+	if out, err := Git(context.Background(), s.primary, "config", "--get", "merge.mergiraf.driver"); err == nil {
+		t.Errorf("the dangling driver is still registered: %q", out)
+	}
+}
+
+// A mergiraf the user registered in the repository themselves isn't
+// mads's, but Land still notices when it resolved what plain git couldn't.
+func TestLandStopsOnUserRegisteredDriver(t *testing.T) {
+	s := newIsolated(t)
+	gitRun(t, s.primary, "config", "merge.mergiraf.driver", fakeMergiraf(t)+" merge --git %O %A %B")
+	if err := os.WriteFile(filepath.Join(s.primary, ".git", "info", "attributes"), []byte("* merge=mergiraf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conflictingWork(t, s)
+	res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Outcome != contracts.LandAutoResolved {
+		t.Fatalf("result = %+v, want auto_resolved", res)
+	}
+	if got := strings.TrimSpace(gitOut(t, s.primary, "config", "--get", "merge.mergiraf.driver")); !strings.HasSuffix(got, " merge --git %O %A %B") {
+		t.Errorf("the user's driver was touched: %q", got)
 	}
 }
 

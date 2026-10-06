@@ -48,6 +48,11 @@ func (r *Runner) Transcript(ctx context.Context) []contracts.TranscriptMessage {
 	if sess != nil {
 		ref = sess.Ref()
 	}
+	if ref == "" {
+		// A fork that doesn't exist yet reads as its source: it starts as a
+		// copy, so until the first turn the original is the history.
+		ref = r.forkFrom
+	}
 	r.mu.Unlock()
 	if ref == "" {
 		return out // Start hasn't finished yet

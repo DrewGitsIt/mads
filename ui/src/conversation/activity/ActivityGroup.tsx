@@ -45,12 +45,18 @@ function entryStatus(entry: ActivityEntry, statuses?: ReadonlyMap<string, ToolSt
   return statusOf(entry.tool, override, live && entry.live);
 }
 
-/** Aggregate status for the header: running beats failed beats pending beats interrupted beats ✓. */
+/**
+ * Aggregate status for the header: running beats failed beats pending beats
+ * interrupted beats ✓. Only the calls decide — a live group whose calls have
+ * all resolved is done, even while the turn runs on (the working indicator
+ * covers the turn); spinning on `live` alone kept every finished group of a
+ * long turn spinning until its end.
+ */
 function aggregateStatus(entries: ActivityEntry[], statuses?: ReadonlyMap<string, ToolStatus>, live?: boolean): ToolStatus {
   const all = entries
     .map((e) => entryStatus(e, statuses, live))
     .filter((s): s is ToolStatus => s !== undefined);
-  if (live || all.includes("in_progress")) return "in_progress";
+  if (all.includes("in_progress")) return "in_progress";
   if (all.includes("failed")) return "failed";
   if (all.includes("pending")) return "pending";
   if (all.includes("interrupted")) return "interrupted";

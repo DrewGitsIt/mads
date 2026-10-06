@@ -25,9 +25,8 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	if opts.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", opts.SystemPrompt)
 	}
-	if opts.Resume != "" {
-		args = append(args, "--resume", opts.Resume)
-	}
+	resume, forkID := resumeArgs(opts)
+	args = append(args, resume...)
 	args = append(args, trustArgs(opts.Trust)...)
 	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
 	if err != nil {
@@ -52,6 +51,13 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	// (SessionLocator, locate.go) — this provider's job here is just to hand
 	// back a session whose Ref() starts empty and never blocks Start on it.
 	s := &ptySession{cmd: cmd, master: master, ref: opts.Resume, mcpConfigPath: mcpConfigPath}
+	if forkID != "" {
+		// A fork's Ref() is not Resume: it stays empty until the pinned
+		// fork's transcript appears (forkedPTYSession), then the Runner
+		// persists it via RefAnnounced.
+		s.ref = ""
+		return newForkedPTYSession(s, p.cfg.TranscriptDir, forkID), nil
+	}
 	return s, nil
 }
 

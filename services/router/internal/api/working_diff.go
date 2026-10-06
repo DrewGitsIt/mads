@@ -86,8 +86,10 @@ func readWorkingFile(path string) (string, error) {
 // workingOriginal best-effort resolves the file's pre-session content.
 // First choice is the session's shadow baseline commit (docs/
 // SHADOW-GIT-DIFFS-ADR.md) — the root's literal state when the session
-// first touched it, which works even for sessions that never commit and
-// for non-git roots. Absent a usable shadow (older session, baseline still
+// first touched it, which works even for sessions that never commit.
+// Non-git files have no baseline commit (the store never bulk-scans a
+// non-repo root); they use the pre-image captured before the session's first
+// tool call on the file. Absent a usable shadow (older session, baseline still
 // running, shadowing disabled), fall back to whatever git repo contains
 // the path: the session-base rev when the session has recorded commits in
 // that repo (the pre-shadow heuristic — parent of the earliest recorded
@@ -126,6 +128,14 @@ func (s *server) workingOriginal(ctx context.Context, sessionID, path string) st
 	}
 
 	if repo == "" {
+		// A non-git file has no shadow baseline (the store never bulk-scans
+		// a non-repo root — it may be ~ or /); its pre-image is the one
+		// captured before the session's first tool call changed it.
+		if sess, err := s.data.Session(ctx, sessionID); err == nil && sess.ShadowDir != "" {
+			if original, ok := shadow.FirstCaptureOriginal(ctx, sess.ShadowDir, path); ok {
+				return original
+			}
+		}
 		return ""
 	}
 	rel, err := filepath.Rel(repo, path)

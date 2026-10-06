@@ -13,7 +13,7 @@ export interface WorkspaceStepProps {
 }
 
 /**
- * Step 4/5: name + primary repo path, POST /workspaces, plus an optional
+ * Step 5/6: name + primary repo path, POST /workspaces, plus an optional
  * default-provider select (HANDOFF §6). The created workspace id and the
  * chosen provider (if any) are staged into the shared `config` draft so
  * FirstRunWizard's final `PUT /config` persists them as

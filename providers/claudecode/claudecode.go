@@ -53,6 +53,10 @@ type Config struct {
 	// it runs first whenever the index has a usable entry; rung 2 (a direct
 	// transcript content scan) is the fallback when it doesn't.
 	HistoryFile string
+	// LiveSessionsDir is where running claude processes register themselves,
+	// one <pid>.json each (default ~/.claude/sessions) — ScanHistory skips
+	// conversations whose process is still alive (history.go).
+	LiveSessionsDir string
 	// Models pins the model list, short-circuiting live discovery
 	// (discover.go). Empty — the normal case — probes the binary instead.
 	Models []provider.Model
@@ -76,6 +80,11 @@ func New(cfg Config) *Provider {
 			cfg.HistoryFile = filepath.Join(home, ".claude", "history.jsonl")
 		}
 	}
+	if cfg.LiveSessionsDir == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.LiveSessionsDir = filepath.Join(home, ".claude", "sessions")
+		}
+	}
 	return &Provider{cfg: cfg}
 }
 
@@ -96,8 +105,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorCostReporting:  provider.Native,
 		provider.BehaviorACP:            provider.Native,
 		provider.BehaviorPTY:            provider.Native,
-		provider.BehaviorBranching:      provider.Unsupported,
-		provider.BehaviorCwdReroot:      provider.Unsupported,
+		// Fork-on-resume only: StartOptions.Fork becomes `--resume <ref>
+		// --fork-session` (fork.go) on both transports. Forking at an
+		// earlier turn (rewind) is not supported — claude has no scriptable
+		// flag for it.
+		provider.BehaviorBranching: provider.Native,
+		provider.BehaviorCwdReroot: provider.Unsupported,
 		// --disallowedTools removes tools from the model's palette entirely
 		// (confirmed against `claude --help`) — the same flag on both
 		// transports, see README.

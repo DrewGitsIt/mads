@@ -62,6 +62,8 @@ var routeManifest = []struct {
 	{"DELETE", "/credentials/abc", "DELETE /credentials/{name}"},
 	{"GET", "/credentials/env-candidates", "GET /credentials/env-candidates"},
 	{"POST", "/credentials/import", "POST /credentials/import"},
+	{"GET", "/imports/conversations", "GET /imports/conversations"},
+	{"POST", "/imports/conversations", "POST /imports/conversations"},
 	{"GET", "/preflight", "GET /preflight"},
 	{"GET", "/version", "GET /version"},
 	{"POST", "/update/check", "POST /update/check"},

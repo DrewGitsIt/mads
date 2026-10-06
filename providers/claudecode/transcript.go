@@ -69,6 +69,11 @@ type transcriptLine struct {
 	// Cwd is the session's working directory, stamped on every line —
 	// candidateTranscripts's filter, not read by normalizeTranscript.
 	Cwd string `json:"cwd"`
+	// Entrypoint is how the CLI was launched: "cli" for a human at a
+	// terminal, "sdk-cli" for an SDK/automation run. AITitle is the
+	// conversation's generated title, on "ai-title" lines (history.go).
+	Entrypoint string `json:"entrypoint"`
+	AITitle    string `json:"aiTitle"`
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`

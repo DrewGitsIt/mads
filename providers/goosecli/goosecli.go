@@ -247,6 +247,11 @@ func (p *Provider) IntentMatrix() provider.IntentMatrix {
 }
 
 func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {
+	// BehaviorBranching is Unsupported: refuse rather than resume in place
+	// (the PTY transport would otherwise append to the original).
+	if opts.Fork && opts.Resume != "" {
+		return nil, fmt.Errorf("fork on resume: %w", provider.ErrUnsupported)
+	}
 	switch opts.Mode {
 	case provider.ModeACP:
 		return p.engine().Start(ctx, opts)

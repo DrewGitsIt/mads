@@ -47,6 +47,11 @@ type wireLine struct {
 	// stream-task-subagent.jsonl). Status doubles as task_notification's
 	// final state; Usage doubles as the {total_tokens, tool_uses,
 	// duration_ms} counters on progress/notification lines (see wireUsage).
+	// TaskType says what kind of background task it is ("local_agent" for a
+	// subagent, "local_bash" for a run_in_background Bash call — verified
+	// against claude-code 2.1.290, testdata/stream-task-bash.jsonl) and rides
+	// task_started only; the later phases carry just the task_id.
+	TaskType       string         `json:"task_type"`
 	TaskID         string         `json:"task_id"`
 	ToolUseID      string         `json:"tool_use_id"`
 	Description    string         `json:"description"`
@@ -149,6 +154,11 @@ func (l *wireLine) model() string {
 type wireMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+	// Model and Usage ride on assistant messages: on a transcript line they
+	// are that one API call's own accounting (history.go reads them off the
+	// last assistant line).
+	Model string     `json:"model"`
+	Usage *wireUsage `json:"usage"`
 }
 
 type wireBlock struct {
@@ -436,14 +446,29 @@ func (l *wireLine) systemEvents() []provider.Event {
 			Success: l.CompactResult == "success",
 			Error:   l.CompactError,
 		}}}
-	case l.Subtype == "task_started" || l.Subtype == "task_progress" ||
-		l.Subtype == "task_updated" || l.Subtype == "task_notification":
+	case l.isTaskLine():
 		return []provider.Event{{Kind: provider.EventTask, Task: l.taskStatus()}}
 	case l.Subtype == "thinking_tokens":
 		return []provider.Event{{Kind: provider.EventThinking, ThinkingTokens: l.EstimatedTokens}}
 	default:
 		return nil
 	}
+}
+
+// isTaskLine reports whether this is a task-lifecycle system line.
+func (l *wireLine) isTaskLine() bool {
+	return l.Type == "system" && (l.Subtype == "task_started" || l.Subtype == "task_progress" ||
+		l.Subtype == "task_updated" || l.Subtype == "task_notification")
+}
+
+// isAgentTask reports whether a task_started line spawns a subagent. The
+// task_* lines are claude-code's lifecycle for every background task, not
+// just subagents: a run_in_background Bash call gets them too, and mads
+// renders each EventTask as a subagent (the substrip, the rail's count). An
+// absent task_type keeps the old reading — streams from before the field
+// existed only ever carried subagent tasks.
+func (l *wireLine) isAgentTask() bool {
+	return l.TaskType == "" || l.TaskType == "local_agent"
 }
 
 // taskStatus maps one task-lifecycle system line onto the normalized
