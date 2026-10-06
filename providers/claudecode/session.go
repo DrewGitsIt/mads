@@ -138,6 +138,11 @@ type streamSession struct {
 	unprompted bool
 	reqSeq     int
 	closed     bool
+	// otherTasks holds the task_ids of background tasks that aren't
+	// subagents (wire.go isAgentTask). Only their task_started line says so,
+	// so the later phases are dropped by id. Never pruned: one entry per
+	// backgrounded command, gone with the process.
+	otherTasks map[string]bool
 	refFired   bool // guards announced against a double-send
 
 	// launchMCP names the servers this process was started with
@@ -223,11 +228,15 @@ func (s *streamSession) handleLine(raw []byte) {
 	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
 		s.unprompted = true
 	}
+	dropTask := s.isOtherTask(&l)
 	s.mu.Unlock()
 
 	evs := l.events(interrupted, true)
 	if closesUnprompted {
 		evs = l.notificationTurnEnd()
+	}
+	if dropTask {
+		evs = nil
 	}
 	for _, ev := range evs {
 		if ev.Usage != nil {
@@ -243,6 +252,23 @@ func (s *streamSession) handleLine(raw []byte) {
 		}
 		s.events <- ev
 	}
+}
+
+// isOtherTask reports whether l is a task-lifecycle line for a background
+// task that isn't a subagent — a run_in_background Bash call — learning the
+// task_id from its task_started line. Those lines never become EventTask:
+// downstream every task is a subagent. Caller holds s.mu.
+func (s *streamSession) isOtherTask(l *wireLine) bool {
+	if !l.isTaskLine() {
+		return false
+	}
+	if l.Subtype == "task_started" && !l.isAgentTask() {
+		if s.otherTasks == nil {
+			s.otherTasks = map[string]bool{}
+		}
+		s.otherTasks[l.TaskID] = true
+	}
+	return s.otherTasks[l.TaskID]
 }
 
 func (s *streamSession) Ref() string {
