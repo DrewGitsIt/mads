@@ -3,6 +3,14 @@
   height: 100%;
   min-height: 120px;
   background: var(--bg0);
-  padding: var(--space-2);
   border-radius: var(--r-sm);
+}
+
+/* The inset belongs on xterm's own element: FitAddon subtracts that element's
+   padding (and the scrollbar) when it sizes the grid. Padding the container
+   instead makes the grid as wide as the container, so the rows cover the
+   viewport's scrollbar and it can't be grabbed. */
+.terminal :global(.xterm) {
+  height: 100%;
+  padding: var(--space-2);
 }
