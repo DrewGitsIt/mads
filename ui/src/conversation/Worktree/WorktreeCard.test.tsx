@@ -203,4 +203,34 @@ describe("WorktreeCard — pipeline merges into the session", () => {
       expect(screen.queryByRole("button", { name: "See the changes" })).toBeNull();
     });
   });
+
+  describe("trust changed", () => {
+    const trust = (over: Partial<Extract<WorktreeCardModel, { kind: "trustChanged" }>> = {}): WorktreeCardModel => ({
+      kind: "trustChanged",
+      id: "t",
+      seq: 1,
+      timestamp: "2026-10-05T14:02:00Z",
+      from: "limited",
+      to: "full",
+      restarted: true,
+      ...over,
+    });
+
+    it("names both levels by the pickers' labels and says the agent restarted", () => {
+      render(<WorktreeCard card={trust()} />);
+      const note = screen.getByRole("note", { name: "Trust changed: Limited → Full access · agent restarted" });
+      expect(note.getAttribute("data-worktree-card")).toBe("trust-changed");
+    });
+
+    it("says when it applies if the agent didn't restart, keeping a failed restart's reason on hover", () => {
+      render(<WorktreeCard card={trust({ from: "full", to: "read_only", restarted: false, restartError: "spawn failed" })} />);
+      const text = screen.getByText("Trust changed: Full access → Read-only · applies when the agent next starts");
+      expect(text.getAttribute("title")).toBe("Restarting the agent failed: spawn failed");
+    });
+
+    it("renders a level this build doesn't know as itself, and an unset one as the default", () => {
+      render(<WorktreeCard card={trust({ from: "", to: "some_future_level" })} />);
+      expect(screen.getByText("Trust changed: Limited → some_future_level · agent restarted")).toBeTruthy();
+    });
+  });
 });

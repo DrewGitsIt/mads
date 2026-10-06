@@ -538,7 +538,11 @@ export function ConversationTab({
   // Header trust pill → POST /sessions/{id}/trust. Unlike the local-only
   // pills above this one persists (and the Router bounces a live child so
   // the new level actually applies — trust is spawn-time-only in the
-  // runner); the toast says so instead of leaving the restart mysterious.
+  // runner). The confirmation is the inline "Trust changed: …" notice the
+  // Router's session.trust_changed draws in the history (useWorktreeCards),
+  // which says whether the agent restarted and survives a reload — so a
+  // success adds no toast of its own. A failure still does: a bounce that
+  // failed is a 502 whose message says the level was saved anyway.
   const handleChangeTrust = useCallback(
     (trust: NonNullable<Session["trust"]>) => {
       void routerClient
@@ -550,7 +554,6 @@ export function ConversationTab({
           setSession((s) =>
             s ? { ...s, trust: updated.trust, effective_trust: updated.effective_trust } : s,
           );
-          setCommandToast({ tone: "ok", message: `Trust set to ${trust} — agent restarted to apply it.` });
         })
         .catch((err) => {
           setCommandToast({

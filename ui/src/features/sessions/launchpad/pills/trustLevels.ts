@@ -21,9 +21,16 @@ const TRUST_LABELS: Record<SessionTrust, string> = {
   read_only: "Read-only",
 };
 
-/** The plain display name of a trust level — no provider annotation. */
-export function trustLabel(trust: SessionTrust): string {
-  return TRUST_LABELS[trust] ?? trust;
+/**
+ * The plain display name of a trust level — no provider annotation. An
+ * unset value is the backend's builtin default, "limited" (see
+ * ConversationHeader's TrustPickerPill); a value this build doesn't know —
+ * e.g. one an older or newer mads logged — falls back to the raw string
+ * rather than vanishing.
+ */
+export function trustLabel(value: SessionTrust | string | undefined): string {
+  const v = value || "limited";
+  return TRUST_LABELS[v as SessionTrust] ?? v;
 }
 
 /**

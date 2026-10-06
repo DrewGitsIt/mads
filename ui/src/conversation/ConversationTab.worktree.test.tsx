@@ -209,3 +209,40 @@ describe("ConversationTab — Commit and Land", () => {
     expect(await screen.findByText("Landed into main")).toBeTruthy();
   });
 });
+
+describe("ConversationTab — trust changes in the history", () => {
+  beforeEach(() => {
+    nextSeq = 100;
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("replays a logged trust change as an inline notice, so it survives a reload", async () => {
+    const client = makeClient();
+    client.seedEvent(envelope("session.trust_changed", { from: "limited", to: "full", restarted: true }, 1));
+    client.seedEvent(
+      envelope("session.trust_changed", { from: "full", to: "read_only", restarted: false, restart_error: "x" }, 2),
+    );
+    await mount(client);
+    expect(await screen.findByText("Trust changed: Limited → Full access · agent restarted")).toBeTruthy();
+    expect(screen.getByText("Trust changed: Full access → Read-only · applies when the agent next starts")).toBeTruthy();
+  });
+
+  it("draws the notice live when the header pill changes trust, with no toast repeating it", async () => {
+    const client = makeClient();
+    const setTrust = vi.spyOn(client, "setSessionTrust");
+    await mount(client);
+    fireEvent.click(screen.getByRole("button", { name: /^Trust: / }));
+    fireEvent.click(await screen.findByRole("option", { name: "Full access" }));
+    await waitFor(() => expect(setTrust).toHaveBeenCalledWith(SID, "full"));
+    await screen.findByRole("button", { name: /^Trust: Full access/ });
+
+    // The Router's event is the confirmation — it lands on the shared bus.
+    emitControl("session.trust_changed", { from: "limited", to: "full", restarted: true });
+    expect(await screen.findByText("Trust changed: Limited → Full access · agent restarted")).toBeTruthy();
+    expect(screen.queryByText(/Trust set to/)).toBeNull();
+  });
+});

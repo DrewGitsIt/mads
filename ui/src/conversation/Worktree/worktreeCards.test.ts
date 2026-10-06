@@ -176,3 +176,18 @@ describe("auto-merged Land (merge.auto_resolved)", () => {
     expect(withEchoes(logged, { land: { afterSeq: 0, card }, commits: [] })).toHaveLength(1);
   });
 });
+
+describe("foldWorktreeEvents — session.trust_changed", () => {
+  it("draws each trust change where it was logged, raw levels kept for the renderer", () => {
+    const cards = foldWorktreeEvents([
+      env("commit.created", { hash: "mine", source: "commit", message: "m", drafted: true }, 700),
+      env("session.trust_changed", { from: "limited", to: "full", restarted: true }, 701),
+      env("session.trust_changed", { from: "full", to: "auto_review", restarted: false, restart_error: "boom" }, 702),
+    ]);
+    expect(cards.map((c) => c.kind)).toEqual(["committed", "trustChanged", "trustChanged"]);
+    expect(cards[1]).toMatchObject({ id: "wt-701", from: "limited", to: "full", restarted: true, restartError: undefined });
+    expect(cards[2]).toMatchObject({ from: "full", to: "auto_review", restarted: false, restartError: "boom" });
+    // Not a commit or a land: the commit is still the tip Undo applies to.
+    expect(cards[0]).toMatchObject({ kind: "committed", tip: true });
+  });
+});

@@ -172,21 +172,63 @@ func (s *server) handleSetSessionTrust(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	from := effectiveTrust(sess.Trust)
 	sess.Trust = body.Trust
 	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
 		writeError(w, err)
 		return
 	}
+	// Only a real change is logged (and drawn in the conversation);
+	// re-picking the current level still bounces, as before, but says
+	// nothing new happened.
+	changed := from != body.Trust
+	restarted := false
 	if _, running := s.sup.SessionPID(id); running {
 		if _, err := s.sup.BounceSession(r.Context(), id); err != nil {
+			if changed {
+				s.appendTrustChanged(r.Context(), id, from, body.Trust, false, err)
+			}
 			// The record is updated either way; report the bounce failure so
 			// the UI can say "applies on next restart" instead of lying.
 			writeErrMsg(w, http.StatusBadGateway, "set session trust: applied, but restarting the agent failed: ", err)
 			return
 		}
+		restarted = true
+	}
+	if changed {
+		s.appendTrustChanged(r.Context(), id, from, body.Trust, restarted, nil)
 	}
 	s.decorateSession(&sess)
 	writeJSON(w, http.StatusOK, sess)
+}
+
+// effectiveTrust is the level a session record's trust actually means: an
+// unset field is the builtin default (resolveSessionDefaults), so "" → limited
+// is not a change worth recording.
+func effectiveTrust(t contracts.SessionTrust) contracts.SessionTrust {
+	if t == "" {
+		return contracts.TrustLimited
+	}
+	return t
+}
+
+// appendTrustChanged logs a trust change as session.trust_changed — the
+// conversation's durable record of it (contracts.TrustChange). Best-effort:
+// the change itself is already persisted, so a failed append is logged, not
+// turned into a failed request.
+func (s *server) appendTrustChanged(ctx context.Context, id string, from, to contracts.SessionTrust, restarted bool, restartErr error) {
+	change := contracts.TrustChange{From: from, To: to, Restarted: restarted}
+	if restartErr != nil {
+		change.RestartError = restartErr.Error()
+	}
+	if err := s.data.Append(context.WithoutCancel(ctx), &contracts.Envelope{
+		Type:      contracts.SessionTrustChanged,
+		SessionID: id,
+		Actor:     "user",
+		Payload:   mustJSON(change),
+	}); err != nil {
+		log.Printf("api: append session.trust_changed for %s: %v", id, err)
+	}
 }
 
 // handleSetSessionModel changes a session's model after creation — the

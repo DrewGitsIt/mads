@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "../../components/Button/Button";
+import { trustLabel } from "../../features/sessions/launchpad/pills/trustLevels";
 import type { UndoCommitResult } from "../../router/types";
 import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import type { WorktreeCardModel } from "./worktreeCards";
@@ -160,7 +161,44 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
           <div className={styles.body}>{pipelineMergedCopy(card.files, card.task)}</div>
         </Shell>
       );
+    case "trustChanged":
+      return <TrustNotice card={card} when={when} />;
   }
+}
+
+/** The trust notice's one line, e.g. "Trust changed: Limited → Full access · agent restarted". */
+export function trustNoticeText(card: Extract<WorktreeCardModel, { kind: "trustChanged" }>): string {
+  const outcome = card.restarted ? "agent restarted" : "applies when the agent next starts";
+  return `Trust changed: ${trustLabel(card.from)} → ${trustLabel(card.to)} · ${outcome}`;
+}
+
+/**
+ * A trust change as a divider across the history rather than a card: it
+ * marks where the agent's permissions changed, and asks nothing of the user.
+ * A failed restart keeps its reason on hover — the change still stands, and
+ * the line already says when it takes effect.
+ */
+function TrustNotice({
+  card,
+  when,
+}: {
+  card: Extract<WorktreeCardModel, { kind: "trustChanged" }>;
+  when: ReactNode;
+}) {
+  const text = trustNoticeText(card);
+  return (
+    <div className={styles.divider} role="note" aria-label={text} data-worktree-card="trust-changed">
+      <span className={styles.rule} aria-hidden="true" />
+      <span
+        className={styles.dividerText}
+        title={card.restartError ? `Restarting the agent failed: ${card.restartError}` : undefined}
+      >
+        {text}
+      </span>
+      {when}
+      <span className={styles.rule} aria-hidden="true" />
+    </div>
+  );
 }
 
 function Shell({

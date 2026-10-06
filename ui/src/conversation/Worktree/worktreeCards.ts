@@ -60,7 +60,14 @@ export type WorktreeCardModel =
   /** A pipeline task merging into the session's folder (D8) committed the agent's overlapping edits first. */
   | (CardBase & { kind: "pipelineSaved"; task?: string; files: string[] })
   /** A pipeline task merged into the folder after waiting out the agent's turn: these files changed under it. */
-  | (CardBase & { kind: "pipelineMerged"; task?: string; files: string[] });
+  | (CardBase & { kind: "pipelineMerged"; task?: string; files: string[] })
+  /**
+   * The session's trust level changed (session.trust_changed). Not a
+   * worktree outcome, but the same kind of thing: a mads-side change that
+   * belongs in the history where it happened, so it rides this fold rather
+   * than a parallel one. Drawn as a one-line divider, not a card.
+   */
+  | (CardBase & { kind: "trustChanged"; from: string; to: string; restarted: boolean; restartError?: string });
 
 export type LandCardModel = Extract<WorktreeCardModel, { kind: "landed" | "conflicted" | "refused" | "autoResolved" }>;
 
@@ -234,6 +241,19 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
         const copy = ensuredCopy(p, !created);
         if (str(p.action) === "created") created = true;
         if (copy) cards.push({ ...base, kind: "ensured", ...copy });
+        break;
+      }
+      case "session.trust_changed": {
+        // Levels stay raw strings: the label is the renderer's (trustLabel),
+        // so a level this build doesn't know still shows up as itself.
+        cards.push({
+          ...base,
+          kind: "trustChanged",
+          from: typeof p.from === "string" ? p.from : "",
+          to: typeof p.to === "string" ? p.to : "",
+          restarted: p.restarted === true,
+          restartError: str(p.restart_error),
+        });
         break;
       }
     }

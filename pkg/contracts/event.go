@@ -126,6 +126,14 @@ const (
 	// never fired for a subagent's parent-tagged events — a sidechain rolls
 	// up as a count, not as the main agent's label.
 	SessionAgentState EventType = "session.agent_state"
+	// SessionTrustChanged fires when a session's trust level is set to a
+	// different value (POST /sessions/{id}/trust; re-setting the level it
+	// already has logs nothing). Payload: contracts.TrustChange — from, to,
+	// and whether the live agent was restarted onto it or it waits for the
+	// next spawn. The conversation draws it inline where it happened
+	// (ui/src/conversation/Worktree/worktreeCards.ts), so a trust change is
+	// durable in the history instead of a toast that's gone on reload.
+	SessionTrustChanged EventType = "session.trust_changed"
 
 	TaskCreated       EventType = "task.created"
 	TaskUpdated       EventType = "task.updated"
@@ -444,6 +452,7 @@ var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
 	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState,
+	SessionTrustChanged,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,
 	FileChanged,

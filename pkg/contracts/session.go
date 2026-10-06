@@ -376,3 +376,18 @@ type SetSessionModelResponse struct {
 	Session Session `json:"session"`
 	Queued  bool    `json:"queued"`
 }
+
+// TrustChange is the payload of SessionTrustChanged: a session's trust level
+// moved From → To through POST /sessions/{id}/trust. Restarted reports what
+// happened to the agent process: true means a live child was bounced and is
+// already running at To; false means To applies at the next spawn — either
+// nothing was running, or the bounce failed (RestartError says why, and the
+// child stays down until something starts it again). The conversation draws
+// this as an inline notice where it happened, which is why it is a logged
+// event rather than only the POST's answer: the answer is gone on reload.
+type TrustChange struct {
+	From         SessionTrust `json:"from"`
+	To           SessionTrust `json:"to"`
+	Restarted    bool         `json:"restarted"`
+	RestartError string       `json:"restart_error,omitempty"`
+}

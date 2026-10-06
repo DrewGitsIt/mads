@@ -1449,3 +1449,18 @@ export type SetSessionModelResponse = {
   session: Session;
   queued: boolean;
 };
+
+/**
+ * A session.trust_changed payload (contracts.TrustChange): POST
+ * /sessions/{id}/trust moved the level from → to. `restarted` is true when a
+ * live agent was bounced onto it; false means it applies at the next start
+ * (nothing was running, or the bounce failed — `restart_error` says why).
+ * Levels are plain strings here on purpose: the log outlives any one
+ * version's SessionTrust union, and an unknown level still has to render.
+ */
+export type TrustChange = {
+  from: string;
+  to: string;
+  restarted: boolean;
+  restart_error?: string;
+};

@@ -62,7 +62,10 @@ export const WORKSPACE_SESSION_EVENT_TYPES = [
  * Commit and Land's conversation cards (docs/SESSION-WORKTREES-DESIGN.md
  * D5/D6, conversation/Worktree): replayed from the log at mount, then live.
  * merge.* is shared with the pipeline's land queue — the cards keep only
- * payloads with kind "land".
+ * payloads with kind "land". session.trust_changed rides the same fold: it
+ * is the other mads-side change drawn inline in the history (a one-line
+ * notice, see worktreeCards.ts), and one replay + one subscription serves
+ * both.
  */
 export const WORKTREE_CARD_EVENT_TYPES = [
   "commit.created",
@@ -72,4 +75,5 @@ export const WORKTREE_CARD_EVENT_TYPES = [
   "merge.refused",
   "merge.auto_resolved",
   "worktree.ensured",
+  "session.trust_changed",
 ];
