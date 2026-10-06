@@ -9,6 +9,7 @@ import type {
   TranscriptMessage,
 } from "../../router/types";
 import { ActivityGroup } from "../activity/ActivityGroup";
+import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import {
   anchorPermissions,
   buildItems,
@@ -76,6 +77,8 @@ export interface ChatRendererProps {
    */
   permissionRequests?: PermissionRequest[];
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
+  /** The approval jump's latest reveal — a collapsed group holding that card opens. */
+  permissionReveal?: PermissionReveal | null;
 }
 
 const noResolve = async () => {};
@@ -129,6 +132,7 @@ export function ChatRenderer({
   worktreeActions,
   permissionRequests = [],
   onResolvePermission = noResolve,
+  permissionReveal,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   const folded = foldToolResults(messages);
@@ -201,6 +205,7 @@ export function ChatRenderer({
               onOpenTool={onOpenTool}
               permissions={permissions.anchored}
               onResolvePermission={onResolvePermission}
+              reveal={permissionReveal}
             />
           );
         }

@@ -44,6 +44,10 @@ function summarizeInput(input: unknown): string | undefined {
  * `request.id` — this component itself never distinguishes which source it
  * came from. Where it renders is the caller's choice: under its tool call's
  * row when `tool_use_id` anchors it, else in the turn's trailing list.
+ *
+ * The wrapper's data-permission-id/-status let the conversation's approval
+ * jump find every copy of a card (main stream, dock) without threading refs,
+ * and count as "inside" for the dock's outside-click close.
  */
 export function PermissionCard({ request, onResolve }: PermissionCardProps) {
   const [resolving, setResolving] = useState<"allow" | "deny">();
@@ -60,35 +64,42 @@ export function PermissionCard({ request, onResolve }: PermissionCardProps) {
   };
 
   return (
-    // A status class, not data-status: Card doesn't forward data-* attributes.
-    <Card className={`${styles.card} ${styles[request.status] ?? ""}`}>
-      <div className={styles.header}>
-        <Chip tone="warn">permission</Chip>
-        <span className={styles.tool}>{request.tool}</span>
-        <Chip tone={STATUS_TONE[request.status]}>{STATUS_LABEL[request.status]}</Chip>
-      </div>
-      {request.reason && <div className={styles.reason}>{request.reason}</div>}
-      {summary && <div className={styles.summary}>{summary}</div>}
-      {pending && (
-        <div className={styles.actions}>
-          <Button
-            variant="primary"
-            size="sm"
-            disabled={resolving !== undefined}
-            onClick={() => void handle("allow")}
-          >
-            {resolving === "allow" ? "Allowing…" : "Allow"}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={resolving !== undefined}
-            onClick={() => void handle("deny")}
-          >
-            {resolving === "deny" ? "Denying…" : "Deny"}
-          </Button>
+    <div
+      className={styles.anchor}
+      data-permission-id={request.id}
+      data-permission-status={request.status}
+    >
+      {/* A status class, not data-status: Card doesn't forward data-* attributes. */}
+      <Card className={`${styles.card} ${styles[request.status] ?? ""}`}>
+        <div className={styles.header}>
+          <Chip tone="warn">permission</Chip>
+          <span className={styles.tool}>{request.tool}</span>
+          <Chip tone={STATUS_TONE[request.status]}>{STATUS_LABEL[request.status]}</Chip>
         </div>
-      )}
-    </Card>
+        {request.reason && <div className={styles.reason}>{request.reason}</div>}
+        {summary && <div className={styles.summary}>{summary}</div>}
+        {pending && (
+          <div className={styles.actions}>
+            <Button
+              variant="primary"
+              size="sm"
+              data-permission-action="allow"
+              disabled={resolving !== undefined}
+              onClick={() => void handle("allow")}
+            >
+              {resolving === "allow" ? "Allowing…" : "Allow"}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={resolving !== undefined}
+              onClick={() => void handle("deny")}
+            >
+              {resolving === "deny" ? "Denying…" : "Deny"}
+            </Button>
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }

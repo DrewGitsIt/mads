@@ -689,3 +689,279 @@ describe("ConversationTab — permission cards on their calls", () => {
     expect(screen.getByText("WebFetch")).toBeTruthy();
   });
 });
+
+// jsdom has no IntersectionObserver; this one only reports what a test says
+// is on screen, so "off screen" is every card's starting state.
+class FakeIntersectionObserver {
+  static instances: FakeIntersectionObserver[] = [];
+  readonly targets = new Set<Element>();
+  constructor(readonly callback: IntersectionObserverCallback) {
+    FakeIntersectionObserver.instances.push(this);
+  }
+  observe(el: Element) {
+    this.targets.add(el);
+  }
+  unobserve(el: Element) {
+    this.targets.delete(el);
+  }
+  disconnect() {
+    this.targets.clear();
+  }
+  takeRecords() {
+    return [];
+  }
+}
+
+/** Reports every observed copy of a permission card as on/off screen. */
+function setCardOnScreen(id: string, onScreen: boolean) {
+  act(() => {
+    for (const io of FakeIntersectionObserver.instances) {
+      for (const target of io.targets) {
+        if ((target as HTMLElement).dataset.permissionId !== id) continue;
+        io.callback(
+          [{ target, isIntersecting: onScreen } as IntersectionObserverEntry],
+          io as unknown as IntersectionObserver,
+        );
+      }
+    }
+  });
+}
+
+const jumpButton = () =>
+  screen.queryByRole("button", { name: /Approval needed|approvals waiting/ });
+
+describe("ConversationTab — approval jump", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  it("stays hidden with nothing pending, and while every pending card is on screen", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "t1", name: "Read", kind: "read", title: "read hosts" } });
+    });
+    expect(jumpButton()).toBeNull();
+
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: {
+          id: "perm-1",
+          tool: "Read",
+          tool_use_id: "t1",
+          input: { file_path: "/etc/hosts" },
+          status: "pending",
+        },
+      });
+    });
+    // Off screen until the observer says otherwise.
+    expect(jumpButton()?.textContent).toBe("Approval needed: Read hosts");
+
+    setCardOnScreen("perm-1", true);
+    expect(jumpButton()).toBeNull();
+    setCardOnScreen("perm-1", false);
+    expect(jumpButton()).toBeTruthy();
+
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-1", tool: "Read", tool_use_id: "t1", status: "allowed" },
+      });
+    });
+    expect(jumpButton()).toBeNull();
+  });
+
+  it("names the subagent for one request, and counts several", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "audit the parser" } },
+      });
+      source.emit({
+        kind: "task",
+        task: { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "audit the parser" },
+      });
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "sub1", name: "Bash", kind: "execute", title: "clean" },
+        parent_tool_use_id: "tu1",
+      });
+      source.emit({
+        kind: "permission_request",
+        permission: {
+          id: "perm-1",
+          tool: "Bash",
+          tool_use_id: "sub1",
+          parent_tool_use_id: "tu1",
+          input: { command: "make clean\nmake all" },
+          status: "pending",
+        },
+      });
+    });
+    expect(jumpButton()?.textContent).toBe("Approval needed: Bash make clean · audit the parser");
+    // The announcement is its own live region, apart from the visibility-
+    // gated button, so scrolling a card in and out never re-announces.
+    const live = document.querySelector('[aria-live="polite"]')!;
+    expect(live.textContent).toBe("Approval needed: Bash make clean · audit the parser");
+
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-2", tool: "WebFetch", status: "pending" },
+      });
+    });
+    expect(jumpButton()?.textContent).toBe("2 approvals waiting");
+    // Only the off-screen ones count toward the button.
+    setCardOnScreen("perm-2", true);
+    expect(jumpButton()?.textContent).toBe("Approval needed: Bash make clean · audit the parser");
+  });
+
+  it("jumps to the oldest pending card — reopening its collapsed group, flashing it, focusing Allow — and cycles", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([
+      {
+        role: "tool",
+        tool: { id: "t1", name: "Edit", kind: "edit", title: "edit main.go" },
+        timestamp: "2026-09-09T10:00:01Z",
+      },
+      { role: "agent", text: "now the tests", timestamp: "2026-09-09T10:00:02Z" },
+      {
+        role: "tool",
+        tool: { id: "t2", name: "Bash", kind: "execute", title: "run tests" },
+        timestamp: "2026-09-09T10:00:03Z",
+      },
+    ]);
+    const source = await mountActive(client);
+    await waitFor(() => expect(screen.getAllByTestId("activity-group")).toHaveLength(2));
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: {
+          id: "perm-1",
+          tool: "Edit",
+          tool_use_id: "t1",
+          input: { file_path: "/repo/main.go" },
+          status: "pending",
+        },
+      });
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-2", tool: "Bash", tool_use_id: "t2", status: "pending" },
+      });
+    });
+
+    // The user re-collapses the first group: its card leaves the DOM.
+    const [first] = screen.getAllByTestId("activity-group");
+    fireEvent.click(first.querySelector("button")!);
+    expect(within(first).queryByRole("button", { name: "Allow" })).toBeNull();
+    expect(jumpButton()?.textContent).toBe("2 approvals waiting");
+
+    fireEvent.click(jumpButton()!);
+    const card1 = document.querySelector<HTMLElement>('[data-permission-id="perm-1"]')!;
+    expect(first.contains(card1)).toBe(true);
+    expect(card1.scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+    expect(card1.hasAttribute("data-flash")).toBe(true);
+    expect(document.activeElement).toBe(within(card1).getByRole("button", { name: "Allow" }));
+
+    // Still off screen as far as the observer knows (mid-scroll): the next
+    // click moves on rather than re-jumping…
+    fireEvent.click(jumpButton()!);
+    const card2 = document.querySelector<HTMLElement>('[data-permission-id="perm-2"]')!;
+    expect(document.activeElement).toBe(within(card2).getByRole("button", { name: "Allow" }));
+    // …and wraps around to the oldest.
+    fireEvent.click(jumpButton()!);
+    expect(document.activeElement).toBe(within(card1).getByRole("button", { name: "Allow" }));
+  });
+
+  it("shows for a background subagent's request after the turn ended, with no working indicator", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([
+      {
+        role: "tool",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "watch CI" } },
+        timestamp: "2026-09-09T10:00:01Z",
+      },
+      { role: "agent", text: "CI watcher runs in the background", timestamp: "2026-09-09T10:00:02Z" },
+    ]);
+    const source = await mountActive(client);
+    await screen.findByText("CI watcher runs in the background");
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: {
+          id: "perm-1",
+          tool: "Bash",
+          parent_tool_use_id: "tu1",
+          input: { command: "gh run watch" },
+          status: "pending",
+        },
+      });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
+    expect(jumpButton()?.textContent).toBe("Approval needed: Bash gh run watch · subagent");
+
+    fireEvent.click(jumpButton()!);
+    const allow = within(screen.getByTestId("task-card")).getByRole("button", { name: "Allow" });
+    expect(document.activeElement).toBe(allow);
+  });
+
+  it("counts a card shown in the open dock as on screen, and deciding from the main stream keeps the dock open", async () => {
+    const client = new FakeRouterClient();
+    const resolve = vi.spyOn(client, "resolvePermissionRequest");
+    const source = await mountActive(client);
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "audit" } },
+      });
+      source.emit({
+        kind: "task",
+        task: { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "audit" },
+      });
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "sub1", name: "Bash", kind: "execute", title: "rm -rf build" },
+        parent_tool_use_id: "tu1",
+      });
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-1", tool: "Bash", tool_use_id: "sub1", parent_tool_use_id: "tu1", status: "pending" },
+      });
+    });
+    fireEvent.click(screen.getByTestId("task-card").querySelector("button")!);
+    const dock = await screen.findByRole("dialog", { name: "Activity detail" });
+    expect(within(dock).getByRole("button", { name: "Allow" })).toBeTruthy();
+
+    // Either copy on screen is enough — here the dock's.
+    expect(jumpButton()).toBeTruthy();
+    const dockCard = dock.querySelector('[data-permission-id="perm-1"]')!;
+    act(() => {
+      for (const io of FakeIntersectionObserver.instances) {
+        if (!io.targets.has(dockCard)) continue;
+        io.callback(
+          [{ target: dockCard, isIntersecting: true } as IntersectionObserverEntry],
+          io as unknown as IntersectionObserver,
+        );
+      }
+    });
+    expect(jumpButton()).toBeNull();
+
+    const mainAllow = within(screen.getByTestId("task-card")).getByRole("button", { name: "Allow" });
+    fireEvent.mouseDown(mainAllow);
+    fireEvent.click(mainAllow);
+    expect(resolve).toHaveBeenCalledWith("session-active", "perm-1", "allow");
+    expect(screen.getByRole("dialog", { name: "Activity detail" })).toBeTruthy();
+  });
+});

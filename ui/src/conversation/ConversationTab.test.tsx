@@ -804,7 +804,7 @@ describe("ConversationTab", () => {
     // missing file) as tool_result is_error — that used to raise a
     // "blocked awaiting permission" banner on full-trust sessions and stick
     // until turn_end, reading as a silent stall. An error is card-local; only
-    // a real permission_request may block the turn indicator.
+    // a real permission_request may raise an approval signal.
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
@@ -826,6 +826,7 @@ describe("ConversationTab", () => {
     });
 
     expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Approval needed/ })).toBeNull();
     // The turn goes on: the next tool's spinner shows as usual.
     act(() => {
       source.emit({ kind: "tool_use", tool: { id: "toolu_2", name: "Read" } });
@@ -833,7 +834,7 @@ describe("ConversationTab", () => {
     expect(screen.getByRole("status", { name: "Using Read…" })).toBeTruthy();
   });
 
-  it("raises the blocked banner from a pending permission_request and clears it on resolution", async () => {
+  it("signals a pending permission_request with the approval jump, not a blocked chip, until it resolves", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
@@ -850,23 +851,22 @@ describe("ConversationTab", () => {
       });
     });
 
-    // The banner names the parked tool and replaces the plain spinner.
-    expect(
-      screen.getByText(
-        "blocked awaiting permission for Bash — allow or deny on its card, or raise trust in the header",
-      ),
-    ).toBeTruthy();
-    expect(screen.queryByRole("status", { name: "Using Bash…" })).toBeNull();
+    // One signal, not two: the working indicator keeps its ordinary story
+    // (no red blocked chip) and the approval jump names the parked call.
+    // (No IntersectionObserver under jsdom, so the card counts as off screen.)
+    expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
+    expect(screen.getByRole("status", { name: "Using Bash…" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Approval needed: Bash rm -rf" })).toBeTruthy();
 
     // The terminal-status broadcast (runner's finishPermission) upserts over
-    // the pending entry — the banner derives from it and clears itself.
+    // the pending entry — the jump derives from it and clears itself.
     act(() => {
       source.emit({
         kind: "permission_request",
         permission: { id: "perm-1", tool: "Bash", input: { command: "rm -rf" }, status: "allowed" },
       });
     });
-    expect(screen.queryByText(/blocked awaiting permission/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Approval needed/ })).toBeNull();
   });
 
   it("clears the streamed bubble and replaces it with the persisted transcript on turn_end", async () => {

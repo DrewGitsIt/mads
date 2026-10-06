@@ -1,0 +1,77 @@
+/* Floats just above the pinned bottom cluster, centered over the history —
+   a "jump to" affordance, so it takes no layout space of its own. */
+.region {
+  position: absolute;
+  bottom: calc(100% + var(--space-2));
+  left: var(--space-4);
+  right: var(--space-4);
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.jump {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 14px;
+  background: var(--bg1);
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  font: 500 var(--fs-sm) var(--sans);
+  color: var(--text);
+  cursor: pointer;
+  animation: jump-in 0.2s ease-out;
+}
+.jump:hover {
+  background: var(--bg2);
+}
+.jump:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 2px;
+}
+
+.dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jump {
+    animation: none;
+  }
+}
+
+/* Visually hidden, still read: the live announcement of a new approval. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

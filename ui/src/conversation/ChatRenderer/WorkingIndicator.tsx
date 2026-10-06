@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Chip } from "../../components/Chip/Chip";
 import type { ToolUse } from "../../router/types";
 import { toolTitle } from "../activity/toolDisplay";
 import styles from "./WorkingIndicator.module.css";
@@ -13,20 +12,17 @@ const COMPACTING = "Compacting…";
  * turn_end), so "is it still going?" is never ambiguous — the elapsed
  * counter ticks turn-long, and a current-activity ticker line streams the
  * latest tool title (or "Thinking", fed by thinking-token ticks) while the
- * label stays a calm, generic "Working…". Precedence is unchanged:
- * `blocked` overrides everything with a system-toned banner; a pending tool
- * names itself (aria) ahead of the generic label — see providers/
- * claudecode's README ("Defense in depth") for why blocked must never be a
- * silent no-op.
+ * label stays a calm, generic "Working…". A pending tool names itself
+ * (aria) ahead of the generic label. A turn parked on a permission prompt
+ * isn't this indicator's story: the conversation's approval jump owns that
+ * signal, live turn or not (a background subagent can ask after the turn).
  */
 export function WorkingIndicator({
   tool,
-  blocked,
   activity,
   since,
 }: {
   tool?: ToolUse;
-  blocked?: string;
   /** Streamed current-activity ticker — latest tool title or "Thinking…". */
   activity?: string;
   /**
@@ -51,13 +47,6 @@ export function WorkingIndicator({
     return () => window.clearInterval(id);
   }, [since]);
 
-  if (blocked) {
-    return (
-      <div className={styles.working} role="status">
-        <Chip tone="bad">{blocked}</Chip>
-      </div>
-    );
-  }
   // The session's mirrored labels (services/session's agentstate.go) include
   // two that describe the whole turn rather than a step in it: the generic
   // "Working…", which would only echo the label beside it, and

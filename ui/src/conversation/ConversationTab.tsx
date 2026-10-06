@@ -35,6 +35,8 @@ import { useAgentIndex } from "../router/useAgentIndex";
 import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
 import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
+import { ApprovalJump } from "./ApprovalJump/ApprovalJump";
+import type { PermissionReveal } from "./ApprovalJump/permissionReveal";
 import { ActivityDock, type DockView } from "./activity/ActivityDock";
 import { Substrip, type SubstripEntry } from "./activity/Substrip";
 import {
@@ -895,9 +897,9 @@ export function ConversationTab({
       // shows its outcome as it arrives — never a silent no-op. An is_error
       // result renders as the card's own error state; it is NOT a permission
       // signal (claude reports every ordinary tool failure this way — a
-      // non-zero exit, a missing file), so it must not raise the blocked
-      // banner. Genuine permission stalls arrive as permission_request
-      // events and drive the banner below.
+      // non-zero exit, a missing file), so it must not raise an approval
+      // signal. Genuine permission stalls arrive as permission_request
+      // events and drive the approval jump below.
       pacerApplyToolResult(parsed.tool?.id, {
         text: parsed.text,
         is_error: parsed.is_error,
@@ -1078,6 +1080,18 @@ export function ConversationTab({
   // the scroll handler never itself triggers a render.
   const streamRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  // The approval jump's reach: the whole tab (stream + dock) for finding
+  // cards, the pinned cluster for what the composer covers. The reveal is
+  // its latest click, published to collapsed groups (permissionReveal.ts).
+  const tabRef = useRef<HTMLDivElement>(null);
+  const pinnedRef = useRef<HTMLDivElement>(null);
+  const [permissionReveal, setPermissionReveal] = useState<PermissionReveal | null>(null);
+  const revealPermission = useCallback((id: string) => {
+    // Jumping up the history is the user leaving the tail — don't let the
+    // next streamed frame snap back before the smooth scroll's first event.
+    stickToBottom.current = false;
+    setPermissionReveal((cur) => ({ id, nonce: (cur?.nonce ?? 0) + 1 }));
+  }, []);
 
   const handleStreamScroll = useCallback(() => {
     const el = streamRef.current;
@@ -1150,30 +1164,19 @@ export function ConversationTab({
   const inChatTurn = activeMode === "chat" && turnPhase === "live";
   const liveItems = inChatTurn ? pacer.items : [];
   const lastLiveItem = liveItems[liveItems.length - 1];
-  // A genuinely parked tool call: the PreToolUse hook broadcast a
-  // permission_request and hasn't seen a decision yet. Derived (not stored)
-  // so the banner clears itself the moment the terminal-status event
-  // (allowed/denied/expired/cancelled) upserts over the pending entry — no
-  // separate clear-on-turn-end bookkeeping to get out of sync. The card may
-  // sit under its call's row up in the stream, so the hint doesn't say "below".
-  const pendingPermission = [...permissionRequests.values()].find((r) => r.status === "pending");
-  const turnBlocked = pendingPermission
-    ? `blocked awaiting permission for ${pendingPermission.tool} — allow or deny on its card, or raise trust in the header`
-    : undefined;
   // Trailing "working" affordance — truthy for the ENTIRE live turn, never
   // just while the tail happens to look busy. It used to go false whenever
   // the last live item was finished text or a completed tool call, which
   // made the indicator flicker out mid-turn between a tool result and the
-  // next stream event — exactly when "is it done?" matters most. Blocked
-  // beats tool-pending beats plain "Working…"; WorkingIndicator stays
-  // mounted throughout, so its elapsed counter spans the turn.
-  const working: { tool?: ToolUse; blocked?: string } | false = !inChatTurn
+  // next stream event — exactly when "is it done?" matters most. Tool-pending
+  // beats plain "Working…"; WorkingIndicator stays mounted throughout, so its
+  // elapsed counter spans the turn. A call parked on a permission prompt is
+  // the approval jump's signal, not this one's.
+  const working: { tool?: ToolUse } | false = !inChatTurn
     ? false
-    : turnBlocked
-      ? { blocked: turnBlocked }
-      : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
-        ? { tool: lastLiveItem.tool }
-        : {};
+    : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
+      ? { tool: lastLiveItem.tool }
+      : {};
   // Never carry a stale open overlay across a switch back to chat and later
   // back to terminal — a bare `!showHistory` gate on `open` below would hide
   // it visually but leave the state true, popping it back open unprompted.
@@ -1185,6 +1188,11 @@ export function ConversationTab({
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
   const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  // Still-parked calls, oldest first (a Map keeps first-insertion order; a
+  // status upsert doesn't move its entry). Derived, not stored, so the
+  // approval jump clears itself the moment the terminal-status event
+  // (allowed/denied/expired/cancelled) upserts over a pending entry.
+  const pendingPermissions = livePermissionRequests.filter((r) => r.status === "pending");
   const resolvePermission = (id: string, decision: "allow" | "deny") =>
     routerClient.resolvePermissionRequest(sessionId, id, decision);
   // The dock's subagent stream renders the inner rows themselves, so there a
@@ -1199,6 +1207,12 @@ export function ConversationTab({
   }
   // --- Redesign wiring: dock targets, running-subagent substrip ---
   const tasksByToolUseMap = tasksByToolUse(tasks);
+  // The approval jump's "· <subagent>" — named as its task card titles it.
+  const subagentName = (req: PermissionRequest) => {
+    if (!req.parent_tool_use_id) return undefined;
+    const model = tasksByToolUseMap.get(req.parent_tool_use_id);
+    return model?.description ?? model?.subagentType ?? "subagent";
+  };
   const substripEntries: SubstripEntry[] = [...tasks.values()]
     .filter((t) => t.running)
     .map((model) => {
@@ -1273,7 +1287,7 @@ export function ConversationTab({
     occupancyPct >= 60;
 
   return (
-    <div className={styles.tab}>
+    <div className={styles.tab} ref={tabRef}>
       <ConversationHeader
         session={session}
         workspaceName={sessionWorkspace?.name ?? undefined}
@@ -1347,6 +1361,7 @@ export function ConversationTab({
                   worktreeActions={worktreeActions}
                   permissionRequests={livePermissionRequests}
                   onResolvePermission={resolvePermission}
+                  permissionReveal={permissionReveal}
                 />
               )}
               {transport.status !== "idle" && (
@@ -1427,7 +1442,16 @@ export function ConversationTab({
                   turn-long working indicator + composer stick together at
                   the bottom of the scrollable stream — none can scroll off
                   screen while the conversation is on screen. */}
-              <div className={styles.pinned} data-testid="pinned-cluster">
+              <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+                <ApprovalJump
+                  pending={pendingPermissions}
+                  subagentName={subagentName}
+                  scopeRef={tabRef}
+                  streamRef={streamRef}
+                  pinnedRef={pinnedRef}
+                  reveal={permissionReveal}
+                  onReveal={revealPermission}
+                />
                 <Substrip
                   entries={substripEntries}
                   onOpen={(model) =>
@@ -1438,7 +1462,6 @@ export function ConversationTab({
                 {working && (
                   <WorkingIndicator
                     tool={working.tool}
-                    blocked={working.blocked}
                     activity={currentActivity}
                     since={agentSince}
                   />

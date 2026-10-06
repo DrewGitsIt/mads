@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import type { PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
+import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
@@ -40,6 +41,8 @@ export interface ActivityGroupProps {
   /** Permission requests anchored to a call, by tool_use id — each renders right under its row. */
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
+  /** The approval jump's latest reveal — opens this group if it holds that pending card. */
+  reveal?: PermissionReveal | null;
 }
 
 const PEEK_TEXT_CAP = 400;
@@ -123,6 +126,7 @@ export function ActivityGroup({
   defaultOpen = false,
   permissions,
   onResolvePermission,
+  reveal,
 }: ActivityGroupProps) {
   const [open, setOpen] = useState(live || defaultOpen);
   // Collapse exactly once when the live turn ends — never re-collapse a
@@ -145,6 +149,13 @@ export function ActivityGroup({
   useEffect(() => {
     if (awaiting) setOpen(true);
   }, [awaiting]);
+  // The approval jump re-reveals one of ours: open during render (not in an
+  // effect) so the card is in the DOM by the commit the jump scrolls after.
+  const [seenReveal, setSeenReveal] = useState(reveal?.nonce);
+  if (reveal && reveal.nonce !== seenReveal) {
+    setSeenReveal(reveal.nonce);
+    if (awaiting.split(",").includes(reveal.id)) setOpen(true);
+  }
 
   const { kinds, label } = kindCounts(entries);
   const duration = useMemo(() => groupDuration(entries), [entries]);

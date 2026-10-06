@@ -45,3 +45,26 @@
   gap: var(--space-2);
   margin-top: var(--space-3);
 }
+
+/* A brief flash when the approval jump lands on this card — the eye finds
+   it even mid-scroll. */
+.anchor[data-flash] .card {
+  animation: permission-flash 500ms ease-in-out 2;
+}
+
+@keyframes permission-flash {
+  0%,
+  100% {
+    box-shadow: none;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--warn, var(--accent));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anchor[data-flash] .card {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--warn, var(--accent));
+  }
+}

@@ -69,8 +69,12 @@ export function ActivityDock({
     const onDown = (e: MouseEvent) => {
       const target = e.target as Element | null;
       // Clicks on the dock itself, or on any element that (re)targets the
-      // dock (rows, task cards, the substrip), never count as "outside".
-      if (target?.closest?.("[data-activity-dock],[data-dock-source]")) return;
+      // dock (rows, task cards, the substrip), never count as "outside" —
+      // nor do permission cards and the approval jump: deciding a subagent's
+      // request from its main-stream card shouldn't close the stream it's in.
+      const inside =
+        "[data-activity-dock],[data-dock-source],[data-permission-id],[data-permission-jump]";
+      if (target?.closest?.(inside)) return;
       onClose();
     };
     document.addEventListener("keydown", onKey);
