@@ -19,6 +19,10 @@ func TestStampTranscriptStatuses(t *testing.T) {
 		{Role: "tool_result", Tool: &contracts.ToolUse{ID: "t2"}, IsError: true},
 		{Role: "tool", Tool: &contracts.ToolUse{ID: "t3", Name: "Read", Kind: "read"}},
 		{Role: "tool", Tool: &contracts.ToolUse{Name: "no_id"}},
+		// A harness permission refusal reloads as blocked, not failed.
+		{Role: "tool", Tool: &contracts.ToolUse{ID: "t4", Name: "Write", Kind: "edit"}},
+		{Role: "tool_result", Tool: &contracts.ToolUse{ID: "t4"}, IsError: true,
+			Text: "Claude requested permissions to write to /tmp/x.txt, but you haven't granted it yet."},
 	}
 	StampTranscriptStatuses(msgs)
 
@@ -36,5 +40,8 @@ func TestStampTranscriptStatuses(t *testing.T) {
 	}
 	if got := msgs[6].Tool.Status; got != "" {
 		t.Errorf("id-less call status = %q, want empty (unknown)", got)
+	}
+	if got := msgs[7].Tool.Status; got != Blocked {
+		t.Errorf("t4 (refused) call status = %q, want blocked", got)
 	}
 }

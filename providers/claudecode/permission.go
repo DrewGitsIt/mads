@@ -2,28 +2,19 @@ package claudecode
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
-
-	"github.com/drewkidwell/mads/providers/provider"
 )
-
-// permissionHookTimeoutSeconds is the ask-first hook's own declared timeout
-// (settings "timeout" field) — the outermost of the three layered bounds
-// that keep an unanswered prompt from hanging the agent forever.
-const permissionHookTimeoutSeconds = 660
-
-// curlMaxTimeSeconds bounds the ask-first hook subprocess's own blocking
-// HTTP call — the second layer, in case the session service itself never
-// answers.
-const curlMaxTimeSeconds = 640
 
 // pathScopeHookTimeout bounds how long claude waits for the path-scope
 // hook to answer before failing the tool call. The hook is a local POSIX
 // sh check (no network), so 5s is generous; a stuck hook must not stall
-// the agent the way an unanswered approval might.
+// the agent.
 const pathScopeHookTimeout = 5
+
+// pathScopeMatcher is the PreToolUse matcher the path-scope hook rides:
+// the file tools whose input names a target path.
+const pathScopeMatcher = "Write|Edit|MultiEdit|NotebookEdit"
 
 type hookEntry struct {
 	Type    string `json:"type"`
@@ -32,92 +23,40 @@ type hookEntry struct {
 }
 
 type matcherEntry struct {
-	Matcher string      `json:"matcher"`
+	Matcher string      `json:"matcher,omitempty"`
 	Hooks   []hookEntry `json:"hooks"`
 }
 
-// settingsFile is the "direct" (non-plugin) settings.json shape --settings
-// loads: hook events as top-level keys, no wrapping "hooks" object.
+// hookConfig maps a hook event name ("PreToolUse", "SessionStart", ...) to
+// its matcher entries.
+type hookConfig map[string][]matcherEntry
+
+// settingsFile is the --settings JSON shape: hook events nest under a
+// top-level "hooks" object, exactly as in ~/.claude/settings.json. The
+// earlier flat shape ({"PreToolUse": [...]} at the top level — the plugin
+// hooks.json layout, not a settings file's) loads without complaint and is
+// silently ignored: verified against claude-code 2.1.285, where no hook in
+// it ever ran. TestSettingsShapeRealClaude pins the nested shape against
+// the real binary.
 type settingsFile struct {
-	PreToolUse []matcherEntry `json:"PreToolUse"`
+	Hooks hookConfig `json:"hooks"`
 }
 
-// needsPermissionHook reports whether trust leaves any tool call subject to
-// claude's default ask-first prompt. TrustLimited/TrustReadOnly disallow
-// some tools outright (trustArgs) but leave the rest asking; TrustFull
-// runs --permission-mode bypassPermissions and never asks at all. This
-// gate applies to the *ask-first* hook only — the path-scope hook (a
-// separate matcher entry in the same settings file) fires on a persona's
-// allowlist regardless of trust.
-func needsPermissionHook(trust provider.Trust) bool {
-	switch trust {
-	case provider.TrustLimited, provider.TrustReadOnly:
-		return true
-	default:
-		return false
-	}
+// marshalSettings is the one place a hook config becomes --settings bytes —
+// production (writeSettings) and the real-binary shape test both go through
+// it, so the test proves the bytes claude actually gets.
+func marshalSettings(hooks hookConfig) ([]byte, error) {
+	return json.Marshal(settingsFile{Hooks: hooks})
 }
 
-// shellSingleQuote wraps s for safe interpolation into a POSIX sh command
-// line. The URL is ours (built from the session service's own listener
-// address), but quoting defensively costs nothing.
-func shellSingleQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// writePermissionSettings materializes a --settings file carrying up to
-// two PreToolUse hook entries:
-//
-//  1. the ask-first hook (matcher "*" — every tool) — fired on every
-//     tool call *while trust leaves the tool asking*
-//     (TrustLimited/ReadOnly) and a callback URL is supplied. It pipes
-//     each call's JSON to the session service's permission endpoint and
-//     prints the response verbatim — the handler is what pre-formats the
-//     exact {"hookSpecificOutput": ...} JSON claude expects, so the
-//     shell command itself never parses or builds JSON. If curl fails
-//     outright (connection refused, its own --max-time expiry), the
-//     fallback denies rather than leaving claude to interpret empty or
-//     malformed stdout.
-//
-//  2. the path-scope hook (matcher "Write|Edit|MultiEdit|NotebookEdit")
-//     — fired whenever PersonaAllowedPaths is non-empty, *independent of
-//     trust*. A local POSIX sh containment check (no network) that
-//     denies a file-tool call whose target path is outside the
-//     allowlist, with a reason the model can act on. This is
-//     claude-code's native enforcement surface for the portable
-//     "path_scope" permission intent (agent-concept redesign §2, Option
-//     A) — the reason IntentMatrix() now declares IntentPathScope:
-//     Native.
-//
-// Either entry may be absent; the file is written only when at least one
-// is present (see permissionArgs, which gates the call).
-func writePermissionSettings(trust provider.Trust, url string, allowedPaths []string) (path string, err error) {
-	entries := make([]matcherEntry, 0, 2)
-	if needsPermissionHook(trust) && url != "" {
-		command := fmt.Sprintf(
-			`curl -s -X POST --max-time %d -d @- %s || echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny"},"systemMessage":"permission service unreachable"}'`,
-			curlMaxTimeSeconds, shellSingleQuote(url),
-		)
-		entries = append(entries, matcherEntry{
-			Matcher: "*",
-			Hooks:   []hookEntry{{Type: "command", Command: command, Timeout: permissionHookTimeoutSeconds}},
-		})
-	}
-	if len(allowedPaths) > 0 {
-		entries = append(entries, matcherEntry{
-			Matcher: "Write|Edit|MultiEdit|NotebookEdit",
-			Hooks:   []hookEntry{{Type: "command", Command: pathScopeScript(allowedPaths), Timeout: pathScopeHookTimeout}},
-		})
-	}
-	if len(entries) == 0 {
-		return "", nil
-	}
-	cfg := settingsFile{PreToolUse: entries}
-	raw, err := json.Marshal(cfg)
+// writeSettings materializes hooks as a temp --settings file and returns its
+// path, for the caller to remove when the session closes.
+func writeSettings(hooks hookConfig) (string, error) {
+	raw, err := marshalSettings(hooks)
 	if err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp("", "mads-permission-*.json")
+	f, err := os.CreateTemp("", "mads-settings-*.json")
 	if err != nil {
 		return "", err
 	}
@@ -129,21 +68,41 @@ func writePermissionSettings(trust provider.Trust, url string, allowedPaths []st
 	return f.Name(), nil
 }
 
-// permissionArgs returns the CLI args wiring the --settings file into
-// claude's launch, and the settings file path (for the caller to remove
-// on session Close). Both zero/nil when neither hook is required — a
-// terminal transport that never sets opts.PermissionPromptURL on a persona
-// with no path scope, or a TrustFull session with no persona.
-func permissionArgs(trust provider.Trust, url string, allowedPaths []string) (args []string, path string, err error) {
-	if !needsPermissionHook(trust) && url == "" && len(allowedPaths) == 0 {
+// sessionHooks is the hook config a session launches with: today only the
+// persona path-scope hook (a PreToolUse entry on the file tools), present
+// whenever PersonaAllowedPaths is non-empty, *independent of trust*. A local
+// POSIX sh containment check (no network) that denies a file-tool call whose
+// target path is outside the allowlist, with a reason the model can act on.
+// This is claude-code's native enforcement surface for the portable
+// "path_scope" permission intent (agent-concept redesign §2, Option A) — the
+// reason IntentMatrix() declares IntentPathScope: Native.
+//
+// Asking the user is not a hook's job any more: limited/read-only trust runs
+// claude's own manual permission mode and answers its prompts over the
+// stream-json host channel (hostprompt.go). Nil when there is nothing to
+// wire.
+func sessionHooks(allowedPaths []string) hookConfig {
+	if len(allowedPaths) == 0 {
+		return nil
+	}
+	return hookConfig{"PreToolUse": {{
+		Matcher: pathScopeMatcher,
+		Hooks:   []hookEntry{{Type: "command", Command: pathScopeScript(allowedPaths), Timeout: pathScopeHookTimeout}},
+	}}}
+}
+
+// permissionArgs returns the CLI args wiring the session's --settings file
+// into claude's launch, and the file's path (for the caller to remove on
+// session Close). Both zero when the session needs no hooks — no persona
+// path scope.
+func permissionArgs(allowedPaths []string) (args []string, path string, err error) {
+	hooks := sessionHooks(allowedPaths)
+	if hooks == nil {
 		return nil, "", nil
 	}
-	path, err = writePermissionSettings(trust, url, allowedPaths)
+	path, err = writeSettings(hooks)
 	if err != nil {
 		return nil, "", err
-	}
-	if path == "" {
-		return nil, "", nil
 	}
 	return []string{"--settings", path}, path, nil
 }
@@ -173,7 +132,8 @@ func permissionArgs(trust provider.Trust, url string, allowedPaths []string) (ar
 // explicitly allowed; a false-allow on a rename only widens the file-tool
 // palette to what the trust layer already permits for that tool. A Bash
 // call that reads a file it shouldn't is out of scope — Bash is a separate
-// intent with its own TrustLimited/ReadOnly enforcement (trustArgs).
+// intent with its own enforcement (trustArgs: asked under TrustLimited,
+// removed under TrustReadOnly).
 const pathScopeHookBody = `
 inp=$(cat)
 # Pull the target path out of tool_input.file_path (the key every file

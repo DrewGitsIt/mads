@@ -52,11 +52,13 @@ const (
 	// SessionCrashed fires when the Router's supervision detects a Session
 	// Service child exited unexpectedly. Payload: {"reason": string}.
 	SessionCrashed EventType = "session.crashed"
-	// SessionPermissionRequested fires when a PreToolUse hook parks a tool
-	// call awaiting an allow/deny decision (chat transport, limited/
-	// read-only trust). Payload: {"request_id", "tool": string}. Its
-	// resolution fires SessionPermissionResolved with {"request_id", "tool",
-	// "status": "allowed"|"denied"|"expired"}. Persisted (unlike the live
+	// SessionPermissionRequested fires when the harness asks permission for
+	// a tool call and waits on an allow/deny decision (chat transport,
+	// limited/read-only trust — provider.StartOptions.Permissions). Payload:
+	// {"request_id", "tool", "tool_use_id": string}. Its resolution fires
+	// SessionPermissionResolved with {"request_id", "tool", "tool_use_id",
+	// "status": "allowed"|"denied"|"expired"|"cancelled"} ("cancelled": the
+	// harness stopped waiting, e.g. an interrupted turn). Persisted (unlike the live
 	// EventPermissionRequest stream frame) so a stalled-awaiting-permission
 	// incident is diagnosable from the event log after the fact.
 	SessionPermissionRequested EventType = "session.permission_requested"
@@ -91,8 +93,9 @@ const (
 	// outside any wire event that could carry it: "interrupted" when a turn
 	// ends (or the session stops) with no result for the call, "pending"
 	// when the call parks behind a permission request, "in_progress" when
-	// that park is allowed. Statuses that ride a wire event (in_progress on
-	// tool_use, completed/failed on tool_result) are stamped onto the event
+	// that park is allowed, "blocked" when it is denied, expires, or is
+	// cancelled. Statuses that ride a wire event (in_progress on tool_use,
+	// completed/failed/blocked on tool_result) are stamped onto the event
 	// itself, not duplicated here. Payload: contracts.ToolStatusChange.
 	SessionToolStatusChanged EventType = "session.tool_status_changed"
 	// SessionCompact fires for each phase of a native context-compaction

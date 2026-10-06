@@ -27,7 +27,8 @@ type ToolUse struct {
 	Title string `json:"title,omitempty"`
 	// Status is the call's lifecycle state — providers/provider/event.go
 	// ToolStatus's vocabulary: "pending", "in_progress", "completed",
-	// "failed", "interrupted". Empty means unknown.
+	// "failed", "interrupted", "blocked" (never ran: permission refused).
+	// Empty means unknown.
 	Status string `json:"status,omitempty"`
 	// Locations lists the file positions the call touched, when known.
 	Locations []ToolLocation `json:"locations,omitempty"`

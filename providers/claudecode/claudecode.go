@@ -111,9 +111,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// flag for it.
 		provider.BehaviorBranching: provider.Native,
 		provider.BehaviorCwdReroot: provider.Unsupported,
-		// --disallowedTools removes tools from the model's palette entirely
-		// (confirmed against `claude --help`) — the same flag on both
-		// transports, see README.
+		// Limited is claude's own manual permission mode — claude decides
+		// what is risky and asks; read-only adds --disallowedTools, which
+		// removes the command and file-mutating tools from the palette
+		// entirely. Same flags on both transports; on chat the prompts
+		// reach the user over --permission-prompt-tool stdio, on the
+		// terminal claude's own UI asks (trustArgs, README).
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
 		// --mcp-config + --strict-mcp-config threads a real MCP server into
@@ -137,14 +140,15 @@ func (p *Provider) Matrix() provider.Matrix {
 
 // IntentMatrix declares this provider's enforcement of the portable
 // permission intents (pkg/contracts.PermissionIntent): deny_commands and
-// read_only are native via trustArgs' --disallowedTools sets,
-// require_approval is native via the permission.go PreToolUse ask-first
-// hook, and path_scope is native via the permission.go PreToolUse
-// *path-scope* hook (Option A, agent-concept redesign §2) — a local POSIX
-// sh containment check on Write|Edit|MultiEdit|NotebookEdit wired from
-// StartOptions.PersonaAllowedPaths, independent of trust. See
-// permission.go's writePermissionSettings for the two-hooks-in-one-file
-// shape.
+// read_only are native via --disallowedTools (trustArgs' read-only set, and
+// a persona's denied "shell" intent — personaTools.go); require_approval
+// is native via claude's own manual permission mode, whose prompts reach
+// the user over the stream-json host channel (--permission-prompt-tool
+// stdio, hostprompt.go) on chat and claude's own UI on the terminal; and
+// path_scope is native via the permission.go PreToolUse *path-scope* hook
+// (Option A, agent-concept redesign §2) — a local POSIX sh containment
+// check on Write|Edit|MultiEdit|NotebookEdit wired from
+// StartOptions.PersonaAllowedPaths, independent of trust.
 func (p *Provider) IntentMatrix() provider.IntentMatrix {
 	return provider.IntentMatrix{
 		provider.IntentDenyCommands:    provider.Native,
@@ -154,26 +158,44 @@ func (p *Provider) IntentMatrix() provider.IntentMatrix {
 	}
 }
 
-// trustArgs maps a trust level to the CLI flag(s) that enforce it. Limited
-// and ReadOnly use --disallowedTools to remove tools from claude's palette
-// entirely, so the interactive ask-first prompt they'd otherwise trigger
-// never fires for a tool that's already gone. TrustFull (and the zero value)
-// used to add nothing, leaving claude's default ask-first permission mode in
-// effect — which stalls forever on a transport with nobody to answer the
-// prompt (chat/ACP has no such surface; the pipeline confirmed this in
-// terminal mode too). --permission-mode bypassPermissions fixes that; it's
-// deliberately not --dangerously-skip-permissions, which stays reserved for
-// the separate pipeline engine's own autonomous-agent invocation
-// (cmd/mads/run.go's -claude-args) — see README.
-func trustArgs(trust provider.Trust) []string {
+// trustArgs maps a trust level to the CLI flag(s) that enforce it.
+//
+//   - TrustLimited ("the agent asks me before anything risky") runs claude's
+//     own "manual" permission mode — the CLI's canonical name for its
+//     normal ask-when-risky mode (the init line reports it as "default") —
+//     so claude itself decides what needs asking: a Bash call, a write
+//     outside the working directory. Named explicitly so a user's own
+//     settings.json defaultMode can't quietly loosen it.
+//   - TrustReadOnly is the same mode with every command and file-mutating
+//     tool removed from the palette by --disallowedTools: a hard guarantee,
+//     not a prompt. Whatever still asks asks the same way.
+//   - TrustFull (and the zero value) is --permission-mode
+//     bypassPermissions: claude never asks. Deliberately not
+//     --dangerously-skip-permissions, which stays reserved for the
+//     separate pipeline engine's own autonomous-agent invocation
+//     (cmd/mads/run.go's -claude-args) — see README.
+//
+// hostAsks says who answers claude's prompts. True (the chat transport with
+// a StartOptions.Permissions asker) adds --permission-prompt-tool stdio:
+// each prompt then arrives as a can_use_tool control_request on stdout and
+// mads answers it on stdin (hostprompt.go). False leaves claude's native
+// answerer in place — a human at the terminal on the PTY transport; with
+// nobody there, as on a chat session with no asker, claude refuses the
+// call outright ("… but you haven't granted it yet.") rather than stalling.
+func trustArgs(trust provider.Trust, hostAsks bool) []string {
+	var args []string
 	switch trust {
 	case provider.TrustLimited:
-		return []string{"--disallowedTools", "Bash"}
+		args = []string{"--permission-mode", "manual"}
 	case provider.TrustReadOnly:
-		return []string{"--disallowedTools", "Bash,Write,Edit,NotebookEdit"}
+		args = []string{"--permission-mode", "manual", "--disallowedTools", "Bash,Write,Edit,NotebookEdit"}
 	default:
 		return []string{"--permission-mode", "bypassPermissions"}
 	}
+	if hostAsks {
+		args = append(args, "--permission-prompt-tool", "stdio")
+	}
+	return args
 }
 
 func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provider.Session, error) {

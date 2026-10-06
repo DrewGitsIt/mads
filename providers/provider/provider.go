@@ -89,15 +89,16 @@ type StartOptions struct {
 	// (providers/kirocli/README.md) — the descriptor is simply never
 	// materialized for its sessions.
 	MCPServers []MCPServerRef
-	// PermissionPromptURL, when non-empty, is the session service's own
-	// callback endpoint (e.g. "http://127.0.0.1:PORT/permission-hook") that a
-	// provider supporting BehaviorTrustLimited/BehaviorTrustReadOnly should
-	// wire a permission-decision hook to on the chat/ACP transport only —
-	// never the terminal/PTY transport, which has its own native prompt
-	// surface. Empty for TrustFull sessions (see trustArgs) and for any
-	// transport that isn't chat. claudecode materializes this as a
-	// `--settings` PreToolUse hook (see providers/claudecode/permission.go).
-	PermissionPromptURL string
+	// Permissions, when set, is who answers the harness's own permission
+	// prompts on a transport with no human at the harness's terminal (the
+	// chat/ACP transport — never PTY, where the harness's native prompt is
+	// the surface). mads asks the user only when the harness itself would
+	// ask: an adapter routes the harness's host permission channel here
+	// (claude-code's --permission-prompt-tool stdio can_use_tool requests;
+	// ACP's session/request_permission) and never invents asks of its own.
+	// Nil means nobody answers: an adapter must then let the harness refuse
+	// whatever would have asked, never stall on it. See PermissionAsker.
+	Permissions PermissionAsker
 	// ToolIntents is the persona-level allow/deny policy expressed as a
 	// closed-set intent vocabulary (agent-concept redesign §2). Allowed
 	// is the persona's Allowlist (empty == allow-all, the harness's

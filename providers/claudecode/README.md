@@ -20,8 +20,8 @@ history.
 | PTY | **Native** | claude-code's own interactive terminal UI runs directly on a pseudo-terminal. |
 | Branching | **Native** | Fork-on-resume only: `StartOptions.Fork` launches `--resume <ref> --fork-session --session-id <new uuid>` on both transports (`fork.go`). The fork gets a new id and its own transcript in the new cwd's project dir (lines' `cwd` rewritten); the original file is never written. The id is pinned with `--session-id` because the terminal transport can't otherwise learn it, and a forked session's `Ref()` stays empty until claude confirms it (the stream `system`/`init` line, or the fork's transcript appearing on the terminal transport) — never the original's id. Forking at an earlier turn (rewind) is not supported: claude has no scriptable flag for it. |
 | CwdReroot | **Unsupported** | No flag or API moves a live session to a different working directory. |
-| TrustLimited | **Native** | `--disallowedTools Bash` removes command execution from the model's tool palette entirely — confirmed against `claude --help`: `--disallowedTools, --disallowed-tools <tools...>` takes "a comma or space-separated list of tool names to deny". `Write`/`Edit` stay available, and asking before those runs through the permission-prompt hook below on the chat transport. |
-| TrustReadOnly | **Native** | `--disallowedTools Bash,Write,Edit,NotebookEdit` denies both command execution and every file-mutating tool; whatever narrow set remains still asks via the hook below on chat. |
+| TrustLimited | **Native** | `--permission-mode manual`: claude's own normal mode, in which claude itself decides what is risky enough to ask about (a `Bash` call, a write outside the working directory). On chat the asks reach the user over `--permission-prompt-tool stdio`; on the terminal claude's own UI asks. See "Trust enforcement" below. |
+| TrustReadOnly | **Native** | The same mode plus `--disallowedTools Bash,Write,Edit,NotebookEdit`, which removes command execution and every file-mutating tool from the palette (confirmed against `claude --help`: "a comma or space-separated list of tool names to deny"). Whatever narrow set remains still asks the same way. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 | RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
 
@@ -77,23 +77,34 @@ mechanism existed (resume-less until reattached with an explicit ref).
 ## Trust enforcement, transport by transport
 
 Both `startStream()` (structured transport) and `startPTY()` (terminal
-transport) append the identical mapping for a given `StartOptions.Trust` via
-the shared `trustArgs()` helper. Unlike kirocli, there is no PTY-vs-ACP
-asymmetry here: whichever transport a session uses, the same flags reach
-claude.
+transport) build the trust flags with the shared `trustArgs()` helper. The
+mode and the removed tools are identical on both; the only difference is
+who answers claude's asks — the user through mads on chat
+(`--permission-prompt-tool stdio`, see below), a human at claude's own
+terminal UI on PTY.
+
+The principle: **mads asks the user only when the harness itself would
+ask.** mads never invents an ask-first gate of its own; "limited" means
+"claude's normal judgment about what is risky", answered by the user.
 
 | Trust | Flag(s) | Effect |
 |---|---|---|
-| `TrustLimited` | `--disallowedTools Bash` (+ `--settings` hook on chat, see below) | Command execution is genuinely absent from the model's tool palette, not merely intercepted at approval time. `Write`/`Edit` stay available and still ask — answerable via the chat transport's permission card. |
-| `TrustReadOnly` | `--disallowedTools Bash,Write,Edit,NotebookEdit` (+ `--settings` hook on chat, see below) | Command execution and every file-mutating tool are absent. Whatever narrow set of tools remains still asks, answerable the same way. |
-| `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never enters its default ask-first flow at all — no hook is wired, since there is never a prompt to answer. |
+| `TrustLimited` | `--permission-mode manual` (+ `--permission-prompt-tool stdio` on chat) | claude's normal mode: it asks before anything it deems risky — a `Bash` call, a write outside the working directory — and runs the rest. Reads inside the working directory never ask. |
+| `TrustReadOnly` | `--permission-mode manual --disallowedTools Bash,Write,Edit,NotebookEdit` (+ `--permission-prompt-tool stdio` on chat) | Command execution and every file-mutating tool are absent from the palette — a hard guarantee, not a prompt. Whatever remains asks the same way limited does. |
+| `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never asks at all, so no prompt channel is wired. |
+
+`manual` is the CLI's canonical name for its normal mode in claude-code
+2.1.285 (`claude --help` lists `acceptEdits, auto, bypassPermissions,
+manual, dontAsk, plan`; the `system`/`init` line still reports it as
+`"permissionMode":"default"`). It is passed explicitly so a user's own
+`settings.json` `defaultMode` can't quietly loosen a limited session.
 
 `--disallowedTools`'s effect is confirmed against `claude --help` in this
 environment: `--disallowedTools, --disallowed-tools <tools...>` takes "a
 comma or space-separated list of tool names to deny".
 
 **Why `TrustFull` needed a flag at all:** claude's *default* permission mode
-asks before every tool call, on both transports. That's fine when a human is
+asks before risky tool calls, on both transports. That's fine when a human is
 sitting at the terminal to answer, but chat mode (the structured transport)
 has no surface to answer a permission prompt at all — the request just sits
 there. Before this fix, `TrustFull` (meant to be "no restrictions, no
@@ -144,53 +155,87 @@ on-disk path.
 
 The frontend renders an `EventToolResult` with `is_error: true` as the
 error state on its own tool card (claude reports *every* ordinary tool
-failure this way — a non-zero exit, a missing file — so it must not be
-treated as a permission signal). The "blocked awaiting permission" banner is
-driven exclusively by `EventPermissionRequest` (the hook below), which
-carries the parked tool's name and clears itself when the request resolves —
-see `ui/src/conversation/ConversationTab.tsx` and `ChatRenderer/`.
+failure this way — a non-zero exit, a missing file — so `is_error` alone
+must not be treated as a permission signal). A call that never ran for want
+of permission is told apart by the Runner's status synthesis
+(`pkg/toolstatus`): it is stamped `blocked`, not `failed`, when mads refused
+its ask, or when its result text is claude's own refusal ("Claude requested
+permissions to … but you haven't granted it yet." — `toolstatus.PermissionRefusal`,
+which also covers reloaded transcripts). The "awaiting permission" card is
+driven by `EventPermissionRequest` (below), which names the asking call by
+`tool_use_id` and clears itself when the request resolves.
 
-### Answering the prompt itself: the permission hook (chat transport only)
+### Answering the prompt itself: the host permission channel (chat transport)
 
-`TrustLimited`/`TrustReadOnly` leave whichever tools survive `--disallowedTools`
-subject to claude's default ask-before-every-call behavior. On the terminal
-transport (`startPTY`) that prompt is claude's own native TUI — a human is
-sitting there, so nothing further is needed. On the chat/structured transport
-(`startStream`) there is no such surface at all, which is exactly what the
-"Defense in depth" section above exists to make visible rather than silent.
+On the terminal transport (`startPTY`) claude's prompts are its own native
+TUI — a human is sitting there, so nothing further is needed. On the
+chat/structured transport (`startStream`) there is no such surface, so when
+the Runner supplies a `StartOptions.Permissions` asker (it always does) and
+trust can ask at all (limited/read-only), `trustArgs` adds
+`--permission-prompt-tool stdio`: claude's SDK host channel. Every prompt
+claude would have shown then arrives on stdout as an inbound control
+request, and claude blocks that one tool call until mads answers on stdin
+(`hostprompt.go`). Wire shapes, verified against claude-code 2.1.285 (real
+capture: `testdata/stream-can-use-tool.jsonl` — a main-agent `Write` that was
+allowed and a foreground subagent's `Write` that was denied, both outside
+cwd; `stream_event` lines dropped):
 
-This adapter closes that gap with a **PreToolUse command hook**, not an MCP
-tool — `claude` has no MCP-based permission-delegation flag (`--help` has
-never listed one; see `services/session/HANDOFF.md` for the verification
-trail of two earlier attempts that assumed one existed). `--settings
-<file>` does exist and is documented to load hook configuration at session
-start, in the "direct" (non-plugin) shape:
-
-```json
-{"PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": "...", "timeout": 660}]}]}
+```text
+← {"type":"control_request","request_id":"<uuid>","request":{"subtype":"can_use_tool",
+     "tool_name":"Write","input":{...},"tool_use_id":"toolu_…","agent_id":"a…",
+     "decision_reason":"Path is outside allowed working directories", ...}}
+→ {"type":"control_response","response":{"subtype":"success","request_id":"<uuid>",
+     "response":{"behavior":"allow","updatedInput":{...the input, unchanged...}}}}
+→ ... "response":{"behavior":"deny","message":"<relayed to the model verbatim>"}
+← {"type":"control_cancel_request","request_id":"<uuid>"}
 ```
 
-`permission.go`'s `permissionArgs` builds this file — mirroring `mcp.go`'s
-`writeMCPConfig`/`--mcp-config` temp-file pattern — only when
-`needsPermissionHook(opts.Trust)` is true (`TrustLimited`/`TrustReadOnly`)
-**and** `opts.PermissionPromptURL` is set. `startStream` is the only call
-site; `startPTY` never sees this option, so terminal-mode behavior is
-unchanged. The Runner (`services/session/internal/runner`) is what sets
-`opts.PermissionPromptURL`, and only for the chat transport — see its own
-docs for the request/response contract, the in-memory pending-request
-registry, and the ~10-minute deny-on-timeout bound. The hook command itself
-is a single `curl -d @-` invocation (no Go subcommand, no script file —
-`pkg/githook`'s bare-shell-script precedent) that pipes its stdin straight
-through as the POST body and prints the response straight back to stdout;
-the session service's handler pre-formats the exact
-`{"hookSpecificOutput": ...}` JSON claude expects, so the shell command
-never itself parses or builds JSON. A `curl` failure (connection refused,
-its own `--max-time` expiry) falls back to an inline deny rather than
-leaving claude to interpret empty/malformed stdout — three layered
-timeouts (the hook's own `"timeout"`, curl's `--max-time`, and the session
-service's own bound) each shorter than the one before it, so the
-server-side bound always wins the race and the agent process never hangs
-indefinitely on an unanswered prompt.
+- `agent_id` is present only for a subagent's calls; it equals that
+  subagent's `task_id`, so the adapter maps it to the parent Agent call via
+  the `task_started` line (`PermissionAsk.ParentToolUseID`).
+- A deny's `message` becomes the refused call's error `tool_result` text
+  verbatim. The Runner's messages all start with
+  `toolstatus.DenialPrefix`, so a reloaded transcript still shows the call
+  `blocked`.
+- An interrupt while a prompt is open makes claude send
+  `control_cancel_request` for it and refuse the call itself ("The user
+  doesn't want to proceed with this tool use. …"); the adapter cancels the
+  asker's ctx and writes nothing back. The process exiting or `Close`
+  cancels every open ask the same way.
+- Any other inbound `control_request` subtype gets
+  `{"subtype":"error","error":"…"}` — claude blocks on every inbound
+  request, and an error answer makes it refuse ("Tool permission request
+  failed: …") instead of hanging.
+- Without `--permission-prompt-tool stdio` (no asker), claude in manual
+  mode doesn't stall: it refuses the call at once with "Claude requested
+  permissions to …, but you haven't granted it yet."
+
+The asker (`provider.PermissionAsker`) is harness-agnostic: the Runner's
+`RequestPermission` (`services/session/internal/runner/permissions.go`)
+broadcasts the `EventPermissionRequest` card, waits for the user's
+Allow/Deny (`POST /permission-requests/{id}/resolve`), and denies on its own
+after ~10 minutes ("expired") or when ctx is cancelled ("cancelled").
+
+### The persona path-scope hook
+
+A persona's `AllowedPaths` (`StartOptions.PersonaAllowedPaths`, any trust)
+is the one thing still enforced by a hook: `permission.go` writes a
+`--settings` file with a `PreToolUse` command hook on
+`Write|Edit|MultiEdit|NotebookEdit` that denies a target outside the
+allowlist. Hook events must nest under a top-level `"hooks"` key, exactly
+as in `~/.claude/settings.json`:
+
+```json
+{"hooks": {"PreToolUse": [{"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "sh -c '...'", "timeout": 5}]}]}}
+```
+
+The flat shape (`{"PreToolUse": [...]}` at the top level) loads without
+complaint and is silently ignored — this package wrote it until 2026-10,
+so neither the old ask-first hook nor the path-scope hook ever ran.
+`TestSettingsShapeRealClaude` pins the nested shape against the real binary
+at zero token cost: a `SessionStart` hook added through the same marshaling
+code must fire when claude runs against a dead API endpoint with a bogus
+key (skipped when `claude` isn't on PATH).
 
 ## MCP servers
 

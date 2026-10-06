@@ -62,7 +62,7 @@ func (r *Runner) stampToolStatus(ev provider.Event) provider.Event {
 	case provider.EventToolUse:
 		status = r.toolStatus.ToolUse(ev.Tool.ID, ev.Tool.Name, ev.ParentToolUseID, string(ev.Tool.Status))
 	case provider.EventToolResult:
-		status = r.toolStatus.ToolResult(ev.Tool.ID, ev.IsError, string(ev.Tool.Status))
+		status = r.toolStatus.ToolResult(ev.Tool.ID, ev.IsError, ev.Text, string(ev.Tool.Status))
 	default:
 		return ev
 	}

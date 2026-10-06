@@ -233,7 +233,7 @@ func (p *Provider) Matrix() provider.Matrix {
 // matrix's TrustLimited/TrustReadOnly rows (Emulated — the engine's
 // class-based permission-reply gate riding goose's approve mode), no
 // intent has a harness-level enforcement mechanism: goose never reads
-// StartOptions.PermissionPromptURL, has no command blocklist, and no
+// StartOptions.Permissions, has no command blocklist, and no
 // path-scoped write restriction. The trust emulation is a different,
 // coarser mechanism and must not be implied here — every intent is
 // declared unenforced honestly.

@@ -2,12 +2,12 @@ package runner
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/toolstatus"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -18,61 +18,63 @@ import (
 // wait).
 const defaultPermissionTimeout = 10 * time.Minute
 
-// pendingPermission is one parked PreToolUse hook call awaiting a decision.
-// resolved carries exactly one value ("allow" or "deny") — RequestPermission
+// Permission request statuses (provider.PermissionRequest.Status).
+const (
+	permPending   = "pending"
+	permAllowed   = "allowed"
+	permDenied    = "denied"
+	permExpired   = "expired"
+	permCancelled = "cancelled"
+)
+
+// pendingPermission is one harness permission ask awaiting a decision.
+// resolved carries exactly one value (the final status) — RequestPermission
 // blocks reading it.
 type pendingPermission struct {
 	req      provider.PermissionRequest
 	resolved chan string
-	// toolUseID is the wire ID of the tool call this park blocked, tied
-	// best-effort by r.toolStatus (the hook wire carries only the tool
-	// name); "" when no announced call matched. Lets an allow move the
-	// call's synthesized status pending → in_progress.
-	toolUseID string
 }
 
-// RequestPermission is called by the session service's POST /permission-hook
-// handler for every PreToolUse call while trust leaves the tool asking (see
-// providers/claudecode/permission.go — the hook subprocess's own blocking
-// HTTP call is what "parks" the tool call; there is no separate connection
-// to park in-process). It registers a new pending request, broadcasts an
+// RequestPermission is the session's provider.PermissionAsker (set as
+// StartOptions.Permissions in Start): the adapter calls it whenever the
+// harness itself asks permission for a tool call — claude-code's manual
+// mode on limited/read-only trust. It registers a new pending request,
+// marks the call "pending" (pkg/toolstatus), broadcasts an
 // EventPermissionRequest (status "pending") on the hub so the chat UI can
-// render a card, and blocks until ResolvePermission answers it or the
-// timeout elapses — at which point it resolves to "deny" on its own and
-// broadcasts an "expired" status. The return value is exactly claude's
-// hookSpecificOutput.permissionDecision ("allow" or "deny").
-func (r *Runner) RequestPermission(tool string, input json.RawMessage) string {
+// render a card, and blocks until ResolvePermission answers it, the timeout
+// elapses ("expired"), or ctx is done because the harness stopped waiting —
+// an interrupted turn, the process gone ("cancelled"). Anything but an
+// allow is a deny, and blocks the call.
+func (r *Runner) RequestPermission(ctx context.Context, ask provider.PermissionAsk) provider.PermissionDecision {
+	// Status synthesis first, so the card carries the call's parent: the
+	// ask names its call exactly, and the tracker knows (or, if the ask
+	// beat the call's tool_use to the pump, starts tracking) it.
+	parent := ask.ParentToolUseID
+	if up, ok := r.toolStatus.PermissionParked(ask.ToolUseID, ask.ParentToolUseID); ok {
+		parent = up.ParentToolUseID
+		r.appendToolStatus(up)
+	}
+
 	r.permMu.Lock()
 	r.permSeq++
 	id := fmt.Sprintf("%s-perm-%d", r.sessionID, r.permSeq)
 	pp := &pendingPermission{
-		req:      provider.PermissionRequest{ID: id, Tool: tool, Input: input, Status: "pending"},
+		req: provider.PermissionRequest{
+			ID: id, Tool: ask.Tool, Input: ask.Input, Status: permPending,
+			ToolUseID: ask.ToolUseID, ParentToolUseID: parent, AgentID: ask.AgentID, Reason: ask.Reason,
+		},
 		resolved: make(chan string, 1),
 	}
 	r.permPending[id] = pp
+	req := pp.req // a copy: finishPermission mutates pp.req under permMu
 	r.permMu.Unlock()
 
-	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &pp.req})
+	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &req})
 	// Persisted (unlike the hub frame, which only live viewers see) so a
 	// session that sat parked awaiting a decision is diagnosable from the
 	// event log after the fact.
 	r.appendPermissionEvent(contracts.SessionPermissionRequested,
-		map[string]string{"request_id": id, "tool": tool})
-
-	// Status synthesis (pkg/toolstatus): the parked call is "pending" until
-	// answered. Best-effort by tool name — the hook can fire before the
-	// pump has processed the announcing tool_use line, in which case no
-	// call matches and the card alone tells the story.
-	if up, ok := r.toolStatus.PermissionParked(tool); ok {
-		r.permMu.Lock() // finishPermission reads toolUseID under the same lock
-		pp.toolUseID = up.ToolUseID
-		r.permMu.Unlock()
-		r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
-			ToolUseID:       up.ToolUseID,
-			Status:          up.Status,
-			ParentToolUseID: up.ParentToolUseID,
-		})
-	}
+		map[string]string{"request_id": id, "tool": ask.Tool, "tool_use_id": ask.ToolUseID})
 
 	timeout := r.PermissionTimeout
 	if timeout <= 0 {
@@ -82,11 +84,32 @@ func (r *Runner) RequestPermission(tool string, input json.RawMessage) string {
 	defer timer.Stop()
 
 	select {
-	case decision := <-pp.resolved:
-		return decision
+	case status := <-pp.resolved:
+		return permissionDecision(status)
 	case <-timer.C:
-		r.finishPermission(id, "deny", "expired")
-		return "deny"
+		r.finishPermission(id, permExpired)
+	case <-ctx.Done():
+		r.finishPermission(id, permCancelled)
+	}
+	// Whichever finishPermission won the race — this one, or a resolve
+	// that landed at the same moment — sent the final status exactly once.
+	return permissionDecision(<-pp.resolved)
+}
+
+// permissionDecision is what the harness is told for a final status. Every
+// deny message starts with toolstatus.DenialPrefix: the harness relays it
+// to the model as the refused call's result, and the prefix is how a
+// reloaded transcript still shows that call blocked.
+func permissionDecision(status string) provider.PermissionDecision {
+	switch status {
+	case permAllowed:
+		return provider.PermissionDecision{Allow: true}
+	case permExpired:
+		return provider.PermissionDecision{Message: toolstatus.DenialPrefix + "nobody answered the permission request in time."}
+	case permCancelled:
+		return provider.PermissionDecision{Message: toolstatus.DenialPrefix + "the permission request was withdrawn."}
+	default:
+		return provider.PermissionDecision{Message: toolstatus.DenialPrefix + "the user denied permission."}
 	}
 }
 
@@ -96,55 +119,64 @@ func (r *Runner) RequestPermission(tool string, input json.RawMessage) string {
 // double click, or a request that already timed out) — not an error worth
 // surfacing to the caller.
 func (r *Runner) ResolvePermission(id, decision string) bool {
-	if decision != "allow" && decision != "deny" {
+	switch decision {
+	case "allow":
+		return r.finishPermission(id, permAllowed)
+	case "deny":
+		return r.finishPermission(id, permDenied)
+	default:
 		return false
 	}
-	status := "denied"
-	if decision == "allow" {
-		status = "allowed"
-	}
-	return r.finishPermission(id, decision, status)
 }
 
 // finishPermission resolves the pending request exactly once: deleting it
-// from permPending under permMu is what arbitrates the resolve-vs-timeout
-// race (whichever call reaches the lock first deletes the entry and wins;
-// the other finds it already gone and is a no-op), so no separate
+// from permPending under permMu is what arbitrates the resolve-vs-timeout-
+// vs-cancel race (whichever call reaches the lock first deletes the entry
+// and wins; the others find it already gone and are no-ops), so no separate
 // once.Do/atomic guard is needed.
-func (r *Runner) finishPermission(id, decision, status string) bool {
+func (r *Runner) finishPermission(id, status string) bool {
 	r.permMu.Lock()
 	pp, ok := r.permPending[id]
 	if ok {
 		delete(r.permPending, id)
-	}
-	var toolUseID string
-	if ok {
-		toolUseID = pp.toolUseID
+		pp.req.Status = status
 	}
 	r.permMu.Unlock()
 	if !ok {
 		return false
 	}
-	pp.req.Status = status
-	pp.resolved <- decision
-	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &pp.req})
+	pp.resolved <- status
+	req := pp.req
+	r.hub.broadcast(provider.Event{Kind: provider.EventPermissionRequest, Permission: &req})
 	r.appendPermissionEvent(contracts.SessionPermissionResolved,
-		map[string]string{"request_id": id, "tool": pp.req.Tool, "status": status})
+		map[string]string{"request_id": id, "tool": req.Tool, "tool_use_id": req.ToolUseID, "status": status})
 
-	// An allow un-parks the call: pending → in_progress (pkg/toolstatus).
-	// Deny/expiry needs no transition here — the harness reports the
-	// denial as an error tool_result (→ failed), and the turn-end sweep
-	// backstops a harness that doesn't.
-	if status == "allowed" && toolUseID != "" {
-		if up, resumed := r.toolStatus.PermissionResolved(toolUseID); resumed {
-			r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
-				ToolUseID:       up.ToolUseID,
-				Status:          up.Status,
-				ParentToolUseID: up.ParentToolUseID,
-			})
-		}
+	// Status synthesis (pkg/toolstatus): an allow un-parks the call
+	// (pending → in_progress); anything else means it will never run
+	// (→ blocked, which the harness's error tool_result then keeps).
+	if req.ToolUseID == "" {
+		return true
+	}
+	var up toolstatus.Update
+	var changed bool
+	if status == permAllowed {
+		up, changed = r.toolStatus.PermissionResolved(req.ToolUseID)
+	} else {
+		up, changed = r.toolStatus.PermissionDenied(req.ToolUseID)
+	}
+	if changed {
+		r.appendToolStatus(up)
 	}
 	return true
+}
+
+// appendToolStatus persists one synthesized tool-status change.
+func (r *Runner) appendToolStatus(up toolstatus.Update) {
+	r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
+		ToolUseID:       up.ToolUseID,
+		Status:          up.Status,
+		ParentToolUseID: up.ParentToolUseID,
+	})
 }
 
 // appendPermissionEvent persists one permission lifecycle event, best-effort
@@ -167,7 +199,7 @@ func (r *Runner) appendPermissionEvent(t contracts.EventType, payload map[string
 // the reconstruction source for a chat client that refetches its transcript
 // and needs to redraw a still-open card (acceptance criterion 3). A resolved
 // request isn't returned here; a client that already received its terminal
-// event (allowed/denied/expired) off the live stream needs nothing further
+// event (allowed/denied/expired/cancelled) off the live stream needs nothing further
 // from this endpoint. Order is unspecified (map iteration) — there is at
 // most a handful of these live at once, so callers sort if they care.
 func (r *Runner) PermissionRequests() []provider.PermissionRequest {

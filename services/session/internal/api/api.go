@@ -49,7 +49,6 @@ func New(r *runner.Runner) http.Handler {
 	mux.HandleFunc("POST /skills/{name}/inject", s.handleInjectSkill)
 	mux.HandleFunc("GET /capabilities/{name}/diagnose", s.handleDiagnoseCapability)
 	mux.HandleFunc("POST /orchestrate/refresh", s.handleOrchestrateRefresh)
-	mux.HandleFunc("POST /permission-hook", s.handlePermissionHook)
 	mux.HandleFunc("GET /permission-requests", s.handlePermissionRequests)
 	mux.HandleFunc("POST /permission-requests/{id}/resolve", s.handleResolvePermission)
 	return mux
@@ -447,42 +446,6 @@ func (s *server) handleDiagnoseCapability(w http.ResponseWriter, r *http.Request
 		"reason":      reason,
 		"suggestions": suggestions,
 	})
-}
-
-// handlePermissionHook is the callback the claude PreToolUse hook's `curl`
-// command blocks on (providers/claudecode/permission.go builds the exact
-// command line). The request body is claude's own PreToolUse JSON, piped
-// through unmodified by the hook's stdin — only tool_name/tool_input are
-// read here, the rest (session_id, transcript_path, cwd, permission_mode)
-// isn't needed since this process already knows all of that about itself.
-// The response body IS the hook's required stdout verbatim (the shell
-// command prints curl's output straight through), so its shape is
-// hookSpecificOutput.permissionDecision exactly, not this API's usual
-// {"error":...}/{"status":...} envelope.
-func (s *server) handlePermissionHook(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		ToolName  string          `json:"tool_name"`
-		ToolInput json.RawMessage `json:"tool_input"`
-	}
-	if !decode(w, r, &body) {
-		return
-	}
-	decision := s.runner.RequestPermission(body.ToolName, body.ToolInput)
-	// hookEventName is part of claude's hookSpecificOutput contract for
-	// PreToolUse (the repo's own SessionStart hook includes its equivalent —
-	// see providers/claudecode/complete_test.go). Omitting it risks claude
-	// treating the output as malformed and falling back to its default
-	// ask-with-nobody-to-answer, i.e. a silent indefinite stall.
-	resp := map[string]any{
-		"hookSpecificOutput": map[string]string{
-			"hookEventName":      "PreToolUse",
-			"permissionDecision": decision,
-		},
-	}
-	if decision == "deny" {
-		resp["systemMessage"] = "Permission request was denied (or expired awaiting a response) via the chat UI."
-	}
-	writeJSON(w, http.StatusOK, resp)
 }
 
 // handlePermissionRequests answers every still-pending permission request

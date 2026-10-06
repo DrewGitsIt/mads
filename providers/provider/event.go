@@ -46,13 +46,13 @@ const (
 	// permission-blocked tool call instead of silently stalling — see
 	// providers/claudecode's wireLine.events() and its README.
 	EventToolResult EventKind = "tool_result"
-	// EventPermissionRequest — the provider's PreToolUse hook parked a tool
-	// call awaiting an allow/deny decision (chat transport only — see
-	// providers/claudecode's permission.go and README "Trust enforcement").
-	// Permission carries the request; the Runner (not the provider adapter)
-	// constructs and broadcasts this event directly from its HTTP hook
-	// handler, since the decision loop lives in the session service, not the
-	// provider process.
+	// EventPermissionRequest — the harness asked permission for a tool call
+	// and is waiting on an allow/deny decision (chat transport only — see
+	// StartOptions.Permissions and providers/claudecode's README "Trust
+	// enforcement"). Permission carries the request; the Runner (not the
+	// provider adapter) constructs and broadcasts this event from its
+	// PermissionAsker, since the decision loop lives in the session service,
+	// not the provider process.
 	EventPermissionRequest EventKind = "permission_request"
 	// EventCompact — the provider is running (or just finished) a native
 	// context-compaction pass. Today the only producer is the Runner's
@@ -185,17 +185,31 @@ type CompactStatus struct {
 	Error string `json:"error,omitempty"`
 }
 
-// PermissionRequest is one parked PreToolUse hook call awaiting a decision.
-// ID correlates the eventual resolve call (POST
-// /permission-requests/{id}/resolve) back to the parked hook subprocess.
+// PermissionRequest is one harness permission prompt awaiting (or past) a
+// decision — the mads-side record of a PermissionAsk. ID correlates the
+// eventual resolve call (POST /permission-requests/{id}/resolve) back to the
+// waiting asker.
 type PermissionRequest struct {
 	ID    string          `json:"id"`
 	Tool  string          `json:"tool"`
 	Input json.RawMessage `json:"input,omitempty"`
-	// Status starts "pending" and moves to "allowed", "denied", or "expired"
-	// — carried on the event so a late subscriber (transcript refetch) can
+	// Status starts "pending" and moves to "allowed", "denied", "expired"
+	// (nobody answered in time — a deny), or "cancelled" (the harness
+	// stopped waiting, e.g. the turn was interrupted — also a deny) —
+	// carried on the event so a late subscriber (transcript refetch) can
 	// reconstruct a resolved card's final state, not just the open one.
 	Status string `json:"status"`
+	// ToolUseID is the asking call's wire id (PermissionAsk.ToolUseID) —
+	// the key a client uses to attach the card to that call's row.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// ParentToolUseID is the subagent call the asking call runs under;
+	// empty for the main agent (Event.ParentToolUseID's meaning).
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+	// AgentID is the harness's id for the asking subagent; empty for the
+	// main agent.
+	AgentID string `json:"agent_id,omitempty"`
+	// Reason is the harness's own reason for asking, when it gave one.
+	Reason string `json:"reason,omitempty"`
 }
 
 // ToolKind classifies a tool invocation for rendering — icon choice and
@@ -229,8 +243,8 @@ const (
 // their wire actually reports one (ACP conformance); synthesizing the
 // missing states everywhere else — in_progress on arrival, completed/failed
 // on result, interrupted on a resultless turn end, pending while
-// permission-parked — is the layer above's job, in one place, not each
-// adapter's.
+// permission-parked, blocked when permission was refused — is the layer
+// above's job (pkg/toolstatus), in one place, not each adapter's.
 type ToolStatus string
 
 const (
@@ -239,6 +253,11 @@ const (
 	ToolStatusCompleted   ToolStatus = "completed"
 	ToolStatusFailed      ToolStatus = "failed"
 	ToolStatusInterrupted ToolStatus = "interrupted"
+	// ToolStatusBlocked: the call never ran because permission was refused
+	// — the user denied it, nobody answered in time, the harness stopped
+	// waiting, or the harness itself refused for lack of a grant. Terminal,
+	// and distinct from failed (the call ran and errored).
+	ToolStatusBlocked ToolStatus = "blocked"
 )
 
 // ToolLocation is one file position a tool call touched — absolute path

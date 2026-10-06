@@ -453,25 +453,43 @@ func TestRateLimitSurfaces(t *testing.T) {
 	}
 }
 
-// A read_only session's attempted Write and a limited session's attempted
-// Bash both refuse — the stand-in only emits tool_use when the tool isn't in
-// --disallowedTools, so a lingering EventToolUse means the flag didn't land.
-func TestTrustDisallowsTools(t *testing.T) {
-	cases := []struct {
-		trust  provider.Trust
-		prompt string
-	}{
-		{provider.TrustLimited, "attempt-command"},
-		{provider.TrustReadOnly, "attempt-write"},
-		{provider.TrustReadOnly, "attempt-command"},
+// turnText sends prompt and collects the turn's text until its end.
+func turnText(t *testing.T, sess provider.Session, prompt string) string {
+	t.Helper()
+	if err := sess.Send(context.Background(), prompt); err != nil {
+		t.Fatal(err)
 	}
-	for _, c := range cases {
+	var text string
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			if ev.Kind == provider.EventText {
+				text += ev.Text
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				return text
+			}
+		case <-deadline:
+			t.Fatalf("no turn end for %q", prompt)
+		}
+	}
+}
+
+// A read_only session's attempted Write and Bash both refuse — the stand-in
+// only emits tool_use when the tool isn't in --disallowedTools, so a
+// lingering EventToolUse means the flag didn't land.
+func TestTrustReadOnlyDisallowsTools(t *testing.T) {
+	for _, prompt := range []string{"attempt-write", "attempt-command"} {
 		p := testProvider(t)
-		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: c.trust})
+		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustReadOnly})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sess.Send(context.Background(), c.prompt); err != nil {
+		if err := sess.Send(context.Background(), prompt); err != nil {
 			t.Fatal(err)
 		}
 		deadline := time.After(10 * time.Second)
@@ -482,65 +500,64 @@ func TestTrustDisallowsTools(t *testing.T) {
 					t.Fatal("stream closed before turn end")
 				}
 				if ev.Kind == provider.EventToolUse {
-					t.Errorf("trust %s: tool use event observed for %q (name=%s)", c.trust, c.prompt, ev.Tool.Name)
+					t.Errorf("read_only: tool use event observed for %q (name=%s)", prompt, ev.Tool.Name)
 				}
 				if ev.Kind == provider.EventTurnEnd {
 					done = true
 				}
 			case <-deadline:
-				t.Fatalf("trust %s: no turn end for %q", c.trust, c.prompt)
+				t.Fatalf("read_only: no turn end for %q", prompt)
 			}
 		}
 		_ = sess.Close()
 	}
 }
 
-// TestTrustFullBypassesPermissionsStream proves TrustFull (and the zero
-// value) reach the launched process as --permission-mode bypassPermissions
-// on the structured transport — the fix for the bug where a TrustFull chat
-// session silently stalled awaiting an interactive permission prompt nobody
-// could answer. The stand-in's "permission-echo" dialect reads back the
-// parsed flag, the same proof-of-exact-args pattern as the MCP echo tests.
-func TestTrustFullBypassesPermissionsStream(t *testing.T) {
-	for _, trust := range []provider.Trust{provider.TrustFull, ""} {
-		p := testProvider(t)
-		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: trust})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := sess.Send(context.Background(), "permission-echo"); err != nil {
-			t.Fatal(err)
-		}
-		var text string
-		deadline := time.After(10 * time.Second)
-		for done := false; !done; {
-			select {
-			case ev, ok := <-sess.Events():
-				if !ok {
-					t.Fatal("stream closed before turn end")
-				}
-				if ev.Kind == provider.EventText {
-					text += ev.Text
-				}
-				if ev.Kind == provider.EventTurnEnd {
-					done = true
-				}
-			case <-deadline:
-				t.Fatal("no turn end")
+// TestTrustFlags pins every trust level's launch flags on the structured
+// transport, with and without an asker: limited is claude's manual mode
+// with Bash still in the palette (it asks instead), read_only adds the hard
+// --disallowedTools set, full bypasses; the host prompt channel
+// (--permission-prompt-tool stdio) is wired exactly when an asker is set
+// and the mode can ask at all. The stand-in's "permission-echo" dialect
+// reads back the parsed flags.
+func TestTrustFlags(t *testing.T) {
+	asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
+		return provider.PermissionDecision{}
+	}
+	cases := []struct {
+		name  string
+		trust provider.Trust
+		asker provider.PermissionAsker
+		want  string
+	}{
+		{"limited, asker", provider.TrustLimited, asker, "permission_mode=manual permission_prompt_tool=stdio disallowed="},
+		{"limited, no asker", provider.TrustLimited, nil, "permission_mode=manual permission_prompt_tool= disallowed="},
+		{"read_only, asker", provider.TrustReadOnly, asker, "permission_mode=manual permission_prompt_tool=stdio disallowed=Bash,Write,Edit,NotebookEdit"},
+		{"full, asker", provider.TrustFull, asker, "permission_mode=bypassPermissions permission_prompt_tool= disallowed="},
+		{"zero value", "", nil, "permission_mode=bypassPermissions permission_prompt_tool= disallowed="},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := testProvider(t)
+			sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: c.trust, Permissions: c.asker})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-		if !strings.Contains(text, "permission_mode=bypassPermissions") {
-			t.Errorf("trust %q: permission mode not observed: %q", trust, text)
-		}
-		_ = sess.Close()
+			defer func() { _ = sess.Close() }()
+			if got := turnText(t, sess, "permission-echo"); got != c.want {
+				t.Errorf("flags = %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
-// TestTrustFullBypassesPermissionsPTY is the terminal-transport counterpart
-// — Drew expects Auto to mean no prompts in terminal mode too.
-func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
+// ptyPermissionEcho runs the "permission-echo" dialect on a terminal
+// session and returns the echoed line.
+func ptyPermissionEcho(t *testing.T, opts provider.StartOptions) string {
+	t.Helper()
 	p := testProvider(t)
-	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModePTY, Trust: provider.TrustFull})
+	opts.Mode = provider.ModePTY
+	sess, err := p.Start(context.Background(), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +576,7 @@ func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
 		for {
 			n, err := pty.Terminal().Read(buf)
 			acc.Write(buf[:n])
-			if strings.Contains(acc.String(), "permission_mode=") || err != nil {
+			if strings.Contains(acc.String(), "disallowed=") || err != nil {
 				out <- acc.String()
 				return
 			}
@@ -567,73 +584,61 @@ func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
 	}()
 	select {
 	case text := <-out:
-		if !strings.Contains(text, "permission_mode=bypassPermissions") {
-			t.Errorf("permission mode not observed: %q", text)
-		}
+		return text
 	case <-time.After(10 * time.Second):
 		t.Fatal("permission-echo marker not seen in terminal output")
+		return ""
 	}
 }
 
-// TestPermissionHookWiredOnChatTransportOnly proves permissionArgs' gating
-// reaches a real launched process: --settings only appears when trust needs
-// the hook (TrustLimited/TrustReadOnly) AND a PermissionPromptURL was
-// supplied — never for TrustFull, and never when the URL is empty (the
-// terminal-transport / not-yet-listening case). The stand-in's
-// "settings-echo" dialect reads back the file the adapter wrote, the same
-// proof-of-exact-bytes pattern as the MCP echo tests.
-func TestPermissionHookWiredOnChatTransportOnly(t *testing.T) {
-	const url = "http://127.0.0.1:9/permission-hook"
-	cases := []struct {
-		name     string
-		trust    provider.Trust
-		url      string
-		wantHook bool
-	}{
-		{"limited with url", provider.TrustLimited, url, true},
-		{"readonly with url", provider.TrustReadOnly, url, true},
-		{"full with url", provider.TrustFull, url, false},
-		{"limited without url", provider.TrustLimited, "", false},
+// TestTrustFullBypassesPermissionsPTY is the terminal-transport counterpart
+// — Drew expects Auto to mean no prompts in terminal mode too.
+func TestTrustFullBypassesPermissionsPTY(t *testing.T) {
+	text := ptyPermissionEcho(t, provider.StartOptions{Trust: provider.TrustFull})
+	if !strings.Contains(text, "permission_mode=bypassPermissions") {
+		t.Errorf("permission mode not observed: %q", text)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			p := testProvider(t)
-			sess, err := p.Start(context.Background(), provider.StartOptions{
-				Mode: provider.ModeACP, Trust: c.trust, PermissionPromptURL: c.url,
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = sess.Close() }()
-			if err := sess.Send(context.Background(), "settings-echo"); err != nil {
-				t.Fatal(err)
-			}
-			var text string
-			deadline := time.After(10 * time.Second)
-			for done := false; !done; {
-				select {
-				case ev, ok := <-sess.Events():
-					if !ok {
-						t.Fatal("stream closed before turn end")
-					}
-					if ev.Kind == provider.EventText {
-						text += ev.Text
-					}
-					if ev.Kind == provider.EventTurnEnd {
-						done = true
-					}
-				case <-deadline:
-					t.Fatal("no turn end")
-				}
-			}
-			if c.wantHook {
-				if !strings.Contains(text, `"command":"curl`) || !strings.Contains(text, url) {
-					t.Errorf("expected --settings hook wired with url %q, got %q", url, text)
-				}
-			} else if !strings.Contains(text, "settings=none") {
-				t.Errorf("expected no --settings hook, got %q", text)
-			}
-		})
+}
+
+// TestTrustLimitedPTYAsksNatively: on the terminal a human answers claude's
+// own prompt, so limited is just manual mode — never the stdio host
+// channel, even when the Runner's base options carry an asker.
+func TestTrustLimitedPTYAsksNatively(t *testing.T) {
+	asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
+		return provider.PermissionDecision{}
+	}
+	text := ptyPermissionEcho(t, provider.StartOptions{Trust: provider.TrustLimited, Permissions: asker})
+	if !strings.Contains(text, "permission_mode=manual permission_prompt_tool= ") {
+		t.Errorf("want manual mode without the host channel, got %q", text)
+	}
+}
+
+// TestPathScopeSettingsReachLaunch proves a persona allowlist reaches the
+// launched process as a --settings file in the nested "hooks" shape, and
+// that a session without one passes no --settings at all. The stand-in's
+// "settings-echo" dialect reads back the file the adapter wrote.
+func TestPathScopeSettingsReachLaunch(t *testing.T) {
+	p := testProvider(t)
+	sess, err := p.Start(context.Background(), provider.StartOptions{
+		Mode: provider.ModeACP, Trust: provider.TrustLimited, PersonaAllowedPaths: []string{"src/"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := turnText(t, sess, "settings-echo")
+	_ = sess.Close()
+	if !strings.HasPrefix(text, `settings={"hooks":{"PreToolUse":[{"matcher":"Write|Edit|MultiEdit|NotebookEdit"`) {
+		t.Errorf("want the nested path-scope hook, got %q", text)
+	}
+
+	p = testProvider(t)
+	sess, err = p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustLimited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if text := turnText(t, sess, "settings-echo"); text != "settings=none" {
+		t.Errorf("no allowlist: want no --settings, got %q", text)
 	}
 }
 

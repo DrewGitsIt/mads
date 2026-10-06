@@ -45,35 +45,23 @@ func newPermissionTestServer(t *testing.T) (*httptest.Server, *runner.Runner) {
 	return srv, r
 }
 
-func postPermissionHook(t *testing.T, srv *httptest.Server, toolName string) chan *http.Response {
-	t.Helper()
-	body, err := json.Marshal(map[string]any{"tool_name": toolName, "tool_input": map[string]string{"command": "ls"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	respCh := make(chan *http.Response, 1)
+// ask raises one permission ask the way the provider adapter does — on its
+// own goroutine, through the Runner's PermissionAsker — and delivers the
+// decision on the returned channel.
+func ask(r *runner.Runner, tool string) chan provider.PermissionDecision {
+	out := make(chan provider.PermissionDecision, 1)
 	go func() {
-		resp, err := http.Post(srv.URL+"/permission-hook", "application/json", bytes.NewReader(body))
-		if err != nil {
-			t.Errorf("POST /permission-hook: %v", err)
-			respCh <- nil
-			return
-		}
-		respCh <- resp
+		out <- r.RequestPermission(context.Background(), provider.PermissionAsk{
+			ToolUseID: "toolu_1", Tool: tool, Input: json.RawMessage(`{"command":"ls"}`),
+		})
 	}()
-	return respCh
+	return out
 }
 
-// TestPermissionHookRoundTripAllow exercises the full hook contract end to
-// end: POST /permission-hook blocks, GET /permission-requests shows it
-// pending in the meantime, POST /permission-requests/{id}/resolve unblocks
-// it, and the original blocked call gets back the exact hookSpecificOutput
-// JSON shape claude's PreToolUse hook contract requires.
-func TestPermissionHookRoundTripAllow(t *testing.T) {
-	srv, _ := newPermissionTestServer(t)
-	respCh := postPermissionHook(t, srv, "Bash")
-
-	var id string
+// pendingRequest polls GET /permission-requests until exactly one request
+// is pending, and returns it.
+func pendingRequest(t *testing.T, srv *httptest.Server) provider.PermissionRequest {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		resp, err := http.Get(srv.URL + "/permission-requests")
@@ -86,47 +74,49 @@ func TestPermissionHookRoundTripAllow(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 		if len(reqs) == 1 && reqs[0].Status == "pending" {
-			id = reqs[0].ID
-			if reqs[0].Tool != "Bash" {
-				t.Errorf("tool = %q, want Bash", reqs[0].Tool)
-			}
-			break
+			return reqs[0]
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("permission request never appeared pending, got %v", reqs)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
 
-	resolveBody, _ := json.Marshal(map[string]string{"decision": "allow"})
-	resolveResp, err := http.Post(srv.URL+"/permission-requests/"+id+"/resolve", "application/json", bytes.NewReader(resolveBody))
+func resolve(t *testing.T, srv *httptest.Server, id, decision string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"decision": decision})
+	resp, err := http.Post(srv.URL+"/permission-requests/"+id+"/resolve", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = resolveResp.Body.Close() }()
-	if resolveResp.StatusCode != http.StatusOK {
-		t.Fatalf("resolve status = %d, want 200", resolveResp.StatusCode)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("resolve status = %d, want 200", resp.StatusCode)
 	}
+}
+
+// TestPermissionRoundTripAllow exercises the HTTP half of the contract end
+// to end: an ask blocks, GET /permission-requests shows it pending (with
+// the asking call's tool_use_id) in the meantime, and POST
+// /permission-requests/{id}/resolve unblocks it with the user's decision.
+func TestPermissionRoundTripAllow(t *testing.T) {
+	srv, r := newPermissionTestServer(t)
+	decision := ask(r, "Bash")
+
+	req := pendingRequest(t, srv)
+	if req.Tool != "Bash" || req.ToolUseID != "toolu_1" {
+		t.Errorf("request = %+v, want Bash for toolu_1", req)
+	}
+	resolve(t, srv, req.ID, "allow")
 
 	select {
-	case hookResp := <-respCh:
-		if hookResp == nil {
-			t.Fatal("hook request failed")
-		}
-		defer func() { _ = hookResp.Body.Close() }()
-		var parsed struct {
-			HookSpecificOutput struct {
-				PermissionDecision string `json:"permissionDecision"`
-			} `json:"hookSpecificOutput"`
-		}
-		if err := json.NewDecoder(hookResp.Body).Decode(&parsed); err != nil {
-			t.Fatal(err)
-		}
-		if parsed.HookSpecificOutput.PermissionDecision != "allow" {
-			t.Errorf("permissionDecision = %q, want allow", parsed.HookSpecificOutput.PermissionDecision)
+	case d := <-decision:
+		if !d.Allow {
+			t.Errorf("decision = %+v, want allow", d)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("hook request never unblocked after resolve")
+		t.Fatal("ask never unblocked after resolve")
 	}
 
 	// A resolved request must not still be listed as pending.
@@ -144,86 +134,35 @@ func TestPermissionHookRoundTripAllow(t *testing.T) {
 	}
 }
 
-func TestPermissionHookRoundTripDeny(t *testing.T) {
+func TestPermissionRoundTripDeny(t *testing.T) {
 	srv, r := newPermissionTestServer(t)
-	respCh := postPermissionHook(t, srv, "Write")
-
-	deadline := time.Now().Add(2 * time.Second)
-	var id string
-	for {
-		reqs := r.PermissionRequests()
-		if len(reqs) == 1 {
-			id = reqs[0].ID
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("permission request never registered, got %v", reqs)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	resolveBody, _ := json.Marshal(map[string]string{"decision": "deny"})
-	resolveResp, err := http.Post(srv.URL+"/permission-requests/"+id+"/resolve", "application/json", bytes.NewReader(resolveBody))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = resolveResp.Body.Close() }()
+	decision := ask(r, "Write")
+	resolve(t, srv, pendingRequest(t, srv).ID, "deny")
 
 	select {
-	case hookResp := <-respCh:
-		if hookResp == nil {
-			t.Fatal("hook request failed")
-		}
-		defer func() { _ = hookResp.Body.Close() }()
-		var parsed struct {
-			HookSpecificOutput struct {
-				PermissionDecision string `json:"permissionDecision"`
-			} `json:"hookSpecificOutput"`
-			SystemMessage string `json:"systemMessage"`
-		}
-		if err := json.NewDecoder(hookResp.Body).Decode(&parsed); err != nil {
-			t.Fatal(err)
-		}
-		if parsed.HookSpecificOutput.PermissionDecision != "deny" {
-			t.Errorf("permissionDecision = %q, want deny", parsed.HookSpecificOutput.PermissionDecision)
-		}
-		if parsed.SystemMessage == "" {
-			t.Error("expected a systemMessage explaining the denial")
+	case d := <-decision:
+		if d.Allow || d.Message == "" {
+			t.Errorf("decision = %+v, want a deny with a message for the model", d)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("hook request never unblocked after resolve")
+		t.Fatal("ask never unblocked after resolve")
 	}
 }
 
-// TestPermissionHookExpiresToExpiredCard proves the "unanswered denies after
-// the bound, and shows as expired" acceptance criterion over real HTTP,
-// using a short overridden PermissionTimeout.
-func TestPermissionHookExpiresToExpiredCard(t *testing.T) {
-	srv, r := newPermissionTestServer(t)
+// TestPermissionExpires proves the "unanswered denies after the bound"
+// acceptance criterion, using a short overridden PermissionTimeout.
+func TestPermissionExpires(t *testing.T) {
+	_, r := newPermissionTestServer(t)
 	r.PermissionTimeout = 30 * time.Millisecond
-	respCh := postPermissionHook(t, srv, "Bash")
 
 	select {
-	case hookResp := <-respCh:
-		if hookResp == nil {
-			t.Fatal("hook request failed")
-		}
-		defer func() { _ = hookResp.Body.Close() }()
-		var parsed struct {
-			HookSpecificOutput struct {
-				PermissionDecision string `json:"permissionDecision"`
-			} `json:"hookSpecificOutput"`
-		}
-		if err := json.NewDecoder(hookResp.Body).Decode(&parsed); err != nil {
-			t.Fatal(err)
-		}
-		if parsed.HookSpecificOutput.PermissionDecision != "deny" {
-			t.Errorf("expired decision = %q, want deny", parsed.HookSpecificOutput.PermissionDecision)
+	case d := <-ask(r, "Bash"):
+		if d.Allow {
+			t.Errorf("expired decision = %+v, want deny", d)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("hook request never resolved by its own timeout")
+		t.Fatal("ask never resolved by its own timeout")
 	}
-
 	if got := r.PermissionRequests(); len(got) != 0 {
 		t.Errorf("expired request should no longer be pending, got %v", got)
 	}

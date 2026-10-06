@@ -4,8 +4,10 @@ import "github.com/drewkidwell/mads/pkg/contracts"
 
 // StampTranscriptStatuses runs the rule engine over an already-recorded
 // message list (the GET /transcript read, live child and Router dormant
-// fallback alike): results resolve their calls to completed/failed,
-// provider-reported statuses win, and — because a refetch has no turn-end
+// fallback alike): results resolve their calls to completed/failed — or
+// blocked, when an error result's text is a permission refusal
+// (PermissionRefusal: the harness's own, or mads's deny message relayed
+// verbatim) — provider-reported statuses win, and — because a refetch has no turn-end
 // signal — calls with no result stay honestly open (Tracker.Snapshot,
 // never TurnEnd here). Mutates msgs' Tool statuses in place.
 func StampTranscriptStatuses(msgs []contracts.TranscriptMessage) {
@@ -18,7 +20,7 @@ func StampTranscriptStatuses(msgs []contracts.TranscriptMessage) {
 		case "tool":
 			tr.ToolUse(m.Tool.ID, m.Tool.Name, "", m.Tool.Status)
 		case "tool_result":
-			tr.ToolResult(m.Tool.ID, m.IsError, m.Tool.Status)
+			tr.ToolResult(m.Tool.ID, m.IsError, m.Text, m.Tool.Status)
 		}
 	}
 	statuses := make(map[string]string)

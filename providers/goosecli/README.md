@@ -134,7 +134,7 @@ Seams 1 and 2 have drafted upstream proposals:
 ## IntentMatrix
 
 All portable permission intents are honestly **Unsupported**: goose never
-reads `PermissionPromptURL`, has no command blocklist, and no path-scoped
+reads `StartOptions.Permissions`, has no command blocklist, and no path-scoped
 write restriction. The trust emulation above is a different, coarser
 mechanism and must not be implied here (goosecli.go `IntentMatrix`).
 

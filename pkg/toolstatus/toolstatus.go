@@ -14,7 +14,10 @@
 //     tool_result arrives (failed on the result's error flag);
 //     "interrupted" when the turn ends — or the session stops or is
 //     cancelled — with no result for that call; "pending" while the call is
-//     parked behind a permission request.
+//     parked behind a permission request; "blocked" when it never ran
+//     because permission was refused — mads's own ask was denied, expired
+//     or cancelled (PermissionDenied), or its error result is the harness's
+//     own refusal for lack of a grant (PermissionRefusal).
 //
 // The input model is deliberately wider than any one harness needs, because
 // real agents disagree (providers/acprpc/testdata/captures/README.md):
@@ -27,7 +30,10 @@
 // status here.
 package toolstatus
 
-import "sync"
+import (
+	"strings"
+	"sync"
+)
 
 // The status vocabulary — mirrors providers/provider/event.go ToolStatus and
 // pkg/contracts/transcript.go ToolUse.Status (plain strings here so this
@@ -38,12 +44,48 @@ const (
 	Completed   = "completed"
 	Failed      = "failed"
 	Interrupted = "interrupted"
+	Blocked     = "blocked"
 )
 
 // Terminal reports whether s is a final state — one no later signal (result,
 // permission park, turn-end sweep) may override.
 func Terminal(s string) bool {
-	return s == Completed || s == Failed || s == Interrupted
+	return s == Completed || s == Failed || s == Interrupted || s == Blocked
+}
+
+// DenialPrefix starts every deny message mads itself hands a harness when
+// it refuses a permission ask (services/session/internal/runner,
+// permissions.go). Harnesses relay that message to the model verbatim as
+// the refused call's error result — claude-code does — so the prefix is
+// how a reloaded transcript still knows the call was blocked, not failed.
+const DenialPrefix = "mads blocked this tool call: "
+
+// PermissionRefusal reports whether an error tool_result's text says the
+// call never ran because permission was refused. Two sources:
+//
+//   - mads's own deny messages, which all start with DenialPrefix.
+//   - Claude Code's own refusals, harness-specific text pinned against
+//     claude-code 2.1.285 (the 2026-10 permission investigation; the same
+//     shapes appear for a subagent's calls):
+//     "Claude requested permissions to <verb> <target>, but you haven't
+//     granted it yet." — the call needed a grant nobody gave (no
+//     permission channel wired); and "The user doesn't want to proceed
+//     with this tool use. …" — a prompt rejected, or withdrawn by an
+//     interrupt while it was still open (also what a human's "No" in
+//     claude's terminal UI leaves behind).
+//
+// A future CLI rewording silently degrades such calls back to "failed" —
+// honest, just less specific.
+func PermissionRefusal(text string) bool {
+	text = strings.TrimSpace(text)
+	switch {
+	case strings.HasPrefix(text, DenialPrefix):
+		return true
+	case strings.HasPrefix(text, "Claude requested permissions to "):
+		return strings.Contains(text, "but you haven't granted it yet")
+	default:
+		return strings.HasPrefix(text, "The user doesn't want to proceed with this tool use.")
+	}
 }
 
 // Update is one call's current (or just-synthesized) status, keyed by the
@@ -64,11 +106,13 @@ type call struct {
 	parent   string
 	status   string
 	reported bool // status came from the provider, not synthesis
+	refused  bool // mads refused its permission ask (PermissionDenied)
 }
 
 // Tracker synthesizes statuses for one session's live tool calls. All
 // methods are safe for concurrent use — tool events arrive on the runner's
-// pump goroutine while permission parks arrive on HTTP handler goroutines.
+// pump goroutine while permission parks arrive on the adapter's asker
+// goroutines.
 //
 // Calls without a wire tool_use ID cannot be correlated to any later signal
 // (result, park, sweep), so they are not tracked at all: ToolUse returns the
@@ -106,6 +150,11 @@ func (t *Tracker) ToolUse(id, name, parentToolUseID, reported string) string {
 	if name != "" {
 		c.name = name
 	}
+	if c.parent == "" {
+		// A permission ask can be tracked before its call's tool_use line
+		// (PermissionParked); the arrival fills in what the ask lacked.
+		c.parent = parentToolUseID
+	}
 	if reported != "" {
 		c.status = reported
 		c.reported = true
@@ -115,20 +164,15 @@ func (t *Tracker) ToolUse(id, name, parentToolUseID, reported string) string {
 
 // ToolResult records the call's result arriving and returns the status to
 // stamp on the result event: the provider-reported status when it states one
-// (a Hermes completed-only update), else "failed" on the result's error flag,
-// else "completed". A result for an untracked id (a result-first wire, or a
-// call whose tool_use this process never saw) is tracked from here so the
+// (a Hermes completed-only update); else, on the result's error flag,
+// "blocked" when the call never ran for want of permission (mads refused its
+// ask, or text is a PermissionRefusal) and "failed" otherwise; else
+// "completed". A result for an untracked id (a result-first wire, or a call
+// whose tool_use this process never saw) is tracked from here so the
 // turn-end sweep and later snapshots still know its fate.
-func (t *Tracker) ToolResult(id string, isError bool, reported string) string {
+func (t *Tracker) ToolResult(id string, isError bool, text, reported string) string {
 	if id == "" {
 		return reported
-	}
-	status := reported
-	if status == "" {
-		status = Completed
-		if isError {
-			status = Failed
-		}
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -138,38 +182,82 @@ func (t *Tracker) ToolResult(id string, isError bool, reported string) string {
 		t.calls[id] = c
 		t.order = append(t.order, id)
 	}
-	c.status = status
+	c.status = reported
+	if c.status == "" {
+		c.status = resultStatus(isError, c.refused || PermissionRefusal(text))
+	}
 	c.reported = reported != ""
 	return c.status
 }
 
-// PermissionParked marks the call now parked behind a permission request as
-// "pending" and returns its update. The permission hook's wire (claude-code
-// PreToolUse) carries the tool name, not the tool_use id, so the park is
-// tied to the most recent unresolved call with that name — best-effort: ok
-// is false when no such call is tracked (the hook can fire before the pump
-// has processed the announcing tool_use line), and the caller simply skips
-// the status change. A provider-reported terminal status is never overridden.
-func (t *Tracker) PermissionParked(toolName string) (Update, bool) {
+// resultStatus is the synthesized status a result implies.
+func resultStatus(isError, refused bool) string {
+	switch {
+	case !isError:
+		return Completed
+	case refused:
+		return Blocked
+	default:
+		return Failed
+	}
+}
+
+// PermissionParked marks the call identified by id — the harness's ask
+// names it exactly (provider.PermissionAsk.ToolUseID) — as "pending" behind
+// a permission request and returns its update. The ask can arrive before
+// the pump has processed the call's own tool_use line, so an untracked id
+// is tracked from here (parent as the asker knew it; ToolUse fills in a
+// missing one later). A terminal status is never overridden: ok is false
+// then, and for an empty id.
+func (t *Tracker) PermissionParked(id, parentToolUseID string) (Update, bool) {
+	if id == "" {
+		return Update{}, false
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for i := len(t.order) - 1; i >= 0; i-- {
-		c := t.calls[t.order[i]]
-		if c.name != toolName || Terminal(c.status) {
-			continue
-		}
-		c.status = Pending
-		c.reported = false
-		return Update{ToolUseID: c.id, ParentToolUseID: c.parent, Status: Pending}, true
+	c, ok := t.calls[id]
+	if !ok {
+		c = &call{id: id, parent: parentToolUseID}
+		t.calls[id] = c
+		t.order = append(t.order, id)
 	}
-	return Update{}, false
+	if Terminal(c.status) {
+		return Update{}, false
+	}
+	if c.parent == "" {
+		c.parent = parentToolUseID
+	}
+	c.status = Pending
+	c.reported = false
+	return Update{ToolUseID: c.id, ParentToolUseID: c.parent, Status: Pending}, true
+}
+
+// PermissionDenied records that mads refused the call's permission ask
+// (denied, expired, or cancelled — the call will never run) and marks it
+// "blocked" right away, returning the update; ok is false when the call
+// isn't tracked or is already terminal. The harness's own error tool_result
+// for the refused call follows and resolves to "blocked" too (ToolResult),
+// whatever its text says.
+func (t *Tracker) PermissionDenied(id string) (Update, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	c, ok := t.calls[id]
+	if !ok {
+		return Update{}, false
+	}
+	c.refused = true
+	if Terminal(c.status) {
+		return Update{}, false
+	}
+	c.status = Blocked
+	c.reported = false
+	return Update{ToolUseID: c.id, ParentToolUseID: c.parent, Status: Blocked}, true
 }
 
 // PermissionResolved returns a parked call to "in_progress" once its
 // permission request is allowed and execution proceeds. ok is false when the
-// call isn't tracked or isn't pending (a deny needs no transition here — the
-// harness reports the denial as an error tool_result, which ToolResult turns
-// into "failed", and the turn-end sweep backstops a harness that doesn't).
+// call isn't tracked or isn't pending (a refusal goes through
+// PermissionDenied instead).
 func (t *Tracker) PermissionResolved(id string) (Update, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

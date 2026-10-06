@@ -200,9 +200,9 @@ func TestObserveConversationStampsStatuses(t *testing.T) {
 	}
 }
 
-// TestPermissionParkStatusFlow: a parked tool call goes "pending" in the
-// event log the moment RequestPermission parks it, and an allow returns it
-// to "in_progress" — the tool_use_id tie the hook wire itself never carries.
+// TestPermissionParkStatusFlow: an asked tool call goes "pending" in the
+// event log the moment RequestPermission parks it (the ask names the call
+// by tool_use_id), and an allow returns it to "in_progress".
 func TestPermissionParkStatusFlow(t *testing.T) {
 	base := datatest.Start(t)
 	sess := newSession(t, base)
@@ -214,8 +214,12 @@ func TestPermissionParkStatusFlow(t *testing.T) {
 		Tool: &provider.ToolUse{ID: "t1", Name: "Bash"},
 	})
 
-	done := make(chan string, 1)
-	go func() { done <- r.RequestPermission("Bash", json.RawMessage(`{"command":"ls"}`)) }()
+	done := make(chan provider.PermissionDecision, 1)
+	go func() {
+		done <- r.RequestPermission(context.Background(), provider.PermissionAsk{
+			ToolUseID: "t1", Tool: "Bash", Input: json.RawMessage(`{"command":"ls"}`),
+		})
+	}()
 
 	waitFor(t, "pending status change", func() bool {
 		changes := eventsOfType[contracts.ToolStatusChange](t, data, sess.ID, contracts.SessionToolStatusChanged)
@@ -231,8 +235,8 @@ func TestPermissionParkStatusFlow(t *testing.T) {
 	}
 	select {
 	case decision := <-done:
-		if decision != "allow" {
-			t.Fatalf("decision = %q, want allow", decision)
+		if !decision.Allow {
+			t.Fatalf("decision = %+v, want allow", decision)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RequestPermission never returned")
@@ -247,5 +251,45 @@ func TestPermissionParkStatusFlow(t *testing.T) {
 	ev := r.observeConversation(provider.Event{Kind: provider.EventToolResult, Tool: &provider.ToolUse{ID: "t1"}})
 	if ev.Tool.Status != provider.ToolStatusCompleted {
 		t.Errorf("post-allow result status = %q, want completed", ev.Tool.Status)
+	}
+}
+
+// TestPermissionDenyBlocksCall: a denied ask moves the call to "blocked"
+// in the event log at once, and the harness's error tool_result for it is
+// stamped "blocked" too — not "failed".
+func TestPermissionDenyBlocksCall(t *testing.T) {
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, nil)
+
+	r.observeConversation(provider.Event{
+		Kind:            provider.EventToolUse,
+		Tool:            &provider.ToolUse{ID: "t1", Name: "Write"},
+		ParentToolUseID: "toolu_agent",
+	})
+	done := make(chan provider.PermissionDecision, 1)
+	go func() {
+		done <- r.RequestPermission(context.Background(), provider.PermissionAsk{ToolUseID: "t1", Tool: "Write", AgentID: "agent-1"})
+	}()
+	waitFor(t, "pending request", func() bool { return len(r.PermissionRequests()) == 1 })
+	req := r.PermissionRequests()[0]
+	if req.ParentToolUseID != "toolu_agent" {
+		t.Errorf("request parent = %q, want toolu_agent (from the tracked call)", req.ParentToolUseID)
+	}
+	r.ResolvePermission(req.ID, "deny")
+	decision := <-done
+
+	waitFor(t, "blocked status change", func() bool {
+		changes := eventsOfType[contracts.ToolStatusChange](t, data, sess.ID, contracts.SessionToolStatusChanged)
+		return len(changes) == 2 && changes[1].ToolUseID == "t1" && changes[1].Status == "blocked" &&
+			changes[1].ParentToolUseID == "toolu_agent"
+	})
+	ev := r.observeConversation(provider.Event{
+		Kind: provider.EventToolResult, Tool: &provider.ToolUse{ID: "t1"},
+		Text: decision.Message, IsError: true, ParentToolUseID: "toolu_agent",
+	})
+	if ev.Tool.Status != provider.ToolStatusBlocked {
+		t.Errorf("denied call's result status = %q, want blocked", ev.Tool.Status)
 	}
 }

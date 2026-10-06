@@ -37,6 +37,7 @@ type fcArgs struct {
 	model             string
 	disallowedTools   []string
 	permissionMode    string
+	permissionPrompt  string // --permission-prompt-tool
 	mcpConfigPath     string
 	strictMCPConfig   bool
 	settingsPath      string
@@ -77,6 +78,9 @@ func parseFCArgs(argv []string) fcArgs {
 		case "--permission-mode":
 			i++
 			a.permissionMode = argv[i]
+		case "--permission-prompt-tool":
+			i++
+			a.permissionPrompt = argv[i]
 		case "--mcp-config":
 			i++
 			a.mcpConfigPath = argv[i]
@@ -119,17 +123,19 @@ func fcMCPEcho(a fcArgs) string {
 	return fmt.Sprintf("mcp_config_err=%v strict=%v mcp_config=%s", err, a.strictMCPConfig, string(raw))
 }
 
-// fcPermissionEcho reports the --permission-mode value the adapter passed
-// (empty when the flag was never sent), so tests can assert TrustFull's
-// bypass flag reached the launched process on both transports.
+// fcPermissionEcho reports the permission flags the adapter passed (empty
+// when a flag was never sent), so tests can assert each trust level's mode,
+// prompt channel and removed tools reached the launched process on both
+// transports.
 func fcPermissionEcho(a fcArgs) string {
-	return fmt.Sprintf("permission_mode=%s", a.permissionMode)
+	return fmt.Sprintf("permission_mode=%s permission_prompt_tool=%s disallowed=%s",
+		a.permissionMode, a.permissionPrompt, strings.Join(a.disallowedTools, ","))
 }
 
 // fcSettingsEcho reads back the --settings file's raw contents ("none" when
-// the flag was never passed), so tests can assert the permission hook's
-// settings JSON — command string, URL, timeout — reached the launched
-// process, and that TrustFull/no-URL cases never pass --settings at all.
+// the flag was never passed), so tests can assert the path-scope hook's
+// settings JSON reached the launched process, and that a session without a
+// persona allowlist never passes --settings at all.
 func fcSettingsEcho(a fcArgs) string {
 	if a.settingsPath == "" {
 		return "settings=none"
@@ -319,6 +325,111 @@ type fcLine struct {
 		Subtype string                     `json:"subtype"`
 		Servers map[string]json.RawMessage `json:"servers"`
 	} `json:"request"`
+	// Response is a control_response the adapter wrote for one of the
+	// fake's own inbound requests (can_use_tool, or an unknown subtype).
+	Response struct {
+		Subtype   string `json:"subtype"`
+		RequestID string `json:"request_id"`
+		Error     string `json:"error"`
+		Response  struct {
+			Behavior     string          `json:"behavior"`
+			Message      string          `json:"message"`
+			UpdatedInput json.RawMessage `json:"updatedInput"`
+		} `json:"response"`
+	} `json:"response"`
+}
+
+// fcAskTool runs the host-permission-channel dialect ("ask", "ask-subagent",
+// "ask-cancel"): the shapes real claude 2.1.285 produces in manual mode for a
+// write outside its working directory (testdata/stream-can-use-tool.jsonl).
+// The call is announced, then — only when the adapter passed
+// --permission-prompt-tool stdio — asked over a can_use_tool control_request
+// whose answer decides the tool_result. Without the flag it is refused the
+// way real claude refuses it. "ask-cancel" never gets an answer: it waits
+// for the interrupt, withdraws the ask with control_cancel_request, and
+// refuses the call the way claude does after a withdrawn prompt.
+func fcAskTool(id string, a fcArgs, prompt string, lines <-chan fcLine) string {
+	parent := ""
+	agentID := ""
+	if prompt == "ask-subagent" {
+		parent, agentID = "toolu_agent", "agent-1"
+		fcEmit(map[string]any{
+			"type": "system", "subtype": "task_started", "session_id": id,
+			"task_id": agentID, "tool_use_id": parent, "task_type": "local_agent",
+			"description": "write a file",
+		})
+	}
+	input := map[string]any{"file_path": "/outside/x.txt", "content": "hi"}
+	call := map[string]any{
+		"type": "assistant", "session_id": id,
+		"message": map[string]any{
+			"role":    "assistant",
+			"content": []map[string]any{{"type": "tool_use", "id": "toolu_ask", "name": "Write", "input": input}},
+		},
+	}
+	if parent != "" {
+		call["parent_tool_use_id"] = parent
+	}
+	fcEmit(call)
+	toolResult := func(text string, isError bool) {
+		line := map[string]any{
+			"type": "user", "session_id": id,
+			"message": map[string]any{
+				"role": "user",
+				"content": []map[string]any{{
+					"type": "tool_result", "tool_use_id": "toolu_ask", "content": text, "is_error": isError,
+				}},
+			},
+		}
+		if parent != "" {
+			line["parent_tool_use_id"] = parent
+		}
+		fcEmit(line)
+	}
+	if a.permissionPrompt != "stdio" {
+		toolResult("Claude requested permissions to write to /outside/x.txt, but you haven't granted it yet.", true)
+		return "refused"
+	}
+	req := map[string]any{
+		"subtype": "can_use_tool", "tool_name": "Write", "display_name": "Write",
+		"input": input, "tool_use_id": "toolu_ask",
+		"decision_reason": "Path is outside allowed working directories", "decision_reason_type": "workingDir",
+	}
+	if agentID != "" {
+		req["agent_id"] = agentID
+	}
+	fcEmit(map[string]any{"type": "control_request", "request_id": "req-1", "request": req})
+	for l := range lines {
+		if prompt == "ask-cancel" && l.Type == "control_request" && l.Request.Subtype == "interrupt" {
+			fcEmit(map[string]any{"type": "control_cancel_request", "request_id": "req-1"})
+			toolResult("The user doesn't want to proceed with this tool use. The tool use was rejected.", true)
+			return "cancelled"
+		}
+		if l.Type != "control_response" || l.Response.RequestID != "req-1" {
+			continue
+		}
+		r := l.Response.Response
+		if r.Behavior == "allow" {
+			toolResult("File created successfully at: /outside/x.txt", false)
+			return "decision=allow updated_input=" + string(r.UpdatedInput)
+		}
+		toolResult(r.Message, true)
+		return "decision=" + r.Behavior + " message=" + r.Message
+	}
+	return "stdin closed"
+}
+
+// fcControlBogus sends the adapter an inbound control_request it can't
+// know, and reports the control_response it got back — claude blocks on
+// every inbound request, so the adapter must always answer.
+func fcControlBogus(lines <-chan fcLine) string {
+	fcEmit(map[string]any{"type": "control_request", "request_id": "req-bogus", "request": map[string]any{"subtype": "bogus"}})
+	for l := range lines {
+		if l.Type == "control_response" && l.Response.RequestID == "req-bogus" {
+			return "reply=" + l.Response.Subtype + " error=" + l.Response.Error
+		}
+	}
+	return "stdin closed"
 }
 
 // fcEmitListModels answers the model-discovery probe (discover.go). The
@@ -445,6 +556,18 @@ func fcStream(a fcArgs) {
 			reply := fcPermissionEcho(a)
 			fcEmitText(id, reply)
 			fcAppendTranscript(transcript, "assistant", reply, "")
+			result(reply, false)
+			continue
+		}
+		if prompt == "ask" || prompt == "ask-subagent" || prompt == "ask-cancel" {
+			reply := fcAskTool(id, a, prompt, lines)
+			fcEmitText(id, reply)
+			result(reply, false)
+			continue
+		}
+		if prompt == "control-bogus" {
+			reply := fcControlBogus(lines)
+			fcEmitText(id, reply)
 			result(reply, false)
 			continue
 		}

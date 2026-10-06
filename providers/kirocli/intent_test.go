@@ -17,7 +17,7 @@ func TestIntentMatrixValid(t *testing.T) {
 // unenforced stance on every portable permission intent — no command
 // blocklist flag, no path-scoped write restriction, no flag that blocks
 // writes/commands outright, and (unlike claude-code) no wiring of
-// StartOptions.PermissionPromptURL at all, so require_approval has no
+// StartOptions.Permissions at all, so require_approval has no
 // enforcement mechanism to ride.
 func TestIntentMatrixDeclaresUnenforced(t *testing.T) {
 	p := New(Config{})

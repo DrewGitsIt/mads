@@ -31,7 +31,10 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 	}
 	resume, forkID := resumeArgs(opts)
 	args = append(args, resume...)
-	args = append(args, trustArgs(opts.Trust)...)
+	// With an asker wired, claude's permission prompts come to mads over
+	// the host channel (hostprompt.go); without one claude refuses whatever
+	// would have asked.
+	args = append(args, trustArgs(opts.Trust, opts.Permissions != nil)...)
 	// Persona-level allow/deny (agent-concept redesign §2): merged on
 	// top of trustArgs's native set. personaDisallowedTools returns ""
 	// when the persona's policy doesn't add anything trustArgs didn't
@@ -46,12 +49,12 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		return nil, fmt.Errorf("mcp config: %w", err)
 	}
 	args = append(args, mcpArgVals...)
-	permArgVals, permSettingsPath, err := permissionArgs(opts.Trust, opts.PermissionPromptURL, opts.PersonaAllowedPaths)
+	permArgVals, permSettingsPath, err := permissionArgs(opts.PersonaAllowedPaths)
 	if err != nil {
 		if mcpConfigPath != "" {
 			_ = os.Remove(mcpConfigPath)
 		}
-		return nil, fmt.Errorf("permission hook settings: %w", err)
+		return nil, fmt.Errorf("path-scope hook settings: %w", err)
 	}
 	args = append(args, permArgVals...)
 	args = append(args, p.cfg.ExtraArgs...)
@@ -87,7 +90,10 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		announced:        make(chan string, 1),
 		launchMCP:        map[string]bool{},
 		controlWaiters:   map[string]chan controlReply{},
+		asker:            opts.Permissions,
+		asks:             map[string]context.CancelFunc{},
 	}
+	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
 		s.launchMCP[srv.Name] = true
 	}
@@ -153,6 +159,18 @@ type streamSession struct {
 	// controlWaiters routes a control_response to the call waiting on its
 	// request_id.
 	controlWaiters map[string]chan controlReply
+
+	// asker answers claude's permission prompts (StartOptions.Permissions;
+	// hostprompt.go). asks holds the cancel for each prompt still open,
+	// by claude's request_id; askCtx parents them all, and askStop — run
+	// when stdout ends or on Close — withdraws every one at once.
+	asker   provider.PermissionAsker
+	asks    map[string]context.CancelFunc
+	askCtx  context.Context
+	askStop context.CancelFunc
+	// agentParents maps a subagent's agent_id to the Agent tool call it
+	// runs under, learned from task_started lines (noteSubagent).
+	agentParents map[string]string
 }
 
 // controlReply is the part of a control_response line a waiter needs.
@@ -169,6 +187,7 @@ type controlReply struct {
 // providers/provider).
 func (s *streamSession) read(stdout io.Reader) {
 	defer close(s.events)
+	defer s.askStop() // the process is gone: no open prompt can be answered
 	defer func() {
 		s.mu.Lock()
 		if !s.refFired {
@@ -194,11 +213,19 @@ func (s *streamSession) handleLine(raw []byte) {
 	if err := json.Unmarshal(raw, &l); err != nil {
 		return // not a protocol line; claude prints nothing else on stdout, but stay tolerant
 	}
-	if l.Type == "control_response" {
+	switch l.Type {
+	case "control_response":
 		s.routeControlResponse(raw)
+		return
+	case "control_request":
+		s.handleControlRequest(raw)
+		return
+	case "control_cancel_request":
+		s.cancelAsk(raw)
 		return
 	}
 	s.mu.Lock()
+	s.noteSubagent(&l)
 	if l.SessionID != "" && l.SessionID != s.forkFrom {
 		s.ref = l.SessionID
 	}
@@ -473,6 +500,7 @@ func (s *streamSession) Close() error {
 	s.closed = true
 	_ = s.stdin.Close()
 	s.mu.Unlock()
+	s.askStop()
 	closeWait(s.cmd, 3*time.Second)
 	if s.mcpConfigPath != "" {
 		_ = os.Remove(s.mcpConfigPath)

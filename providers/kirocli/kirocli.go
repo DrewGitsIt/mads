@@ -124,7 +124,7 @@ func (p *Provider) Matrix() provider.Matrix {
 // Behavior matrix's BehaviorTrustLimited/BehaviorTrustReadOnly rows
 // (Emulated — the acprpc engine's ACP kind-based auto-deny, or a human's own
 // PTY confirmation), no intent here has a harness-level enforcement
-// mechanism: kiro-cli never reads StartOptions.PermissionPromptURL (no
+// mechanism: kiro-cli never reads StartOptions.Permissions (no
 // require_approval wiring exists at all), has no command blocklist flag, no
 // path-scoped write restriction, and no flag that blocks writes/commands
 // outright. Every intent is declared unenforced honestly rather than

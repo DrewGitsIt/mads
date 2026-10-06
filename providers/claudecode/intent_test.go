@@ -22,16 +22,17 @@ func TestIntentMatrixMatchesArgConstruction(t *testing.T) {
 	p := New(Config{})
 	m := p.IntentMatrix()
 
-	// deny_commands: native via --disallowedTools Bash, present for both
-	// trust levels that restrict at all.
+	// deny_commands: native via --disallowedTools Bash — read-only trust's
+	// set, and a persona that denies the "shell" intent.
 	if m[provider.IntentDenyCommands] != provider.Native {
 		t.Fatalf("IntentDenyCommands = %s, want native", m[provider.IntentDenyCommands])
 	}
-	for _, trust := range []provider.Trust{provider.TrustLimited, provider.TrustReadOnly} {
-		args := trustArgs(trust)
-		if !strings.Contains(strings.Join(args, " "), "Bash") {
-			t.Errorf("trust %s: trustArgs = %v, want Bash disallowed (deny_commands native)", trust, args)
-		}
+	if args := strings.Join(trustArgs(provider.TrustReadOnly, false), " "); !strings.Contains(args, "Bash") {
+		t.Errorf("trustArgs(read_only) = %q, want Bash disallowed (deny_commands native)", args)
+	}
+	persona := provider.StartOptions{ToolIntents: provider.ToolIntents{Denied: []provider.ToolIntent{provider.ToolIntentShell}}}
+	if got := personaDisallowedTools(persona); !strings.Contains(got, "Bash") {
+		t.Errorf("persona denying shell: --disallowedTools %q, want Bash (deny_commands native)", got)
 	}
 
 	// read_only: native via --disallowedTools also covering Write/Edit/
@@ -39,35 +40,26 @@ func TestIntentMatrixMatchesArgConstruction(t *testing.T) {
 	if m[provider.IntentReadOnly] != provider.Native {
 		t.Fatalf("IntentReadOnly = %s, want native", m[provider.IntentReadOnly])
 	}
-	roArgs := strings.Join(trustArgs(provider.TrustReadOnly), " ")
+	roArgs := strings.Join(trustArgs(provider.TrustReadOnly, false), " ")
 	for _, tool := range []string{"Write", "Edit", "NotebookEdit"} {
 		if !strings.Contains(roArgs, tool) {
 			t.Errorf("trustArgs(read_only) = %q, want %s disallowed (read_only native)", roArgs, tool)
 		}
 	}
 
-	// require_approval: native via the permission.go PreToolUse hook, wired
-	// exactly when needsPermissionHook is true and a callback URL is set.
+	// require_approval: native via claude's manual permission mode, whose
+	// prompts reach the asker over --permission-prompt-tool stdio on chat.
 	if m[provider.IntentRequireApproval] != provider.Native {
 		t.Fatalf("IntentRequireApproval = %s, want native", m[provider.IntentRequireApproval])
 	}
 	for _, trust := range []provider.Trust{provider.TrustLimited, provider.TrustReadOnly} {
-		if !needsPermissionHook(trust) {
-			t.Errorf("trust %s: needsPermissionHook = false, want true (require_approval native)", trust)
-		}
-		args, path, err := permissionArgs(trust, "http://127.0.0.1:0/permission-hook", nil)
-		if err != nil {
-			t.Fatalf("trust %s: permissionArgs: %v", trust, err)
-		}
-		if len(args) == 0 {
-			t.Errorf("trust %s: permissionArgs returned no args, want --settings hook wiring", trust)
-		}
-		if path == "" {
-			t.Errorf("trust %s: permissionArgs returned no settings path", trust)
+		args := strings.Join(trustArgs(trust, true), " ")
+		if !strings.Contains(args, "--permission-mode manual") || !strings.Contains(args, "--permission-prompt-tool stdio") {
+			t.Errorf("trust %s: trustArgs = %q, want manual mode answered over the stdio host channel", trust, args)
 		}
 	}
-	if needsPermissionHook(provider.TrustFull) {
-		t.Error("trust full: needsPermissionHook = true, want false (bypassPermissions never asks)")
+	if args := strings.Join(trustArgs(provider.TrustFull, true), " "); strings.Contains(args, "--permission-prompt-tool") {
+		t.Errorf("trust full: trustArgs = %q, want no prompt channel (bypassPermissions never asks)", args)
 	}
 
 	// path_scope: Native via the path-scope PreToolUse hook in
@@ -80,24 +72,24 @@ func TestIntentMatrixMatchesArgConstruction(t *testing.T) {
 		t.Fatalf("IntentPathScope = %s, want native", m[provider.IntentPathScope])
 	}
 	{
-		args, path, err := permissionArgs(provider.TrustFull, "", []string{"src/"})
+		args, path, err := permissionArgs([]string{"src/"})
 		if err != nil {
-			t.Fatalf("permissionArgs(TrustFull, paths): %v", err)
+			t.Fatalf("permissionArgs(paths): %v", err)
 		}
 		if len(args) == 0 || path == "" {
-			t.Errorf("permissionArgs(TrustFull, allowlist) returned no --settings wiring, want the path-scope hook file")
+			t.Errorf("permissionArgs(allowlist) returned no --settings wiring, want the path-scope hook file")
 		}
 		if path != "" {
 			defer func() { _ = os.Remove(path) }()
 		}
 	}
 	{
-		args, path, err := permissionArgs(provider.TrustFull, "", nil)
+		args, path, err := permissionArgs(nil)
 		if err != nil {
-			t.Fatalf("permissionArgs(TrustFull, no allowlist): %v", err)
+			t.Fatalf("permissionArgs(no allowlist): %v", err)
 		}
 		if len(args) != 0 || path != "" {
-			t.Errorf("permissionArgs(TrustFull, no allowlist) = args %v path %q, want none (no hook required)", args, path)
+			t.Errorf("permissionArgs(no allowlist) = args %v path %q, want none (no hook required)", args, path)
 		}
 	}
 }

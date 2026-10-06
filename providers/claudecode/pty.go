@@ -27,7 +27,9 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	}
 	resume, forkID := resumeArgs(opts)
 	args = append(args, resume...)
-	args = append(args, trustArgs(opts.Trust)...)
+	// A human at the terminal answers claude's own prompts here, so
+	// opts.Permissions is never wired on this transport.
+	args = append(args, trustArgs(opts.Trust, false)...)
 	mcpArgVals, mcpConfigPath, err := mcpArgs(opts.MCPServers)
 	if err != nil {
 		return nil, fmt.Errorf("mcp config: %w", err)

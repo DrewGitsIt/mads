@@ -201,15 +201,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
-	// Bound before r.Start: the chat-transport permission-prompt hook
-	// (providers/claudecode/permission.go) needs this process's own address
-	// to call back to, and that has to be known before the provider process
-	// is spawned — a --settings hook config can't be injected after launch.
+	// Bound before r.Start so a taken port fails fast, before any provider
+	// process is spawned.
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatalf("session: listen %s: %v", *addr, err)
 	}
-	r.SelfURL = "http://" + ln.Addr().String()
 
 	if err := r.Start(ctx); err != nil {
 		log.Fatalf("session: start: %v", err)
@@ -217,10 +214,9 @@ func main() {
 
 	// "listening on <addr>" is the Supervisor's readiness signal (see
 	// services/router/internal/child). Emit it only after r.Start succeeds:
-	// the listener is bound above because the provider's permission-prompt
-	// hook needs SelfURL before launch, but a child whose runner failed to
-	// start (e.g. an unresolvable provider) must read as never-ready rather
-	// than announce a port it will abandon a moment later.
+	// a child whose runner failed to start (e.g. an unresolvable provider)
+	// must read as never-ready rather than announce a port it will abandon
+	// a moment later.
 	log.Printf("session: listening on %s", ln.Addr())
 
 	srv := &http.Server{Handler: api.New(r)}

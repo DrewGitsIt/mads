@@ -121,14 +121,6 @@ type Runner struct {
 	// means "mads" from $PATH.
 	MadsCmd string
 
-	// SelfURL is this session-service process's own bound HTTP address
-	// (e.g. "http://127.0.0.1:PORT"), set by main.go once the listener is
-	// bound and before calling Start (same pattern as Cwd/WorktreeRoot).
-	// Empty disables the permission-prompt hook entirely (e.g. in tests that
-	// never serve HTTP) — Start only sets opts.PermissionPromptURL when this
-	// is non-empty.
-	SelfURL string
-
 	// PermissionTimeout bounds how long an unanswered permission request sits
 	// pending before RequestPermission (permissions.go) resolves it to a
 	// deny on its own. Zero defaults to defaultPermissionTimeout.
@@ -469,9 +461,12 @@ func (r *Runner) Start(ctx context.Context) error {
 	if orchestrateMCP != nil {
 		opts.MCPServers = []provider.MCPServerRef{*orchestrateMCP}
 	}
-	if r.SelfURL != "" {
-		opts.PermissionPromptURL = r.SelfURL + "/permission-hook"
-	}
+	// The harness's own permission prompts come to the user through this
+	// session (permissions.go). Adapters wire it only where nobody sits at
+	// the harness's own UI — the chat transport — and only when trust lets
+	// the harness ask at all; carried in baseOpts, a switch to the terminal
+	// transport simply leaves it unused there.
+	opts.Permissions = r.RequestPermission
 	spawnedAt := time.Now()
 	provSess, err := p.Start(ctx, opts)
 	if err != nil {
