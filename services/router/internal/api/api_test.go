@@ -24,6 +24,7 @@ import (
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
 	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 	gokeyring "github.com/zalando/go-keyring"
@@ -114,14 +115,15 @@ func testRegistry(t *testing.T) *registryclient.Client {
 func testOptions(t *testing.T, data *dataclient.Client, sup *supervisor.Supervisor) api.Options {
 	t.Helper()
 	return api.Options{
-		Data:      data,
-		Sup:       sup,
-		Jobs:      testJobs(t, data),
-		Providers: testProviders(t),
-		Creds:     testCredStore(t),
-		VaultRefs: testVaultRefs(t),
-		Version:   "test",
-		Registry:  testRegistry(t),
+		Data:        data,
+		Sup:         sup,
+		Jobs:        testJobs(t, data),
+		Providers:   testProviders(t),
+		Creds:       testCredStore(t),
+		VaultRefs:   testVaultRefs(t),
+		Version:     "test",
+		Registry:    testRegistry(t),
+		Attachments: attachments.New(t.TempDir()),
 	}
 }
 

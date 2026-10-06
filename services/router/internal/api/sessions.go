@@ -38,6 +38,9 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		// record itself never persists it; Session.Name only ever carries the
 		// first line (see Launchpad's deriveSessionName).
 		OpeningPrompt string `json:"opening_prompt,omitempty"`
+		// AttachmentDraft names the launchpad draft whose attachments the
+		// opening message refers to — moved to the session once it's up.
+		AttachmentDraft string `json:"attachment_draft,omitempty"`
 	}
 	if !decode(w, r, &req) {
 		return
@@ -103,6 +106,7 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		writeErrMsg(w, http.StatusBadGateway, "spawn session: ", err)
 		return
 	}
+	s.adoptDraftAttachments(req.AttachmentDraft, sess.ID)
 	resp := map[string]any{"session": req.Session, "addr": addr}
 	if len(req.Links) > 0 {
 		resp["links"] = links
@@ -434,6 +438,7 @@ func (s *server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	} else {
 		sessionwt.Cleanup(ctx, sess)
 	}
+	s.removeSessionAttachments(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -1,0 +1,43 @@
+.attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.tile {
+  display: block;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  overflow: hidden;
+  background: var(--bg2);
+  color: var(--text2);
+  text-decoration: none;
+}
+
+.tile:hover {
+  border-color: var(--line);
+}
+
+.thumb {
+  display: block;
+  max-width: 240px;
+  max-height: 160px;
+  object-fit: contain;
+}
+
+.file {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  font: var(--fs-sm) var(--sans);
+}
+
+.name {
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

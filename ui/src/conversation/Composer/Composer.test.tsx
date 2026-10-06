@@ -536,4 +536,129 @@ describe("Composer", () => {
     expect(onUpdateSession).toHaveBeenCalledWith({ agent: "autonomous-executor" });
     expect(textarea.value).toBe("");
   });
+
+  describe("attachments", () => {
+    function pasteFiles(target: Element, files: File[]) {
+      fireEvent.paste(target, { clipboardData: { files, types: ["Files"] } });
+    }
+
+    it("uploads a pasted screenshot to the session under a dated name and shows its thumbnail", async () => {
+      const client = new FakeRouterClient();
+      render(<Composer routerClient={client} sessionId="s1" />);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [
+        new File([new Uint8Array(8)], "image.png", { type: "image/png" }),
+      ]);
+
+      await waitFor(() => expect(client.uploadedAttachments).toHaveLength(1));
+      const { owner, attachment } = client.uploadedAttachments[0];
+      expect(owner).toEqual({ session: "s1" });
+      expect(attachment.name).toMatch(/^screenshot-\d{4}-\d{2}-\d{2}-\d{6}\.png$/);
+      const chip = (await screen.findByLabelText(`Remove ${attachment.name}`)).parentElement!;
+      await waitFor(() =>
+        expect(chip.querySelector("img")?.getAttribute("src")).toBe(
+          `fixture://sessions/s1/attachments/${attachment.id}/thumbnail`,
+        ),
+      );
+    });
+
+    it("leaves a plain-text paste to the textarea", () => {
+      const client = new FakeRouterClient();
+      render(<Composer routerClient={client} sessionId="s1" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
+      const notPrevented = fireEvent.paste(textarea, {
+        clipboardData: { files: [], types: ["text/plain"] },
+      });
+      expect(notPrevented).toBe(true);
+      expect(client.uploadedAttachments).toHaveLength(0);
+    });
+
+    it("stages dropped files", async () => {
+      const client = new FakeRouterClient();
+      const { container } = render(<Composer routerClient={client} sessionId="s1" />);
+      const file = new File(["log"], "build.log", { type: "text/plain" });
+      fireEvent.drop(container.firstElementChild!, {
+        dataTransfer: { files: [file], types: ["Files"] },
+      });
+      await waitFor(() => expect(client.uploadedAttachments[0]?.attachment.name).toBe("build.log"));
+    });
+
+    it("sends staged attachments by id, shows them in the sent bubble's text, and clears them", async () => {
+      const client = new FakeRouterClient();
+      const send = vi.spyOn(client, "sendMessage");
+      const onSent = vi.fn();
+      render(<Composer routerClient={client} sessionId="s1" onSent={onSent} />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
+      pasteFiles(textarea, [new File(["x"], "notes.txt", { type: "text/plain" })]);
+      await screen.findByText("1 B");
+
+      fireEvent.change(textarea, { target: { value: "read this" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() => expect(onSent).toHaveBeenCalled());
+      const { attachment } = client.uploadedAttachments[0];
+      expect(send).toHaveBeenCalledWith(
+        "s1",
+        expect.objectContaining({ text: "read this", attachments: [attachment.id] }),
+      );
+      expect(onSent.mock.calls[0][0]).toContain(`- ${attachment.path}`);
+      expect(screen.queryByLabelText("Remove notes.txt")).toBeNull();
+      // Sent files belong to the message now — nothing was deleted.
+      expect(client.deletedAttachments).toEqual([]);
+    });
+
+    it("can send attachments with no text", async () => {
+      const client = new FakeRouterClient();
+      const send = vi.spyOn(client, "sendMessage");
+      render(<Composer routerClient={client} sessionId="s1" />);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      await screen.findByText("1 B");
+      fireEvent.click(screen.getByText("Send"));
+      await waitFor(() =>
+        expect(send).toHaveBeenCalledWith(
+          "s1",
+          expect.objectContaining({ text: "", attachments: ["att_1"] }),
+        ),
+      );
+    });
+
+    it("holds Send until uploads land", async () => {
+      const client = new FakeRouterClient();
+      let land: () => void = () => {};
+      vi.spyOn(client, "uploadAttachment").mockImplementation(
+        (_owner, file, name) =>
+          new Promise((resolve) => {
+            land = () =>
+              resolve({ id: "att_slow", name, path: `/a/s1/att_slow/${name}`, size: file.size, thumbnail: false });
+          }),
+      );
+      render(<Composer routerClient={client} sessionId="s1" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
+      fireEvent.change(textarea, { target: { value: "hi" } });
+      pasteFiles(textarea, [new File(["x"], "a.txt")]);
+
+      const send = screen.getByText("Send").closest("button")!;
+      await waitFor(() => expect(send.disabled).toBe(true));
+      expect(screen.getByText("Uploading…")).toBeTruthy();
+      land();
+      await waitFor(() => expect(send.disabled).toBe(false));
+    });
+
+    it("removing a staged file deletes it from the Router", async () => {
+      const client = new FakeRouterClient();
+      render(<Composer routerClient={client} sessionId="s1" />);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      fireEvent.click(await screen.findByLabelText("Remove a.txt"));
+      await waitFor(() => expect(client.deletedAttachments).toEqual(["att_1"]));
+    });
+
+    it("keeps staged files across a remount, like the text draft", async () => {
+      const client = new FakeRouterClient();
+      const { unmount } = render(<Composer routerClient={client} sessionId="s1" />);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      await screen.findByLabelText("Remove a.txt");
+      unmount();
+      render(<Composer routerClient={client} sessionId="s1" />);
+      expect(screen.getByLabelText("Remove a.txt")).toBeTruthy();
+    });
+  });
 });

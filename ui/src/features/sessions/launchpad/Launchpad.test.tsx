@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, deriveSessionName } from "./Launchpad";
 import { FLAGS } from "../../../featureFlags";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
+import { FakeRouterClient } from "../../../router/fixtures";
+import { stagedForSession } from "../../../components/Attachments/stagedAttachments";
 import type { Session, SessionDefaults } from "../../../router/types";
 
 function makeSession(overrides: Partial<Session>): Session {
@@ -290,59 +292,95 @@ describe("Launchpad", () => {
       fireEvent.change(input, { target: { files: [file] } });
     }
 
-    it("renders a removable chip for an attached file, with no raw path in the textarea", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    it("uploads an attached file to a draft and shows a removable chip, with no raw path in the textarea", async () => {
+      const client = new FakeRouterClient();
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} routerClient={client} />);
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
 
-      expect(screen.getByText("notes.txt")).toBeTruthy();
+      expect(await screen.findByLabelText("Remove notes.txt")).toBeTruthy();
+      await waitFor(() => expect(client.uploadedAttachments).toHaveLength(1));
+      expect(client.uploadedAttachments[0].owner).toEqual({ draft: expect.stringMatching(/^draft_/) });
       const textarea = screen.getByLabelText("Describe your goal") as HTMLTextAreaElement;
       expect(textarea.value).toBe("");
-      expect(textarea.value).not.toContain("notes.txt");
     });
 
-    it("shows a thumbnail for an image file and a glyph for a non-image file", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    it("shows the Router's thumbnail for an image file and a glyph for a non-image file", async () => {
+      const client = new FakeRouterClient();
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} routerClient={client} />);
       attachFile(new File([new Uint8Array(10)], "photo.png", { type: "image/png" }));
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
 
-      const image = screen.getByText("photo.png").closest("span")?.parentElement;
-      expect(image?.querySelector("img")).toBeTruthy();
-      const doc = screen.getByText("notes.txt").closest("span")?.parentElement;
-      expect(doc?.querySelector("img")).toBeNull();
+      const image = (await screen.findByLabelText("Remove photo.png")).parentElement!;
+      await waitFor(() =>
+        expect(image.querySelector("img")?.getAttribute("src")).toMatch(
+          /^fixture:\/\/attachment-drafts\/draft_\w+\/attachments\/att_1\/thumbnail$/,
+        ),
+      );
+      const doc = screen.getByLabelText("Remove notes.txt").parentElement!;
+      expect(doc.querySelector("img")).toBeNull();
     });
 
-    it("removing a chip drops the file", () => {
-      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    it("stages a pasted screenshot and dropped files", async () => {
+      const client = new FakeRouterClient();
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} routerClient={client} />);
+      const textarea = screen.getByLabelText("Describe your goal");
+      fireEvent.paste(textarea, {
+        clipboardData: { files: [new File(["x"], "image.png", { type: "image/png" })] },
+      });
+      fireEvent.drop(textarea, {
+        dataTransfer: { files: [new File(["y"], "trace.txt")], types: ["Files"] },
+      });
+      await waitFor(() => expect(client.uploadedAttachments).toHaveLength(2));
+      expect(client.uploadedAttachments[0].attachment.name).toMatch(/^screenshot-.*\.png$/);
+      expect(client.uploadedAttachments[1].attachment.name).toBe("trace.txt");
+    });
+
+    it("removing a chip deletes the uploaded file", async () => {
+      const client = new FakeRouterClient();
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} routerClient={client} />);
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
-      expect(screen.getByText("notes.txt")).toBeTruthy();
+      await screen.findByText("5 B");
 
       fireEvent.click(screen.getByLabelText("Remove notes.txt"));
       expect(screen.queryByText("notes.txt")).toBeNull();
+      await waitFor(() => expect(client.deletedAttachments).toEqual(["att_1"]));
     });
 
-    it("prepends an injected reference preamble the user did not type to the goal text sent on start", async () => {
+    it("starts the session from the draft and hands the files to its composer, leaving the goal text as typed", async () => {
+      const client = new FakeRouterClient();
       const session = makeSession({ id: "s99" });
       const createSession = vi.fn().mockResolvedValue(session);
       const onSessionCreated = vi.fn();
-      render(<Launchpad createSession={createSession} onSessionCreated={onSessionCreated} />);
+      render(
+        <Launchpad
+          createSession={createSession}
+          onSessionCreated={onSessionCreated}
+          routerClient={client}
+        />,
+      );
 
       attachFile(new File(["hello"], "notes.txt", { type: "text/plain" }));
+      await screen.findByText("5 B");
       fireEvent.change(screen.getByLabelText("Describe your goal"), {
         target: { value: "Fix the deploy script" },
       });
       fireEvent.click(screen.getByText("Start session"));
 
-      await waitFor(() => expect(onSessionCreated).toHaveBeenCalled());
-      const goalText = onSessionCreated.mock.calls[0][1] as string;
-      expect(goalText).toContain("See these files for reference: notes.txt");
-      expect(goalText).toContain("Fix the deploy script");
-      // The session's own name is still derived from what the user typed, not the preamble.
-      expect(createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ name: "Fix the deploy script" }),
+      await waitFor(() =>
+        expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
       );
+      const draft = (client.uploadedAttachments[0].owner as { draft: string }).draft;
+      expect(createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Fix the deploy script", attachment_draft: draft }),
+      );
+      const handed = stagedForSession("s99", client);
+      expect(handed.owner).toEqual({ session: "s99" });
+      expect(handed.readyIds()).toEqual(["att_1"]);
+      // The launchpad's own draft starts over.
+      expect(screen.queryByLabelText("Remove notes.txt")).toBeNull();
     });
 
-    it("does not inject a preamble when no files are attached", async () => {
+    it("sends no attachment draft when nothing is attached", async () => {
       const session = makeSession({ id: "s100" });
       const createSession = vi.fn().mockResolvedValue(session);
       const onSessionCreated = vi.fn();
@@ -356,6 +394,27 @@ describe("Launchpad", () => {
       await waitFor(() =>
         expect(onSessionCreated).toHaveBeenCalledWith(session, "Fix the deploy script"),
       );
+      expect(createSession.mock.calls[0][0]).not.toHaveProperty("attachment_draft");
+    });
+
+    it("holds Start until uploads land", async () => {
+      const client = new FakeRouterClient();
+      let land: () => void = () => {};
+      vi.spyOn(client, "uploadAttachment").mockImplementation(
+        (_owner, file, name) =>
+          new Promise((resolve) => {
+            land = () =>
+              resolve({ id: "a1", name, path: `/d/a1/${name}`, size: file.size, thumbnail: false });
+          }),
+      );
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} routerClient={client} />);
+      fireEvent.change(screen.getByLabelText("Describe your goal"), { target: { value: "go" } });
+      attachFile(new File(["hello"], "notes.txt"));
+
+      const start = screen.getByText("Start session").closest("button")!;
+      await waitFor(() => expect(start.disabled).toBe(true));
+      land();
+      await waitFor(() => expect(start.disabled).toBe(false));
     });
   });
 

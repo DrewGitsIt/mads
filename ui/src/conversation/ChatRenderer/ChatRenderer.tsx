@@ -17,6 +17,8 @@ import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
+import { MessageAttachments } from "./MessageAttachments";
+import { splitAttachments } from "../attachmentRefs";
 import styles from "./ChatRenderer.module.css";
 
 /**
@@ -36,6 +38,11 @@ export interface ChatRendererProps {
   /** Linked sessions (flag-gated): links touching the viewed session, used to resolve an attributed message as an inject chip vs. a digest card (decision 4, docs/LINKED-SESSIONS-DESIGN.md). */
   links?: Link[];
   viewedSessionId?: string;
+  /**
+   * Where the Router serves the viewed session's attachments — lets a user
+   * message's attached files show as thumbnails. Absent → names only.
+   */
+  attachmentUrl?: (attachmentId: string, variant?: "thumbnail") => string;
   /** The in-flight turn's ordered items (text runs + tool/thinking entries), rendered after `messages` and replaced by the persisted transcript on turn_end. */
   liveItems?: StreamItem[];
   /** A turn is in flight — the trailing live activity group renders open and grows in place, collapsing on turn end. */
@@ -93,6 +100,7 @@ export function ChatRenderer({
   messages,
   links = [],
   viewedSessionId,
+  attachmentUrl,
   liveItems = [],
   turnActive = false,
   thinkingHistory = [],
@@ -272,6 +280,9 @@ export function ChatRenderer({
           </time>
         );
         const isUser = message.role === "user";
+        const { body, attachments } = isUser
+          ? splitAttachments(message.text ?? "")
+          : { body: message.text ?? "", attachments: [] };
         return (
           <div
             key={item.key}
@@ -281,7 +292,14 @@ export function ChatRenderer({
           >
             {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
             {isUser && stamp}
-            <Markdown className={styles.prose} text={message.text ?? ""} />
+            {attachments.length > 0 ? (
+              <div className={styles.withAttachments}>
+                <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
+                {body && <Markdown className={styles.prose} text={body} />}
+              </div>
+            ) : (
+              <Markdown className={styles.prose} text={body} />
+            )}
             {!isUser && stamp}
           </div>
         );

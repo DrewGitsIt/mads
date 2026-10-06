@@ -34,6 +34,7 @@ import (
 	"github.com/drewkidwell/mads/providers/kirocli"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/digestwatch"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
@@ -150,7 +151,7 @@ func buildProviderRegistry(madsHome string) (*provider.Registry, error) {
 	return providers, nil
 }
 
-func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity) http.Handler {
+func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runner, providers *provider.Registry, creds *credstore.Store, pf preflight.Checker, vaultRefs *vault.RefStore, vaultSources []vault.Source, staticHandler http.Handler, registry *registryclient.Client, runsDir string, attachmentStore *attachments.Store, fastModelFlagBaseURL string, models *modelcatalog.Catalog, routerURL string, ident identity) http.Handler {
 	return api.New(api.Options{
 		Data:                 data,
 		Sup:                  sup,
@@ -164,6 +165,7 @@ func newMux(data *dataclient.Client, sup *supervisor.Supervisor, jobs *job.Runne
 		Version:              version,
 		Registry:             registry,
 		RunsDir:              runsDir,
+		Attachments:          attachmentStore,
 		FastModelFlagBaseURL: fastModelFlagBaseURL,
 		Models:               models,
 		RouterURL:            routerURL,
@@ -282,7 +284,11 @@ func main() {
 	// open — from blocking on an agent spawn.
 	models := modelcatalog.New(providers, modelcatalog.Options{})
 
-	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist))}
+	attachmentStore := attachments.New(filepath.Join(*madsHome, "attachments"))
+	// A launchpad draft that was attached to but never started leaves files
+	// no session will ever delete; a week is long enough to come back to it.
+	go attachmentStore.SweepDrafts(7 * 24 * time.Hour)
+	srv := &http.Server{Handler: newMux(data, sup, jobs, providers, creds, pf, vaultRefs, vaultSources, static.New(*uiDist), reg, filepath.Join(*madsHome, "runs"), attachmentStore, *fastmodelBaseURL, models, "http://"+*addr, newIdentity(*uiDist))}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

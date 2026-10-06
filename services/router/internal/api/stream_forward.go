@@ -46,6 +46,11 @@ func (s *server) handlePipelineOutput(w http.ResponseWriter, r *http.Request) {
 // "session not running" to the UI.
 func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// Before the wake: a send naming a missing attachment fails fast
+	// rather than starting a child for a message that can't go out.
+	if !s.resolveMessageAttachments(w, r, id) {
+		return
+	}
 	addr, err := s.ensureSession(r.Context(), id)
 	if err != nil {
 		writeWakeError(w, err)

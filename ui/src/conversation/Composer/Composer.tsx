@@ -7,6 +7,11 @@ import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
 import { getDraft, setDraft } from "./composerDrafts";
+import { AttachmentChips } from "../../components/Attachments/AttachmentChips";
+import { stagedForSession } from "../../components/Attachments/stagedAttachments";
+import { useStagedAttachments } from "../../components/Attachments/useStagedAttachments";
+import { useFileDrop } from "../../components/Attachments/useFileDrop";
+import { appendAttachments, splitAttachments } from "../attachmentRefs";
 import { ContextMeter } from "./ContextMeter";
 import { formatShortcut } from "../../platform/shortcut";
 import styles from "./Composer.module.css";
@@ -137,6 +142,14 @@ export function Composer({
   // user edits the text again, so dismissing never "sticks" past a keystroke.
   const [menuDismissed, setMenuDismissed] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Pasted, dropped and picked files upload the moment they're staged and
+  // outlive this mount (stagedAttachments.ts), like the text draft above.
+  const staged = stagedForSession(sessionId, routerClient);
+  const attachments = useStagedAttachments(staged);
+  const uploading = attachments.some((a) => a.status === "uploading");
+  const { dragging, dropHandlers, onPaste } = useFileDrop((files) => staged.add(files));
 
   const { trigger, candidates } = useMentionResolver(
     routerClient,
@@ -267,15 +280,27 @@ export function Composer({
   // message and delivers it when the turn ends — so it still goes out if
   // this pane unmounts first — and an idle session just runs it. Asking
   // whatever `busy` says here also covers a turn this pane hasn't seen yet.
+  //
+  // Staged attachments go by id; the Router appends their paths to the text
+  // the agent gets (services/router/internal/attachments). A send waits for
+  // every upload to land — Send is disabled meanwhile — so none is dropped.
   async function handleSend() {
     const text = value.trim();
-    if (!text) return;
+    const ready = attachments.flatMap((a) =>
+      a.status === "ready" && a.attachment ? [a.attachment] : [],
+    );
+    if ((!text && ready.length === 0) || staged.uploading()) return;
     const mentions = injected.map((i) => i.id);
     onSendStart?.();
     try {
-      const result = await routerClient.sendMessage(sessionId, { text, mentions, queue: true });
+      const result = await routerClient.sendMessage(sessionId, {
+        text,
+        mentions,
+        queue: true,
+        ...(ready.length > 0 ? { attachments: ready.map((a) => a.id) } : {}),
+      });
       if (result.status === "queued") onQueued?.(result.queued);
-      else onSent?.(text, mentions);
+      else onSent?.(appendAttachments(text, ready), mentions);
     } catch (err) {
       onSendError?.(err instanceof Error ? err.message : String(err));
       return;
@@ -283,6 +308,7 @@ export function Composer({
     setValue("");
     setCursor(0);
     setInjected([]);
+    staged.clear();
   }
 
   useEffect(() => {
@@ -333,17 +359,42 @@ export function Composer({
   const expandTitle = `${expanded ? "Collapse" : "Expand"} editor (${formatShortcut("Mod+E")})`;
 
   return (
-    <div className={styles.composer} onKeyDownCapture={handleComposerKeyDownCapture}>
+    <div
+      className={[styles.composer, dragging && styles.dropTarget].filter(Boolean).join(" ")}
+      onKeyDownCapture={handleComposerKeyDownCapture}
+      onPaste={onPaste}
+      {...dropHandlers}
+    >
       <InjectedContentPreview
         items={injected}
         onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
+      />
+      <AttachmentChips
+        items={attachments}
+        thumbnailUrl={(a) =>
+          a.attachment?.thumbnail
+            ? routerClient.attachmentUrl(staged.owner, a.attachment.id, "thumbnail")
+            : undefined
+        }
+        onRemove={(key) => staged.remove(key)}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        aria-label="Attach files"
+        onChange={(e) => {
+          staged.add(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
       />
       {queued.length > 0 && (
         <div className={styles.queued}>
           {queued.map((q) => (
             <div key={q.id} className={styles.queuedItem}>
               <span className={styles.queuedBadge}>Queued</span>
-              <span className={styles.queuedText}>{q.text}</span>
+              <span className={styles.queuedText}>{queuedLabel(q.text)}</span>
               <button
                 type="button"
                 className={styles.queuedRemove}
@@ -393,7 +444,12 @@ export function Composer({
                 ■ Stop
               </Button>
             )}
-            <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
+            <Button
+              variant="primary"
+              onClick={() => void handleSend()}
+              disabled={disabled || uploading}
+              title={uploading ? "Waiting for attachments to finish uploading" : undefined}
+            >
               Send
             </Button>
           </div>
@@ -435,6 +491,17 @@ export function Composer({
             type="button"
             variant="ghost"
             size="sm"
+            title="Attach files — or paste or drop them here"
+            aria-label="Attach files…"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={disabled}
+          >
+            📎
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
             title={expandTitle}
             aria-label="Expand editor"
             aria-keyshortcuts="Meta+e"
@@ -455,11 +522,24 @@ export function Composer({
               ■ Stop
             </Button>
           )}
-          <Button variant="primary" onClick={() => void handleSend()} disabled={disabled}>
+          <Button
+            variant="primary"
+            onClick={() => void handleSend()}
+            disabled={disabled || uploading}
+            title={uploading ? "Waiting for attachments to finish uploading" : undefined}
+          >
             Send
           </Button>
         </div>
       )}
     </div>
   );
+}
+
+/** A queued message's text without the attachment paths the Router appended. */
+function queuedLabel(text: string): string {
+  const { body, attachments } = splitAttachments(text);
+  if (attachments.length === 0) return text;
+  const files = `📎 ${attachments.length} file${attachments.length === 1 ? "" : "s"}`;
+  return body ? `${body} · ${files}` : files;
 }

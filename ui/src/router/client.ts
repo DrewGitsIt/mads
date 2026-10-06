@@ -1,4 +1,6 @@
 import type {
+  Attachment,
+  AttachmentOwner,
   Agent,
   CapabilitySuggestion,
   AgentLeaderboardEntry,
@@ -96,8 +98,18 @@ export interface RouterClient {
    */
   sendMessage(
     sessionId: string,
-    body: { text: string; mentions?: string[]; queue?: boolean },
+    body: { text: string; mentions?: string[]; queue?: boolean; attachments?: string[] },
   ): Promise<SendResult>;
+  /**
+   * Streams a pasted, dropped or picked file to the Router's attachment
+   * store (services/router/internal/attachments). A message names it by id
+   * (`sendMessage`'s `attachments`) and the agent is handed its path.
+   */
+  uploadAttachment(owner: AttachmentOwner, file: Blob, name: string): Promise<Attachment>;
+  /** Drops an attachment that was staged but never sent. */
+  deleteAttachment(owner: AttachmentOwner, attachmentId: string): Promise<void>;
+  /** Where the original file, or its thumbnail, is served. */
+  attachmentUrl(owner: AttachmentOwner, attachmentId: string, variant?: "thumbnail"): string;
   /** The session's queued messages, in delivery order. */
   listQueuedMessages(sessionId: string): Promise<QueuedMessage[]>;
   /** Drop one queued message before it's delivered. */
@@ -502,6 +514,12 @@ async function routerDelete<T>(baseUrl: string, path: string): Promise<T> {
   return readJSON<T>(res);
 }
 
+function attachmentsPath(owner: AttachmentOwner): string {
+  return "session" in owner
+    ? `/sessions/${encodeURIComponent(owner.session)}/attachments`
+    : `/attachment-drafts/${encodeURIComponent(owner.draft)}/attachments`;
+}
+
 /** fetch-backed RouterClient. Only exercised directly by client.test.ts. */
 export class FetchRouterClient implements RouterClient {
   constructor(private readonly baseUrl: string = "") {}
@@ -527,7 +545,7 @@ export class FetchRouterClient implements RouterClient {
 
   async sendMessage(
     sessionId: string,
-    body: { text: string; mentions?: string[]; queue?: boolean },
+    body: { text: string; mentions?: string[]; queue?: boolean; attachments?: string[] },
   ): Promise<SendResult> {
     const res = await fetch(`${this.baseUrl}/sessions/${sessionId}/messages`, {
       method: "POST",
@@ -568,6 +586,32 @@ export class FetchRouterClient implements RouterClient {
     return result?.status === "queued" && "queued" in result
       ? (result as SendResult)
       : { status: "accepted" };
+  }
+
+  async uploadAttachment(owner: AttachmentOwner, file: Blob, name: string): Promise<Attachment> {
+    // The raw file is the body — never a base64 or multipart envelope — so
+    // the browser streams it from its own blob storage and the Router
+    // writes it straight to disk.
+    const res = await fetch(buildUrl(this.baseUrl, attachmentsPath(owner), { name }), {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    return readJSON<Attachment>(res);
+  }
+
+  async deleteAttachment(owner: AttachmentOwner, attachmentId: string): Promise<void> {
+    const res = await fetch(`${this.baseUrl}${attachmentsPath(owner)}/${attachmentId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok && res.status !== 404) {
+      throw new Error(`router request failed: ${res.status} ${await res.text()}`);
+    }
+  }
+
+  attachmentUrl(owner: AttachmentOwner, attachmentId: string, variant?: "thumbnail"): string {
+    const base = `${this.baseUrl}${attachmentsPath(owner)}/${attachmentId}`;
+    return variant ? `${base}/${variant}` : base;
   }
 
   async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {

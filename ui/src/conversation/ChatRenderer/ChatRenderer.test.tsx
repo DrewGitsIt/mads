@@ -32,6 +32,34 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("hi back")).toBeTruthy();
   });
 
+  it("shows a user message's attached files as thumbnails and tiles, not the path list", () => {
+    const text =
+      "why is this red?\n\nAttached files (open each one with your file-reading tool):\n" +
+      "- /Users/me/.mads/attachments/s1/a1/screenshot.png\n" +
+      "- /Users/me/.mads/attachments/s1/b2/build.log";
+    const url = (id: string, variant?: string) =>
+      `http://router/sessions/s1/attachments/${id}${variant ? `/${variant}` : ""}`;
+    render(<ChatRenderer messages={[{ role: "user", text }]} attachmentUrl={url} />);
+    expect(screen.getByText("why is this red?")).toBeTruthy();
+    expect(screen.queryByText(/Attached files/)).toBeNull();
+    const thumb = screen.getByAltText("screenshot.png");
+    expect(thumb.getAttribute("src")).toBe(url("a1", "thumbnail"));
+    expect(thumb.closest("a")?.getAttribute("href")).toBe(url("a1"));
+    expect(screen.getByText("build.log").closest("a")?.getAttribute("href")).toBe(url("b2"));
+  });
+
+  it("falls back to a named tile when an image has no thumbnail", () => {
+    const text =
+      "Attached files (open each one with your file-reading tool):\n" +
+      "- /h/.mads/attachments/s1/a1/huge.png";
+    render(
+      <ChatRenderer messages={[{ role: "user", text }]} attachmentUrl={(id) => `http://r/${id}`} />,
+    );
+    fireEvent.error(screen.getByAltText("huge.png"));
+    expect(screen.getByText("huge.png")).toBeTruthy();
+    expect(screen.queryByAltText("huge.png")).toBeNull();
+  });
+
   it("renders tool messages as a collapsed activity group that expands to rows", () => {
     const messages: TranscriptMessage[] = [
       { role: "tool", tool: { name: "Read", path: "a.go" } },

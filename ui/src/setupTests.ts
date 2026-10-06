@@ -1,5 +1,7 @@
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
+import { clearAllStagedAttachments } from "./components/Attachments/stagedAttachments";
+import { clearLaunchpadDraft } from "./features/sessions/launchpad/launchpadDraft";
 
 // Node >= 25 defines global localStorage/sessionStorage accessors that
 // return undefined unless --localstorage-file is passed, and — because
@@ -43,4 +45,8 @@ afterEach(() => {
   // One in-memory store for the whole file: without this, state a test persisted
   // (the rail's seen-session ids, say) decides what the next test renders.
   localStorage.clear();
+  // Same for staged composer attachments (which also hold the RouterClient
+  // the first test to touch a session handed them) and the launchpad draft.
+  clearAllStagedAttachments();
+  clearLaunchpadDraft();
 });

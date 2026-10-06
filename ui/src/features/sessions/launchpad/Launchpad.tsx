@@ -4,7 +4,7 @@ import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Popover } from "../../../components/Popover/Popover";
 import { Toast } from "../../../components/Toast/Toast";
 import { FLAGS } from "../../../featureFlags";
-import { router } from "../../../router/client";
+import { router, type RouterClient } from "../../../router/client";
 import type {
   Agent,
   Config,
@@ -23,9 +23,15 @@ import { ModelPill } from "./pills/ModelPill";
 import { TrustPill } from "./pills/TrustPill";
 import { IsolationPill } from "./pills/IsolationPill";
 import type { StagedConfig } from "./pills/stagedConfig";
-import { AttachmentChips } from "./AttachmentChips";
+import { AttachmentChips } from "../../../components/Attachments/AttachmentChips";
+import {
+  handLaunchpadToSession,
+  stagedForLaunchpad,
+} from "../../../components/Attachments/stagedAttachments";
+import { useStagedAttachments } from "../../../components/Attachments/useStagedAttachments";
+import { useFileDrop } from "../../../components/Attachments/useFileDrop";
 import { StagedLinkChips } from "./StagedLinkChips";
-import { buildGoalText, toAttachedFile, type AttachedFile } from "./attachments";
+import { clearLaunchpadDraft, getLaunchpadDraft, setLaunchpadDraft } from "./launchpadDraft";
 import styles from "./Launchpad.module.css";
 
 /**
@@ -112,6 +118,8 @@ export interface LaunchpadProps {
   sessions?: Session[];
   /** Links touching `sessions`, so the link chooser can show which are already led. */
   links?: Link[];
+  /** Defaults to the app's Router client; tests hand in a fake. */
+  routerClient?: RouterClient;
 }
 
 export function Launchpad({
@@ -119,18 +127,23 @@ export function Launchpad({
   onSessionCreated,
   sessions = [],
   links = [],
+  routerClient = router,
 }: LaunchpadProps) {
-  const [text, setText] = useState("");
-  const [staged, setStaged] = useState<StagedConfig>({});
-  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>();
-  const [selectedAgent, setSelectedAgent] = useState<Agent | undefined>();
+  // Seeded from the unsent draft, so leaving for a session and coming back
+  // through "+ New session" picks up where the goal was left.
+  const [initialDraft] = useState(getLaunchpadDraft);
+  const [text, setText] = useState(initialDraft.text);
+  const [staged, setStaged] = useState<StagedConfig>(initialDraft.staged);
+  const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | undefined>(
+    initialDraft.selectedWorkspace,
+  );
+  const [selectedAgent, setSelectedAgent] = useState<Agent | undefined>(initialDraft.selectedAgent);
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<SessionDefaults | undefined>();
   const [savedConfig, setSavedConfig] = useState<Config | undefined>();
   const [savingDefaults, setSavingDefaults] = useState(false);
   const [defaultsSaved, setDefaultsSaved] = useState(false);
-  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
-  const [stagedLinks, setStagedLinks] = useState<LinkRequest[]>([]);
+  const [stagedLinks, setStagedLinks] = useState<LinkRequest[]>(initialDraft.stagedLinks);
   const [menuOpen, setMenuOpen] = useState(false);
   const [linkDialogOpen, setLinkDialogOpen] = useState(false);
   // In-flight create guard. Creating a session is slow by construction
@@ -143,11 +156,22 @@ export function Launchpad({
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setLaunchpadDraft({ text, staged, selectedWorkspace, selectedAgent, stagedLinks });
+  }, [text, staged, selectedWorkspace, selectedAgent, stagedLinks]);
+  // Attached files upload to a draft at once — the session doesn't exist
+  // yet — and POST /sessions moves them to it (attachment_draft). Staged
+  // outside component state, so they survive navigating away and back.
+  const stagedFiles = stagedForLaunchpad(routerClient);
+  const attachments = useStagedAttachments(stagedFiles);
+  const uploading = attachments.some((a) => a.status === "uploading");
+  const { dragging, dropHandlers, onPaste } = useFileDrop((files) => stagedFiles.add(files));
   const { providers } = useProviderMatrix();
 
   useEffect(() => {
     let cancelled = false;
-    router
+    routerClient
       .getSessionDefaults(staged.workspace, staged.dir)
       .then((r) => {
         if (!cancelled) setResolved(r);
@@ -159,11 +183,11 @@ export function Launchpad({
       cancelled = true;
     };
     // savedConfig: saving new defaults changes what an unstaged pill resolves to.
-  }, [staged.workspace, staged.dir, savedConfig]);
+  }, [routerClient, staged.workspace, staged.dir, savedConfig]);
 
   useEffect(() => {
     let cancelled = false;
-    router
+    routerClient
       .getConfig()
       .then((cfg) => {
         if (!cancelled) setSavedConfig(cfg);
@@ -172,7 +196,7 @@ export function Launchpad({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [routerClient]);
 
   useEffect(() => {
     if (!defaultsSaved) return;
@@ -185,8 +209,8 @@ export function Launchpad({
     try {
       // Re-read rather than PUT the copy from mount: Settings may have
       // changed other fields since, and PUT /config replaces the whole row.
-      const current = await router.getConfig();
-      const saved = await router.updateConfig(
+      const current = await routerClient.getConfig();
+      const saved = await routerClient.updateConfig(
         withStagedDefaults(current, staged, selectedWorkspace),
       );
       setSavedConfig(saved);
@@ -202,7 +226,9 @@ export function Launchpad({
 
   async function submit() {
     const trimmed = text.trim();
-    if (trimmed === "" || submittingRef.current) return;
+    if (trimmed === "" || submittingRef.current || stagedFiles.uploading()) return;
+    const draft = stagedFiles.owner;
+    const hasFiles = stagedFiles.readyIds().length > 0;
     submittingRef.current = true;
     setSubmitting(true);
     try {
@@ -219,13 +245,21 @@ export function Launchpad({
         // A saved Auto default needs the prompt as much as a picked one.
         ...((staged.agent ?? resolved?.agent?.value) === "auto" ? { opening_prompt: trimmed } : {}),
         ...(stagedLinks.length > 0 ? { links: stagedLinks } : {}),
+        ...(hasFiles && "draft" in draft ? { attachment_draft: draft.draft } : {}),
       });
+      // Started: the whole draft goes, so the next new session begins from
+      // the defaults again. On failure all of it stays — the server rolled
+      // back the whole create, so it's still what the user wants to retry.
       setText("");
-      setAttachments([]);
-      // On failure the chips stay: the server rolled back the whole create,
-      // so the staged links are still what the user wants to retry with.
+      setStaged({});
+      setSelectedWorkspace(undefined);
+      setSelectedAgent(undefined);
       setStagedLinks([]);
-      onSessionCreated(session, buildGoalText(trimmed, attachments));
+      clearLaunchpadDraft();
+      // The files are the session's now: its composer's opening auto-send
+      // carries them, and the launchpad starts a fresh draft.
+      if (hasFiles) handLaunchpadToSession(session.id);
+      onSessionCreated(session, trimmed);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -249,19 +283,8 @@ export function Launchpad({
     differsFromSaved(staged, selectedWorkspace, savedConfig);
 
   function handleFilesSelected(e: ChangeEvent<HTMLInputElement>) {
-    const files = e.target.files;
-    if (files) {
-      setAttachments((prev) => [...prev, ...Array.from(files).map(toAttachedFile)]);
-    }
+    stagedFiles.add(Array.from(e.target.files ?? []));
     e.target.value = "";
-  }
-
-  function removeAttachment(id: string) {
-    setAttachments((prev) => {
-      const removed = prev.find((f) => f.id === id);
-      if (removed?.previewUrl) URL.revokeObjectURL(removed.previewUrl);
-      return prev.filter((f) => f.id !== id);
-    });
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -279,7 +302,10 @@ export function Launchpad({
           <p className={styles.subtitle}>Describe your goal — I&rsquo;ll help you get there.</p>
         </div>
 
-        <div className={styles.box}>
+        <div
+          className={[styles.box, dragging && styles.dropTarget].filter(Boolean).join(" ")}
+          {...dropHandlers}
+        >
           <textarea
             className={styles.input}
             rows={3}
@@ -288,8 +314,17 @@ export function Launchpad({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
+            onPaste={onPaste}
           />
-          <AttachmentChips files={attachments} onRemove={removeAttachment} />
+          <AttachmentChips
+            items={attachments}
+            thumbnailUrl={(a) =>
+              a.attachment?.thumbnail
+                ? routerClient.attachmentUrl(stagedFiles.owner, a.attachment.id, "thumbnail")
+                : undefined
+            }
+            onRemove={(key) => stagedFiles.remove(key)}
+          />
           <div className={styles.actions}>
             <div className={styles.attachGroup}>
               <input
@@ -309,7 +344,7 @@ export function Launchpad({
               >
                 <span aria-hidden="true">📎</span> Attach files
               </Button>
-              <span className={styles.attachHint}>Files are shared with the agent automatically</span>
+              <span className={styles.attachHint}>Or paste or drop them — the agent opens each one</span>
             </div>
             <div className={styles.sendGroup}>
               <span className={styles.hint}>↵ to start · Shift↵ for a new line</span>
@@ -318,7 +353,7 @@ export function Launchpad({
                   <Button
                     variant="primary"
                     className={styles.splitMain}
-                    disabled={text.trim() === "" || submitting}
+                    disabled={text.trim() === "" || submitting || uploading}
                     onClick={() => void submit()}
                   >
                     {submitting ? "Starting…" : stagedLinks.length > 0 ? "Start & link" : "Start session"}
@@ -363,7 +398,7 @@ export function Launchpad({
                 <Button
                   variant="primary"
                   className={styles.noWrap}
-                  disabled={text.trim() === "" || submitting}
+                  disabled={text.trim() === "" || submitting || uploading}
                   onClick={() => void submit()}
                 >
                   {submitting ? "Starting…" : "Start session"}

@@ -574,7 +574,23 @@ export type CreateSessionPayload = Partial<Session> & {
   links?: LinkRequest[];
   /** Composer's full opening text — only consumed when agent="auto" (pkg/capinfer inference); never persisted on the Session record. */
   opening_prompt?: string;
+  /** The launchpad draft whose attachments move to the new session (AttachmentOwner's `draft`). */
+  attachment_draft?: string;
 };
+
+// mirrors services/router/internal/attachments Attachment — one stored file.
+export interface Attachment {
+  id: string;
+  name: string;
+  /** Absolute path on the Router's machine — what the agent is handed. */
+  path: string;
+  size: number;
+  /** A thumbnail exists (the file decoded as an image). */
+  thumbnail: boolean;
+}
+
+/** Whose attachments: a session's, or a launchpad draft's before its session exists. */
+export type AttachmentOwner = { session: string } | { draft: string };
 
 // mirrors providers/provider/event.go PermissionRequest — one parked
 // PreToolUse hook call awaiting an allow/deny decision (chat transport only,

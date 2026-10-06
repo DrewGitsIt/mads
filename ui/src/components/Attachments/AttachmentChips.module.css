@@ -11,9 +11,9 @@
 }
 
 .thumb {
-  width: 16px;
-  height: 16px;
-  border-radius: 2px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
   object-fit: cover;
 }
 

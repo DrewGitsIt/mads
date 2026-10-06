@@ -47,6 +47,13 @@
   border-radius: var(--r);
 }
 
+/* A file is being dragged over the goal box (useFileDrop). */
+.dropTarget {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+  background: var(--accent-soft);
+}
+
 .input {
   width: 100%;
   resize: vertical;

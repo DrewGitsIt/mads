@@ -1,6 +1,8 @@
 import type { RouterClient, SessionEventSource } from "./client";
 import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
+  Attachment,
+  AttachmentOwner,
   QueuedMessage,
   SendResult,
   Agent,
@@ -867,6 +869,34 @@ export class FakeRouterClient implements RouterClient {
 
   async sendMessage(): Promise<SendResult> {
     return { status: "accepted" };
+  }
+
+  /** Every upload, in order — tests read it to see what a composer staged. */
+  readonly uploadedAttachments: { owner: AttachmentOwner; attachment: Attachment }[] = [];
+  readonly deletedAttachments: string[] = [];
+
+  async uploadAttachment(owner: AttachmentOwner, file: Blob, name: string): Promise<Attachment> {
+    const id = `att_${this.uploadedAttachments.length + 1}`;
+    const dir = "session" in owner ? owner.session : `drafts/${owner.draft}`;
+    const attachment: Attachment = {
+      id,
+      name,
+      path: `/home/me/.mads/attachments/${dir}/${id}/${name}`,
+      size: file.size,
+      thumbnail: file.type.startsWith("image/"),
+    };
+    this.uploadedAttachments.push({ owner, attachment });
+    return attachment;
+  }
+
+  async deleteAttachment(_owner: AttachmentOwner, attachmentId: string): Promise<void> {
+    this.deletedAttachments.push(attachmentId);
+  }
+
+  attachmentUrl(owner: AttachmentOwner, attachmentId: string, variant?: "thumbnail"): string {
+    const who =
+      "session" in owner ? `sessions/${owner.session}` : `attachment-drafts/${owner.draft}`;
+    return `fixture://${who}/attachments/${attachmentId}${variant ? `/${variant}` : ""}`;
   }
 
   /** Per-session queued messages; tests seed via seedQueuedMessages. */

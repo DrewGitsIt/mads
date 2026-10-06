@@ -20,6 +20,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/registryclient"
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/router/internal/attachments"
 	"github.com/drewkidwell/mads/services/router/internal/job"
 	"github.com/drewkidwell/mads/services/router/internal/modelcatalog"
 	"github.com/drewkidwell/mads/services/router/internal/supervisor"
@@ -37,6 +38,7 @@ type server struct {
 	registry             *registryclient.Client
 	version              string
 	runsDir              string
+	attachments          *attachments.Store
 	fastModelFlagBaseURL string
 	models               *modelcatalog.Catalog
 	routerURL            string
@@ -79,6 +81,9 @@ type Options struct {
 	Version       string
 	Registry      *registryclient.Client
 	RunsDir       string
+	// Attachments stores files pasted, dropped or picked into a composer.
+	// Nil answers the attachment routes with 503.
+	Attachments *attachments.Store
 	// FastModelFlagBaseURL mirrors main.go's -fastmodel-base-url flag value —
 	// GET /fast-model/status needs it for the same unset-mode fallback
 	// fastModelDynamicConfig applies, so a pre-mode-selector flag-only
@@ -120,7 +125,7 @@ func NewMux(opts Options) *http.ServeMux {
 	if opts.StaticHandler == nil {
 		opts.StaticHandler = http.NotFoundHandler()
 	}
-	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt}
+	s := &server{data: opts.Data, sup: opts.Sup, jobs: opts.Jobs, providers: opts.Providers, creds: opts.Creds, preflight: opts.Preflight, vaultRefs: opts.VaultRefs, vaultSources: opts.VaultSources, version: opts.Version, registry: opts.Registry, runsDir: opts.RunsDir, attachments: opts.Attachments, fastModelFlagBaseURL: opts.FastModelFlagBaseURL, models: opts.Models, routerURL: opts.RouterURL, root: opts.Root, uiDist: opts.UIDist, startedAt: opts.StartedAt}
 	if opts.Jobs != nil && opts.Sup != nil {
 		// Job bodies that must reach a dormant session (job.Deps.Waker) wake
 		// it through the same path a composer send uses.
@@ -140,6 +145,14 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /sessions/{id}/model", s.handleSetSessionModel)
 	mux.HandleFunc("DELETE /sessions/{id}", s.handleDeleteSession)
 	mux.HandleFunc("POST /sessions/{id}/messages", s.handleSessionMessages)
+	mux.HandleFunc("POST /sessions/{id}/attachments", s.handleUploadAttachment(s.sessionAttachmentOwner))
+	mux.HandleFunc("GET /sessions/{id}/attachments/{aid}", s.handleGetAttachment(s.sessionAttachmentOwner))
+	mux.HandleFunc("GET /sessions/{id}/attachments/{aid}/thumbnail", s.handleGetAttachmentThumbnail(s.sessionAttachmentOwner))
+	mux.HandleFunc("DELETE /sessions/{id}/attachments/{aid}", s.handleDeleteAttachment(s.sessionAttachmentOwner))
+	mux.HandleFunc("POST /attachment-drafts/{id}/attachments", s.handleUploadAttachment(s.draftAttachmentOwner))
+	mux.HandleFunc("GET /attachment-drafts/{id}/attachments/{aid}", s.handleGetAttachment(s.draftAttachmentOwner))
+	mux.HandleFunc("GET /attachment-drafts/{id}/attachments/{aid}/thumbnail", s.handleGetAttachmentThumbnail(s.draftAttachmentOwner))
+	mux.HandleFunc("DELETE /attachment-drafts/{id}/attachments/{aid}", s.handleDeleteAttachment(s.draftAttachmentOwner))
 	mux.HandleFunc("GET /sessions/{id}/queue", s.handleSessionQueue)
 	mux.HandleFunc("DELETE /sessions/{id}/queue/{qid}", s.handleSessionCancelQueued)
 	mux.HandleFunc("POST /sessions/{id}/interrupt", s.handleSessionInterrupt)

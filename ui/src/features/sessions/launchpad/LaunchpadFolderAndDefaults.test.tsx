@@ -229,3 +229,71 @@ describe("recentDirs", () => {
     ).toEqual(["/new", "/old"]);
   });
 });
+
+// The Launchpad unmounts whenever a session is open, so "+ New session"
+// remounts it — the unsent goal and its staged settings must come back.
+describe("Launchpad draft", () => {
+  beforeEach(() => {
+    vi.stubGlobal("EventSource", FakeEventSource);
+    stubRouter(() => defaults(), { ...DEFAULT_CONFIG });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  async function stageDraft() {
+    await waitFor(() => expect(screen.getByText(/New worktree \(default\)/)).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Describe your goal"), {
+      target: { value: "Fix the flaky deploy" },
+    });
+    fireEvent.click(screen.getByText(/New worktree \(default\)/));
+    fireEvent.click(screen.getByText("Current directory"));
+  }
+
+  it("keeps the unsent goal and staged settings across a remount", async () => {
+    const { unmount } = render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    await stageDraft();
+    unmount();
+
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    expect((screen.getByLabelText("Describe your goal") as HTMLTextAreaElement).value).toBe(
+      "Fix the flaky deploy",
+    );
+    expect(screen.queryByText(/New worktree \(default\)/)).toBeNull();
+    expect(screen.getByText(/Current directory/)).toBeTruthy();
+  });
+
+  it("starting the session clears the draft back to the defaults", async () => {
+    const createSession = vi.fn().mockResolvedValue(makeSession({ id: "s1" }));
+    const { unmount } = render(
+      <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
+    );
+    await stageDraft();
+    fireEvent.click(screen.getByText("Start session"));
+    await waitFor(() =>
+      expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ isolation: "current_dir" })),
+    );
+    unmount();
+
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    expect((screen.getByLabelText("Describe your goal") as HTMLTextAreaElement).value).toBe("");
+    await waitFor(() => expect(screen.getByText(/New worktree \(default\)/)).toBeTruthy());
+  });
+
+  it("a failed start keeps the draft for a retry", async () => {
+    const createSession = vi.fn().mockRejectedValue(new Error("spawn failed"));
+    const { unmount } = render(
+      <Launchpad createSession={createSession} onSessionCreated={vi.fn()} />,
+    );
+    await stageDraft();
+    fireEvent.click(screen.getByText("Start session"));
+    await waitFor(() => expect(screen.getByText(/spawn failed/)).toBeTruthy());
+    unmount();
+
+    render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+    expect((screen.getByLabelText("Describe your goal") as HTMLTextAreaElement).value).toBe(
+      "Fix the flaky deploy",
+    );
+  });
+});
