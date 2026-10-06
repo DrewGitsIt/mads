@@ -29,7 +29,7 @@ row says so.
 | ACP | **Native** | `goose acp --with-builtin developer` — the captured spawn shape. |
 | PTY | **Native** | `goose session` under a pty (pty.go); banner ref discovery plus the SessionLocator backstop (locate.go: `session list` filtered by cwd + created_at, verified by first-message export — declines on any ambiguity). |
 | MCPServers | **Native** | See "MCPServers, both transports" below. |
-| TrustLimited / TrustReadOnly | **Emulated** | goose's `approve` mode plus the engine's class-based permission-reply gate — not a harness-level block. See the trust table below. |
+| TrustLimited / TrustReadOnly | **Emulated** | goose's `approve` mode, every ask answered by the engine: limited forwards edits/commands/unknowns to the user and allows reads itself; read_only is the class gate alone — not a harness-level block. See "Trust: why approve, not smart_approve" and the trust table below. |
 | Branching | **Unsupported** | goose's session fork is real, but mads has no provider-layer branching surface — flip when it grows one. |
 | CwdReroot | **Unsupported** | No mechanism at all. |
 
@@ -96,12 +96,48 @@ emits is harmless; an unlisted one denies).
 | todo | todo__todo_write | think | the COMPOSITE-name exception to the bare-name rule (capture line 33; `todo.rs` `TODO_WRITE_TOOL_NAME_COMPLETE`) |
 | fetch | fetch | fetch | **guess-grade**: task-prescribed, but no fetch builtin exists at v1.48.0 — a harmless additive row |
 
-Fail-closed rule: unlisted identities deny below full trust (the
-kirocli/goose unknown-deny precedent — over-denying after a rename is
-safe, under-enforcing is not). Full trust maps to goose mode `auto`
-explicitly, so a user config.yaml default of `approve` can't stall a
-headless session; limited/read_only ride `approve` and the engine's
-permission-reply gate does the real enforcement.
+Fail-closed rule: wherever the engine decides alone (read_only; limited
+with no asker), unlisted identities deny (the kirocli/goose unknown-deny
+precedent — over-denying after a rename is safe, under-enforcing is not).
+At limited with an asker, an unlisted identity is asked about instead.
+Full trust maps to goose mode `auto` explicitly, so a user config.yaml
+default of `approve` can't stall a headless session.
+
+## Trust: why approve, not smart_approve
+
+goose has four modes (`crates/goose-provider-types/src/goose_mode.rs`,
+September 2026 tree): `auto` ("Automatically approve tool calls"),
+`approve` ("Ask before every tool call"), `smart_approve` ("Ask only for
+sensitive tool calls") and `chat` (no tools). Its permission inspector
+(`crates/goose/src/permission/permission_inspector.rs`, `inspect`) shows
+what the two asking modes actually do with a call that has no user grant
+in goose's own permission config:
+
+- `approve`: RequireApproval — always. The capture confirms it asks even
+  for `todo__todo_write` (`acp-transcript.jsonl` line 34).
+- `smart_approve`: allow a tool annotated read-only; otherwise defer to
+  `detect_read_only_requests` — **an extra LLM call** in which goose's own
+  model judges whether the call is read-only — and ask only if it says no.
+
+mads' `limited` means "follow the harness": ask before risky things,
+reads don't ask — claude-code's normal mode. `smart_approve` reaches that
+shape by having a model judge risk: nondeterministic, token-spending, and
+exactly the "auto-review" idea a separate trust level would own — not
+limited's. So limited (and read_only) stay on `approve`, the only
+deterministic asking mode, and the binding sets the engine's
+`PermissionAsksEveryCall`: at limited the engine allows the read/search/
+think/fetch classes itself and forwards only edits, commands and unknown
+tools to the user (`StartOptions.Permissions`), answering with the
+`_once` option of the user's decision (never `_always`, which goose would
+persist). read_only never asks: the class gate allows reads and denies
+the rest.
+
+Caveat, both modes: a tool the user has granted `AlwaysAllow` /
+`NeverAllow` in goose's own permission config (`goose configure`) is
+decided by goose without asking, so neither mads' card nor the engine's
+class gate ever sees it — a pre-existing grant for `shell` would run
+commands even under read_only. mads never writes such grants (no `_always`
+replies), but cannot see or override ones the user made.
 
 ## The unstable system-prompt dependency
 
@@ -133,10 +169,13 @@ Seams 1 and 2 have drafted upstream proposals:
 
 ## IntentMatrix
 
-All portable permission intents are honestly **Unsupported**: goose never
-reads `StartOptions.Permissions`, has no command blocklist, and no path-scoped
-write restriction. The trust emulation above is a different, coarser
-mechanism and must not be implied here (goosecli.go `IntentMatrix`).
+`require_approval` is **Emulated**: on the ACP transport goose's `approve`
+mode asks and the engine forwards each ask to the user — less the safe
+classes it answers itself — while the PTY transport sets no mode at all
+(the user's own goose config decides whether the terminal asks). The rest
+are honestly **Unsupported**: no command blocklist, no path-scoped write
+restriction, and the read_only trust emulation above is a coarser
+mechanism than the `read_only` intent claims (goosecli.go `IntentMatrix`).
 
 ## Testing without goose installed
 

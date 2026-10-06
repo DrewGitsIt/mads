@@ -33,8 +33,8 @@ best-effort research, not fact.
 | PTY | **Native** | `kiro-cli chat`'s interactive terminal REPL. |
 | Branching | **Unsupported** | `/rewind` is real and does create a new conversation branch, but it is an interactive-only TUI turn-picker (arrow-key selection UI), not a scriptable flag or stable API. A GitHub issue on Kiro's ACP crate notes session-fork support is behind an `unstable_session_fork` feature flag and is not currently active (`sessionCapabilities` reports empty). No stable, scriptable surface exists to declare this Native or Emulated honestly. |
 | CwdReroot | **Unsupported** | No documented flag or command changes a live session's working directory mid-session. |
-| TrustLimited | **Emulated** | Enforced on the ACP transport by auto-denying `session/request_permission` requests for command-execution-kind tool calls (see below); on PTY, the corresponding restriction is a human declining kiro-cli's own interactive confirmation prompt, not an automated guarantee. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
-| TrustReadOnly | **Emulated** | Same mechanism, denying both command execution and file mutation kinds. Same ACP-vs-PTY asymmetry as TrustLimited. |
+| TrustLimited | **Emulated** | kiro's own per-request asks reach the user: on the ACP transport each `session/request_permission` is forwarded to `StartOptions.Permissions` (with no asker wired, the engine's kind gate denies command-execution kinds instead); on PTY, kiro-cli's own interactive confirmation prompt asks the human at the terminal. Neither is a harness-level block the way claude-code's `--disallowedTools` is — hence Emulated, not Native. |
+| TrustReadOnly | **Emulated** | The engine's kind gate answers every ask without asking the user, denying both command execution and file mutation kinds. On PTY, the human declining kiro's prompt is the only restriction. |
 | MCPServers | **Unsupported** | No documented flag or config mechanism threads an MCP server into kiro-cli's own launch was found in its public docs/GitHub issues (same citation bar as the rest of this table — kiro-cli is not installed in this environment). The acprpc engine does now place descriptors on `session/new`'s spec-required `mcpServers` field, but no kiro doc confirms the agent actually connects them, so the declaration stays honest-unsupported: the L2c leader capability (`docs/LINKED-SESSIONS-DESIGN.md` item 5) is not promised to a kiro-cli-backed agent. Revisit with `MADS_KIRO_SMOKE=1` against a real binary. |
 | RefAnnounce | **Emulated** | ACP's `session/new` response carries the ref synchronously, before `Start` even returns — no announcement subscription is needed there (Native-strength). The PTY transport prints nothing and has no on-disk transcript format to discover from (unlike claude-code) — a fresh terminal session's ref is simply never learned. Emulated is the honest one-row summary across both. |
 
@@ -77,19 +77,28 @@ only at turn end.
 - **ACP transport (structured):** `session/request_permission` is a real
   mid-turn request the agent sends before a tool call runs. The acprpc
   engine's trust gate (with this package's `ToolIdentity: KindBased` knob)
-  classifies the tool call's ACP `kind`
-  (`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`other`,
-  per agentclientprotocol.com) against the session's trust level:
-  - `limited` approves `read`/`edit`/`search`/`think`/`fetch`; denies
-    `execute`/`delete`/`move`/`other`.
-  - `read_only` approves only `read`/`search`/`think`/`fetch`; denies
-    everything else, including `edit`.
+  answers it per the session's trust level ("follow the harness": mads
+  asks the user only when kiro itself asks):
+  - `limited` with an asker (the Runner always wires one): the request is
+    forwarded to the user, unfiltered — kiro's own policy already trusts
+    reads by default and asks for the rest (kiro.dev/docs/cli/chat/
+    permissions), the claude-code-normal shape, so there is no session
+    mode to set and nothing for the engine to second-guess
+    (`PermissionAsksEveryCall` off). The reply is the offered `_once`
+    option of the user's decision, never a persistent "Trust" option.
+  - `limited` without an asker: the engine's kind gate classifies the
+    tool call's ACP `kind`
+    (`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`other`,
+    per agentclientprotocol.com) — approves `read`/`edit`/`search`/
+    `think`/`fetch`; denies `execute`/`delete`/`move`/`other`.
+  - `read_only` approves only `read`/`search`/`think`/`fetch` by kind;
+    denies everything else, including `edit` — never asking.
   - `full` (and the zero value) approves everything — unchanged from before
     this row existed.
   The kind comes from the announced `tool_call` update with the same
   `toolCallId`, or — when the agent asks before announcing — from the
-  request's own embedded tool call. Either way an absent or unrecognized
-  kind denies under `limited`/`read_only` — never a silent under-enforce.
+  request's own embedded tool call. Wherever the gate decides, an absent
+  or unrecognized kind denies — never a silent under-enforce.
   The reply is selected from the request's *offered options* by option
   kind (`allow_once`/`reject_once`, with the `_always` same-polarity
   fallback), since optionIds are agent-chosen opaque strings per spec.
@@ -102,6 +111,18 @@ only at turn end.
   PTY session with nobody watching the terminal is not actually
   trust-restricted in any enforceable sense — only ACP sessions get an
   automated guarantee.
+
+## IntentMatrix
+
+`require_approval` is **Native**: kiro's own per-request policy decides
+what to ask, and both transports put those asks in front of the user —
+forwarded over ACP, kiro's own prompt on PTY (`--trust-all-tools` is
+withheld below full trust; `TestIntentMatrixDeclarations` pins both).
+Like the rest of this table it is doc-sourced, not yet observed against a
+live binary. `deny_commands`, `path_scope` and `read_only` stay
+**Unsupported**: no command blocklist flag, no path-scoped write
+restriction, no flag that blocks writes/commands outright (read_only
+trust is the engine's kind gate, a coarser mechanism).
 
 ## Real, citable gaps beyond the Matrix
 

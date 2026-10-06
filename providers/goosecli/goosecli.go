@@ -153,8 +153,17 @@ func (p *Provider) engineConfig() acprpc.Config {
 		Env:     p.cfg.Env,
 		// Full trust sets "auto" EXPLICITLY so a user config.yaml default
 		// of "approve" can't stall a headless session (design doc "Trust
-		// enforcement"); limited/read_only ride "approve" and the engine's
-		// permission-reply gate does the real enforcement.
+		// enforcement"). limited/read_only ride "approve" — goose asks for
+		// every tool call — and the engine answers: read_only by its class
+		// gate alone; limited by forwarding the ask to the user
+		// (StartOptions.Permissions), safe classes excepted
+		// (PermissionAsksEveryCall below). "smart_approve" was the other
+		// candidate for limited and is deliberately not used: past
+		// read-only-annotated tools it decides by an extra LLM call
+		// (permission_inspector.rs detect_read_only_requests) — goose's
+		// model judging risk, nondeterministic and token-spending — which
+		// is an "auto-review" trust level of its own, not "ask before
+		// risky things". README "Trust: why approve, not smart_approve".
 		TrustModes: map[provider.Trust]string{
 			provider.TrustFull:     "auto",
 			provider.TrustLimited:  "approve",
@@ -173,6 +182,11 @@ func (p *Provider) engineConfig() acprpc.Config {
 		},
 		ToolIdentity:   acprpc.ToolIdentity{Mode: acprpc.ToolIdentityMetaNamespace, Namespace: "goose"},
 		ToolClassTable: gooseToolClassTable,
+		// approve mode asks before EVERY call, reads included (goose_mode.rs
+		// "Ask before every tool call"; acp-transcript.jsonl line 34 asks
+		// for todo__todo_write): the engine allows read/search/think/fetch
+		// itself so the user's cards are the edits, commands and unknowns.
+		PermissionAsksEveryCall: true,
 	}
 }
 
@@ -205,8 +219,9 @@ func (p *Provider) Matrix() provider.Matrix {
 		// outputTokens} (pinned: testdata/captures/acp-transcript.jsonl
 		// line 85) → Usage on EventTurnEnd and OneShot results.
 		provider.BehaviorCostReporting: provider.Native,
-		// approve mode + the engine's permission-reply gate (design doc
-		// "Trust enforcement") — not a harness-level block.
+		// approve mode + the engine's answer to each ask (design doc
+		// "Trust enforcement"): read_only class-gated, limited asking the
+		// user for everything but reads — not a harness-level block.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
 		// ACP's ref is synchronous at Start-return (Native-strength); the
@@ -229,20 +244,22 @@ func (p *Provider) Matrix() provider.Matrix {
 }
 
 // IntentMatrix declares this provider's enforcement of the portable
-// permission intents (pkg/contracts.PermissionIntent). Unlike the Behavior
-// matrix's TrustLimited/TrustReadOnly rows (Emulated — the engine's
-// class-based permission-reply gate riding goose's approve mode), no
-// intent has a harness-level enforcement mechanism: goose never reads
-// StartOptions.Permissions, has no command blocklist, and no
-// path-scoped write restriction. The trust emulation is a different,
-// coarser mechanism and must not be implied here — every intent is
-// declared unenforced honestly.
+// permission intents (pkg/contracts.PermissionIntent). require_approval is
+// Emulated: on the ACP transport goose's approve mode asks before every
+// call and the engine forwards each ask to the user through
+// StartOptions.Permissions — but it answers the safe read/search/think/
+// fetch classes itself, and on the PTY transport no mode is set at all
+// (pty.go — the user's own goose config decides whether the human at the
+// terminal is asked). The rest are honestly unenforced: goose has no
+// command blocklist, no path-scoped write restriction, and its read-only
+// trust emulation (the engine's class gate) is a coarser mechanism than
+// the read_only intent claims.
 func (p *Provider) IntentMatrix() provider.IntentMatrix {
 	return provider.IntentMatrix{
 		provider.IntentDenyCommands:    provider.Unsupported,
 		provider.IntentPathScope:       provider.Unsupported,
 		provider.IntentReadOnly:        provider.Unsupported,
-		provider.IntentRequireApproval: provider.Unsupported,
+		provider.IntentRequireApproval: provider.Emulated,
 	}
 }
 

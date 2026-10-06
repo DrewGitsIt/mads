@@ -95,9 +95,11 @@ func (p *Provider) Matrix() provider.Matrix {
 		provider.BehaviorBranching:      provider.Unsupported,
 		provider.BehaviorCwdReroot:      provider.Unsupported,
 		// Emulated: enforcement rides the ACP session/request_permission
-		// handshake (kind-based auto-deny) on the structured transport, and a
-		// human's own interactive confirmation on PTY — neither is a harness
-		// guarantee the way claude-code's --disallowedTools is. See README.
+		// handshake on the structured transport — limited forwards kiro's
+		// own asks to the user, read_only answers them by the engine's
+		// kind gate — and a human's own interactive confirmation on PTY;
+		// neither is a harness guarantee the way claude-code's
+		// --disallowedTools is. See README.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
 		// The acprpc engine now rides descriptors on session/new (a spec
@@ -120,21 +122,24 @@ func (p *Provider) Matrix() provider.Matrix {
 }
 
 // IntentMatrix declares this provider's enforcement of the portable
-// permission intents (pkg/contracts.PermissionIntent). Unlike the
-// Behavior matrix's BehaviorTrustLimited/BehaviorTrustReadOnly rows
-// (Emulated — the acprpc engine's ACP kind-based auto-deny, or a human's own
-// PTY confirmation), no intent here has a harness-level enforcement
-// mechanism: kiro-cli never reads StartOptions.Permissions (no
-// require_approval wiring exists at all), has no command blocklist flag, no
+// permission intents (pkg/contracts.PermissionIntent). require_approval is
+// Native: kiro-cli's own per-request tool policy decides what to ask
+// about (reads are trusted by default, everything else asks unless
+// trusted — kiro.dev/docs/cli/chat/permissions), and both transports put
+// those asks in front of the user — the ACP transport forwards each
+// session/request_permission to StartOptions.Permissions unfiltered (the
+// acprpc engine, PermissionAsksEveryCall off), the PTY transport omits
+// --trust-all-tools so kiro's own prompt asks the human at the terminal.
+// The rest stay honestly unenforced: no command blocklist flag, no
 // path-scoped write restriction, and no flag that blocks writes/commands
-// outright. Every intent is declared unenforced honestly rather than
-// implying otherwise; this task does not add kiro-cli enforcement.
+// outright (read_only trust is the engine's kind gate — Emulated on the
+// Behavior matrix, not this intent).
 func (p *Provider) IntentMatrix() provider.IntentMatrix {
 	return provider.IntentMatrix{
 		provider.IntentDenyCommands:    provider.Unsupported,
 		provider.IntentPathScope:       provider.Unsupported,
 		provider.IntentReadOnly:        provider.Unsupported,
-		provider.IntentRequireApproval: provider.Unsupported,
+		provider.IntentRequireApproval: provider.Native,
 	}
 }
 
@@ -204,8 +209,13 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 //     identity embedded in a session/request_permission that arrives
 //     before any tool_call announcement.
 //   - No TrustModes, SendModeAtSessionNew false: kiro documents no session
-//     mode vocabulary, and the old layer sent none; enforcement rides the
-//     engine's permission-reply gate — the same Emulated stance as before.
+//     mode vocabulary for trust (its ACP modes select agents), and its
+//     default per-request policy already is "reads don't ask, the rest
+//     does" — the claude-code-normal shape limited wants, with no mode to
+//     set. Enforcement rides the engine's permission handling: limited
+//     forwards kiro's asks to the user, read_only answers by kind.
+//   - PermissionAsksEveryCall false: kiro judges what to ask about
+//     itself, so every ask it makes reaches the user unfiltered.
 //   - ModelConfigOptionID empty: kiro documents no model configOption, so
 //     an ACP Start naming a model fails wrapping provider.ErrUnsupported
 //     instead of riding the old non-spec modelId param on session/new.

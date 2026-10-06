@@ -149,6 +149,10 @@ type faAttempt struct {
 	input                  map[string]any
 	offer                  []string
 	askFirst               bool
+	// withdraw → the agent gives up on its own permission request: it
+	// sends $/cancel_request for it shortly after asking and expects the
+	// RequestCancelled (-32800) error answer instead of an outcome.
+	withdraw bool
 }
 
 var faAttempts = map[string]faAttempt{
@@ -167,6 +171,7 @@ var faAttempts = map[string]faAttempt{
 	// update to correlate with.
 	"attempt-write-askfirst": {ext: "developer", name: "text_editor", kind: "edit", title: "text_editor write", input: map[string]any{"command": "write", "path": "/tmp/fake.txt", "file_text": "x"}, askFirst: true},
 	"attempt-shell-askfirst": {ext: "developer", name: "shell", kind: "execute", title: "shell", input: map[string]any{"command": "echo hi"}, askFirst: true},
+	"attempt-shell-withdraw": {ext: "developer", name: "shell", kind: "execute", title: "shell", input: map[string]any{"command": "echo hi"}, withdraw: true},
 }
 
 func faSend(m rpcMessage) {
@@ -324,10 +329,13 @@ func faServe(pr faProfile) {
 	permSeq := 0
 	// requestPermission sends a real session/request_permission (string id,
 	// per the captures) with the profile's adversarial optionIds and blocks
-	// for the client's reply — safe because the client answers synchronously
-	// from within its read loop. Only the profile's own allow ids count as
-	// approval; the returned outcome string makes the agent-side observation
-	// assertable ("denied via cancelled" vs "denied via <optionId>").
+	// for the client's reply to THAT id — a forwarded ask is answered off
+	// the client's read loop, so other client lines (session/cancel) can
+	// arrive first and are skipped. Only the profile's own allow ids count
+	// as approval; the returned outcome string makes the agent-side
+	// observation assertable ("denied via cancelled", "denied via
+	// <optionId>", "denied via error -32800"); an _always allow is
+	// reported as "<optionId>" too so "used X (always)" can tell it apart.
 	requestPermission := func(callID string, a faAttempt) (allowed bool, outcome string) {
 		permSeq++
 		reqID := json.RawMessage(fmt.Sprintf("%q", fmt.Sprintf("perm-%d", permSeq)))
@@ -355,9 +363,26 @@ func faServe(pr faProfile) {
 			"options":   options,
 		})
 		faSend(rpcMessage{JSONRPC: "2.0", ID: reqID, Method: "session/request_permission", Params: params})
-		resp, ok := <-msgs
-		if !ok {
-			return false, "eof"
+		if a.withdraw {
+			// Give the client time to hand the ask to its asker, then take
+			// it back the way the ACP request-cancellation RFD does.
+			time.Sleep(200 * time.Millisecond)
+			cp, _ := json.Marshal(map[string]any{"requestId": reqID})
+			faSend(rpcMessage{JSONRPC: "2.0", Method: "$/cancel_request", Params: cp})
+		}
+		var resp rpcMessage
+		for {
+			m, ok := <-msgs
+			if !ok {
+				return false, "eof"
+			}
+			if m.Method == "" && string(m.ID) == string(reqID) {
+				resp = m
+				break
+			}
+		}
+		if resp.Error != nil {
+			return false, fmt.Sprintf("error %d", resp.Error.Code)
 		}
 		var res permissionResult
 		_ = json.Unmarshal(resp.Result, &res)
@@ -388,6 +413,9 @@ func faServe(pr faProfile) {
 				toolCall(callID, a)
 			}
 			toolDone(callID, "completed", "ran "+a.title)
+			if outcome == pr.optionID["allow_always"] {
+				return "used " + a.title + " (always)"
+			}
 			return "used " + a.title
 		}
 		if !a.askFirst {

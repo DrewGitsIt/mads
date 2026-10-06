@@ -70,6 +70,8 @@ func (e *Engine) Start(ctx context.Context, opts provider.StartOptions) (provide
 		pending:   make(map[int]chan rpcMessage),
 		trust:     trust,
 		toolCalls: make(map[string]toolCallInfo),
+		asker:     opts.Permissions,
+		asks:      make(map[string]*permAsk),
 	}
 	go s.read(stdout)
 
@@ -324,12 +326,26 @@ func mcpEntries(servers []provider.MCPServerRef, httpOK bool) []json.RawMessage 
 }
 
 // toolCallInfo is the recorded identity of one announced tool call — its
-// resolved trust class and raw input, keyed by toolCallId so a later
+// resolved trust class, tool name (classify's, the same Name its
+// EventToolUse carried) and raw input, keyed by toolCallId so a later
 // session/request_permission (whose params may carry no identity at all,
-// goose's case) can be gated.
+// goose's case) can be gated and, when forwarded, named.
 type toolCallInfo struct {
 	class    string
+	name     string
 	rawInput json.RawMessage
+}
+
+// permAsk is one session/request_permission forwarded to the asker and not
+// yet answered, keyed in streamSession.asks by idKey(id). Whoever deletes
+// the entry under s.mu — the asker's goroutine with a decision, or a
+// withdrawal (session/cancel, $/cancel_request, process exit, Close) —
+// owns the request's single reply; the loser finds it gone and does
+// nothing. That delete is the whole exactly-once arbitration.
+type permAsk struct {
+	id      json.RawMessage
+	options []permissionOption
+	cancel  context.CancelFunc
 }
 
 // streamSession owns one agent process. Requests it sends are correlated
@@ -377,7 +393,13 @@ type streamSession struct {
 	// session/set_model.
 	models    *sessionModels
 	toolCalls map[string]toolCallInfo
-	closed    bool
+	// asker is StartOptions.Permissions — who answers the agent's
+	// permission requests at limited trust (handlePermission); nil keeps
+	// the engine's own class-based answer. asks holds the requests
+	// currently forwarded to it (permAsk).
+	asker  provider.PermissionAsker
+	asks   map[string]*permAsk
+	closed bool
 	// Latest usage_update snapshot (absolute occupancy + real window size),
 	// attached to the next turn end's Usage. Agents push these throughout a
 	// turn (and a post-compaction one can legitimately DROP below the prior
@@ -394,6 +416,9 @@ type streamSession struct {
 // tell the difference from a real answer.
 func (s *streamSession) read(stdout io.Reader) {
 	defer func() {
+		// The agent is gone: nobody is left to receive an answer, so
+		// every forwarded ask is withdrawn without a reply.
+		s.withdrawAsks(false)
 		s.mu.Lock()
 		for id, ch := range s.pending {
 			close(ch)
@@ -445,6 +470,11 @@ func (s *streamSession) handleLine(raw []byte) {
 		}
 	case m.Method == "session/request_permission" && len(m.ID) > 0:
 		s.handlePermission(m.ID, m.Params)
+	case m.Method == "$/cancel_request":
+		var p cancelRequestParams
+		if json.Unmarshal(m.Params, &p) == nil && len(p.RequestID) > 0 {
+			s.cancelAsk(p.RequestID)
+		}
 	case m.Method == "session/update":
 		s.handleUpdate(m.Params)
 	}
@@ -493,17 +523,37 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 	s.events <- end
 }
 
-// handlePermission gates a session/request_permission on the session's
-// trust level and the tool's class, replying by selecting from the
-// request's offered options by kind — optionIds are agent-chosen opaque
-// strings per spec, never hardcoded. The identity preferably comes from
-// the recorded tool_call update with the same toolCallId (goose's request
-// params carry none of their own); when no announced call matches, the
-// request's own embedded toolCall — a spec ToolCallUpdate that may carry
-// kind/_meta of its own (kiro-cli asks before announcing) — is classified
-// through the same ToolIdentity knob. Either path without identity
-// classifies unknown, which denies below full trust — never silently
-// under-enforce.
+// handlePermission answers a session/request_permission. Who decides
+// depends on trust — "follow the harness" (providers/provider
+// PermissionAsker): mads asks the user only when the agent itself asked.
+//
+//   - full: allow, always. The agent shouldn't be asking at all (its full
+//     mode, e.g. goose "auto", never does); if it does anyway, nobody is
+//     there to answer, and full means "don't ask me".
+//   - read_only: the engine's class gate decides alone (classAllowed) —
+//     the hard guarantee never depends on a person clicking Deny, and an
+//     allowed read needs no card either.
+//   - limited with an asker (StartOptions.Permissions — the chat
+//     transport): the request goes to the user (forwardPermission), except
+//     that with PermissionAsksEveryCall (goose's approve mode) the safe
+//     read/search/think/fetch classes are allowed here without a card.
+//     Unknown identities are forwarded too: the agent asked, the user
+//     sees what it asked about and decides.
+//   - limited without an asker: the class gate, as before asking existed —
+//     execute/other/unknown deny, never stall on an ask nobody answers.
+//
+// The identity preferably comes from the recorded tool_call update with
+// the same toolCallId (goose's request params carry none of their own);
+// when no announced call matches, the request's own embedded toolCall — a
+// spec ToolCallUpdate that may carry kind/_meta of its own (kiro-cli asks
+// before announcing) — is classified through the same ToolIdentity knob.
+// Either path without identity classifies unknown, which the class gate
+// denies below full trust — never silently under-enforce.
+//
+// Every engine-made reply selects from the request's offered options by
+// kind — optionIds are agent-chosen opaque strings per spec, never
+// hardcoded — and is written from the read loop at once; only the
+// forwarded path leaves the request open, on its own goroutine.
 func (s *streamSession) handlePermission(id json.RawMessage, params json.RawMessage) {
 	var p requestPermissionParams
 	_ = json.Unmarshal(params, &p)
@@ -511,23 +561,136 @@ func (s *streamSession) handlePermission(id json.RawMessage, params json.RawMess
 	s.mu.Lock()
 	info, known := s.toolCalls[p.ToolCall.ToolCallID]
 	trust := s.trust
+	asker := s.asker
 	s.mu.Unlock()
 
-	class := info.class
+	class, name := info.class, info.name
 	if !known {
-		class, _ = s.classify(&sessionUpdate{
+		class, name = s.classify(&sessionUpdate{
 			Title:    p.ToolCall.Title,
 			Kind:     p.ToolCall.Kind,
 			RawInput: p.ToolCall.RawInput,
 			Meta:     p.ToolCall.Meta,
 		})
 	}
-	allow := trust == provider.TrustFull || classAllowed(trust, class)
 
+	// The safe classes are exactly read_only's allowed set.
+	answerSafeLocally := s.cfg.PermissionAsksEveryCall && classAllowed(provider.TrustReadOnly, class)
+	if trust == provider.TrustLimited && asker != nil && !answerSafeLocally {
+		input := p.ToolCall.RawInput
+		if len(input) == 0 {
+			input = info.rawInput
+		}
+		s.forwardPermission(id, p.Options, asker, provider.PermissionAsk{
+			ToolUseID: p.ToolCall.ToolCallID,
+			Tool:      name,
+			Input:     input,
+			// ParentToolUseID, AgentID, Reason stay empty: no captured ACP
+			// agent puts subagent identity or an ask reason on the wire
+			// (claude-agent-acp, codex, hermes, goose — testdata/captures;
+			// claude's _meta.permission carries only a title).
+		})
+		return
+	}
+
+	allow := trust == provider.TrustFull || classAllowed(trust, class)
 	outcome := permissionOutcome{Outcome: "cancelled"}
 	if optionID, ok := selectOption(p.Options, allow); ok {
 		outcome = permissionOutcome{Outcome: "selected", OptionID: optionID}
 	}
+	s.replyPermission(id, outcome)
+}
+
+// forwardPermission hands one request to the asker on its own goroutine —
+// never the read loop, which must keep delivering session/update lines (and
+// a later $/cancel_request) while the user thinks — and replies with the
+// offered _once option matching the decision (selectOnceOption). The
+// asker's ctx is cancelled when the request is withdrawn first
+// (withdrawAsks, cancelAsk); a decision arriving after that finds its
+// permAsk gone and is discarded, per the PermissionAsker contract.
+func (s *streamSession) forwardPermission(id json.RawMessage, options []permissionOption, asker provider.PermissionAsker, ask provider.PermissionAsk) {
+	key := idKey(id)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		cancel()
+		return // Close already withdrew every ask; nobody reads a reply now
+	}
+	s.asks[key] = &permAsk{id: id, options: options, cancel: cancel}
+	s.mu.Unlock()
+
+	go func() {
+		decision := asker(ctx, ask)
+		s.mu.Lock()
+		pa, ok := s.asks[key]
+		if ok {
+			delete(s.asks, key)
+		}
+		s.mu.Unlock()
+		cancel()
+		if !ok {
+			return // withdrawn while the user was deciding
+		}
+		outcome := permissionOutcome{Outcome: "cancelled"}
+		if optionID, found := selectOnceOption(pa.options, decision.Allow); found {
+			outcome = permissionOutcome{Outcome: "selected", OptionID: optionID}
+		}
+		// decision.Message has nowhere to go: ACP's permission response
+		// carries only the outcome. The agent reports the refused call
+		// itself (goose: a failed tool_call_update), and the Runner has
+		// already marked the call blocked.
+		s.replyPermission(pa.id, outcome)
+	}()
+}
+
+// cancelAsk handles the agent's $/cancel_request for a forwarded
+// permission request: the agent stopped waiting, so the asker's ctx is
+// cancelled and the request gets its one response — the RequestCancelled
+// error the RFD prescribes. A requestId naming no open ask (already
+// answered, or a request of some other kind) is ignored.
+func (s *streamSession) cancelAsk(requestID json.RawMessage) {
+	key := idKey(requestID)
+	s.mu.Lock()
+	pa, ok := s.asks[key]
+	if ok {
+		delete(s.asks, key)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	pa.cancel()
+	line, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: pa.id, Error: &rpcError{Code: errRequestCancelled, Message: "Request cancelled"}})
+	if err != nil {
+		return
+	}
+	_ = s.write(append(line, '\n'))
+}
+
+// withdrawAsks withdraws every forwarded ask at once, cancelling each
+// asker's ctx. reply says whether the agent still expects answers: the
+// spec obliges a client that sends session/cancel to answer every pending
+// session/request_permission with outcome "cancelled" (Interrupt); a dead
+// process or a closing session gets nothing (read's exit, Close).
+func (s *streamSession) withdrawAsks(reply bool) {
+	s.mu.Lock()
+	asks := make([]*permAsk, 0, len(s.asks))
+	for key, pa := range s.asks {
+		asks = append(asks, pa)
+		delete(s.asks, key)
+	}
+	s.mu.Unlock()
+	for _, pa := range asks {
+		pa.cancel()
+		if reply {
+			s.replyPermission(pa.id, permissionOutcome{Outcome: "cancelled"})
+		}
+	}
+}
+
+// replyPermission writes one session/request_permission response.
+func (s *streamSession) replyPermission(id json.RawMessage, outcome permissionOutcome) {
 	result, _ := json.Marshal(permissionResult{Outcome: outcome})
 	line, err := json.Marshal(rpcMessage{JSONRPC: "2.0", ID: id, Result: result})
 	if err != nil {
@@ -677,7 +840,7 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 		class, name := s.classify(&u)
 		if u.ToolCallID != "" {
 			s.mu.Lock()
-			s.toolCalls[u.ToolCallID] = toolCallInfo{class: class, rawInput: u.RawInput}
+			s.toolCalls[u.ToolCallID] = toolCallInfo{class: class, name: name, rawInput: u.RawInput}
 			s.mu.Unlock()
 		}
 		tool := &provider.ToolUse{
@@ -925,7 +1088,11 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 // Interrupt asks the agent to stop the current response via session/cancel
 // — the standard ACP cancel notification, no response expected. The turn
 // still closes through its session/prompt response; the flag set here is
-// what marks it Interrupted (see finishTurn).
+// what marks it Interrupted (see finishTurn). A permission request still
+// waiting on the user is withdrawn with it: the spec requires the client
+// to answer every pending session/request_permission with outcome
+// "cancelled" once it has sent session/cancel, and the asker's ctx is
+// cancelled so the user's card closes.
 func (s *streamSession) Interrupt(context.Context) error {
 	s.mu.Lock()
 	if s.closed {
@@ -935,7 +1102,9 @@ func (s *streamSession) Interrupt(context.Context) error {
 	s.interrupted = true
 	ref := s.ref
 	s.mu.Unlock()
-	return s.notify("session/cancel", cancelParams{SessionID: ref})
+	err := s.notify("session/cancel", cancelParams{SessionID: ref})
+	s.withdrawAsks(true)
+	return err
 }
 
 func (s *streamSession) write(line []byte) error {
@@ -962,6 +1131,11 @@ func (s *streamSession) Close() error {
 	ref := s.ref
 	closeOK := s.closeOK
 	s.mu.Unlock()
+
+	// Nobody will answer an open ask once the session is going away; the
+	// agent learns of it through session/close (which cancels its run) or
+	// the process ending, so no reply is owed.
+	s.withdrawAsks(false)
 
 	if ref != "" && closeOK {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

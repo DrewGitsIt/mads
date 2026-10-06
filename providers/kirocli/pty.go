@@ -19,22 +19,7 @@ import (
 // events flow in this mode: Events() is nil and the byte stream is the
 // interface.
 func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error) {
-	args := []string{"chat"}
-	if opts.Model != "" {
-		args = append(args, "--model", opts.Model)
-	}
-	if opts.Resume != "" {
-		args = append(args, "--resume-id", opts.Resume)
-	}
-	// --trust-all-tools only for full trust (and the zero value). For
-	// limited/read_only, omit it and rely on kiro-cli's own interactive
-	// per-tool confirmation prompt — a human at the terminal, not the
-	// automated kind-based gate the ACP transport uses. See README.
-	if opts.Trust == provider.TrustFull || opts.Trust == "" {
-		args = append(args, "--trust-all-tools")
-	}
-	args = append(args, p.cfg.ExtraArgs...)
-
+	args := p.ptyArgs(opts)
 	cmd := exec.Command(p.cfg.Bin, args...)
 	cmd.Dir = opts.Cwd
 	cmd.Env = p.env(opts.Env)
@@ -46,6 +31,25 @@ func (p *Provider) startPTY(opts provider.StartOptions) (provider.Session, error
 	// (kirodotdev/Kiro#7788) — the same limitation claude-code's PTY
 	// transport has. The ref is only known when resuming.
 	return &ptySession{cmd: cmd, master: master, ref: opts.Resume}, nil
+}
+
+// ptyArgs builds the `kiro-cli chat` argv for the terminal transport.
+func (p *Provider) ptyArgs(opts provider.StartOptions) []string {
+	args := []string{"chat"}
+	if opts.Model != "" {
+		args = append(args, "--model", opts.Model)
+	}
+	if opts.Resume != "" {
+		args = append(args, "--resume-id", opts.Resume)
+	}
+	// --trust-all-tools only for full trust (and the zero value). For
+	// limited/read_only, omit it and rely on kiro-cli's own interactive
+	// per-tool confirmation prompt — a human at the terminal, not the
+	// automated handling the ACP transport has. See README.
+	if opts.Trust == provider.TrustFull || opts.Trust == "" {
+		args = append(args, "--trust-all-tools")
+	}
+	return append(args, p.cfg.ExtraArgs...)
 }
 
 type ptySession struct {

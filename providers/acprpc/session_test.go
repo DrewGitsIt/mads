@@ -37,6 +37,7 @@ func gooseConfig() Config {
 			{Extension: "developer", Name: "text_editor", ByCommand: map[string]string{"view": "read", "write": "edit", "str_replace": "edit", "insert": "edit"}},
 			{Extension: "todo", Name: "todo__todo_write", Class: "think"},
 		},
+		PermissionAsksEveryCall: true,
 	}
 }
 
@@ -338,7 +339,7 @@ func TestPermissionSelectionByKind(t *testing.T) {
 		// The fallback ladder: a two-option menu (no _always pair, hermes
 		// style) and an _always-only menu, both polarities.
 		{"two-option allow", "synthetic", syntheticConfig(), provider.TrustReadOnly, "attempt-view-two", "used text_editor view"},
-		{"always-only allow falls back", "synthetic", syntheticConfig(), provider.TrustReadOnly, "attempt-view-always", "used text_editor view"},
+		{"always-only allow falls back", "synthetic", syntheticConfig(), provider.TrustReadOnly, "attempt-view-always", "used text_editor view (always)"},
 		{"always-only reject falls back", "synthetic", syntheticConfig(), provider.TrustLimited, "attempt-shell-always", "denied via syn-no-4ever"},
 		// No option of the needed polarity → outcome cancelled, observed
 		// agent-side.

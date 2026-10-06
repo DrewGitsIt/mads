@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,38 @@ func TestTrustLimited(t *testing.T) {
 	}
 	if _, results := toolEvents(events); len(results) != 1 || results[0].IsError {
 		t.Fatalf("view under limited: allowed call must complete; results = %+v", toolResults(events))
+	}
+}
+
+// TestTrustLimitedAsksTheUser: with an asker wired (the Runner always
+// wires one — chat transport), goose's approve-mode asks reach the user for
+// edits, commands and unknown tools, while reads are answered by the
+// engine without a card (PermissionAsksEveryCall). The decision picks the
+// reply: the user's allow runs the shell call the class gate alone denies.
+func TestTrustLimitedAsksTheUser(t *testing.T) {
+	var mu sync.Mutex
+	var asked []string
+	asker := func(_ context.Context, ask provider.PermissionAsk) provider.PermissionDecision {
+		mu.Lock()
+		asked = append(asked, ask.Tool)
+		mu.Unlock()
+		return provider.PermissionDecision{Allow: ask.Tool == "shell"}
+	}
+	sess := startSession(t, testProvider(t), provider.StartOptions{Trust: provider.TrustLimited, Permissions: asker})
+
+	if text := turnText(sendTurn(t, sess, "attempt-shell")); !strings.Contains(text, "used shell") {
+		t.Fatalf("shell allowed by the user: turn text = %q", text)
+	}
+	if text := turnText(sendTurn(t, sess, "attempt-write")); !strings.Contains(text, "denied via reject_once") {
+		t.Fatalf("write denied by the user: turn text = %q", text)
+	}
+	if text := turnText(sendTurn(t, sess, "attempt-view")); !strings.Contains(text, "used text_editor view") {
+		t.Fatalf("view: turn text = %q", text)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(asked, ",") != "shell,text_editor" {
+		t.Fatalf("asked about %v, want shell then text_editor (the write) — never the read", asked)
 	}
 }
 

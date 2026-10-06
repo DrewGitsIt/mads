@@ -48,7 +48,7 @@ export function trustLevels(
     {
       value: "limited",
       label: "Limited",
-      description: `Restricts the agent from running commands — ${enforcementNote(trustSupport(matrix, "trust_limited"))}`,
+      description: `Agent asks you before running commands or other risky actions — ${enforcementNote(trustSupport(matrix, "trust_limited"))}`,
     },
     {
       value: "read_only",

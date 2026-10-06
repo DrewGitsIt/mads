@@ -43,12 +43,20 @@ func (s IntentSet) Union(other IntentSet) IntentSet {
 }
 
 // Intents compiles a session trust level to the restrictions it imposes.
-// TrustFull, and the zero value (which behaves identically — see
-// provider.StartOptions.Trust), impose none.
+// TrustLimited is require_approval alone — "follow the harness": the agent
+// asks the user before whatever it judges risky (commands included) and
+// the user decides, so commands are asked about, not denied (claude-code's
+// manual mode, goose's approve mode, kiro's per-request policy — each
+// provider's README "Trust enforcement"). TrustReadOnly is a hard read_only
+// guarantee plus require_approval for whatever still asks. TrustFull, and
+// the zero value (which behaves identically — see
+// provider.StartOptions.Trust), impose none. deny_commands comes only from
+// an agent's own DeniedCommands/Denylist (AgentPermissions.Intents,
+// EffectiveIntentsWithDenials), never from trust.
 func (t SessionTrust) Intents() IntentSet {
 	switch t {
 	case TrustLimited:
-		return IntentSet{IntentDenyCommands: true, IntentRequireApproval: true}
+		return IntentSet{IntentRequireApproval: true}
 	case TrustReadOnly:
 		return IntentSet{IntentReadOnly: true, IntentRequireApproval: true}
 	default:

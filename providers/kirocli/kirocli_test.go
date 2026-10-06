@@ -115,8 +115,9 @@ func TestTrustDeniesToolKind(t *testing.T) {
 	}
 }
 
-// A limited session's attempted Write (an "edit" kind) is allowed — only
-// command execution is restricted at that level.
+// With no asker wired (StartOptions.Permissions nil — nobody to ask), a
+// limited session's attempted Write (an "edit" kind) is allowed by the
+// engine's kind gate; only command execution is refused.
 func TestTrustLimitedAllowsEdit(t *testing.T) {
 	p := testProvider(t)
 	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustLimited})
@@ -147,6 +148,70 @@ func TestTrustLimitedAllowsEdit(t *testing.T) {
 	}
 	if !sawTool {
 		t.Fatal("limited session denied an edit-kind tool, want it allowed")
+	}
+}
+
+// TestTrustLimitedForwardsAsks: with an asker wired (the Runner always wires
+// one), kiro's own permission requests reach the user unfiltered and the
+// user's decision is what runs: an allowed command executes even though
+// the kind gate alone would refuse it, a denied edit never runs. kiro asks
+// before announcing the call, so the ask's identity comes from the
+// request's embedded toolCall.
+func TestTrustLimitedForwardsAsks(t *testing.T) {
+	cases := []struct {
+		prompt  string
+		allow   bool
+		wantUse bool
+	}{
+		{"attempt-command", true, true},
+		{"attempt-write", false, false},
+	}
+	for _, c := range cases {
+		asks := make(chan provider.PermissionAsk, 4)
+		asker := func(_ context.Context, ask provider.PermissionAsk) provider.PermissionDecision {
+			asks <- ask
+			return provider.PermissionDecision{Allow: c.allow}
+		}
+		p := testProvider(t)
+		sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustLimited, Permissions: asker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sess.Send(context.Background(), c.prompt); err != nil {
+			t.Fatal(err)
+		}
+		var useID string
+		deadline := time.After(10 * time.Second)
+		for done := false; !done; {
+			select {
+			case ev, ok := <-sess.Events():
+				if !ok {
+					t.Fatal("stream closed before turn end")
+				}
+				if ev.Kind == provider.EventToolUse {
+					useID = ev.Tool.ID
+				}
+				if ev.Kind == provider.EventTurnEnd {
+					done = true
+				}
+			case <-deadline:
+				t.Fatalf("%s: no turn end", c.prompt)
+			}
+		}
+		_ = sess.Close()
+		if len(asks) != 1 {
+			t.Fatalf("%s: asker called %d times, want 1", c.prompt, len(asks))
+		}
+		ask := <-asks
+		if ask.ToolUseID == "" {
+			t.Fatalf("%s: ask %+v names no call", c.prompt, ask)
+		}
+		if (useID != "") != c.wantUse {
+			t.Errorf("%s: tool use observed = %v, want %v", c.prompt, useID != "", c.wantUse)
+		}
+		if useID != "" && useID != ask.ToolUseID {
+			t.Errorf("%s: announced id %q != asked id %q", c.prompt, useID, ask.ToolUseID)
+		}
 	}
 }
 

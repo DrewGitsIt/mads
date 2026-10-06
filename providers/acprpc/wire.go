@@ -1,6 +1,7 @@
 package acprpc
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -461,6 +462,55 @@ func selectOption(options []permissionOption, allow bool) (optionID string, ok b
 		return fallback, true
 	}
 	return "", false
+}
+
+// selectOnceOption picks the offered _once option of the wanted polarity
+// and nothing else — the reply to a decision the USER made through the
+// asker (handlePermission's forwarded path). An _always option would
+// persist the one-off answer agent-side (goose writes allow_always/
+// reject_always into its permission config; claude-agent-acp's
+// "allow-with-updates" allows all edits for the session), so later calls
+// would stop asking — or stop running — without mads ever seeing them.
+// ok=false when no _once option of that polarity is offered; the caller
+// then replies outcome "cancelled", which every agent treats as "not
+// allowed" (so a user's allow is lost on such an agent — no captured
+// agent offers an always-only menu for a real ask).
+func selectOnceOption(options []permissionOption, allow bool) (optionID string, ok bool) {
+	want := "reject_once"
+	if allow {
+		want = "allow_once"
+	}
+	for _, o := range options {
+		if o.Kind == want {
+			return o.OptionID, true
+		}
+	}
+	return "", false
+}
+
+// cancelRequestParams — "$/cancel_request", the notification an agent sends
+// to withdraw a request it is still waiting on (ACP's request-cancellation
+// RFD, borrowed from LSP's $/cancelRequest; no captured agent has sent one
+// yet). RequestID is the withdrawn request's own JSON-RPC id, string or
+// number, kept raw and compared through idKey.
+type cancelRequestParams struct {
+	RequestID json.RawMessage `json:"requestId"`
+}
+
+// errRequestCancelled is the JSON-RPC error code the withdrawn request is
+// answered with (LSP's RequestCancelled, which the ACP RFD adopts): the
+// request still gets exactly one response, just not a result.
+const errRequestCancelled = -32800
+
+// idKey normalizes a raw JSON-RPC id for map keys and comparisons, so the
+// id a request carried and the requestId a later $/cancel_request names
+// match even if an agent re-serializes with different whitespace.
+func idKey(raw json.RawMessage) string {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, raw); err != nil {
+		return string(raw)
+	}
+	return buf.String()
 }
 
 // permissionResult / permissionOutcome — the engine's reply to

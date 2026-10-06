@@ -1,6 +1,7 @@
 package kirocli
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/drewkidwell/mads/providers/provider"
@@ -13,18 +14,29 @@ func TestIntentMatrixValid(t *testing.T) {
 	}
 }
 
-// TestIntentMatrixDeclaresUnenforced asserts kiro-cli takes the honest
-// unenforced stance on every portable permission intent — no command
-// blocklist flag, no path-scoped write restriction, no flag that blocks
-// writes/commands outright, and (unlike claude-code) no wiring of
-// StartOptions.Permissions at all, so require_approval has no
-// enforcement mechanism to ride.
-func TestIntentMatrixDeclaresUnenforced(t *testing.T) {
+// TestIntentMatrixDeclarations asserts kiro-cli's stance on the portable
+// permission intents: require_approval native — kiro's own per-request
+// asks reach the user (StartOptions.Permissions on ACP, kiro's prompt on
+// PTY, where --trust-all-tools is withheld below full trust) — and the
+// honest unenforced stance on the rest: no command blocklist flag, no
+// path-scoped write restriction, no flag that blocks writes/commands
+// outright.
+func TestIntentMatrixDeclarations(t *testing.T) {
 	p := New(Config{})
 	m := p.IntentMatrix()
 	for _, i := range provider.Intents {
-		if m[i] != provider.Unsupported {
-			t.Errorf("IntentMatrix[%s] = %s, want unsupported (unenforced)", i, m[i])
+		want := provider.Unsupported
+		if i == provider.IntentRequireApproval {
+			want = provider.Native
+		}
+		if m[i] != want {
+			t.Errorf("IntentMatrix[%s] = %s, want %s", i, m[i], want)
+		}
+	}
+	for _, trust := range []provider.Trust{provider.TrustLimited, provider.TrustReadOnly} {
+		args := strings.Join(p.ptyArgs(provider.StartOptions{Trust: trust}), " ")
+		if strings.Contains(args, "--trust-all-tools") {
+			t.Errorf("trust %s: PTY argv %q trusts every tool, so kiro would never ask (require_approval native)", trust, args)
 		}
 	}
 }

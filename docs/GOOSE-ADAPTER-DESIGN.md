@@ -197,10 +197,10 @@ untouched.
 | TrustReadOnly | **Emulated** | Same mechanism, stricter allowlist. |
 | RefAnnounce | **Emulated** | ACP: `session/new` returns the ref synchronously — `Ref()` non-empty at Start-return, no subscription needed (Native-strength). PTY: `goose session` prints the id in its startup banner (pinned: `testdata/captures/pty-banner.raw`; ANSI-wrapped — see "PTY") — parseable but cosmetic-fragile; SessionLocator backstops. Emulated as the honest one-row summary (same reasoning as kirocli, but goose's PTY side actually works). |
 
-IntentMatrix: all four intents Unsupported, kirocli-style — goose has no
-command blocklist, path scoping, or `PermissionPromptURL` wiring. (The
-`approve` mode + a Runner bridge could honestly upgrade `require_approval`
-later — see Future work.)
+IntentMatrix: `require_approval` Emulated (as of 2026-10 — `approve` mode
+asks, the acprpc engine forwards each ask to the user; see Future work);
+the other three Unsupported — goose has no command blocklist or path
+scoping.
 
 ## ACP session lifecycle (session.go)
 
@@ -538,10 +538,13 @@ ACP session's assistant reply readable from `GET /transcript` in real time
 
 ## Future work (explicitly not v1)
 
-- Bridge `session/request_permission` to the Runner's platform permission
-  UI (`PermissionPromptURL` / EventPermissionRequest) — goose's `approve`
-  and `smart_approve` modes make it a natural fit, and it would honestly
-  upgrade `IntentRequireApproval`.
+- ~~Bridge `session/request_permission` to the Runner's platform permission
+  UI~~ — done (2026-10): at limited trust the acprpc engine forwards each
+  ask to `StartOptions.Permissions` (reads excepted, via
+  `PermissionAsksEveryCall`), and `IntentRequireApproval` is Emulated.
+  limited stays on `approve`, not `smart_approve` (whose LLM risk judgment
+  belongs to a future auto-review level) — providers/goosecli/README.md
+  "Trust: why approve, not smart_approve".
 - `session/fork` → BehaviorBranching once mads grows a branching surface.
 - `_goose/unstable/session/steer` (mid-turn message injection) — no mads
   surface exists for it today.

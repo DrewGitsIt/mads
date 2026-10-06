@@ -12,14 +12,16 @@ import (
 //
 // ctx is cancelled when the harness stops waiting for the answer: it
 // withdrew the request (claude-code's control_cancel_request, sent when the
-// turn is interrupted), the process exited, or the session was closed. An
+// turn is interrupted; an ACP agent's $/cancel_request, or the client's own
+// session/cancel), the process exited, or the session was closed. An
 // asker seeing ctx done should stop asking the user and return promptly;
 // the adapter discards a decision returned after that point, since nobody
 // is left to receive it.
 //
 // The contract is harness-agnostic on purpose: the same func serves
-// claude-code's stream-json can_use_tool requests today and an ACP agent's
-// session/request_permission later.
+// claude-code's stream-json can_use_tool requests (providers/claudecode
+// hostprompt.go) and ACP agents' session/request_permission (providers/
+// acprpc handlePermission — goose, kiro).
 type PermissionAsker func(ctx context.Context, ask PermissionAsk) PermissionDecision
 
 // PermissionAsk is one tool call the harness wants permission for.

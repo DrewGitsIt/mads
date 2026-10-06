@@ -37,8 +37,11 @@ type Script struct {
 	// successfully (announcing the attempt is fine; a non-error result is not).
 	AttemptWrite func() string
 	// AttemptCommand returns a prompt that makes the agent try to run a
-	// command. Used to probe BehaviorTrustLimited: the command must never
-	// complete successfully.
+	// command. Used to probe BehaviorTrustLimited: limited asks the user
+	// before a command rather than denying it outright, and the probe wires
+	// no asker (StartOptions.Permissions nil) — nobody approves — so the
+	// command must never complete successfully, and the turn must not hang
+	// on the unanswered ask.
 	AttemptCommand func() string
 	// Unprompted returns a prompt after which the agent produces more
 	// main-agent output once its own turn has already ended — the claude

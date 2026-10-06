@@ -124,6 +124,21 @@ type Config struct {
 	// (providers/goosecli/testdata/captures/acp-transcript.jsonl line 33),
 	// so classification must be supplied, not read off the wire.
 	ToolClassTable []ToolClassRule
+	// PermissionAsksEveryCall declares that the agent's limited-trust mode
+	// asks session/request_permission for EVERY tool call, reads included,
+	// rather than judging risk itself. goose's "approve" mode is exactly
+	// that ("Ask before every tool call", goose_mode.rs; permission_
+	// inspector.rs sends every call without a user-config grant to
+	// RequireApproval — and the capture asks even for todo__todo_write,
+	// acp-transcript.jsonl line 34). Forwarding all of those to the user
+	// would make a card of every file read, so with this set and an asker
+	// wired (StartOptions.Permissions, limited trust only), the engine
+	// allows the read/search/think/fetch classes itself and forwards only
+	// the rest — approximating the "reads don't ask, risky things do" shape
+	// claude-code's own normal mode has. False (kiro-cli: its own
+	// per-request policy already trusts reads) forwards every ask the agent
+	// makes, unfiltered: the harness alone decides what is worth asking.
+	PermissionAsksEveryCall bool
 }
 
 // ConfigOptionValue is one PreseedConfigOptions entry.

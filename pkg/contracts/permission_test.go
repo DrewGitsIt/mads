@@ -14,8 +14,8 @@ func TestSessionTrustIntents(t *testing.T) {
 	}{
 		{contracts.TrustFull, contracts.IntentSet{}},
 		{"", contracts.IntentSet{}},
+		// Limited asks before commands rather than denying them.
 		{contracts.TrustLimited, contracts.IntentSet{
-			contracts.IntentDenyCommands:    true,
 			contracts.IntentRequireApproval: true,
 		}},
 		{contracts.TrustReadOnly, contracts.IntentSet{
