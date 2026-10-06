@@ -49,7 +49,7 @@ func validateSession(s *contracts.Session) *contracts.ValidationError {
 	// FULL access — a typo'd "read-only" must be rejected here, not silently
 	// granted everything.
 	if s.Trust != "" && !s.Trust.Valid() {
-		v.Add("trust", "must be one of: full, limited, read_only")
+		v.Add("trust", "must be one of: "+contracts.SessionTrustChoices())
 	}
 	if v.Empty() {
 		return nil
@@ -74,6 +74,8 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 	if sess.NameSource == "" {
 		sess.NameSource = contracts.SessionNameSourceDerived
 	}
+	// Derived on read by the Router, never stored (Session.EffectiveTrust).
+	sess.EffectiveTrust = ""
 	if verr := validateSession(sess); verr != nil {
 		return verr
 	}
@@ -100,6 +102,9 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 // changed: session.renamed, session.activity_changed, and session.updated
 // for anything else (provider binding, summary, active task, ...).
 func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor string) error {
+	// A record read through the Router comes back decorated; writing it
+	// back must not freeze the derivation into the row.
+	sess.EffectiveTrust = ""
 	if verr := validateSession(sess); verr != nil {
 		return verr
 	}

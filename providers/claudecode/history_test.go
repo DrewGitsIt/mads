@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // writeNative writes a transcript <root>/<project>/<id>.jsonl from raw lines.
@@ -131,4 +133,72 @@ func mustTime(t *testing.T, s string) time.Time {
 		t.Fatal(err)
 	}
 	return ts
+}
+
+// TestScanHistoryTrustFromPermissionMode: an imported conversation carries
+// the mads level matching the permission mode it last ran in — the latest
+// main-chain permissionMode, whether on a user line or a "permission-mode"
+// line. The fixture (testdata/history-permission-mode.jsonl, real 2.1.274
+// line shapes) starts in default and switches to auto; a sidechain line in
+// plan mode after the switch must not count. Generated conversations cover
+// the rest of the table, a mode switch landing after a multi-megabyte line
+// (the reader has no line cap), and a transcript with no mode at all.
+func TestScanHistoryTrustFromPermissionMode(t *testing.T) {
+	root := t.TempDir()
+	p := New(Config{TranscriptDir: root, LiveSessionsDir: t.TempDir()})
+	const ts = "2026-09-01T10:00:00.000Z"
+
+	fixture, err := os.ReadFile(filepath.Join("testdata", "history-permission-mode.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeNative(t, root, "-work-release", "fixture", strings.TrimRight(string(fixture), "\n"))
+
+	withMode := func(mode string) string {
+		return fmt.Sprintf(`{"type":"user","timestamp":%q,"cwd":"/w","entrypoint":"cli","permissionMode":%q,"message":{"role":"user","content":"go"}}`, ts, mode)
+	}
+	modeLine := func(mode string) string {
+		return fmt.Sprintf(`{"type":"permission-mode","permissionMode":%q,"sessionId":"s"}`, mode)
+	}
+	for id, mode := range map[string]string{
+		"bypass": "bypassPermissions", "default": "default", "manual": "manual",
+		"accept": "acceptEdits", "plan": "plan", "dontask": "dontAsk", "future": "telepathy",
+	} {
+		writeNative(t, root, "-w", id, withMode(mode))
+	}
+	writeNative(t, root, "-w", "none", nativeUser(ts, "/w", "cli", "go"))
+	huge := fmt.Sprintf(`{"type":"user","timestamp":%q,"cwd":"/w","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":%q}]}}`,
+		ts, strings.Repeat("y", 3<<20))
+	writeNative(t, root, "-w", "huge", withMode("default"), huge, modeLine("bypassPermissions"))
+
+	scan, err := p.ScanHistory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]provider.Trust{}
+	for _, c := range scan.Conversations {
+		got[c.Ref] = c.Trust
+	}
+	want := map[string]provider.Trust{
+		"fixture": provider.TrustAutoReview,
+		"bypass":  provider.TrustFull,
+		"default": provider.TrustLimited,
+		"manual":  provider.TrustLimited,
+		"accept":  provider.TrustLimited,
+		"plan":    provider.TrustReadOnly,
+		"dontask": "",
+		"future":  "",
+		"none":    "",
+		"huge":    provider.TrustFull,
+	}
+	for ref, w := range want {
+		g, ok := got[ref]
+		if !ok {
+			t.Errorf("%s: not scanned", ref)
+			continue
+		}
+		if g != w {
+			t.Errorf("%s: trust = %q, want %q", ref, g, w)
+		}
+	}
 }

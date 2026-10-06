@@ -17,6 +17,8 @@ export interface TrustPillProps {
   resolved?: ResolvedSessionField;
   /** The selected provider's capability matrix — see trustLevels.ts. */
   matrix?: Record<ProviderBehavior, ProviderSupport>;
+  /** The selected provider's name, for Auto-review's "(runs as Limited on …)" note. */
+  provider?: string;
   /** The selected agent's declared permissions, if any (Library agent record). */
   agentPermissions?: AgentPermissions;
   /** The selected provider's per-intent enforcement declaration — see providers/provider/intent.go. */
@@ -28,12 +30,13 @@ export function TrustPill({
   value,
   resolved,
   matrix,
+  provider,
   agentPermissions,
   intentMatrix,
   onChange,
 }: TrustPillProps) {
   const [open, setOpen] = useState(false);
-  const levels = trustLevels(matrix);
+  const levels = trustLevels(matrix, provider);
   const selected = levels.find((t) => t.value === value);
   const resolvedLevel = levels.find((t) => t.value === resolved?.value);
   const intentNotes = agentIntentNotes(agentPermissions, intentMatrix);

@@ -231,6 +231,21 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 	} else {
 		c.add(provider.BehaviorTrustReadOnly, nil, "declared unsupported: not probed for a negative")
 	}
+	// Auto-review's verdicts are the harness's own model judging each call
+	// — nothing a scripted prompt can pin either way — so a working
+	// declaration is held only to accepting the level at Start. An
+	// unsupported one is held to its promised fallback instead: run as
+	// limited (provider.EffectiveTrust), which the limited probe can check.
+	switch {
+	case m[provider.BehaviorTrustAutoReview].Works():
+		c.add(provider.BehaviorTrustAutoReview, c.startsAt(provider.TrustAutoReview),
+			"start-only: the reviewer's verdicts are the harness's model judging, not probed")
+	case m[provider.BehaviorTrustLimited].Works() && s.AttemptCommand != nil:
+		c.add(provider.BehaviorTrustAutoReview, c.trust(provider.TrustAutoReview, s.AttemptCommand),
+			"declared unsupported: probed as its limited fallback")
+	default:
+		c.add(provider.BehaviorTrustAutoReview, nil, "declared unsupported: not probed for a negative")
+	}
 
 	return c.results
 }
@@ -731,6 +746,20 @@ func (c *checker) trust(level provider.Trust, prompt func() string) error {
 			return c.ctx.Err()
 		}
 	}
+}
+
+// startsAt proves a session starts at the given trust level on a working
+// transport — for a level whose behavior can't be probed with a script.
+func (c *checker) startsAt(level provider.Trust) error {
+	mode := provider.ModeACP
+	if !c.m[provider.BehaviorACP].Works() {
+		mode = provider.ModePTY
+	}
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: mode, Trust: level})
+	if err != nil {
+		return fmt.Errorf("Start(%s, trust=%s): %w", mode, level, err)
+	}
+	return sess.Close()
 }
 
 // mcpServers proves the field can never fail a session launch, regardless

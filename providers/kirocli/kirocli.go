@@ -102,6 +102,14 @@ func (p *Provider) Matrix() provider.Matrix {
 		// --disallowedTools is. See README.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
+		// No reviewer: kiro documents no mode in which something other
+		// than the user approves a tool call (its ACP modes select agents;
+		// its per-request policy is fixed — trusted tools run, the rest
+		// ask). An auto_review session therefore runs as limited — Start
+		// maps it through provider.EffectiveTrust — and the Router puts
+		// that on the session record (effective_trust) so the downgrade is
+		// visible. See README.
+		provider.BehaviorTrustAutoReview: provider.Unsupported,
 		// The acprpc engine now rides descriptors on session/new (a spec
 		// obligation), but no kiro doc confirms the agent actually connects
 		// them — the row stays declared-unsupported until MADS_KIRO_SMOKE
@@ -185,6 +193,11 @@ func (p *Provider) Start(ctx context.Context, opts provider.StartOptions) (provi
 	if opts.Fork && opts.Resume != "" {
 		return nil, fmt.Errorf("fork on resume: %w", provider.ErrUnsupported)
 	}
+	// BehaviorTrustAutoReview is Unsupported: kiro has no reviewer, so an
+	// auto_review request runs as limited on both transports. The Runner
+	// already passes the effective level; this keeps any other caller
+	// from reaching a trust switch that doesn't know the value.
+	opts.Trust = provider.EffectiveTrust(opts.Trust, p.Matrix())
 	switch opts.Mode {
 	case provider.ModeACP:
 		return p.startACP(ctx, opts)

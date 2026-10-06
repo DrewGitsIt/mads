@@ -544,7 +544,12 @@ export function ConversationTab({
       void routerClient
         .setSessionTrust(sessionId, trust)
         .then((updated) => {
-          setSession((s) => (s ? { ...s, trust: updated.trust } : s));
+          // effective_trust rides along: the Router recomputes it for the
+          // new level (auto_review on a provider with no reviewer → limited),
+          // and a stale one would keep — or miss — the header's fallback.
+          setSession((s) =>
+            s ? { ...s, trust: updated.trust, effective_trust: updated.effective_trust } : s,
+          );
           setCommandToast({ tone: "ok", message: `Trust set to ${trust} — agent restarted to apply it.` });
         })
         .catch((err) => {

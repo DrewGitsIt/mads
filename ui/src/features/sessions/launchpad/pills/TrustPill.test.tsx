@@ -60,6 +60,52 @@ describe("TrustPill", () => {
     expect(screen.getAllByText(/not enforced by the selected provider/)).toHaveLength(2);
   });
 
+  it("lists the levels in picker order, Auto-review second", () => {
+    expect(trustLevels().map((l) => l.value)).toEqual(["full", "auto_review", "limited", "read_only"]);
+    render(<TrustPill resolved={{ value: "limited", source: "config" }} onChange={() => {}} />);
+    fireEvent.click(screen.getByText(/Limited \(default\)/));
+    expect(screen.getByText("Auto-review")).toBeTruthy();
+  });
+
+  it("marks Auto-review as running Limited on a provider with no reviewer", () => {
+    const onChange = vi.fn();
+    render(
+      <TrustPill
+        resolved={{ value: "limited", source: "config" }}
+        matrix={{ trust_limited: "emulated", trust_auto_review: "unsupported" }}
+        provider="kiro-cli"
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByText(/Limited \(default\)/));
+    expect(screen.getByText(/kiro-cli has no reviewer, so this runs as Limited\.$/)).toBeTruthy();
+    fireEvent.click(screen.getByText("Auto-review (runs as Limited on kiro-cli)"));
+    // Still requested as auto_review — the record keeps the ask, the
+    // Router reports the fallback.
+    expect(onChange).toHaveBeenCalledWith("auto_review");
+  });
+
+  it("shows the fallback on the trigger once Auto-review is picked on such a provider", () => {
+    render(
+      <TrustPill
+        value="auto_review"
+        matrix={{ trust_auto_review: "unsupported" }}
+        provider="kiro-cli"
+        onChange={() => {}}
+      />,
+    );
+    expect(screen.getByText("Auto-review (runs as Limited on kiro-cli)")).toBeTruthy();
+  });
+
+  it("leaves Auto-review unannotated where the provider runs a reviewer, or is unknown", () => {
+    const native = trustLevels({ trust_auto_review: "native" }, "claude-code");
+    expect(native.find((l) => l.value === "auto_review")).toMatchObject({
+      label: "Auto-review",
+      fallback: undefined,
+    });
+    expect(trustLevels().find((l) => l.value === "auto_review")?.label).toBe("Auto-review");
+  });
+
   it("does not show an agent-intents block when the agent declares nothing", () => {
     render(
       <TrustPill

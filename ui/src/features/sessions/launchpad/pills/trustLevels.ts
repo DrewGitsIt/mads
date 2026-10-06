@@ -4,6 +4,26 @@ export interface TrustLevel {
   value: SessionTrust;
   label: string;
   description: string;
+  /**
+   * Set when the selected provider can't run this level, to the level it
+   * runs as instead (today only auto_review → limited, on a harness with no
+   * reviewer). The label already says so; this is for callers that need
+   * the value.
+   */
+  fallback?: SessionTrust;
+}
+
+/** Display names, in picker order (pkg/contracts SessionTrusts). */
+const TRUST_LABELS: Record<SessionTrust, string> = {
+  full: "Full access",
+  auto_review: "Auto-review",
+  limited: "Limited",
+  read_only: "Read-only",
+};
+
+/** The plain display name of a trust level — no provider annotation. */
+export function trustLabel(trust: SessionTrust): string {
+  return TRUST_LABELS[trust] ?? trust;
 }
 
 /**
@@ -32,27 +52,77 @@ function enforcementNote(support: ProviderSupport): string {
 }
 
 /**
+ * The level a session asking for `trust` runs at on a provider declaring
+ * `matrix` — the UI twin of provider.EffectiveTrust (providers/provider):
+ * auto_review falls back to limited when BehaviorTrustAutoReview isn't
+ * working. Unlike the restriction notes above, an unknown provider (no
+ * matrix) reports no fallback: falling back is the provider's to declare,
+ * and guessing one would put a downgrade on screen that may not happen.
+ */
+export function trustFallback(
+  trust: SessionTrust,
+  matrix?: Record<ProviderBehavior, ProviderSupport>,
+): SessionTrust | undefined {
+  if (trust !== "auto_review" || !matrix) return undefined;
+  const support = matrix.trust_auto_review ?? "unsupported";
+  return support === "unsupported" ? "limited" : undefined;
+}
+
+/**
+ * Auto-review's honesty line. Worded apart from enforcementNote on purpose:
+ * a missing reviewer doesn't loosen anything — the session asks more, as
+ * Limited — so "not enforced … runs as Full access" would be wrong here.
+ */
+function reviewerNote(
+  matrix: Record<ProviderBehavior, ProviderSupport> | undefined,
+  provider: string | undefined,
+): string {
+  if (!matrix) return "runs as Limited on a provider with no reviewer.";
+  switch (matrix.trust_auto_review ?? "unsupported") {
+    case "native":
+      return "the selected provider's harness runs the reviewer.";
+    case "emulated":
+      return "the selected provider emulates the reviewer — best-effort.";
+    case "unsupported":
+      return `${provider ?? "the selected provider"} has no reviewer, so this runs as Limited.`;
+  }
+}
+
+/**
  * Builds the trust option list, deriving each restricted level's honesty
  * from the selected provider's capability matrix (§11 GET /providers)
- * instead of a hardcoded disclaimer.
+ * instead of a hardcoded disclaimer. `provider` names the provider in
+ * Auto-review's fallback annotation — "(runs as Limited on kiro-cli)" —
+ * when its matrix says it has no reviewer.
  */
 export function trustLevels(
   matrix?: Record<ProviderBehavior, ProviderSupport>,
+  provider?: string,
 ): TrustLevel[] {
+  const autoFallback = trustFallback("auto_review", matrix);
+  const where = provider ?? "this provider";
   return [
     {
       value: "full",
-      label: "Full access",
+      label: TRUST_LABELS.full,
       description: "Agent edits files and runs any command without asking.",
     },
     {
+      value: "auto_review",
+      label: autoFallback
+        ? `${TRUST_LABELS.auto_review} (runs as ${trustLabel(autoFallback)} on ${where})`
+        : TRUST_LABELS.auto_review,
+      description: `A reviewer model approves routine actions and asks you only about risky or uncertain ones — ${reviewerNote(matrix, provider)}`,
+      fallback: autoFallback,
+    },
+    {
       value: "limited",
-      label: "Limited",
+      label: TRUST_LABELS.limited,
       description: `Agent asks you before running commands or other risky actions — ${enforcementNote(trustSupport(matrix, "trust_limited"))}`,
     },
     {
       value: "read_only",
-      label: "Read-only",
+      label: TRUST_LABELS.read_only,
       description: `Blocks edits and commands entirely — ${enforcementNote(trustSupport(matrix, "trust_read_only"))}`,
     },
   ];

@@ -419,9 +419,13 @@ func (r *Runner) Start(ctx context.Context) error {
 		// ForkOnResume: ProviderRef is a native conversation mads must not
 		// append to (an import), so this start forks it. The flag stays set
 		// on the record until the fork's own ref is persisted.
-		Fork:  sess.ForkOnResume && sess.ProviderRef != "",
-		Env:   capEnv,
-		Trust: provider.Trust(sess.Trust),
+		Fork: sess.ForkOnResume && sess.ProviderRef != "",
+		Env:  capEnv,
+		// The level the provider can actually run: auto_review on a
+		// harness with no reviewer starts as limited. The record keeps
+		// what the user asked for; the Router reports the difference
+		// (Session.EffectiveTrust), so the fallback is visible, not silent.
+		Trust: provider.EffectiveTrust(provider.Trust(sess.Trust), p.Matrix()),
 	}
 	// Persona-level tool-intent policy (agent-concept redesign §2). The
 	// persona's Allowlist/Denylist fold through EffectiveToolIntents,

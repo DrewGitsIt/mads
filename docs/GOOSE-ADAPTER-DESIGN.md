@@ -542,9 +542,10 @@ ACP session's assistant reply readable from `GET /transcript` in real time
   UI~~ — done (2026-10): at limited trust the acprpc engine forwards each
   ask to `StartOptions.Permissions` (reads excepted, via
   `PermissionAsksEveryCall`), and `IntentRequireApproval` is Emulated.
-  limited stays on `approve`, not `smart_approve` (whose LLM risk judgment
-  belongs to a future auto-review level) — providers/goosecli/README.md
-  "Trust: why approve, not smart_approve".
+  limited stays on `approve`; `smart_approve` (whose LLM risk judgment is
+  the reviewer) became the `auto_review` level's mode (2026-10), its asks
+  forwarded unfiltered — providers/goosecli/README.md "Trust: approve, and
+  smart_approve for auto-review".
 - `session/fork` → BehaviorBranching once mads grows a branching surface.
 - `_goose/unstable/session/steer` (mid-turn message injection) — no mads
   surface exists for it today.

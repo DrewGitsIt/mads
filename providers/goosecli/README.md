@@ -29,7 +29,8 @@ row says so.
 | ACP | **Native** | `goose acp --with-builtin developer` — the captured spawn shape. |
 | PTY | **Native** | `goose session` under a pty (pty.go); banner ref discovery plus the SessionLocator backstop (locate.go: `session list` filtered by cwd + created_at, verified by first-message export — declines on any ambiguity). |
 | MCPServers | **Native** | See "MCPServers, both transports" below. |
-| TrustLimited / TrustReadOnly | **Emulated** | goose's `approve` mode, every ask answered by the engine: limited forwards edits/commands/unknowns to the user and allows reads itself; read_only is the class gate alone — not a harness-level block. See "Trust: why approve, not smart_approve" and the trust table below. |
+| TrustLimited / TrustReadOnly | **Emulated** | goose's `approve` mode, every ask answered by the engine: limited forwards edits/commands/unknowns to the user and allows reads itself; read_only is the class gate alone — not a harness-level block. See "Trust: approve, and smart_approve for auto-review" and the trust table below. |
+| TrustAutoReview | **Native** | goose's `smart_approve` mode is a reviewer of goose's own: read-only-annotated tools run, an extra LLM call judges the rest, and only what it judges not read-only asks — every such ask forwarded to the user unfiltered. ACP only: the PTY transport sets no mode for any trust level. |
 | Branching | **Unsupported** | goose's session fork is real, but mads has no provider-layer branching surface — flip when it grows one. |
 | CwdReroot | **Unsupported** | No mechanism at all. |
 
@@ -103,7 +104,7 @@ At limited with an asker, an unlisted identity is asked about instead.
 Full trust maps to goose mode `auto` explicitly, so a user config.yaml
 default of `approve` can't stall a headless session.
 
-## Trust: why approve, not smart_approve
+## Trust: approve, and smart_approve for auto-review
 
 goose has four modes (`crates/goose-provider-types/src/goose_mode.rs`,
 September 2026 tree): `auto` ("Automatically approve tool calls"),
@@ -122,8 +123,16 @@ in goose's own permission config:
 mads' `limited` means "follow the harness": ask before risky things,
 reads don't ask — claude-code's normal mode. `smart_approve` reaches that
 shape by having a model judge risk: nondeterministic, token-spending, and
-exactly the "auto-review" idea a separate trust level would own — not
-limited's. So limited (and read_only) stay on `approve`, the only
+exactly what the separate `auto_review` level ("Auto-review") asks for —
+so `auto_review` maps to `smart_approve`, and the engine forwards every
+ask it makes to the user unfiltered (each is the reviewer's escalation;
+goose caches a not-read-only verdict per tool as AskBefore, so a tool
+judged risky once asks thereafter without another LLM call). Note what
+goose's reviewer judges: "is this call read-only?", not claude's broader
+"is this risky?" — so under goose an edit always escalates, where
+claude's classifier would usually let a routine one through.
+
+limited (and read_only) stay on `approve`, the only
 deterministic asking mode, and the binding sets the engine's
 `PermissionAsksEveryCall`: at limited the engine allows the read/search/
 think/fetch classes itself and forwards only edits, commands and unknown

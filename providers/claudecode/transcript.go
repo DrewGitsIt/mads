@@ -73,7 +73,12 @@ type transcriptLine struct {
 	// terminal, "sdk-cli" for an SDK/automation run. AITitle is the
 	// conversation's generated title, on "ai-title" lines (history.go).
 	Entrypoint string `json:"entrypoint"`
-	AITitle    string `json:"aiTitle"`
+	// PermissionMode is the mode the CLI was in when it wrote the line:
+	// stamped on every user line, and alone on the "permission-mode" lines
+	// it writes whenever the mode changes ({"type":"permission-mode",
+	// "permissionMode":"auto",…}). history.go's import reads the latest.
+	PermissionMode string `json:"permissionMode"`
+	AITitle        string `json:"aiTitle"`
 	// Timestamp is claude-code's own RFC3339 stamp on every conversation
 	// line. Unparseable or absent leaves the zero time.Time.
 	Timestamp string `json:"timestamp"`

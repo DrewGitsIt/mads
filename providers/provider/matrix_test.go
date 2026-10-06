@@ -71,6 +71,8 @@ func TestRequirementLevels(t *testing.T) {
 		BehaviorOneShot:     LevelRequired,
 		BehaviorResume:      LevelExpected,
 		BehaviorBranching:   LevelOptional,
+		// A provider without a reviewer is fine: auto_review falls back.
+		BehaviorTrustAutoReview: LevelOptional,
 	} {
 		if got := Requirement(b); got != want {
 			t.Errorf("Requirement(%s) = %s, want %s", b, got, want)
@@ -79,7 +81,36 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 16 {
-		t.Errorf("Behaviors() = %d entries, want 16", n)
+	if n := len(Behaviors()); n != 17 {
+		t.Errorf("Behaviors() = %d entries, want 17", n)
+	}
+}
+
+// TestEffectiveTrust: auto_review on a provider without a working reviewer
+// declaration runs as limited — never looser — and every other level, or
+// auto_review where the reviewer exists, runs as requested.
+func TestEffectiveTrust(t *testing.T) {
+	native := fullMatrix(nil)
+	emulated := fullMatrix(map[Behavior]Support{BehaviorTrustAutoReview: Emulated})
+	none := fullMatrix(map[Behavior]Support{BehaviorTrustAutoReview: Unsupported})
+	cases := []struct {
+		trust Trust
+		m     Matrix
+		want  Trust
+	}{
+		{TrustAutoReview, native, TrustAutoReview},
+		{TrustAutoReview, emulated, TrustAutoReview},
+		{TrustAutoReview, none, TrustLimited},
+		{TrustAutoReview, Matrix{}, TrustLimited}, // no stance is no reviewer
+		{TrustAutoReview, nil, TrustLimited},
+		{TrustFull, none, TrustFull},
+		{TrustLimited, none, TrustLimited},
+		{TrustReadOnly, none, TrustReadOnly},
+		{"", none, ""},
+	}
+	for _, c := range cases {
+		if got := EffectiveTrust(c.trust, c.m); got != c.want {
+			t.Errorf("EffectiveTrust(%q, auto_review=%q) = %q, want %q", c.trust, c.m[BehaviorTrustAutoReview], got, c.want)
+		}
 	}
 }

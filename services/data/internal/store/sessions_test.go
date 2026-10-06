@@ -572,3 +572,32 @@ func TestRecordCommitProvenance(t *testing.T) {
 		t.Errorf("hook commit payload = %v, want no source", agent)
 	}
 }
+
+// TestSessionEffectiveTrustNeverStored: effective_trust is the Router's
+// derivation from the provider's declaration, recomputed on every read; a
+// decorated record written back (Create or Update) must not freeze it into
+// the row, or a provider that later grows a reviewer would keep reporting
+// the old downgrade. auto_review itself is a valid level to store.
+func TestSessionEffectiveTrustNeverStored(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Trust: contracts.TrustAutoReview, EffectiveTrust: contracts.TrustLimited})
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Trust != contracts.TrustAutoReview || got.EffectiveTrust != "" {
+		t.Fatalf("after create: trust %q, effective %q — want auto_review stored, effective dropped", got.Trust, got.EffectiveTrust)
+	}
+	got.EffectiveTrust = contracts.TrustLimited
+	if err := s.Update(ctx, got, "user"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.EffectiveTrust != "" {
+		t.Fatalf("after update: effective %q stored, want dropped", again.EffectiveTrust)
+	}
+}

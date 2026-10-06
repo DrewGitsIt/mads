@@ -357,7 +357,7 @@ func ValidateConfig(c *Config) *ValidationError {
 		v.Add("cost_alert_cents", "must not be negative")
 	}
 	if c.DefaultTrust != "" && !c.DefaultTrust.Valid() {
-		v.Add("default_trust", "must be one of: full, limited, read_only")
+		v.Add("default_trust", "must be one of: "+SessionTrustChoices())
 	}
 	if c.DefaultIsolation != "" && c.DefaultIsolation != IsolationWorktree && c.DefaultIsolation != IsolationCurrentDir {
 		v.Add("default_isolation", "must be one of: worktree, current_dir")

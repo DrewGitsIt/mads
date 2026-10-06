@@ -448,3 +448,62 @@ func (b *safeBuffer) String() string {
 func (b *safeBuffer) lines() int {
 	return strings.Count(b.String(), "\n")
 }
+
+// TestHostPromptAutoModeCapture replays a real auto-mode run (claude-code
+// 2.1.285, sonnet, --permission-mode auto --permission-prompt-tool stdio,
+// an autoMode hard_deny rule blocking curl to 127.0.0.1:9, and four such
+// curls asked for — README "Auto-review: claude's auto mode"). The first
+// two blocks are the classifier's own: a system permission_denied line and
+// an error tool_result, no ask. From the third consecutive block claude
+// stops trusting its reviewer and asks the host instead — so the capture
+// holds exactly two can_use_tool requests, both carrying the "N
+// consecutive actions were blocked" reason the card shows.
+func TestHostPromptAutoModeCapture(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "stream-auto-mode.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var written safeBuffer
+	asker := newRecordingAsker(func(provider.PermissionAsk) provider.PermissionDecision {
+		return provider.PermissionDecision{Allow: false, Message: "no"}
+	})
+	s := &streamSession{
+		events:    make(chan provider.Event, 1024),
+		announced: make(chan string, 1),
+		stdin:     &written,
+		asker:     asker.ask,
+		asks:      map[string]context.CancelFunc{},
+	}
+	s.askCtx, s.askStop = context.WithCancel(context.Background())
+	defer s.askStop()
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if strings.TrimSpace(ln) != "" {
+			s.handleLine([]byte(ln))
+		}
+	}
+	deadline := time.After(5 * time.Second)
+	for written.lines() < 2 {
+		select {
+		case <-deadline:
+			t.Fatalf("only %d responses written: %s", written.lines(), written.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	asker.mu.Lock()
+	asks := append([]provider.PermissionAsk(nil), asker.asks...)
+	asker.mu.Unlock()
+	if len(asks) != 2 {
+		t.Fatalf("asks = %d, want 2 (only the escalated blocks ask): %+v", len(asks), asks)
+	}
+	for i, a := range asks {
+		if a.Tool != "Bash" || !strings.HasPrefix(a.ToolUseID, "toolu_") {
+			t.Errorf("ask %d = %+v, want a Bash call with its tool_use id", i, a)
+		}
+		if !strings.Contains(a.Reason, "consecutive actions were blocked") {
+			t.Errorf("ask %d reason = %q, want the classifier's escalation reason", i, a.Reason)
+		}
+	}
+	if got := written.String(); strings.Count(got, `"behavior":"deny"`) != 2 {
+		t.Errorf("responses = %s, want two denies", got)
+	}
+}

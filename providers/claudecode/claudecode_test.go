@@ -533,6 +533,10 @@ func TestTrustFlags(t *testing.T) {
 		{"limited, asker", provider.TrustLimited, asker, "permission_mode=manual permission_prompt_tool=stdio disallowed="},
 		{"limited, no asker", provider.TrustLimited, nil, "permission_mode=manual permission_prompt_tool= disallowed="},
 		{"read_only, asker", provider.TrustReadOnly, asker, "permission_mode=manual permission_prompt_tool=stdio disallowed=Bash,Write,Edit,NotebookEdit"},
+		// Auto-review is claude's auto mode; its escalations (a run of
+		// classifier blocks) ride the same host channel limited's asks do.
+		{"auto_review, asker", provider.TrustAutoReview, asker, "permission_mode=auto permission_prompt_tool=stdio disallowed="},
+		{"auto_review, no asker", provider.TrustAutoReview, nil, "permission_mode=auto permission_prompt_tool= disallowed="},
 		{"full, asker", provider.TrustFull, asker, "permission_mode=bypassPermissions permission_prompt_tool= disallowed="},
 		{"zero value", "", nil, "permission_mode=bypassPermissions permission_prompt_tool= disallowed="},
 	}
@@ -610,6 +614,18 @@ func TestTrustLimitedPTYAsksNatively(t *testing.T) {
 	text := ptyPermissionEcho(t, provider.StartOptions{Trust: provider.TrustLimited, Permissions: asker})
 	if !strings.Contains(text, "permission_mode=manual permission_prompt_tool= ") {
 		t.Errorf("want manual mode without the host channel, got %q", text)
+	}
+}
+
+// TestTrustAutoReviewPTYAsksNatively: auto mode on the terminal, with
+// claude's own UI answering whatever the classifier escalates.
+func TestTrustAutoReviewPTYAsksNatively(t *testing.T) {
+	asker := func(context.Context, provider.PermissionAsk) provider.PermissionDecision {
+		return provider.PermissionDecision{}
+	}
+	text := ptyPermissionEcho(t, provider.StartOptions{Trust: provider.TrustAutoReview, Permissions: asker})
+	if !strings.Contains(text, "permission_mode=auto permission_prompt_tool= ") {
+		t.Errorf("want auto mode without the host channel, got %q", text)
 	}
 }
 

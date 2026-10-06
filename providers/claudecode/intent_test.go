@@ -58,6 +58,11 @@ func TestIntentMatrixMatchesArgConstruction(t *testing.T) {
 			t.Errorf("trust %s: trustArgs = %q, want manual mode answered over the stdio host channel", trust, args)
 		}
 	}
+	// auto_review compiles to require_approval too: the classifier's
+	// escalations reach the user over the same channel.
+	if args := strings.Join(trustArgs(provider.TrustAutoReview, true), " "); args != "--permission-mode auto --permission-prompt-tool stdio" {
+		t.Errorf("trust auto_review: trustArgs = %q, want auto mode answered over the stdio host channel", args)
+	}
 	if args := strings.Join(trustArgs(provider.TrustFull, true), " "); strings.Contains(args, "--permission-prompt-tool") {
 		t.Errorf("trust full: trustArgs = %q, want no prompt channel (bypassPermissions never asks)", args)
 	}

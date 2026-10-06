@@ -1,6 +1,9 @@
 package contracts
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // SessionActivity is derived state, not a user-managed one (spec §1): active
 // while the agent process runs or activity is recent, inactive otherwise.
@@ -22,13 +25,33 @@ const (
 type SessionTrust string
 
 const (
-	TrustFull     SessionTrust = "full"
-	TrustLimited  SessionTrust = "limited"
-	TrustReadOnly SessionTrust = "read_only"
+	TrustFull SessionTrust = "full"
+	// TrustAutoReview delegates the routine approvals to a reviewer inside
+	// the harness — typically a smaller model judging each call — which lets
+	// routine calls through and escalates only the risky or uncertain ones
+	// to the user, as the same Allow/Deny card limited shows. Not every
+	// harness has a reviewer: a provider declaring
+	// BehaviorTrustAutoReview unsupported runs such a session as
+	// TrustLimited instead, and the Router says so on the record
+	// (Session.EffectiveTrust).
+	TrustAutoReview SessionTrust = "auto_review"
+	TrustLimited    SessionTrust = "limited"
+	TrustReadOnly   SessionTrust = "read_only"
 )
 
-// SessionTrusts is the full registry, for validation and enumeration.
-var SessionTrusts = []SessionTrust{TrustFull, TrustLimited, TrustReadOnly}
+// SessionTrusts is the full registry, for validation and enumeration, in
+// picker order: most to least permissive.
+var SessionTrusts = []SessionTrust{TrustFull, TrustAutoReview, TrustLimited, TrustReadOnly}
+
+// SessionTrustChoices is SessionTrusts as the "must be one of: …" list a
+// validation message names, so no message can fall behind the registry.
+func SessionTrustChoices() string {
+	names := make([]string, len(SessionTrusts))
+	for i, t := range SessionTrusts {
+		names[i] = string(t)
+	}
+	return strings.Join(names, ", ")
+}
 
 // Valid reports whether t is a registered trust level.
 func (t SessionTrust) Valid() bool {
@@ -127,8 +150,18 @@ type Session struct {
 	// Empty means no agent binding — no capability wiring occurs.
 	Agent     string `json:"agent,omitempty"`
 	Isolation string `json:"isolation,omitempty"`
-	// Trust is the session's trust level (MADS-UX §3.2 Trust pill).
+	// Trust is the session's trust level (MADS-UX §3.2 Trust pill) — the
+	// level the user asked for.
 	Trust SessionTrust `json:"trust,omitempty"`
+	// EffectiveTrust is the level the session actually runs at, set only
+	// when that differs from Trust: auto_review on a provider whose harness
+	// has no reviewer (BehaviorTrustAutoReview unsupported) runs as limited,
+	// and the UI must say so rather than downgrade silently. Derived, never
+	// stored: the Router fills it from the provider's declaration on every
+	// read (services/router/internal/api decorateSession), and the Data
+	// Service drops whatever a write carries, so a stale value can't outlive
+	// a provider that has since grown the capability.
+	EffectiveTrust SessionTrust `json:"effective_trust,omitempty"`
 	// WorktreeDir is the absolute path of this session's isolated worktree
 	// (spec §17; docs/SESSION-WORKTREES-DESIGN.md D1), set at its first start
 	// when Isolation is "worktree" and Dir is a git repo. Empty means the

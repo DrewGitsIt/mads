@@ -4,6 +4,7 @@ import { ConversationHeader } from "./ConversationHeader";
 import { fixtureIsolatedSession, fixtureSessions } from "../../router/fixtures";
 import { agentIndex } from "../../router/agentRef";
 import { resetProviderModelCache } from "../../router/useProviderModels";
+import { resetProviderInfoCache } from "../../router/useProviderInfos";
 
 function stubProviderModels(models: { id: string; name: string; default?: boolean }[]) {
   const fetchMock = vi.fn().mockImplementation((input: URL) => {
@@ -26,6 +27,7 @@ describe("ConversationHeader", () => {
   // still-unresolved fetch and see its stubbed models.
   beforeEach(() => {
     resetProviderModelCache();
+    resetProviderInfoCache();
   });
 
   afterEach(() => {
@@ -199,6 +201,70 @@ describe("ConversationHeader", () => {
     fireEvent.click(screen.getByRole("option", { name: "Full access" }));
 
     expect(onChangeTrust).toHaveBeenCalledWith("full");
+  });
+
+  it("shows a trust fallback on the pill, with the reason on hover", () => {
+    render(
+      <ConversationHeader
+        session={{
+          ...fixtureSessions["session-active"],
+          provider: "kiro-cli",
+          trust: "auto_review",
+          effective_trust: "limited",
+        }}
+        onChangeTrust={() => {}}
+      />,
+    );
+
+    const pill = screen.getByText("Trust: Auto-review → Limited");
+    expect(pill.closest("button")?.getAttribute("title")).toBe(
+      "kiro-cli doesn't support auto-review; running as Limited",
+    );
+  });
+
+  it("shows no fallback when the session runs at the level it asked for", () => {
+    render(
+      <ConversationHeader
+        session={{ ...fixtureSessions["session-active"], provider: "claude-code", trust: "auto_review" }}
+      />,
+    );
+
+    const chip = screen.getByText("Trust: Auto-review");
+    expect(chip.getAttribute("title")).toBeNull();
+  });
+
+  it("marks Auto-review in the menu when the session's provider has no reviewer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((input: URL) => {
+        const url = input.toString();
+        if (url.endsWith("/providers")) {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify([
+                { name: "kiro-cli", matrix: { trust_limited: "emulated", trust_auto_review: "unsupported" } },
+              ]),
+              { status: 200 },
+            ),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify({ models: [] }), { status: 200 }));
+      }),
+    );
+    const onChangeTrust = vi.fn();
+    render(
+      <ConversationHeader
+        session={{ ...fixtureSessions["session-active"], provider: "kiro-cli", trust: "limited" }}
+        onChangeTrust={onChangeTrust}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Trust: Limited"));
+    const option = await screen.findByRole("option", {
+      name: "Auto-review (runs as Limited on kiro-cli)",
+    });
+    fireEvent.click(option);
+    expect(onChangeTrust).toHaveBeenCalledWith("auto_review");
   });
 
   it("renders trust as a static chip when no onChangeTrust handler is wired", () => {

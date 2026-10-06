@@ -22,6 +22,7 @@ func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.decorateSession(&sess)
 	writeJSON(w, http.StatusOK, sess)
 }
 
@@ -107,6 +108,7 @@ func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.adoptDraftAttachments(req.AttachmentDraft, sess.ID)
+	s.decorateSession(sess)
 	resp := map[string]any{"session": req.Session, "addr": addr}
 	if len(req.Links) > 0 {
 		resp["links"] = links
@@ -141,6 +143,7 @@ func (s *server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.decorateSession(&sess)
 	writeJSON(w, http.StatusOK, sess)
 }
 
@@ -161,7 +164,7 @@ func (s *server) handleSetSessionTrust(w http.ResponseWriter, r *http.Request) {
 	}
 	if !body.Trust.Valid() {
 		writeErrMsg(w, http.StatusBadRequest, "set session trust: ",
-			errors.New("trust must be one of: full, limited, read_only"))
+			errors.New("trust must be one of: "+contracts.SessionTrustChoices()))
 		return
 	}
 	sess, err := s.data.Session(r.Context(), id)
@@ -182,6 +185,7 @@ func (s *server) handleSetSessionTrust(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.decorateSession(&sess)
 	writeJSON(w, http.StatusOK, sess)
 }
 
@@ -225,6 +229,7 @@ func (s *server) handleSetSessionModel(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.decorateSession(&sess)
 	addr, running := s.sup.SessionAddr(id)
 	if !running {
 		// Nothing live to reconfigure; the updated record is what the next

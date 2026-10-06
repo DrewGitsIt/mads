@@ -412,3 +412,58 @@ func TestCreateSessionIgnoresClientCreatedAt(t *testing.T) {
 		t.Errorf("created_at=%v imported_from=%q, want server-stamped and empty", created.Session.CreatedAt, created.Session.ImportedFrom)
 	}
 }
+
+// An imported Claude Code conversation continues at the level matching the
+// permission mode it last ran in (claudecode trustFromPermissionMode): auto
+// → auto_review, plan → read_only, bypassPermissions → full, the latest
+// mode winning over earlier ones. One with no recorded mode — or one mads
+// has no level for — takes the configured default, which here is set away
+// from the built-in limited to prove it's the config that applies.
+func TestImportConversationsTrustFromPermissionMode(t *testing.T) {
+	f := newImportFixture(t)
+	ctx := context.Background()
+	cfg, err := f.data.Config(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.DefaultTrust = contracts.TrustReadOnly
+	if err := f.data.UpdateConfig(ctx, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	modeLine := func(mode string) string {
+		return fmt.Sprintf(`{"type":"permission-mode","permissionMode":%q,"sessionId":"s"}`, mode)
+	}
+	userIn := func(mode string) string {
+		return fmt.Sprintf(`{"type":"user","uuid":"u1","timestamp":%q,"cwd":%q,"entrypoint":"cli","permissionMode":%q,"message":{"role":"user","content":"go"}}`, impT1, f.repo, mode)
+	}
+	f.native(t, "-repo", "was-auto", append([]string{modeLine("default"), userIn("default")}, modeLine("auto"))...)
+	f.native(t, "-repo", "was-plan", userIn("plan"))
+	f.native(t, "-repo", "was-bypass", userIn("bypassPermissions"))
+	f.native(t, "-repo", "was-accept", userIn("acceptEdits"))
+	f.native(t, "-repo", "was-dontask", userIn("dontAsk"))
+	f.native(t, "-repo", "no-mode", convo(f.repo, "cli", "older transcript")...)
+
+	if res := f.importAll(t); res["imported"] != 6 {
+		t.Fatalf("POST = %v, want 6 imported", res)
+	}
+	all, err := f.data.Sessions(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]contracts.SessionTrust{}
+	for _, s := range all {
+		got[s.ProviderRef] = s.Trust
+	}
+	for ref, want := range map[string]contracts.SessionTrust{
+		"was-auto":    contracts.TrustAutoReview,
+		"was-plan":    contracts.TrustReadOnly,
+		"was-bypass":  contracts.TrustFull,
+		"was-accept":  contracts.TrustLimited,
+		"was-dontask": contracts.TrustReadOnly, // the configured default
+		"no-mode":     contracts.TrustReadOnly, // the configured default
+	} {
+		if got[ref] != want {
+			t.Errorf("%s: trust = %q, want %q", ref, got[ref], want)
+		}
+	}
+}

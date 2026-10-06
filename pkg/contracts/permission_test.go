@@ -22,12 +22,33 @@ func TestSessionTrustIntents(t *testing.T) {
 			contracts.IntentReadOnly:        true,
 			contracts.IntentRequireApproval: true,
 		}},
+		// Auto-review: a reviewer answers routine asks, but escalations
+		// still reach a human — the same guarantee as limited.
+		{contracts.TrustAutoReview, contracts.IntentSet{
+			contracts.IntentRequireApproval: true,
+		}},
 	}
 	for _, c := range cases {
 		got := c.trust.Intents()
 		if !reflect.DeepEqual(got, c.want) {
 			t.Errorf("SessionTrust(%q).Intents() = %v, want %v", c.trust, got, c.want)
 		}
+	}
+}
+
+func TestSessionTrustRegistry(t *testing.T) {
+	for _, v := range []contracts.SessionTrust{"full", "auto_review", "limited", "read_only"} {
+		if !v.Valid() {
+			t.Errorf("%q not valid", v)
+		}
+	}
+	for _, v := range []contracts.SessionTrust{"", "auto-review", "Auto-review", "autoReview"} {
+		if v.Valid() {
+			t.Errorf("%q valid, want rejected", v)
+		}
+	}
+	if got := contracts.SessionTrustChoices(); got != "full, auto_review, limited, read_only" {
+		t.Errorf("SessionTrustChoices() = %q, want picker order", got)
 	}
 }
 

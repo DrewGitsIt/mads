@@ -157,17 +157,20 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// every tool call — and the engine answers: read_only by its class
 		// gate alone; limited by forwarding the ask to the user
 		// (StartOptions.Permissions), safe classes excepted
-		// (PermissionAsksEveryCall below). "smart_approve" was the other
-		// candidate for limited and is deliberately not used: past
-		// read-only-annotated tools it decides by an extra LLM call
-		// (permission_inspector.rs detect_read_only_requests) — goose's
-		// model judging risk, nondeterministic and token-spending — which
-		// is an "auto-review" trust level of its own, not "ask before
-		// risky things". README "Trust: why approve, not smart_approve".
+		// (PermissionAsksEveryCall below). "smart_approve" is
+		// auto_review's mode, not limited's: past read-only-annotated tools
+		// it decides by an extra LLM call (permission_inspector.rs
+		// detect_read_only_requests) — goose's model judging risk,
+		// nondeterministic and token-spending, which is exactly the
+		// reviewer auto_review asks for — and asks only for what that call
+		// judges not read-only. The engine forwards every such ask to the
+		// user unfiltered. README "Trust: approve, and smart_approve for
+		// auto-review".
 		TrustModes: map[provider.Trust]string{
-			provider.TrustFull:     "auto",
-			provider.TrustLimited:  "approve",
-			provider.TrustReadOnly: "approve",
+			provider.TrustFull:       "auto",
+			provider.TrustAutoReview: "smart_approve",
+			provider.TrustLimited:    "approve",
+			provider.TrustReadOnly:   "approve",
 		},
 		SendModeAtSessionNew: true,
 		// Flat string value — pinned, testdata/captures/acp-transcript.jsonl
@@ -224,6 +227,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// user for everything but reads — not a harness-level block.
 		provider.BehaviorTrustLimited:  provider.Emulated,
 		provider.BehaviorTrustReadOnly: provider.Emulated,
+		// smart_approve is goose's own reviewer: read-only-annotated tools
+		// run, an extra LLM call judges the rest, and only what it judges
+		// not read-only asks — forwarded to the user unfiltered. Native on
+		// ACP; the PTY transport sets no mode for any trust level (pty.go),
+		// as with the rows above.
+		provider.BehaviorTrustAutoReview: provider.Native,
 		// ACP's ref is synchronous at Start-return (Native-strength); the
 		// PTY's rides a banner parse (pty.go) that a cosmetic goose change
 		// could break. Emulated is the honest one-row summary across both

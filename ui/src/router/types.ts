@@ -3,7 +3,8 @@
 // no camelCase translation layer for this first pass.
 
 export type SessionActivity = "active" | "inactive";
-export type SessionTrust = "full" | "limited" | "read_only";
+// Picker order, most to least permissive (pkg/contracts SessionTrusts).
+export type SessionTrust = "full" | "auto_review" | "limited" | "read_only";
 export type SessionNameSource = "derived" | "user" | "generated";
 
 export interface Session {
@@ -17,7 +18,15 @@ export interface Session {
   model?: string;
   agent?: string;
   isolation?: string;
+  /** The level the user asked for. */
   trust?: SessionTrust;
+  /**
+   * The level the session actually runs at, present only when that differs
+   * from `trust`: auto_review on a provider whose harness has no reviewer
+   * runs as limited. Derived by the Router from the provider's capability
+   * declaration on every read, never stored — show it, never write it back.
+   */
+  effective_trust?: SessionTrust;
   worktree_dir?: string;
   worktree_branch?: string;
   /** The branch the checkout had open when this session's worktree was made — the Land target. Absent for a session working in place. */

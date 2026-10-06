@@ -227,6 +227,38 @@ func TestTrustLimitedAsksTheUser(t *testing.T) {
 	}
 }
 
+// TestTrustAutoReviewRidesSmartApprove: auto_review sets goose's
+// smart_approve mode, whose reviewer lets the read through unasked and
+// escalates the rest — each escalation reaching the user unfiltered (no
+// PermissionAsksEveryCall second-guessing), the user's decision picking
+// the reply.
+func TestTrustAutoReviewRidesSmartApprove(t *testing.T) {
+	var mu sync.Mutex
+	var asked []string
+	asker := func(_ context.Context, ask provider.PermissionAsk) provider.PermissionDecision {
+		mu.Lock()
+		asked = append(asked, ask.Tool)
+		mu.Unlock()
+		return provider.PermissionDecision{Allow: ask.Tool == "shell"}
+	}
+	sess := startSession(t, testProvider(t), provider.StartOptions{Trust: provider.TrustAutoReview, Permissions: asker})
+
+	if text := turnText(sendTurn(t, sess, "attempt-view")); !strings.Contains(text, "used text_editor view") {
+		t.Fatalf("view: turn text = %q, want it run unasked", text)
+	}
+	if text := turnText(sendTurn(t, sess, "attempt-shell")); !strings.Contains(text, "used shell") {
+		t.Fatalf("shell allowed by the user: turn text = %q", text)
+	}
+	if text := turnText(sendTurn(t, sess, "attempt-unknown")); !strings.Contains(text, "denied via reject_once") {
+		t.Fatalf("unknown denied by the user: turn text = %q", text)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if strings.Join(asked, ",") != "shell,mystery_tool" {
+		t.Fatalf("asked about %v, want shell then mystery_tool — never the reviewed read", asked)
+	}
+}
+
 func TestTrustReadOnly(t *testing.T) {
 	sess := startSession(t, testProvider(t), provider.StartOptions{Trust: provider.TrustReadOnly})
 

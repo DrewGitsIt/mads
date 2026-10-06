@@ -138,6 +138,9 @@ type Config struct {
 	// claude-code's own normal mode has. False (kiro-cli: its own
 	// per-request policy already trusts reads) forwards every ask the agent
 	// makes, unfiltered: the harness alone decides what is worth asking.
+	// Limited only: at auto_review the agent's own reviewer mode
+	// (TrustModes[TrustAutoReview], e.g. goose smart_approve) has already
+	// filtered, so every ask it makes is forwarded.
 	PermissionAsksEveryCall bool
 }
 

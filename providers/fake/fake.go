@@ -180,6 +180,10 @@ func (f *Fake) Matrix() provider.Matrix {
 		provider.BehaviorCwdReroot:     provider.Unsupported,
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
+		// No scripted reviewer: an auto_review session runs as limited
+		// (provider.EffectiveTrust), the fallback path every layer above
+		// gets exercised against.
+		provider.BehaviorTrustAutoReview: provider.Unsupported,
 		// The fake already fully records/exposes it via MCPServers(ref).
 		provider.BehaviorMCPServers: provider.Native,
 		// OneShot streams scripted chunks with their scripted delay.
@@ -230,7 +234,8 @@ func (f *Fake) Start(_ context.Context, opts provider.StartOptions) (provider.Se
 	f.mcpServers[ref] = opts.MCPServers
 	f.mu.Unlock()
 
-	trust := opts.Trust
+	// Recorded above as passed; run at what the declaration allows.
+	trust := provider.EffectiveTrust(opts.Trust, f.Matrix())
 	if trust == "" {
 		trust = provider.TrustFull
 	}

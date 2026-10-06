@@ -541,6 +541,15 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 //     sees what it asked about and decides.
 //   - limited without an asker: the class gate, as before asking existed —
 //     execute/other/unknown deny, never stall on an ask nobody answers.
+//   - auto_review: exactly limited's two cases, except that every ask is
+//     forwarded unfiltered even with PermissionAsksEveryCall. That knob
+//     describes the agent's limited-trust mode; at auto_review the agent
+//     runs its own reviewer (goose's smart_approve: read-only-annotated
+//     tools allowed, an extra LLM call judging the rest), so whatever
+//     still reaches session/request_permission is what the reviewer
+//     escalated — the user decides it, nothing is second-guessed here. An
+//     agent without a reviewer never sees auto_review: the provider runs
+//     such a session as limited (provider.EffectiveTrust).
 //
 // The identity preferably comes from the recorded tool_call update with
 // the same toolCallId (goose's request params carry none of their own);
@@ -574,9 +583,13 @@ func (s *streamSession) handlePermission(id json.RawMessage, params json.RawMess
 		})
 	}
 
-	// The safe classes are exactly read_only's allowed set.
-	answerSafeLocally := s.cfg.PermissionAsksEveryCall && classAllowed(provider.TrustReadOnly, class)
-	if trust == provider.TrustLimited && asker != nil && !answerSafeLocally {
+	// The safe classes are exactly read_only's allowed set. Only limited's
+	// mode asks about everything (PermissionAsksEveryCall); auto_review's
+	// asks are already a reviewer's escalations.
+	answerSafeLocally := trust == provider.TrustLimited && s.cfg.PermissionAsksEveryCall &&
+		classAllowed(provider.TrustReadOnly, class)
+	asksUser := trust == provider.TrustLimited || trust == provider.TrustAutoReview
+	if asksUser && asker != nil && !answerSafeLocally {
 		input := p.ToolCall.RawInput
 		if len(input) == 0 {
 			input = info.rawInput
@@ -700,14 +713,15 @@ func (s *streamSession) replyPermission(id json.RawMessage, outcome permissionOu
 }
 
 // classAllowed is the engine-fixed trust policy over the ACP kind
-// taxonomy: read_only allows {read, search, think, fetch}; limited
+// taxonomy: read_only allows {read, search, think, fetch}; limited (and
+// auto_review, whose reviewer is the agent's, not the engine's)
 // additionally allows {edit}; everything else — including "unknown",
 // "other", and "execute" — denies below full trust (the kirocli/goose
 // unknown-deny precedent: over-denying after an agent renames a tool is
 // safe, under-enforcing is not).
 func classAllowed(trust provider.Trust, class string) bool {
 	switch trust {
-	case provider.TrustLimited:
+	case provider.TrustLimited, provider.TrustAutoReview:
 		switch class {
 		case "read", "edit", "search", "think", "fetch":
 			return true

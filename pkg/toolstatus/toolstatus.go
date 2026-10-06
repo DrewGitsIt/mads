@@ -72,7 +72,13 @@ const DenialPrefix = "mads blocked this tool call: "
 //     permission channel wired); and "The user doesn't want to proceed
 //     with this tool use. …" — a prompt rejected, or withdrawn by an
 //     interrupt while it was still open (also what a human's "No" in
-//     claude's terminal UI leaves behind).
+//     claude's terminal UI leaves behind). Auto mode (auto_review trust)
+//     adds two more, probed the same way (providers/claudecode README
+//     "Auto-review: claude's auto mode"): "Permission for this action was
+//     denied by the Claude Code auto mode classifier. Reason: …" — the
+//     reviewer blocked it — and a bare "This command requires approval" —
+//     the reviewer escalated after a run of blocks and nobody could be
+//     asked.
 //
 // A future CLI rewording silently degrades such calls back to "failed" —
 // honest, just less specific.
@@ -83,6 +89,10 @@ func PermissionRefusal(text string) bool {
 		return true
 	case strings.HasPrefix(text, "Claude requested permissions to "):
 		return strings.Contains(text, "but you haven't granted it yet")
+	case strings.HasPrefix(text, "Permission for this action was denied by the Claude Code auto mode classifier."):
+		return true
+	case text == "This command requires approval":
+		return true
 	default:
 		return strings.HasPrefix(text, "The user doesn't want to proceed with this tool use.")
 	}

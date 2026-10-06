@@ -119,6 +119,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// terminal claude's own UI asks (trustArgs, README).
 		provider.BehaviorTrustLimited:  provider.Native,
 		provider.BehaviorTrustReadOnly: provider.Native,
+		// Auto-review is claude's own auto mode: its classifier approves
+		// routine calls and blocks risky ones; after a run of blocks it
+		// stops judging and asks, which on chat reaches the user over the
+		// same --permission-prompt-tool stdio channel (trustArgs; README
+		// "Auto-review: claude's auto mode", with the probe evidence).
+		provider.BehaviorTrustAutoReview: provider.Native,
 		// --mcp-config + --strict-mcp-config threads a real MCP server into
 		// the launch on both transports — see mcp.go and README.
 		provider.BehaviorMCPServers: provider.Native,
@@ -166,6 +172,18 @@ func (p *Provider) IntentMatrix() provider.IntentMatrix {
 //     so claude itself decides what needs asking: a Bash call, a write
 //     outside the working directory. Named explicitly so a user's own
 //     settings.json defaultMode can't quietly loosen it.
+//   - TrustAutoReview runs claude's "auto" mode: a server-side classifier
+//     judges each call that would otherwise need approval, allowing the
+//     routine ones and denying the risky ones outright (the model sees "…
+//     denied by the Claude Code auto mode classifier", and works around or
+//     reports it). It does not ask per block: only after 3 consecutive (or
+//     20 total) blocks does claude stop trusting its own reviewer and ask —
+//     a can_use_tool request on the host channel, the same card limited
+//     shows. Safety-check prompts the classifier never sees ask the same
+//     way. Probed against 2.1.285, README "Auto-review: claude's auto
+//     mode". Not every model runs it: claude silently starts a haiku
+//     session in "default" (= manual) instead, which is limited — safer,
+//     just chattier.
 //   - TrustReadOnly is the same mode with every command and file-mutating
 //     tool removed from the palette by --disallowedTools: a hard guarantee,
 //     not a prompt. Whatever still asks asks the same way.
@@ -187,6 +205,8 @@ func trustArgs(trust provider.Trust, hostAsks bool) []string {
 	switch trust {
 	case provider.TrustLimited:
 		args = []string{"--permission-mode", "manual"}
+	case provider.TrustAutoReview:
+		args = []string{"--permission-mode", "auto"}
 	case provider.TrustReadOnly:
 		args = []string{"--permission-mode", "manual", "--disallowedTools", "Bash,Write,Edit,NotebookEdit"}
 	default:

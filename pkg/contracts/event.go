@@ -54,7 +54,7 @@ const (
 	SessionCrashed EventType = "session.crashed"
 	// SessionPermissionRequested fires when the harness asks permission for
 	// a tool call and waits on an allow/deny decision (chat transport,
-	// limited/read-only trust — provider.StartOptions.Permissions). Payload:
+	// auto-review/limited/read-only trust — provider.StartOptions.Permissions). Payload:
 	// {"request_id", "tool", "tool_use_id": string}. Its resolution fires
 	// SessionPermissionResolved with {"request_id", "tool", "tool_use_id",
 	// "status": "allowed"|"denied"|"expired"|"cancelled"} ("cancelled": the

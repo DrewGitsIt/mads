@@ -192,6 +192,14 @@ describe("railTooltip", () => {
     expect(railTooltip(makeSession({ cwd: "./" }), context())).toBe("");
   });
 
+  // A requested level the provider can't run says what it runs as instead,
+  // never just the request.
+  it("shows trust with its fallback when the session runs at another level", () => {
+    expect(
+      railTooltip(makeSession({ trust: "auto_review", effective_trust: "limited" }), context()),
+    ).toBe("Trust: auto_review → limited");
+  });
+
   it("names the workspace an id reference points at", () => {
     expect(railTooltip(makeSession({ workspace: "ws" }), context())).toBe("Workspace: mads");
   });

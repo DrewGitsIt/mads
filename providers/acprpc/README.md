@@ -95,7 +95,7 @@ capture citations are to committed files.
 | `PreseedConfigOptions` | goose-as-client's `session_config_options` (`provider.rs:69`): copilot/pi want the model pinned at session/new (`copilot_acp.rs:73`), claude sets it lazily after. |
 | `SystemPrompt` | Most ACP agents have NO system-prompt surface — goose-as-client drops system prompts entirely (`provider.rs:820-826`); goose-as-agent has only `_goose/unstable/session/system-prompt/set` (works at 1.48.0, `acp-transcript.jsonl` lines 13-14). mads must never silently drop an agent persona, so the zero value is first-send prefixing and the extension strategy falls back to it on `-32601`. |
 | `ToolIdentity` | ACP gives clients no canonical tool name: claude sets `kind` + `_meta.claudeCode.toolName`, codex/hermes set `kind` only, goose sets neither and puts identity in `_meta.goose.toolCall` (`testdata/captures/README.md` "Tool identity varies"). All three strategies occur in the wild; TitleOnly (the zero value) means limited/read_only degrade to deny-all. |
-| `PermissionAsksEveryCall` | goose's `approve` mode asks before EVERY tool call, reads included (`goose_mode.rs`: "Ask before every tool call"; `permission_inspector.rs` sends every call without a user grant to RequireApproval; `acp-transcript.jsonl` line 34 asks for `todo__todo_write`). Set, the engine answers read/search/think/fetch itself at limited trust instead of making each a card. Unset (kiro-cli, whose own policy trusts reads), every ask is forwarded. |
+| `PermissionAsksEveryCall` | goose's `approve` mode asks before EVERY tool call, reads included (`goose_mode.rs`: "Ask before every tool call"; `permission_inspector.rs` sends every call without a user grant to RequireApproval; `acp-transcript.jsonl` line 34 asks for `todo__todo_write`). Set, the engine answers read/search/think/fetch itself at limited trust instead of making each a card. Unset (kiro-cli, whose own policy trusts reads), every ask is forwarded. Never applied at auto_review, whose reviewer mode has already filtered. |
 | `ToolClassTable` | goose's `tool_call` updates carry only the `_meta` name and no `kind` (`goosecli/testdata/captures/acp-transcript.jsonl` line 33), so classification must be supplied, not read off the wire. Unknown identities deny below full trust. |
 
 ## Who answers a permission request
@@ -110,6 +110,15 @@ harness" — `providers/provider` `PermissionAsker`). `handlePermission`
 | `read_only` | either | the engine's class gate: read/search/think/fetch allow, the rest deny — a hard guarantee never waits on a click |
 | `limited` | yes | **the user**, via the asker — except read/search/think/fetch when `PermissionAsksEveryCall` is set, which the engine allows itself |
 | `limited` | no | the engine's class gate: read/edit/search/think/fetch allow; execute/other/unknown deny — never a stall on an ask nobody answers |
+| `auto_review` | yes | **the user**, every ask unfiltered — the agent is in its reviewer mode (`TrustModes[auto_review]`, goose `smart_approve`), so an ask is already the reviewer's escalation; `PermissionAsksEveryCall` (a property of the *limited* mode) doesn't apply |
+| `auto_review` | no | as `limited` without an asker |
+
+An agent with no reviewer mode never sees `auto_review`: its binding
+declares `BehaviorTrustAutoReview` unsupported and the session runs as
+`limited` (`provider.EffectiveTrust`, applied by the Runner and again by
+the binding — kirocli's `Start`). A binding that declares it working but
+maps no `TrustModes[auto_review]` fails `Start` loudly (`applyTrustMode`),
+like any other unmapped restricted level.
 
 The forwarded path runs the asker on its own goroutine — the read loop
 keeps streaming `session/update`s (and a later cancel) while the user

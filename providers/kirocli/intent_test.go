@@ -33,7 +33,7 @@ func TestIntentMatrixDeclarations(t *testing.T) {
 			t.Errorf("IntentMatrix[%s] = %s, want %s", i, m[i], want)
 		}
 	}
-	for _, trust := range []provider.Trust{provider.TrustLimited, provider.TrustReadOnly} {
+	for _, trust := range []provider.Trust{provider.TrustLimited, provider.TrustReadOnly, provider.TrustAutoReview} {
 		args := strings.Join(p.ptyArgs(provider.StartOptions{Trust: trust}), " ")
 		if strings.Contains(args, "--trust-all-tools") {
 			t.Errorf("trust %s: PTY argv %q trusts every tool, so kiro would never ask (require_approval native)", trust, args)

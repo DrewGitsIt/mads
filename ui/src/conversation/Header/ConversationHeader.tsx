@@ -3,13 +3,20 @@ import { Chip } from "../../components/Chip/Chip";
 import { Button } from "../../components/Button/Button";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import { Popover } from "../../components/Popover/Popover";
-import type { Model, Session, SessionTrust } from "../../router/types";
+import type {
+  Model,
+  ProviderBehavior,
+  ProviderSupport,
+  Session,
+  SessionTrust,
+} from "../../router/types";
 import { useProviderModels } from "../../router/useProviderModels";
+import { useProviderInfos } from "../../router/useProviderInfos";
 import { modelDisplayName } from "../../router/modelDisplay";
 import { UNKNOWN_AGENT, agentNameForRef } from "../../router/agentRef";
 import type { AgentIndex } from "../../router/agentRef";
 import { sessionLocation } from "../../router/sessionLocation";
-import { trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
+import { trustLabel, trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
 import { WorkControl } from "../Worktree/WorkControl";
 import { isIsolated } from "../Worktree/workState";
 import styles from "./ConversationHeader.module.css";
@@ -87,6 +94,7 @@ export function ConversationHeader({
 }: ConversationHeaderProps) {
   const [openPill, setOpenPill] = useState<PillField | null>(null);
   const modelsByProvider = useProviderModels();
+  const providerInfos = useProviderInfos();
 
   // Narrowed to the free-text pills onUpdateSession still owns. Model and
   // trust are not among them: both persist through their own endpoint
@@ -129,6 +137,9 @@ export function ConversationHeader({
 
         <TrustPickerPill
           trust={session.trust}
+          effectiveTrust={session.effective_trust}
+          provider={session.provider}
+          matrix={providerInfos.find((p) => p.name === session.provider)?.matrix}
           open={openPill === "trust"}
           onOpen={() => setOpenPill("trust")}
           onClose={() => setOpenPill(null)}
@@ -278,6 +289,11 @@ function PillPopover({ value: rawValue, label, open, onOpen, onCommit, onClose }
 
 interface TrustPickerPillProps {
   trust?: SessionTrust;
+  /** Session.effective_trust: what the session really runs at, when not `trust`. */
+  effectiveTrust?: SessionTrust;
+  provider?: string;
+  /** The session's provider's capability matrix, once loaded — marks Auto-review's fallback. */
+  matrix?: Record<ProviderBehavior, ProviderSupport>;
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
@@ -292,14 +308,40 @@ interface TrustPickerPillProps {
  * else here would misreport what the spawned agent can actually do. Trust
  * is spawn-time-only in the runner, so selecting a level restarts the agent
  * process (the Router bounces a live child as part of the call).
+ *
+ * A level the provider can't run is never shown as if it were running: the
+ * Router reports the fallback on the record (effective_trust — auto_review
+ * on a harness with no reviewer runs as limited), and the pill reads
+ * "Trust: Auto-review → Limited" with the reason on hover. The menu marks
+ * the same option "(runs as Limited on <provider>)" before it's picked,
+ * from the provider's own matrix.
  */
-function TrustPickerPill({ trust, open, onOpen, onClose, onSelect }: TrustPickerPillProps) {
-  const levels = trustLevels();
+function TrustPickerPill({
+  trust,
+  effectiveTrust,
+  provider,
+  matrix,
+  open,
+  onOpen,
+  onClose,
+  onSelect,
+}: TrustPickerPillProps) {
+  const levels = trustLevels(matrix, provider);
   const current = trust ?? "limited";
-  const label = `Trust: ${levels.find((l) => l.value === current)?.label ?? current}`;
+  const fallback = effectiveTrust && effectiveTrust !== current ? effectiveTrust : undefined;
+  const asked = trustLabel(current);
+  const label = fallback ? `Trust: ${asked} → ${trustLabel(fallback)}` : `Trust: ${asked}`;
+  const title = fallback
+    ? `${provider ?? "This provider"} doesn't support ${asked.toLowerCase()}; ` +
+      `running as ${trustLabel(fallback)}`
+    : undefined;
 
   if (!onSelect) {
-    return <span className={styles.pillStatic}>{label}</span>;
+    return (
+      <span className={styles.pillStatic} title={title}>
+        {label}
+      </span>
+    );
   }
 
   return (
@@ -312,6 +354,7 @@ function TrustPickerPill({ trust, open, onOpen, onClose, onSelect }: TrustPicker
           className={styles.pill}
           aria-haspopup="listbox"
           aria-expanded={open}
+          title={title}
           onClick={() => (open ? onClose() : onOpen())}
         >
           {label}

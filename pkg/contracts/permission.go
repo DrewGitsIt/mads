@@ -47,7 +47,13 @@ func (s IntentSet) Union(other IntentSet) IntentSet {
 // asks the user before whatever it judges risky (commands included) and
 // the user decides, so commands are asked about, not denied (claude-code's
 // manual mode, goose's approve mode, kiro's per-request policy — each
-// provider's README "Trust enforcement"). TrustReadOnly is a hard read_only
+// provider's README "Trust enforcement"). TrustAutoReview compiles to the
+// same require_approval: a reviewer answers the routine asks in the user's
+// stead, but whatever it escalates still reaches a human before it runs,
+// and nothing is blocked outright — the intent vocabulary describes what
+// the user is guaranteed, and "someone approves risky calls first" is
+// exactly that guarantee (who the first approver is is the provider's
+// business, BehaviorTrustAutoReview). TrustReadOnly is a hard read_only
 // guarantee plus require_approval for whatever still asks. TrustFull, and
 // the zero value (which behaves identically — see
 // provider.StartOptions.Trust), impose none. deny_commands comes only from
@@ -55,7 +61,7 @@ func (s IntentSet) Union(other IntentSet) IntentSet {
 // EffectiveIntentsWithDenials), never from trust.
 func (t SessionTrust) Intents() IntentSet {
 	switch t {
-	case TrustLimited:
+	case TrustAutoReview, TrustLimited:
 		return IntentSet{IntentRequireApproval: true}
 	case TrustReadOnly:
 		return IntentSet{IntentReadOnly: true, IntentRequireApproval: true}

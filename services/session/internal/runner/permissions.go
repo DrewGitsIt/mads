@@ -38,8 +38,9 @@ type pendingPermission struct {
 // RequestPermission is the session's provider.PermissionAsker (set as
 // StartOptions.Permissions in Start): the adapter calls it whenever the
 // harness itself asks permission for a tool call — claude-code's manual
-// mode on limited/read-only trust. It registers a new pending request,
-// marks the call "pending" (pkg/toolstatus), broadcasts an
+// mode on limited/read-only trust, its auto mode's escalations on
+// auto_review, an ACP agent's session/request_permission. It registers a
+// new pending request, marks the call "pending" (pkg/toolstatus), broadcasts an
 // EventPermissionRequest (status "pending") on the hub so the chat UI can
 // render a card, and blocks until ResolvePermission answers it, the timeout
 // elapses ("expired"), or ctx is done because the harness stopped waiting —

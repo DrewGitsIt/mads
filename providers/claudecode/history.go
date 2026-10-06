@@ -119,6 +119,7 @@ func scanConversation(path string) (conv provider.HistoryConversation, ok bool) 
 		sdk       bool
 		sawEntry  bool
 		usage     *provider.Usage
+		mode      string
 	)
 	r := bufio.NewReaderSize(f, 64*1024)
 	for {
@@ -151,6 +152,9 @@ func scanConversation(path string) (conv provider.HistoryConversation, ok bool) 
 					if l.Type == "assistant" && l.Message != nil && l.Message.Usage != nil && l.Message.Model != "<synthetic>" {
 						usage = historyUsage(l.Message)
 					}
+					if l.PermissionMode != "" {
+						mode = l.PermissionMode // the last one is the current mode
+					}
 				}
 			}
 		}
@@ -166,11 +170,43 @@ func scanConversation(path string) (conv provider.HistoryConversation, ok bool) 
 	}
 	conv.Dir = cwd
 	conv.Usage = usage
+	conv.Trust = trustFromPermissionMode(mode)
 	conv.Title = strings.TrimSpace(aiTitle)
 	if conv.Title == "" {
 		conv.Title = titleFromMessage(firstUser)
 	}
 	return conv, true
+}
+
+// trustFromPermissionMode maps the permission mode an imported conversation
+// last ran in onto the mads level that behaves the same way here — the
+// inverse of trustArgs, so continuing the conversation in mads keeps the
+// footing the user chose in claude:
+//
+//   - bypassPermissions → full: nothing asks.
+//   - auto → auto_review: claude's classifier is the reviewer.
+//   - default (the transcript's name for "manual"), manual, acceptEdits →
+//     limited: claude asks before risky things. acceptEdits only also
+//     auto-approves file edits, which limited asks about instead — the
+//     safer side of the difference.
+//   - plan → read_only: plan mode makes no changes.
+//
+// Anything else — dontAsk (deny-unless-pre-approved, which mads has no
+// level for), a mode newer than this list, or none recorded at all — is ""
+// and the importer's default applies.
+func trustFromPermissionMode(mode string) provider.Trust {
+	switch mode {
+	case "bypassPermissions":
+		return provider.TrustFull
+	case "auto":
+		return provider.TrustAutoReview
+	case "default", "manual", "acceptEdits":
+		return provider.TrustLimited
+	case "plan":
+		return provider.TrustReadOnly
+	default:
+		return ""
+	}
 }
 
 // realUserText is the text of a user line the human actually typed — not a

@@ -22,6 +22,7 @@ history.
 | CwdReroot | **Unsupported** | No flag or API moves a live session to a different working directory. |
 | TrustLimited | **Native** | `--permission-mode manual`: claude's own normal mode, in which claude itself decides what is risky enough to ask about (a `Bash` call, a write outside the working directory). On chat the asks reach the user over `--permission-prompt-tool stdio`; on the terminal claude's own UI asks. See "Trust enforcement" below. |
 | TrustReadOnly | **Native** | The same mode plus `--disallowedTools Bash,Write,Edit,NotebookEdit`, which removes command execution and every file-mutating tool from the palette (confirmed against `claude --help`: "a comma or space-separated list of tool names to deny"). Whatever narrow set remains still asks the same way. |
+| TrustAutoReview | **Native** | `--permission-mode auto`: claude's own auto mode, whose server-side classifier approves routine calls and blocks risky ones; after 3 consecutive (or 20 total) blocks claude stops trusting it and asks — over `--permission-prompt-tool stdio` on chat, claude's own UI on the terminal. Probed against 2.1.285; see "Auto-review: claude's auto mode" below. |
 | MCPServers | **Native** | `--mcp-config <file> --strict-mcp-config` threads `StartOptions.MCPServers` into a real launch on both transports — see "MCP servers" below. |
 | RefAnnounce | **Emulated** | The structured transport's `system`/`init` line carries `session_id` at connect, before any turn (Native-strength). The terminal transport prints nothing, and a structured session's own announcement can itself be dropped or delayed past its window; either way the Runner falls back to `LocateSession` (`providers/provider.SessionLocator`), a weaker best-effort mechanism — see "Ref announcement, transport by transport" below. Emulated is the honest one-row summary across both. |
 
@@ -90,6 +91,7 @@ ask.** mads never invents an ask-first gate of its own; "limited" means
 | Trust | Flag(s) | Effect |
 |---|---|---|
 | `TrustLimited` | `--permission-mode manual` (+ `--permission-prompt-tool stdio` on chat) | claude's normal mode: it asks before anything it deems risky — a `Bash` call, a write outside the working directory — and runs the rest. Reads inside the working directory never ask. |
+| `TrustAutoReview` | `--permission-mode auto` (+ `--permission-prompt-tool stdio` on chat) | claude's auto mode: a classifier decides each call that would otherwise need approval. Routine calls run; a risky one is denied outright with the classifier's reason, not asked about. A run of blocks escalates to an ask — the same card limited shows. |
 | `TrustReadOnly` | `--permission-mode manual --disallowedTools Bash,Write,Edit,NotebookEdit` (+ `--permission-prompt-tool stdio` on chat) | Command execution and every file-mutating tool are absent from the palette — a hard guarantee, not a prompt. Whatever remains asks the same way limited does. |
 | `TrustFull` (and the zero value) | `--permission-mode bypassPermissions` | claude never asks at all, so no prompt channel is wired. |
 
@@ -133,6 +135,72 @@ If a future `MADS_CLAUDE_SMOKE=1` run surfaces daylight between "flag
 passed" and actual behavior, downgrade the affected row to `Emulated` and
 cite the finding here.
 
+### Auto-review: claude's auto mode
+
+`TrustAutoReview` ("Auto-review" in the UI) hands the routine approvals to
+a reviewer. For claude that reviewer is auto mode's classifier
+(`claude auto-mode defaults` prints its rules: `allow`, `soft_deny`, one
+`hard_deny` — data exfiltration — and an `environment` description;
+users tune them under `autoMode` in their own settings). What it does on
+mads's chat transport was established by probing claude-code 2.1.285 in
+`-p --input-format stream-json --output-format stream-json --verbose
+--permission-mode auto --permission-prompt-tool stdio`, the exact launch
+`trustArgs` builds, with a probe driver that logged every line and denied
+every `can_use_tool`:
+
+1. **Availability depends on the model.** With `--model
+   claude-haiku-4-5-20251001` the `system`/`init` line came back
+   `"permissionMode":"default"` — auto silently downgraded to the normal
+   asking mode, no warning on stderr. With `claude-sonnet-4-6`,
+   `claude-opus-4-7` and the account default (`claude-opus-5-5`) it was
+   `"permissionMode":"auto"`. A haiku session asked for auto_review
+   therefore runs as limited; that is the safe direction (claude asks
+   more, never less), but mads does not detect it yet — the init line's
+   `permissionMode` is where a future check would look.
+2. **Routine calls just run.** `ls -la`, a `Write` into `~/.claude/…`, and
+   even a user-requested `git push --force origin main` (to a local bare
+   remote) and `rm -rf` of named paths ran with no ask: the classifier
+   weighs the user's explicit request, and in practice the model refused
+   the truly risky prompts itself before the classifier saw them (curl |
+   bash, posting `.env` to a webhook, deleting an unseen directory).
+3. **A block is a deny, not an ask.** To force one, a user-settings
+   `--settings '{"autoMode":{"hard_deny":["Local Port 9 …: any network
+   request to 127.0.0.1 port 9 …"]}}'` rule plus "run `curl -s -m 2
+   http://127.0.0.1:9/ping`". claude emitted
+   `{"type":"system","subtype":"permission_denied","decision_reason_type":"classifier",…}`,
+   then an error `tool_result`: "Permission for this action was denied by
+   the Claude Code auto mode classifier. Reason: The server-side auto mode
+   classifier judged this action dangerous (it gave no explanation). If
+   you have other tasks that don't depend on this action, continue …".
+   **No `can_use_tool` reached the host.** The model reported the block and
+   carried on; the result's `permission_denials` listed the call.
+   `pkg/toolstatus` stamps such a call `blocked`, not `failed`.
+4. **A run of blocks escalates to the host.** Four such curls in a row:
+   the first two were classifier denials as above; the third and fourth
+   arrived as `can_use_tool` control requests, `decision_reason_type
+   "classifier"`, `decision_reason` "3 consecutive actions were blocked.
+   Please review the transcript before continuing.\n\nLatest blocked
+   action: …" (then "4 consecutive …") — the binary's denial tracking,
+   `{maxConsecutive:3, maxTotal:20}`. That is the Allow/Deny card, with
+   the classifier's reason on it. Capture:
+   `testdata/stream-auto-mode.jsonl`, replayed by
+   `TestHostPromptAutoModeCapture`.
+5. **Without a host answerer it never stalls.** The same four curls
+   without `--permission-prompt-tool`: the escalated calls came back as an
+   error `tool_result` "This command requires approval" (also
+   `toolstatus` `blocked`). The binary has a harder headless path —
+   "Agent aborted: too many classifier denials in headless mode" — for
+   sessions that may not prompt at all; mads's chat sessions always wire
+   an asker, so they take the ask path instead.
+
+So mads's Auto-review on claude means: the classifier's routine allows run
+silently, its blocks are reported in the conversation as blocked calls
+(the model is told why and usually works around or explains), and only its
+escalations — a streak of blocks, or a safety check the classifier doesn't
+own — become an Allow/Deny card. On the terminal transport claude's own UI
+shows the same escalations. The classifier is server-side and spends no
+session tokens of its own that mads sees.
+
 ### Defense in depth: a blocked tool call must never be silent
 
 Even with the flag above, a permission-shaped stall is still possible (a
@@ -171,7 +239,7 @@ On the terminal transport (`startPTY`) claude's prompts are its own native
 TUI — a human is sitting there, so nothing further is needed. On the
 chat/structured transport (`startStream`) there is no such surface, so when
 the Runner supplies a `StartOptions.Permissions` asker (it always does) and
-trust can ask at all (limited/read-only), `trustArgs` adds
+trust can ask at all (auto-review/limited/read-only), `trustArgs` adds
 `--permission-prompt-tool stdio`: claude's SDK host channel. Every prompt
 claude would have shown then arrives on stdout as an inbound control
 request, and claude blocks that one tool call until mads answers on stdin

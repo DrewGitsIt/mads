@@ -252,3 +252,49 @@ func TestRealKiroSmoke(t *testing.T) {
 		t.Fatalf("smoke result: %+v", res)
 	}
 }
+
+// TestTrustAutoReviewFallsBackToLimited: kiro has no reviewer
+// (BehaviorTrustAutoReview unsupported), so an auto_review session runs
+// exactly as limited — kiro's own asks forwarded to the user, the user's
+// allow running a command the kind gate alone would refuse — and the
+// declaration EffectiveTrust reads says so.
+func TestTrustAutoReviewFallsBackToLimited(t *testing.T) {
+	p := testProvider(t)
+	if got := provider.EffectiveTrust(provider.TrustAutoReview, p.Matrix()); got != provider.TrustLimited {
+		t.Fatalf("EffectiveTrust(auto_review) = %q, want limited", got)
+	}
+	asks := make(chan provider.PermissionAsk, 4)
+	asker := func(_ context.Context, ask provider.PermissionAsk) provider.PermissionDecision {
+		asks <- ask
+		return provider.PermissionDecision{Allow: true}
+	}
+	sess, err := p.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP, Trust: provider.TrustAutoReview, Permissions: asker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sess.Close() }()
+	if err := sess.Send(context.Background(), "attempt-command"); err != nil {
+		t.Fatal(err)
+	}
+	var used bool
+	deadline := time.After(10 * time.Second)
+	for done := false; !done; {
+		select {
+		case ev, ok := <-sess.Events():
+			if !ok {
+				t.Fatal("stream closed before turn end")
+			}
+			if ev.Kind == provider.EventToolUse {
+				used = true
+			}
+			if ev.Kind == provider.EventTurnEnd {
+				done = true
+			}
+		case <-deadline:
+			t.Fatal("no turn end")
+		}
+	}
+	if len(asks) != 1 || !used {
+		t.Fatalf("asks = %d, tool used = %v: want kiro's ask forwarded and the allowed command run, as at limited", len(asks), used)
+	}
+}

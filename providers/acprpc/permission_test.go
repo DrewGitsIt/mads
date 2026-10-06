@@ -346,3 +346,51 @@ func TestLateDecisionDiscarded(t *testing.T) {
 		t.Fatalf("follow-up turn = %q", got)
 	}
 }
+
+// TestAutoReviewForwardsEveryAsk: at auto_review the agent runs its own
+// reviewer mode (goose smart_approve), so whatever reaches
+// session/request_permission is an escalation and goes to the user —
+// even a read, which limited under PermissionAsksEveryCall answers
+// locally. The fake has no reviewer of its own: auto_review is mapped to
+// its asking mode, standing in for a reviewer that escalated every call.
+// Without an asker auto_review keeps limited's class gate, so nothing
+// stalls.
+func TestAutoReviewForwardsEveryAsk(t *testing.T) {
+	cfg := func() Config {
+		c := gooseConfig()
+		c.TrustModes[provider.TrustAutoReview] = "approve"
+		return c
+	}
+	cases := []struct {
+		prompt string
+		decide func(provider.PermissionAsk) provider.PermissionDecision
+		want   string
+	}{
+		{"attempt-view", denyAll, "denied via opt-r"},
+		{"attempt-shell", allowAll, "used shell"},
+		{"attempt-write", denyAll, "denied via opt-r"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.prompt, func(t *testing.T) {
+			asker := newRecordingAsker(tc.decide)
+			e := testEngine(t, cfg(), "goose", t.TempDir())
+			sess := startSession(t, e, provider.StartOptions{Trust: provider.TrustAutoReview, Permissions: asker.ask})
+			if got := turnText(sendTurn(t, sess, tc.prompt)); got != tc.want {
+				t.Fatalf("reply = %q, want %q", got, tc.want)
+			}
+			if asks, _ := asker.snapshot(); len(asks) != 1 {
+				t.Fatalf("asker called %d times, want 1", len(asks))
+			}
+		})
+	}
+	t.Run("no asker: class gate", func(t *testing.T) {
+		e := testEngine(t, cfg(), "goose", t.TempDir())
+		sess := startSession(t, e, provider.StartOptions{Trust: provider.TrustAutoReview})
+		if got := turnText(sendTurn(t, sess, "attempt-write")); got != "used text_editor write" {
+			t.Fatalf("edit: reply = %q", got)
+		}
+		if got := turnText(sendTurn(t, sess, "attempt-shell")); got != "denied via opt-r" {
+			t.Fatalf("execute: reply = %q", got)
+		}
+	})
+}

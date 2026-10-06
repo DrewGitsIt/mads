@@ -463,6 +463,7 @@ export function Launchpad({
               providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))
                 ?.matrix
             }
+            provider={staged.provider ?? resolved?.provider?.value}
             agentPermissions={selectedAgent?.permissions}
             intentMatrix={
               providers.find((p) => p.name === (staged.provider ?? resolved?.provider?.value))

@@ -69,6 +69,13 @@ const (
 	// writes and command execution. Expected, same honesty requirement as
 	// BehaviorTrustLimited.
 	BehaviorTrustReadOnly Behavior = "trust_read_only"
+	// BehaviorTrustAutoReview — an "auto_review" trust session hands routine
+	// approvals to a reviewer inside the harness (claude-code's auto mode
+	// classifier, goose's smart_approve LLM check) and escalates only what
+	// the reviewer blocks or can't decide to the user. Optional: a provider
+	// without a reviewer declares it Unsupported, and such a session runs
+	// as limited instead (EffectiveTrust) — visibly, never silently.
+	BehaviorTrustAutoReview Behavior = "trust_auto_review"
 	// BehaviorOneShotStream — OneShotRequest.OnEvent actually fires with
 	// incremental text (and tool use) during the invocation, rather than
 	// only the final result being available once OneShot returns. Optional:
@@ -118,22 +125,23 @@ const (
 // exactly these keys — no more, no fewer — so a behavior added here fails
 // every adapter's conformance run until that adapter takes a stance.
 var requirements = map[Behavior]Level{
-	BehaviorInteractive:    LevelRequired,
-	BehaviorInterrupt:      LevelRequired,
-	BehaviorOneShot:        LevelRequired,
-	BehaviorResume:         LevelExpected,
-	BehaviorTranscript:     LevelExpected,
-	BehaviorModelDiscovery: LevelExpected,
-	BehaviorCostReporting:  LevelExpected,
-	BehaviorACP:            LevelExpected, // "one of" rule enforced separately
-	BehaviorPTY:            LevelExpected,
-	BehaviorBranching:      LevelOptional,
-	BehaviorCwdReroot:      LevelOptional,
-	BehaviorMCPServers:     LevelOptional,
-	BehaviorTrustLimited:   LevelExpected,
-	BehaviorTrustReadOnly:  LevelExpected,
-	BehaviorOneShotStream:  LevelOptional,
-	BehaviorRefAnnounce:    LevelExpected,
+	BehaviorInteractive:     LevelRequired,
+	BehaviorInterrupt:       LevelRequired,
+	BehaviorOneShot:         LevelRequired,
+	BehaviorResume:          LevelExpected,
+	BehaviorTranscript:      LevelExpected,
+	BehaviorModelDiscovery:  LevelExpected,
+	BehaviorCostReporting:   LevelExpected,
+	BehaviorACP:             LevelExpected, // "one of" rule enforced separately
+	BehaviorPTY:             LevelExpected,
+	BehaviorBranching:       LevelOptional,
+	BehaviorCwdReroot:       LevelOptional,
+	BehaviorMCPServers:      LevelOptional,
+	BehaviorTrustLimited:    LevelExpected,
+	BehaviorTrustReadOnly:   LevelExpected,
+	BehaviorTrustAutoReview: LevelOptional,
+	BehaviorOneShotStream:   LevelOptional,
+	BehaviorRefAnnounce:     LevelExpected,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""

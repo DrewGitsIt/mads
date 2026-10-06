@@ -51,10 +51,34 @@ const (
 type Trust string
 
 const (
-	TrustFull     Trust = "full"
-	TrustLimited  Trust = "limited"
-	TrustReadOnly Trust = "read_only"
+	TrustFull Trust = "full"
+	// TrustAutoReview: a reviewer inside the harness approves routine calls
+	// and escalates only risky or uncertain ones, which reach the user the
+	// way limited's asks do (StartOptions.Permissions). Only meaningful on a
+	// provider declaring BehaviorTrustAutoReview; EffectiveTrust maps it to
+	// TrustLimited everywhere else, and an adapter without a reviewer must
+	// treat it as TrustLimited if it is handed one anyway — never as the
+	// unknown-value fallthrough to full that some trust switches have.
+	TrustAutoReview Trust = "auto_review"
+	TrustLimited    Trust = "limited"
+	TrustReadOnly   Trust = "read_only"
 )
+
+// EffectiveTrust is the level a session requesting t actually runs at on a
+// provider declaring m: auto_review on a harness with no reviewer
+// (BehaviorTrustAutoReview not working) falls back to limited — the
+// nearest level that still asks the user about risky calls, and strictly
+// safer than the request, never looser. Every other level, and auto_review
+// where the reviewer exists, runs as requested. The Session runner starts
+// the provider at this level and the Router reports it on the session
+// record (Session.EffectiveTrust) whenever it differs from the request, so
+// the downgrade is never silent.
+func EffectiveTrust(t Trust, m Matrix) Trust {
+	if t == TrustAutoReview && !m[BehaviorTrustAutoReview].Works() {
+		return TrustLimited
+	}
+	return t
+}
 
 // StartOptions configures an interactive session. Resume carries the
 // provider-native ref of a previous session (Session.Ref); empty starts
@@ -300,6 +324,12 @@ type HistoryConversation struct {
 	LastActiveAt time.Time
 	// Usage is the last turn's token accounting, nil when the store has none.
 	Usage *Usage
+	// Trust is the level the conversation last ran at, mapped from the
+	// harness's own permission mode as the store recorded it (claude-code:
+	// the most recent permissionMode in the transcript). Empty when the
+	// store records none, or a mode with no honest mads equivalent — the
+	// importer then applies its default.
+	Trust Trust
 }
 
 // RefAnnouncer is the optional strategy for BehaviorRefAnnounce: a session

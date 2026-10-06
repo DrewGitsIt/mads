@@ -224,16 +224,16 @@ func (s *server) handleImportConversations(w http.ResponseWriter, r *http.Reques
 			writeError(w, err)
 			return
 		}
-		trust := cfg.DefaultTrust
-		if trust == "" {
-			trust = contracts.TrustLimited
+		defaultTrust := cfg.DefaultTrust
+		if defaultTrust == "" {
+			defaultTrust = contracts.TrustLimited
 		}
 		for _, c := range scan.candidates {
 			window := 0
 			if c.Usage != nil {
 				window = scan.windows[windowKey{c.provider, c.Usage.Model}]
 			}
-			sess := importedSession(c, trust, workspaceFor(workspaces, c.Dir), window)
+			sess := importedSession(c, importTrust(c, defaultTrust), workspaceFor(workspaces, c.Dir), window)
 			if err := s.data.CreateSession(ctx, &sess); err != nil {
 				writeError(w, err)
 				return
@@ -242,6 +242,18 @@ func (s *server) handleImportConversations(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"imported": imported, "skipped_existing": scan.alreadyImported})
+}
+
+// importTrust is the level an imported conversation continues at: the one
+// its own harness last ran it at (HistoryConversation.Trust — claude-code
+// maps its transcript's permission mode, providers/claudecode/history.go),
+// so a conversation the user ran in auto mode comes back as auto_review and
+// one in plan mode as read_only; otherwise the configured default.
+func importTrust(c importCandidate, fallback contracts.SessionTrust) contracts.SessionTrust {
+	if t := contracts.SessionTrust(c.Trust); t.Valid() {
+		return t
+	}
+	return fallback
 }
 
 // importedSession is the dormant record for one native conversation. Isolation

@@ -16,7 +16,35 @@ func (s *server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	for i := range sessions {
+		s.decorateSession(&sessions[i])
+	}
 	writeJSON(w, http.StatusOK, sessions)
+}
+
+// decorateSession fills the record's derived fields before it leaves the
+// Router. Today that is EffectiveTrust: the Router is the layer that holds
+// both the session's requested trust and its provider's capability
+// declaration (the same registry GET /providers serves), so it — not the
+// Data Service, which knows no providers, nor the Session runner, which
+// exists only while the agent runs — says when the two disagree: an
+// auto_review session on a provider declaring BehaviorTrustAutoReview
+// unsupported runs as limited (provider.EffectiveTrust, exactly what the
+// runner starts it at). Left empty when they agree, when the session has
+// no trust yet, or when its provider isn't registered here — "unknown" is
+// not a downgrade to report.
+func (s *server) decorateSession(sess *contracts.Session) {
+	sess.EffectiveTrust = ""
+	if sess.Trust == "" || sess.Provider == "" || s.providers == nil {
+		return
+	}
+	p, err := s.providers.Get(sess.Provider)
+	if err != nil {
+		return
+	}
+	if eff := contracts.SessionTrust(provider.EffectiveTrust(provider.Trust(sess.Trust), p.Matrix())); eff != sess.Trust {
+		sess.EffectiveTrust = eff
+	}
 }
 
 func (s *server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {

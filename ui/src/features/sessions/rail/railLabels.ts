@@ -110,7 +110,14 @@ export function railTooltip(session: Session, ctx: RailLabelContext = EMPTY_LABE
     ...line("Agent", agentLabel(session.agent, ctx.agents)),
     ...line("Model", session.model),
     ...line("Provider", session.provider),
-    ...line("Trust", session.trust),
+    // A level the provider can't run is shown with what it runs as instead
+    // (effective_trust: auto_review → limited on a harness with no reviewer).
+    ...line(
+      "Trust",
+      session.trust && session.effective_trust
+        ? `${session.trust} → ${session.effective_trust}`
+        : session.trust,
+    ),
     ...line("Isolation", session.isolation),
     ...line(
       "Context",

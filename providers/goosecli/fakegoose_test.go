@@ -351,13 +351,16 @@ func fgServe() {
 
 	// attemptTool runs the gated-tool dance: announce the tool_call, ask
 	// permission when in approve mode (in auto mode goose asks nothing),
-	// then complete or fail the call.
+	// then complete or fail the call. smart_approve stands in for goose's
+	// reviewer (permission_inspector.rs): the read is judged read-only and
+	// runs unasked, everything else is escalated to an ask.
 	attemptTool := func(a fgAttempt) string {
 		permSeq++
 		callID := fmt.Sprintf("call_%d", permSeq)
 		toolCall(callID, a)
 		allowed, outcome := true, "unasked"
-		if mode == "approve" {
+		reviewedSafe := mode == "smart_approve" && a.title == "text_editor view"
+		if mode == "approve" || (mode == "smart_approve" && !reviewedSafe) {
 			allowed, outcome = requestPermission(callID, a)
 		}
 		if allowed {
