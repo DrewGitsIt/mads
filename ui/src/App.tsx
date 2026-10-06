@@ -121,9 +121,12 @@ export function App() {
 
   if (configError) return <ConfigGateFailure onRetry={loadConfig} />;
 
-  if (!config) return null;
-
-  if (!config.onboarding_complete) {
+  // The shell renders without waiting on Config: the rail's only config-shaped
+  // inputs (theme, feature flags) have safe defaults and are applied the
+  // moment the response lands — the sessions list itself never needed them.
+  // A hard failure (router unreachable) is still the full-screen error, and a
+  // genuinely fresh install shows the wizard instead of the app.
+  if (config && !config.onboarding_complete) {
     return <FirstRunWizard onComplete={() => setConfig({ ...config, onboarding_complete: true })} />;
   }
 

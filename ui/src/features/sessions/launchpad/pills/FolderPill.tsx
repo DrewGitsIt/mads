@@ -85,7 +85,9 @@ export function FolderPill({
       anchor={
         <button
           type="button"
-          className={pillStyles.trigger}
+          className={[pillStyles.trigger, dir || workspace ? pillStyles.modified : ""]
+            .filter(Boolean)
+            .join(" ")}
           title={title}
           onClick={() => setOpen((o) => !o)}
         >

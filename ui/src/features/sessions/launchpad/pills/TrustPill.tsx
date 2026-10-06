@@ -51,7 +51,9 @@ export function TrustPill({
       anchor={
         <button
           type="button"
-          className={pillStyles.trigger}
+          className={[pillStyles.trigger, value !== undefined ? pillStyles.modified : ""]
+            .filter(Boolean)
+            .join(" ")}
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>trust</span> {triggerLabel}

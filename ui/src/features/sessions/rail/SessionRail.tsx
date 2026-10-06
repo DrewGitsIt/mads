@@ -258,7 +258,7 @@ export function SessionRail({
 
   // A holder answers for the subjects nested under it: they ride along when it
   // survives a filter, so counting it as merely "idle" while a nested card is
-  // parked would make "Needs you 1" click through to a list without it.
+  // parked would make "Attn. 1" click through to a list without it.
   const bucketByRowId = new Map<string, RailFilterBucket>(
     rows.map((row) => [
       row.session.id,
@@ -513,12 +513,13 @@ export function SessionRail({
         )}
       </div>
       <div className={styles.filterBar} role="group" aria-label="Filter sessions">
-        {RAIL_FILTERS.map(({ id, label }) => (
+        {RAIL_FILTERS.map(({ id, label, title }) => (
           <button
             key={id}
             type="button"
             className={[styles.chip, filter === id ? styles.chipOn : ""].filter(Boolean).join(" ")}
             aria-pressed={filter === id}
+            title={title}
             onClick={() => setFilter(id)}
           >
             {label}

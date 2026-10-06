@@ -120,17 +120,23 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           inner div instead would compare a scrolled row against the full
           content height and never dismiss anything. */}
       <aside className={styles.rail} data-rail-scroll="">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setSelectedId(undefined);
-            setOpenDelegate(undefined);
-            setActionError(undefined);
-          }}
-        >
-          + New session
-        </Button>
+        <div className={styles.railHeader}>
+          <Button
+            variant="secondary"
+            size="md"
+            className={styles.newSession}
+            onClick={() => {
+              setSelectedId(undefined);
+              setOpenDelegate(undefined);
+              setActionError(undefined);
+            }}
+          >
+            <span className={styles.plus} aria-hidden="true">
+              +
+            </span>
+            New session
+          </Button>
+        </div>
         {!loading && sessions.length === 0 ? (
           <NoSessionsEmptyState />
         ) : (

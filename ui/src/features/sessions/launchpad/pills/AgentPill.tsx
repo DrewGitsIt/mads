@@ -45,7 +45,9 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
       anchor={
         <button
           type="button"
-          className={pillStyles.trigger}
+          className={[pillStyles.trigger, value !== undefined ? pillStyles.modified : ""]
+            .filter(Boolean)
+            .join(" ")}
           onClick={() => setOpen((o) => !o)}
         >
           {/* Redesign: the registry record is a persona (prompt +

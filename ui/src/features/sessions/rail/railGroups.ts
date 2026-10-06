@@ -259,10 +259,10 @@ export type RailFilter = "all" | "working" | "needs" | "idle";
 /** Every filter but "all" — the bucket a single card falls in. */
 export type RailFilterBucket = Exclude<RailFilter, "all">;
 
-export const RAIL_FILTERS: { id: RailFilter; label: string }[] = [
+export const RAIL_FILTERS: { id: RailFilter; label: string; title?: string }[] = [
   { id: "all", label: "All" },
   { id: "working", label: "Working" },
-  { id: "needs", label: "Needs you" },
+  { id: "needs", label: "Attn.", title: "Needs you" },
   { id: "idle", label: "Idle" },
 ];
 

@@ -12,6 +12,27 @@
   overflow-y: auto;
   border-right: 1px solid var(--line-soft);
   padding: var(--space-3);
+  /* Keep cards the same width whether the scrollbar is showing or not: a
+     classic scrollbar steals 10px from the content box, which squished every
+     card the moment the list overflowed. Reserve that strip inside the
+     padding box instead of the content box. */
+  scrollbar-gutter: stable;
+}
+
+/* Prominent on purpose: it used to read as a caption for the search field below.
+   Full width, secondary border, real padding — a control, not a label. */
+.railHeader {
+  margin-bottom: var(--space-2);
+}
+
+.newSession {
+  width: 100%;
+  font-weight: 650;
+}
+
+.plus {
+  font-size: 15px;
+  line-height: 1;
 }
 
 .main {

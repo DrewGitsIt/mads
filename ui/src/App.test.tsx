@@ -37,10 +37,10 @@ describe("App", () => {
     delete document.documentElement.dataset.palette;
   });
 
-  it("renders nothing while the mount-time config fetch is in flight", () => {
-    vi.stubGlobal("fetch", vi.fn(() => new Promise(() => {})));
+  it("renders the shell while the mount-time config fetch is in flight, so the sessions list needn't wait for it", () => {
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => {})));
     const { container } = render(<App />);
-    expect(container.firstChild).toBeNull();
+    expect(container.firstChild).not.toBeNull();
   });
 
   it("renders the first-run wizard when onboarding_complete is false", async () => {
@@ -79,17 +79,20 @@ describe("App", () => {
   });
 
   it("shows the failure screen when the config fetch rejects, and Retry refetches", async () => {
-    let calls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
-        if (calls++ === 0) return Promise.reject(new TypeError("Failed to fetch"));
-        return routedFetch({ "GET /config": fixtureConfig })(input, init);
-      }),
-    );
+    let allowConfig = false;
+    const fetchMock = vi.fn().mockImplementation((input: URL | string, init?: RequestInit) => {
+      const path = new URL(input.toString()).pathname;
+      if (path === "/config") {
+        if (!allowConfig) return Promise.reject(new TypeError("Failed to fetch"));
+        return Promise.resolve(new Response(JSON.stringify(fixtureConfig), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
     render(<App />);
-    await waitFor(() => expect(screen.getByText(/can't reach/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Can.t reach/i)).toBeTruthy());
 
+    allowConfig = true;
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
     await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());

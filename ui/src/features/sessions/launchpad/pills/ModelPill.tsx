@@ -58,7 +58,9 @@ export function ModelPill({
       anchor={
         <button
           type="button"
-          className={pillStyles.trigger}
+          className={[pillStyles.trigger, provider !== undefined || model ? pillStyles.modified : ""]
+            .filter(Boolean)
+            .join(" ")}
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>model</span> {label}

@@ -41,7 +41,9 @@ export function IsolationPill({
       anchor={
         <button
           type="button"
-          className={pillStyles.trigger}
+          className={[pillStyles.trigger, value !== undefined ? pillStyles.modified : ""]
+            .filter(Boolean)
+            .join(" ")}
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>isolation</span> {triggerLabel}

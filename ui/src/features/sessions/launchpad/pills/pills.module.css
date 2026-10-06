@@ -1,22 +1,27 @@
+/* A field, not a button: these are rarely-touched defaults (persona/model/
+   trust/isolation/folder), so at rest they read as metadata — quiet, tight,
+   no hard border — and only stand out (accent dot + stronger text) when the
+   user has staged an override that differs from the saved defaults. */
 .trigger {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
-  padding: var(--space-2) var(--space-3);
-  background: var(--bg2);
-  border: 1px solid var(--line);
+  padding: 3px var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
-  color: var(--text);
+  color: var(--text2);
   font: 500 var(--fs-sm) var(--sans);
   cursor: pointer;
 }
 
 .trigger:hover {
-  background: var(--bg3);
-  border-color: var(--text3);
+  background: var(--bg2);
+  border-color: var(--line-soft);
+  color: var(--text);
 }
 
-/* a downward caret marks the pill as a menu the user can open */
+/* A downward caret marks the pill as a menu the user can open */
 .trigger::after {
   content: "";
   width: 0;
@@ -24,8 +29,25 @@
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
   border-top: 4px solid currentColor;
-  opacity: 0.5;
-  margin-left: var(--space-1);
+  opacity: 0.4;
+  margin-left: 2px;
+}
+
+/* A staged override — the one state a user is actually choosing, worth
+   standing out next to the quiet defaults. */
+.modified {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--bg2);
+}
+
+.modified::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 .key {
