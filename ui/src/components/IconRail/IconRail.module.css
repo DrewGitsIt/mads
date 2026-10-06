@@ -37,8 +37,12 @@
     width 0.15s ease,
     box-shadow 0.15s ease;
 }
+/* keyboard focus peeks via :focus-visible, not :focus-within: a mouse click
+   leaves its button focused, and :focus-within would then reopen the rail
+   the moment the collapse slid its edge out from under the pointer (that
+   mouseleave clears the suppression below while focus is still inside). */
 .rail.collapsed:hover,
-.rail.collapsed:focus-within {
+.rail.collapsed:has(:focus-visible) {
   width: 176px;
   box-shadow: var(--shadow);
 }
@@ -47,7 +51,7 @@
    hold the narrow width until the pointer actually leaves once. Higher
    specificity (4 selectors vs. 3) wins regardless of source order. */
 .rail.collapsed[data-peek-suppressed="true"]:hover,
-.rail.collapsed[data-peek-suppressed="true"]:focus-within {
+.rail.collapsed[data-peek-suppressed="true"]:has(:focus-visible) {
   width: 44px;
   box-shadow: none;
 }

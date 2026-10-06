@@ -43,14 +43,12 @@ export function IconRail({
   function handleItemClick(id: string) {
     return (e: React.MouseEvent) => {
       e.stopPropagation();
-      // Suppress the peek the same way handleToggle does. The clicked
-      // button keeps focus after the click, so :focus-within would hold
-      // the collapsed rail open at 176px — and since it is absolute and
-      // z-index 20, it then covers the left edge of the very panel this
-      // click just navigated to. Content under that strip cannot be
-      // clicked free, because the click is intercepted by the rail rather
-      // than landing and moving focus away. handleNavBlur clears this once
-      // focus genuinely leaves the nav.
+      // Suppress the peek the same way handleToggle does: the pointer is
+      // still on the rail, so :hover would hold it open at 176px — and since
+      // it is absolute and z-index 20, it would cover the left edge of the
+      // very panel this click just navigated to. The clicked button keeps
+      // focus too, which is why the CSS peeks on :focus-visible rather than
+      // :focus-within. mouseleave/handleNavBlur clear this again.
       setPeekSuppressed(true);
       onSelect?.(id);
     };
