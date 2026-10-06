@@ -103,6 +103,22 @@ describe("ActivityGroup", () => {
     expect(screen.queryAllByTestId("activity-row")).toHaveLength(0);
   });
 
+  it("a live group's header spins only while a call in it is unresolved", () => {
+    const liveEntries = entries.map((e) => ({ ...e, live: true }));
+    const { rerender } = render(<ActivityGroup entries={liveEntries} live />);
+    const header = screen.getByRole("button", { name: /2 actions/ });
+    expect(header.querySelector('[data-status="in_progress"]')).toBeNull();
+    expect(header.querySelector('[data-status="completed"]')).toBeTruthy();
+
+    const pending: ActivityEntry = {
+      type: "tool",
+      tool: { id: "t9", name: "Bash", kind: "execute", title: "make check" },
+      live: true,
+    };
+    rerender(<ActivityGroup entries={[...liveEntries, pending]} live />);
+    expect(screen.getByRole("button", { name: /3 actions/ }).querySelector('[data-status="in_progress"]')).toBeTruthy();
+  });
+
   it("row click opens the dock target; rows are inert without onOpenTool", () => {
     const onOpen = vi.fn();
     const { unmount } = render(<ActivityGroup entries={entries} defaultOpen onOpenTool={onOpen} />);
