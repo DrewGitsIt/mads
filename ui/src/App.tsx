@@ -19,6 +19,7 @@ import { LibrarySurface } from "./library/LibrarySurface";
 import { DashboardTab } from "./dashboard/DashboardTab";
 import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
+import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
 import { requestShellToggle } from "./conversation/shellToggleSignal";
 import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
@@ -66,6 +67,10 @@ export function App() {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // App-level, not in a surface: a deleted session's shell must end whichever
+  // surface is showing (see the hook).
+  useEndDeletedSessionShells();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [jumpToSessionId, setJumpToSessionId] = useState<string>();

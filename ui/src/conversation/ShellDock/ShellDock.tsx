@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { ResizablePanel } from "../../components/ResizablePanel/ResizablePanel";
 import { TerminalView } from "../TerminalRenderer/TerminalView";
+import type { ShellActivity } from "../TerminalRenderer/ptyBridge";
 import { SHELL_SCROLLBACK, type ShellDockBridge } from "./shellBridge";
 import styles from "./ShellDock.module.css";
 
@@ -12,7 +14,7 @@ export interface ShellDockProps {
   onHeightChange?: (height: number) => void;
   /** Chevron: hide the dock. The shell keeps running. */
   onHide?: () => void;
-  /** ×: end the shell and close the dock. */
+  /** ×, once confirmed (or at once when the shell is idle): end the shell and close the dock. */
   onEnd?: () => void;
 }
 
@@ -24,7 +26,8 @@ type Lost = "exited" | "host-exited" | "detached";
  * the agent's own PTY session. Callers supply a ShellBridge for this session;
  * the shell it attaches to outlives this component (hiding the dock unmounts
  * it, which detaches), so only `onEnd` — the × — kills it
- * (docs/SHELL-DOCK-DESIGN.md D2/D4).
+ * (docs/SHELL-DOCK-DESIGN.md D2/D4). The × first asks the bridge what is
+ * running: an idle shell ends at once, a busy one asks first (D4).
  *
  * When the shell goes away under a mounted dock, a strip under the terminal
  * says why and offers the way back: each button remounts TerminalView, whose
@@ -34,6 +37,10 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
   const [lost, setLost] = useState<Lost>();
   // Bumped to remount TerminalView for a fresh open.
   const [generation, setGeneration] = useState(0);
+  // The shell's activity while the End dialog is up; undefined means no dialog.
+  const [confirming, setConfirming] = useState<ShellActivity>();
+  // The × is in flight (asking the host); a second click mustn't stack another ask.
+  const asking = useRef(false);
 
   useEffect(() => {
     const unsubDetached = bridge.onDetached(() => setLost("detached"));
@@ -43,6 +50,19 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
       unsubHostExited();
     };
   }, [bridge]);
+
+  const requestEnd = async () => {
+    if (asking.current) return;
+    asking.current = true;
+    try {
+      const activity = await bridge.inspect().catch(() => undefined);
+      // Idle, or the host can't say (gone): ending is what × always did.
+      if (activity?.busy) setConfirming(activity);
+      else onEnd?.();
+    } finally {
+      asking.current = false;
+    }
+  };
 
   const reopen = () => {
     setLost(undefined);
@@ -73,7 +93,7 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
             className={styles.headerButton}
             aria-label="End shell"
             title="End shell"
-            onClick={onEnd}
+            onClick={() => void requestEnd()}
           >
             ×
           </button>
@@ -103,6 +123,44 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirming !== undefined}
+        title={
+          confirming && confirming.count > 1
+            ? `${confirming.count} processes are still running in this shell`
+            : "A process is still running in this shell"
+        }
+        description={
+          confirming && (
+            <>
+              <ul className={styles.running}>
+                {confirming.processes.map((p) => (
+                  <li key={`${p.pid}-${p.command}`} className={styles.runningCommand} title={p.command}>
+                    {p.command}
+                  </li>
+                ))}
+              </ul>
+              <p>
+                Ending the shell stops {confirming.count > 1 ? "them" : "it"}. Anything started with{" "}
+                <code>nohup</code>,{" "}
+                <code>disown</code> or <code>setsid</code> may keep running.
+              </p>
+            </>
+          )
+        }
+        confirmLabel="End shell"
+        cancelLabel="Keep running, hide"
+        onConfirm={() => {
+          setConfirming(undefined);
+          onEnd?.();
+        }}
+        onCancel={() => {
+          setConfirming(undefined);
+          onHide?.();
+        }}
+        // Escape or a backdrop click is neither choice: just close the question.
+        onDismiss={() => setConfirming(undefined)}
+      />
     </ResizablePanel>
   );
 }

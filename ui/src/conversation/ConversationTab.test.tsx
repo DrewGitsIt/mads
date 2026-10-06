@@ -397,7 +397,7 @@ describe("ConversationTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "End shell" }));
 
-    expect(host.end).toHaveBeenCalledWith("shell-session-active");
+    await waitFor(() => expect(host.end).toHaveBeenCalledWith("shell-session-active"));
     await waitFor(() => expect(shellVisible()).toBe(false));
   });
 

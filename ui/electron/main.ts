@@ -14,7 +14,9 @@ import {
 } from "electron";
 import { join } from "node:path";
 import { ShellRegistryCache } from "./pty/shellRegistryCache";
-import type { ShellInfo } from "./pty/shellHostCore";
+import type { ShellActivity, ShellInfo } from "./pty/shellHostCore";
+import { HostRequests } from "./pty/hostRequests";
+import { describeBusyShells, INSPECT_TIMEOUT_MS, QuitGuard } from "./pty/quitGuard";
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 // Same env var the renderer's own RouterClient reads (see ui/src/router/client.ts)
@@ -144,19 +146,68 @@ const shellRegistry = new ShellRegistryCache((shells: ShellInfo[]) => {
   }
 });
 
+// How long quit waits for the host to hang up its shells before killing it anyway.
+const END_ALL_TIMEOUT_MS = 1000;
+
+// Quit-time requests to the host (what is running; end every shell), answered
+// over the parent port. Created with the host; see hostRequests.ts.
+let hostRequests: HostRequests | undefined;
+
+/** Hangs up every shell and its jobs, waiting briefly for the host's ack, then stops the host. */
+async function stopShellHost(): Promise<void> {
+  if (!shellHost) return;
+  await hostRequests?.request("end-all", END_ALL_TIMEOUT_MS);
+  shellHost?.kill();
+}
+
+// D7: quitting with something running in a shell asks first (quitGuard.ts).
+const quitGuard = new QuitGuard({
+  hostRunning: () => shellHost !== undefined,
+  inspect: async () => (await hostRequests?.request<ShellActivity[]>("inspect", INSPECT_TIMEOUT_MS)) ?? [],
+  confirm: async (busy) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    const options: Electron.MessageBoxOptions = {
+      type: "warning",
+      buttons: ["Quit and end them", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+      message:
+        busy.length === 1
+          ? "A shell still has something running"
+          : `${busy.length} shells still have something running`,
+      detail: `${describeBusyShells(busy)}\n\nQuitting ends these shells and stops what they are running.`,
+    };
+    const result = win ? await dialog.showMessageBox(win, options) : await dialog.showMessageBox(options);
+    return result.response === 0;
+  },
+  killHost: stopShellHost,
+  quit: () => app.quit(),
+});
+
 function ensureShellHost(): UtilityProcess {
   if (shellHost) return shellHost;
   const host = utilityProcess.fork(join(__dirname, "pty", "shellHost.js"), [], {
     serviceName: "mads-shell-host",
   });
   shellHost = host;
-  host.on("message", (message: { type?: string; shells?: ShellInfo[] }) => {
-    if (shellHost === host && message.type === "shells-changed" && message.shells) {
-      shellRegistry.set(message.shells);
-    }
-  });
+  hostRequests = new HostRequests((message) => host.postMessage(message));
+  host.on(
+    "message",
+    (message: { type?: string; shells?: ShellInfo[] | ShellActivity[]; requestId?: number }) => {
+      if (shellHost !== host) return;
+      if (message.type === "shells-changed" && message.shells) {
+        shellRegistry.set(message.shells as ShellInfo[]);
+      } else if (message.type === "inspect-result" && message.requestId !== undefined) {
+        hostRequests?.reply(message.requestId, message.shells ?? []);
+      } else if (message.type === "end-all-done" && message.requestId !== undefined) {
+        hostRequests?.reply(message.requestId, true);
+      }
+    },
+  );
   host.on("exit", () => {
     if (shellHost !== host) return;
+    // Nobody is going to answer a pending quit-time request now.
+    hostRequests?.failAll();
     shellRegistry.clear();
     // Its shells died with it. Tell every window that held a port so the dock
     // can say so; the next shell:connect forks a fresh host.
@@ -201,10 +252,9 @@ function registerShellBroker(): void {
     wc.postMessage("shell:port", null, [port2]);
   });
 
-  // Don't leave the host (and its shells) to the OS's mercy at quit.
-  app.on("before-quit", () => {
-    shellHost?.kill();
-  });
+  // Don't leave the host (and its shells) to the OS's mercy at quit — but ask
+  // first when a shell is busy.
+  app.on("before-quit", (event) => quitGuard.handleBeforeQuit(event));
 }
 
 function createWindow(): void {

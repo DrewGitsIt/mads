@@ -14,6 +14,11 @@ import os from "node:os";
 
 export interface PtyProcess {
   pid?: number;
+  /**
+   * Name of the pty's foreground process (node-pty reads it on Linux and
+   * macOS). It equals the shell's own name while the shell sits at its prompt.
+   */
+  readonly process?: string;
   write(data: string): void;
   resize(cols: number, rows: number): void;
   kill(): void;

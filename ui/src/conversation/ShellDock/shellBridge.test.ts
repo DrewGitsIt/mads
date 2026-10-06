@@ -73,6 +73,30 @@ describe("ShellBridge", () => {
     expect(host.detach).toHaveBeenCalledTimes(1);
   });
 
+  it("inspect asks the host about this session's shell, and is undefined with no live shell", async () => {
+    const { host } = makeFakeShellHost();
+    const activity = {
+      sessionId: "ses_1",
+      shellId: "shell-ses_1",
+      busy: true,
+      foreground: undefined,
+      processes: [{ pid: 5, command: "sleep 30" }],
+      count: 1,
+      rssKb: 0,
+    };
+    host.inspect.mockResolvedValue([activity]);
+    const bridge = new ShellBridge(host, "ses_1");
+    expect(await bridge.inspect()).toBeUndefined(); // never opened
+    expect(host.inspect).not.toHaveBeenCalled();
+
+    await bridge.spawn();
+    expect(await bridge.inspect()).toEqual(activity);
+    expect(host.inspect).toHaveBeenCalledWith("shell-ses_1");
+
+    bridge.end();
+    expect(await bridge.inspect()).toBeUndefined(); // ended: nothing to ask
+  });
+
   it("end ends the current shell", async () => {
     const { host } = makeFakeShellHost();
     const bridge = new ShellBridge(host, "ses_1");

@@ -7,6 +7,7 @@ import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf } from "../rail/
 import type { OpenTaskBreakdown, SessionAgentState } from "../rail/railGroups";
 import { FakeRouterClient, fixtureSessions } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
+import { makeFakeShellHost } from "../../../conversation/ShellDock/fakeShellHost";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { Session } from "../../../router/types";
 
@@ -60,6 +61,56 @@ function renderDialog(props: Partial<Parameters<typeof SessionDeleteConfirmDialo
 function panelOf(dialog: HTMLElement): HTMLElement {
   return dialog.querySelector<HTMLElement>("[data-delete-state]")!;
 }
+
+describe("SessionDeleteConfirmDialog — its shell (D7)", () => {
+  afterEach(() => {
+    delete (window as { mads?: unknown }).mads;
+  });
+  const live = { sessionId: "s1", shellId: "shell-s1", cwd: "/", pid: 1, startedAt: 0, attached: false };
+  const activity = (commands: string[]) => ({
+    sessionId: "s1",
+    shellId: "shell-s1",
+    busy: commands.length > 0,
+    foreground: undefined,
+    processes: commands.map((command, i) => ({ pid: 10 + i, command })),
+    count: commands.length,
+    rssKb: 0,
+  });
+  function withShell(shells: (typeof live)[], commands: string[]) {
+    const fake = makeFakeShellHost();
+    fake.setShells(shells);
+    fake.host.inspect.mockResolvedValue(shells.length ? [activity(commands)] : []);
+    window.mads = { shell: fake.host };
+    return fake;
+  }
+
+  it("says what the shell is running, with a count of the rest, when it is busy", async () => {
+    withShell([live], ["sleep 30", "tail -f x", "top"]);
+    const dialog = renderDialog();
+    const line = await waitFor(() => {
+      const el = dialog.querySelector("[data-delete-shell]");
+      expect(el).toBeTruthy();
+      return el as HTMLElement;
+    });
+    expect(line.textContent).toBe("Its shell is running sleep 30 (+2 more); deleting ends it.");
+    expect(line.querySelector("code")?.textContent).toBe("sleep 30");
+  });
+
+  it("says nothing when the shell is idle", async () => {
+    const fake = withShell([live], []);
+    const dialog = renderDialog();
+    await waitFor(() => expect(fake.host.inspect).toHaveBeenCalledWith("shell-s1"));
+    expect(dialog.querySelector("[data-delete-shell]")).toBeNull();
+  });
+
+  it("says nothing, and never asks the host, when the session has no live shell", async () => {
+    const fake = withShell([], []);
+    const dialog = renderDialog();
+    await waitFor(() => expect(fake.host.list).toHaveBeenCalled());
+    expect(fake.host.inspect).not.toHaveBeenCalled();
+    expect(dialog.querySelector("[data-delete-shell]")).toBeNull();
+  });
+});
 
 describe("SessionDeleteConfirmDialog", () => {
   it("names the session in its title — the rail deletes sessions that aren't the one on screen", () => {

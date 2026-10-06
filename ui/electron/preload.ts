@@ -72,6 +72,16 @@ interface ShellInfo {
   attached: boolean;
 }
 
+interface ShellActivity {
+  sessionId: string;
+  shellId: string;
+  busy: boolean;
+  foreground: string | undefined;
+  processes: Array<{ pid: number; command: string }>;
+  count: number;
+  rssKb: number;
+}
+
 type ShellEventMessage =
   | { event: "data"; shellId: string; data: string }
   | { event: "exit"; shellId: string; exitCode: number }
@@ -180,6 +190,8 @@ const shellBridge = {
     shellRequest({ type: "open", sessionId, ...options }),
   detach: (shellId: string): Promise<void> => shellRequest({ type: "detach", shellId }),
   end: (shellId: string): Promise<void> => shellRequest({ type: "end", shellId }),
+  endSession: (sessionId: string): Promise<void> => shellRequest({ type: "end-session", sessionId }),
+  inspect: (shellId?: string): Promise<ShellActivity[]> => shellRequest({ type: "inspect", shellId }),
   write: (shellId: string, data: string): void => {
     shellSend({ type: "write", shellId, data });
   },

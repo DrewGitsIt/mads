@@ -56,6 +56,21 @@ export interface ShellInfo {
   attached: boolean;
 }
 
+/** What is running in one shell (D5), as the shell host's `inspect` reports it. */
+export interface ShellActivity {
+  sessionId: string;
+  shellId: string;
+  /** Something other than the shell is running in it (foreground or background). */
+  busy: boolean;
+  /** The foreground program's name when it isn't the shell itself. */
+  foreground: string | undefined;
+  /** The shell's descendants, the shell excluded; commands are truncated. */
+  processes: Array<{ pid: number; command: string }>;
+  count: number;
+  /** Resident memory of the shell and its descendants, KiB. */
+  rssKb: number;
+}
+
 /**
  * Renderer-facing contract for the shell host (ui/electron/pty/shellHost.ts):
  * one shell per session id that outlives whichever view is attached. This is
@@ -88,6 +103,13 @@ export interface ShellHostBridge {
   detach(shellId: string): Promise<void>;
   /** Kills the shell and forgets it. */
   end(shellId: string): Promise<void>;
+  /** Ends the session's shell, if it has one (the session was deleted). */
+  endSession(sessionId: string): Promise<void>;
+  /**
+   * What is running, read on demand (never polled): one shell, or every shell.
+   * Unlike list() this connects to the host, so ask only about a shell that exists.
+   */
+  inspect(shellId?: string): Promise<ShellActivity[]>;
   write(shellId: string, data: string): void;
   resize(shellId: string, cols: number, rows: number): void;
   /** Every live shell. Answered by main's cache, so it never forks the host (see useLiveShells). */

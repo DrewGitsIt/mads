@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import { defaultShell, resolveCwd, type NodePtyModule, type PtyProcess } from "./ptyHost";
 import { shellEnv } from "./shellEnv";
+import { describeTree, type ProcessSource } from "./processTable";
 import { createHeadlessMirror, type CreateMirror, type ShellMirror } from "./shellMirror";
 
 export { SHELL_SCROLLBACK } from "./shellMirror";
@@ -31,6 +33,8 @@ export type ShellRequest =
   | { type: "open"; sessionId: string; cwd?: string; cols?: number; rows?: number }
   | { type: "detach"; shellId: string }
   | { type: "end"; shellId: string }
+  | { type: "end-session"; sessionId: string }
+  | { type: "inspect"; shellId?: string }
   | { type: "write"; shellId: string; data: string }
   | { type: "resize"; shellId: string; cols: number; rows: number }
   | { type: "list" };
@@ -74,6 +78,24 @@ export interface ShellInfo {
   attached: boolean;
 }
 
+/**
+ * What is running in one shell (D5), asked for on demand. `processes` are the
+ * shell's descendants (the shell itself excluded); `busy` is also true when
+ * the pty's foreground process is not the shell, even if no descendant could
+ * be read.
+ */
+export interface ShellActivity {
+  sessionId: string;
+  shellId: string;
+  busy: boolean;
+  /** Something other than the shell owns the terminal's foreground. */
+  foreground: string | undefined;
+  processes: Array<{ pid: number; command: string }>;
+  count: number;
+  /** Resident memory of the shell and everything under it, in KiB. */
+  rssKb: number;
+}
+
 export type SendToWindow = (event: ShellEvent) => void;
 
 export interface ShellHostDeps {
@@ -92,6 +114,17 @@ export interface ShellHostDeps {
    * require connecting to (and forking) this host.
    */
   onShellsChanged?: (shells: ShellInfo[]) => void;
+  /**
+   * Sends a signal to a pid (process.kill in the real host). May throw (ESRCH,
+   * EPERM). Deliberately has no default, like processSource: "end" hangs up a
+   * shell's descendants, and a test that left the real process table and the
+   * real process.kill in place behind a fake pty once SIGHUPed every process
+   * the user owned (2026-10-06). Only shellHost.ts and the realtests pass the
+   * real ones; everything else must pass fakes, and the compiler says so.
+   */
+  signal: (pid: number, signal: NodeJS.Signals) => void;
+  /** A process source for one request (createProcessSource in the real host). No default; see `signal`. */
+  processSource: () => ProcessSource;
   /** Runs `fn` after `ms` and returns a canceller; defaults to setTimeout. */
   schedule?: (fn: () => void, ms: number) => () => void;
 }
@@ -100,6 +133,8 @@ interface ShellEntry {
   sessionId: string;
   shellId: string;
   proc: PtyProcess;
+  /** The shell's own program name, to tell it apart from a foreground job. */
+  shellName: string;
   cwd: string | undefined;
   startedAt: number;
   attachedTo: number | undefined;
@@ -124,6 +159,11 @@ interface ShellEntry {
 interface Dispatched {
   result: unknown;
   release?: () => void;
+}
+
+/** "-bash", "/bin/bash --login" and "bash" are all the program "bash". */
+function programName(command: string): string {
+  return basename(command.trim().split(/\s+/)[0] ?? "").replace(/^-/, "");
 }
 
 export class ShellHostCore {
@@ -196,8 +236,15 @@ export class ShellHostCore {
         if (this.owned(windowId, request.shellId)) this.detach(request.shellId);
         return { result: undefined };
       case "end":
-        this.end(request.shellId);
+        await this.end(request.shellId);
         return { result: undefined };
+      case "end-session": {
+        const entry = this.bySession.get(request.sessionId);
+        if (entry) await this.end(entry.shellId);
+        return { result: undefined };
+      }
+      case "inspect":
+        return { result: await this.inspect(request.shellId) };
       case "write":
         this.owned(windowId, request.shellId)?.proc.write(request.data);
         return { result: undefined };
@@ -220,6 +267,45 @@ export class ShellHostCore {
       startedAt: entry.startedAt,
       attached: entry.attachedTo !== undefined,
     }));
+  }
+
+  /**
+   * D5: what is running in one shell, or in all of them. Reads the process
+   * table now; nothing is cached or polled.
+   */
+  async inspect(shellId?: string): Promise<ShellActivity[]> {
+    const entries = shellId ? [this.byId.get(shellId)] : [...this.byId.values()];
+    const source = this.deps.processSource();
+    const out: ShellActivity[] = [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const pid = entry.proc.pid;
+      const tree = pid ? await describeTree(source, pid) : { root: undefined, descendants: [] };
+      let foreground: string | undefined;
+      try {
+        foreground = entry.proc.process;
+      } catch {
+        // node-pty throws once the pty is gone; then nothing is in the foreground.
+      }
+      // Whether it is the shell's own name: node-pty reports a path or argv0
+      // ("/bin/sh", "-bash" for a login shell) as readily as a bare name.
+      const names = new Set([entry.shellName, programName(tree.root?.command ?? "")]);
+      const away = !!foreground && !names.has(programName(foreground));
+      const processes = tree.descendants.map(({ pid: p, command }) => ({ pid: p, command }));
+      // Foreground differs but nothing was readable (ps failed, or it exited
+      // mid-walk): still say something is running, by the name node-pty gave.
+      if (away && processes.length === 0) processes.push({ pid: 0, command: foreground as string });
+      out.push({
+        sessionId: entry.sessionId,
+        shellId: entry.shellId,
+        busy: away || processes.length > 0,
+        foreground: away ? foreground : undefined,
+        processes,
+        count: processes.length,
+        rssKb: [tree.root, ...tree.descendants].reduce((sum, p) => sum + (p?.rssKb ?? 0), 0),
+      });
+    }
+    return out;
   }
 
   /** The shell, but only if this window is the one attached — others can't drive it. */
@@ -247,7 +333,8 @@ export class ShellHostCore {
     const cwd = resolveCwd(request.cwd);
     const cols = request.cols ?? 80;
     const rows = request.rows ?? 24;
-    const proc = nodePty.spawn((this.deps.shell ?? defaultShell)(), [], {
+    const shellFile = (this.deps.shell ?? defaultShell)();
+    const proc = nodePty.spawn(shellFile, [], {
       name: "xterm-256color",
       cols,
       rows,
@@ -258,6 +345,7 @@ export class ShellHostCore {
       sessionId: request.sessionId,
       shellId: (this.deps.newId ?? randomUUID)(),
       proc,
+      shellName: basename(shellFile),
       cwd,
       startedAt: (this.deps.now ?? Date.now)(),
       attachedTo: windowId,
@@ -389,21 +477,64 @@ export class ShellHostCore {
     this.clearPending(entry);
   }
 
-  private end(shellId: string): void {
+  /**
+   * Forgets the shell at once (so open/list see it gone), then hangs it up.
+   * The kernel's hangup when the pty closes reaches only the foreground
+   * process group, and a shell resends it to its background jobs only if it
+   * chooses to (bash and zsh do, dash doesn't). So the descendants are
+   * collected first — once the shell dies they are reparented and no longer
+   * findable — and each gets SIGHUP after the shell is killed. A job that
+   * ignores SIGHUP (nohup) survives, by design (D6); nothing escalates to
+   * SIGKILL.
+   */
+  private end(shellId: string): Promise<void> {
     const entry = this.byId.get(shellId);
-    if (!entry) return;
+    if (!entry) return Promise.resolve();
     this.remove(entry);
     // An end owes the window nothing, not even output held behind a re-open.
     entry.holdToken = undefined;
     entry.heldExit = undefined;
     this.clearPending(entry);
-    entry.proc.kill();
     this.broadcastShellsChanged();
+    return this.hangUp(entry);
+  }
+
+  private async hangUp(entry: ShellEntry): Promise<void> {
+    let descendants: number[] = [];
+    try {
+      const pid = entry.proc.pid;
+      const source = this.deps.processSource();
+      // Only walk a tree this host provably owns: the shell must be our own
+      // direct child (node-pty forks it from this process). Every process
+      // descends from pid 1, so a wrong root — pid 1, a fake pty's made-up
+      // pid that happens to be real, a recycled pid — would otherwise turn
+      // "end this shell" into SIGHUP for an arbitrary slice of the machine.
+      // That happened once (2026-10-06): a test's fake pty had pid 1. Checked
+      // before the kill, while the shell is still ours to ask about.
+      if (pid && pid > 1 && (await source.parent(pid)) === process.pid) {
+        const tree = await describeTree(source, pid);
+        descendants = tree.descendants.map((p) => p.pid);
+      }
+    } catch {
+      // Unreadable table: the shell is still killed, just without the extra hangups.
+    } finally {
+      entry.proc.kill();
+    }
+    for (const pid of descendants) {
+      // Belt and braces on top of the ownership check: never init, never this
+      // host, never main (our parent).
+      if (pid <= 1 || pid === process.pid || pid === process.ppid) continue;
+      try {
+        this.deps.signal(pid, "SIGHUP");
+      } catch {
+        // ESRCH: already gone; EPERM: not ours to signal. Neither matters.
+      }
+    }
   }
 
   /** Ends every shell, e.g. when the host is shutting down. */
-  endAll(): void {
-    for (const entry of [...this.byId.values()]) this.end(entry.shellId);
+  async endAll(): Promise<void> {
+    await Promise.all([...this.byId.values()].map((entry) => this.end(entry.shellId)));
   }
 
   private remove(entry: ShellEntry): void {

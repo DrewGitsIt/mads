@@ -1,4 +1,9 @@
-import type { PtyBridge, PtySpawnOptions, ShellHostBridge } from "../TerminalRenderer/ptyBridge";
+import type {
+  PtyBridge,
+  PtySpawnOptions,
+  ShellActivity,
+  ShellHostBridge,
+} from "../TerminalRenderer/ptyBridge";
 
 /**
  * Scrollback of the dock's xterm. Must equal SHELL_SCROLLBACK in
@@ -13,6 +18,11 @@ export const SHELL_SCROLLBACK = 1000;
 export interface ShellDockBridge extends PtyBridge {
   /** Kills the session's shell for good (the dock's ×). Hiding never calls this. */
   end(): void;
+  /**
+   * What is running in this session's shell, read now (the × asks before
+   * ending). Undefined when there is no live shell to ask about.
+   */
+  inspect(): Promise<ShellActivity | undefined>;
   /** Another window opened this session's shell and took it over. */
   onDetached(listener: () => void): () => void;
   /** The shell host died; the shell is gone. */
@@ -115,6 +125,13 @@ export class ShellBridge implements ShellDockBridge {
       return;
     }
     this.endNow();
+  }
+
+  async inspect(): Promise<ShellActivity | undefined> {
+    await this.opening;
+    const id = this.shellId;
+    if (!id || this.lost) return undefined;
+    return (await this.host.inspect(id))[0];
   }
 
   private endNow(): void {

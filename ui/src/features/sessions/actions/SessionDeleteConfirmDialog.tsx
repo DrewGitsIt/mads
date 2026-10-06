@@ -10,6 +10,8 @@ import {
 import type { OpenTaskBreakdown, RailStatus, SessionAgentState } from "../rail/railGroups";
 import type { RouterClient } from "../../../router/client";
 import type { Session, WorktreeTenant } from "../../../router/types";
+import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
+import type { ShellActivity } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { isIsolated } from "../../../conversation/Worktree/workState";
 import {
   formatAbsoluteStamp,
@@ -205,10 +207,47 @@ function DeleteDescription({
         )}
       </div>
       {isIsolated(session) && <UnlandedWork session={session} routerClient={routerClient} />}
+      <ShellBusyLine sessionId={session.id} />
       <div className={styles.loss}>{lossSentence(state, openTasks)}</div>
       <div className={styles.keeps}>
         Provider transcripts and the event log survive. This can't be undone.
       </div>
+    </div>
+  );
+}
+
+/**
+ * D7: deleting a session ends its dock shell, so when that shell has
+ * something running the dialog says what. Asked when the dialog opens; a
+ * session with no live shell (or no Electron) never touches the shell host.
+ */
+function ShellBusyLine({ sessionId }: { sessionId: string }) {
+  const shell = useLiveShells().find((s) => s.sessionId === sessionId);
+  const shellId = shell?.shellId;
+  const [activity, setActivity] = useState<ShellActivity>();
+  useEffect(() => {
+    const host = typeof window !== "undefined" ? window.mads?.shell : undefined;
+    if (!host || !shellId) {
+      setActivity(undefined);
+      return;
+    }
+    let cancelled = false;
+    host
+      .inspect(shellId)
+      .then((found) => {
+        if (!cancelled) setActivity(found[0]);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [shellId]);
+  if (!activity?.busy || activity.processes.length === 0) return null;
+  const more = activity.processes.length - 1;
+  return (
+    <div className={styles.keeps} data-delete-shell="busy">
+      Its shell is running <code>{activity.processes[0].command}</code>
+      {more > 0 ? ` (+${more} more)` : ""}; deleting ends it.
     </div>
   );
 }

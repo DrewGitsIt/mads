@@ -1,4 +1,5 @@
 import type { MessagePortMain } from "electron";
+import { createProcessSource } from "./processTable";
 import { loadNodePty } from "./ptyHost";
 import { ShellHostCore, type ShellRequest } from "./shellHostCore";
 
@@ -25,6 +26,10 @@ import { ShellHostCore, type ShellRequest } from "./shellHostCore";
 // it without connecting to this process — see shellRegistryCache.ts.
 const core = new ShellHostCore({
   loadPty: loadNodePty,
+  // The real process table and process.kill live only here (and in the
+  // realtests): ShellHostCore has no defaults for them on purpose.
+  processSource: createProcessSource,
+  signal: (pid, sig) => process.kill(pid, sig),
   onShellsChanged: (shells) => process.parentPort?.postMessage({ type: "shells-changed", shells }),
 });
 const ports = new Map<number, MessagePortMain>();
@@ -60,11 +65,33 @@ function connectWindow(windowId: number, port: MessagePortMain): void {
 // (vitest importing this by accident) this file stays inert.
 if (process.parentPort) {
   process.parentPort.on("message", (event) => {
-    const message = event.data as { type: string; windowId: number };
-    if (message.type === "connect" && event.ports[0]) {
+    const message = event.data as { type: string; windowId: number; requestId?: number };
+    if (message.type === "inspect") {
+      // Main's quit guard (quitGuard.ts) asks what is running, over the parent
+      // port rather than a window port. A failure answers "nothing": it must
+      // not block quitting.
+      const requestId = message.requestId;
+      core.inspect().then(
+        (shells) => process.parentPort?.postMessage({ type: "inspect-result", requestId, shells }),
+        () => process.parentPort?.postMessage({ type: "inspect-result", requestId, shells: [] }),
+      );
+    } else if (message.type === "end-all") {
+      // Main is shutting the host down: hang up every shell and its jobs first
+      // (ShellHostCore.endAll), then say so. Main kills us anyway on timeout.
+      const requestId = message.requestId;
+      void core.endAll().finally(() => process.parentPort?.postMessage({ type: "end-all-done", requestId }));
+    } else if (message.type === "connect" && event.ports[0]) {
       connectWindow(message.windowId, event.ports[0]);
     } else if (message.type === "window-gone") {
       dropPort(message.windowId);
     }
+  });
+}
+
+// Backstop: if the host is killed without an end-all (Electron's own
+// shutdown), still hang up the shells' jobs on the way out.
+if (process.parentPort) {
+  process.on("SIGTERM", () => {
+    void core.endAll().finally(() => process.exit(0));
   });
 }

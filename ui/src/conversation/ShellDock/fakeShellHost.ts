@@ -28,6 +28,8 @@ export function makeFakeShellHost() {
     })),
     detach: vi.fn(async (_shellId: string) => {}),
     end: vi.fn(async (_shellId: string) => {}),
+    endSession: vi.fn(async (_sessionId: string) => {}),
+    inspect: vi.fn<ShellHostBridge["inspect"]>(async () => []),
     write: vi.fn(),
     resize: vi.fn(),
     list: vi.fn(async () => shells),

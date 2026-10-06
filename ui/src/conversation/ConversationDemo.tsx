@@ -29,6 +29,9 @@ function makeDemoPtyBridge(): ShellDockBridge {
       dataListeners.get(ptyId)?.forEach((cb) => cb(data === "\r" ? "\r\n$ " : data));
     },
     resize() {},
+    async inspect() {
+      return undefined; // the demo shell is never busy
+    },
     kill(ptyId) {
       dataListeners.delete(ptyId);
     },

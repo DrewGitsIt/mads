@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ShellDock } from "./ShellDock";
 import { ShellBridge } from "./shellBridge";
+import type { ShellActivity } from "../TerminalRenderer/ptyBridge";
 import { makeFakeShellHost } from "./fakeShellHost";
 
 // Typed output reaches the pty through the bridge; these tests need only the
@@ -59,7 +60,110 @@ describe("ShellDock", () => {
     expect(onEnd).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "End shell" }));
-    expect(onEnd).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+  });
+
+  describe("× with something running (D4)", () => {
+    const activity = (commands: string[]): ShellActivity => ({
+      sessionId: "ses_1",
+      shellId: "shell-ses_1",
+      busy: commands.length > 0,
+      foreground: undefined,
+      processes: commands.map((command, i) => ({ pid: 10 + i, command })),
+      count: commands.length,
+      rssKb: 0,
+    });
+    const clickEnd = () => fireEvent.click(screen.getByRole("button", { name: "End shell" }));
+
+    it("an idle shell ends at once, with no dialog", async () => {
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockResolvedValue([activity([])]);
+
+      clickEnd();
+
+      await waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+      expect(fake.host.inspect).toHaveBeenCalledWith("shell-ses_1");
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("a busy shell asks first, listing what runs and the nohup caveat", async () => {
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockResolvedValue([
+        activity(["sudo python -m http.server 80", "tail -f /var/log/syslog"]),
+      ]);
+
+      clickEnd();
+
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText("2 processes are still running in this shell")).toBeTruthy();
+      expect(within(dialog).getByText("sudo python -m http.server 80")).toBeTruthy();
+      expect(within(dialog).getByText("tail -f /var/log/syslog")).toBeTruthy();
+      expect(dialog.textContent).toContain("Ending the shell stops them.");
+      expect(dialog.textContent).toContain("nohup");
+      expect(onEnd).not.toHaveBeenCalled();
+    });
+
+    it("Keep running, hide hides without ending", async () => {
+      const onHide = vi.fn();
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onHide, onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockResolvedValue([activity(["sleep 30"])]);
+
+      clickEnd();
+      fireEvent.click(await screen.findByRole("button", { name: "Keep running, hide" }));
+
+      expect(onHide).toHaveBeenCalledTimes(1);
+      expect(onEnd).not.toHaveBeenCalled();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("End shell in the dialog ends", async () => {
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockResolvedValue([activity(["sleep 30"])]);
+
+      clickEnd();
+      const dialog = await screen.findByRole("alertdialog");
+      expect(within(dialog).getByText("A process is still running in this shell")).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole("button", { name: "End shell" }));
+
+      expect(onEnd).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
+
+    it("Escape closes the question without hiding or ending", async () => {
+      const onHide = vi.fn();
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onHide, onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockResolvedValue([activity(["sleep 30"])]);
+
+      clickEnd();
+      await screen.findByRole("alertdialog");
+      fireEvent.keyDown(document, { key: "Escape" });
+
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(onHide).not.toHaveBeenCalled();
+      expect(onEnd).not.toHaveBeenCalled();
+    });
+
+    it("falls back to ending when the host can't be asked", async () => {
+      const onEnd = vi.fn();
+      const { fake } = mountDock({ onEnd });
+      await waitFor(() => expect(fake.host.open).toHaveBeenCalled());
+      fake.host.inspect.mockRejectedValue(new Error("shell host exited"));
+
+      clickEnd();
+
+      await waitFor(() => expect(onEnd).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+    });
   });
 
   it("unmounting detaches and never ends the shell", async () => {

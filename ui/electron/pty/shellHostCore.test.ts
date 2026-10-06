@@ -2,7 +2,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { Terminal } from "@xterm/headless";
 import type { NodePtyModule, PtyProcess } from "./ptyHost";
-import { DATA_BATCH_MS, SHELL_SCROLLBACK, ShellHostCore, type ShellEvent } from "./shellHostCore";
+import {
+  DATA_BATCH_MS,
+  SHELL_SCROLLBACK,
+  ShellHostCore,
+  type ShellActivity,
+  type ShellEvent,
+} from "./shellHostCore";
+import type { ProcessInfo, ProcessSource } from "./processTable";
 import { createHeadlessMirror, type ShellMirror } from "./shellMirror";
 
 /**
@@ -13,6 +20,8 @@ import { createHeadlessMirror, type ShellMirror } from "./shellMirror";
 
 class FakePty implements PtyProcess {
   killed = false;
+  /** The foreground process name node-pty would report. */
+  process: string | undefined = "fakesh";
   written: string[] = [];
   sizes: Array<[number, number]> = [];
   private dataListeners: Array<(d: string) => void> = [];
@@ -52,6 +61,24 @@ let spawned: FakePty[];
 let core: ShellHostCore;
 let ids = 0;
 let timers: Array<{ fn: () => void; ms: number; live: boolean }>;
+// The process table the host reads for `inspect`: parent pid -> children.
+let processTable: Map<number, ProcessInfo[]>;
+const fakeSource: ProcessSource = {
+  children: async (pid) => (processTable.get(pid) ?? []).map((p) => p.pid),
+  info: async (pid) =>
+    pid >= 1000 && pid < 1100
+      ? { pid, command: "/bin/fakesh", rssKb: 100 }
+      : [...processTable.values()].flat().find((p) => p.pid === pid),
+  // The fake shells (pids 1000-1099) are this process's children, so the
+  // ownership check in end() lets their trees be walked; everything else is
+  // somebody else's. A test can override a shell's parent via `parents`.
+  parent: async (pid) => (parents.has(pid) ? parents.get(pid) : pid >= 1000 && pid < 1100 ? process.pid : 1),
+};
+// Per-test parent overrides for the fake source.
+let parents: Map<number, number | undefined>;
+// Signals the host sent, and an errno to throw for given pids.
+let signals: Array<[number, string]>;
+let signalErrors: Map<number, string>;
 let mirrorHook: ((data: string) => void) | undefined;
 
 /** Fires every scheduled batch flush that wasn't cancelled. */
@@ -102,6 +129,10 @@ beforeEach(() => {
   ids = 0;
   timers = [];
   mirrorHook = undefined;
+  processTable = new Map();
+  parents = new Map();
+  signals = [];
+  signalErrors = new Map();
   const pty: NodePtyModule = {
     spawn: (file, _args, options) => {
       const proc = new FakePty(1000 + spawned.length, file, options);
@@ -116,6 +147,12 @@ beforeEach(() => {
     now: () => 4242,
     newId: () => `shell-${++ids}`,
     createMirror: hookedMirror,
+    processSource: () => fakeSource,
+    signal: (pid, sig) => {
+      const code = signalErrors.get(pid);
+      if (code) throw Object.assign(new Error(code), { code });
+      signals.push([pid, sig]);
+    },
     onShellsChanged: (shells) => reported.push(shells.map((x) => x.sessionId)),
     schedule: (fn, ms) => {
       const timer = { fn, ms, live: true };
@@ -167,7 +204,11 @@ describe("ShellHostCore", () => {
   });
 
   it("rejects open when node-pty is unavailable", async () => {
-    core = new ShellHostCore({ loadPty: async () => undefined });
+    core = new ShellHostCore({
+      loadPty: async () => undefined,
+      processSource: () => fakeSource,
+      signal: (pid, sig) => signals.push([pid, sig]),
+    });
     connectWindow(1);
     await expect(open(1, "ses_a")).rejects.toThrow(/node-pty is unavailable/);
   });
@@ -475,10 +516,16 @@ describe("ShellHostCore", () => {
 
     it("disposes the mirror when the shell ends or exits", async () => {
       let disposed = 0;
+      // Any core built here must inject processSource and signal: the defaults
+      // read the real /proc and call process.kill, and "end" hangs up the
+      // shell's descendants. With pid 1 that once SIGHUPed every process the
+      // user owned and killed their desktop session.
       core = new ShellHostCore({
+        processSource: () => fakeSource,
+        signal: (pid, sig) => signals.push([pid, sig]),
         loadPty: async () => ({
           spawn: (file, _a, options) => {
-            const proc = new FakePty(1, file, options);
+            const proc = new FakePty(1000 + spawned.length, file, options);
             spawned.push(proc);
             return proc;
           },
@@ -546,6 +593,192 @@ describe("ShellHostCore", () => {
       await core.handle(1, { type: "detach", shellId });
       tick();
       expect(events).toEqual([]);
+    });
+  });
+});
+
+describe("ShellHostCore inspect (D5)", () => {
+  const inspect = (shellId?: string) =>
+    core.handle(1, { type: "inspect", shellId }) as Promise<ShellActivity[]>;
+
+  it("reports a shell at its prompt as idle", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    const [activity] = await inspect();
+    expect(activity).toMatchObject({
+      sessionId: "ses_a",
+      shellId: "shell-1",
+      busy: false,
+      processes: [],
+      count: 0,
+      rssKb: 100,
+    });
+  });
+
+  it("is busy when the foreground process is not the shell, and lists the descendants", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    spawned[0].process = "python";
+    processTable.set(1000, [{ pid: 2001, command: "python -m http.server", rssKb: 5000 }]);
+    const [activity] = await inspect("shell-1");
+    expect(activity).toMatchObject({
+      busy: true,
+      foreground: "python",
+      processes: [{ pid: 2001, command: "python -m http.server" }],
+      count: 1,
+      rssKb: 5100,
+    });
+  });
+
+  it("is busy for a background job even while the shell itself is in the foreground", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    processTable.set(1000, [{ pid: 2001, command: "sleep 30", rssKb: 10 }]);
+    const [activity] = await inspect();
+    expect(activity).toMatchObject({ busy: true, foreground: undefined, count: 1 });
+  });
+
+  it("treats a login shell's leading dash as the shell itself", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    spawned[0].process = "-fakesh";
+    expect((await inspect())[0].busy).toBe(false);
+    spawned[0].process = "/bin/fakesh"; // or the path it was spawned by
+    expect((await inspect())[0].busy).toBe(false);
+  });
+
+  it("still says busy by the foreground name when no descendant could be read", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    spawned[0].process = "vim";
+    const [activity] = await inspect();
+    expect(activity).toMatchObject({ busy: true, count: 1, processes: [{ pid: 0, command: "vim" }] });
+  });
+
+  it("inspects every shell by default, and an unknown shell id yields nothing", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    await open(1, "ses_b");
+    expect((await inspect()).map((a) => a.sessionId)).toEqual(["ses_a", "ses_b"]);
+    expect(await inspect("nope")).toEqual([]);
+  });
+
+  it("ends a session's shell by session id, and ignores a session with none", async () => {
+    connectWindow(1);
+    await open(1, "ses_a");
+    await core.handle(1, { type: "end-session", sessionId: "ses_none" });
+    expect(spawned[0].killed).toBe(false);
+    await core.handle(1, { type: "end-session", sessionId: "ses_a" });
+    expect(spawned[0].killed).toBe(true);
+    expect(core.list()).toEqual([]);
+  });
+
+  describe("end hangs up the descendants", () => {
+    beforeEach(() => {
+      processTable.set(1000, [
+        { pid: 2001, command: "sudo svc", rssKb: 1 },
+        { pid: 2002, command: "sleep 30", rssKb: 1 },
+      ]);
+      processTable.set(2001, [{ pid: 2003, command: "svc", rssKb: 1 }]);
+    });
+
+    it("kills the shell, then SIGHUPs every descendant, nested ones included", async () => {
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      await core.handle(1, { type: "end", shellId });
+      expect(spawned[0].killed).toBe(true);
+      expect(signals).toEqual([
+        [2001, "SIGHUP"],
+        [2002, "SIGHUP"],
+        [2003, "SIGHUP"],
+      ]);
+    });
+
+    it("forgets the shell at once, before the walk finishes", async () => {
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      const ending = core.handle(1, { type: "end", shellId });
+      expect(core.list()).toEqual([]);
+      await ending;
+    });
+
+    it("end-session and endAll do the same for every shell", async () => {
+      connectWindow(1);
+      await open(1, "ses_a");
+      await open(1, "ses_b");
+      await core.handle(1, { type: "end-session", sessionId: "ses_a" });
+      expect(spawned[0].killed).toBe(true);
+      expect(signals.map(([pid]) => pid)).toEqual([2001, 2002, 2003]);
+      signals.length = 0;
+      await core.endAll();
+      expect(spawned[1].killed).toBe(true);
+      expect(core.list()).toEqual([]);
+    });
+
+    it("ignores ESRCH and EPERM and keeps signalling the rest", async () => {
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      signalErrors.set(2001, "ESRCH");
+      signalErrors.set(2002, "EPERM");
+      await core.handle(1, { type: "end", shellId });
+      expect(signals).toEqual([[2003, "SIGHUP"]]);
+    });
+
+    it("still kills the shell when the process table can't be read", async () => {
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      processTable = undefined as unknown as typeof processTable; // the fake source throws
+      await core.handle(1, { type: "end", shellId });
+      expect(spawned[0].killed).toBe(true);
+      expect(signals).toEqual([]);
+    });
+
+    it("never walks from pid 1, whose descendants are every process on the machine", async () => {
+      processTable.set(1, [{ pid: 2278, command: "systemd --user", rssKb: 1 }]);
+      // Even if the ownership check were fooled, pid 1 is never a root.
+      parents.set(1, process.pid);
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      (spawned[0] as { pid: number }).pid = 1;
+      await core.handle(1, { type: "end", shellId });
+      expect(spawned[0].killed).toBe(true);
+      expect(signals).toEqual([]);
+    });
+
+    it("signals nothing when the shell isn't this host's own child", async () => {
+      // e.g. a recycled pid, or a fake pty whose made-up pid is somebody's real process.
+      processTable.set(1000, [{ pid: 2001, command: "gnome-shell", rssKb: 1 }]);
+      parents.set(1000, 4321);
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      await core.handle(1, { type: "end", shellId });
+      expect(spawned[0].killed).toBe(true);
+      expect(signals).toEqual([]);
+    });
+
+    it("signals nothing when the shell's parent can't be read", async () => {
+      processTable.set(1000, [{ pid: 2001, command: "sleep 30", rssKb: 1 }]);
+      parents.set(1000, undefined);
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      await core.handle(1, { type: "end", shellId });
+      expect(signals).toEqual([]);
+    });
+
+    it("never hangs up main (the host's parent)", async () => {
+      processTable.set(1000, [{ pid: process.ppid, command: "electron", rssKb: 1 }]);
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      await core.handle(1, { type: "end", shellId });
+      expect(signals).toEqual([]);
+    });
+
+    it("never hangs up the host itself", async () => {
+      processTable.set(1000, [{ pid: process.pid, command: "node", rssKb: 1 }]);
+      connectWindow(1);
+      const { shellId } = await open(1, "ses_a");
+      await core.handle(1, { type: "end", shellId });
+      expect(signals).toEqual([]);
     });
   });
 });
