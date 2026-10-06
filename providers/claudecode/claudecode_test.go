@@ -1314,3 +1314,27 @@ func TestTranscriptTaskNotification(t *testing.T) {
 		t.Errorf("summary-less notification = %+v", m)
 	}
 }
+
+// A screenshot pasted into claude (or loaded by Read) is one JSONL line of
+// base64 that can outgrow any fixed scanner cap — that one line used to fail
+// the whole transcript, so the conversation wouldn't load at all.
+func TestNormalizeTranscriptReadsAnOversizedImageLine(t *testing.T) {
+	image := strings.Repeat("A", 20<<20)
+	jsonl := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"before"},"timestamp":"2026-10-06T10:00:00Z"}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + image + `"}},{"type":"text","text":"look at this"}]},"timestamp":"2026-10-06T10:00:01Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"after"}]},"timestamp":"2026-10-06T10:00:02Z"}`,
+	}, "\n")
+	msgs, err := normalizeTranscript(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, m := range msgs {
+		texts = append(texts, m.Role+":"+m.Text)
+	}
+	want := []string{"user:before", "user:look at this", "agent:after"}
+	if strings.Join(texts, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q, want %q", texts, want)
+	}
+}

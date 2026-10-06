@@ -123,6 +123,47 @@ func taskNotificationText(m *wireMessage) string {
 	return "Background task finished"
 }
 
+// lineReader walks a transcript's JSONL lines with no length cap, with
+// bufio.Scanner's Scan/Text/Err shape. claude writes a whole message as one
+// line, base64 image blocks included — a pasted screenshot or an image the
+// Read tool loaded can run to megabytes — and a Scanner's fixed token cap
+// failed the entire transcript on that one line (bufio.ErrTooLong), so the
+// conversation wouldn't load at all.
+type lineReader struct {
+	r    *bufio.Reader
+	line []byte
+	err  error
+}
+
+func newLineReader(r io.Reader) *lineReader {
+	return &lineReader{r: bufio.NewReaderSize(r, 64*1024)}
+}
+
+func (l *lineReader) Scan() bool {
+	if l.err != nil {
+		return false
+	}
+	line, err := l.r.ReadBytes('\n')
+	if err != nil {
+		l.err = err
+		if err != io.EOF || len(line) == 0 {
+			return false
+		}
+	}
+	l.line = line
+	return true
+}
+
+func (l *lineReader) Text() string { return string(l.line) }
+
+// Err is nil at a clean end of input, like bufio.Scanner's.
+func (l *lineReader) Err() error {
+	if l.err == io.EOF {
+		return nil
+	}
+	return l.err
+}
+
 // normalizeTranscript maps transcript JSONL onto the provider-independent
 // Message form consumed by synthesis, retro, and the pipeline drill-in feed
 // (spec §4, §7): user text, agent text, tool invocations, and tool results
@@ -131,8 +172,7 @@ func taskNotificationText(m *wireMessage) string {
 func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 	var msgs []provider.Message
 	seen := map[string]struct{}{}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc := newLineReader(r)
 	for sc.Scan() {
 		raw := strings.TrimSpace(sc.Text())
 		if raw == "" {
@@ -283,8 +323,7 @@ func firstUserText(path string) (string, bool) {
 		return "", false
 	}
 	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc := newLineReader(f)
 	for sc.Scan() {
 		raw := strings.TrimSpace(sc.Text())
 		if raw == "" {
@@ -338,8 +377,7 @@ func probeCwd(path string) (string, bool) {
 		return "", false
 	}
 	defer func() { _ = f.Close() }()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	sc := newLineReader(f)
 	for sc.Scan() {
 		raw := strings.TrimSpace(sc.Text())
 		if raw == "" {
