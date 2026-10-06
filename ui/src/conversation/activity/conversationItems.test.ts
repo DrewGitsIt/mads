@@ -141,6 +141,23 @@ describe("task lifecycle folding", () => {
     expect(t.summary).toBe("all good");
   });
 
+  it("a progress line's description is the current step, never the task's name", () => {
+    let tasks = new Map<string, TaskModel>();
+    tasks = applyTaskEvent(
+      tasks,
+      { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "Empirical color harmony science" },
+      true,
+    );
+    tasks = applyTaskEvent(
+      tasks,
+      { phase: "progress", task_id: "tk1", description: "Searching for Ou Luo 2006 colour harmony" },
+      true,
+    );
+    const t = tasks.get("tk1")!;
+    expect(t.description).toBe("Empirical color harmony science");
+    expect(t.currentStep).toBe("Searching for Ou Luo 2006 colour harmony");
+  });
+
   it("a replayed lifecycle never claims running; no notification = interrupted-shape", () => {
     let tasks = new Map<string, TaskModel>();
     tasks = applyTaskEvent(tasks, { phase: "started", task_id: "tk1", tool_use_id: "tu1" }, false);

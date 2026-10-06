@@ -10,9 +10,10 @@ export interface SubstripEntry {
 }
 
 /**
- * Pinned substrip (T15): while any subagent task runs, one strip per task
- * sits above the composer with the task name, a current-op ticker and live
- * counters. Click opens the subagent's full stream in the dock.
+ * Pinned substrip (T15): one strip per running subagent task whose in-stream
+ * card is off screen sits above the composer with the task name, a
+ * current-op ticker and live counters. Click opens the subagent's full
+ * stream in the dock.
  */
 export function Substrip({
   entries,

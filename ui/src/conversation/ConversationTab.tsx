@@ -69,6 +69,7 @@ import { useCommitSettings } from "./Worktree/useCommitSettings";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
+import { useVisibleCards } from "./useVisibleCards";
 import styles from "./ConversationTab.module.css";
 
 // When the user last dismissed this session's compaction banner — lets a
@@ -1094,6 +1095,11 @@ export function ConversationTab({
   const tabRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
   const [permissionReveal, setPermissionReveal] = useState<PermissionReveal | null>(null);
+  // Same reach for the substrip: which task cards are already on screen.
+  const visibleTaskCards = useVisibleCards(tabRef, streamRef, pinnedRef, {
+    selector: "[data-task-id]",
+    idAttribute: "data-task-id",
+  });
   const revealPermission = useCallback((id: string) => {
     // Jumping up the history is the user leaving the tail — don't let the
     // next streamed frame snap back before the smooth scroll's first event.
@@ -1221,8 +1227,10 @@ export function ConversationTab({
     const model = tasksByToolUseMap.get(req.parent_tool_use_id);
     return model?.description ?? model?.subagentType ?? "subagent";
   };
+  // A running task gets a strip only while its in-stream card is off screen
+  // — one copy of each subagent, never the card and its strip together.
   const substripEntries: SubstripEntry[] = [...tasks.values()]
-    .filter((t) => t.running)
+    .filter((t) => t.running && !visibleTaskCards.has(t.taskId))
     .map((model) => {
       const stream = model.toolUseId ? subagentStreams.get(model.toolUseId) : undefined;
       const last = stream && stream.length > 0 ? stream[stream.length - 1] : undefined;
@@ -1231,7 +1239,7 @@ export function ConversationTab({
           ? toolTitle(last.tool)
           : last?.type === "thinking"
             ? "Thinking…"
-            : model.lastToolName;
+            : (model.currentStep ?? model.lastToolName);
       return { model, op };
     });
   const openTool = (tool: ToolUse) => {

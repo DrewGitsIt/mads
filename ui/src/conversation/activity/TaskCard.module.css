@@ -35,6 +35,24 @@
   color: var(--text3);
 }
 
+/* Live current-step ticker, same treatment as the substrip's. */
+.step {
+  color: var(--text2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  animation: step-in 0.25s ease-out;
+}
+@keyframes step-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .meta {
   margin-left: auto;
   color: var(--text3);

@@ -283,6 +283,8 @@ export interface TaskModel {
   taskId: string;
   toolUseId?: string;
   description?: string;
+  /** The subagent's latest step ("Searching for …") — a progress line's description, never the task's name. */
+  currentStep?: string;
   subagentType?: string;
   isBackgrounded?: boolean;
   totalTokens?: number;
@@ -312,7 +314,12 @@ export function applyTaskEvent(
     ? { ...prev }
     : { taskId: task.task_id, running: false, completed: false, startedAt: at };
   if (task.tool_use_id) model.toolUseId = task.tool_use_id;
-  if (task.description) model.description = task.description;
+  // A progress line's description narrates the current step; letting it
+  // overwrite the name would retitle the card on every tick.
+  if (task.description) {
+    if (task.phase === "progress") model.currentStep = task.description;
+    else model.description = task.description;
+  }
   if (task.subagent_type) model.subagentType = task.subagent_type;
   if (task.is_backgrounded !== undefined) model.isBackgrounded = task.is_backgrounded;
   if (task.total_tokens !== undefined) model.totalTokens = task.total_tokens;

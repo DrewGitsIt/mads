@@ -30,6 +30,22 @@ describe("TaskCard", () => {
     expect(screen.getByRole("img", { name: "in progress" })).toBeTruthy();
   });
 
+  it("a running card shows the subagent's current step; a finished one drops it", () => {
+    const model: TaskModel = {
+      taskId: "tk1",
+      toolUseId: "tu1",
+      description: "Empirical color harmony science",
+      currentStep: "Searching for Ou Luo 2006 colour harmony",
+      running: true,
+      completed: false,
+    };
+    const { rerender } = render(<TaskCard tool={spawnTool} model={model} />);
+    expect(screen.getByText("Empirical color harmony science")).toBeTruthy();
+    expect(screen.getByText("Searching for Ou Luo 2006 colour harmony")).toBeTruthy();
+    rerender(<TaskCard tool={spawnTool} model={{ ...model, running: false, completed: true }} />);
+    expect(screen.queryByText("Searching for Ou Luo 2006 colour harmony")).toBeNull();
+  });
+
   it("completed variant: ✓ with the task_notification summary inline", () => {
     const model: TaskModel = {
       taskId: "tk1",

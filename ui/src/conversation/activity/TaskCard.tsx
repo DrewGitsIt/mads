@@ -40,10 +40,10 @@ function inputField(tool: ToolUse, key: string): string | undefined {
 
 /**
  * Compact in-stream Task subagent card (T15): agent icon, description,
- * subagent type and live counters while running; the completed variant
- * carries the task_notification summary inline. A replayed task that never
- * saw a notification renders interrupted-shaped — never a fake spinner.
- * Click opens the subagent's own stream in the dock.
+ * subagent type, current step and live counters while running; the
+ * completed variant carries the task_notification summary inline. A replayed
+ * task that never saw a notification renders interrupted-shaped — never a
+ * fake spinner. Click opens the subagent's own stream in the dock.
  */
 export function TaskCard({
   tool,
@@ -68,13 +68,18 @@ export function TaskCard({
   const summary = model?.summary;
 
   return (
-    <div className={styles.card} data-testid="task-card">
+    <div className={styles.card} data-testid="task-card" data-task-id={model?.taskId}>
       <button type="button" className={styles.head} data-dock-source onClick={onOpen}>
         <KindIcon kind="agent" />
         <span className={styles.title}>
           {description}
           {subtype && <span className={styles.sub}> · {subtype}</span>}
         </span>
+        {running && model?.currentStep && (
+          <span className={styles.step} key={model.currentStep}>
+            {model.currentStep}
+          </span>
+        )}
         <span className={styles.meta}>
           {counters && <span data-testid="task-counters">{counters}</span>}
           {blocked ? (

@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import type { PermissionRequest } from "../../router/types";
 import { basename, summarize } from "../activity/toolDisplay";
+import { useVisibleCards } from "../useVisibleCards";
 import type { PermissionReveal } from "./permissionReveal";
 import styles from "./ApprovalJump.module.css";
 
@@ -43,115 +44,6 @@ export function approvalLabel(
 
 function pendingIdOf(el: Element): string | undefined {
   return (el as HTMLElement).dataset.permissionId;
-}
-
-/**
- * Which pending cards are on screen right now, by request id. Main-stream
- * copies are watched against the stream's viewport minus the pinned bottom
- * cluster (a card under the composer isn't visible); the dock's copies
- * against the window. Re-scans for card elements every render — cards come
- * and go with groups collapsing, the dock opening, and requests resolving,
- * none of which this component would otherwise hear about.
- */
-function useVisiblePermissions(
-  scopeRef: RefObject<HTMLElement | null>,
-  streamRef: RefObject<HTMLElement | null>,
-  pinnedRef: RefObject<HTMLElement | null>,
-): ReadonlySet<string> {
-  const [visible, setVisible] = useState<ReadonlySet<string>>(() => new Set());
-  const observers = useRef<{
-    stream: IntersectionObserver;
-    page: IntersectionObserver;
-    root: Element;
-    margin: string;
-  } | null>(null);
-  // Every observed card element → whether it currently intersects.
-  const watched = useRef(new Map<Element, boolean>());
-
-  const publish = () => {
-    const ids = new Set<string>();
-    for (const [el, on] of watched.current) {
-      const id = pendingIdOf(el);
-      if (on && id) ids.add(id);
-    }
-    setVisible((cur) => (cur.size === ids.size && [...ids].every((id) => cur.has(id)) ? cur : ids));
-  };
-
-  const scan = () => {
-    const scope = scopeRef.current;
-    const stream = streamRef.current;
-    if (!scope || !stream || typeof IntersectionObserver === "undefined") return;
-    const margin = `0px 0px -${pinnedRef.current?.offsetHeight ?? 0}px 0px`;
-    let obs = observers.current;
-    if (!obs || obs.root !== stream || obs.margin !== margin) {
-      obs?.stream.disconnect();
-      obs?.page.disconnect();
-      const onEntries = (entries: IntersectionObserverEntry[]) => {
-        for (const e of entries) {
-          if (watched.current.has(e.target)) watched.current.set(e.target, e.isIntersecting);
-        }
-        publish();
-      };
-      obs = {
-        stream: new IntersectionObserver(onEntries, { root: stream, rootMargin: margin }),
-        page: new IntersectionObserver(onEntries),
-        root: stream,
-        margin,
-      };
-      observers.current = obs;
-      watched.current = new Map();
-    }
-    const current = new Set(scope.querySelectorAll(PENDING_SELECTOR));
-    let dropped = false;
-    for (const el of [...watched.current.keys()]) {
-      if (current.has(el)) continue;
-      obs.stream.unobserve(el);
-      obs.page.unobserve(el);
-      watched.current.delete(el);
-      dropped = true;
-    }
-    for (const el of current) {
-      if (watched.current.has(el)) continue;
-      watched.current.set(el, false);
-      (stream.contains(el) ? obs.stream : obs.page).observe(el);
-    }
-    if (dropped) publish();
-  };
-  const scanRef = useRef(scan);
-  scanRef.current = scan;
-
-  useEffect(() => scan());
-
-  // A group the user expands or collapses, or a card's status flipping,
-  // re-renders only its own subtree — watch the DOM for those, coalesced to
-  // one scan per frame (the stream mutates constantly mid-turn).
-  useEffect(() => {
-    const scope = scopeRef.current;
-    if (!scope || typeof MutationObserver === "undefined") return;
-    let frame = 0;
-    const mo = new MutationObserver(() => {
-      if (frame) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        scanRef.current();
-      });
-    });
-    mo.observe(scope, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["data-permission-status"],
-    });
-    return () => {
-      mo.disconnect();
-      cancelAnimationFrame(frame);
-      observers.current?.stream.disconnect();
-      observers.current?.page.disconnect();
-      observers.current = null;
-    };
-  }, [scopeRef]);
-
-  return visible;
 }
 
 /** Restart-safe ~1s highlight: re-adding the attribute replays the animation. */
@@ -200,7 +92,11 @@ export function ApprovalJump({
   reveal,
   onReveal,
 }: ApprovalJumpProps) {
-  const visible = useVisiblePermissions(scopeRef, streamRef, pinnedRef);
+  const visible = useVisibleCards(scopeRef, streamRef, pinnedRef, {
+    selector: PENDING_SELECTOR,
+    idAttribute: "data-permission-id",
+    watchAttributes: ["data-permission-status"],
+  });
   const offscreen = pending.filter((r) => !visible.has(r.id));
   const lastJumped = useRef<string | undefined>(undefined);
   const flashTimers = useRef(new Map<HTMLElement, number>());

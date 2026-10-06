@@ -111,6 +111,41 @@ describe("ConversationTab — subagent presence (T15)", () => {
     expect(screen.queryByTestId("substrip")).toBeNull();
   });
 
+  it("shows a running subagent once: its card while on screen, its strip once scrolled away", async () => {
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "Color harmony" } },
+      });
+      source.emit({
+        kind: "task",
+        task: { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "Color harmony" },
+      });
+      // Claude Code narrates the current step in a progress line's description.
+      source.emit({
+        kind: "task",
+        task: { phase: "progress", task_id: "tk1", description: "Searching for Ou Luo 2006", tool_uses: 3 },
+      });
+    });
+    const card = screen.getByTestId("task-card");
+    // The step ticks on the card, under the task's own name.
+    expect(within(card).getByText("Color harmony")).toBeTruthy();
+    expect(within(card).getByText("Searching for Ou Luo 2006")).toBeTruthy();
+
+    setTaskCardOnScreen(card, true);
+    expect(screen.queryByTestId("substrip")).toBeNull();
+
+    setTaskCardOnScreen(card, false);
+    const strip = screen.getByTestId("substrip");
+    expect(within(strip).getByText("Color harmony")).toBeTruthy();
+    expect(within(strip).getByText("Searching for Ou Luo 2006")).toBeTruthy();
+  });
+
   it("routes parent-tagged events to the subagent's dock stream, never the main transcript", async () => {
     const client = new FakeRouterClient();
     const source = await mountActive(client);
@@ -723,6 +758,19 @@ function setCardOnScreen(id: string, onScreen: boolean) {
           io as unknown as IntersectionObserver,
         );
       }
+    }
+  });
+}
+
+/** Reports a task card as on/off screen to whichever observer watches it. */
+function setTaskCardOnScreen(card: Element, onScreen: boolean) {
+  act(() => {
+    for (const io of FakeIntersectionObserver.instances) {
+      if (!io.targets.has(card)) continue;
+      io.callback(
+        [{ target: card, isIntersecting: onScreen } as IntersectionObserverEntry],
+        io as unknown as IntersectionObserver,
+      );
     }
   });
 }
