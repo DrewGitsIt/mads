@@ -155,6 +155,12 @@ button.rowLine:hover {
   }
 }
 
+/* A permission card anchored under its call's row, indented to the row's
+   title so it reads as belonging to that call. */
+.permission {
+  margin: 2px 0 6px 42px;
+}
+
 /* ---------- hover peek ---------- */
 
 .peek {

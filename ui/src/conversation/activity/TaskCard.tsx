@@ -1,4 +1,5 @@
-import type { ToolUse } from "../../router/types";
+import type { PermissionRequest, ToolStatus, ToolUse } from "../../router/types";
+import { PermissionCard } from "../ChatRenderer/PermissionCard";
 import type { TaskModel } from "./conversationItems";
 import { KindIcon, Spinner, StatusGlyph } from "./primitives";
 import { formatMs, formatTokens } from "./toolDisplay";
@@ -9,8 +10,19 @@ export interface TaskCardProps {
   tool: ToolUse;
   /** Folded task lifecycle (task_started/progress/updated/notification), when the harness reported one. */
   model?: TaskModel;
+  /** The Agent call's own stated status (wire or out-of-band) — "blocked" beats everything. */
+  status?: ToolStatus;
+  /**
+   * Permission requests anchored here: the subagent's own calls (its inner
+   * rows live only in the dock, so this card is where they stay visible)
+   * plus any request for the Agent call itself.
+   */
+  permissions?: PermissionRequest[];
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   onOpen?: () => void;
 }
+
+const noResolve = async () => {};
 
 export function taskCounters(model: TaskModel): string {
   const parts: string[] = [];
@@ -33,12 +45,22 @@ function inputField(tool: ToolUse, key: string): string | undefined {
  * saw a notification renders interrupted-shaped — never a fake spinner.
  * Click opens the subagent's own stream in the dock.
  */
-export function TaskCard({ tool, model, onOpen }: TaskCardProps) {
+export function TaskCard({
+  tool,
+  model,
+  status,
+  permissions,
+  onResolvePermission,
+  onOpen,
+}: TaskCardProps) {
   const description =
     model?.description ?? tool.title ?? inputField(tool, "description") ?? "Subagent task";
   const subtype = model?.subagentType ?? inputField(tool, "subagent_type");
   const counters = model ? taskCounters(model) : "";
-  const running = model?.running ?? false;
+  // A refused spawn never ran: blocked wins over the lifecycle and over the
+  // refusal's is_error result alike.
+  const blocked = (status ?? tool.status) === "blocked";
+  const running = !blocked && (model?.running ?? false);
   // Without lifecycle events (foreign harness), fall back to the tool
   // result: a result means the Agent call finished.
   const completed = model ? model.completed : Boolean(tool.result && !tool.result.is_error);
@@ -55,7 +77,9 @@ export function TaskCard({ tool, model, onOpen }: TaskCardProps) {
         </span>
         <span className={styles.meta}>
           {counters && <span data-testid="task-counters">{counters}</span>}
-          {running ? (
+          {blocked ? (
+            <StatusGlyph status="blocked" />
+          ) : running ? (
             <Spinner />
           ) : completed ? (
             <StatusGlyph status="completed" />
@@ -67,6 +91,11 @@ export function TaskCard({ tool, model, onOpen }: TaskCardProps) {
         </span>
       </button>
       {summary && <div className={styles.summary}>{summary}</div>}
+      {permissions?.map((req) => (
+        <div key={req.id} className={styles.permission}>
+          <PermissionCard request={req} onResolve={onResolvePermission ?? noResolve} />
+        </div>
+      ))}
     </div>
   );
 }

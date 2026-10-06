@@ -1153,11 +1153,12 @@ export function ConversationTab({
   // A genuinely parked tool call: the PreToolUse hook broadcast a
   // permission_request and hasn't seen a decision yet. Derived (not stored)
   // so the banner clears itself the moment the terminal-status event
-  // (allowed/denied/expired) upserts over the pending entry — no separate
-  // clear-on-turn-end bookkeeping to get out of sync.
+  // (allowed/denied/expired/cancelled) upserts over the pending entry — no
+  // separate clear-on-turn-end bookkeeping to get out of sync. The card may
+  // sit under its call's row up in the stream, so the hint doesn't say "below".
   const pendingPermission = [...permissionRequests.values()].find((r) => r.status === "pending");
   const turnBlocked = pendingPermission
-    ? `blocked awaiting permission for ${pendingPermission.tool} — allow or deny below, or raise trust in the header`
+    ? `blocked awaiting permission for ${pendingPermission.tool} — allow or deny on its card, or raise trust in the header`
     : undefined;
   // Trailing "working" affordance — truthy for the ENTIRE live turn, never
   // just while the tail happens to look busy. It used to go false whenever
@@ -1184,6 +1185,18 @@ export function ConversationTab({
   // the chat process (and any in-flight hook subprocess) down with it, so
   // there is nothing meaningful left to show mid-turn on that transport.
   const livePermissionRequests = activeMode === "chat" ? [...permissionRequests.values()] : [];
+  const resolvePermission = (id: string, decision: "allow" | "deny") =>
+    routerClient.resolvePermissionRequest(sessionId, id, decision);
+  // The dock's subagent stream renders the inner rows themselves, so there a
+  // subagent call's card sits right under its own row (keyed by tool_use id).
+  const permissionsByToolUse = new Map<string, PermissionRequest[]>();
+  for (const req of livePermissionRequests) {
+    if (!req.tool_use_id) continue;
+    permissionsByToolUse.set(req.tool_use_id, [
+      ...(permissionsByToolUse.get(req.tool_use_id) ?? []),
+      req,
+    ]);
+  }
   // --- Redesign wiring: dock targets, running-subagent substrip ---
   const tasksByToolUseMap = tasksByToolUse(tasks);
   const substripEntries: SubstripEntry[] = [...tasks.values()]
@@ -1301,7 +1314,13 @@ export function ConversationTab({
               )}
               <SessionSummaryCard session={session} />
               {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
-                <div className={styles.emptyTranscript}>No conversation yet</div>
+                <>
+                  <div className={styles.emptyTranscript}>No conversation yet</div>
+                  {/* No rows to anchor to — every card is a fallback one. */}
+                  {livePermissionRequests.map((req) => (
+                    <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
+                  ))}
+                </>
               ) : (
                 <ChatRenderer
                   messages={messages}
@@ -1326,17 +1345,10 @@ export function ConversationTab({
                   }
                   worktreeCards={worktree.cards}
                   worktreeActions={worktreeActions}
+                  permissionRequests={livePermissionRequests}
+                  onResolvePermission={resolvePermission}
                 />
               )}
-              {livePermissionRequests.map((req) => (
-                <PermissionCard
-                  key={req.id}
-                  request={req}
-                  onResolve={(id, decision) =>
-                    routerClient.resolvePermissionRequest(sessionId, id, decision)
-                  }
-                />
-              ))}
               {transport.status !== "idle" && (
                 <div className={styles.transportBanner}>
                   {transport.status === "switching" ? (
@@ -1535,6 +1547,8 @@ export function ConversationTab({
           sessionId={sessionId}
           client={routerClient}
           statuses={toolStatuses}
+          permissions={permissionsByToolUse}
+          onResolvePermission={resolvePermission}
           onClose={() => setDockTarget(null)}
         />
       )}

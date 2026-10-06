@@ -3,7 +3,7 @@ import styles from "./primitives.module.css";
 
 /**
  * Vocabulary primitives (T11, mockup v3 §0): the per-kind icon tile, the
- * status glyph set (✓ ✕ ◔ ⊘ + running spinner), the diffstat chip, and the
+ * status glyph set (✓ ✕ ◔ ⊘ ⊖ + running spinner), the diffstat chip, and the
  * MCP server badge. Everything downstream (rows, group headers, dock, task
  * cards) composes these rather than re-deriving glyphs.
  */
@@ -46,6 +46,9 @@ const STATUS_GLYPHS: Record<Exclude<ToolStatus, "in_progress">, { glyph: string;
   failed: { glyph: "✕", cls: styles.stBad, label: "failed" },
   pending: { glyph: "◔", cls: styles.stPend, label: "pending approval" },
   interrupted: { glyph: "⊘", cls: styles.stInt, label: "interrupted" },
+  // A no-entry sign, not ✕: refused by a permission decision, which is a
+  // different story from the call running and failing.
+  blocked: { glyph: "⊖", cls: styles.stBlocked, label: "blocked by permissions" },
 };
 
 export function StatusGlyph({ status }: { status: ToolStatus }) {

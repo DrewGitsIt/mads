@@ -130,6 +130,12 @@ export function statusOf(
   return live ? "in_progress" : "interrupted";
 }
 
+/** Label over a call's result text: a blocked call's result is the refusal, not an error it hit. */
+export function resultLabel(result: { is_error?: boolean }, status?: ToolStatus): string {
+  if (status === "blocked") return "blocked";
+  return result.is_error ? "error" : "result";
+}
+
 export interface DiffHunk {
   removed: string[];
   added: string[];

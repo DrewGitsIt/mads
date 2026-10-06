@@ -28,6 +28,22 @@ describe("ActivityDock — tool detail", () => {
     expect(screen.getByText(/ok github\.com\/drewkidwell/)).toBeTruthy();
   });
 
+  it("labels a blocked call's result 'blocked', with the blocked glyph", () => {
+    const refused: ToolUse = { ...bashTool, result: { text: "denied by user", is_error: true } };
+    render(
+      <ActivityDock
+        view={toolView(refused)}
+        sessionId="s1"
+        client={noDiffClient}
+        statuses={new Map([["t1", "blocked" as const]])}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("blocked")).toBeTruthy();
+    expect(screen.queryByText("error")).toBeNull();
+    expect(screen.getByRole("img", { name: "blocked by permissions" })).toBeTruthy();
+  });
+
   it("renders a bash call's bare command — no JSON braces, no description echo (it's already the title)", () => {
     const tool: ToolUse = {
       ...bashTool,
@@ -195,5 +211,25 @@ describe("ActivityDock — subagent stream (T15)", () => {
     expect(screen.getByText("Start disposable session")).toBeTruthy();
     expect(screen.getByText("Drive create/edit/delete")).toBeTruthy();
     expect(screen.getByText("9.8k tok · 4 tools")).toBeTruthy();
+  });
+
+  it("shows a subagent call's blocked status and its permission card under its row", () => {
+    render(
+      <ActivityDock
+        view={view}
+        sessionId="s1"
+        client={noDiffClient}
+        statuses={new Map([["s1", "blocked" as const]])}
+        permissions={
+          new Map([
+            ["s2", [{ id: "perm-2", tool: "Bash", status: "pending", tool_use_id: "s2", parent_tool_use_id: "tu1" }]],
+          ])
+        }
+        onClose={() => {}}
+      />,
+    );
+    const [first, second] = screen.getAllByTestId("activity-row");
+    expect(first.querySelector('[data-status="blocked"]')).toBeTruthy();
+    expect(second.nextElementSibling!.textContent).toContain("awaiting your decision");
   });
 });

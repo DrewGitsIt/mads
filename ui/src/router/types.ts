@@ -429,8 +429,16 @@ export type ToolKind =
   | "other";
 
 // mirrors providers/provider/event.go ToolStatus — a tool call's lifecycle
-// state. Absent means the wire didn't state one (yet).
-export type ToolStatus = "pending" | "in_progress" | "completed" | "failed" | "interrupted";
+// state. Absent means the wire didn't state one (yet). "blocked" is terminal
+// like "failed": a permission decision refused the call (the user denied it,
+// its request expired or was cancelled, or the harness itself refused it).
+export type ToolStatus =
+  | "pending"
+  | "in_progress"
+  | "completed"
+  | "failed"
+  | "interrupted"
+  | "blocked";
 
 // mirrors providers/provider/event.go ToolLocation — one file position a
 // tool call touched (absolute path when known; line is 1-based, absent
@@ -595,14 +603,23 @@ export type AttachmentOwner = { session: string } | { draft: string };
 // mirrors providers/provider/event.go PermissionRequest — one parked
 // PreToolUse hook call awaiting an allow/deny decision (chat transport only,
 // TrustLimited/TrustReadOnly). status starts "pending" and moves to
-// "allowed"/"denied"/"expired"; GET /sessions/{id}/permission-requests
+// "allowed"/"denied"/"expired", or "cancelled" when the agent stopped
+// waiting (e.g. the turn was interrupted); GET /sessions/{id}/permission-requests
 // returns only still-pending ones (services/session's PermissionRequests),
 // which is what lets a still-open card survive a transcript refetch.
 export interface PermissionRequest {
   id: string;
   tool: string;
   input?: unknown; // json.RawMessage
-  status: "pending" | "allowed" | "denied" | "expired";
+  status: "pending" | "allowed" | "denied" | "expired" | "cancelled";
+  // The parked call's tool_use id — anchors the card under that call's row.
+  tool_use_id?: string;
+  // Set when the call belongs to a subagent: the spawning Agent tool_use id.
+  parent_tool_use_id?: string;
+  agent_id?: string;
+  // The harness's human-readable reason, e.g. "Path is outside allowed
+  // working directories".
+  reason?: string;
 }
 
 // mirrors providers/provider/event.go CompactStatus — which phase of a

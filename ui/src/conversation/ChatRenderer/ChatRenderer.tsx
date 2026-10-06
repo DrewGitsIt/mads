@@ -1,9 +1,16 @@
 import { Chip } from "../../components/Chip/Chip";
 import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
-import type { Link, ToolStatus, ToolUse, TranscriptMessage } from "../../router/types";
+import type {
+  Link,
+  PermissionRequest,
+  ToolStatus,
+  ToolUse,
+  TranscriptMessage,
+} from "../../router/types";
 import { ActivityGroup } from "../activity/ActivityGroup";
 import {
+  anchorPermissions,
   buildItems,
   interleaveCards,
   mergeTranscript,
@@ -18,6 +25,7 @@ import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
 import { MessageAttachments } from "./MessageAttachments";
+import { PermissionCard } from "./PermissionCard";
 import { splitAttachments } from "../attachmentRefs";
 import styles from "./ChatRenderer.module.css";
 
@@ -62,7 +70,15 @@ export interface ChatRendererProps {
   /** Commit/Land result cards (event-log built), interleaved by time. */
   worktreeCards?: WorktreeCardModel[];
   worktreeActions?: WorktreeCardActions;
+  /**
+   * Permission cards: each renders under its call's row (or its subagent's
+   * task card); the rest trail the stream (see anchorPermissions).
+   */
+  permissionRequests?: PermissionRequest[];
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
 }
+
+const noResolve = async () => {};
 
 const CADENCE_LABEL: Record<Link["cadence"], string> = {
   per_turn: "cadence: digest after each burst of activity",
@@ -111,6 +127,8 @@ export function ChatRenderer({
   onOpenTask,
   worktreeCards = [],
   worktreeActions,
+  permissionRequests = [],
+  onResolvePermission = noResolve,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   const folded = foldToolResults(messages);
@@ -127,6 +145,7 @@ export function ChatRenderer({
   }
   const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
   const items = buildItems(interleaveCards(entries, worktreeCards));
+  const permissions = anchorPermissions(items, permissionRequests);
 
   // Collapse digest→NOOP pairs into quiet-check chips before rendering. A
   // completed (non-live) agent reply of exactly NOOP directly after a digest
@@ -180,6 +199,8 @@ export function ChatRenderer({
               statuses={toolStatuses}
               selectedToolId={selectedToolId}
               onOpenTool={onOpenTool}
+              permissions={permissions.anchored}
+              onResolvePermission={onResolvePermission}
             />
           );
         }
@@ -197,6 +218,9 @@ export function ChatRenderer({
               key={item.key}
               tool={item.tool}
               model={model}
+              status={item.tool.id ? toolStatuses?.get(item.tool.id) : undefined}
+              permissions={item.tool.id ? permissions.anchored.get(item.tool.id) : undefined}
+              onResolvePermission={onResolvePermission}
               onOpen={
                 onOpenTask && item.tool.id ? () => onOpenTask(item.tool.id!, item.tool) : undefined
               }
@@ -304,6 +328,9 @@ export function ChatRenderer({
           </div>
         );
       })}
+      {permissions.unanchored.map((req) => (
+        <PermissionCard key={req.id} request={req} onResolve={onResolvePermission} />
+      ))}
     </div>
   );
 }

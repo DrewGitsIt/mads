@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { ActivityGroup } from "./ActivityGroup";
+import type { PermissionRequest } from "../../router/types";
 import type { ActivityEntry } from "./conversationItems";
 
 const entries: ActivityEntry[] = [
@@ -183,5 +184,98 @@ describe("ActivityGroup", () => {
     expect(screen.getByText(/Thought · the ledger never distinguishes/)).toBeTruthy();
     fireEvent.mouseEnter(screen.getByTestId("activity-row"));
     expect(screen.getByTestId("activity-peek").textContent).toContain("created vs edited");
+  });
+});
+
+describe("ActivityGroup — blocked calls and permission cards", () => {
+  const denied: ActivityEntry = {
+    type: "tool",
+    tool: {
+      id: "t3",
+      name: "Write",
+      kind: "edit",
+      title: "write /etc/hosts",
+      input: { file_path: "/etc/hosts" },
+      result: { text: "Permission to use Write has been denied.", is_error: true },
+    },
+  };
+  const blocked = new Map([["t3", "blocked" as const]]);
+  const pendingRequest: PermissionRequest = {
+    id: "perm-1",
+    tool: "Read",
+    tool_use_id: "t2",
+    status: "pending",
+    reason: "Path is outside allowed working directories",
+  };
+
+  it("renders a blocked row with its own glyph, not failed's ✕", () => {
+    render(<ActivityGroup entries={[denied]} statuses={blocked} defaultOpen />);
+    const row = screen.getByTestId("activity-row");
+    expect(row.querySelector('[data-status="blocked"]')).toBeTruthy();
+    expect(row.querySelector('[data-status="failed"]')).toBeNull();
+  });
+
+  it("the header shows blocked when that's the only problem, failed when the group also failed", () => {
+    const { unmount } = render(<ActivityGroup entries={[...entries, denied]} statuses={blocked} />);
+    const header = screen.getByRole("button", { name: /3 actions/ });
+    expect(header.querySelector('[data-status="blocked"]')).toBeTruthy();
+    unmount();
+
+    const failing: ActivityEntry = {
+      type: "tool",
+      tool: { id: "t4", name: "Bash", kind: "execute", title: "make", result: { text: "exit 2", is_error: true } },
+    };
+    render(<ActivityGroup entries={[denied, failing]} statuses={blocked} />);
+    const header2 = screen.getByRole("button", { name: /2 actions/ });
+    expect(header2.querySelector('[data-status="failed"]')).toBeTruthy();
+    expect(header2.querySelector('[data-status="blocked"]')).toBeNull();
+  });
+
+  it("labels a blocked call's result 'blocked' in the peek, not 'error'", () => {
+    render(<ActivityGroup entries={[denied]} statuses={blocked} defaultOpen />);
+    fireEvent.mouseEnter(screen.getByTestId("activity-row"));
+    const labels = [...screen.getByTestId("activity-peek").querySelectorAll("div")].map(
+      (d) => d.textContent,
+    );
+    expect(labels).toContain("blocked");
+    expect(labels).not.toContain("error");
+  });
+
+  it("renders an anchored permission card right under its call's row", () => {
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(
+      <ActivityGroup
+        entries={entries}
+        defaultOpen
+        permissions={new Map([["t2", [pendingRequest]]])}
+        onResolvePermission={onResolve}
+      />,
+    );
+    const [, readRow] = screen.getAllByTestId("activity-row");
+    const card = readRow.nextElementSibling!;
+    expect(card.textContent).toContain("awaiting your decision");
+    expect(card.textContent).toContain("Path is outside allowed working directories");
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onResolve).toHaveBeenCalledWith("perm-1", "allow");
+  });
+
+  it("a collapsed group opens itself for a pending request, and flags it if collapsed again", () => {
+    const { rerender } = render(<ActivityGroup entries={entries} />);
+    const header = screen.getByRole("button", { name: /2 actions/ });
+    expect(header.getAttribute("aria-expanded")).toBe("false");
+
+    rerender(<ActivityGroup entries={entries} permissions={new Map([["t2", [pendingRequest]]])} />);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+
+    // The user collapses it anyway: the header still says it needs them.
+    fireEvent.click(header);
+    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
+    expect(header.textContent).toContain("needs your approval");
+
+    // Decided: no more flag.
+    const allowed: PermissionRequest = { ...pendingRequest, status: "allowed" };
+    rerender(<ActivityGroup entries={entries} permissions={new Map([["t2", [allowed]]])} />);
+    expect(header.textContent).not.toContain("needs your approval");
   });
 });

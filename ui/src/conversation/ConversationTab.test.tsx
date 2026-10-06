@@ -853,7 +853,7 @@ describe("ConversationTab", () => {
     // The banner names the parked tool and replaces the plain spinner.
     expect(
       screen.getByText(
-        "blocked awaiting permission for Bash — allow or deny below, or raise trust in the header",
+        "blocked awaiting permission for Bash — allow or deny on its card, or raise trust in the header",
       ),
     ).toBeTruthy();
     expect(screen.queryByRole("status", { name: "Using Bash…" })).toBeNull();

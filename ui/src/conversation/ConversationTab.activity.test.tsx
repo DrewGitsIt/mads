@@ -7,7 +7,7 @@
 // substrip/bottom cluster, the V2 working-indicator ticker, and history
 // parity from the control-plane event log.
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
@@ -601,5 +601,91 @@ describe("ConversationTab — reopened mid-turn", () => {
     fireEvent.click(await screen.findByLabelText("Remove queued message"));
     expect(cancel).toHaveBeenCalledWith("session-active", "q_1");
     expect(screen.queryByText("never mind this")).toBeNull();
+  });
+});
+
+describe("ConversationTab — permission cards on their calls", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("renders a live request under its tool row, with the harness's reason, and resolves from there", async () => {
+    const client = new FakeRouterClient();
+    const resolve = vi.spyOn(client, "resolvePermissionRequest");
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "t1", name: "Read", kind: "read", title: "read /etc/hosts" } });
+      source.emit({
+        kind: "permission_request",
+        permission: {
+          id: "perm-1",
+          tool: "Read",
+          tool_use_id: "t1",
+          status: "pending",
+          reason: "Path is outside allowed working directories",
+        },
+      });
+    });
+
+    const row = screen.getByTestId("activity-row");
+    const card = row.nextElementSibling as HTMLElement;
+    expect(card.textContent).toContain("Path is outside allowed working directories");
+    fireEvent.click(within(card).getByRole("button", { name: "Allow" }));
+    expect(resolve).toHaveBeenCalledWith("session-active", "perm-1", "allow");
+  });
+
+  it("renders a subagent call's request inside its task card, and a cancelled one says so", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "audit" } },
+      });
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "sub1", name: "Bash", kind: "execute", title: "rm -rf build" },
+        parent_tool_use_id: "tu1",
+      });
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-2", tool: "Bash", tool_use_id: "sub1", parent_tool_use_id: "tu1", status: "pending" },
+      });
+    });
+
+    const taskCard = screen.getByTestId("task-card");
+    expect(within(taskCard).getByRole("button", { name: "Deny" })).toBeTruthy();
+
+    act(() => {
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-2", tool: "Bash", tool_use_id: "sub1", parent_tool_use_id: "tu1", status: "cancelled" },
+      });
+    });
+    expect(within(taskCard).getByText("cancelled — the agent stopped waiting")).toBeTruthy();
+    expect(within(taskCard).queryByRole("button", { name: "Deny" })).toBeNull();
+  });
+
+  it("falls back to the trailing list for a request with no tool_use_id", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "t1", name: "Read", kind: "read", title: "read a.go" } });
+      source.emit({
+        kind: "permission_request",
+        permission: { id: "perm-3", tool: "WebFetch", status: "pending" },
+      });
+    });
+
+    const allow = screen.getByRole("button", { name: "Allow" });
+    expect(allow.closest('[data-testid="activity-group"]')).toBeNull();
+    expect(screen.getByText("WebFetch")).toBeTruthy();
   });
 });

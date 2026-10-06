@@ -84,6 +84,11 @@
 .stInt {
   color: var(--text3);
 }
+/* blocked: a muted red-amber, kin to failed but visibly not it */
+.stBlocked {
+  color: color-mix(in srgb, var(--bad-fg) 55%, var(--warn-fg));
+  opacity: 0.85;
+}
 
 .spinner {
   width: 12px;

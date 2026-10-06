@@ -1,5 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ToolKind, ToolStatus, ToolUse } from "../../router/types";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Chip } from "../../components/Chip/Chip";
+import type { PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
+import { PermissionCard } from "../ChatRenderer/PermissionCard";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { Diffstat, KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
@@ -12,6 +14,7 @@ import {
   kindOf,
   mcpServerOf,
   primaryLocation,
+  resultLabel,
   statusOf,
   toolTitle,
 } from "./toolDisplay";
@@ -34,10 +37,14 @@ export interface ActivityGroupProps {
   onOpenTool?: (tool: ToolUse) => void;
   /** Open on mount regardless of liveness (dock's subagent stream view). */
   defaultOpen?: boolean;
+  /** Permission requests anchored to a call, by tool_use id — each renders right under its row. */
+  permissions?: ReadonlyMap<string, PermissionRequest[]>;
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
 }
 
 const PEEK_TEXT_CAP = 400;
 const PEEK_DIFF_LINES = 8;
+const noResolve = async () => {};
 
 function entryStatus(entry: ActivityEntry, statuses?: ReadonlyMap<string, ToolStatus>, live?: boolean): ToolStatus | undefined {
   if (entry.type !== "tool") return undefined;
@@ -46,11 +53,13 @@ function entryStatus(entry: ActivityEntry, statuses?: ReadonlyMap<string, ToolSt
 }
 
 /**
- * Aggregate status for the header: running beats failed beats pending beats
- * interrupted beats ✓. Only the calls decide — a live group whose calls have
- * all resolved is done, even while the turn runs on (the working indicator
- * covers the turn); spinning on `live` alone kept every finished group of a
- * long turn spinning until its end.
+ * Aggregate status for the header: running beats failed beats blocked beats
+ * pending beats interrupted beats ✓ — blocked is "something went wrong" like
+ * failed, but a real failure is the louder story when the group has both,
+ * so blocked shows only when it's the worst. Only the calls decide — a live
+ * group whose calls have all resolved is done, even while the turn runs on
+ * (the working indicator covers the turn); spinning on `live` alone kept
+ * every finished group of a long turn spinning until its end.
  */
 function aggregateStatus(entries: ActivityEntry[], statuses?: ReadonlyMap<string, ToolStatus>, live?: boolean): ToolStatus {
   const all = entries
@@ -58,6 +67,7 @@ function aggregateStatus(entries: ActivityEntry[], statuses?: ReadonlyMap<string
     .filter((s): s is ToolStatus => s !== undefined);
   if (all.includes("in_progress")) return "in_progress";
   if (all.includes("failed")) return "failed";
+  if (all.includes("blocked")) return "blocked";
   if (all.includes("pending")) return "pending";
   if (all.includes("interrupted")) return "interrupted";
   return "completed";
@@ -111,6 +121,8 @@ export function ActivityGroup({
   selectedToolId,
   onOpenTool,
   defaultOpen = false,
+  permissions,
+  onResolvePermission,
 }: ActivityGroupProps) {
   const [open, setOpen] = useState(live || defaultOpen);
   // Collapse exactly once when the live turn ends — never re-collapse a
@@ -121,6 +133,18 @@ export function ActivityGroup({
     if (live) setOpen(true);
     wasLive.current = live;
   }, [live]);
+
+  // A pending request must never hide inside a collapsed group: each newly
+  // pending one opens the group, and if the user collapses it again anyway
+  // the header carries a "needs your approval" chip until it's decided.
+  const awaiting = entries
+    .flatMap((e) => (e.type === "tool" && e.tool.id ? (permissions?.get(e.tool.id) ?? []) : []))
+    .filter((r) => r.status === "pending")
+    .map((r) => r.id)
+    .join(",");
+  useEffect(() => {
+    if (awaiting) setOpen(true);
+  }, [awaiting]);
 
   const { kinds, label } = kindCounts(entries);
   const duration = useMemo(() => groupDuration(entries), [entries]);
@@ -156,6 +180,7 @@ export function ActivityGroup({
         </span>
         <span>{label}</span>
         <span className={styles.meta}>
+          {!open && awaiting && <Chip tone="warn">needs your approval</Chip>}
           <Diffstat adds={stat.adds} dels={stat.dels} />
           {duration && <span>{duration}</span>}
           {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
@@ -163,19 +188,29 @@ export function ActivityGroup({
       </button>
       {open && (
         <div className={styles.body}>
-          {entries.map((entry, i) => (
-            <ActivityRow
-              key={entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`}
-              entry={entry}
-              status={entryStatus(entry, statuses, live)}
-              selected={
-                entry.type === "tool" &&
-                entry.tool.id !== undefined &&
-                entry.tool.id === selectedToolId
-              }
-              onOpen={onOpenTool}
-            />
-          ))}
+          {entries.map((entry, i) => {
+            const requests =
+              entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
+            return (
+              <Fragment key={entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`}>
+                <ActivityRow
+                  entry={entry}
+                  status={entryStatus(entry, statuses, live)}
+                  selected={
+                    entry.type === "tool" &&
+                    entry.tool.id !== undefined &&
+                    entry.tool.id === selectedToolId
+                  }
+                  onOpen={onOpenTool}
+                />
+                {requests?.map((req) => (
+                  <div key={req.id} className={styles.permission}>
+                    <PermissionCard request={req} onResolve={onResolvePermission ?? noResolve} />
+                  </div>
+                ))}
+              </Fragment>
+            );
+          })}
         </div>
       )}
     </div>
@@ -262,7 +297,7 @@ export function ActivityRow({
       ) : (
         <div className={styles.rowLine}>{line}</div>
       )}
-      {peekVisible && <Peek entry={entry} clickable={clickable} />}
+      {peekVisible && <Peek entry={entry} status={status} clickable={clickable} />}
     </div>
   );
 }
@@ -311,7 +346,15 @@ function usePeekFlip() {
 }
 
 /** Capped input/result preview under the hovered row (mockup's .peek). */
-function Peek({ entry, clickable }: { entry: ActivityEntry; clickable: boolean }) {
+function Peek({
+  entry,
+  status,
+  clickable,
+}: {
+  entry: ActivityEntry;
+  status?: ToolStatus;
+  clickable: boolean;
+}) {
   const { ref, up } = usePeekFlip();
   const cls = up ? `${styles.peek} ${styles.peekUp}` : styles.peek;
   if (entry.type === "thinking") {
@@ -336,7 +379,7 @@ function Peek({ entry, clickable }: { entry: ActivityEntry; clickable: boolean }
       )}
       {result?.text && (
         <>
-          <div className={styles.lbl}>{result.is_error ? "error" : "result"}</div>
+          <div className={styles.lbl}>{resultLabel(result, status)}</div>
           <pre>
             {result.text.length > PEEK_TEXT_CAP
               ? `${result.text.slice(0, PEEK_TEXT_CAP)}…`

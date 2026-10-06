@@ -57,6 +57,37 @@ describe("TaskCard", () => {
     expect(screen.queryByRole("img", { name: "in progress" })).toBeNull();
   });
 
+  it("a blocked spawn shows blocked, beating the refusal's is_error result and a lifecycle", () => {
+    const refused = { ...spawnTool, result: { text: "denied", is_error: true } };
+    const { unmount } = render(<TaskCard tool={refused} status="blocked" />);
+    expect(screen.getByRole("img", { name: "blocked by permissions" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "failed" })).toBeNull();
+    unmount();
+
+    // Stamped on the wire rather than out-of-band, with a running model.
+    const model: TaskModel = { taskId: "tk1", toolUseId: "tu1", running: true, completed: false };
+    render(<TaskCard tool={{ ...spawnTool, status: "blocked" }} model={model} />);
+    expect(screen.getByRole("img", { name: "blocked by permissions" })).toBeTruthy();
+    expect(screen.queryByRole("img", { name: "in progress" })).toBeNull();
+  });
+
+  it("holds the permission cards anchored to it (the subagent's own calls)", () => {
+    const onResolve = vi.fn().mockResolvedValue(undefined);
+    render(
+      <TaskCard
+        tool={spawnTool}
+        permissions={[
+          { id: "perm-9", tool: "Bash", status: "pending", tool_use_id: "sub1", parent_tool_use_id: "tu1" },
+        ]}
+        onResolvePermission={onResolve}
+      />,
+    );
+    const card = screen.getByTestId("task-card");
+    expect(card.textContent).toContain("awaiting your decision");
+    fireEvent.click(screen.getByRole("button", { name: "Deny" }));
+    expect(onResolve).toHaveBeenCalledWith("perm-9", "deny");
+  });
+
   it("click opens the subagent stream", () => {
     const onOpen = vi.fn();
     render(<TaskCard tool={spawnTool} onOpen={onOpen} />);

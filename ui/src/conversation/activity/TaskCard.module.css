@@ -52,3 +52,9 @@
   font: 13.5px var(--sans);
   max-width: 84ch;
 }
+
+/* A permission card for one of the subagent's calls, held inside the task card. */
+.permission {
+  border-top: 1px solid var(--line-soft);
+  padding: 10px 14px 12px;
+}

@@ -62,4 +62,21 @@ describe("PermissionCard", () => {
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.getByText(/expired/)).toBeTruthy();
   });
+
+  it("shows a cancelled label when the agent stopped waiting", () => {
+    const cancelled: PermissionRequest = { ...pending, status: "cancelled" };
+    render(<PermissionCard request={cancelled} onResolve={vi.fn()} />);
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText("cancelled — the agent stopped waiting")).toBeTruthy();
+  });
+
+  it("shows the harness's reason when present", () => {
+    render(
+      <PermissionCard
+        request={{ ...pending, reason: "Path is outside allowed working directories" }}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Path is outside allowed working directories")).toBeTruthy();
+  });
 });

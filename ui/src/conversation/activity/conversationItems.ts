@@ -1,6 +1,7 @@
 import type {
   CompactStatus,
   Envelope,
+  PermissionRequest,
   SubagentEvent,
   SubagentTask,
   ThinkingBlock,
@@ -178,6 +179,36 @@ export function buildItems(entries: SourceEntry[]): ConversationItem[] {
   });
 
   return items;
+}
+
+/**
+ * Where each permission card renders. A subagent's call anchors to its
+ * spawning Agent's task card (the inner rows only exist in the dock); a
+ * main-agent call anchors to its own row, or its task card when the call is
+ * itself an Agent spawn. Anything else — no tool_use_id, or a call not
+ * rendered (yet) — is unanchored and falls back to the trailing list, so a
+ * request is never dropped. Anchored maps key by the anchor's tool_use id.
+ */
+export function anchorPermissions(
+  items: ConversationItem[],
+  requests: PermissionRequest[],
+): { anchored: Map<string, PermissionRequest[]>; unanchored: PermissionRequest[] } {
+  const rendered = new Set<string>();
+  for (const item of items) {
+    if (item.type === "task" && item.tool.id) rendered.add(item.tool.id);
+    if (item.type !== "activity") continue;
+    for (const e of item.entries) if (e.type === "tool" && e.tool.id) rendered.add(e.tool.id);
+  }
+  const anchored = new Map<string, PermissionRequest[]>();
+  const unanchored: PermissionRequest[] = [];
+  for (const req of requests) {
+    const anchor = [req.parent_tool_use_id, req.tool_use_id].find(
+      (id) => id !== undefined && rendered.has(id),
+    );
+    if (anchor) anchored.set(anchor, [...(anchored.get(anchor) ?? []), req]);
+    else unanchored.push(req);
+  }
+  return { anchored, unanchored };
 }
 
 /**

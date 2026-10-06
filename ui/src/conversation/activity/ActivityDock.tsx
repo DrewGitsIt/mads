@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ToolDiff, ToolStatus, ToolUse } from "../../router/types";
+import type { PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../router/types";
 import { ActivityGroup } from "./ActivityGroup";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
@@ -11,6 +11,7 @@ import {
   formatDuration,
   kindOf,
   mcpServerOf,
+  resultLabel,
   serverDiffHunk,
   statusOf,
   toolTitle,
@@ -35,6 +36,9 @@ export interface ActivityDockProps {
   /** Only the tool-diff read is needed — narrow so tests can stub a two-line object. */
   client: { getToolDiff(sessionId: string, toolUseId: string): Promise<ToolDiff | null> };
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Permission requests by tool_use id — a subagent call's card renders under its row in the stream view. */
+  permissions?: ReadonlyMap<string, PermissionRequest[]>;
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   onClose: () => void;
 }
 
@@ -47,7 +51,15 @@ export interface ActivityDockProps {
  * subagent streams, rendered with the same grouping components as the main
  * pane. Esc and outside-click close; clicking another row retargets.
  */
-export function ActivityDock({ view, sessionId, client, statuses, onClose }: ActivityDockProps) {
+export function ActivityDock({
+  view,
+  sessionId,
+  client,
+  statuses,
+  permissions,
+  onResolvePermission,
+  onClose,
+}: ActivityDockProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -81,7 +93,13 @@ export function ActivityDock({ view, sessionId, client, statuses, onClose }: Act
           onClose={onClose}
         />
       ) : (
-        <SubagentDetail view={view} onClose={onClose} />
+        <SubagentDetail
+          view={view}
+          statuses={statuses}
+          permissions={permissions}
+          onResolvePermission={onResolvePermission}
+          onClose={onClose}
+        />
       )}
     </div>
   );
@@ -178,7 +196,7 @@ function ToolDetail({
         )}
         {result && (
           <div className={result.is_error ? styles.error : undefined}>
-            <div className={styles.lbl}>{result.is_error ? "error" : "result"}</div>
+            <div className={styles.lbl}>{resultLabel(result, status)}</div>
             <pre className={styles.pre}>{result.text ?? ""}</pre>
           </div>
         )}
@@ -244,12 +262,19 @@ function ToolDiffSection({
 
 function SubagentDetail({
   view,
+  statuses,
+  permissions,
+  onResolvePermission,
   onClose,
 }: {
   view: Extract<DockView, { type: "subagent" }>;
+  statuses?: ReadonlyMap<string, ToolStatus>;
+  permissions?: ReadonlyMap<string, PermissionRequest[]>;
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   onClose: () => void;
 }) {
-  const running = view.task?.running ?? false;
+  const blocked = statuses?.get(view.parentToolUseId) === "blocked";
+  const running = !blocked && (view.task?.running ?? false);
   // Same grouping components as the main stream: fold contiguous
   // tool/thinking items into groups between text paragraphs.
   const blocks = useMemo(() => {
@@ -274,7 +299,9 @@ function SubagentDetail({
         <span className={styles.meta}>
           {view.subtype && <span>{view.subtype}</span>}
           {view.task && <span>{taskCounters(view.task)}</span>}
-          {running ? (
+          {blocked ? (
+            <StatusGlyph status="blocked" />
+          ) : running ? (
             <Spinner />
           ) : view.task?.completed ? (
             <StatusGlyph status="completed" />
@@ -295,7 +322,14 @@ function SubagentDetail({
             </div>
           ) : (
             <div key={i} className={styles.subGroup}>
-              <ActivityGroup entries={b.entries} defaultOpen live={running && i === blocks.length - 1} />
+              <ActivityGroup
+                entries={b.entries}
+                defaultOpen
+                live={running && i === blocks.length - 1}
+                statuses={statuses}
+                permissions={permissions}
+                onResolvePermission={onResolvePermission}
+              />
             </div>
           ),
         )}

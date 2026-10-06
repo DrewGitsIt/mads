@@ -40,13 +40,27 @@ describe("KindIcon", () => {
 });
 
 describe("StatusGlyph", () => {
-  it.each(["completed", "failed", "pending", "interrupted"] as const)(
+  it.each(["completed", "failed", "pending", "interrupted", "blocked"] as const)(
     "renders %s",
     (status) => {
       render(<StatusGlyph status={status} />);
       expect(document.querySelector(`[data-status="${status}"]`)).toBeTruthy();
     },
   );
+
+  it("renders blocked distinctly from failed and interrupted", () => {
+    render(
+      <div>
+        <StatusGlyph status="blocked" />
+        <StatusGlyph status="failed" />
+        <StatusGlyph status="interrupted" />
+      </div>,
+    );
+    const blocked = screen.getByRole("img", { name: "blocked by permissions" });
+    expect(blocked.textContent).toBe("⊖");
+    expect(screen.getByRole("img", { name: "failed" }).textContent).not.toBe("⊖");
+    expect(screen.getByRole("img", { name: "interrupted" }).textContent).not.toBe("⊖");
+  });
 
   it("renders in_progress as the running spinner", () => {
     render(<StatusGlyph status="in_progress" />);

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { FLAGS } from "../../featureFlags";
-import type { Link, TranscriptMessage } from "../../router/types";
+import type { Link, PermissionRequest, TranscriptMessage } from "../../router/types";
 
 function makeLink(overrides: Partial<Link>): Link {
   return {
@@ -305,5 +305,69 @@ describe("ChatRenderer — linked sessions (flag-gated)", () => {
     );
     expect(screen.getByText("kick off the refactor")).toBeTruthy();
     expect(screen.getByText("NOOP")).toBeTruthy();
+  });
+});
+
+describe("ChatRenderer — permission card placement", () => {
+  const transcript: TranscriptMessage[] = [
+    { role: "user", text: "tidy up" },
+    { role: "tool", tool: { id: "t1", name: "Bash", kind: "execute", title: "ls /etc" } },
+    { role: "tool", tool: { id: "t2", name: "Read", kind: "read", title: "read /etc/hosts" } },
+    {
+      role: "tool",
+      tool: { id: "tu1", name: "Agent", kind: "agent", input: { description: "Audit config" } },
+    },
+  ];
+  const req = (over: Partial<PermissionRequest>): PermissionRequest => ({
+    id: "perm-1",
+    tool: "Read",
+    status: "pending",
+    ...over,
+  });
+  const cardsIn = (el: HTMLElement) => within(el).queryAllByRole("button", { name: "Allow" }).length;
+
+  it("attaches a card with tool_use_id right under that call's row", () => {
+    render(
+      <ChatRenderer
+        messages={transcript}
+        permissionRequests={[req({ tool_use_id: "t2", reason: "Path is outside allowed working directories" })]}
+      />,
+    );
+    const group = screen.getByTestId("activity-group");
+    // The pending request opened the (historical, so otherwise collapsed) group.
+    const rows = screen.getAllByTestId("activity-row");
+    expect(rows[1].nextElementSibling!.textContent).toContain("awaiting your decision");
+    expect(group.textContent).toContain("Path is outside allowed working directories");
+    expect(cardsIn(screen.getByTestId("task-card"))).toBe(0);
+  });
+
+  it("attaches a subagent call's card to its spawning task card", () => {
+    render(
+      <ChatRenderer
+        messages={transcript}
+        permissionRequests={[req({ tool: "Bash", tool_use_id: "sub1", parent_tool_use_id: "tu1" })]}
+      />,
+    );
+    expect(cardsIn(screen.getByTestId("task-card"))).toBe(1);
+    expect(cardsIn(screen.getByTestId("activity-group"))).toBe(0);
+  });
+
+  it("falls back to the trailing list without a tool_use_id, or when the call isn't rendered yet", () => {
+    const { container } = render(
+      <ChatRenderer
+        messages={transcript}
+        permissionRequests={[
+          req({ id: "perm-a" }),
+          req({ id: "perm-b", tool_use_id: "not-yet" }),
+          req({ id: "perm-c", tool_use_id: "sub9", parent_tool_use_id: "tu-unknown" }),
+        ]}
+      />,
+    );
+    const stream = container.firstElementChild!;
+    expect(cardsIn(screen.getByTestId("activity-group"))).toBe(0);
+    expect(cardsIn(screen.getByTestId("task-card"))).toBe(0);
+    // All three trail the stream, after the last item (the task card).
+    const trailing = [...stream.children].slice(-3);
+    expect(trailing.every((el) => el.textContent?.includes("awaiting your decision"))).toBe(true);
   });
 });

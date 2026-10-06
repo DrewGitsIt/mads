@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
-import { Chip } from "../../components/Chip/Chip";
+import { Chip, type ChipTone } from "../../components/Chip/Chip";
 import type { PermissionRequest } from "../../router/types";
 import styles from "./PermissionCard.module.css";
 
@@ -15,6 +15,15 @@ const STATUS_LABEL: Record<PermissionRequest["status"], string> = {
   allowed: "allowed",
   denied: "denied",
   expired: "expired — no response in time",
+  cancelled: "cancelled — the agent stopped waiting",
+};
+
+const STATUS_TONE: Record<PermissionRequest["status"], ChipTone> = {
+  pending: "warn",
+  allowed: "ok",
+  denied: "bad",
+  expired: "bad",
+  cancelled: "neutral",
 };
 
 function summarizeInput(input: unknown): string | undefined {
@@ -33,7 +42,8 @@ function summarizeInput(input: unknown): string | undefined {
  * enforcement"). Renders from the live `permission_request` stream event or
  * from GET /permission-requests on mount/refetch, either way keyed by
  * `request.id` — this component itself never distinguishes which source it
- * came from.
+ * came from. Where it renders is the caller's choice: under its tool call's
+ * row when `tool_use_id` anchors it, else in the turn's trailing list.
  */
 export function PermissionCard({ request, onResolve }: PermissionCardProps) {
   const [resolving, setResolving] = useState<"allow" | "deny">();
@@ -50,14 +60,14 @@ export function PermissionCard({ request, onResolve }: PermissionCardProps) {
   };
 
   return (
-    <Card className={styles.card} data-status={request.status}>
+    // A status class, not data-status: Card doesn't forward data-* attributes.
+    <Card className={`${styles.card} ${styles[request.status] ?? ""}`}>
       <div className={styles.header}>
         <Chip tone="warn">permission</Chip>
         <span className={styles.tool}>{request.tool}</span>
-        <Chip tone={pending ? "warn" : request.status === "allowed" ? "ok" : "bad"}>
-          {STATUS_LABEL[request.status]}
-        </Chip>
+        <Chip tone={STATUS_TONE[request.status]}>{STATUS_LABEL[request.status]}</Chip>
       </div>
+      {request.reason && <div className={styles.reason}>{request.reason}</div>}
       {summary && <div className={styles.summary}>{summary}</div>}
       {pending && (
         <div className={styles.actions}>
