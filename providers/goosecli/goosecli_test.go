@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/drewkidwell/mads/pkg/binlocate"
 	"github.com/drewkidwell/mads/providers/conformance"
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -386,8 +386,10 @@ func skipUnlessRealGooseSmoke(t *testing.T) {
 	if os.Getenv("MADS_GOOSE_SMOKE") != "1" {
 		t.Skip("set MADS_GOOSE_SMOKE=1 to run against the real goose binary (needs a serving local ollama — free tokens, but slow; ollama down fails the run, it does not skip)")
 	}
-	if _, err := exec.LookPath("goose"); err != nil {
-		t.Skip("no goose binary on PATH")
+	// The same lookup the provider runs (pkg/binlocate): PATH, then the CLI
+	// goose Desktop bundles inside its app and never links onto PATH.
+	if _, err := binlocate.Find("goose"); err != nil {
+		t.Skip("no goose binary on PATH or in a known install location")
 	}
 }
 
