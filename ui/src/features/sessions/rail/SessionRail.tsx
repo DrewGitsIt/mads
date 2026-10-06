@@ -1,6 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
+import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
+import { useShellDockState } from "../../../conversation/ShellDock/dockState";
+import type { ShellInfo } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
 import { SessionCloseLandDialog } from "../actions/SessionCloseLandDialog";
@@ -132,6 +135,13 @@ export function SessionRail({
   className,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
+  // Subscribed once here, not per card: N cards must not each hold a listener
+  // on the shell set. Keyed by session; there is at most one shell per session.
+  const liveShells = useLiveShells();
+  const shellBySession = useMemo(
+    () => new Map(liveShells.map((shell) => [shell.sessionId, shell])),
+    [liveShells],
+  );
   const [query, setQuery] = useState("");
   const railRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -340,6 +350,7 @@ export function SessionRail({
   const rowProps = {
     openTaskCounts,
     agentStates,
+    shellBySession,
     matchById,
     wsIndex,
     selectedId,
@@ -540,6 +551,7 @@ function RailRowGroup({
   row,
   openTaskCounts,
   agentStates,
+  shellBySession,
   matchById,
   wsIndex,
   selectedId,
@@ -559,6 +571,8 @@ function RailRowGroup({
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
   agentStates: Record<string, SessionAgentState>;
+  /** Each live dock shell by session id, hidden or visible. */
+  shellBySession: Map<string, ShellInfo>;
   /** Only populated while a query is live — a card's own hit, for its reason line. */
   matchById: Map<string, SearchMatch>;
   /** Resolves a session's workspace reference to its workspace (router/workspaceRef.ts). */
@@ -586,6 +600,7 @@ function RailRowGroup({
         session={row.session}
         openTaskBreakdown={openTaskCounts[row.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
         agentState={agentStates[row.session.id] ?? EMPTY_AGENT_STATE}
+        shell={shellBySession.get(row.session.id)}
         matchReason={reasonFor(row.session, matchById, wsIndex)}
         selected={row.session.id === selectedId}
         onSelect={onSelect}
@@ -625,6 +640,7 @@ function RailRowGroup({
               session={sub.session}
               openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
               agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
+              shell={shellBySession.get(sub.session.id)}
               matchReason={reasonFor(sub.session, matchById, wsIndex)}
               selected={sub.session.id === selectedId}
               onSelect={onSelect}
@@ -684,6 +700,7 @@ function SessionRow({
   session,
   openTaskBreakdown,
   agentState,
+  shell,
   matchReason: reason,
   selected,
   onSelect,
@@ -714,6 +731,8 @@ function SessionRow({
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
   agentState: SessionAgentState;
+  /** This session's live dock shell, hidden or visible; absent on a plain card. */
+  shell?: ShellInfo;
   /** Set only when a live search matched this card on something other than its name. */
   matchReason?: MatchReason;
   selected: boolean;
@@ -795,8 +814,41 @@ function SessionRow({
     status.kind === "stalled"
       ? `Last reported: ${agentState.label ?? "Working…"} (${formatAbsoluteStamp(status.since!)})`
       : "";
+  // A shell card says what its shell is doing in the title. "Hidden" is the
+  // case worth a peek at what is running, so that is asked once per hover —
+  // never on render and never polled (the host answers inspect on demand).
+  const dock = useShellDockState(session.id);
+  const [hiddenRunning, setHiddenRunning] = useState<string>();
+  // Visible only on the selected session: another session's stored `open`
+  // just means its dock comes back when you return — its shell is detached.
+  const shellOpen = shell !== undefined && selected === true && dock.open;
+  const shellNote = !shell
+    ? ""
+    : shellOpen
+      ? "Shell open"
+      : hiddenRunning
+        ? `Shell hidden · running: ${hiddenRunning}`
+        : "Shell hidden";
+  function inspectHiddenShell() {
+    const host = typeof window !== "undefined" ? window.mads?.shell : undefined;
+    if (!shell || shellOpen || !host) return;
+    setHiddenRunning(undefined);
+    host
+      .inspect(shell.shellId)
+      .then((activities) => {
+        const activity = activities.find((a) => a.shellId === shell.shellId) ?? activities[0];
+        if (!activity?.busy) return;
+        const [first, ...rest] = activity.processes;
+        const command = first?.command ?? activity.foreground;
+        if (!command) return;
+        setHiddenRunning(rest.length > 0 ? `${command} (+${rest.length} more)` : command);
+      })
+      // Best effort: a shell that ended mid-hover just keeps the plain clause.
+      .catch(() => undefined);
+  }
   const tooltip = [
     railTooltip(session, labelContext),
+    shellNote,
     stalledNote,
     backgroundSubagents > 0 ? `Background subagents: ${backgroundSubagents} running` : "",
   ]
@@ -909,6 +961,7 @@ function SessionRow({
       className={[
         styles.row,
         selected ? styles.selected : "",
+        shell ? styles.shellCard : "",
         nested ? styles.nestedRow : "",
         linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
         linkModeActive && isLinkCrossWorkspace ? styles.linkDimmed : "",
@@ -919,6 +972,7 @@ function SessionRow({
       onMouseEnter={() => {
         hovering.current = true;
         anchorCluster();
+        inspectHiddenShell();
       }}
       onMouseLeave={() => {
         hovering.current = false;
@@ -948,6 +1002,15 @@ function SessionRow({
     >
       {nested && <LinkConnector watched={linkBadge === "WATCHED"} />}
       <div className={styles.rowTop}>
+        {shell && (
+          <span
+            className={[styles.prompt, styles[`status-${status.tone}`]].join(" ")}
+            aria-hidden="true"
+            data-shell-prompt=""
+          >
+            &gt;_
+          </span>
+        )}
         <span className={styles.name}>{name}</span>
         {work && (
           <span

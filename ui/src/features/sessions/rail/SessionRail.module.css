@@ -883,3 +883,35 @@
   flex: none;
   opacity: 0.5;
 }
+
+/* ── a card whose session has a live dock shell (docs/SHELL-DOCK-DESIGN.md D9)
+   It reads as a terminal: a ">_" prompt in front of the name, coloured by the
+   status line's tone (the .status-* classes, which only set colour), the name
+   and stamp in the mono face, and the rows below indented to sit under the
+   name (prompt 16px + the 6px gap). Nothing animates, and nothing here changes
+   a font size or line-height, so the card is exactly as tall as a plain one. */
+.prompt {
+  flex: none;
+  width: 16px;
+  font: 700 11px/1.35 var(--mono);
+  letter-spacing: -1px;
+}
+
+.shellCard .rowTop {
+  gap: 6px;
+}
+
+.shellCard .name {
+  font-family: var(--mono);
+  letter-spacing: -0.1px;
+}
+
+.shellCard .when {
+  font-family: var(--mono);
+}
+
+.shellCard .status,
+.shellCard .detail,
+.shellCard .summary {
+  padding-left: 22px;
+}
