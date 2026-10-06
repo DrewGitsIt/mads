@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { ResizablePanel } from "../../components/ResizablePanel/ResizablePanel";
 import { TerminalView } from "../TerminalRenderer/TerminalView";
 import type { ShellActivity } from "../TerminalRenderer/ptyBridge";
+import { requestOpenSettings } from "../../appNavigation";
+import { EndShellDialog } from "./EndShellDialog";
+import { useLiveShells } from "./useLiveShells";
 import { SHELL_SCROLLBACK, type ShellDockBridge } from "./shellBridge";
 import styles from "./ShellDock.module.css";
 
@@ -17,6 +19,12 @@ export interface ShellDockProps {
   /** ×, once confirmed (or at once when the shell is idle): end the shell and close the dock. */
   onEnd?: () => void;
 }
+
+/**
+ * How many live shells make the dock say so (D8). Only a notice: nothing is
+ * capped and nothing is ever ended on the user's behalf.
+ */
+export const SHELL_SOFT_LIMIT = 9;
 
 /** Why the terminal under the dock no longer has a live shell attached. */
 type Lost = "exited" | "host-exited" | "detached";
@@ -41,6 +49,9 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
   const [confirming, setConfirming] = useState<ShellActivity>();
   // The × is in flight (asking the host); a second click mustn't stack another ask.
   const asking = useRef(false);
+  // The soft-limit notice (D8), dismissed for this dock's lifetime only.
+  const liveCount = useLiveShells().length;
+  const [limitDismissed, setLimitDismissed] = useState(false);
 
   useEffect(() => {
     const unsubDetached = bridge.onDetached(() => setLost("detached"));
@@ -79,6 +90,28 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
       <div className={styles.body}>
         <div className={styles.header}>
           <span className={styles.title}>Shell</span>
+          {liveCount >= SHELL_SOFT_LIMIT && !limitDismissed ? (
+            <span className={styles.limit} role="status">
+              {liveCount} shells are running ·{" "}
+              <button
+                type="button"
+                className={styles.limitLink}
+                onClick={() => requestOpenSettings("shells")}
+              >
+                Manage
+              </button>
+              <button
+                type="button"
+                className={styles.limitLink}
+                aria-label="Dismiss shell count notice"
+                onClick={() => setLimitDismissed(true)}
+              >
+                ×
+              </button>
+            </span>
+          ) : (
+            <span className={styles.spacer} />
+          )}
           <button
             type="button"
             className={styles.headerButton}
@@ -123,32 +156,8 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
           </div>
         )}
       </div>
-      <ConfirmDialog
-        open={confirming !== undefined}
-        title={
-          confirming && confirming.count > 1
-            ? `${confirming.count} processes are still running in this shell`
-            : "A process is still running in this shell"
-        }
-        description={
-          confirming && (
-            <>
-              <ul className={styles.running}>
-                {confirming.processes.map((p) => (
-                  <li key={`${p.pid}-${p.command}`} className={styles.runningCommand} title={p.command}>
-                    {p.command}
-                  </li>
-                ))}
-              </ul>
-              <p>
-                Ending the shell stops {confirming.count > 1 ? "them" : "it"}. Anything started with{" "}
-                <code>nohup</code>,{" "}
-                <code>disown</code> or <code>setsid</code> may keep running.
-              </p>
-            </>
-          )
-        }
-        confirmLabel="End shell"
+      <EndShellDialog
+        activity={confirming}
         cancelLabel="Keep running, hide"
         onConfirm={() => {
           setConfirming(undefined);
@@ -158,7 +167,6 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
           setConfirming(undefined);
           onHide?.();
         }}
-        // Escape or a backdrop click is neither choice: just close the question.
         onDismiss={() => setConfirming(undefined)}
       />
     </ResizablePanel>

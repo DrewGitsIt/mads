@@ -4,6 +4,7 @@ import { ShellDock } from "./ShellDock";
 import { ShellBridge } from "./shellBridge";
 import type { ShellActivity } from "../TerminalRenderer/ptyBridge";
 import { makeFakeShellHost } from "./fakeShellHost";
+import { OPEN_SETTINGS_EVENT } from "../../appNavigation";
 
 // Typed output reaches the pty through the bridge; these tests need only the
 // dock's own behaviour, so the host is the in-memory fake.
@@ -209,5 +210,57 @@ describe("ShellDock", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reattach" }));
     await waitFor(() => expect(fake.host.open).toHaveBeenCalledTimes(2));
     expect(fake.host.end).not.toHaveBeenCalled();
+  });
+
+  describe("soft limit notice (D8)", () => {
+    const shell = (n: number) => ({
+      sessionId: `ses_${n}`,
+      shellId: `shell-ses_${n}`,
+      cwd: "/",
+      pid: n,
+      startedAt: 0,
+      attached: false,
+    });
+    const many = (n: number) => Array.from({ length: n }, (_, i) => shell(i + 1));
+    afterEach(() => {
+      delete (window as { mads?: unknown }).mads;
+    });
+    const mountWithShells = async (n: number) => {
+      const fake = makeFakeShellHost();
+      fake.setShells(many(n));
+      window.mads = { shell: fake.host };
+      const bridge = new ShellBridge(fake.host, "ses_1");
+      render(<ShellDock bridge={bridge} />);
+      await waitFor(() => expect(fake.host.list).toHaveBeenCalled());
+      return fake;
+    };
+
+    it("says so at nine live shells, and Manage opens Settings → Shells", async () => {
+      await mountWithShells(9);
+      expect(await screen.findByText(/9 shells are running/)).toBeTruthy();
+
+      const opened = vi.fn();
+      window.addEventListener(OPEN_SETTINGS_EVENT, opened);
+      fireEvent.click(screen.getByRole("button", { name: "Manage" }));
+      window.removeEventListener(OPEN_SETTINGS_EVENT, opened);
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(window.location.hash).toBe("#shells");
+    });
+
+    it("stays silent at eight, and appears when a ninth starts", async () => {
+      const fake = await mountWithShells(8);
+      expect(screen.queryByText(/shells are running/)).toBeNull();
+      act(() => fake.setShells(many(9)));
+      expect(await screen.findByText(/9 shells are running/)).toBeTruthy();
+    });
+
+    it("is dismissible, never ends anything, and returns with the next dock", async () => {
+      const fake = await mountWithShells(10);
+      await screen.findByText(/10 shells are running/);
+      fireEvent.click(screen.getByRole("button", { name: "Dismiss shell count notice" }));
+      expect(screen.queryByText(/shells are running/)).toBeNull();
+      expect(fake.host.end).not.toHaveBeenCalled();
+      expect(fake.host.endSession).not.toHaveBeenCalled();
+    });
   });
 });

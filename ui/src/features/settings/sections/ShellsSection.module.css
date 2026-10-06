@@ -1,0 +1,64 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.empty {
+  margin: 0;
+  color: var(--text3);
+  font: 400 var(--fs-body) var(--sans);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 var(--fs-body) var(--sans);
+  color: var(--text2);
+}
+
+.table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text3);
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.table td {
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
+  border-bottom: 1px solid var(--line-soft);
+  max-width: 260px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.gone {
+  color: var(--text3);
+  font-style: italic;
+}
+
+.link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+.link:hover {
+  text-decoration: underline;
+}
+
+.actions {
+  display: flex;
+}

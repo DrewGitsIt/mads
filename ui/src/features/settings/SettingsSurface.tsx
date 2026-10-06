@@ -15,6 +15,7 @@ import { PipelineSection } from "./sections/PipelineSection";
 import { AppearanceSection } from "./sections/AppearanceSection";
 import { CredentialsSection } from "./sections/CredentialsSection";
 import { AdvancedSection } from "./sections/AdvancedSection";
+import { ShellsSection } from "./sections/ShellsSection";
 import { ProvidersSection } from "./sections/ProvidersSection";
 import { UpdatesAboutSection } from "./sections/UpdatesAboutSection";
 import type { Config } from "../../router/types";
@@ -118,6 +119,11 @@ export function SettingsSurface() {
           <section id="advanced" ref={sectionRefs.advanced} className={styles.section}>
             <h2 className={styles.heading}>{SECTION_LABELS.advanced}</h2>
             <AdvancedSection config={config} />
+          </section>
+
+          <section id="shells" ref={sectionRefs.shells} className={styles.section}>
+            <h2 className={styles.heading}>{SECTION_LABELS.shells}</h2>
+            <ShellsSection />
           </section>
 
           <section id="providers" ref={sectionRefs.providers} className={styles.section}>

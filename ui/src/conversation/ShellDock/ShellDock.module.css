@@ -26,7 +26,35 @@
 }
 
 .title {
+  flex: none;
+}
+
+.spacer {
   flex: 1;
+}
+
+/* Subtle and one line: a count and a way to the inventory, no alarm colour. */
+.limit {
+  flex: 1;
+  min-width: 0;
+  margin-left: var(--space-3);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--fs-sm) var(--sans);
+}
+
+.limitLink {
+  border: none;
+  background: none;
+  color: var(--text2);
+  cursor: pointer;
+  font: inherit;
+  padding: 0 var(--space-1);
+}
+.limitLink:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 .headerButton {
@@ -72,19 +100,4 @@
 }
 .noticeButton:hover {
   border-color: var(--accent);
-}
-
-/* The End dialog's list of what is still running. */
-.running {
-  margin: 0 0 var(--space-3);
-  padding: 0;
-  list-style: none;
-}
-
-.runningCommand {
-  font: var(--fs-body) var(--mono);
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }

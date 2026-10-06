@@ -8,6 +8,7 @@ import {
   isCredentialActive,
   orderedDiffSections,
 } from "./profileDiff";
+import { FIELD_LABELS, FIELD_SECTION, SECTION_IDS } from "./sections";
 import { fixtureConfig, fixtureProfile } from "../../router/fixtures";
 
 describe("deepEqual", () => {
@@ -46,6 +47,23 @@ describe("groupBySection / orderedDiffSections", () => {
     expect(grouped.general?.map((e) => e.field)).toEqual(["concurrency_limit"]);
     expect(grouped.pipeline?.map((e) => e.field)).toEqual(["default_model_tier"]);
     expect(orderedDiffSections(grouped)).toEqual(["general", "pipeline"]);
+  });
+});
+
+describe("the Shells section (not a Config section)", () => {
+  it("owns no Config field, so no diff entry can group under it", () => {
+    expect(SECTION_IDS).toContain("shells");
+    expect(Object.values(FIELD_SECTION)).not.toContain("shells");
+    const entries = computeProfileDiff(fixtureConfig, fixtureProfile.snapshot);
+    expect(groupBySection(entries).shells).toBeUndefined();
+    expect(orderedDiffSections(groupBySection(entries))).not.toContain("shells");
+    expect(orderedDiffSections({})).toEqual([]);
+  });
+
+  it("every labelled field still maps to a section", () => {
+    for (const field of Object.keys(FIELD_LABELS)) {
+      expect(FIELD_SECTION[field as keyof typeof FIELD_SECTION]).toBeDefined();
+    }
   });
 });
 

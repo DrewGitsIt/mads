@@ -21,6 +21,7 @@ import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
 import { requestShellToggle } from "./conversation/shellToggleSignal";
+import { OPEN_SESSION_EVENT, OPEN_SETTINGS_EVENT } from "./appNavigation";
 import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
 
@@ -94,6 +95,24 @@ export function App() {
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
+  }, []);
+
+  // Signals from deep inside a surface (the shell dock's "Manage", the Settings
+  // shell inventory's session link) to switch surface; see appNavigation.ts.
+  useEffect(() => {
+    const openSettings = () => setActiveId("settings");
+    const openSession = (e: Event) => {
+      const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
+      setActiveId("sessions");
+      setJumpToSessionId(sessionId);
+      setJumpToTab(undefined);
+    };
+    window.addEventListener(OPEN_SETTINGS_EVENT, openSettings);
+    window.addEventListener(OPEN_SESSION_EVENT, openSession);
+    return () => {
+      window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings);
+      window.removeEventListener(OPEN_SESSION_EVENT, openSession);
+    };
   }, []);
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);

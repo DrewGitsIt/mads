@@ -8,6 +8,7 @@ export type SectionId =
   | "appearance"
   | "credentials"
   | "advanced"
+  | "shells"
   | "providers"
   | "updates";
 
@@ -18,6 +19,7 @@ export const SECTION_IDS: SectionId[] = [
   "appearance",
   "credentials",
   "advanced",
+  "shells",
   "providers",
   "updates",
 ];
@@ -29,6 +31,7 @@ export const SECTION_LABELS: Record<SectionId, string> = {
   appearance: "Appearance",
   credentials: "Credentials",
   advanced: "Advanced",
+  shells: "Shells",
   providers: "Providers",
   updates: "Updates & About",
 };
@@ -40,6 +43,9 @@ export const SECTION_LABELS: Record<SectionId, string> = {
  * Fields absent here (onboarding_complete, update_feed_url,
  * active_profile_id, credential_bindings) are either excluded from profile
  * snapshots or handled by dedicated, non-generic diff logic.
+ * "shells" is no Config section at all: it lists the live dock shells, owns
+ * no field, and so never appears here, in a profile diff or as a restart
+ * badge (the maps are Partial and the diff only groups fields that are keys).
  */
 export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   concurrency_limit: "general",
