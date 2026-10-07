@@ -65,6 +65,21 @@ describe("ContextRim", () => {
     expect(onCompact).toHaveBeenCalled();
   });
 
+  it("never pins a label or offers Compact off an aggregate-only usage", () => {
+    // No context_tokens: only the per-turn billing aggregate (~N× real).
+    const aggregate: Usage = {
+      input_tokens: 18,
+      output_tokens: 50,
+      cache_creation_input_tokens: 23_710,
+      cache_read_input_tokens: 243_484,
+    };
+    render(<ContextRim usage={aggregate} contextWindow={200_000} onCompact={vi.fn()} />);
+    const rim = screen.getByTestId("context-meter");
+    expect(rim.getAttribute("aria-valuenow")).toBe("100");
+    expect(rim.hasAttribute("data-pinned")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Compact" })).toBeNull();
+  });
+
   it("offers no Compact without a handler", () => {
     render(<ContextRim usage={at(190_000)} contextWindow={200_000} />);
     expect(screen.queryByRole("button", { name: "Compact" })).toBeNull();

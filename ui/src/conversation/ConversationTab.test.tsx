@@ -1200,76 +1200,11 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(rimPct()).toBe("50"));
   });
 
-  // The user-facing half of auto-compaction's fix: the server only force-
-  // compacts near the window limit; below that the UI offers the choice
-  // (the resume options interactive claude-code shows that headless -p
-  // lacks), derived locally from the same last_usage the meter reads.
-  it("suggests compaction at high occupancy, and Compact now runs it", async () => {
-    const client = new FakeRouterClient();
-    vi.spyOn(client, "getSession").mockResolvedValueOnce({
-      id: "session-active",
-      created_at: "2026-07-14T00:00:00Z",
-      updated_at: "2026-07-14T00:00:00Z",
-      name: "big session",
-      activity: "active",
-      model: "claude-sonnet-5",
-      last_usage: { input_tokens: 500, output_tokens: 50, context_tokens: 130_000, context_window: 200_000 },
-    });
-    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
-    const compactSpy = vi.spyOn(client, "compactSession").mockResolvedValue();
-    render(<ConversationTab sessionId="session-active" routerClient={client} />);
-
-    await waitFor(() => expect(screen.getByText(/using ~65% of the context window/)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Compact now" }));
-    expect(compactSpy).toHaveBeenCalledWith("session-active");
-    // The suggestion yields to the (optimistic) progress banner immediately.
-    await waitFor(() => expect(screen.getByText("Compacting conversation…")).toBeTruthy());
-    expect(screen.queryByText(/of the context window/)).toBeNull();
-  });
-
-  it("Not now dismisses the compaction suggestion, and low occupancy never shows it", async () => {
-    const client = new FakeRouterClient();
-    vi.spyOn(client, "getSession").mockResolvedValueOnce({
-      id: "session-active",
-      created_at: "2026-07-14T00:00:00Z",
-      updated_at: "2026-07-14T00:00:00Z",
-      name: "big session",
-      activity: "active",
-      model: "claude-sonnet-5",
-      last_usage: { input_tokens: 500, output_tokens: 50, context_tokens: 130_000, context_window: 200_000 },
-    });
-    render(<ConversationTab sessionId="session-active" routerClient={client} />);
-    await waitFor(() => expect(screen.getByText(/of the context window/)).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
-    expect(screen.queryByText(/of the context window/)).toBeNull();
-
-    // Below the 60% suggestion line (and with the accurate context_tokens
-    // beating the inflated aggregate): no banner at all.
-    const quiet = new FakeRouterClient();
-    vi.spyOn(quiet, "getSession").mockResolvedValueOnce({
-      id: "session-active",
-      created_at: "2026-07-14T00:00:00Z",
-      updated_at: "2026-07-14T00:00:00Z",
-      name: "small session",
-      activity: "active",
-      model: "claude-sonnet-5",
-      last_usage: { input_tokens: 500, output_tokens: 50, cache_read_input_tokens: 400_000, context_tokens: 40_000, context_window: 200_000 },
-    });
-    render(<ConversationTab sessionId="session-active" routerClient={quiet} />);
-    // The meter proves the same accurate numbers rendered: 40k/200k = 20%,
-    // not the aggregate's 400k.
-    await waitFor(() =>
-      expect(screen.getAllByTestId("context-meter").map((m) => m.getAttribute("aria-valuenow"))).toContain("20"),
-    );
-    expect(screen.queryByText(/of the context window/)).toBeNull();
-  });
-
   // A last_usage persisted before context_tokens existed carries only the
-  // per-turn billing aggregate (~N× real occupancy) — off it the banner used
-  // to claim an impossible "~134%" while the meter showed 100%. Untrusted
-  // numbers must never raise the suggestion; the meter's clamped fallback
-  // rendering is all such a session gets.
-  it("never suggests compaction from an aggregate-only last_usage", async () => {
+  // per-turn billing aggregate (~N× real occupancy). Untrusted numbers must
+  // never prompt a compaction: the rim's clamped fallback fill is all such a
+  // session gets — no pinned label, no Compact link.
+  it("never offers compaction from an aggregate-only last_usage", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getSession").mockResolvedValueOnce({
       id: "session-active",
@@ -1291,7 +1226,8 @@ describe("ConversationTab", () => {
     // The meter's intentional fallback rendering (267,212 aggregate against
     // the static 200k table, clamped) proves the seeded usage mounted.
     await waitFor(() => expect(rimPct()).toBe("100"));
-    expect(screen.queryByText(/of the context window/)).toBeNull();
+    expect(screen.getByTestId("context-meter").hasAttribute("data-pinned")).toBe(false);
+    expect(screen.queryByRole("button", { name: "Compact" })).toBeNull();
   });
 
   // The "compaction completed banner sticks around far longer than it

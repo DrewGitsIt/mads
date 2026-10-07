@@ -88,7 +88,7 @@ Chat renderer (markdown + collapsible tool cards) or terminal renderer (xterm.js
 
 **The session dock** (`ui/src/conversation/Dock/`) is one edge-to-edge band under the conversation, in both views. No inner boxes, no textarea border; focus tints the whole band. Top to bottom:
 
-1. **Rim.** The dock's 2px top hairline *is* the context meter. Its fill is occupancy: quiet below 70%, amber from 70%, red from 90%. Hovering it shows `106.5k / 128k · 83% context`. From 70% the label stays up, and from 80% it carries **Compact** (chat only). With no usage recorded, the rim is a plain hairline with no label, never a stale or invented number.
+1. **Rim.** The dock's 2px top hairline *is* the context meter. Its fill is occupancy: quiet below 70%, amber from 70%, red from 90%. Hovering it shows `106.5k / 128k · 83% context`. From 70% the label stays up, and from 80% it carries **Compact** (chat only). There is no separate compaction banner: the rim and the + menu's Compact now are the ways to compact. With no usage recorded, the rim is a plain hairline with no label, never a stale or invented number; a usage with only the per-turn billing aggregate (no context_tokens) fills the rim but never pins the label or offers Compact.
 2. **Attachment chips** (chat).
 3. **Input row** (chat only): **+** · an auto-growing textarea · Stop while a turn runs · **Send**, or **Queue** while busy.
 4. **Expanded editor** (⌘E): grows in place, no modal (#7). Monaco with a line-number gutter and word wrap, then an action bar with **+**, the send/collapse hint, and Stop / Send / Queue.

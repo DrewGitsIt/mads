@@ -217,12 +217,6 @@ export function ConversationTab({
   // effect below; not persisted, since it's meaningful only while this tab
   // is watching the live stream.
   const [compactStatus, setCompactStatus] = useState<CompactStatus>();
-  // "Not now" on the compact-suggestion banner — sticky per mount, so
-  // declining once quiets the banner until the session is next opened. The
-  // server only force-compacts near the window limit (compact.go's ~85%
-  // threshold); everything below that is this user choice, replicating the
-  // resume options interactive claude-code offers that headless -p lacks.
-  const [compactSuggestionDismissed, setCompactSuggestionDismissed] = useState(false);
   // The in-flight turn's server-side start (Session.agent_state.since, then
   // live session.agent_state events) — the working indicator's elapsed
   // anchor, so a remount mid-turn doesn't restart the counter.
@@ -352,7 +346,6 @@ export function ConversationTab({
     setPermissionRequests(new Map());
     setLastUsage(undefined);
     setCompactStatus(undefined);
-    setCompactSuggestionDismissed(false);
     setAgentSince(undefined);
     setPendingReplay(null);
     setQueuedMessages([]);
@@ -859,7 +852,6 @@ export function ConversationTab({
     // provider's own compact/start stream event arrives (the Router may
     // first have to wake a dormant session); the real done/failed event
     // overwrites it.
-    setCompactSuggestionDismissed(true);
     setCompactStatus({ phase: "start" });
     try {
       await routerClient.compactSession(sessionId);
@@ -1289,28 +1281,6 @@ export function ConversationTab({
       task: model,
     };
   }
-  // Compact-suggestion input, derived locally from the same usage the dock's
-  // context rim reads (session.last_usage at mount, turn_end frames after) — no
-  // extra stream event or server round-trip, and no race against the
-  // Runner's own Start-time trigger, which only fires near the window limit.
-  const occupancyWindow = lastUsage?.context_window || contextWindowForModel(session.model);
-  // Only context_tokens (the final API call's prompt side) feeds the
-  // suggestion: the summed token fields are claude-code's per-turn billing
-  // aggregate (~N× real occupancy — a 3-iteration small turn reads 60%+),
-  // so a proactive "compact?" off them is a false positive. The meter keeps
-  // its aggregate fallback rendering for stale sessions; without trusted
-  // numbers the suggestion simply stays away. Clamped at 100 like the meter
-  // so the two can never contradict ("~134%" is impossible).
-  const occupancyTokens = lastUsage?.context_tokens ?? 0;
-  const occupancyPct =
-    occupancyWindow > 0 ? Math.min(100, Math.round((occupancyTokens / occupancyWindow) * 100)) : 0;
-  const showCompactSuggestion =
-    activeMode === "chat" &&
-    !inChatTurn &&
-    !compactSuggestionDismissed &&
-    !compactStatus &&
-    occupancyTokens > 0 &&
-    occupancyPct >= 60;
 
   // Terminal-view "Ask the agent…": the prompt replaces the compose draft (as
   // a chat prefill replaces the composer's text) and the sheet opens on it.
@@ -1486,26 +1456,6 @@ export function ConversationTab({
             {waking && (
               <div className={styles.transportBanner}>
                 <span>Waking the agent…</span>
-              </div>
-            )}
-            {showCompactSuggestion && (
-              <div className={styles.transportBanner}>
-                <span>
-                  This conversation is using ~{occupancyPct}% of the context window. Compacting
-                  summarizes older messages to free space.
-                </span>
-                <div className={styles.transportActions}>
-                  <Button variant="secondary" size="sm" onClick={() => void handleCompactNow()}>
-                    Compact now
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => setCompactSuggestionDismissed(true)}
-                  >
-                    Not now
-                  </Button>
-                </div>
               </div>
             )}
             <CompactionStatus

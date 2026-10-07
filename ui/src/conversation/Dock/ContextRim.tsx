@@ -24,8 +24,11 @@ const COMPACT_AT = 80;
  * `106.5k / 128k · 83% context`; the label stays pinned from 70%, and from
  * 80% it carries a Compact link when `onCompact` is wired. Without usage
  * the rim is a plain hairline with no label — never a stale or made-up
- * number. The occupancy arithmetic is contextOccupancy's, shared with the
- * rail so the two can't disagree.
+ * number. A last_usage without context_tokens (persisted before it existed)
+ * carries only claude-code's per-turn billing aggregate, ~N× real occupancy:
+ * the fill still renders it, but it never pins the label or offers Compact,
+ * so an untrusted number can't prompt a compaction. The occupancy arithmetic
+ * is contextOccupancy's, shared with the rail so the two can't disagree.
  */
 export function ContextRim({ usage, contextWindow, onCompact }: ContextRimProps) {
   const occupancy = contextOccupancy(usage, contextWindow);
@@ -34,7 +37,8 @@ export function ContextRim({ usage, contextWindow, onCompact }: ContextRimProps)
   }
   const { used, window, pct } = occupancy;
   const tone = pct >= BAD_AT ? "bad" : pct >= WARN_AT ? "warn" : "quiet";
-  const pinned = pct >= WARN_AT;
+  const trusted = (usage?.context_tokens ?? 0) > 0;
+  const pinned = trusted && pct >= WARN_AT;
   const tokens = `${formatTokens(used)} / ${formatTokens(window)}`;
   return (
     <div
@@ -56,7 +60,7 @@ export function ContextRim({ usage, contextWindow, onCompact }: ContextRimProps)
           <span className={styles.lblFull}>{tokens} · </span>
           {pct}%<span className={styles.lblFull}> context</span>
         </span>
-        {onCompact && pct >= COMPACT_AT && (
+        {onCompact && trusted && pct >= COMPACT_AT && (
           <button type="button" className={styles.compact} onClick={onCompact}>
             Compact
           </button>
