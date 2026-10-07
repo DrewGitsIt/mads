@@ -1,6 +1,5 @@
 import { Suspense, lazy, useRef, type ReactNode } from "react";
 import type { Monaco } from "@monaco-editor/react";
-import type { editor } from "monaco-editor";
 import { defineMadsMonacoTheme, MADS_MONACO_THEME } from "../../utils/createMonacoTheme";
 import { bindingFor, hotkeyLabel } from "../../platform/hotkeys";
 import { monacoKeybinding } from "./monacoKeybinding";
@@ -16,7 +15,7 @@ export interface ExpandedComposerProps {
   onChange: (value: string) => void;
   /** Sends `text` (the editor's current value): the sendFromEditor hotkey or the send button. */
   onSend: (text: string) => void;
-  /** Esc in the editor. */
+  /** The collapseEditor hotkey (Esc) in the editor. */
   onCollapse: () => void;
   /** Character offset to place the caret at on mount — the textarea's cursor at the moment the editor expanded. Default 0. */
   initialCursor?: number;
@@ -69,7 +68,6 @@ export function ExpandedComposer({
   leading,
   hintSuffix,
 }: ExpandedComposerProps) {
-  const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   // onMount fires exactly once per Monaco mount, not on every prop change —
   // addCommand below must dereference these every keystroke rather than
   // close over onSend/onCollapse/value directly, or the send hotkey would
@@ -97,7 +95,6 @@ export function ExpandedComposer({
             beforeMount={(monaco: Monaco) => defineMadsMonacoTheme(monaco)}
             onChange={(next) => onChange(next ?? "")}
             onMount={(ed, monaco) => {
-              editorRef.current = ed;
               const model = ed.getModel();
               if (model) {
                 const pos = model.getPositionAt(initialCursor);
@@ -105,9 +102,13 @@ export function ExpandedComposer({
                 ed.revealPositionInCenterIfOutsideViewport(pos);
               }
               ed.focus();
+              // Both chords come from the hotkeys table, so a future user
+              // override reaches the editor too (Monaco can only bind them
+              // here, through addCommand).
               const send = monacoKeybinding(bindingFor("sendFromEditor"), monaco);
               if (send !== undefined) ed.addCommand(send, () => onSendRef.current(valueRef.current));
-              ed.addCommand(monaco.KeyCode.Escape, () => onCollapseRef.current());
+              const collapse = monacoKeybinding(bindingFor("collapseEditor"), monaco);
+              if (collapse !== undefined) ed.addCommand(collapse, () => onCollapseRef.current());
               ed.onDidChangeCursorPosition((e) => {
                 const m = ed.getModel();
                 onCursorChangeRef.current?.(m ? m.getOffsetAt(e.position) : 0);
