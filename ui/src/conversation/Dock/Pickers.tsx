@@ -237,7 +237,8 @@ export function TrustSegment({
         style={{ background: `var(--${trustTone(fallback ?? current)})` }}
         aria-hidden="true"
       />
-      <span className={cx(styles.text, styles.vFull)}>Trust: </span>
+      {/* No trailing space: the segment's flex gap is the one space. */}
+      <span className={cx(styles.text, styles.vFull)}>Trust:</span>
       <span className={styles.text}>{value}</span>
     </>
   );

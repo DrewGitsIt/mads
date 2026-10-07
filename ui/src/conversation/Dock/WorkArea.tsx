@@ -116,14 +116,15 @@ export function WorkArea({
           onClick={toggleFresh}
         >
           <span aria-hidden="true">⎇</span>
-          {where.name && <span className={cx(line.text, line.vFull, styles.where)}>{where.name} /&nbsp;</span>}
+          {/* No trailing space after "/" or before "→": the segment's flex gap is the one space. */}
+          {where.name && <span className={cx(line.text, line.vFull, styles.where)}>{where.name} /</span>}
           {branch && (
             <>
               <span className={cx(styles.branch, line.vFull)}>{branch}</span>
               <span className={cx(styles.branch, line.vMid)}>{shortBranch(branch)}</span>
             </>
           )}
-          {base && <span className={styles.base}>&nbsp;→ {base}</span>}
+          {base && <span className={styles.base}>→ {base}</span>}
         </button>
       )}
       {showControl && work && (
