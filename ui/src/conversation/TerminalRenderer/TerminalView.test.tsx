@@ -4,6 +4,7 @@ import { render, fireEvent, waitFor } from "@testing-library/react";
 import { Terminal } from "@xterm/xterm";
 import { TerminalView, type TerminalViewHandle } from "./TerminalView";
 import type { PtyBridge, TerminalMenuAction } from "./ptyBridge";
+import { setPlatform } from "../../platform/shortcut";
 
 /** In-memory PtyBridge stub — no Electron, no IPC, no node-pty. */
 function makeStubBridge() {
@@ -83,18 +84,85 @@ describe("TerminalView (renderer contract)", () => {
     expect(bridge.kill).toHaveBeenCalledWith("pty-1");
   });
 
-  it("captures ⌘E before xterm processes it — opens compose, writes nothing to the pty", async () => {
-    const { bridge } = makeStubBridge();
-    const onComposeOpen = vi.fn();
-    const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);
-    await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+  it("captures the compose chord (Cmd+E on mac) before xterm — opens compose, writes nothing to the pty", async () => {
+    setPlatform("darwin");
+    try {
+      const { bridge } = makeStubBridge();
+      const onComposeOpen = vi.fn();
+      const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);
+      await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
 
-    const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
-    textarea.focus();
-    fireEvent.keyDown(textarea, { key: "e", code: "KeyE", metaKey: true });
+      const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+      textarea.focus();
+      fireEvent.keyDown(textarea, { key: "e", code: "KeyE", metaKey: true });
 
-    expect(onComposeOpen).toHaveBeenCalledTimes(1);
-    expect(bridge.write).not.toHaveBeenCalled();
+      expect(onComposeOpen).toHaveBeenCalledTimes(1);
+      expect(bridge.write).not.toHaveBeenCalled();
+    } finally {
+      setPlatform(undefined);
+    }
+  });
+
+  it("on Linux, Ctrl+Shift+E opens compose and plain Ctrl+E is not intercepted", async () => {
+    setPlatform("linux");
+    try {
+      const { bridge } = makeStubBridge();
+      const onComposeOpen = vi.fn();
+      const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);
+      await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+      const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+      textarea.focus();
+      fireEvent.keyDown(textarea, { key: "E", code: "KeyE", keyCode: 69, ctrlKey: true, shiftKey: true });
+      expect(onComposeOpen).toHaveBeenCalledTimes(1);
+      expect(bridge.write).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(textarea, { key: "e", code: "KeyE", keyCode: 69, which: 69, ctrlKey: true });
+      expect(onComposeOpen).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(bridge.write).toHaveBeenCalledWith("pty-1", "\u0005"));
+    } finally {
+      setPlatform(undefined);
+    }
+  });
+
+  it("without onComposeOpen (docked Shell), plain Ctrl+E reaches the pty as readline end-of-line", async () => {
+    setPlatform("linux");
+    try {
+      const { bridge } = makeStubBridge();
+      const { container } = render(<TerminalView bridge={bridge} />);
+      await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+      const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+      textarea.focus();
+      fireEvent.keyDown(textarea, { key: "e", code: "KeyE", keyCode: 69, which: 69, ctrlKey: true });
+
+      await waitFor(() => expect(bridge.write).toHaveBeenCalledWith("pty-1", "\u0005"));
+    } finally {
+      setPlatform(undefined);
+    }
+  });
+
+  it("onToggleView is intercepted only when provided", async () => {
+    setPlatform("linux");
+    try {
+      const { bridge } = makeStubBridge();
+      const onToggleView = vi.fn();
+      const { container, rerender } = render(<TerminalView bridge={bridge} onToggleView={onToggleView} />);
+      await waitFor(() => expect(bridge.spawn).toHaveBeenCalledTimes(1));
+
+      const textarea = container.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+      textarea.focus();
+      const chord = { key: "T", code: "KeyT", keyCode: 84, which: 84, ctrlKey: true, shiftKey: true };
+      fireEvent.keyDown(textarea, chord);
+      expect(onToggleView).toHaveBeenCalledTimes(1);
+      expect(bridge.write).not.toHaveBeenCalled();
+
+      rerender(<TerminalView bridge={bridge} />);
+      fireEvent.keyDown(textarea, chord);
+      expect(onToggleView).toHaveBeenCalledTimes(1);
+    } finally {
+      setPlatform(undefined);
+    }
   });
 
   it("Ctrl+` writes nothing to the pty and bubbles to the document (so it can hide the shell dock)", async () => {
@@ -125,7 +193,7 @@ describe("TerminalView (renderer contract)", () => {
     expect(onExit).toHaveBeenCalledWith(3);
   });
 
-  it("lets other keys reach the pty as usual — only ⌘E/Ctrl+E is captured", async () => {
+  it("lets other keys reach the pty as usual — only the compose chord is captured", async () => {
     const { bridge } = makeStubBridge();
     const onComposeOpen = vi.fn();
     const { container } = render(<TerminalView bridge={bridge} onComposeOpen={onComposeOpen} />);

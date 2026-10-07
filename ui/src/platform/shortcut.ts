@@ -14,7 +14,8 @@ export function setPlatform(platform: string | undefined): void {
   routerPlatform = platform;
 }
 
-function isMac(platform: string | undefined): boolean {
+/** True on darwin. `platform` overrides the stored/navigator platform (tests). */
+export function isMac(platform: string | undefined = routerPlatform): boolean {
   if (platform !== undefined) return platform === "darwin";
   if (typeof navigator === "undefined") return false;
   return /^mac/i.test(navigator.platform ?? "");

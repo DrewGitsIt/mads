@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import type { PtyBridge, PtySpawnOptions } from "./ptyBridge";
 import { useElectronClipboardBridge, useElectronContextMenu } from "./ptyBridge";
+import { matches } from "../../platform/hotkeys";
 import "@xterm/xterm/css/xterm.css";
 import styles from "./TerminalView.module.css";
 
@@ -18,11 +19,18 @@ export interface TerminalViewProps {
    */
   convertEol?: boolean;
   /**
-   * Fires on ⌘E/Ctrl+E — captured via xterm's attachCustomKeyEventHandler
-   * before xterm processes the keystroke, so no stray bytes reach the pty
-   * when the compose overlay opens (ConversationTab renders TerminalComposer).
+   * Fires on the expand/compose chord (hotkeys.ts: ⌘E on mac, Ctrl+Shift+E
+   * elsewhere) — captured via xterm's attachCustomKeyEventHandler before xterm
+   * processes the keystroke, so no stray bytes reach the pty. The chord is
+   * only intercepted when this is provided; without it (the docked Shell) the
+   * keystroke passes through to the pty untouched.
    */
   onComposeOpen?: () => void;
+  /**
+   * Fires on the chat/terminal toggle chord (hotkeys.ts toggleView). Same
+   * rule: intercepted only when provided.
+   */
+  onToggleView?: () => void;
   /** The pty's process ended (after "[process exited]" is printed). Only a real exit — never an unmount. */
   onExit?: (exitCode: number) => void;
   /** Lines of history xterm keeps; omitted means xterm's default. The dock sets it to match the shell host's mirror. */
@@ -44,7 +52,7 @@ export interface TerminalViewHandle {
  */
 export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
   function TerminalView(
-    { bridge, spawnOptions, className, convertEol = false, onComposeOpen, onExit, scrollback },
+    { bridge, spawnOptions, className, convertEol = false, onComposeOpen, onToggleView, onExit, scrollback },
     ref,
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -54,6 +62,8 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     // ref lets the mount-only effect below always call the latest callback.
     const onComposeOpenRef = useRef(onComposeOpen);
     onComposeOpenRef.current = onComposeOpen;
+    const onToggleViewRef = useRef(onToggleView);
+    onToggleViewRef.current = onToggleView;
     const onExitRef = useRef(onExit);
     onExitRef.current = onExit;
 
@@ -120,7 +130,7 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
       // Must run before xterm's own key handling — returning false swallows
       // the keystroke so no "e" (or the overlay's later Escape) ever reaches
-      // the pty while toggling the compose overlay. Copy/paste piggybacks on
+      // the pty while toggling the compose overlay (see the chords below). Copy/paste piggybacks on
       // the same mechanism: xterm (rightly) treats a plain Ctrl+C as SIGINT
       // (sends ETX down the pty) and that must keep working unmodified, so
       // copy is bound to Ctrl+Shift+C instead — plus plain Cmd/Meta+C on
@@ -143,8 +153,18 @@ export const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         // and a stray NUL would be noise.
         if (e.ctrlKey && e.key === "`") return false;
 
-        if ((e.metaKey || e.ctrlKey) && key === "e") {
-          onComposeOpenRef.current?.();
+        // Compose / view-toggle chords: only swallowed when a handler is
+        // wired, so e.g. readline's Ctrl+E (end-of-line) still works in the
+        // docked Shell, which passes no callbacks.
+        if (onComposeOpenRef.current && matches("expandEditor", e)) {
+          e.preventDefault();
+          onComposeOpenRef.current();
+          return false;
+        }
+
+        if (onToggleViewRef.current && matches("toggleView", e)) {
+          e.preventDefault();
+          onToggleViewRef.current();
           return false;
         }
 
