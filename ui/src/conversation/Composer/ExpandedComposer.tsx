@@ -119,6 +119,10 @@ export function ExpandedComposer({
               minimap: { enabled: false },
               lineNumbers: "on",
               lineNumbersMinChars: 3,
+              // A gap between the numbers and the text (Monaco's default is
+              // tight once folding is off) and the mockup's 8px top inset.
+              lineDecorationsWidth: 14,
+              padding: { top: 8 },
               glyphMargin: false,
               folding: false,
               readOnly: disabled,

@@ -53,6 +53,13 @@
   font: var(--fs-chat)/1.5 var(--sans);
 }
 
+/* Borderless in the dock: the global textarea:focus-visible ring would draw
+   the box the design removed. The dock's own focus-within tint
+   (SessionDock.module.css) says where typing goes. */
+.textarea:focus-visible {
+  outline: none;
+}
+
 .textarea::placeholder {
   color: var(--text3);
 }

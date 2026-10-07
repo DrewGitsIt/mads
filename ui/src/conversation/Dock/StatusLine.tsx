@@ -109,7 +109,10 @@ export function StatusLine({
           title={`Compose a long prompt (${hotkeyLabel("expandEditor")})`}
           data-segment="compose"
         >
-          <kbd className={styles.kbd}>{hotkeyLabel("expandEditor")}</kbd>
+          <kbd className={cx(styles.kbd, styles.lblFull)}>{hotkeyLabel("expandEditor")}</kbd>
+          <span className={styles.vMin} aria-hidden="true">
+            ✎
+          </span>
           <span className={cx(styles.text, styles.vFull)}>&nbsp;compose</span>
         </button>
       )}

@@ -228,10 +228,12 @@
    vFull: full text, gone below 700.
    vMid: short text, 520–700 only (vMidKeep: below 520 too).
    vNotMin / lblFull: gone below 520.
+   vMin: only below 520 (a glyph standing in for a label).
    The trust value and the Commit/Land control carry none of these on their
    essential text, so they never collapse. */
 
-.vMid {
+.vMid,
+.vMin {
   display: none;
 }
 
@@ -250,7 +252,8 @@
   .lblFull {
     display: none;
   }
-  .vMid.vMidKeep {
+  .vMid.vMidKeep,
+  .vMin {
     display: inline;
   }
 }
