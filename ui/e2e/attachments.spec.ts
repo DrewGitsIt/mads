@@ -70,8 +70,11 @@ test("attachments journey: pasted and dropped files reach the agent as paths and
   // Live composer: drop a file, send it alone.
   await dropTextFile(page, composer, "trace.txt");
   await expect(page.getByLabel("Remove trace.txt")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
-  await page.getByRole("button", { name: "Send" }).click();
+  // Send while idle, Queue while a turn is still finishing (the button reads
+  // which) — either way the file goes out.
+  const send = page.getByRole("button", { name: /^(Send|Queue)$/ });
+  await expect(send).toBeEnabled();
+  await send.click();
   await expect(page.getByLabel("Remove trace.txt")).toHaveCount(0);
   await expect(panel.getByRole("link", { name: /trace\.txt/ })).toBeVisible();
 

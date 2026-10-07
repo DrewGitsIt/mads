@@ -161,7 +161,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     expect(git(primary, "branch", "--show-current")).toBe(base);
   });
 
-  test("b. Commit… lists the session's file and commits it; the header turns to Land", async ({
+  test("b. Commit… lists the session's file and commits it; the dock turns to Land", async ({
     page,
     routerURL,
   }) => {
@@ -263,7 +263,13 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     await expect(conflicted).toContainText(C);
     await shot(page, "06-conflict-card.png", conflicted);
 
-    await conflicted.getByRole("button", { name: "Ask the agent to resolve" }).click();
+    // The Land click opened the dock's ⎇ popover, which shows the same
+    // outcome at the button — and its own Ask the agent (it covers the
+    // card's corner while open, so that's the one to use).
+    const outcome = page.locator('[data-testid="work-popover"] [data-testid="land-outcome"]');
+    await expect(outcome).toHaveAttribute("data-kind", "conflicted");
+    await outcome.getByRole("button", { name: "Ask the agent to resolve" }).click();
+    await expect(page.locator('[data-testid="work-popover"]')).toHaveCount(0);
     const composer = page.getByPlaceholder(COMPOSER);
     await expect(composer).toHaveValue(
       `Merge ${base} into this branch and resolve the conflicts in ${C}, keeping both sides' changes. Then commit the merge.`,
@@ -387,8 +393,13 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       expect(git(folder, "log", "-1", "--format=%P").split(" ")).toContain(baseHead);
       expect(git(folder, "status", "--porcelain")).toBe("");
 
-      // Ask the agent drafts a message, and sends nothing.
-      await auto.getByRole("button", { name: "Ask the agent to check" }).click();
+      // Ask the agent drafts a message, and sends nothing. The Land click
+      // left the dock's ⎇ popover open on the same outcome; its button is
+      // the one in reach (and closes the popover).
+      const outcome = page.locator('[data-testid="work-popover"] [data-testid="land-outcome"]');
+      await expect(outcome).toHaveAttribute("data-kind", "autoResolved");
+      await outcome.getByRole("button", { name: "Ask the agent to check" }).click();
+      await expect(page.locator('[data-testid="work-popover"]')).toHaveCount(0);
       const composer = page.getByPlaceholder(COMPOSER);
       await expect(composer).toHaveValue(new RegExp(`resolved ${M.replace(/\./g, "\\.")} automatically`));
       await composer.fill("");

@@ -28,10 +28,16 @@ test("sessions journey: hero goal opens the conversation and gets a reply", asyn
   await expect(rail.getByText(goal, { exact: true })).toBeVisible();
 
   // Terminal round trip still works; history (the goal message) survives it.
-  await page.getByRole("button", { name: "Terminal" }).click();
+  // Into terminal from the composer's + menu (View), back through the dock's
+  // leading Chat segment.
+  await page.getByRole("button", { name: "Input options" }).click();
+  await page.getByRole("group", { name: "View" }).getByRole("button", { name: /Terminal/ }).click();
   await expect(page.locator('[data-testid="terminal-view"]')).toBeVisible();
-  await page.getByRole("button", { name: "Chat" }).click();
+  const dock = page.locator('[data-testid="session-dock"]');
+  await expect(dock).toHaveAttribute("data-mode", "terminal");
+  await dock.getByRole("button", { name: "Chat", exact: true }).click();
   await expect(transcript.filter({ hasText: goal })).toBeVisible();
+  await expect(dock).toHaveAttribute("data-mode", "chat");
 
   // "+ New session" clears the open workspace back to the Launchpad (the
   // dedicated "Back to Launchpad" button no longer exists).
@@ -61,7 +67,8 @@ test("sessions journey: agent replies to a composer message", async ({ page, rou
   // providers/fake/fake.go) so the working indicator has an observable
   // in-flight window — no second send anywhere in this arc.
   await composer.fill(`echo slowly ${token}`);
-  await page.getByRole("button", { name: "Send" }).click();
+  // Queue if the goal's own turn is still finishing — it goes out right after.
+  await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
 
   await expect(page.getByText(`echo slowly ${token}`)).toBeVisible();
   await expect(page.getByRole("status", { name: /Working…|Using / })).toBeVisible();
@@ -323,7 +330,7 @@ test("sessions journey: sending a message wakes a dormant session", async ({ pag
     page.waitForResponse(
       (res) => res.request().method() === "POST" && res.url().includes(`/sessions/${session.id}/messages`),
     ),
-    page.getByRole("button", { name: "Send" }).click(),
+    page.getByRole("button", { name: /^(Send|Queue)$/ }).click(),
   ]);
   expect(sendResponse.status()).toBe(202);
 

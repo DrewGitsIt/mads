@@ -22,7 +22,7 @@ test.describe("synthesis proposals: agent turn -> proposal card -> approve -> ta
     // (services/router/internal/synthwatch/watcher.go) — a high-value trigger
     // that fires the synthesizer regardless of debounce tier, once the turn ends.
     await composer.fill("echo sounds good, let's go with that plan");
-    await page.getByRole("button", { name: "Send" }).click();
+    await page.getByRole("button", { name: /^(Send|Queue)$/ }).click();
     await expect(page.getByText("you said sounds good, let's go with that plan")).toBeVisible();
 
     // synthesis_debounce_ms defaults to 2000ms (pkg/contracts/config.go): the
