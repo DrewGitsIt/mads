@@ -315,6 +315,18 @@ describe("SessionDock", () => {
       renderDock({ mode: "terminal" });
       expect(document.querySelector('[data-segment="compose"]')).toBeNull();
     });
+
+    // Ported from the retired ConversationHeader: those live in the
+    // workspace kebab, and the dock must not grow them back.
+    it("carries no Shell / Restart Agent controls in either view", () => {
+      for (const mode of ["chat", "terminal"] as const) {
+        const { unmount } = renderDock({ mode });
+        expect(screen.queryByLabelText("More actions")).toBeNull();
+        expect(screen.queryByText("Shell")).toBeNull();
+        expect(screen.queryByText("Restart Agent")).toBeNull();
+        unmount();
+      }
+    });
   });
 
   describe("slots", () => {
