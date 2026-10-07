@@ -3,7 +3,7 @@ import type { Session } from "../../router/types";
 /**
  * The session's next step with its work (docs/SESSION-WORKTREES-DESIGN.md
  * D4), read straight off the record's counts — never computed here, never
- * per render. Shared by the header control and the rail marker so the two
+ * per render. Shared by the dock's Commit/Land control and the rail marker so the two
  * can't disagree.
  */
 export type WorkState =

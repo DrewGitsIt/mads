@@ -6,7 +6,7 @@ import { ContextRim } from "./ContextRim";
 import { StatusLine } from "./StatusLine";
 import styles from "./SessionDock.module.css";
 
-/** Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4) — same shape ConversationHeader's `work` had. */
+/** Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4) — the same shape the retired ConversationHeader's `work` had. */
 export interface DockWork {
   /** Opens the commit flow (one-click Commit or the Commit dialog — the caller decides). */
   onCommit: () => void;

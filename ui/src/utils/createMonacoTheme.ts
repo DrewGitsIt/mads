@@ -13,7 +13,7 @@ function cssVar(name: string): string {
  * reading getComputedStyle here tracks whichever of the 6 combinations is
  * currently active with no per-palette enumeration on this side. Call from
  * `beforeMount` so the theme exists before the Editor's `theme` prop applies
- * it (see ExpandedComposer/TerminalComposer).
+ * it (see ExpandedComposer, which also backs the terminal compose sheet).
  */
 export function defineMadsMonacoTheme(monaco: Monaco): void {
   const base = document.documentElement.dataset.theme === "light" ? "vs" : "vs-dark";

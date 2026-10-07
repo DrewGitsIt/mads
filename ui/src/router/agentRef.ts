@@ -63,7 +63,7 @@ export const UNKNOWN_AGENT = "Unknown agent";
 
 /**
  * The label for a persona reference wherever one must be shown even when it
- * doesn't resolve — the conversation header's persona pill, the rail
+ * doesn't resolve — the session dock's persona segment, the rail
  * tooltip. Same rule as agentNameForRef, except an unresolvable `agt_…` reads
  * "Unknown agent" instead of disappearing: the slot is there either way, and
  * a hash in it answers nothing. Undefined only when there is no reference.

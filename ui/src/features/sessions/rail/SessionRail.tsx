@@ -800,7 +800,7 @@ function SessionRow({
   const name = session.name || "Untitled session";
   // The work marker (mockup docs/mockups/session-worktrees.html §1): hollow
   // for uncommitted files, filled for commits waiting to land. Quiet — read
-  // off the record's counts, the same ones the header control uses.
+  // off the record's counts, the same ones the dock's Commit/Land control uses.
   const work = workState(session);
   // last_turn_at, not updated_at: the stamp says "last reply", and only a turn
   // end writes this field (store.Sessions.RecordTurnEnd), so it cannot be a
@@ -1211,7 +1211,7 @@ function SessionRow({
 /** Status kinds with nothing live to say — the work note may share the line. */
 const RESTING = new Set(["done", "ready", "sleeping"]);
 
-/** The work marker's words: what the header control would offer next. */
+/** The work marker's words: what the dock's Commit/Land control would offer next. */
 function workNote(work: NonNullable<WorkState>): string {
   if (work.kind === "commit") return "uncommitted changes";
   if (work.kind === "outside") return "changes outside this session";

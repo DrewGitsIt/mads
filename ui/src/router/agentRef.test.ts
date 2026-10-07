@@ -69,7 +69,7 @@ describe("agentLabel", () => {
     expect(agentLabel("reviewer", agentIndex([]))).toBe("reviewer");
   });
 
-  // The header pill printed "AGT_3212544BB2E37C92" for exactly this case.
+  // The old header pill printed "AGT_3212544BB2E37C92" for exactly this case.
   it("reads an unresolvable id as Unknown agent, never the id", () => {
     expect(agentLabel("agt_deleted", agentIndex([PARTNER]))).toBe(UNKNOWN_AGENT);
   });

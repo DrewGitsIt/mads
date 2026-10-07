@@ -26,7 +26,7 @@ export interface SessionActionsMenuProps {
   onUnlinkRequest?: () => void;
   /**
    * Conversation-tab tools folded into this one menu so the workspace has a
-   * single kebab (not one here + one in the ConversationHeader). Passed only
+   * single kebab (not one here + one in the conversation itself). Passed only
    * by SessionWorkspace; the rail never sends them, so its cards stay
    * lifecycle-only.
    */

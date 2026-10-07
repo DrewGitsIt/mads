@@ -23,8 +23,8 @@ const TRUST_LABELS: Record<SessionTrust, string> = {
 
 /**
  * The plain display name of a trust level — no provider annotation. An
- * unset value is the backend's builtin default, "limited" (see
- * ConversationHeader's TrustPickerPill); a value this build doesn't know —
+ * unset value is the backend's builtin default, "limited" (see the session
+ * dock's TrustSegment); a value this build doesn't know —
  * e.g. one an older or newer mads logged — falls back to the raw string
  * rather than vanishing.
  */

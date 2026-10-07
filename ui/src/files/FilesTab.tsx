@@ -27,7 +27,7 @@ type Selection = { source: "working"; path: string } | { source: "commit"; hash:
 /**
  * Files tab (MADS-UX §3.3/§5/§17, W6.5). Composes the change/commit lists
  * and the diff viewer. Committing and landing the work are the conversation
- * header's (docs/SESSION-WORKTREES-DESIGN.md D4), not this tab's. `taskId` is optional so this
+ * dock's (docs/SESSION-WORKTREES-DESIGN.md D4), not this tab's. `taskId` is optional so this
  * also works from a session-only caller; the session/task scope switch is
  * only interactive once a `taskId` is actually available (HANDOFF §2/§8).
  */

@@ -32,7 +32,7 @@ export interface Session {
   /** The branch the checkout had open when this session's worktree was made — the Land target. Absent for a session working in place. */
   worktree_base?: string;
   /**
-   * The header state (docs/SESSION-WORKTREES-DESIGN.md D4): this session's
+   * The Commit/Land state (docs/SESSION-WORKTREES-DESIGN.md D4): this session's
    * files git still reports changed, and its branch's commits the base
    * lacks (always 0 in place). Recomputed server-side after file changes,
    * Commit, Land and pipeline merges — read, never derived, here.
@@ -1260,7 +1260,7 @@ export interface Config {
   allow_sleep_during_pipelines: boolean;
   // auto_commit_messages mirrors pkg/contracts/config.go's
   // AutoCommitMessages — Settings' "Write commit messages for me": the
-  // header's Commit skips the dialog and the Fast Model drafts the message.
+  // dock's Commit skips the dialog and the Fast Model drafts the message.
   // Optional: configs saved before it read as off.
   auto_commit_messages?: boolean;
 

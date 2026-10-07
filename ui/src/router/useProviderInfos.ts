@@ -5,7 +5,7 @@ import type { ProviderInfo } from "./types";
 /**
  * Every registered provider's capability declaration (GET /providers), for
  * callers that need to know what a session's provider can do — the
- * conversation header's trust picker marks Auto-review "(runs as Limited on
+ * session dock's trust picker marks Auto-review "(runs as Limited on
  * …)" from it. Like useProviderModels, simultaneous mounts share one request
  * and nothing is cached past it: the declarations are static per Router
  * process, and a refetch on mount is one cheap read. A failed fetch yields

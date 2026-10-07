@@ -13,7 +13,7 @@ import {
 
 export interface WorktreeCards {
   cards: WorktreeCardModel[];
-  /** A Land is in flight — the header shows "Landing…" and won't start another. */
+  /** A Land is in flight — the dock shows "Landing…" and won't start another. */
   landing: boolean;
   /** A one-click Commit is in flight. */
   committing: boolean;

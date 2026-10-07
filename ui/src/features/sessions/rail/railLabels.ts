@@ -37,8 +37,8 @@ export const EMPTY_LABEL_CONTEXT: RailLabelContext = {
 export interface RailLabels {
   /**
    * Which project this is: the workspace name, else the chosen folder's
-   * basename (router/sessionLocation.ts — the same rule the conversation
-   * header's subline uses).
+   * basename (router/sessionLocation.ts — the same rule the session dock's
+   * ⎇ segment uses).
    */
   location?: string;
   /** Isolation's branch, in mono — also the existing "has unmerged work" flag. */
@@ -59,7 +59,7 @@ export interface RailLabels {
  * isolated session's worktree) is in the tooltip.
  *
  * The branch follows whenever the session is isolated — the signal that work
- * is sitting unmerged. Its "→ base" target is left to the header: a 280px
+ * is sitting unmerged. Its "→ base" target is left to the dock: a 280px
  * card has room for one branch name, not two.
  *
  * The persona used to take a slot here and no longer does: the harness mark

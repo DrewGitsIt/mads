@@ -180,7 +180,7 @@ describe("railTooltip", () => {
   });
 
   // A session whose persona record is gone still has a persona line — but
-  // a hash in it answers nothing, so it reads the way the header pill does.
+  // a hash in it answers nothing, so it reads the way the dock's persona segment does.
   it("reads an unresolvable persona id as Unknown agent", () => {
     expect(railTooltip(makeSession({ agent: "agt_deleted" }), context())).toBe("Agent: Unknown agent");
   });
