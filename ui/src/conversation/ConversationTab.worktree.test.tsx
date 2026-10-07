@@ -15,7 +15,9 @@ import type { Envelope, LandResult, TranscriptMessage } from "../router/types";
 import { tidyOutsidePrompt } from "./Worktree/worktreeCopy";
 
 vi.mock("@monaco-editor/react", () => ({
-  Editor: () => <textarea data-testid="fake-monaco-editor" />,
+  Editor: ({ value }: { value?: string }) => (
+    <textarea data-testid="fake-monaco-editor" value={value ?? ""} readOnly />
+  ),
 }));
 
 if (!window.matchMedia) {
@@ -251,6 +253,37 @@ describe("ConversationTab — Commit and Land", () => {
 
     await waitFor(() => expect(composer.value).toBe(tidyOutsidePrompt()));
     expect(screen.queryByTestId("work-popover")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("in terminal view, Ask the agent opens the compose sheet on the prompt and pastes only when asked", async () => {
+    const client = makeClient({
+      ...fixtureIsolatedSession,
+      uncommitted_count: 0,
+      unlanded_count: 1,
+      outside_count: 2,
+    });
+    const send = vi.spyOn(client, "sendMessage");
+    const terminalWrite = vi.spyOn(client, "terminalWrite");
+    await client.switchTransport(SID, "terminal");
+    render(<ConversationTab sessionId={SID} routerClient={client} />);
+    await waitFor(() => expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy());
+    expect(screen.queryByTestId("dock-sheet")).toBeNull();
+
+    fireEvent.click(workControl("outside")!);
+    const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
+    fireEvent.click(within(explainer).getByRole("button", { name: "Ask the agent" }));
+
+    // No composer in this view: the draft opens the dock's compose sheet.
+    const sheet = await screen.findByTestId("dock-sheet");
+    expect(within(sheet).getByTestId("fake-monaco-editor")).toHaveProperty("value", tidyOutsidePrompt());
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+    expect(screen.queryByPlaceholderText(/message the agent/i)).toBeNull();
+    expect(terminalWrite).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Paste into terminal" }));
+    expect(terminalWrite).toHaveBeenCalledWith(SID, `\x1b[200~${tidyOutsidePrompt()}\x1b[201~`);
     expect(send).not.toHaveBeenCalled();
   });
 

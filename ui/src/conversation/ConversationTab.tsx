@@ -1312,6 +1312,12 @@ export function ConversationTab({
     occupancyTokens > 0 &&
     occupancyPct >= 60;
 
+  // Terminal-view "Ask the agent…": the prompt replaces the compose draft (as
+  // a chat prefill replaces the composer's text) and the sheet opens on it.
+  const askInCompose = (text: string) => {
+    setComposeText(text);
+    setComposeOpen(true);
+  };
   // The session dock's props, shared by both views (chat mounts the composer
   // inside it; terminal adds the compose segment and sheet).
   const dockProps = {
@@ -1329,7 +1335,10 @@ export function ConversationTab({
     work: {
       onCommit: handleCommit,
       onLand: handleLand,
-      onAskAgent: worktreeActions.onAskAgent,
+      // Chat drafts into the composer. Terminal has no composer mounted, so
+      // the draft opens the compose sheet instead: the user reviews it there
+      // and pastes it into the TUI themselves (never sent on its own).
+      onAskAgent: !showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent,
       landing: worktree.landing,
       committing: worktree.committing,
     },
