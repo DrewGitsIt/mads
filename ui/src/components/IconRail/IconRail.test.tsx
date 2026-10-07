@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { IconRail } from "./IconRail";
 
@@ -8,8 +8,6 @@ const items = [
 ];
 
 describe("IconRail", () => {
-  beforeEach(() => localStorage.clear());
-
   it("renders every item's label", () => {
     render(<IconRail items={items} />);
     expect(screen.getByLabelText("Runs")).toBeTruthy();
@@ -33,82 +31,37 @@ describe("IconRail", () => {
     expect(onSelect).toHaveBeenCalledWith("runs");
   });
 
-  it("toggles collapsed state via the toggle button", () => {
-    render(<IconRail items={items} defaultCollapsed />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-
-    fireEvent.click(screen.getByLabelText("Pin rail open"));
-    expect(nav.getAttribute("data-collapsed")).toBe("false");
+  it("has no pin/collapse toggle", () => {
+    render(<IconRail items={items} />);
+    expect(screen.queryByLabelText("Pin rail open")).toBeNull();
+    expect(screen.queryByLabelText("Collapse rail")).toBeNull();
   });
 
-  it("caret click while hovered visibly collapses (suppresses the hover-peek)", () => {
-    render(<IconRail items={items} defaultCollapsed={false} />);
-    const nav = screen.getByLabelText("Collapse rail").closest("nav")!;
+  it("item click suppresses the hover-peek until the pointer leaves", () => {
+    render(<IconRail items={items} />);
+    const nav = screen.getByRole("navigation", { name: "Main navigation" });
 
     fireEvent.mouseOver(nav);
-    fireEvent.click(screen.getByLabelText("Collapse rail"));
-
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-    expect(nav.getAttribute("data-peek-suppressed")).toBe("true");
-  });
-
-  it("background click pins the rail open", () => {
-    render(<IconRail items={items} defaultCollapsed />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-
-    fireEvent.click(nav);
-    expect(nav.getAttribute("data-collapsed")).toBe("false");
-  });
-
-  it("nav-item click never toggles collapsed state", () => {
-    render(<IconRail items={items} defaultCollapsed />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-
     fireEvent.click(screen.getByLabelText("Runs"));
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-  });
-
-  it("persists the collapsed/pinned choice across mounts via localStorage", () => {
-    const { unmount } = render(<IconRail items={items} defaultCollapsed={false} />);
-    fireEvent.click(screen.getByLabelText("Collapse rail"));
-    unmount();
-
-    render(<IconRail items={items} defaultCollapsed={false} />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-  });
-
-  it("restores hover-peek after a full expand/collapse cycle", () => {
-    render(<IconRail items={items} defaultCollapsed={false} />);
-    const nav = screen.getByLabelText("Collapse rail").closest("nav")!;
-
-    fireEvent.mouseOver(nav);
-    fireEvent.click(screen.getByLabelText("Collapse rail"));
     expect(nav.getAttribute("data-peek-suppressed")).toBe("true");
 
     fireEvent.mouseLeave(nav);
     expect(nav.getAttribute("data-peek-suppressed")).toBe("false");
   });
 
-  it("collapsed rail's layout slot is not marked expanded (peek must not reserve layout width)", () => {
-    render(<IconRail items={items} defaultCollapsed />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    const slot = nav.parentElement!;
+  it("item click's suppression clears once focus leaves the nav", () => {
+    render(
+      <>
+        <IconRail items={items} />
+        <button type="button">elsewhere</button>
+      </>,
+    );
+    const nav = screen.getByRole("navigation", { name: "Main navigation" });
 
-    expect(nav.getAttribute("data-collapsed")).toBe("true");
-    expect(slot.className).not.toMatch(/expanded/);
-  });
-
-  it("pinning open marks the layout slot expanded (deliberate, click-initiated layout change)", () => {
-    render(<IconRail items={items} defaultCollapsed />);
-    const nav = screen.getByLabelText("Pin rail open").closest("nav")!;
-    const slot = nav.parentElement!;
-
-    fireEvent.click(screen.getByLabelText("Pin rail open"));
-    expect(nav.getAttribute("data-collapsed")).toBe("false");
-    expect(slot.className).toMatch(/expanded/);
+    fireEvent.click(screen.getByLabelText("Runs"));
+    fireEvent.blur(screen.getByLabelText("Runs"), {
+      relatedTarget: screen.getByText("elsewhere"),
+    });
+    expect(nav.getAttribute("data-peek-suppressed")).toBe("false");
   });
 });

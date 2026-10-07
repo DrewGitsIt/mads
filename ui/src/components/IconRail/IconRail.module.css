@@ -1,38 +1,30 @@
-/* the layout slot is what participates in the surrounding flex row — its
-   width only ever changes on the deliberate, click-initiated pin/unpin
-   (.expanded), never on hover/focus. This is what keeps the peek from
-   shoving adjacent content around. */
+/* the layout slot is what participates in the surrounding flex row — a
+   fixed 44px, so the hover/focus peek never shoves adjacent content around. */
 .slot {
   position: relative;
   display: flex;
   flex: none;
   width: 44px;
 }
-.slot.expanded {
-  width: 176px;
-}
 
+/* icons-only at rest, positioned over the slot so its peek overlays adjacent
+   content instead of resizing the in-flow slot. The 6px side padding leaves
+   each item 32px wide, centred on the 44px rail. */
 .rail {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  width: 176px;
-  background: var(--bg1);
-  border-right: 1px solid var(--line-soft);
-  padding: var(--space-2);
-  gap: 2px;
-  overflow: hidden;
-}
-
-/* collapsed rail: icons-only, positioned over the slot so its hover/focus
-   peek overlays adjacent content instead of resizing the in-flow slot. */
-.rail.collapsed {
   position: absolute;
   top: 0;
   left: 0;
   bottom: 0;
-  width: 44px;
   z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 44px;
+  background: var(--bg1);
+  border-right: 1px solid var(--line-soft);
+  padding: var(--space-2) 6px;
+  gap: 2px;
+  overflow: hidden;
   transition:
     width 0.15s ease,
     box-shadow 0.15s ease;
@@ -41,26 +33,28 @@
    leaves its button focused, and :focus-within would then reopen the rail
    the moment the collapse slid its edge out from under the pointer (that
    mouseleave clears the suppression below while focus is still inside). */
-.rail.collapsed:hover,
-.rail.collapsed:has(:focus-visible) {
+.rail:hover,
+.rail:has(:focus-visible) {
   width: 176px;
   box-shadow: var(--shadow);
 }
 
-/* a collapse just happened while the pointer/focus was still on the rail —
+/* an item was just clicked while the pointer/focus was still on the rail —
    hold the narrow width until the pointer actually leaves once. Higher
-   specificity (4 selectors vs. 3) wins regardless of source order. */
-.rail.collapsed[data-peek-suppressed="true"]:hover,
-.rail.collapsed[data-peek-suppressed="true"]:has(:focus-visible) {
+   specificity (3 selectors vs. 2) wins regardless of source order. */
+.rail[data-peek-suppressed="true"]:hover,
+.rail[data-peek-suppressed="true"]:has(:focus-visible) {
   width: 44px;
   box-shadow: none;
 }
 
+/* 2px bar + 4px padding = the 6px left over on the icon's right, so the
+   icon sits centred in its highlight at rest and stays put when peeked. */
 .item {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2);
+  padding: var(--space-2) var(--space-1);
   border-radius: var(--r-sm);
   border-left: 2px solid transparent;
   color: var(--text2);
@@ -100,18 +94,4 @@
 
 .label {
   font: 600 var(--fs-sm) var(--sans);
-}
-
-.spacer {
-  flex: 1;
-}
-
-.toggle {
-  flex: none;
-  align-self: flex-end;
-  padding: var(--space-1) var(--space-2);
-  color: var(--text3);
-}
-.toggle:hover {
-  color: var(--text2);
 }

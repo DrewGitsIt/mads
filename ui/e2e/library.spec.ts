@@ -22,7 +22,7 @@ test("library journey: agents, capabilities, workspaces, templates", async ({
   // shelf chips, so every click aimed there would land on the rail instead.
   await page.getByRole("button", { name: "Library" }).blur();
   await page.locator("main").hover();
-  await expect(page.locator("nav[data-collapsed]")).toHaveCSS("width", "44px");
+  await expect(page.getByRole("navigation", { name: "Main navigation" })).toHaveCSS("width", "44px");
 
   // Agents shelf is the default — seeded by services/data at migration time
   // (0005_registries.up.sql), assert real names render, not a count. Each

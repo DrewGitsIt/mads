@@ -173,7 +173,7 @@ function ComboSection({
 
       <ComponentGroup name="IconRail">
         <div className={styles.railDemo}>
-          <IconRail items={RAIL_ITEMS} activeId="sessions" defaultCollapsed />
+          <IconRail items={RAIL_ITEMS} activeId="sessions" />
         </div>
       </ComponentGroup>
 

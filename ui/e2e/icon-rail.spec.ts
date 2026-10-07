@@ -6,8 +6,7 @@ test("icon rail: hover peek overlays content instead of shifting it", async ({
 }) => {
   await page.goto(routerURL);
 
-  const rail = page.locator("nav[data-collapsed]");
-  await expect(rail).toHaveAttribute("data-collapsed", "true");
+  const rail = page.getByRole("navigation", { name: "Main navigation" });
 
   // main-surface element outside the rail entirely — its position must be
   // unaffected by the rail's hover peek.
@@ -38,7 +37,7 @@ test("icon rail: clicking an item's label collapses the peek and it stays collap
 }) => {
   await page.goto(routerURL);
 
-  const rail = page.locator("nav[data-collapsed]");
+  const rail = page.getByRole("navigation", { name: "Main navigation" });
   await rail.hover();
   await expect(rail).toHaveCSS("width", "176px");
 
@@ -59,8 +58,31 @@ test("icon rail: keyboard focus still peeks the collapsed rail open", async ({
 }) => {
   await page.goto(routerURL);
 
-  const rail = page.locator("nav[data-collapsed]");
+  const rail = page.getByRole("navigation", { name: "Main navigation" });
   await rail.getByRole("button", { name: "Sessions" }).focus();
   await page.keyboard.press("Tab");
   await expect(rail).toHaveCSS("width", "176px");
+});
+
+test("icon rail: at rest, each icon is centred in its highlight and the highlight on the rail", async ({
+  page,
+  routerURL,
+}) => {
+  await page.goto(routerURL);
+
+  const rail = page.getByRole("navigation", { name: "Main navigation" });
+  await expect(rail).toHaveCSS("width", "44px");
+  await expect(rail.getByRole("button", { name: /rail/i })).toHaveCount(0);
+
+  const railBox = (await rail.boundingBox())!;
+  const item = rail.getByRole("button", { name: "Sessions" });
+  const itemBox = (await item.boundingBox())!;
+  const iconBox = (await item.locator("span").first().boundingBox())!;
+
+  const mid = (b: { x: number; width: number }) => b.x + b.width / 2;
+  // the rail's 1px right border isn't part of the column the eye centres on.
+  expect(Math.abs(mid(itemBox) - (railBox.x + (railBox.width - 1) / 2))).toBeLessThanOrEqual(1);
+  expect(Math.abs(mid(iconBox) - mid(itemBox))).toBeLessThanOrEqual(1);
+
+  await rail.screenshot({ path: test.info().outputPath("rail.png") });
 });

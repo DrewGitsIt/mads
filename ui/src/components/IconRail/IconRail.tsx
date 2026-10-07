@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import styles from "./IconRail.module.css";
 
 export interface IconRailItem {
@@ -11,60 +11,23 @@ export interface IconRailProps {
   items: IconRailItem[];
   activeId?: string;
   onSelect?: (id: string) => void;
-  defaultCollapsed?: boolean;
   className?: string;
 }
 
-const RAIL_COLLAPSED_KEY = "mads.iconRail.collapsed";
-
-function readStoredCollapsed(fallback: boolean): boolean {
-  const stored = localStorage.getItem(RAIL_COLLAPSED_KEY);
-  if (stored === "true") return true;
-  if (stored === "false") return false;
-  return fallback;
-}
-
-export function IconRail({
-  items,
-  activeId,
-  onSelect,
-  defaultCollapsed = true,
-  className,
-}: IconRailProps) {
-  const [collapsed, setCollapsed] = useState(() =>
-    readStoredCollapsed(defaultCollapsed),
-  );
+export function IconRail({ items, activeId, onSelect, className }: IconRailProps) {
   const [peekSuppressed, setPeekSuppressed] = useState(false);
 
-  useEffect(() => {
-    localStorage.setItem(RAIL_COLLAPSED_KEY, String(collapsed));
-  }, [collapsed]);
-
   function handleItemClick(id: string) {
-    return (e: React.MouseEvent) => {
-      e.stopPropagation();
-      // Suppress the peek the same way handleToggle does: the pointer is
-      // still on the rail, so :hover would hold it open at 176px — and since
-      // it is absolute and z-index 20, it would cover the left edge of the
-      // very panel this click just navigated to. The clicked button keeps
-      // focus too, which is why the CSS peeks on :focus-visible rather than
-      // :focus-within. mouseleave/handleNavBlur clear this again.
+    return () => {
+      // The pointer is still on the rail after a click, so :hover would hold
+      // the peek open at 176px — and since it is absolute and z-index 20, it
+      // would cover the left edge of the very panel this click just
+      // navigated to. The clicked button keeps focus too, which is why the
+      // CSS peeks on :focus-visible rather than :focus-within.
+      // mouseleave/handleNavBlur clear this again.
       setPeekSuppressed(true);
       onSelect?.(id);
     };
-  }
-
-  function handleToggle(e: React.MouseEvent) {
-    e.stopPropagation();
-    setCollapsed((prev) => {
-      const next = !prev;
-      if (next) setPeekSuppressed(true);
-      return next;
-    });
-  }
-
-  function handleBackgroundClick() {
-    setCollapsed(false);
   }
 
   function handleNavBlur(e: React.FocusEvent<HTMLElement>) {
@@ -74,20 +37,13 @@ export function IconRail({
   }
 
   return (
-    <div
-      className={[styles.slot, collapsed ? "" : styles.expanded, className]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <div className={[styles.slot, className].filter(Boolean).join(" ")}>
       <nav
-        data-collapsed={collapsed}
+        aria-label="Main navigation"
         data-peek-suppressed={peekSuppressed}
-        onClick={handleBackgroundClick}
         onMouseLeave={() => setPeekSuppressed(false)}
         onBlur={handleNavBlur}
-        className={[styles.rail, collapsed ? styles.collapsed : ""]
-          .filter(Boolean)
-          .join(" ")}
+        className={styles.rail}
       >
         {items.map((item) => (
           <button
@@ -102,15 +58,6 @@ export function IconRail({
             <span className={styles.label}>{item.label}</span>
           </button>
         ))}
-        <div className={styles.spacer} />
-        <button
-          type="button"
-          className={styles.toggle}
-          aria-label={collapsed ? "Pin rail open" : "Collapse rail"}
-          onClick={handleToggle}
-        >
-          {collapsed ? "»" : "«"}
-        </button>
       </nav>
     </div>
   );
