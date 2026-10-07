@@ -357,6 +357,20 @@ export function Composer({
   }
 
   const expandTitle = `${expanded ? "Collapse" : "Expand"} editor (${formatShortcut("Mod+E")})`;
+  // Both layouts offer it; the hidden file input it clicks sits outside them.
+  const attachButton = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      title="Attach files — or paste or drop them here"
+      aria-label="Attach files…"
+      onClick={() => fileInputRef.current?.click()}
+      disabled={disabled}
+    >
+      📎
+    </Button>
+  );
 
   return (
     <div
@@ -420,6 +434,7 @@ export function Composer({
           />
           <div className={styles.actions}>
             <ContextMeter usage={usage} contextWindow={contextWindow} />
+            {attachButton}
             <Button
               type="button"
               variant="ghost"
@@ -487,17 +502,7 @@ export function Composer({
             onKeyDown={handleKeyDown}
           />
           <ContextMeter usage={usage} contextWindow={contextWindow} />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            title="Attach files — or paste or drop them here"
-            aria-label="Attach files…"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={disabled}
-          >
-            📎
-          </Button>
+          {attachButton}
           <Button
             type="button"
             variant="ghost"

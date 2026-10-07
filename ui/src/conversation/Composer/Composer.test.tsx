@@ -151,6 +151,18 @@ describe("Composer", () => {
     expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
   });
 
+  it("offers the attach button in the expanded editor too, opening the same file picker", async () => {
+    const client = new FakeRouterClient();
+    const { container } = render(<Composer routerClient={client} sessionId="session-active" />);
+    fireEvent.click(screen.getByRole("button", { name: "Expand editor" }));
+    await screen.findByTestId("fake-monaco-editor");
+
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    const picked = vi.spyOn(input, "click");
+    fireEvent.click(screen.getByRole("button", { name: "Attach files…" }));
+    expect(picked).toHaveBeenCalledTimes(1);
+  });
+
   it("round-trips typed text losslessly between collapsed and expanded", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
