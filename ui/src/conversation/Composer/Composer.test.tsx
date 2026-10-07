@@ -1,17 +1,19 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { Composer } from "./Composer";
 import { clearAllDrafts } from "./composerDrafts";
 import { FakeRouterClient } from "../../router/fixtures";
+import { setPlatform } from "../../platform/shortcut";
 import type { Agent, Model } from "../../router/types";
 
 // Fake Monaco that also drives the real onMount/onChange callbacks
-// ExpandedComposer wires up (addCommand for ⌘Enter send / Escape collapse,
-// onDidChangeCursorPosition for the round-trip cursor), so those keybindings
-// are exercised the same way the real editor's keybinding service would —
-// happy-dom can't mount real Monaco (no Worker/canvas), same precedent as
-// YamlSourceView.test.tsx/DiffViewer.test.tsx.
+// ExpandedComposer wires up (addCommand for the sendFromEditor binding and
+// Escape collapse, onDidChangeCursorPosition for the round-trip cursor), so
+// those keybindings are exercised the same way the real editor's keybinding
+// service would — happy-dom can't mount real Monaco (no Worker/canvas), same
+// precedent as YamlSourceView.test.tsx/DiffViewer.test.tsx.
 const CTRL_CMD = 1 << 11;
+const SHIFT = 1 << 10;
 const KEY_ENTER = 3;
 const KEY_ESCAPE = 9;
 
@@ -19,6 +21,7 @@ vi.mock("@monaco-editor/react", () => ({
   Editor: (props: {
     value: string;
     language?: string;
+    options?: { lineNumbers?: string };
     onChange?: (value: string) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
   }) => {
@@ -37,12 +40,16 @@ vi.mock("@monaco-editor/react", () => ({
       }),
       onDidChangeCursorPosition: () => ({ dispose: () => {} }),
     };
-    const monaco = { KeyMod: { CtrlCmd: CTRL_CMD }, KeyCode: { Enter: KEY_ENTER, Escape: KEY_ESCAPE } };
+    const monaco = {
+      KeyMod: { CtrlCmd: CTRL_CMD, Shift: SHIFT },
+      KeyCode: { Enter: KEY_ENTER, Escape: KEY_ESCAPE },
+    };
     props.onMount?.(fakeEditor, monaco);
     return (
       <textarea
         data-testid="fake-monaco-editor"
         data-language={props.language}
+        data-line-numbers={props.options?.lineNumbers}
         value={props.value}
         onChange={(e) => props.onChange?.(e.target.value)}
         onKeyDown={(e) => {
@@ -58,6 +65,13 @@ vi.mock("@monaco-editor/react", () => ({
   },
 }));
 
+const PLACEHOLDER = "Message the agent — @ to mention, / for commands";
+
+// Linux/Windows defaults (hotkeys.ts): never a plain Ctrl+letter.
+const EXPAND_LINUX = { key: "E", ctrlKey: true, shiftKey: true };
+const ATTACH_LINUX = { key: "A", ctrlKey: true, shiftKey: true };
+const TOGGLE_VIEW_LINUX = { key: "T", ctrlKey: true, shiftKey: true };
+
 // React mirrors a controlled textarea's value into a text-node child (an SSR
 // carryover), so plain screen.getByText("/agent") can false-positive-match
 // the textarea itself when the typed command equals the label under test.
@@ -66,12 +80,26 @@ function menu() {
   return within(screen.getByRole("listbox"));
 }
 
+function openPlusMenu() {
+  fireEvent.click(screen.getByRole("button", { name: "Input options" }));
+  return within(screen.getByRole("menu", { name: "Input options" }));
+}
+
 function fixtureAgent(id: string): Agent {
   return { id, name: id, prompt: "", created_at: "", updated_at: "" };
 }
 
 describe("Composer", () => {
-  beforeEach(clearAllDrafts);
+  beforeEach(() => {
+    clearAllDrafts();
+    setPlatform("linux");
+  });
+  afterEach(() => setPlatform(undefined));
+
+  it("keeps the placeholder text exactly (e2e specs select on it)", () => {
+    render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+    expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeTruthy();
+  });
 
   it("resolves @ mentionables against the faked Router response set and shows a menu", async () => {
     const client = new FakeRouterClient();
@@ -116,51 +144,255 @@ describe("Composer", () => {
     expect(screen.getByText("unhealthy")).toBeTruthy();
   });
 
-  it("⌘E toggles between the textarea and the Monaco editor", async () => {
-    const client = new FakeRouterClient();
-    render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/);
+  describe("hotkeys", () => {
+    it("Ctrl+Shift+E toggles between the textarea and the Monaco editor on linux", async () => {
+      const client = new FakeRouterClient();
+      render(<Composer routerClient={client} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
 
-    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
-    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
-    // Monaco is lazy-loaded behind Suspense (see ExpandedComposer) — even a
-    // mocked module resolves the dynamic import asynchronously, so the first
-    // expand in the file must await it rather than query synchronously.
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+      fireEvent.keyDown(textarea, EXPAND_LINUX);
+      // Monaco is lazy-loaded behind Suspense (see ExpandedComposer) — even a
+      // mocked module resolves the dynamic import asynchronously, so the first
+      // expand in the file must await it rather than query synchronously.
+      const editor = await screen.findByTestId("fake-monaco-editor");
+      expect(editor.getAttribute("data-language")).toBe("markdown");
+      expect(screen.queryByPlaceholderText(/Message the agent/)).toBeNull();
+
+      fireEvent.keyDown(editor, EXPAND_LINUX);
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+      expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
+    });
+
+    it("plain Ctrl+E and Cmd+E do nothing on linux", async () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
+      fireEvent.keyDown(textarea, { key: "e", ctrlKey: true });
+      fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+    });
+
+    it("Cmd+E expands on mac, and Ctrl+Shift+E does not", async () => {
+      setPlatform("darwin");
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/);
+      fireEvent.keyDown(textarea, EXPAND_LINUX);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+
+      fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+      expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
+    });
+
+    it("the attachFiles hotkey opens the file picker, collapsed and expanded", async () => {
+      const { container } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+      );
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const picked = vi.spyOn(input, "click");
+
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), ATTACH_LINUX);
+      expect(picked).toHaveBeenCalledTimes(1);
+
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      const editor = await screen.findByTestId("fake-monaco-editor");
+      fireEvent.keyDown(editor, ATTACH_LINUX);
+      expect(picked).toHaveBeenCalledTimes(2);
+    });
+
+    it("the toggleView hotkey switches to terminal when onModeChange is provided", () => {
+      const onModeChange = vi.fn();
+      const { rerender } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+      );
+      // No handler: the chord is left alone (no throw, nothing to call).
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), TOGGLE_VIEW_LINUX);
+
+      rerender(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          onModeChange={onModeChange}
+        />,
+      );
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), TOGGLE_VIEW_LINUX);
+      expect(onModeChange).toHaveBeenCalledWith("terminal");
+    });
+  });
+
+  describe("+ menu", () => {
+    it("lists the Input items with platform hotkey labels", () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const m = openPlusMenu();
+      expect(m.getByRole("menuitem", { name: /Attach files…/ }).textContent).toContain("Ctrl+Shift+A");
+      expect(m.getByRole("menuitem", { name: /Mention file or session/ })).toBeTruthy();
+      expect(m.getByRole("menuitem", { name: /Commands/ })).toBeTruthy();
+      expect(m.getByRole("menuitem", { name: /Expand editor/ }).textContent).toContain("Ctrl+Shift+E");
+      expect(m.getByRole("menuitem", { name: /Keyboard shortcuts/ })).toBeTruthy();
+    });
+
+    it("labels hotkeys with mac glyphs on darwin", () => {
+      setPlatform("darwin");
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const m = openPlusMenu();
+      expect(m.getByRole("menuitem", { name: /Expand editor/ }).textContent).toContain("⌘E");
+      expect(m.getByRole("menuitem", { name: /Attach files…/ }).textContent).toContain("⌘⇧A");
+    });
+
+    it("Expand editor / Collapse editor toggle the Monaco editor", async () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Expand editor/ }));
+      expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
+      expect(screen.queryByRole("menu")).toBeNull(); // the menu closes on choose
+
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Collapse editor/ }));
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+      expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
+    });
+
+    it("Attach files… opens the file picker", () => {
+      const { container } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+      );
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const picked = vi.spyOn(input, "click");
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }));
+      expect(picked).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps attach reachable in the expanded editor through its + menu", async () => {
+      const { container } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+      );
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      await screen.findByTestId("fake-monaco-editor");
+
+      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const picked = vi.spyOn(input, "click");
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }));
+      expect(picked).toHaveBeenCalledTimes(1);
+    });
+
+    it("Mention inserts @ at the caret and opens the mention menu", async () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "check" } });
+
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Mention file or session/ }));
+      expect(textarea.value).toBe("check @");
+      await waitFor(() => expect(menu().getByText("deep-research")).toBeTruthy());
+    });
+
+    it("Commands inserts / and opens the command menu", async () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Commands/ }));
+      expect(textarea.value).toBe("/");
+      await waitFor(() => expect(menu().getByRole("option", { name: "/task" })).toBeTruthy());
+    });
+
+    it("Mention from the expanded editor collapses back to the textarea first", async () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      await screen.findByTestId("fake-monaco-editor");
+
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Mention file or session/ }));
+      expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
+      expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe("@");
+    });
+
+    it("Keyboard shortcuts lists every binding from hotkeys.ts", () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Keyboard shortcuts/ }));
+      const keys = screen.getByRole("group", { name: "Keyboard shortcuts" });
+      const text = keys.textContent ?? "";
+      for (const label of ["⏎", "⇧⏎", "Ctrl+Shift+E", "Ctrl+⏎", "Esc", "@", "/", "Ctrl+Shift+A", "Ctrl+Shift+T"]) {
+        expect(text).toContain(label);
+      }
+    });
+
+    it("hides the View section without onModeChange", () => {
+      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      openPlusMenu();
+      expect(screen.queryByRole("group", { name: "View" })).toBeNull();
+    });
+
+    it("switches the view through the View segment", () => {
+      const onModeChange = vi.fn();
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          mode="chat"
+          onModeChange={onModeChange}
+        />,
+      );
+      openPlusMenu();
+      const view = within(screen.getByRole("group", { name: "View" }));
+      expect(view.getByRole("button", { name: /Chat/ }).getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(view.getByRole("button", { name: /Terminal/ }));
+      expect(onModeChange).toHaveBeenCalledWith("terminal");
+    });
+
+    it("hides the context row without usage, shows tokens and % with it", () => {
+      const { rerender } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" contextWindow={128000} />,
+      );
+      openPlusMenu();
+      expect(screen.queryByTestId("composer-context")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Input options" })); // close
+
+      rerender(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          usage={{ input_tokens: 106500, output_tokens: 0 }}
+          contextWindow={128000}
+        />,
+      );
+      openPlusMenu();
+      expect(screen.getByTestId("composer-context").textContent).toContain(
+        "Context · 106.5k / 128k (83%)",
+      );
+    });
+
+    it("offers Compact now only with onCompact, and calls it", () => {
+      const onCompact = vi.fn();
+      const { rerender } = render(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+      );
+      expect(openPlusMenu().queryByRole("menuitem", { name: /Compact now/ })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Input options" })); // close
+
+      rerender(
+        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" onCompact={onCompact} />,
+      );
+      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Compact now/ }));
+      expect(onCompact).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("no longer renders a context meter in the input row (the dock's rim replaces it)", () => {
+    render(
+      <Composer
+        routerClient={new FakeRouterClient()}
+        sessionId="session-active"
+        usage={{ input_tokens: 100000, output_tokens: 0 }}
+        contextWindow={200000}
+      />,
+    );
+    expect(screen.queryByTestId("context-meter")).toBeNull();
+    expect(screen.queryByText("50%")).toBeNull();
+  });
+
+  it("renders the expanded editor with a line-number gutter and a send hint", async () => {
+    render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+    fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
     const editor = await screen.findByTestId("fake-monaco-editor");
-    expect(editor.getAttribute("data-language")).toBe("markdown");
-    expect(screen.queryByPlaceholderText(/Message the agent/)).toBeNull();
-
-    fireEvent.keyDown(editor, { key: "e", metaKey: true });
-    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
-    expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
-  });
-
-  it("the visible expand button toggles the same way as ⌘E, with a tooltip naming the hotkey", async () => {
-    const client = new FakeRouterClient();
-    render(<Composer routerClient={client} sessionId="session-active" />);
-
-    const expandButton = screen.getByRole("button", { name: "Expand editor" });
-    expect(expandButton.getAttribute("title")).toBe("Expand editor (Ctrl+E)");
-    fireEvent.click(expandButton);
-
-    expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
-    const collapseButton = screen.getByRole("button", { name: "Collapse editor" });
-    expect(collapseButton.getAttribute("title")).toBe("Collapse editor (Ctrl+E)");
-    fireEvent.click(collapseButton);
-
-    expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
-  });
-
-  it("offers the attach button in the expanded editor too, opening the same file picker", async () => {
-    const client = new FakeRouterClient();
-    const { container } = render(<Composer routerClient={client} sessionId="session-active" />);
-    fireEvent.click(screen.getByRole("button", { name: "Expand editor" }));
-    await screen.findByTestId("fake-monaco-editor");
-
-    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
-    const picked = vi.spyOn(input, "click");
-    fireEvent.click(screen.getByRole("button", { name: "Attach files…" }));
-    expect(picked).toHaveBeenCalledTimes(1);
+    expect(editor.getAttribute("data-line-numbers")).toBe("on");
+    expect(screen.getByTestId("expanded-composer").textContent).toContain("Ctrl+⏎ send · Esc collapse");
   });
 
   it("round-trips typed text losslessly between collapsed and expanded", async () => {
@@ -169,13 +401,13 @@ describe("Composer", () => {
     const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "line one\nline two\t🎉" } });
-    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+    fireEvent.keyDown(textarea, EXPAND_LINUX);
 
     const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
     expect(editor.value).toBe("line one\nline two\t🎉");
 
     fireEvent.change(editor, { target: { value: "line one\nline two\t🎉 edited" } });
-    fireEvent.keyDown(editor, { key: "e", metaKey: true });
+    fireEvent.keyDown(editor, EXPAND_LINUX);
 
     expect(screen.getByPlaceholderText(/Message the agent/)).toHaveProperty(
       "value",
@@ -183,17 +415,17 @@ describe("Composer", () => {
     );
   });
 
-  it("sends from the expanded editor via ⌘Enter", async () => {
+  it("sends from the expanded editor via Ctrl+Enter", async () => {
     const client = new FakeRouterClient();
     const sendMessage = vi.spyOn(client, "sendMessage");
 
     render(<Composer routerClient={client} sessionId="session-active" />);
     const textarea = screen.getByPlaceholderText(/Message the agent/);
-    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+    fireEvent.keyDown(textarea, EXPAND_LINUX);
 
     const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "hello from monaco" } });
-    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+    fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
 
     await waitFor(() =>
       expect(sendMessage).toHaveBeenCalledWith("session-active", {
@@ -204,11 +436,23 @@ describe("Composer", () => {
     );
   });
 
+  it("shows Stop and Queue in the expanded action bar while busy", async () => {
+    const onStop = vi.fn();
+    render(
+      <Composer routerClient={new FakeRouterClient()} sessionId="session-active" busy onStop={onStop} />,
+    );
+    fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+    await screen.findByTestId("fake-monaco-editor");
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /stop generating/i }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   it("Escape in the expanded editor collapses back to the textarea", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
     const textarea = screen.getByPlaceholderText(/Message the agent/);
-    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+    fireEvent.keyDown(textarea, EXPAND_LINUX);
 
     const editor = await screen.findByTestId("fake-monaco-editor");
     fireEvent.keyDown(editor, { key: "Escape" });
@@ -221,7 +465,7 @@ describe("Composer", () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
     const textarea = screen.getByPlaceholderText(/Message the agent/);
-    fireEvent.keyDown(textarea, { key: "e", metaKey: true });
+    fireEvent.keyDown(textarea, EXPAND_LINUX);
 
     const editor = await screen.findByTestId("fake-monaco-editor");
     fireEvent.change(editor, { target: { value: "check @deep" } });
@@ -282,6 +526,17 @@ describe("Composer", () => {
     });
     expect(onSent).not.toHaveBeenCalled(); // no user bubble until it's delivered
     expect(textarea.value).toBe("");
+  });
+
+  it("labels the send button Send when idle and Queue while busy", () => {
+    const client = new FakeRouterClient();
+    const { rerender } = render(<Composer routerClient={client} sessionId="session-active" />);
+    expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
+
+    rerender(<Composer routerClient={client} sessionId="session-active" busy />);
+    expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
 
   it("shows a Stop button while busy and calls onStop when clicked", () => {
@@ -571,6 +826,15 @@ describe("Composer", () => {
           `fixture://sessions/s1/attachments/${attachment.id}/thumbnail`,
         ),
       );
+    });
+
+    it("stages a file pasted into the expanded editor", async () => {
+      const client = new FakeRouterClient();
+      render(<Composer routerClient={client} sessionId="s1" />);
+      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      const editor = await screen.findByTestId("fake-monaco-editor");
+      pasteFiles(editor, [new File(["x"], "notes.txt", { type: "text/plain" })]);
+      await waitFor(() => expect(client.uploadedAttachments[0]?.attachment.name).toBe("notes.txt"));
     });
 
     it("leaves a plain-text paste to the textarea", () => {

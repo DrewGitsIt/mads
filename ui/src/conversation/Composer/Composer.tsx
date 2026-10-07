@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { Button } from "../../components/Button/Button";
 import type { RouterClient } from "../../router/client";
 import type { QueuedMessage, Session, Usage } from "../../router/types";
 import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
+import { ComposerPlusMenu, type ComposerMode } from "./ComposerPlusMenu";
 import { getDraft, setDraft } from "./composerDrafts";
 import { AttachmentChips } from "../../components/Attachments/AttachmentChips";
 import { stagedForSession } from "../../components/Attachments/stagedAttachments";
 import { useStagedAttachments } from "../../components/Attachments/useStagedAttachments";
 import { useFileDrop } from "../../components/Attachments/useFileDrop";
 import { appendAttachments, splitAttachments } from "../attachmentRefs";
-import { ContextMeter } from "./ContextMeter";
-import { formatShortcut } from "../../platform/shortcut";
+import { matches } from "../../platform/hotkeys";
 import styles from "./Composer.module.css";
+
+export type { ComposerMode } from "./ComposerPlusMenu";
 
 const EMPTY_QUEUE: QueuedMessage[] = [];
 
@@ -25,18 +26,28 @@ export interface ComposerProps {
   /** The session's current provider — resolves the "/model" command's candidate list. */
   provider?: string;
   /**
-   * The last turn's usage and the model's fallback window, for the context
-   * meter beside Send — next to the thing that adds to it. Absent → no meter.
+   * The last turn's usage and the model's fallback window, for the + menu's
+   * context row (the dock's rim is the ambient meter). Absent → no row.
    */
   usage?: Usage;
   contextWindow?: number;
+  /** The conversation's current view. Default "chat". */
+  mode?: ComposerMode;
+  /**
+   * Switches Chat ⇄ Terminal: the + menu's View section and the toggleView
+   * hotkey. Absent → no View section and the hotkey is left alone.
+   */
+  onModeChange?: (mode: ComposerMode) => void;
+  /** Compacts the conversation now — the + menu's "Compact now". Absent → hidden. */
+  onCompact?: () => void;
   onSent?: (text: string, mentions: string[]) => void;
   /** Disables the textarea and Send button — set during a transport switch. */
   disabled?: boolean;
   /**
    * A turn is in flight. The composer stays usable: a send mid-turn is queued
    * by the session process (see handleSend) rather than interleaving with the
-   * agent's response. Here it only decides whether Stop shows.
+   * agent's response. Here it decides whether Stop shows and whether the
+   * send button reads "Queue" instead of "Send".
    */
   busy?: boolean;
   /** The session's queued messages, owned by the session process and mirrored by the caller. */
@@ -47,7 +58,7 @@ export interface ComposerProps {
   onCancelQueued?: (queuedId: string) => void;
   /**
    * Interrupts the in-flight turn (chat mode's ⌘/Ctrl-C). When set and `busy`,
-   * a Stop button appears alongside Send; Send keeps queueing as before.
+   * a Stop button appears alongside Queue.
    */
   onStop?: () => void;
   /** Seeds the textarea on first mount only — later changes to this prop are ignored. */
@@ -72,13 +83,13 @@ export interface ComposerProps {
   onAutoSendStart?: () => void;
   /** Fires synchronously at the start of every send (manual or auto) — lets the caller show an in-flight indicator before the request resolves. */
   onSendStart?: () => void;
-  /** Same commit path ConversationHeader's agent/model pills use — a "/agent"/"/model" command dispatches through here rather than sending a chat message. */
   /**
-   * Applies a "/agent" or "/model" command. Resolves true when the change was
-   * accepted but queued behind an in-flight turn — a model switch never
-   * interrupts a running agent, so the confirmation has to say "applies when
-   * the current turn finishes" rather than claiming it already took effect.
-   * Rejects on failure, surfaced through onCommandError.
+   * Applies a "/agent" or "/model" command (the same commit path the dock's
+   * persona/model pickers use). Resolves true when the change was accepted
+   * but queued behind an in-flight turn — a model switch never interrupts a
+   * running agent, so the confirmation has to say "applies when the current
+   * turn finishes" rather than claiming it already took effect. Rejects on
+   * failure, surfaced through onCommandError.
    */
   onUpdateSession?: (patch: Partial<Pick<Session, "agent" | "model">>) => void | Promise<boolean | void>;
   /** Fires once a "/agent"/"/model" command has been applied — surface as a toast, not a transcript message. */
@@ -88,17 +99,23 @@ export interface ComposerProps {
 }
 
 /**
- * Plain textarea, ⌘E expands in place into a Monaco editor (no modal,
- * MADS-UX §3.3). @/ trigger resolution is delegated to useMentionResolver
- * and only ever rendered against the collapsed textarea — the expanded
- * Monaco editor is plain-text markdown compose only (HANDOFF.md "Edge Cases
- * & TODOs for Future"). `@` mentions splice a plain-text reference token
- * into the value and stage it in InjectedContentPreview — nothing is
- * fetched/expanded until send (§2.4). `/` commands are a hierarchical
- * palette: a plain leaf (skill/task) inserts text the same way but never
- * stages a chip; an argument-taking command ("agent"/"model") descends to a
- * second level and its leaves dispatch directly (executeCommand) instead of
- * touching the message at all.
+ * The session dock's chat input (mockup E): attachment and mention chips,
+ * then `[+]` · borderless auto-growing textarea · `[■]` (busy) · Send / Queue.
+ * Renders content only — the dock around it supplies the surface, the rim
+ * (context meter) and the status line. The root carries `data-composer` as a
+ * `:focus-within` hook for the dock's focus treatment.
+ *
+ * The expandEditor hotkey (⌘E on mac, Ctrl+Shift+E elsewhere; see
+ * platform/hotkeys.ts) expands in place into a line-numbered Monaco editor
+ * (no modal, MADS-UX §3.3). @/ trigger resolution is delegated to
+ * useMentionResolver and only ever rendered against the collapsed textarea —
+ * the expanded editor is plain-text markdown compose only. `@` mentions
+ * splice a plain-text reference token into the value and stage it in
+ * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
+ * `/` commands are a hierarchical palette: a plain leaf (skill/task) inserts
+ * text the same way but never stages a chip; an argument-taking command
+ * ("agent"/"model") descends to a second level and its leaves dispatch
+ * directly (executeCommand) instead of touching the message at all.
  */
 export function Composer({
   routerClient,
@@ -107,6 +124,9 @@ export function Composer({
   provider,
   usage,
   contextWindow,
+  mode = "chat",
+  onModeChange,
+  onCompact,
   onSent,
   disabled,
   busy,
@@ -167,6 +187,13 @@ export function Composer({
     setActiveIndex(0);
   }, [candidates]);
 
+  function focusTextareaAt(offset: number) {
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(offset, offset);
+    });
+  }
+
   function selectCandidate(candidate: MentionCandidate) {
     if (!trigger) return;
     if (candidate.kind === "command-action") {
@@ -189,10 +216,7 @@ export function Composer({
       );
     }
     setActiveIndex(0);
-    requestAnimationFrame(() => {
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
-      textareaRef.current?.focus();
-    });
+    focusTextareaAt(nextCursor);
   }
 
   // Executes a level-2 leaf (rebind agent / switch model) against the
@@ -206,10 +230,7 @@ export function Composer({
     setValue(nextValue);
     setCursor(nextCursor);
     setActiveIndex(0);
-    requestAnimationFrame(() => {
-      textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
-      textareaRef.current?.focus();
-    });
+    focusTextareaAt(nextCursor);
     try {
       const queued = await onUpdateSession?.(
         candidate.group === "agent" ? { agent: candidate.id } : { model: candidate.id },
@@ -223,11 +244,33 @@ export function Composer({
     }
   }
 
-  // ⌘E/Ctrl+E is handled by the wrapping div's onKeyDownCapture below (it
-  // must fire before Monaco's own keybinding service sees the event while
-  // expanded — Monaco has no onKeyDown prop, only addCommand from inside
-  // onMount, so a single outer capture is what lets one toggle work from
-  // both collapsed and expanded focus).
+  // The + menu's Mention / Commands: types the trigger character at the
+  // caret (collapsing the editor first — triggers resolve only against the
+  // textarea), which opens the existing mention or command menu.
+  function insertTrigger(ch: "@" | "/") {
+    const at = Math.min(cursor, value.length);
+    const before = value.slice(0, at);
+    const pad = before && !/\s$/.test(before) ? " " : "";
+    const nextValue = `${before}${pad}${ch}${value.slice(at)}`;
+    const nextCursor = at + pad.length + 1;
+    setExpanded(false);
+    setValue(nextValue);
+    setCursor(nextCursor);
+    setMenuDismissed(false);
+    focusTextareaAt(nextCursor);
+  }
+
+  function openFilePicker() {
+    if (disabled) return;
+    fileInputRef.current?.click();
+  }
+
+  // The composer's hotkeys (expandEditor, attachFiles, toggleView) are
+  // handled by the wrapping div's onKeyDownCapture below: it must fire before
+  // Monaco's own keybinding service sees the event while expanded — Monaco
+  // has no onKeyDown prop, only addCommand from inside onMount — so a single
+  // outer capture is what lets one binding work from both collapsed and
+  // expanded focus.
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (trigger && !menuDismissed && e.key === "Escape") {
       e.preventDefault();
@@ -240,10 +283,7 @@ export function Composer({
           const nextCursor = trigger.start + 1 + head.length;
           setValue(nextValue);
           setCursor(nextCursor);
-          requestAnimationFrame(() => {
-            textareaRef.current?.setSelectionRange(nextCursor, nextCursor);
-            textareaRef.current?.focus();
-          });
+          focusTextareaAt(nextCursor);
           return;
         }
       }
@@ -316,10 +356,7 @@ export function Composer({
     setValue(prefill.text);
     setCursor(prefill.text.length);
     setExpanded(false);
-    requestAnimationFrame(() => {
-      textareaRef.current?.focus();
-      textareaRef.current?.setSelectionRange(prefill.text.length, prefill.text.length);
-    });
+    focusTextareaAt(prefill.text.length);
     // Keyed on the nonce alone: the same text asked for twice applies twice.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.nonce]);
@@ -349,60 +386,48 @@ export function Composer({
   }, [expanded, cursor]);
 
   function handleComposerKeyDownCapture(e: KeyboardEvent<HTMLDivElement>) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
+    if (matches("expandEditor", e)) {
       e.preventDefault();
       e.stopPropagation();
       setExpanded((x) => !x);
+    } else if (matches("attachFiles", e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      openFilePicker();
+    } else if (onModeChange && matches("toggleView", e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      onModeChange(mode === "terminal" ? "chat" : "terminal");
     }
   }
 
-  const expandTitle = `${expanded ? "Collapse" : "Expand"} editor (${formatShortcut("Mod+E")})`;
-  // Both layouts offer it; the hidden file input it clicks sits outside them.
-  const attachButton = (
-    <Button
-      type="button"
-      variant="ghost"
-      size="sm"
-      title="Attach files — or paste or drop them here"
-      aria-label="Attach files…"
-      onClick={() => fileInputRef.current?.click()}
+  // Both layouts lead with the same + menu, so attach, mention, commands
+  // and the view switch are one click away whether or not the editor is open.
+  const plusMenu = (
+    <ComposerPlusMenu
+      expanded={expanded}
       disabled={disabled}
-    >
-      📎
-    </Button>
+      onAttach={openFilePicker}
+      onMention={() => insertTrigger("@")}
+      onCommands={() => insertTrigger("/")}
+      onToggleExpanded={() => setExpanded((x) => !x)}
+      mode={mode}
+      onModeChange={onModeChange}
+      usage={usage}
+      contextWindow={contextWindow}
+      onCompact={onCompact}
+    />
   );
+  const sendBlockedReason = uploading ? "Waiting for attachments to finish uploading" : undefined;
 
   return (
     <div
       className={[styles.composer, dragging && styles.dropTarget].filter(Boolean).join(" ")}
+      data-composer=""
       onKeyDownCapture={handleComposerKeyDownCapture}
       onPaste={onPaste}
       {...dropHandlers}
     >
-      <InjectedContentPreview
-        items={injected}
-        onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
-      />
-      <AttachmentChips
-        items={attachments}
-        thumbnailUrl={(a) =>
-          a.attachment?.thumbnail
-            ? routerClient.attachmentUrl(staged.owner, a.attachment.id, "thumbnail")
-            : undefined
-        }
-        onRemove={(key) => staged.remove(key)}
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        hidden
-        aria-label="Attach files"
-        onChange={(e) => {
-          staged.add(Array.from(e.target.files ?? []));
-          e.target.value = "";
-        }}
-      />
       {queued.length > 0 && (
         <div className={styles.queued}>
           {queued.map((q) => (
@@ -421,54 +446,46 @@ export function Composer({
           ))}
         </div>
       )}
+      <div className={styles.chips}>
+        <InjectedContentPreview
+          items={injected}
+          onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
+        />
+        <AttachmentChips
+          items={attachments}
+          thumbnailUrl={(a) =>
+            a.attachment?.thumbnail
+              ? routerClient.attachmentUrl(staged.owner, a.attachment.id, "thumbnail")
+              : undefined
+          }
+          onRemove={(key) => staged.remove(key)}
+        />
+      </div>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        aria-label="Attach files"
+        onChange={(e) => {
+          staged.add(Array.from(e.target.files ?? []));
+          e.target.value = "";
+        }}
+      />
       {expanded ? (
-        <div className={styles.expandedRow}>
-          <ExpandedComposer
-            value={value}
-            onChange={setValue}
-            onSend={() => void handleSend()}
-            onCollapse={() => setExpanded(false)}
-            initialCursor={cursor}
-            onCursorChange={setCursor}
-            disabled={disabled}
-          />
-          <div className={styles.actions}>
-            <ContextMeter usage={usage} contextWindow={contextWindow} />
-            {attachButton}
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              title={expandTitle}
-              aria-label="Collapse editor"
-              aria-keyshortcuts="Meta+e"
-              onClick={() => setExpanded(false)}
-              disabled={disabled}
-            >
-              ⤡
-            </Button>
-            {busy && onStop && (
-              <Button
-                type="button"
-                variant="secondary"
-                className={styles.stop}
-                title="Stop generating"
-                aria-label="Stop generating"
-                onClick={onStop}
-              >
-                ■ Stop
-              </Button>
-            )}
-            <Button
-              variant="primary"
-              onClick={() => void handleSend()}
-              disabled={disabled || uploading}
-              title={uploading ? "Waiting for attachments to finish uploading" : undefined}
-            >
-              Send
-            </Button>
-          </div>
-        </div>
+        <ExpandedComposer
+          value={value}
+          onChange={setValue}
+          onSend={() => void handleSend()}
+          onCollapse={() => setExpanded(false)}
+          initialCursor={cursor}
+          onCursorChange={setCursor}
+          disabled={disabled}
+          busy={busy}
+          onStop={onStop}
+          sendBlockedReason={sendBlockedReason}
+          leading={plusMenu}
+        />
       ) : (
         <div className={styles.inputRow}>
           {menuOpen && (
@@ -478,9 +495,11 @@ export function Composer({
               onSelect={selectCandidate}
             />
           )}
+          {plusMenu}
           <textarea
             ref={textareaRef}
             className={styles.textarea}
+            rows={1}
             placeholder="Message the agent — @ to mention, / for commands"
             value={value}
             disabled={disabled}
@@ -501,40 +520,29 @@ export function Composer({
             onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={handleKeyDown}
           />
-          <ContextMeter usage={usage} contextWindow={contextWindow} />
-          {attachButton}
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            title={expandTitle}
-            aria-label="Expand editor"
-            aria-keyshortcuts="Meta+e"
-            onClick={() => setExpanded(true)}
-            disabled={disabled}
-          >
-            ⤢
-          </Button>
           {busy && onStop && (
-            <Button
+            <button
               type="button"
-              variant="secondary"
               className={styles.stop}
               title="Stop generating"
               aria-label="Stop generating"
               onClick={onStop}
             >
-              ■ Stop
-            </Button>
+              ■
+            </button>
           )}
-          <Button
-            variant="primary"
+          <button
+            type="button"
+            className={[styles.send, busy && styles.queue].filter(Boolean).join(" ")}
             onClick={() => void handleSend()}
             disabled={disabled || uploading}
-            title={uploading ? "Waiting for attachments to finish uploading" : undefined}
+            title={
+              sendBlockedReason ??
+              (busy ? "Queue — sends when the current turn finishes" : undefined)
+            }
           >
-            Send
-          </Button>
+            {busy ? "Queue" : "Send"}
+          </button>
         </div>
       )}
     </div>
