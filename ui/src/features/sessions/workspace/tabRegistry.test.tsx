@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { WORKSPACE_TABS } from "./tabRegistry";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakePipelineClient } from "../../../pipeline/client/fixtures";
@@ -36,8 +36,9 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    await waitFor(() => expect(screen.getByText("Chat")).toBeTruthy());
-    expect(screen.getByText("Terminal")).toBeTruthy();
+    const dock = await screen.findByTestId("session-dock");
+    expect(within(dock).getByPlaceholderText(/message the agent/i)).toBeTruthy();
+    expect(within(dock).getByTestId("dock-status")).toBeTruthy();
   });
 
   it("ConversationTabView also mounts the Context Rail, identical regardless of chat/terminal mode", async () => {

@@ -4,8 +4,8 @@ import { sessionLocation } from "../../router/sessionLocation";
 import type { Session } from "../../router/types";
 
 /**
- * The branch a session working in place has open — the one fact the header's
- * subline needs that the record doesn't carry (only an isolated session has
+ * The branch a session working in place has open — the one fact the dock's
+ * ⎇ segment needs that the record doesn't carry (only an isolated session has
  * worktree_branch). Read from GET /sessions/defaults?dir=, whose dir_branch
  * is the checkout's current branch: one cheap `git symbolic-ref`, no new
  * endpoint.

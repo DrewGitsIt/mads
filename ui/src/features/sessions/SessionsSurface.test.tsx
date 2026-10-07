@@ -22,7 +22,7 @@ function json(body: unknown) {
   return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
 }
 
-/** Scopes queries to the rail, since a selected session's name also appears in the ConversationHeader. */
+/** Scopes queries to the rail, since a selected session's name also appears in the workspace's own header. */
 function rail() {
   return within(screen.getByLabelText("Session list"));
 }
@@ -150,8 +150,10 @@ describe("SessionsSurface", () => {
     fireEvent.click(rail().getByText("Alpha"));
 
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
-    expect(screen.getByText("Chat")).toBeTruthy();
-    expect(screen.getByText("Terminal")).toBeTruthy();
+    // The conversation's session dock, in chat with the composer inside it.
+    const dock = await screen.findByTestId("session-dock");
+    expect(dock.getAttribute("data-mode")).toBe("chat");
+    expect(within(dock).getByPlaceholderText(/message the agent/i)).toBeTruthy();
   });
 
   it("returns to the Launchpad by re-clicking the selected row", async () => {
@@ -329,7 +331,7 @@ describe("SessionsSurface", () => {
     fireEvent.click(rail().getByText("Alpha"));
 
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
-    expect(screen.getByText("Chat")).toBeTruthy();
+    expect(await screen.findByTestId("session-dock")).toBeTruthy();
   });
 
   it("a failed refresh over a loaded list says so and can be dismissed", async () => {

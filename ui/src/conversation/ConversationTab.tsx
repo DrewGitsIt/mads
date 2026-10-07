@@ -29,8 +29,8 @@ import { foldToolResults } from "../router/toolPairing";
 import { useSessionLinks } from "../features/sessions/state/useSessionLinks";
 import { useWorkspaceForRef } from "../tasks/useSessionWorkspace";
 import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge";
-import { ConversationHeader } from "./Header/ConversationHeader";
-import { useCheckoutBranch } from "./Header/useCheckoutBranch";
+import { SessionDock, latestLandOutcome } from "./Dock";
+import { useCheckoutBranch } from "./Dock/useCheckoutBranch";
 import { useAgentIndex } from "../router/useAgentIndex";
 import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
@@ -57,9 +57,12 @@ import { useStreamPacer } from "./streaming/useStreamPacer";
 import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpeed";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
-import { TerminalComposer, formatBracketedPaste } from "./TerminalRenderer/TerminalComposer";
+import { formatBracketedPaste } from "./TerminalRenderer/bracketedPaste";
 import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
+import { ExpandedComposer } from "./Composer/ExpandedComposer";
+import { QueuedMessages } from "./Composer/QueuedMessages";
+import { matches } from "../platform/hotkeys";
 import { ProvisioningStrip } from "./ProvisioningStrip";
 import { ShellDock } from "./ShellDock/ShellDock";
 import { ShellBridge, type ShellDockBridge } from "./ShellDock/shellBridge";
@@ -144,11 +147,12 @@ type TransportState =
 type TurnPhase = "idle" | "live";
 
 /**
- * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the header,
- * the chat/terminal display-mode switch, the inactive-session summary
- * card, the composer, and the docked Shell — see HANDOFF.md §8 for the
- * demo-mount rationale (no Session Workspace shell exists yet to register
- * this into).
+ * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the history (or
+ * the live terminal), the inactive-session summary card, the session dock at
+ * the bottom in both views (context rim, composer in chat, status line with
+ * the persona/model/trust pickers, location and Commit/Land), and the docked
+ * Shell — see HANDOFF.md §8 for the demo-mount rationale (no Session
+ * Workspace shell exists yet to register this into).
  */
 export function ConversationTab({
   sessionId,
@@ -175,16 +179,19 @@ export function ConversationTab({
     () => shellBridgeProp ?? (shellHost ? new ShellBridge(shellHost, sessionId) : undefined),
     [shellBridgeProp, shellHost, sessionId],
   );
-  const [terminalComposerOpen, setTerminalComposerOpen] = useState(false);
+  // Terminal view's compose sheet (⌘E / Ctrl+Shift+E): the line-numbered
+  // editor rising from the dock over the xterm, sent as a bracketed paste.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeText, setComposeText] = useState("");
   const terminalViewRef = useRef<TerminalViewHandle>(null);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
   const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
   const [waking, setWaking] = useState(false);
   const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
-  // session.workspace is a reference (id or name), not the name the header's
-  // subline prints — resolved here, off the session this tab already holds, and
-  // kept live by the hook's workspace.* subscription.
+  // session.workspace is a reference (id or name), not the name the dock's
+  // ⎇ segment prints — resolved here, off the session this tab already holds,
+  // and kept live by the hook's workspace.* subscription.
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
   const agents = useAgentIndex(routerClient);
   const checkoutBranch = useCheckoutBranch(routerClient, session);
@@ -199,9 +206,9 @@ export function ConversationTab({
     finish: pacerFinish,
     reset: pacerReset,
   } = pacer;
-  // Last completed turn's usage, for the composer context meter. Populated from
-  // the stream's turn_end frame (the only place usage is reported); undefined
-  // until this session view sees a turn finish.
+  // Last completed turn's usage, for the dock's context rim and the + menu's
+  // context row. Populated from the stream's turn_end frame (the only place
+  // usage is reported), seeded from session.last_usage at mount.
   const [lastUsage, setLastUsage] = useState<Usage>();
   // Native compaction progress (Runner's resume-above-threshold trigger,
   // services/session/internal/runner/compact.go) — surfaced explicitly since
@@ -253,7 +260,7 @@ export function ConversationTab({
 
   // --- Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D4–D6) ---
   // Result cards from the event log plus the actions that make them; the
-  // header control reads its state off the session record's counts.
+  // dock's Commit/Land control reads its state off the session record's counts.
   const worktree = useWorktreeCards(routerClient, sessionId);
   const { commitAll, land } = worktree;
   const commitSettings = useCommitSettings(routerClient);
@@ -364,7 +371,7 @@ export function ConversationTab({
       .then((s) => {
         if (!cancelled) {
           setSession(s);
-          // Seeds the composer meter from the session record's last-known
+          // Seeds the context rim from the session record's last-known
           // usage at wake time — before this mount has seen a turn_end of
           // its own (services/session/internal/runner's persistUsage).
           if (s.last_usage) setLastUsage(s.last_usage);
@@ -482,10 +489,6 @@ export function ConversationTab({
     void routerClient.getSession(sessionId).then(setSession);
   }, [routerClient, sessionId]);
 
-  // Shared by both the header's agent/model pills and the Composer's
-  // "/agent"/"/model" commands — there's no Router PATCH /sessions/:id yet,
-  // so this is a local-state commit exactly like the pills already did
-  // before the Composer had any use for it.
   // Persists a model change and reconfigures the running agent
   // (POST /sessions/{id}/model). Resolves the child's queued flag: true means
   // a turn was in flight and the switch lands at the end of it — the agent is
@@ -501,7 +504,7 @@ export function ConversationTab({
     [routerClient, sessionId],
   );
 
-  // Header model pill. The composer's "/model" goes through
+  // The dock's model picker. The composer's "/model" goes through
   // handleUpdateSession instead, which reuses applyModel and lets the
   // composer render the confirmation with the model's display name.
   const handleChangeModel = useCallback(
@@ -527,7 +530,7 @@ export function ConversationTab({
 
   // Agent and name stay local-only: unlike model and trust, neither has a
   // live-apply endpoint yet (the agent's system prompt is spawn-time too, so
-  // the pill is cosmetic until one exists — see HANDOFF.md).
+  // the persona picker is cosmetic until one exists — see HANDOFF.md).
   const handleUpdateSession = useCallback(
     async (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => {
       if (patch.model !== undefined) return applyModel(patch.model);
@@ -536,8 +539,8 @@ export function ConversationTab({
     [applyModel],
   );
 
-  // Header trust pill → POST /sessions/{id}/trust. Unlike the local-only
-  // pills above this one persists (and the Router bounces a live child so
+  // The dock's trust picker → POST /sessions/{id}/trust. Unlike the
+  // local-only persona above this one persists (and the Router bounces a live child so
   // the new level actually applies — trust is spawn-time-only in the
   // runner). The confirmation is the inline "Trust changed: …" notice the
   // Router's session.trust_changed draws in the history (useWorktreeCards),
@@ -551,7 +554,7 @@ export function ConversationTab({
         .then((updated) => {
           // effective_trust rides along: the Router recomputes it for the
           // new level (auto_review on a provider with no reviewer → limited),
-          // and a stale one would keep — or miss — the header's fallback.
+          // and a stale one would keep — or miss — the dock's fallback.
           setSession((s) =>
             s ? { ...s, trust: updated.trust, effective_trust: updated.effective_trust } : s,
           );
@@ -566,7 +569,7 @@ export function ConversationTab({
     [routerClient, sessionId],
   );
 
-  // Header Commit…: one click with "Write commit messages for me" on and a
+  // The dock's Commit…: one click with "Write commit messages for me" on and a
   // Fast Model to write them, else the dialog.
   const handleCommit = useCallback(() => {
     if (!(commitSettings.autoCommitMessages && commitSettings.fastModel)) {
@@ -586,10 +589,10 @@ export function ConversationTab({
     });
   }, [commitSettings, commitAll]);
 
-  // Header Land / a card's "Land again". The outcome is a card either way;
-  // only an unexpected failure (no card coming) is a toast. The user asked
-  // for this outcome, so the tail follows it into view even if they had
-  // scrolled up: the header button is nowhere near where the card lands.
+  // The dock's Land / a card's "Land again". The outcome is a card either
+  // way (and the dock's ⎇ popover shows it at the button); only an unexpected
+  // failure (no card coming) is a toast. The user asked for this outcome, so
+  // the tail follows it into view even if they had scrolled up.
   const handleLand = useCallback(() => {
     stickToBottom.current = true;
     land().catch((err: unknown) => {
@@ -958,7 +961,7 @@ export function ConversationTab({
     };
     const onTurnEnd = (ev: MessageEvent<string>) => {
       // turn_end carries this turn's usage — the only place it's reported, so
-      // it feeds the composer context meter.
+      // it feeds the dock's context rim.
       if (typeof ev.data === "string") {
         try {
           const parsed = JSON.parse(ev.data) as StreamEvent;
@@ -1199,11 +1202,10 @@ export function ConversationTab({
     : lastLiveItem?.kind === "tool" && !lastLiveItem.tool.result
       ? { tool: lastLiveItem.tool }
       : {};
-  // Never carry a stale open overlay across a switch back to chat and later
-  // back to terminal — a bare `!showHistory` gate on `open` below would hide
-  // it visually but leave the state true, popping it back open unprompted.
-  if (terminalComposerOpen && activeMode !== "terminal") {
-    setTerminalComposerOpen(false);
+  // Never carry a stale open compose sheet across a switch back to chat and
+  // later back to terminal — it would pop back open unprompted.
+  if (composeOpen && showHistory) {
+    setComposeOpen(false);
   }
   // The hook that would create one of these only ever runs on the chat
   // transport (providers/claudecode/README.md) — a switch to terminal tears
@@ -1287,8 +1289,8 @@ export function ConversationTab({
       task: model,
     };
   }
-  // Compact-suggestion input, derived locally from the same usage the composer
-  // meter reads (session.last_usage at mount, turn_end frames after) — no
+  // Compact-suggestion input, derived locally from the same usage the dock's
+  // context rim reads (session.last_usage at mount, turn_end frames after) — no
   // extra stream event or server round-trip, and no race against the
   // Runner's own Start-time trigger, which only fires near the window limit.
   const occupancyWindow = lastUsage?.context_window || contextWindowForModel(session.model);
@@ -1310,27 +1312,69 @@ export function ConversationTab({
     occupancyTokens > 0 &&
     occupancyPct >= 60;
 
+  // The session dock's props, shared by both views (chat mounts the composer
+  // inside it; terminal adds the compose segment and sheet).
+  const dockProps = {
+    session,
+    usage: lastUsage,
+    contextWindow: lastUsage ? contextWindowForModel(session.model) : undefined,
+    onCompact: () => void handleCompactNow(),
+    onModeChange: (m: DisplayMode) => void handleToggle(m),
+    agents,
+    workspaceName: sessionWorkspace?.name ?? undefined,
+    checkoutBranch,
+    onUpdateSession: handleUpdateSession,
+    onChangeModel: handleChangeModel,
+    onChangeTrust: handleChangeTrust,
+    work: {
+      onCommit: handleCommit,
+      onLand: handleLand,
+      onAskAgent: worktreeActions.onAskAgent,
+      landing: worktree.landing,
+      committing: worktree.committing,
+    },
+    landOutcome: latestLandOutcome(worktree.cards),
+  };
+  // Terminal compose: a draft survives closing the sheet (an accidental Esc
+  // never loses a long prompt); only a paste clears it.
+  const openCompose = () => setComposeOpen(true);
+  const closeCompose = () => {
+    setComposeOpen(false);
+    terminalViewRef.current?.focus();
+  };
+  const toggleCompose = () => (composeOpen ? closeCompose() : openCompose());
+  const composeSheet =
+    composeOpen && terminalBridge ? (
+      <div
+        // One owner for Esc (and the compose chord, which closes too) whether
+        // focus is in Monaco or on a button: capture-phase, before Monaco's
+        // own keybinding service sees the keydown.
+        onKeyDownCapture={(e) => {
+          if (e.key === "Escape" || matches("expandEditor", e)) {
+            e.preventDefault();
+            e.stopPropagation();
+            closeCompose();
+          }
+        }}
+      >
+        <ExpandedComposer
+          value={composeText}
+          onChange={setComposeText}
+          onSend={(text) => {
+            terminalBridge.write(sessionId, formatBracketedPaste(text));
+            setComposeText("");
+            closeCompose();
+          }}
+          onCollapse={closeCompose}
+          sendLabel="Paste into terminal"
+          showBusyControls={false}
+          hintSuffix="sent as a bracketed paste"
+        />
+      </div>
+    ) : undefined;
+
   return (
     <div className={styles.tab} ref={tabRef}>
-      <ConversationHeader
-        session={session}
-        workspaceName={sessionWorkspace?.name ?? undefined}
-        agents={agents}
-        checkoutBranch={checkoutBranch}
-        mode={activeMode}
-        onModeChange={(m) => void handleToggle(m)}
-        onUpdateSession={handleUpdateSession}
-        onChangeModel={handleChangeModel}
-        onChangeTrust={handleChangeTrust}
-        work={{
-          onCommit: handleCommit,
-          onLand: handleLand,
-          onAskAgent: worktreeActions.onAskAgent,
-          landing: worktree.landing,
-          committing: worktree.committing,
-        }}
-      />
-
       <CommitDialog
         open={commitDialog !== null}
         sessionId={sessionId}
@@ -1343,131 +1387,132 @@ export function ConversationTab({
       />
 
       <div className={styles.body}>
-        <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
-          {showHistory ? (
-            <>
-              {provisioning && (
-                <div className={styles.provisioningWrap}>
-                  <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
-                </div>
-              )}
-              <SessionSummaryCard session={session} />
-              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
-                <>
-                  <div className={styles.emptyTranscript}>No conversation yet</div>
-                  {/* No rows to anchor to — every card is a fallback one. */}
-                  {livePermissionRequests.map((req) => (
-                    <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
-                  ))}
-                </>
-              ) : (
-                <ChatRenderer
-                  messages={messages}
-                  links={links}
-                  viewedSessionId={sessionId}
-                  attachmentUrl={(id, variant) =>
-                    routerClient.attachmentUrl({ session: sessionId }, id, variant)
-                  }
-                  liveItems={liveItems}
-                  turnActive={inChatTurn}
-                  thinkingHistory={thinkingHistory}
-                  toolStatuses={toolStatuses}
-                  tasks={tasksByToolUseMap}
-                  selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
-                  onOpenTool={openTool}
-                  onOpenTask={(toolUseId, tool) =>
-                    openSubagent(
-                      toolUseId,
-                      tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
-                      tasksByToolUseMap.get(toolUseId)?.subagentType,
-                    )
-                  }
-                  worktreeCards={worktree.cards}
-                  worktreeActions={worktreeActions}
-                  permissionRequests={livePermissionRequests}
-                  onResolvePermission={resolvePermission}
-                  permissionReveal={permissionReveal}
-                />
-              )}
-              {transport.status !== "idle" && (
-                <div className={styles.transportBanner}>
-                  {transport.status === "switching" ? (
-                    <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
-                  ) : (
-                    <>
-                      <span>
-                        {transport.code === "busy"
-                          ? "Can't switch — a turn is in flight."
-                          : "Couldn't switch transport."}
-                      </span>
-                      <div className={styles.transportActions}>
+        {showHistory ? (
+          <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
+            {provisioning && (
+              <div className={styles.provisioningWrap}>
+                <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
+              </div>
+            )}
+            <SessionSummaryCard session={session} />
+            {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
+              <>
+                <div className={styles.emptyTranscript}>No conversation yet</div>
+                {/* No rows to anchor to — every card is a fallback one. */}
+                {livePermissionRequests.map((req) => (
+                  <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
+                ))}
+              </>
+            ) : (
+              <ChatRenderer
+                messages={messages}
+                links={links}
+                viewedSessionId={sessionId}
+                attachmentUrl={(id, variant) =>
+                  routerClient.attachmentUrl({ session: sessionId }, id, variant)
+                }
+                liveItems={liveItems}
+                turnActive={inChatTurn}
+                thinkingHistory={thinkingHistory}
+                toolStatuses={toolStatuses}
+                tasks={tasksByToolUseMap}
+                selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
+                onOpenTool={openTool}
+                onOpenTask={(toolUseId, tool) =>
+                  openSubagent(
+                    toolUseId,
+                    tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
+                    tasksByToolUseMap.get(toolUseId)?.subagentType,
+                  )
+                }
+                worktreeCards={worktree.cards}
+                worktreeActions={worktreeActions}
+                permissionRequests={livePermissionRequests}
+                onResolvePermission={resolvePermission}
+                permissionReveal={permissionReveal}
+              />
+            )}
+            {transport.status !== "idle" && (
+              <div className={styles.transportBanner}>
+                {transport.status === "switching" ? (
+                  <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
+                ) : (
+                  <>
+                    <span>
+                      {transport.code === "busy"
+                        ? "Can't switch — a turn is in flight."
+                        : "Couldn't switch transport."}
+                    </span>
+                    <div className={styles.transportActions}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => void handleToggle(transport.attemptedMode)}
+                      >
+                        Retry
+                      </Button>
+                      {transport.code === "busy" && (
                         <Button
                           variant="secondary"
                           size="sm"
-                          onClick={() => void handleToggle(transport.attemptedMode)}
+                          onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
                         >
-                          Retry
+                          Interrupt and switch
                         </Button>
-                        {transport.code === "busy" && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
-                          >
-                            Interrupt and switch
-                          </Button>
-                        )}
-                        {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => void handleToggle("chat")}
-                          >
-                            Return to chat
-                          </Button>
-                        )}
-                      </div>
-                    </>
-                  )}
+                      )}
+                      {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void handleToggle("chat")}
+                        >
+                          Return to chat
+                        </Button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            {waking && (
+              <div className={styles.transportBanner}>
+                <span>Waking the agent…</span>
+              </div>
+            )}
+            {showCompactSuggestion && (
+              <div className={styles.transportBanner}>
+                <span>
+                  This conversation is using ~{occupancyPct}% of the context window. Compacting
+                  summarizes older messages to free space.
+                </span>
+                <div className={styles.transportActions}>
+                  <Button variant="secondary" size="sm" onClick={() => void handleCompactNow()}>
+                    Compact now
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setCompactSuggestionDismissed(true)}
+                  >
+                    Not now
+                  </Button>
                 </div>
-              )}
-              {waking && (
-                <div className={styles.transportBanner}>
-                  <span>Waking the agent…</span>
-                </div>
-              )}
-              {showCompactSuggestion && (
-                <div className={styles.transportBanner}>
-                  <span>
-                    This conversation is using ~{occupancyPct}% of the context window. Compacting
-                    summarizes older messages to free space.
-                  </span>
-                  <div className={styles.transportActions}>
-                    <Button variant="secondary" size="sm" onClick={() => void handleCompactNow()}>
-                      Compact now
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => setCompactSuggestionDismissed(true)}
-                    >
-                      Not now
-                    </Button>
-                  </div>
-                </div>
-              )}
-              <CompactionStatus
-                status={compactStatus}
-                onDismiss={() => {
-                  writeCompactDismissedAt(sessionId);
-                  setCompactStatus(undefined);
-                }}
-              />
-              {/* Pinned bottom cluster (T16): running-subagent substrip +
-                  turn-long working indicator + composer stick together at
-                  the bottom of the scrollable stream — none can scroll off
-                  screen while the conversation is on screen. */}
-              <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+              </div>
+            )}
+            <CompactionStatus
+              status={compactStatus}
+              onDismiss={() => {
+                writeCompactDismissedAt(sessionId);
+                setCompactStatus(undefined);
+              }}
+            />
+            {/* Pinned bottom cluster (T16): the approval jump, running-subagent
+                substrip, turn-long working indicator and queued messages sit
+                just above the session dock, and all of it sticks to the
+                bottom of the scrollable stream — none can scroll off screen
+                while the conversation is on screen. */}
+            <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
+              <div className={styles.above}>
                 <ApprovalJump
                   pending={pendingPermissions}
                   subagentName={subagentName}
@@ -1491,67 +1536,93 @@ export function ConversationTab({
                     since={agentSince}
                   />
                 )}
-                <Composer
-                routerClient={routerClient}
-                sessionId={sessionId}
-                agentId={session.agent}
-                provider={session.provider}
-                usage={lastUsage}
-                contextWindow={lastUsage ? contextWindowForModel(session.model) : undefined}
-                disabled={transport.status !== "idle" || waking}
-                busy={inChatTurn}
-                onStop={() => void handleInterrupt()}
-                initialValue={pendingFirstMessage}
-                prefill={composerPrefill}
-                autoSendInitial={Boolean(pendingFirstMessage)}
-                onSendStart={() => {
-                  if (session.activity !== "active") setWaking(true);
-                  setTurnPhase((p) => (p === "idle" ? "live" : p));
-                }}
-                onSendError={(msg) => {
-                  setWaking(false);
-                  setSendError(msg);
-                }}
-                onAutoSendStart={onPendingFirstMessageHandled}
-                onUpdateSession={handleUpdateSession}
-                onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
-                onCommandError={(message) => setCommandToast({ tone: "bad", message })}
-                queued={queuedMessages}
-                onQueued={(q) => {
-                  setWaking(false);
-                  setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
-                }}
-                onCancelQueued={handleCancelQueued}
-                onSent={(text) => {
-                  // A send against a dormant session wakes it (Router:
-                  // handleSessionMessages) synchronously within the POST's
-                  // own request/response cycle — for a fast reply, the whole
-                  // turn (including turn_end) can complete before this
-                  // mount's /output stream (opened before the child existed,
-                  // permanently dead per the WHATWG EventSource spec — see
-                  // streamBroken above) ever reconnects. Piggyback the same
-                  // bounded refetch turn_end normally triggers, rather than
-                  // depending on a stream that's known-unreliable for this
-                  // specific turn.
-                  const wasDormant = session.activity !== "active";
-                  setWaking(false);
-                  setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-                  if (wasDormant) void refetchAfterTurn();
-                }}
+                <QueuedMessages
+                  queued={queuedMessages}
+                  onCancel={handleCancelQueued}
+                  className={styles.queuedAbove}
                 />
               </div>
-            </>
-          ) : terminalBridge ? (
-            <TerminalView
-              ref={terminalViewRef}
-              bridge={terminalBridge}
-              className={styles.terminal}
-              onComposeOpen={() => setTerminalComposerOpen(true)}
+              <SessionDock {...dockProps} mode="chat">
+                <Composer
+                  routerClient={routerClient}
+                  sessionId={sessionId}
+                  agentId={session.agent}
+                  provider={session.provider}
+                  usage={lastUsage}
+                  contextWindow={dockProps.contextWindow}
+                  mode={activeMode}
+                  onModeChange={dockProps.onModeChange}
+                  onCompact={dockProps.onCompact}
+                  disabled={transport.status !== "idle" || waking}
+                  busy={inChatTurn}
+                  onStop={() => void handleInterrupt()}
+                  initialValue={pendingFirstMessage}
+                  prefill={composerPrefill}
+                  autoSendInitial={Boolean(pendingFirstMessage)}
+                  onSendStart={() => {
+                    if (session.activity !== "active") setWaking(true);
+                    setTurnPhase((p) => (p === "idle" ? "live" : p));
+                  }}
+                  onSendError={(msg) => {
+                    setWaking(false);
+                    setSendError(msg);
+                  }}
+                  onAutoSendStart={onPendingFirstMessageHandled}
+                  onUpdateSession={handleUpdateSession}
+                  onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
+                  onCommandError={(message) => setCommandToast({ tone: "bad", message })}
+                  onQueued={(q) => {
+                    setWaking(false);
+                    setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
+                  }}
+                  onSent={(text) => {
+                    // A send against a dormant session wakes it (Router:
+                    // handleSessionMessages) synchronously within the POST's
+                    // own request/response cycle — for a fast reply, the whole
+                    // turn (including turn_end) can complete before this
+                    // mount's /output stream (opened before the child existed,
+                    // permanently dead per the WHATWG EventSource spec — see
+                    // streamBroken above) ever reconnects. Piggyback the same
+                    // bounded refetch turn_end normally triggers, rather than
+                    // depending on a stream that's known-unreliable for this
+                    // specific turn.
+                    const wasDormant = session.activity !== "active";
+                    setWaking(false);
+                    setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
+                    if (wasDormant) void refetchAfterTurn();
+                  }}
+                />
+              </SessionDock>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className={styles.stream} ref={streamRef} data-testid="conversation-stream">
+              {terminalBridge ? (
+                <TerminalView
+                  ref={terminalViewRef}
+                  bridge={terminalBridge}
+                  className={styles.terminal}
+                  onComposeOpen={openCompose}
+                  onToggleView={() => void handleToggle("chat")}
+                />
+              ) : (
+                <div className={styles.ptyUnavailable}>Connecting…</div>
+              )}
+            </div>
+            {/* The xterm is the input: no composer, chips, queue or working
+                line here. The dock's height is fixed in this view, so the
+                xterm fits once; the compose sheet floats over it rather than
+                resizing the PTY. */}
+            <SessionDock
+              {...dockProps}
+              mode="terminal"
+              onComposeToggle={terminalBridge ? toggleCompose : undefined}
+              composeOpen={composeOpen}
+              sheet={composeSheet}
             />
-          ) : (
-            <div className={styles.ptyUnavailable}>Connecting…</div>
-          )}
-        </div>
+          </>
+        )}
 
         {shellOpen &&
           (shellBridge ? (
@@ -1573,21 +1644,6 @@ export function ConversationTab({
             </div>
           ))}
       </div>
-
-      {terminalBridge && (
-        <TerminalComposer
-          open={terminalComposerOpen}
-          onClose={() => {
-            setTerminalComposerOpen(false);
-            terminalViewRef.current?.focus();
-          }}
-          onSend={(text) => {
-            terminalBridge.write(sessionId, formatBracketedPaste(text));
-            setTerminalComposerOpen(false);
-            terminalViewRef.current?.focus();
-          }}
-        />
-      )}
 
       {dockView && (
         <ActivityDock

@@ -3,14 +3,16 @@
 // markdown through DOMPurify, which doesn't sanitize under happy-dom.
 //
 // Commit and Land in the conversation (docs/SESSION-WORKTREES-DESIGN.md
-// D4–D6): the header control's actions, result cards from the event log
-// (replayed and live, rendered once), Undo, and "Ask the agent to resolve".
+// D4–D6): the dock's Commit/Land control and ⎇ popover, result cards from
+// the event log (replayed and live, rendered once), Undo, and "Ask the agent
+// to resolve".
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient, fixtureConfig, fixtureIsolatedSession } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import type { Envelope, LandResult, TranscriptMessage } from "../router/types";
+import { tidyOutsidePrompt } from "./Worktree/worktreeCopy";
 
 vi.mock("@monaco-editor/react", () => ({
   Editor: () => <textarea data-testid="fake-monaco-editor" />,
@@ -68,6 +70,15 @@ async function mount(client: FakeRouterClient) {
   await screen.findByText("Done — the detection works on both runners.");
 }
 
+/**
+ * The status line's Commit/Land control in a given state. The ⎇ popover has
+ * its own "Land into main" button, so the control is found by its
+ * data-work-state (the same hook the e2e suite reads), never by name alone.
+ */
+function workControl(state: "commit" | "land" | "landing" | "outside"): HTMLButtonElement | null {
+  return screen.getByTestId("dock-status").querySelector<HTMLButtonElement>(`[data-work-state="${state}"]`);
+}
+
 describe("ConversationTab — Commit and Land", () => {
   beforeEach(() => {
     nextSeq = 100;
@@ -92,7 +103,7 @@ describe("ConversationTab — Commit and Land", () => {
     expect(document.querySelectorAll("[data-worktree-card]")).toHaveLength(2);
   });
 
-  it("opens the Commit dialog from the header when one-click commits are off", async () => {
+  it("opens the Commit dialog from the dock when one-click commits are off", async () => {
     const client = makeClient();
     await mount(client);
     fireEvent.click(screen.getByRole("button", { name: /Commit…/ }));
@@ -144,15 +155,21 @@ describe("ConversationTab — Commit and Land", () => {
     client.landOutcome = () => new Promise<LandResult>((resolve) => (answer = resolve));
     await mount(client);
 
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
-    expect(((await screen.findByRole("button", { name: "Landing…" })) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(workControl("land")!);
+    await waitFor(() => expect(workControl("landing")?.disabled).toBe(true));
     expect(client.landCalls).toEqual([SID]);
+    // The click opened the ⎇ popover, which says so at the button.
+    const popover = screen.getByTestId("work-popover");
+    expect(within(popover).getByTestId("land-outcome").getAttribute("data-kind")).toBe("landing");
+    expect((within(popover).getByRole("button", { name: "Landing…" }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       answer({ outcome: "refused", reason: "busy", base: "main", branch: "mads/session/session-isolated" });
     });
     expect(await screen.findByText("Can't land while the agent is working")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /Land into main/ })).toBeTruthy();
+    expect(workControl("land")).toBeTruthy();
+    // The refusal shows in the popover too, at the button the user clicked.
+    expect(within(popover).getByTestId("land-outcome").getAttribute("data-reason")).toBe("busy");
 
     emitControl("merge.refused", { ...landPayload, reason: "busy" });
     expect(screen.getAllByText("Can't land while the agent is working")).toHaveLength(1);
@@ -186,13 +203,13 @@ describe("ConversationTab — Commit and Land", () => {
     expect(top).toBe(200);
 
     // ...but their own Land click follows its outcome to the tail.
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
+    fireEvent.click(workControl("land")!);
     expect(await screen.findByText("Changes outside this session are holding Land back")).toBeTruthy();
     expect(top).toBe(2000);
 
     // The same refusal again (answer, then its event): still one card, counted.
     emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
-    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
+    fireEvent.click(workControl("land")!);
     await waitFor(() => expect(client.landCalls).toHaveLength(2));
     emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
     await waitFor(() => expect(screen.getByText("×2")).toBeTruthy());
@@ -213,6 +230,28 @@ describe("ConversationTab — Commit and Land", () => {
     await mount(client);
     emitControl(type, { ...landPayload, ...extra });
     expect(await screen.findByText(title)).toBeTruthy();
+  });
+
+  it("explains changes outside the session in the ⎇ popover, whose Ask the agent drafts the tidy-up", async () => {
+    const client = makeClient({
+      ...fixtureIsolatedSession,
+      uncommitted_count: 0,
+      unlanded_count: 1,
+      outside_count: 2,
+    });
+    const send = vi.spyOn(client, "sendMessage");
+    await mount(client);
+
+    // The control opens the popover rather than drafting straight away.
+    fireEvent.click(workControl("outside")!);
+    const composer = screen.getByPlaceholderText(/message the agent/i) as HTMLTextAreaElement;
+    expect(composer.value).toBe("");
+    const explainer = within(screen.getByTestId("work-popover")).getByTestId("outside-explainer");
+    fireEvent.click(within(explainer).getByRole("button", { name: "Ask the agent" }));
+
+    await waitFor(() => expect(composer.value).toBe(tidyOutsidePrompt()));
+    expect(screen.queryByTestId("work-popover")).toBeNull();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("'Ask the agent to resolve' drafts an editable message in the composer and sends nothing", async () => {
@@ -272,7 +311,7 @@ describe("ConversationTab — trust changes in the history", () => {
     expect(screen.getByText("Trust changed: Full access → Read-only · applies when the agent next starts")).toBeTruthy();
   });
 
-  it("draws the notice live when the header pill changes trust, with no toast repeating it", async () => {
+  it("draws the notice live when the dock's trust picker changes trust, with no toast repeating it", async () => {
     const client = makeClient();
     const setTrust = vi.spyOn(client, "setSessionTrust");
     await mount(client);

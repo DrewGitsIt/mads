@@ -91,19 +91,35 @@
   gap: var(--space-2);
 }
 
-/* Pinned bottom cluster (T16, mockup .pinned): substrip + working indicator
-   + composer stick to the bottom of the scrollable stream — they can never
-   scroll off screen. Subtle backdrop blur + top border, per the mockup. */
+/* Pinned bottom cluster (T16; mockup E's .pinned): the approval jump,
+   substrip, working indicator and queued messages, then the session dock,
+   stick to the bottom of the scrollable stream — they can never scroll off
+   screen. No surface or border of its own: the dock is the one edge-to-edge
+   band, and its rim is the only top edge. */
 .pinned {
   position: sticky;
   bottom: 0;
   z-index: 40;
   margin-top: auto;
-  padding: var(--space-3) var(--space-4) var(--space-3);
-  background: color-mix(in srgb, var(--bg0) 94%, transparent);
-  backdrop-filter: blur(5px);
-  border-top: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+}
+
+/* What sits just above the dock (mockup E's .above). Each child keeps its
+   own surface; the strip itself is transparent over the stream. */
+.above {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.above:empty {
+  display: none;
+}
+
+/* The queue's own inset is for inside the composer; above the dock the
+   strip's padding already places it. */
+.above .queuedAbove {
+  padding: 0;
 }

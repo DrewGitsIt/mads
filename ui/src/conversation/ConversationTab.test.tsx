@@ -2,7 +2,7 @@
 // ChatRenderer/SessionSummaryCard render markdown through DOMPurify, which
 // doesn't sanitize correctly under happy-dom (see ChatRenderer/markdown.test.tsx).
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { resetProviderModelCache } from "../router/useProviderModels";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
@@ -13,13 +13,16 @@ import { FLAGS } from "../featureFlags";
 import { makeFakeShellHost } from "./ShellDock/fakeShellHost";
 import { resetShellDockCache } from "./ShellDock/dockState";
 import type { Link } from "../router/types";
+import { setPlatform } from "../platform/shortcut";
 
-// Same fake-Monaco precedent as Composer.test.tsx/TerminalComposer.test.tsx —
-// drives the real onMount callback (addCommand for ⌘Enter send) so the
-// terminal-mode compose overlay's send path is exercised the same way the
-// real editor's keybinding service would.
+// Same fake-Monaco precedent as Composer.test.tsx — drives the real onMount
+// callback (addCommand for the send-from-editor chord) so the terminal-mode
+// compose sheet's send path is exercised the same way the real editor's
+// keybinding service would.
 const CTRL_CMD = 1 << 11;
+const SHIFT = 1 << 10;
 const KEY_ENTER = 3;
+const KEY_ESCAPE = 9;
 
 vi.mock("@monaco-editor/react", () => ({
   Editor: (props: {
@@ -34,8 +37,18 @@ vi.mock("@monaco-editor/react", () => ({
         commands.set(keybinding, handler);
       },
       focus: () => {},
+      setPosition: () => {},
+      revealPositionInCenterIfOutsideViewport: () => {},
+      getModel: () => ({
+        getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }),
+        getOffsetAt: (pos: { column: number }) => pos.column - 1,
+      }),
+      onDidChangeCursorPosition: () => ({ dispose: () => {} }),
     };
-    const monaco = { KeyMod: { CtrlCmd: CTRL_CMD }, KeyCode: { Enter: KEY_ENTER } };
+    const monaco = {
+      KeyMod: { CtrlCmd: CTRL_CMD, Shift: SHIFT },
+      KeyCode: { Enter: KEY_ENTER, Escape: KEY_ESCAPE },
+    };
     props.onMount?.(fakeEditor, monaco);
     return (
       <textarea
@@ -46,6 +59,9 @@ vi.mock("@monaco-editor/react", () => ({
         onKeyDown={(e) => {
           if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
             commands.get(CTRL_CMD | KEY_ENTER)?.();
+          }
+          if (e.key === "Escape") {
+            commands.get(KEY_ESCAPE)?.();
           }
         }}
       />
@@ -86,6 +102,22 @@ function installShellHost() {
 
 const toggleShell = () => act(() => void window.dispatchEvent(new Event("mads:toggle-shell")));
 
+/** The session has loaded: the dock renders once the record is in, in either view. */
+const waitForDock = () => screen.findByTestId("session-dock");
+
+/** Which view the dock is laid out for ("chat" | "terminal"). */
+const dockMode = () => screen.getByTestId("session-dock").getAttribute("data-mode");
+
+/** The rim's occupancy, as the meter reports it (undefined without usage). */
+const rimPct = () => screen.queryByTestId("context-meter")?.getAttribute("aria-valuenow");
+
+/** Switches view from chat through the composer's + menu (View: Chat | Terminal). */
+async function switchViewTo(view: "Chat" | "Terminal") {
+  fireEvent.click(await screen.findByRole("button", { name: "Input options" }));
+  const group = screen.getByRole("group", { name: "View" });
+  fireEvent.click(within(group).getByRole("button", { name: new RegExp(view) }));
+}
+
 describe("ConversationTab", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
@@ -109,9 +141,7 @@ describe("ConversationTab", () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
     expect(screen.getByText(/Add retry backoff to the ingest worker, please/)).toBeTruthy();
   });
 
@@ -123,10 +153,8 @@ describe("ConversationTab", () => {
     const { host } = installShellHost();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("Terminal"));
+    await waitForDock();
+    await switchViewTo("Terminal");
 
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
@@ -144,10 +172,8 @@ describe("ConversationTab", () => {
     );
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("Terminal"));
+    await waitForDock();
+    await switchViewTo("Terminal");
 
     await waitFor(() => expect(screen.getByText(/Switching to terminal…/)).toBeTruthy());
     // History stays visible and read-only — never a blank pane mid-switch.
@@ -177,7 +203,8 @@ describe("ConversationTab", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
 
     await waitFor(() => expect(screen.getByText("Waking the agent…")).toBeTruthy());
-    const sendButton = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    // The send started a turn, so the button reads Queue — and waits out the wake.
+    const sendButton = screen.getByRole("button", { name: "Queue" }) as HTMLButtonElement;
     expect(sendButton.disabled).toBe(true);
 
     resolveSend();
@@ -209,10 +236,8 @@ describe("ConversationTab", () => {
     const interruptSpy = vi.spyOn(client, "interrupt");
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("Terminal"));
+    await waitForDock();
+    await switchViewTo("Terminal");
 
     await waitFor(() =>
       expect(screen.getByText("Can't switch — a turn is in flight.")).toBeTruthy(),
@@ -232,10 +257,8 @@ describe("ConversationTab", () => {
       .mockResolvedValueOnce({ mode: "terminal", ref: "test-ref" });
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("Terminal"));
+    await waitForDock();
+    await switchViewTo("Terminal");
 
     await waitFor(() => expect(screen.getByText("Couldn't switch transport.")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -255,41 +278,140 @@ describe("ConversationTab", () => {
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
     );
-    expect(
-      screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    // The dock sits under the xterm, led by the way back to chat.
+    expect(dockMode()).toBe("terminal");
+    expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+    expect(screen.queryByPlaceholderText(/message the agent/i)).toBeNull();
     expect(switchSpy).not.toHaveBeenCalled();
   });
 
-  it("terminal mode: ⌘E opens the compose overlay, and Send delivers the exact multi-line text to the PTY via bracketed paste", async () => {
-    const client = new FakeRouterClient();
-    const terminalWrite = vi.spyOn(client, "terminalWrite");
-    await client.switchTransport("session-active", "terminal");
+  // Terminal compose (mockup E · Terminal, T2): the line-numbered editor rises
+  // from the dock as a sheet OVER the xterm — never a modal, never a resize.
+  describe("terminal compose sheet", () => {
+    beforeEach(() => setPlatform("linux"));
+    afterEach(() => setPlatform(undefined));
 
-    render(<ConversationTab sessionId="session-active" routerClient={client} />);
-    await waitFor(() =>
-      expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
-    );
+    async function mountTerminal(client: FakeRouterClient) {
+      await client.switchTransport("session-active", "terminal");
+      render(<ConversationTab sessionId="session-active" routerClient={client} />);
+      await waitFor(() =>
+        expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
+      );
+      return document.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
+    }
 
-    const xtermInput = document.querySelector(".xterm-helper-textarea") as HTMLTextAreaElement;
-    xtermInput.focus();
-    fireEvent.keyDown(xtermInput, { key: "e", metaKey: true });
+    it("opens on the compose hotkey (Ctrl+Shift+E on Linux) and pastes the exact multi-line text as a bracketed paste", async () => {
+      const client = new FakeRouterClient();
+      const terminalWrite = vi.spyOn(client, "terminalWrite");
+      const xtermInput = await mountTerminal(client);
 
-    const editor = await screen.findByTestId("fake-monaco-editor");
-    fireEvent.change(editor, { target: { value: "line one\nline two" } });
-    // No stray keystrokes should have reached the pty while the overlay was open.
-    expect(terminalWrite).not.toHaveBeenCalled();
+      xtermInput.focus();
+      fireEvent.keyDown(xtermInput, { key: "E", ctrlKey: true, shiftKey: true });
 
-    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+      const sheet = await screen.findByTestId("dock-sheet");
+      // Out of the stream: the sheet floats above the dock, so the xterm (and
+      // its PTY) keeps its size.
+      expect(screen.getByTestId("session-dock").contains(sheet)).toBe(true);
+      expect(screen.getByTestId("conversation-stream").contains(sheet)).toBe(false);
+      expect(within(sheet).getByRole("button", { name: "Paste into terminal" })).toBeTruthy();
+      expect(sheet.textContent).toContain("sent as a bracketed paste");
 
-    await waitFor(() =>
-      expect(terminalWrite).toHaveBeenCalledWith(
-        "session-active",
-        "\x1b[200~line one\nline two\x1b[201~",
-      ),
-    );
-    expect(screen.queryByTestId("terminal-composer")).toBeNull();
-    expect(document.activeElement).toBe(xtermInput);
+      const editor = await within(sheet).findByTestId("fake-monaco-editor");
+      fireEvent.change(editor, { target: { value: "line one\nline two" } });
+      // No stray keystrokes reach the pty while the sheet is open.
+      expect(terminalWrite).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
+
+      await waitFor(() =>
+        expect(terminalWrite).toHaveBeenCalledWith(
+          "session-active",
+          "\x1b[200~line one\nline two\x1b[201~",
+        ),
+      );
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+      expect(document.activeElement).toBe(xtermInput);
+    });
+
+    it("ignores the mac chord on Linux", async () => {
+      const client = new FakeRouterClient();
+      const xtermInput = await mountTerminal(client);
+      xtermInput.focus();
+      fireEvent.keyDown(xtermInput, { key: "e", metaKey: true });
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+    });
+
+    it("toggles from the dock's compose segment, pastes from the button, and starts empty again after a paste", async () => {
+      const client = new FakeRouterClient();
+      const terminalWrite = vi.spyOn(client, "terminalWrite");
+      await mountTerminal(client);
+
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      const editor = await screen.findByTestId("fake-monaco-editor");
+      fireEvent.change(editor, { target: { value: "hello pty" } });
+      fireEvent.click(screen.getByRole("button", { name: "Paste into terminal" }));
+      expect(terminalWrite).toHaveBeenCalledWith("session-active", "\x1b[200~hello pty\x1b[201~");
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      expect((await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement).toHaveProperty("value", "");
+      fireEvent.click(screen.getByRole("button", { name: "Close composer" }));
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+    });
+
+    it("closes exactly once on Esc, back to the xterm, keeping the draft for next time", async () => {
+      const client = new FakeRouterClient();
+      const terminalWrite = vi.spyOn(client, "terminalWrite");
+      const xtermInput = await mountTerminal(client);
+
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      const editor = await screen.findByTestId("fake-monaco-editor");
+      fireEvent.change(editor, { target: { value: "half a thought" } });
+      fireEvent.keyDown(editor, { key: "Escape" });
+
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+      expect(document.activeElement).toBe(xtermInput);
+      expect(terminalWrite).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      expect(await screen.findByTestId("fake-monaco-editor")).toHaveProperty("value", "half a thought");
+    });
+
+    it("never resolves @ mentions or / commands in the sheet", async () => {
+      const client = new FakeRouterClient();
+      await mountTerminal(client);
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      fireEvent.change(await screen.findByTestId("fake-monaco-editor"), {
+        target: { value: "check @deep /agent" },
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("doesn't carry an open sheet back to chat and then into terminal again", async () => {
+      const client = new FakeRouterClient();
+      await mountTerminal(client);
+      fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
+      expect(await screen.findByTestId("dock-sheet")).toBeTruthy();
+
+      // The status line's leading Chat segment is the way back.
+      fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+      await waitFor(() => expect(dockMode()).toBe("chat"));
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+
+      await switchViewTo("Terminal");
+      await waitFor(() => expect(dockMode()).toBe("terminal"));
+      expect(screen.queryByTestId("dock-sheet")).toBeNull();
+    });
+
+    it("switches back to chat on the toggle-view hotkey from the xterm", async () => {
+      const client = new FakeRouterClient();
+      const xtermInput = await mountTerminal(client);
+      xtermInput.focus();
+      fireEvent.keyDown(xtermInput, { key: "T", ctrlKey: true, shiftKey: true });
+      await waitFor(() => expect(dockMode()).toBe("chat"));
+      expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
+    });
   });
 
   it("opens a dormant session with no transport history in chat", async () => {
@@ -297,13 +419,10 @@ describe("ConversationTab", () => {
 
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
     expect(document.querySelector('[data-testid="terminal-view"]')).toBeNull();
-    expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(dockMode()).toBe("chat");
+    expect(screen.getByPlaceholderText(/message the agent/i)).toBeTruthy();
   });
 
   it("keeps a session's mode intact after navigating to another session and back, without an implicit switch", async () => {
@@ -312,10 +431,8 @@ describe("ConversationTab", () => {
       <ConversationTab sessionId="session-active" routerClient={client} />,
     );
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
-    fireEvent.click(screen.getByText("Terminal"));
+    await waitForDock();
+    await switchViewTo("Terminal");
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
     );
@@ -330,9 +447,7 @@ describe("ConversationTab", () => {
     await waitFor(() =>
       expect(document.querySelector('[data-testid="terminal-view"]')).toBeTruthy(),
     );
-    expect(
-      screen.getByRole("button", { name: "Terminal" }).getAttribute("aria-pressed"),
-    ).toBe("true");
+    expect(dockMode()).toBe("terminal");
 
     expect(switchSpy).not.toHaveBeenCalled();
   });
@@ -345,8 +460,7 @@ describe("ConversationTab", () => {
   });
 
   const shellVisible = () => screen.queryByRole("button", { name: "End shell" }) !== null;
-  const waitForChat = () =>
-    waitFor(() => expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy());
+  const waitForChat = waitForDock;
 
   it("toggles the Shell dock via the cross-tree toggle signal", async () => {
     const client = new FakeRouterClient();
@@ -490,9 +604,7 @@ describe("ConversationTab", () => {
     const { host } = installShellHost();
     render(<ConversationTab sessionId="session-files-clean" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
     act(() => {
       window.dispatchEvent(new Event("mads:toggle-shell"));
     });
@@ -566,9 +678,7 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(screen.getByText(/couldn't load/i)).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
   });
 
   it("shows an error card when getTranscript rejects", async () => {
@@ -585,9 +695,7 @@ describe("ConversationTab", () => {
 
     expect(screen.getByText(/loading session/i)).toBeTruthy();
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
   });
 
   it("shows an empty-state note when the transcript is empty, with the composer still usable", async () => {
@@ -775,10 +883,16 @@ describe("ConversationTab", () => {
     // contributes, since it's not part of what the next turn's request
     // carries as context (regression test: previously summed input+output+
     // cache, which would have read 50%).
-    await waitFor(() => expect(screen.getByText("49%")).toBeTruthy());
-    // The meter sits in the composer, beside the message box — not the header.
-    const composerRow = screen.getByPlaceholderText(/Message the agent/).parentElement!;
-    expect(composerRow.contains(screen.getByTestId("context-meter"))).toBe(true);
+    await waitFor(() => expect(rimPct()).toBe("49"));
+    expect(screen.getByTestId("context-label").textContent).toContain("97k / 200k · 49% context");
+    // The meter is the dock's rim, its top edge above the composer.
+    const dock = screen.getByTestId("session-dock");
+    const rim = screen.getByTestId("context-meter");
+    expect(dock.contains(rim)).toBe(true);
+    expect(
+      rim.compareDocumentPosition(screen.getByPlaceholderText(/Message the agent/)) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("names the tool in the working indicator, then clears it once text starts streaming", async () => {
@@ -967,9 +1081,7 @@ describe("ConversationTab", () => {
     const getSession = vi.spyOn(client, "getSession");
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
     getSession.mockClear();
 
     const source = FakeEventSource.instances.find((s) => s.url.includes("task.status_changed"));
@@ -997,9 +1109,7 @@ describe("ConversationTab", () => {
     const getSession = vi.spyOn(client, "getSession");
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-    );
+    await waitForDock();
     getSession.mockClear();
 
     const source = FakeEventSource.instances.find((s) => s.url.includes("task.status_changed"));
@@ -1087,7 +1197,7 @@ describe("ConversationTab", () => {
     vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
     render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-    await waitFor(() => expect(screen.getByText("50%")).toBeTruthy());
+    await waitFor(() => expect(rimPct()).toBe("50"));
   });
 
   // The user-facing half of auto-compaction's fix: the server only force-
@@ -1148,7 +1258,9 @@ describe("ConversationTab", () => {
     render(<ConversationTab sessionId="session-active" routerClient={quiet} />);
     // The meter proves the same accurate numbers rendered: 40k/200k = 20%,
     // not the aggregate's 400k.
-    await waitFor(() => expect(screen.getByText("20%")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getAllByTestId("context-meter").map((m) => m.getAttribute("aria-valuenow"))).toContain("20"),
+    );
     expect(screen.queryByText(/of the context window/)).toBeNull();
   });
 
@@ -1178,7 +1290,7 @@ describe("ConversationTab", () => {
 
     // The meter's intentional fallback rendering (267,212 aggregate against
     // the static 200k table, clamped) proves the seeded usage mounted.
-    await waitFor(() => expect(screen.getByText("100%")).toBeTruthy());
+    await waitFor(() => expect(rimPct()).toBe("100"));
     expect(screen.queryByText(/of the context window/)).toBeNull();
   });
 
@@ -1363,9 +1475,7 @@ describe("ConversationTab", () => {
       const getTranscript = vi.spyOn(client, "getTranscript");
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
 
-      await waitFor(() =>
-        expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy(),
-      );
+      await waitForDock();
       const callsAtIdle = getTranscript.mock.calls.length;
 
       vi.useFakeTimers();
@@ -1419,9 +1529,10 @@ describe("ConversationTab", () => {
       expect(screen.getByText("the reply that arrived while backgrounded")).toBeTruthy();
     });
   });
-  // The header model pill and "/model" used to be pure local state: the pill
-  // relabelled, a toast claimed success, and nothing left the browser — the
-  // session record still held the old model and the agent kept running it.
+  // The model picker (once a header pill, now the dock's model segment) and
+  // "/model" used to be pure local state: the pill relabelled, a toast claimed
+  // success, and nothing left the browser — the session record still held the
+  // old model and the agent kept running it.
   // These cover the wiring that replaced that (POST /sessions/{id}/model).
   describe("model switching", () => {
     function stubProviderModels() {
@@ -1455,13 +1566,12 @@ describe("ConversationTab", () => {
     async function pickOpus(client: FakeRouterClient) {
       stubProviderModels();
       render(<ConversationTab sessionId="session-active" routerClient={client} />);
-      // Discovery has to land first or the pill is a static chip, not a menu.
-      await waitFor(() => expect(screen.getByText("Claude Sonnet 5")).toBeTruthy());
-      fireEvent.click(screen.getByText("Claude Sonnet 5"));
-      fireEvent.click(screen.getByText("Claude Opus 5"));
+      // Discovery has to land first or the segment is a static span, not a menu.
+      fireEvent.click(await screen.findByRole("button", { name: "Claude Sonnet 5" }));
+      fireEvent.click(screen.getByRole("option", { name: "Claude Opus 5" }));
     }
 
-    it("persists a header model switch on the session record instead of only relabelling the pill", async () => {
+    it("persists a dock model switch on the session record instead of only relabelling the segment", async () => {
       const client = new FakeRouterClient();
       const setSessionModel = vi.spyOn(client, "setSessionModel");
       await pickOpus(client);
@@ -1488,14 +1598,14 @@ describe("ConversationTab", () => {
       );
     });
 
-    it("surfaces a failed switch instead of leaving the pill showing the new model", async () => {
+    it("surfaces a failed switch instead of leaving the segment showing the new model", async () => {
       const client = new FakeRouterClient();
       vi.spyOn(client, "setSessionModel").mockRejectedValue(new Error("agent is not running"));
       await pickOpus(client);
 
       await waitFor(() => expect(screen.getByText("Command failed")).toBeTruthy());
       expect(screen.getByText("agent is not running")).toBeTruthy();
-      expect(screen.getByText("Claude Sonnet 5")).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Claude Sonnet 5" })).toBeTruthy();
     });
   });
 });

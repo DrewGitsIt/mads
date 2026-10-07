@@ -10,7 +10,9 @@
   transition: background 0.15s;
 }
 
-.dock:focus-within {
+/* Typing lifts the dock slightly (mockup E). Keyed to the composer, not the
+   whole dock, so opening a status-line picker doesn't light the band up. */
+.dock:has([data-composer]:focus-within) {
   background: color-mix(in srgb, var(--bg1) 55%, var(--bg2));
 }
 
