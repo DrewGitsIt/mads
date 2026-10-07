@@ -217,10 +217,10 @@ export function GeneralSection({ config }: GeneralSectionProps) {
             ))}
         </select>
       </div>
-      {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): the header's
-          Commit… skips the dialog. Off and disabled without a Fast Model
-          to write the messages — a saved "on" then just falls back to the
-          dialog. */}
+      {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): Commit… in
+          the session dock's status line (and in its ⎇ popover) skips the
+          dialog. Off and disabled without a Fast Model to write the
+          messages — a saved "on" then just falls back to the dialog. */}
       <div className={styles.row}>
         <label className={styles.toggleLabel}>
           <input
@@ -232,7 +232,7 @@ export function GeneralSection({ config }: GeneralSectionProps) {
           Write commit messages for me
         </label>
         <div className={styles.hint}>
-          The Commit button skips the dialog: the Fast Model writes the message and commits all of
+          Commit in the session's status line skips the dialog: the Fast Model writes the message and commits all of
           this session's files. You can undo from the result. Needs a Fast Model.
         </div>
         {!commitDraftsAvailable && (
