@@ -1,0 +1,92 @@
+/* The dock's top hairline IS the context meter (docs/mockups/composer-options.html, option E). */
+
+.rim {
+  position: relative;
+  height: 2px;
+  background: var(--line-soft);
+}
+
+/* Fat hover target: 14px band centred on the 2px line. */
+.rim::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -6px;
+  height: 14px;
+}
+
+.fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: var(--rim-tone);
+  box-shadow: 0 0 6px var(--rim-tone);
+  transition: width 0.2s;
+}
+
+.rim[data-tone="quiet"] {
+  --rim-tone: var(--text3);
+}
+.rim[data-tone="warn"] {
+  --rim-tone: var(--warn);
+}
+.rim[data-tone="bad"] {
+  --rim-tone: var(--bad);
+}
+
+/* Sits just above the dock, at its right edge. */
+.label {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg1);
+  border: 1px solid var(--line-soft);
+  font: var(--fs-chip) var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--text3);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.rim:hover .label {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* From 70% the label stays up, in the rim's tone. */
+.rim[data-pinned] .label {
+  opacity: 1;
+  pointer-events: auto;
+  color: var(--rim-tone);
+  border-color: color-mix(in srgb, var(--rim-tone) 40%, transparent);
+}
+
+.compact {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: 650 var(--fs-chip) var(--sans);
+  cursor: pointer;
+}
+
+.compact:hover {
+  text-decoration: underline;
+}
+
+/* The dock (SessionDock) is the size container; below 520px the label is the bare %. */
+@container (max-width: 520px) {
+  .lblFull {
+    display: none;
+  }
+}

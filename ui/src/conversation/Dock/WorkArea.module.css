@@ -1,0 +1,187 @@
+/* The status line's ⎇ segment, Commit/Land control and their shared popover. */
+
+/* Shrinkable: the ⎇ branch is the first thing to truncate. */
+.area {
+  display: flex;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+/* components/Popover's root (inline-block) — let it shrink and lay out its anchor in a row. */
+.area > div {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.loc {
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.where {
+  flex: none;
+}
+
+.branch {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  font: 11px var(--mono);
+}
+
+.base {
+  flex: none;
+}
+
+/* Commit… / Land / Changes outside — never collapses; only counts and long words drop. */
+.work {
+  flex: none;
+  margin-left: 2px;
+  height: 22px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 650 11.5px var(--sans);
+  /* keeps the spans' leading spaces (" into main", " ↑3") */
+  white-space: pre;
+  cursor: pointer;
+}
+
+.work:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.work:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.outside {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+}
+
+.outside:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- popover ---- */
+
+.pop {
+  width: 330px;
+  max-width: calc(100vw - 24px);
+  font: var(--fs-ui) var(--sans);
+  color: var(--text);
+  white-space: normal;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  padding: 4px 8px 8px;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.kv dt {
+  color: var(--text3);
+}
+
+.kv dd {
+  margin: 0;
+  min-width: 0;
+  color: var(--text2);
+  font: 12px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kv dd.warn {
+  color: var(--warn-fg);
+  font-family: var(--sans);
+  white-space: normal;
+}
+
+.kv dd.plain {
+  font-family: var(--sans);
+}
+
+.acts {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px 8px;
+}
+
+.outcome {
+  margin: 0 8px 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  border: 1px solid var(--line-soft);
+  background: var(--bg1);
+}
+
+.outcome code {
+  font: 12px var(--mono);
+  background: var(--bg3);
+  padding: 0 4px;
+  border-radius: 4px;
+}
+
+.tone_warn {
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+.tone_warn b {
+  color: var(--warn-fg);
+}
+
+.tone_bad {
+  background: var(--bad-soft);
+  border-color: color-mix(in srgb, var(--bad) 35%, transparent);
+}
+.tone_bad b {
+  color: var(--bad-fg);
+}
+
+.tone_ok {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.tone_ok b {
+  color: var(--ok-fg);
+}
+
+.tone_quiet b {
+  color: var(--text);
+}
+
+.outcomeActs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.detail {
+  margin: 6px 0 0;
+  max-height: 120px;
+  overflow: auto;
+  font: 11.5px var(--mono);
+  white-space: pre-wrap;
+  color: var(--text3);
+}

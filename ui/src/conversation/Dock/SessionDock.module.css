@@ -1,0 +1,28 @@
+/* The session dock (docs/mockups/composer-options.html, option E): one
+   edge-to-edge band, no inner boxes. It is the size container the narrow
+   ladder's @container queries read. */
+
+.dock {
+  position: relative;
+  flex: none;
+  container-type: inline-size;
+  background: var(--bg1);
+  transition: background 0.15s;
+}
+
+.dock:focus-within {
+  background: color-mix(in srgb, var(--bg1) 55%, var(--bg2));
+}
+
+/* Terminal compose: a sheet rising from the dock OVER the xterm, so the
+   terminal (and its PTY) never resizes. Out of flow: the dock keeps its height. */
+.sheet {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 20;
+  background: var(--bg1);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -14px 30px rgba(0, 0, 0, 0.5);
+}
