@@ -1486,7 +1486,8 @@ describe("SessionRail filter chips", () => {
     expect(chip("All").textContent).toBe("All5");
     expect(chip("Working").textContent).toBe("Working1");
     // A crash and a parked approval are both "needs you".
-    expect(chip("Needs you").textContent).toBe("Needs you2");
+    expect(chip("Attn.").textContent).toBe("Attn.2");
+    expect(chip("Attn.").title).toBe("Needs you");
     // Ready and sleeping alike — neither is mid-turn.
     expect(chip("Idle").textContent).toBe("Idle2");
   });
@@ -1499,7 +1500,7 @@ describe("SessionRail filter chips", () => {
         openTaskCounts={{ s: { running: 0, ready: 0, blocked: 1 } }}
       />,
     );
-    expect(chip("Needs you").textContent).toBe("Needs you1");
+    expect(chip("Attn.").textContent).toBe("Attn.1");
     expect(chip("Idle").textContent).toBe("Idle0");
   });
 
@@ -1513,9 +1514,9 @@ describe("SessionRail filter chips", () => {
       "sleeping one",
     ]);
 
-    fireEvent.click(chip("Needs you"));
+    fireEvent.click(chip("Attn."));
     expect(cardNames()).toEqual(["parked one", "crashed one"]);
-    expect(chip("Needs you").getAttribute("aria-pressed")).toBe("true");
+    expect(chip("Attn.").getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(chip("Idle"));
     expect(cardNames()).toEqual(["ready one", "sleeping one"]);

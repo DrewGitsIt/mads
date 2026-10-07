@@ -41,7 +41,7 @@ test("sessions journey: hero goal opens the conversation and gets a reply", asyn
 
   // "+ New session" clears the open workspace back to the Launchpad (the
   // dedicated "Back to Launchpad" button no longer exists).
-  await page.getByRole("button", { name: "+ New session" }).click();
+  await page.getByRole("button", { name: "New session" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 });
 
@@ -179,7 +179,7 @@ test("sessions journey: sleep, wake affordance, delete", async ({ page, routerUR
   // Delete-from-rail: back at the Launchpad ("+ New session" clears the open
   // workspace), the same shared confirm dialog is reachable from the rail
   // row's 🗑 button (aria-label "Archive <name>").
-  await page.getByRole("button", { name: "+ New session" }).click();
+  await page.getByRole("button", { name: "New session" }).click();
   await expect(page.getByLabel("Describe your goal")).toBeVisible();
 
   // The action cluster hangs outside the card and is inert until the row is

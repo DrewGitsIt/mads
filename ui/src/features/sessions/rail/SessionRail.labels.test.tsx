@@ -217,7 +217,7 @@ describe("SessionRail context labels", () => {
     expect(labelsOn(cardFor("blocked one"))).toEqual({ location: "mads" });
     expect(labelsOn(cardFor("calm one"))).toEqual({ location: "sidecar" });
 
-    fireEvent.click(screen.getByRole("button", { name: /Needs you/ }));
+    fireEvent.click(screen.getByTitle("Needs you"));
     expect(cards()).toHaveLength(1);
     expect(labelsOn(cardFor("blocked one"))).toEqual({ location: "mads" });
   });

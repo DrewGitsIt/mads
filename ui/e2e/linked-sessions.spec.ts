@@ -140,7 +140,7 @@ test.describe("linked sessions: link UI behind the flag", () => {
     // under its holder and never joins link selection), but the Launchpad's
     // staged chooser lists every session.
     await page.goto(routerURL);
-    await page.getByRole("button", { name: "+ New session" }).click();
+    await page.getByRole("button", { name: "New session" }).click();
     await page.getByRole("button", { name: "More start options" }).click();
     await page.getByText("Link to session(s)…").click();
 

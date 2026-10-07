@@ -98,7 +98,7 @@ test("attachments journey: an unsent hero goal and its files survive visiting an
 
   await page.locator('[aria-label="Session list"]').getByText(other.name, { exact: true }).click();
   await expect(page.getByPlaceholder("Message the agent — @ to mention, / for commands")).toBeVisible();
-  await page.getByRole("button", { name: "+ New session" }).click();
+  await page.getByRole("button", { name: "New session" }).click();
 
   await expect(page.getByLabel("Describe your goal")).toHaveValue("half-written goal");
   await expect(page.getByLabel(/^Remove screenshot-.*\.png$/)).toBeVisible();
