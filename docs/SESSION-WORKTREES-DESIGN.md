@@ -127,8 +127,30 @@ that predates this).
 |---|---|
 | uncommitted session files | **Commit…** (count of files) |
 | clean, branch ahead of base (isolated only) | **Land into `<worktree_base>`** (count of commits) |
+| clean of session files, but other files changed in the folder (isolated only) | **Changes outside this session** (count of files) |
 | both | **Commit…**, with "then land N" noted |
 | neither | hidden |
+
+**"Changes outside this session"** (added 2026-10-07, commit 40d568d). Land refuses
+a dirty folder (D6), and the dirty files are often ones the agent changed through a
+shell, so they never reached the change list and the Commit dialog can't list them.
+Offering Land there only produced a refusal. `outside_count` counts files git reports
+as changed in an isolated session's folder that aren't on its change list
+(`sessionwt.CountOutside`). While it's non-zero the control says so instead of
+offering Land. Its popover explains why Land is held back and offers **Ask the
+agent**, which drafts an editable message asking the agent to commit or revert those
+files. A `dirty` refusal names them too, in the refusal's `outside` field (carried on
+`merge.refused`), and its card offers the same action.
+
+**Where the control lives** (2026-10-07). The conversation header is retired. The
+control is the right end of the session dock's status line, after the
+`⎇ workspace / branch → base` segment (`ui/src/conversation/Dock/WorkArea.tsx`).
+Clicking ⎇ opens a popover with the folder, worktree, branch and status, and
+**Commit…** / **Land into `<base>`** buttons. A Land click opens that popover, and the
+outcome (landed, conflicted, auto-merged, refused, with the refusal's fix) renders
+there, at the button. The card in the conversation is still the durable record. In
+terminal view, "Ask the agent" opens the dock's compose sheet prefilled instead of
+the chat composer.
 
 **"Uncommitted session files"** means files in the session's change list that git
 also reports as changed. Otherwise a file the agent touched and then reverted would
@@ -141,8 +163,9 @@ a Commit, a Land, a pipeline merge, and at start. It runs:
 - `git status --porcelain --untracked-files=no -- <session files>`
 - `git rev-list --count <base>..mads/session/<id>`
 
-It publishes the result as session fields (`uncommitted_count`, `unlanded_count`) and
-the header just reads them. The rail marker reads the same fields.
+It publishes the result as session fields (`uncommitted_count`, `unlanded_count`,
+`outside_count`) and the status line just reads them. The rail marker reads the same
+fields.
 
 ### D5. Commit (click-to-commit, decided 2026-10-05)
 
@@ -224,7 +247,8 @@ The folder **stays**. A running agent keeps a valid working folder, resume keeps
 working, and the Files tab's paths stay real (fixes 3 and 4).
 
 **Results are cards in the conversation:** landed, needs the agent, your checkout
-refused, or Land unavailable right now. They are not chips on the Files tab.
+refused, or Land unavailable right now. They are not chips on the Files tab. A Land
+started from the dock also shows its outcome in the ⎇ popover, at the button (D4).
 `MergeBackFlow`, its target-branch box and the merge-editor stub are retired.
 
 **Closing a session** (the rail's existing close action, which makes it inactive)

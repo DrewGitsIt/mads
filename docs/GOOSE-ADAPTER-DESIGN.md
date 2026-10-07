@@ -493,8 +493,8 @@ ACP session's assistant reply readable from `GET /transcript` in real time
    the real window at runtime (`usage_update.size` → turn-end
    `Usage.ContextWindow`, providers/acprpc/session.go — confirmed live by
    the smoke: 6101/128000 for qwen3.8), and both consumers already prefer
-   it over the static tables (`ui/src/conversation/Header/ContextMeter.tsx`
-   `usage?.context_window ||` and `services/session/internal/runner/
+   it over the static tables (the dock's context rim, `ui/src/conversation/
+   Dock/ContextRim.tsx`, formerly `Header/ContextMeter.tsx`, and `services/session/internal/runner/
    compact.go` `contextOccupancy`). Static entries were rejected because
    goose model IDs are bare and open-ended (any `ollama pull`, per-user
    config) — a `"qwen3.8" → 128000` row in `providers/provider/

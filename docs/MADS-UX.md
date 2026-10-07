@@ -79,12 +79,36 @@ Replaces #1's empty state. Centered hero composer — greeting copy (approved): 
 
 ### 3.3 Session Workspace
 
-The heart. **One consolidated header** (fixes #3's two-bar split): session name (editable) · status chip · workspace/repo/branch · agent/model/trust pills (click = popover to change, §1 mutable metadata) · context meter · actions: **Resume/Pause**, **Bounce**, **Shell** (^`), **Merge back** (§17), **Link**, overflow (fork/rewind, delete). "Continue" is renamed **Resume** (#2).
+The heart. There is no header bar or subheader above the conversation (the consolidated header this section first proposed was built, then retired on 2026-10-07). The session's name and status are on its rail card; everything about the session itself is in the **session dock** at the bottom edge (below). The shell panel toggles with ^`. "Continue" is renamed **Resume** (#2).
 
-Center pane tabs: **Conversation · Tasks · Files · Pipeline**. Right side: **Context Rail** (§4's constant pane). Bottom: composer. Optional docked, **resizable** shell panel (#5).
+Center pane tabs: **Conversation · Tasks · Files · Pipeline**. Right side: **Context Rail** (§4's constant pane). Bottom: the session dock. Optional docked, **resizable** shell panel (#5).
 
 #### Conversation tab
-Chat renderer (markdown + collapsible tool cards) or terminal renderer (xterm.js on real PTY) per global display mode (§2). The stream is full-width — no centered reading column; agent prose keeps a readable measure (~90ch) while tool cards and code blocks use the available room. Inactive sessions show the **session summary card** at top (only non-empty sections — §16 structure: accomplished / decisions / remaining) above the transcript. Compose expansion (⌘E) grows the composer in place — no modal (#7). Injected content preview before send (§2.4).
+Chat renderer (markdown + collapsible tool cards) or terminal renderer (xterm.js on real PTY) per global display mode (§2). The stream is full-width — no centered reading column; agent prose keeps a readable measure (~90ch) while tool cards and code blocks use the available room. Inactive sessions show the **session summary card** at top (only non-empty sections — §16 structure: accomplished / decisions / remaining) above the transcript. Injected content preview before send (§2.4).
+
+**The session dock** (`ui/src/conversation/Dock/`) is one edge-to-edge band under the conversation, in both views. No inner boxes, no textarea border; focus tints the whole band. Top to bottom:
+
+1. **Rim.** The dock's 2px top hairline *is* the context meter. Its fill is occupancy: quiet below 70%, amber from 70%, red from 90%. Hovering it shows `106.5k / 128k · 83% context`. From 70% the label stays up, and from 80% it carries **Compact** (chat only). With no usage recorded, the rim is a plain hairline with no label, never a stale or invented number.
+2. **Attachment chips** (chat).
+3. **Input row** (chat only): **+** · an auto-growing textarea · Stop while a turn runs · **Send**, or **Queue** while busy.
+4. **Expanded editor** (⌘E): grows in place, no modal (#7). Monaco with a line-number gutter and word wrap, then an action bar with **+**, the send/collapse hint, and Stop / Send / Queue.
+5. **Status line** (one 30px line): persona ▾, model ▾ and trust ▾ (dot coloured by level) on the left; on the right `⎇ workspace / branch → base` and the **Commit / Land** control. Each segment opens its picker upward. The ⎇ popover says where the session works (folder, worktree, branch, status) and offers **Commit…** and **Land into base**. Land outcomes and refusals answer in that popover, at the button, as well as on the card in the conversation (SESSION-WORKTREES-DESIGN.md D4–D6).
+
+The **+ menu** holds everything about input and display: Attach files…, Mention, Commands, Expand editor, Keyboard shortcuts; **View: Chat | Terminal**; a context row with a bar, and Compact now.
+
+**Narrow panes** shed text, never controls. Below ~700px persona and model show short names, the branch a short id, and "Trust: " drops to the bare value. Below ~520px persona and model go icon-only, the branch hides (`⎇ → main`), and the rim label is the bare %. The trust value and the Commit/Land control never collapse.
+
+**Terminal view** keeps the same dock under the xterm, so switching views moves nothing but the input. The xterm *is* the input: no input row, chips, queue or working line. A **💬 Chat** segment leads the status line (the way back) and a **⌘E compose** segment sits before ⎇. There is no + menu and no Compact (type `/compact` in the TUI); mads `@` `/` `#` commands are chat only, and PTY input is never scanned. ⌘E compose opens the same line-numbered editor as a **sheet rising from the dock over the xterm**. It never resizes the terminal, since a PTY resize makes full-screen TUIs redraw. **Paste into terminal** sends it as a bracketed paste. "Ask the agent…" actions (the ⎇ popover's fixes) open this sheet prefilled, for the user to review and paste. The rim shows the session's recorded usage if there is any; in this view context depends on the TUI.
+
+**Hotkeys** come from one table, `ui/src/platform/hotkeys.ts` (`DEFAULT_BINDINGS`, with `setHotkeyOverrides()` as the hook for a future Settings override). Modifiers match exactly, and on Linux/Windows no plain Ctrl+letter is bound, because readline owns those in a terminal.
+
+| Action | Mac | Linux/Windows |
+|---|---|---|
+| Expand editor / compose | ⌘E | Ctrl+Shift+E |
+| Send from the editor | ⌘⏎ | Ctrl+⏎ |
+| Collapse the editor | Esc | Esc |
+| Chat ⇄ Terminal | ⌘⇧T | Ctrl+Shift+T |
+| Attach files | ⌘⇧A | Ctrl+Shift+A |
 
 - **Reads:** `GET /sessions/:id/transcript?page=` (normalized, §11), `GET /sessions/:id` (summary field)
 - **Subscribes:** **data-plane** `GET /sessions/:id/stream` (SSE: tokens, tool events, live status); control: `session.activity_changed`
@@ -98,7 +122,7 @@ Full task management. **List view** (default) and **Graph view** toggle — same
 - **Actions:** `POST /tasks`, `PATCH /tasks/:id` (incl. dependencies), `POST /tasks/:id/confirm|discard` (drafts), `POST /tasks/import`, `POST /sessions/:id/pipeline/start` (runs cycle check, launches)
 
 #### Files tab
-Session-level and per-task file changes (§5 dual granularity). File list with A/M/D badges + attribution (task chip, actor). Monaco diff: side-by-side/inline toggle (#10), **consistent scrollbars**, AA-contrast paths (#13). "Open in editor" always visible (§5). **Merge back** button here and in header: pick target branch → auto-attempt → conflict resolution in embedded merge editor or external editor (§17).
+Session-level and per-task file changes (§5 dual granularity). File list with A/M/D badges + attribution (task chip, actor). Monaco diff: side-by-side/inline toggle (#10), **consistent scrollbars**, AA-contrast paths (#13). "Open in editor" always visible (§5). **Merge back** button here and in header: pick target branch → auto-attempt → conflict resolution in embedded merge editor or external editor (§17). *Superseded: an isolated session lands through **Land** in the session dock's status line (SESSION-WORKTREES-DESIGN.md D6); the merge-back flow is retired.*
 
 - **Reads:** `GET /sessions/:id/changes?task=` (diffs, attribution)
 - **Subscribes:** `file.changed`, `commit.created`, `commit.linked` (session filter)
@@ -183,7 +207,7 @@ This list feeds §15's event log contract; expect growth during mockups.
 
 ## 5. Open UX Questions
 
-1. **Session header density** — how much metadata is visible vs. tucked into popovers? Mockup will decide.
+1. **Session header density** — how much metadata is visible vs. tucked into popovers? *Settled (2026-10-07): no header; the session dock's status line (§3.3) carries persona, model, trust, branch and Commit/Land, each with its own popover.*
 2. **Pipeline board orientation** — columns-by-stage vs rows-by-task with stage progress bars. Prototype both cheaply.
 3. **Linked sessions UI** (§1.12) — leader/monitor affordances deferred until core workspace lands; the `Link` entity (docs/LINKED-SESSIONS-DESIGN.md) and its Data Service CRUD exist behind the `linked-sessions` flag.
 4. **Terminal-mode Context Rail interactions** — rail is identical, but confirm hotkey-only workflows feel right for terminal purists.
