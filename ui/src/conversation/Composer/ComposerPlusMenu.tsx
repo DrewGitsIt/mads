@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { Popover } from "../../components/Popover/Popover";
 import { contextOccupancy } from "../../router/modelDisplay";
+import { formatTokens } from "../Dock/dockLabels";
 import type { Usage } from "../../router/types";
 import { hotkeyLabel } from "../../platform/hotkeys";
 import styles from "./Composer.module.css";
@@ -34,11 +35,6 @@ const UPWARD = {
   padding: 4,
 } as const;
 
-/** Token counts for the context row: "950", "106.5k", "128k". */
-function formatK(n: number): string {
-  if (n < 1000) return String(n);
-  return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
 
 /**
  * The composer's `+` menu (mockup E): Input (attach, mention, commands,
@@ -184,7 +180,7 @@ export function ComposerPlusMenu({
           {(occupancy || onCompact) && <hr className={styles.menuSep} />}
           {occupancy && (
             <div className={styles.ctxRow} data-testid="composer-context">
-              Context · {formatK(occupancy.used)} / {formatK(occupancy.window)} ({occupancy.pct}%)
+              Context · {formatTokens(occupancy.used)} / {formatTokens(occupancy.window)} ({occupancy.pct}%)
               <div className={styles.ctxBar}>
                 <i className={tone} style={{ width: `${occupancy.pct}%` }} />
               </div>

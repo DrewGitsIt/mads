@@ -11,7 +11,8 @@ import { AttachmentChips } from "../../components/Attachments/AttachmentChips";
 import { stagedForSession } from "../../components/Attachments/stagedAttachments";
 import { useStagedAttachments } from "../../components/Attachments/useStagedAttachments";
 import { useFileDrop } from "../../components/Attachments/useFileDrop";
-import { appendAttachments, splitAttachments } from "../attachmentRefs";
+import { appendAttachments } from "../attachmentRefs";
+import { QueuedMessages } from "./QueuedMessages";
 import { matches } from "../../platform/hotkeys";
 import styles from "./Composer.module.css";
 
@@ -428,24 +429,7 @@ export function Composer({
       onPaste={onPaste}
       {...dropHandlers}
     >
-      {queued.length > 0 && (
-        <div className={styles.queued}>
-          {queued.map((q) => (
-            <div key={q.id} className={styles.queuedItem}>
-              <span className={styles.queuedBadge}>Queued</span>
-              <span className={styles.queuedText}>{queuedLabel(q.text)}</span>
-              <button
-                type="button"
-                className={styles.queuedRemove}
-                aria-label="Remove queued message"
-                onClick={() => onCancelQueued?.(q.id)}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
+      <QueuedMessages queued={queued} onCancel={onCancelQueued} />
       <div className={styles.chips}>
         <InjectedContentPreview
           items={injected}
@@ -549,10 +533,3 @@ export function Composer({
   );
 }
 
-/** A queued message's text without the attachment paths the Router appended. */
-function queuedLabel(text: string): string {
-  const { body, attachments } = splitAttachments(text);
-  if (attachments.length === 0) return text;
-  const files = `📎 ${attachments.length} file${attachments.length === 1 ? "" : "s"}`;
-  return body ? `${body} · ${files}` : files;
-}
