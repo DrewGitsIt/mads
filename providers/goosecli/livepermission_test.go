@@ -15,8 +15,11 @@ import (
 // with a recording asker, proving the ACP permission path end to end:
 // goose's own request_permission for a shell call reaches the asker with
 // the call's id, a deny keeps the command from running, an allow lets it
-// run, and a plain file read never asks (the engine allows the read class
+// run, and a read-only tool never asks (the engine allows the read class
 // itself, since goose's approve mode would otherwise ask for everything).
+// goose 1.50's developer extension has no text-file read tool — reading a
+// file is `shell cat`, which rightly asks — so the read turn uses `tree`,
+// the one tool it annotates read-only.
 //
 // Needs a goose model that actually calls tools. goose reads its provider
 // and model from the user's config.yaml; MADS_GOOSE_SMOKE_PROVIDER and
@@ -37,7 +40,14 @@ func TestRealGoosePermissionAsks(t *testing.T) {
 		env = append(env, "GOOSE_MODEL="+v)
 	}
 
-	dir := t.TempDir()
+	// Resolved: on macOS t.TempDir() is under /var, a symlink to
+	// /private/var, and goose reports its cwd resolved — a model told to
+	// touch /var/... decides that's outside its working directory and
+	// refuses. The prompts below use bare filenames for the same reason.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var mu sync.Mutex
 	var asks []provider.PermissionAsk
 	allow := false
@@ -78,7 +88,7 @@ func TestRealGoosePermissionAsks(t *testing.T) {
 	}
 
 	denied := filepath.Join(dir, "denied.txt")
-	if !turn("Use your shell tool to run exactly this command and nothing else: touch " + denied) {
+	if !turn("Use your shell tool to run exactly this command and nothing else: touch denied.txt") {
 		t.Fatal("no tool call on the deny turn — use a goose model that calls tools (MADS_GOOSE_SMOKE_MODEL)")
 	}
 	got := asksSoFar()
@@ -96,22 +106,18 @@ func TestRealGoosePermissionAsks(t *testing.T) {
 	allow = true
 	mu.Unlock()
 	allowed := filepath.Join(dir, "allowed.txt")
-	if !turn("Use your shell tool to run exactly this command and nothing else: touch " + allowed) {
+	if !turn("Use your shell tool to run exactly this command and nothing else: touch allowed.txt") {
 		t.Fatal("no tool call on the allow turn")
 	}
 	if _, err := os.Stat(allowed); err != nil {
 		t.Errorf("%s missing after the user allowed it: %v", allowed, err)
 	}
 
-	note := filepath.Join(dir, "note.txt")
-	if err := os.WriteFile(note, []byte("the secret word is pelican\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 	before := len(asksSoFar())
-	if !turn("Read the file " + note + " with your file-reading tool and tell me the secret word.") {
+	if !turn("Use your tree tool (not shell) to list the files in the current directory.") {
 		t.Fatal("no tool call on the read turn")
 	}
 	if extra := asksSoFar()[before:]; len(extra) > 0 {
-		t.Errorf("a plain read asked the user: %+v", extra)
+		t.Errorf("a read-only tool asked the user: %+v", extra)
 	}
 }
