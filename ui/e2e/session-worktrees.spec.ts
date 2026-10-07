@@ -171,7 +171,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     const work = page.locator("[data-work-state]");
     await expect(work).toHaveAttribute("data-work-state", "commit");
     await expect(work).toContainText("Commit…");
-    await expect(work).toContainText("1 file");
+    // The dock's control shows the bare count; the words are in its title.
+    await expect(work).toHaveAttribute("title", /^Commit 1 file\b/);
     await shot(page, "01-header-commit.png");
 
     await work.click();
@@ -194,7 +195,7 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
 
     await expect(work).toHaveAttribute("data-work-state", "land");
     await expect(work).toContainText(`Land into ${base}`);
-    await expect(work).toContainText("1 commit");
+    await expect(work).toHaveAttribute("title", `Land 1 commit into ${base}`);
     await shot(page, "04-land-button.png");
 
     // Disk: committed on the session branch, with the Session trailer; the
