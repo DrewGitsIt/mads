@@ -15,6 +15,7 @@ import {
   refusalDetailIsGit,
   resolveConflictPrompt,
   shortHash,
+  tidyOutsidePrompt,
   undoRefusalCopy,
   type CardTone,
 } from "./worktreeCopy";
@@ -127,17 +128,30 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
       );
     }
     case "refused": {
-      const copy = refusalCopy(card.reason, card.base, card.files);
+      const copy = refusalCopy(card.reason, card.base, card.files, card.outside);
       const showDetail = Boolean(card.detail) && (refusalDetailIsGit(card.reason) || copy.title === "Land didn't run");
+      const canRetry = copy.retry && card.latest && Boolean(actions.onLandAgain);
+      // Files Commit can't take: the agent can commit or revert them.
+      const tidy =
+        card.reason === "dirty" && card.latest && actions.onAskAgent && card.outside?.length
+          ? card.outside
+          : undefined;
       return (
-        <Shell tone={copy.tone} title={copy.title} when={when} kind="refused" reason={card.reason}>
+        <Shell tone={copy.tone} title={copy.title} when={when} kind="refused" reason={card.reason} repeats={card.repeats}>
           <div className={styles.body}>{copy.body}</div>
           {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
-          {copy.retry && card.latest && actions.onLandAgain && (
+          {(canRetry || tidy) && (
             <div className={styles.acts}>
-              <Button variant="ghost" size="sm" disabled={actions.landing} onClick={actions.onLandAgain}>
-                {actions.landing ? "Landing…" : "Land again"}
-              </Button>
+              {tidy && (
+                <Button variant="primary" size="sm" onClick={() => actions.onAskAgent!(tidyOutsidePrompt(tidy))}>
+                  Ask the agent to commit them
+                </Button>
+              )}
+              {canRetry && (
+                <Button variant="ghost" size="sm" disabled={actions.landing} onClick={actions.onLandAgain}>
+                  {actions.landing ? "Landing…" : "Land again"}
+                </Button>
+              )}
             </div>
           )}
         </Shell>
@@ -207,6 +221,7 @@ function Shell({
   when,
   kind,
   reason,
+  repeats,
   children,
 }: {
   tone: CardTone;
@@ -214,6 +229,8 @@ function Shell({
   when: ReactNode;
   kind: string;
   reason?: string;
+  /** Identical outcomes this card stands for; a count shows past one. */
+  repeats?: number;
   children: ReactNode;
 }) {
   return (
@@ -227,6 +244,11 @@ function Shell({
       <div className={styles.head}>
         <span className={styles.stateDot} aria-hidden="true" />
         <span className={styles.title}>{title}</span>
+        {repeats !== undefined && repeats > 1 && (
+          <span className={styles.repeats} title={`The same outcome ${repeats} times in a row`}>
+            ×{repeats}
+          </span>
+        )}
         {when}
       </div>
       {children}

@@ -201,6 +201,11 @@ type Session struct {
 	// PUT carrying an older read can't roll them back.
 	UncommittedCount int `json:"uncommitted_count,omitempty"`
 	UnlandedCount    int `json:"unlanded_count,omitempty"`
+	// OutsideCount is how many other files are changed in an isolated
+	// session's folder — off the change list, so Commit can't take them,
+	// but Land refuses over them (sessionwt.CountOutside). Same writers and
+	// moments as the two above; always 0 in place.
+	OutsideCount int `json:"outside_count,omitempty"`
 	// ShadowDir is the absolute base path of this session's shadow git store
 	// (docs/SHADOW-GIT-DIFFS-ADR.md; services/session/shadow) — one shadow
 	// git dir per touched root underneath it, plus the capture index. Set by
@@ -298,6 +303,7 @@ type SessionWorktreePatch struct {
 	WorktreeBase     *string `json:"worktree_base,omitempty"`
 	UncommittedCount *int    `json:"uncommitted_count,omitempty"`
 	UnlandedCount    *int    `json:"unlanded_count,omitempty"`
+	OutsideCount     *int    `json:"outside_count,omitempty"`
 }
 
 // ChangeOrigin is how a file change was noticed (spec §5).

@@ -458,10 +458,10 @@ func TestSetWorktreeScopedWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir, branch, base, two, three := "/wt/x", "mads/session/x", "main", 2, 3
+	dir, branch, base, two, three, four := "/wt/x", "mads/session/x", "main", 2, 3, 4
 	patch := contracts.SessionWorktreePatch{
 		WorktreeDir: &dir, WorktreeBranch: &branch, WorktreeBase: &base,
-		UncommittedCount: &two, UnlandedCount: &three,
+		UncommittedCount: &two, UnlandedCount: &three, OutsideCount: &four,
 	}
 	if err := s.SetWorktree(ctx, sess.ID, patch, "session"); err != nil {
 		t.Fatal(err)
@@ -486,7 +486,7 @@ func TestSetWorktreeScopedWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.Name != "Renamed" || got.WorktreeDir != dir || got.WorktreeBranch != branch || got.WorktreeBase != base ||
-		got.UncommittedCount != 2 || got.UnlandedCount != 3 {
+		got.UncommittedCount != 2 || got.UnlandedCount != 3 || got.OutsideCount != 4 {
 		t.Errorf("after stale PUT: %+v, want the rename and every isolation field", got)
 	}
 
@@ -494,8 +494,16 @@ func TestSetWorktreeScopedWrite(t *testing.T) {
 	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{UncommittedCount: &zero, WorktreeDir: &empty}, "session"); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := s.Get(ctx, sess.ID); got.UncommittedCount != 0 || got.WorktreeDir != "" || got.UnlandedCount != 3 || got.WorktreeBranch != branch {
+	if got, _ := s.Get(ctx, sess.ID); got.UncommittedCount != 0 || got.WorktreeDir != "" || got.UnlandedCount != 3 || got.WorktreeBranch != branch || got.OutsideCount != 4 {
 		t.Errorf("partial patch: %+v, want uncommitted and dir cleared, the rest kept", got)
+	}
+	// A changed outside count alone is news: the header's Land depends on it.
+	n = updates()
+	if err := s.SetWorktree(ctx, sess.ID, contracts.SessionWorktreePatch{OutsideCount: &zero}, "session"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Get(ctx, sess.ID); got.OutsideCount != 0 || updates() != n+1 {
+		t.Errorf("outside patch: %+v, %d updates (was %d), want it cleared and announced", got, updates(), n)
 	}
 }
 

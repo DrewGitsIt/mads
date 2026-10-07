@@ -222,6 +222,11 @@ type LandRefusal struct {
 	// Files the refusal names: the folder's uncommitted files (dirty), or
 	// the files in the user's checkout that block the merge.
 	Files []string `json:"files,omitempty"`
+	// Outside (dirty only): those of Files that aren't on the session's
+	// change list — changed through a shell or by something else — so
+	// Commit can't take them; the agent or the user has to commit or revert
+	// them.
+	Outside []string `json:"outside,omitempty"`
 }
 
 // LandResult is POST /sessions/{id}/land's answer — always HTTP 200 for
@@ -238,7 +243,9 @@ type LandResult struct {
 	FastForwarded bool `json:"fast_forwarded,omitempty"`
 	// Files: the conflicted files (conflicted), the files mergiraf
 	// resolved (auto_resolved), or LandRefusal.Files.
-	Files  []string `json:"files,omitempty"`
-	Reason string   `json:"reason,omitempty"`
-	Detail string   `json:"detail,omitempty"`
+	Files []string `json:"files,omitempty"`
+	// Outside is LandRefusal.Outside.
+	Outside []string `json:"outside,omitempty"`
+	Reason  string   `json:"reason,omitempty"`
+	Detail  string   `json:"detail,omitempty"`
 }

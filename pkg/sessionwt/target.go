@@ -121,8 +121,9 @@ func Status(ctx context.Context, t Target, rows []contracts.FileChange, g Gates)
 		Files: []contracts.WorktreeFile{},
 	}
 	present := exists(t.Folder)
+	mine := SessionFiles(t.Folder, rows)
 	if present {
-		files, err := changes(ctx, t.Folder, SessionFiles(t.Folder, rows))
+		files, err := changes(ctx, t.Folder, mine)
 		if err != nil {
 			return contracts.WorktreeStatus{}, err
 		}
@@ -137,7 +138,7 @@ func Status(ctx context.Context, t Target, rows []contracts.FileChange, g Gates)
 		}
 		st.UnlandedCount = n
 	}
-	refusal, err := LandGate(ctx, t, g, st.UnlandedCount, present)
+	refusal, err := LandGate(ctx, t, g, st.UnlandedCount, present, mine)
 	if err != nil {
 		return contracts.WorktreeStatus{}, err
 	}
@@ -229,9 +230,11 @@ func tip(ctx context.Context, t Target) *contracts.WorktreeCommit {
 // LandGate is D6's "when Land is allowed", in the order the user would
 // want to hear about it. nil means Land may run. unlanded is the session's
 // unlanded count; folderPresent false skips the checks that read the
-// folder (Land ensures it back before gating). Read-only, so Status can
-// show the reason before anyone clicks.
-func LandGate(ctx context.Context, t Target, g Gates, unlanded int, folderPresent bool) (*contracts.LandRefusal, error) {
+// folder (Land ensures it back before gating). sessionFiles are the
+// session's own files (SessionFiles): a dirty refusal names the others as
+// Outside, since Commit can't take those. Read-only, so Status can show the
+// reason before anyone clicks.
+func LandGate(ctx context.Context, t Target, g Gates, unlanded int, folderPresent bool, sessionFiles []string) (*contracts.LandRefusal, error) {
 	refuse := func(reason, detail string, files ...string) (*contracts.LandRefusal, error) {
 		return &contracts.LandRefusal{Reason: reason, Detail: detail, Files: files}, nil
 	}
@@ -263,7 +266,9 @@ func LandGate(ctx context.Context, t Target, g Gates, unlanded int, folderPresen
 			for i, e := range entries {
 				files[i] = e.path
 			}
-			return refuse(contracts.LandDirty, "The session's folder has uncommitted changes. Commit them (or ask the agent to tidy up) before landing.", files...)
+			r, _ := refuse(contracts.LandDirty, "The session's folder has uncommitted changes. Commit them (or ask the agent to tidy up) before landing.", files...)
+			r.Outside = outside(entries, sessionFiles)
+			return r, nil
 		}
 	}
 	if unlanded == 0 {

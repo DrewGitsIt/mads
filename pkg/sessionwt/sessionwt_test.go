@@ -342,13 +342,15 @@ func TestCountIsolated(t *testing.T) {
 	commitFile(t, res.Dir, "one.txt", "1\n")
 	commitFile(t, res.Dir, "two.txt", "2\n")
 	writeFile(t, filepath.Join(res.Dir, "one.txt"), "changed\n")
+	// Made through a shell: changed in the folder, never on the change list.
+	writeFile(t, filepath.Join(res.Dir, "shell/out.txt"), "x\n")
 
 	c, err := Count(ctx, CountTarget{Dir: res.Dir, Files: []string{"one.txt", "two.txt"}, Branch: res.Branch, Base: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c != (Counts{Uncommitted: 1, Unlanded: 2}) {
-		t.Errorf("counts = %+v, want 1 uncommitted, 2 unlanded", c)
+	if c != (Counts{Uncommitted: 1, Unlanded: 2, Outside: 1}) {
+		t.Errorf("counts = %+v, want 1 uncommitted, 2 unlanded, 1 outside", c)
 	}
 
 	// Base moved ahead independently: still only the session's commits.
@@ -371,12 +373,14 @@ func TestCountInPlace(t *testing.T) {
 	commitFile(t, repo, "a.txt", "a\n")
 	commitFile(t, repo, "local.txt", "l\n") // a commit the session made in place
 	writeFile(t, filepath.Join(repo, "a.txt"), "b\n")
+	// The user's own edit in their checkout is none of the session's business.
+	writeFile(t, filepath.Join(repo, "users.txt"), "u\n")
 	c, err := Count(context.Background(), CountTarget{Dir: repo, Files: []string{"a.txt"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if c != (Counts{Uncommitted: 1}) {
-		t.Errorf("counts = %+v, want 1 uncommitted, 0 unlanded", c)
+		t.Errorf("counts = %+v, want 1 uncommitted, 0 unlanded, 0 outside", c)
 	}
 }
 

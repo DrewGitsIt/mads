@@ -12,10 +12,13 @@ import (
 
 // Counts is the header state of D4: how many of the session's files git
 // still reports as changed, and how many commits the session branch has that
-// its base doesn't.
+// its base doesn't. Outside is how many other files are changed in an
+// isolated session's folder (see CountOutside): Land refuses while there are
+// any, and Commit can't take them.
 type Counts struct {
 	Uncommitted int `json:"uncommitted_count"`
 	Unlanded    int `json:"unlanded_count"`
+	Outside     int `json:"outside_count"`
 }
 
 // CountTarget says where to count. For an isolated session Dir is its
@@ -42,6 +45,11 @@ func Count(ctx context.Context, t CountTarget) (Counts, error) {
 	}
 	if c.Unlanded, err = CountUnlanded(ctx, t.Dir, t.Base, t.Branch); err != nil {
 		return Counts{}, err
+	}
+	if t.Branch != "" {
+		if c.Outside, err = CountOutside(ctx, t.Dir, t.Files); err != nil {
+			return Counts{}, err
+		}
 	}
 	return c, nil
 }
@@ -74,6 +82,41 @@ func CountUncommitted(ctx context.Context, dir string, files []string) (int, err
 		return 0, err
 	}
 	return len(changed), nil
+}
+
+// CountOutside counts the files git reports changed anywhere in dir's
+// working tree that aren't among files (the session's own, relative to its
+// top): edits the agent made through a shell, which never reach the change
+// ledger, or anything else that wrote to the folder. Land's dirty gate (D6)
+// refuses over them, but Commit only offers the session's files, so the
+// header has to know they're there or it offers a Land that can only be
+// refused. Only asked for an isolated session's own folder: one working in
+// place shares the user's checkout, whose other changes aren't its business.
+func CountOutside(ctx context.Context, dir string, files []string) (int, error) {
+	top, err := Toplevel(ctx, dir)
+	if err != nil {
+		return 0, err
+	}
+	out, err := Git(ctx, top, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all")
+	if err != nil {
+		return 0, err
+	}
+	return len(outside(parseStatusZ(out), files)), nil
+}
+
+// outside is the paths among entries that aren't in files, in git's order.
+func outside(entries []statusEntry, files []string) []string {
+	mine := make(map[string]bool, len(files))
+	for _, f := range files {
+		mine[f] = true
+	}
+	var out []string
+	for _, e := range entries {
+		if !mine[e.path] {
+			out = append(out, e.path)
+		}
+	}
+	return out
 }
 
 // CountUnlanded counts commits on branch that base doesn't have: `git

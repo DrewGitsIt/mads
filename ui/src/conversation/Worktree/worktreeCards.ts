@@ -53,6 +53,10 @@ export type WorktreeCardModel =
       reason: string;
       detail?: string;
       files?: string[];
+      /** Dirty only: those of files off the session's change list, which Commit can't take. */
+      outside?: string[];
+      /** How many identical refusals in a row this card stands for (collapseRepeats); absent is one. */
+      repeats?: number;
       /** The most recent Land outcome — the only one that offers "Land again". */
       latest: boolean;
     })
@@ -232,6 +236,7 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
             reason: str(p.reason) ?? "",
             detail: str(p.detail),
             files: strs(p.files),
+            outside: strs(p.outside),
             latest: false,
           });
         }
@@ -258,8 +263,36 @@ export function foldWorktreeEvents(envelopes: Envelope[]): WorktreeCardModel[] {
       }
     }
   }
-  markLatest(cards);
-  return cards;
+  const out = collapseRepeats(cards);
+  markLatest(out);
+  return out;
+}
+
+type RefusedCard = Extract<WorktreeCardModel, { kind: "refused" }>;
+
+/** What makes two refusals the same: a click that changed nothing refuses identically. */
+function refusalKey(c: RefusedCard): string {
+  const set = (l?: string[]) => [...(l ?? [])].sort().join("\0");
+  return [c.reason, c.base ?? "", set(c.files), set(c.outside)].join("\n");
+}
+
+/**
+ * Folds back-to-back identical refusals into one card, counted, at the
+ * newest one's place: clicking Land again over the same problem says so
+ * once, ×N, rather than stacking copies. The first card's id stays, so the
+ * card keeps its identity as the count grows.
+ */
+function collapseRepeats(cards: WorktreeCardModel[]): WorktreeCardModel[] {
+  const out: WorktreeCardModel[] = [];
+  for (const c of cards) {
+    const prev = out.at(-1);
+    if (c.kind === "refused" && prev?.kind === "refused" && refusalKey(prev) === refusalKey(c)) {
+      out[out.length - 1] = { ...c, id: prev.id, repeats: (prev.repeats ?? 1) + (c.repeats ?? 1) };
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
 }
 
 function markLatest(cards: WorktreeCardModel[]) {
@@ -304,6 +337,7 @@ export function landCardFromResult(result: LandResult, at: string): LandCardMode
     reason: result.reason ?? "",
     detail: result.detail,
     files: result.files,
+    outside: result.outside,
     latest: true,
   };
 }
@@ -331,7 +365,9 @@ export function withEchoes(cards: WorktreeCardModel[], echoes: WorktreeEchoes): 
   const land = echoes.land;
   if (land && !cards.some((c) => isLandCard(c) && c.seq > land.afterSeq)) {
     out.push(land.card);
-    markLatest(out);
+    const collapsed = collapseRepeats(out);
+    markLatest(collapsed);
+    return collapsed;
   }
   return out;
 }

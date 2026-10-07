@@ -1047,7 +1047,7 @@ function SessionRow({
         {unseen && <span className={styles.srOnly}>New session</span>}
         {work && (
           <span
-            className={[styles.workMark, work.kind === "commit" ? styles.workMarkHollow : ""]
+            className={[styles.workMark, work.kind === "land" ? "" : styles.workMarkHollow]
               .filter(Boolean)
               .join(" ")}
             title={workNote(work)}
@@ -1213,7 +1213,9 @@ const RESTING = new Set(["done", "ready", "sleeping"]);
 
 /** The work marker's words: what the header control would offer next. */
 function workNote(work: NonNullable<WorkState>): string {
-  return work.kind === "commit" ? "uncommitted changes" : `${plural(work.commits, "commit")} to land`;
+  if (work.kind === "commit") return "uncommitted changes";
+  if (work.kind === "outside") return "changes outside this session";
+  return `${plural(work.commits, "commit")} to land`;
 }
 
 /**

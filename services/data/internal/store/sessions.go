@@ -136,6 +136,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		sess.WorktreeBase = old.WorktreeBase
 		sess.UncommittedCount = old.UncommittedCount
 		sess.UnlandedCount = old.UnlandedCount
+		sess.OutsideCount = old.OutsideCount
 		sess.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, sess); err != nil {
 			return err
@@ -293,9 +294,10 @@ func (s *Sessions) SetWorktree(ctx context.Context, id string, p contracts.Sessi
 		setIf(&sess.WorktreeBase, p.WorktreeBase)
 		setIf(&sess.UncommittedCount, p.UncommittedCount)
 		setIf(&sess.UnlandedCount, p.UnlandedCount)
+		setIf(&sess.OutsideCount, p.OutsideCount)
 		if sess.WorktreeDir == before.WorktreeDir && sess.WorktreeBranch == before.WorktreeBranch &&
 			sess.WorktreeBase == before.WorktreeBase && sess.UncommittedCount == before.UncommittedCount &&
-			sess.UnlandedCount == before.UnlandedCount {
+			sess.UnlandedCount == before.UnlandedCount && sess.OutsideCount == before.OutsideCount {
 			return nil
 		}
 		if err := s.write(tx, sess); err != nil {

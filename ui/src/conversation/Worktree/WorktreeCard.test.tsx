@@ -130,6 +130,35 @@ describe("WorktreeCard", () => {
     expect(screen.queryByRole("button", { name: "Land again" })).toBeNull();
   });
 
+  it("names the files outside the change list and asks the agent to commit them", () => {
+    const onAskAgent = vi.fn();
+    const onLandAgain = vi.fn();
+    const card: WorktreeCardModel = {
+      kind: "refused",
+      id: "r",
+      seq: 7,
+      base: "main",
+      reason: "dirty",
+      files: ["scratch.txt"],
+      outside: ["scratch.txt"],
+      repeats: 6,
+      latest: true,
+    };
+    const { rerender } = render(<WorktreeCard card={card} actions={{ onAskAgent, onLandAgain }} />);
+    expect(screen.getByText("Changes outside this session are holding Land back")).toBeTruthy();
+    expect(screen.getByText(/^scratch.txt changed in the session's folder but isn't on its change list/)).toBeTruthy();
+    // Six identical clicks read as one card, counted.
+    expect(screen.getByText("×6").getAttribute("title")).toBe("The same outcome 6 times in a row");
+    fireEvent.click(screen.getByRole("button", { name: "Ask the agent to commit them" }));
+    expect(onAskAgent).toHaveBeenCalledWith(expect.stringContaining("scratch.txt"));
+    fireEvent.click(screen.getByRole("button", { name: "Land again" }));
+    expect(onLandAgain).toHaveBeenCalled();
+
+    rerender(<WorktreeCard card={{ ...card, repeats: undefined, latest: false }} actions={{ onAskAgent, onLandAgain }} />);
+    expect(screen.queryByText(/^×/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ask the agent to commit them" })).toBeNull();
+  });
+
   it("renders a folder repair as a quiet card", () => {
     render(<WorktreeCard card={{ kind: "ensured", id: "e", seq: 6, title: "Recreated this session's folder", body: "b" }} />);
     expect(screen.getByRole("note", { name: "Recreated this session's folder" })).toBeTruthy();

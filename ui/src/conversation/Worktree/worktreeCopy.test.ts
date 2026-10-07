@@ -5,8 +5,10 @@ import {
   checkResolutionsPrompt,
   commitPathReason,
   nameFiles,
+  outsideControlTitle,
   refusalCopy,
   resolveConflictPrompt,
+  tidyOutsidePrompt,
   undoRefusalCopy,
 } from "./worktreeCopy";
 
@@ -53,7 +55,24 @@ describe("refusalCopy", () => {
       "Git won't land over scripts/deploy.sh in your checkout. Commit or stash it there, then Land again.",
     );
     expect(refusalCopy("primary_untracked", "main", ["a", "b"]).body).toContain("a and b, which aren't tracked");
-    expect(refusalCopy("dirty", "main", ["x.go"]).body).toBe("Commit x.go first. Land only moves committed work.");
+    expect(refusalCopy("dirty", "main", ["x.go"]).body).toBe(
+      "x.go is uncommitted in the session's folder. Commit it first — if Commit doesn't list one, ask the agent to commit or revert it. Land only moves committed work.",
+    );
+  });
+
+  it("says which dirty files Commit can't take, and who can deal with them", () => {
+    const copy = refusalCopy("dirty", "main", ["a.go", "b.go", "notes.md"], ["b.go", "notes.md"]);
+    expect(copy.title).toBe("Changes outside this session are holding Land back");
+    expect(copy.body).toBe(
+      "b.go and notes.md changed in the session's folder but aren't on its change list (edited through a shell, most likely), " +
+        "so Commit can't include them. Ask the agent to commit or revert them, or commit them yourself in the session's folder, " +
+        "then Land again. Commit this session's other 1 changed file too.",
+    );
+    expect(copy.body).not.toContain("Commit b.go");
+    expect(copy.retry).toBe(true);
+    const many = refusalCopy("dirty", "main", ["1", "2", "3", "4", "5"], ["1", "2", "3", "4", "5"]);
+    expect(many.body).toMatch(/^1, 2, 3 and 2 more changed in the session's folder/);
+    expect(many.body).not.toContain("other");
   });
 
   it("names the base branch", () => {
@@ -86,6 +105,14 @@ describe("worktree copy helpers", () => {
     expect(resolveConflictPrompt("main", ["scripts/deploy.sh", "ci.yml"])).toBe(
       "Merge main into this branch and resolve the conflicts in scripts/deploy.sh, ci.yml, keeping both sides' changes. Then commit the merge.",
     );
+  });
+
+  it("asks the agent to commit or revert the files off the change list", () => {
+    expect(tidyOutsidePrompt(["scratch.txt", "out/x.log"])).toBe(
+      "These files changed outside this session's change list: scratch.txt, out/x.log. Commit the ones that belong to this work and revert the rest, so this session can land.",
+    );
+    expect(tidyOutsidePrompt()).toContain("git status shows them");
+    expect(outsideControlTitle(1)).toMatch(/^1 file in this session's folder .* can't include it and Land won't run until it's/);
   });
 
   it("explains undo refusals and per-path commit outcomes", () => {

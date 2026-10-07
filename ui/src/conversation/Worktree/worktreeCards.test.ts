@@ -54,6 +54,30 @@ describe("foldWorktreeEvents", () => {
     expect(cards[2]).toMatchObject({ latest: true, reason: "busy" });
   });
 
+  it("collapses back-to-back identical refusals into the newest, counted", () => {
+    const dirty = { ...land, reason: "dirty", files: ["a.go", "x.txt"], outside: ["x.txt"] };
+    const cards = foldWorktreeEvents([
+      env("merge.refused", dirty, 10),
+      env("merge.refused", { ...dirty, files: ["x.txt", "a.go"] }, 11),
+      env("merge.refused", dirty, 12),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ kind: "refused", id: "wt-10", seq: 12, repeats: 3, latest: true, outside: ["x.txt"] });
+    expect(cards[0].timestamp).toBe("2026-10-05T10:00:12Z");
+  });
+
+  it("keeps refusals apart when anything differs or something happened in between", () => {
+    const cards = foldWorktreeEvents([
+      env("merge.refused", { ...land, reason: "dirty", files: ["a.go"] }, 20),
+      env("merge.refused", { ...land, reason: "dirty", files: ["a.go", "b.go"] }, 21),
+      env("merge.refused", { ...land, reason: "busy" }, 22),
+      env("commit.created", { hash: "c1", source: "commit", message: "m" }, 23),
+      env("merge.refused", { ...land, reason: "busy" }, 24),
+    ]);
+    expect(cards.map((c) => c.kind)).toEqual(["refused", "refused", "refused", "committed", "refused"]);
+    expect(cards.every((c) => !("repeats" in c) || c.repeats === undefined)).toBe(true);
+  });
+
   it("counts a replayed and a live copy of one event once", () => {
     const e = env("merge.refused", { ...land, reason: "busy" });
     expect(foldWorktreeEvents([e, { ...e }])).toHaveLength(1);
@@ -89,6 +113,17 @@ describe("withEchoes", () => {
       env("merge.refused", { ...land, reason: "busy" }, 6),
     ]);
     expect(withEchoes(after, { commits: [], land: echo })).toHaveLength(2);
+  });
+
+  it("folds an echo identical to the last logged refusal into it, so a repeat click doesn't stack a copy", () => {
+    const logged = foldWorktreeEvents([env("merge.refused", { ...land, reason: "dirty", files: ["x.txt"] }, 30)]);
+    const card = landCardFromResult({ outcome: "refused", reason: "dirty", base: "main", files: ["x.txt"] }, "t");
+    const shown = withEchoes(logged, { commits: [], land: { afterSeq: 30, card } });
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toMatchObject({ kind: "refused", id: "wt-30", repeats: 2, latest: true });
+    // The memoized fold is left alone.
+    expect(logged[0]).toMatchObject({ seq: 30 });
+    expect("repeats" in logged[0] ? logged[0].repeats : undefined).toBeUndefined();
   });
 
   it("drops a commit echo once its hash is logged", () => {

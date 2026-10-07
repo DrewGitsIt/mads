@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -205,6 +206,9 @@ func TestStatusListsSessionFiles(t *testing.T) {
 	}
 	if st.LandBlocked == nil || st.LandBlocked.Reason != contracts.LandDirty || !slices.Contains(st.LandBlocked.Files, "not-mine.txt") {
 		t.Errorf("land blocked = %+v, want dirty naming every file in the folder", st.LandBlocked)
+	}
+	if got := strings.Join(st.LandBlocked.Outside, ","); got != "not-mine.txt" {
+		t.Errorf("land blocked outside = %q, want just the file off the change list", got)
 	}
 	if st.LastCommit == nil || st.LastCommit.Subject != "add reverted.txt" || st.LastCommit.Undoable {
 		t.Errorf("last commit = %+v, want the hand-made commit, not undoable", st.LastCommit)
@@ -752,6 +756,35 @@ func TestLandGates(t *testing.T) {
 		res, _ := s.ops.Land(context.Background(), "ses_test", Gates{})
 		if res.Reason != contracts.LandNothingToLand {
 			t.Errorf("result = %+v", res)
+		}
+	})
+	// The agent edited files through a shell: dirty, and the refusal says
+	// which of them Commit can't take; the published counts say so too.
+	t.Run("dirty outside the change list", func(t *testing.T) {
+		s := newIsolated(t)
+		s.work(t, map[string]string{"README.md": "session\n"})
+		s.commit(t, contracts.CommitRequest{Message: "Work"})
+		s.work(t, map[string]string{"mine.txt": "pending\n"})
+		writeFile(t, filepath.Join(s.folder, "shell.txt"), "made by a shell\n")
+		res, err := s.ops.Land(context.Background(), "ses_test", Gates{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Reason != contracts.LandDirty || len(res.Files) != 2 || strings.Join(res.Outside, ",") != "shell.txt" {
+			t.Errorf("result = %+v, want dirty with shell.txt outside", res)
+		}
+		if p := s.store.lastEvent(t, contracts.MergeRefused); fmt.Sprint(p["outside"]) != "[shell.txt]" {
+			t.Errorf("merge.refused = %v, want outside [shell.txt]", p)
+		}
+		target, err := TargetFor(context.Background(), s.store.sess)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := RefreshCounts(context.Background(), s.store, target); err != nil {
+			t.Fatal(err)
+		}
+		if p := s.store.patches[len(s.store.patches)-1]; *p.UncommittedCount != 1 || *p.OutsideCount != 1 {
+			t.Errorf("counts = %d uncommitted, %d outside; want 1 and 1", *p.UncommittedCount, *p.OutsideCount)
 		}
 	})
 	t.Run("not isolated", func(t *testing.T) {

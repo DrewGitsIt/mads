@@ -51,6 +51,17 @@
   color: var(--accent-ink);
 }
 
+.outside {
+  border-color: var(--warn);
+}
+.outside:hover:not(:disabled) {
+  background: var(--bg3);
+}
+.outside .count {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .then {
   font-weight: 500;
   color: var(--text3);

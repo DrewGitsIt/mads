@@ -774,7 +774,7 @@ func (r *Runner) RefreshWorktreeCounts(ctx context.Context) error {
 	r.recordMu.Lock()
 	defer r.recordMu.Unlock()
 	return r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded,
+		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
 	})
 }
 

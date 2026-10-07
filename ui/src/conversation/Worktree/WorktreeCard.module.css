@@ -48,6 +48,15 @@
   min-width: 0;
 }
 
+.repeats {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg4);
+  color: var(--text2);
+  font: 600 var(--fs-chip) var(--sans);
+}
+
 .stateDot {
   flex: none;
   width: 8px;

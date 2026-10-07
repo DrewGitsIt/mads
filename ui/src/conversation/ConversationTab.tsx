@@ -573,6 +573,9 @@ export function ConversationTab({
       setCommitDialog({});
       return;
     }
+    // The result is a card at the tail; follow it there (see the scroll
+    // effect below), as a sent message does.
+    stickToBottom.current = true;
     commitAll().catch((err: unknown) => {
       if (err instanceof CommitRefusedError) setCommitDialog({ initialError: err.body });
       else
@@ -584,8 +587,11 @@ export function ConversationTab({
   }, [commitSettings, commitAll]);
 
   // Header Land / a card's "Land again". The outcome is a card either way;
-  // only an unexpected failure (no card coming) is a toast.
+  // only an unexpected failure (no card coming) is a toast. The user asked
+  // for this outcome, so the tail follows it into view even if they had
+  // scrolled up: the header button is nowhere near where the card lands.
   const handleLand = useCallback(() => {
+    stickToBottom.current = true;
     land().catch((err: unknown) => {
       setCommandToast({
         tone: "bad",
@@ -1114,10 +1120,12 @@ export function ConversationTab({
     stickToBottom.current = distanceFromBottom < 48;
   }, []);
 
+  // Commit/Land cards join the tail too (interleaveCards), so a new or
+  // updated one follows the same pinning as a streamed message.
   useLayoutEffect(() => {
     const el = streamRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [messages, pacer.items, turnPhase]);
+  }, [messages, pacer.items, turnPhase, worktree.cards]);
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
@@ -1317,6 +1325,7 @@ export function ConversationTab({
         work={{
           onCommit: handleCommit,
           onLand: handleLand,
+          onAskAgent: worktreeActions.onAskAgent,
           landing: worktree.landing,
           committing: worktree.committing,
         }}
@@ -1334,7 +1343,7 @@ export function ConversationTab({
       />
 
       <div className={styles.body}>
-        <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll}>
+        <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
           {showHistory ? (
             <>
               {provisioning && (

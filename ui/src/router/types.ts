@@ -40,6 +40,12 @@ export interface Session {
   uncommitted_count?: number;
   unlanded_count?: number;
   /**
+   * Files changed in an isolated session's folder that aren't on its change
+   * list (edited through a shell, say): Commit can't take them, and Land
+   * refuses while there are any. Same writers and moments as the two above.
+   */
+  outside_count?: number;
+  /**
    * The directory the session asked to start in — the Launchpad's folder,
    * else its workspace's primary repo, else Config.default_dir. Absent means
    * nobody asked: the agent runs wherever the Router was started.
@@ -937,6 +943,8 @@ export interface LandRefusal {
   reason: string;
   detail?: string;
   files?: string[];
+  /** Dirty only: those of files that aren't on the session's change list, so Commit can't take them. */
+  outside?: string[];
 }
 
 /** GET /sessions/{id}/worktree — runs git per call, so fetched when a dialog opens, never per render. */
@@ -1051,6 +1059,8 @@ export interface LandResult {
   merge_commit?: string;
   fast_forwarded?: boolean;
   files?: string[];
+  /** LandRefusal.outside. */
+  outside?: string[];
   reason?: string;
   detail?: string;
 }

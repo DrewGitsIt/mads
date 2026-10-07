@@ -37,13 +37,16 @@ export interface RefusalCopy {
 /**
  * A refused Land, in words, for every reason code the server sends
  * (pkg/contracts/session_worktree.go). `base` is the session's recorded base
- * branch; `files` are the ones the refusal names; `detail` is the server's
- * own text, shown verbatim under the sentence by the card where it helps.
+ * branch; `files` are the ones the refusal names, and `outside` (dirty only)
+ * those of them off the session's change list, which Commit can't take;
+ * `detail` is the server's own text, shown verbatim under the sentence by
+ * the card where it helps.
  */
 export function refusalCopy(
   reason: LandRefusalReason | string,
   base: string | undefined,
   files: string[] | undefined,
+  outside?: string[],
 ): RefusalCopy {
   const b = base || "the base branch";
   const named = nameFiles(files);
@@ -83,15 +86,35 @@ export function refusalCopy(
         tone: "warn",
         retry: true,
       };
-    case "dirty":
+    case "dirty": {
+      // Commit only offers the change list, so "Commit them first" is
+      // advice the user can't take for files the agent changed through a
+      // shell: say which those are and who can deal with them.
+      const off = outside ?? [];
+      if (off.length > 0) {
+        const them = off.length === 1 ? "it" : "them";
+        const own = (files?.length ?? off.length) - off.length;
+        return {
+          title: "Changes outside this session are holding Land back",
+          body:
+            `${nameFiles(off)} changed in the session's folder but ${off.length === 1 ? "isn't" : "aren't"} on its change list ` +
+            `(edited through a shell, most likely), so Commit can't include ${them}. ` +
+            `Ask the agent to commit or revert ${them}, or commit ${them} yourself in the session's folder, then Land again.` +
+            (own > 0 ? ` Commit this session's other ${plural(own, "changed file")} too.` : ""),
+          tone: "warn",
+          retry: true,
+        };
+      }
+      const it = files?.length === 1 ? "it" : "them";
       return {
         title: "This session has uncommitted changes",
         body: named
-          ? `Commit ${named} first. Land only moves committed work.`
+          ? `${named} ${files!.length === 1 ? "is" : "are"} uncommitted in the session's folder. Commit ${it} first — if Commit doesn't list one, ask the agent to commit or revert it. Land only moves committed work.`
           : "Commit them first. Land only moves committed work.",
         tone: "warn",
         retry: false,
       };
+    }
     case "nothing_to_land":
       return {
         title: "Nothing to land",
@@ -197,6 +220,21 @@ export function undoRefusalCopy(reason: string | undefined): string {
     default:
       return "Couldn't undo that commit.";
   }
+}
+
+/** The header control's hover text while files off the change list hold Land back. */
+export function outsideControlTitle(n: number): string {
+  const them = n === 1 ? "it" : "them";
+  return `${plural(n, "file")} in this session's folder changed outside its change list, so Commit can't include ${them} and Land won't run until ${n === 1 ? "it's" : "they're"} committed or reverted. Click to ask the agent to tidy up.`;
+}
+
+/** The message "Ask the agent to commit them" puts in the composer: an ordinary, editable user turn. */
+export function tidyOutsidePrompt(files?: string[]): string {
+  const which =
+    files && files.length > 0
+      ? `These files changed outside this session's change list: ${files.join(", ")}.`
+      : "Some files in this folder changed outside this session's change list (git status shows them).";
+  return `${which} Commit the ones that belong to this work and revert the rest, so this session can land.`;
 }
 
 /** The message "Ask the agent to resolve" puts in the composer: an ordinary, editable user turn. */

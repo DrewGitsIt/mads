@@ -46,7 +46,7 @@ export function SessionCloseLandDialog({ session, routerClient, onClose, onDismi
         const copy = autoResolvedCopy(res.base ?? session.worktree_base, res.files ?? []);
         setOutcome(`${copy.title}. ${copy.body}`);
       } else {
-        const copy = refusalCopy(res.reason ?? "", res.base ?? session.worktree_base, res.files);
+        const copy = refusalCopy(res.reason ?? "", res.base ?? session.worktree_base, res.files, res.outside);
         setOutcome(`${copy.title}. ${copy.body}`);
       }
     } catch (err) {

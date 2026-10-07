@@ -80,6 +80,42 @@ describe("header Commit / Land control (D4)", () => {
     expect(screen.queryByRole("button", { name: /Land into/ })).toBeNull();
   });
 
+  it("holds Land back while files off the change list are changed, asking the agent to tidy up instead", () => {
+    const onAskAgent = vi.fn();
+    const onLand = vi.fn();
+    render(
+      <ConversationHeader
+        session={{ ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 3, outside_count: 5 }}
+        work={{ onCommit: vi.fn(), onLand, onAskAgent }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Land into/ })).toBeNull();
+    const button = screen.getByRole("button", { name: /Changes outside this session/ });
+    expect(button.textContent).toBe("Changes outside this session5 files");
+    expect(button.getAttribute("title")).toMatch(/^5 files in this session's folder changed outside its change list/);
+    fireEvent.click(button);
+    expect(onLand).not.toHaveBeenCalled();
+    expect(onAskAgent).toHaveBeenCalledWith(expect.stringContaining("Commit the ones that belong to this work"));
+  });
+
+  it("still offers Commit… first when the session's own files are uncommitted too", () => {
+    renderHeader({ ...fixtureIsolatedSession, outside_count: 2 });
+    expect(screen.getByRole("button", { name: /Commit…/ })).toBeTruthy();
+    expect(document.querySelector('[data-work-state="outside"]')).toBeNull();
+  });
+
+  it("ignores the outside count for a session working in place", () => {
+    renderHeader({
+      ...fixtureIsolatedSession,
+      worktree_dir: undefined,
+      worktree_branch: undefined,
+      worktree_base: undefined,
+      uncommitted_count: 0,
+      outside_count: 2,
+    });
+    expect(document.querySelector("[data-work-state]")).toBeNull();
+  });
+
   it("subtitles an isolated session with workspace / branch → base", () => {
     renderHeader(fixtureIsolatedSession);
     expect(screen.getByTestId("conversation-subline").textContent).toBe("mads / mads/session/session-isolated → main");

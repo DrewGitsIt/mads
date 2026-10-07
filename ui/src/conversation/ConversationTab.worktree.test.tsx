@@ -158,6 +158,47 @@ describe("ConversationTab — Commit and Land", () => {
     expect(screen.getAllByText("Can't land while the agent is working")).toHaveLength(1);
   });
 
+  it("brings a Land outcome into view though the user had scrolled up, and collapses repeats into one card", async () => {
+    const client = makeClient({ ...fixtureIsolatedSession, uncommitted_count: 0 });
+    const refusal: LandResult = {
+      outcome: "refused",
+      reason: "dirty",
+      base: "main",
+      files: ["scratch.txt"],
+      outside: ["scratch.txt"],
+    };
+    client.landOutcome = () => Promise.resolve(refusal);
+    await mount(client);
+    const stream = screen.getByTestId("conversation-stream");
+    let top = 0;
+    Object.defineProperty(stream, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(stream, "clientHeight", { configurable: true, get: () => 500 });
+    Object.defineProperty(stream, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => (top = v),
+    });
+    // The user scrolls up to read: a new card alone wouldn't move them...
+    top = 200;
+    fireEvent.scroll(stream);
+    emitControl("merge.refused", { ...landPayload, reason: "busy" });
+    expect(await screen.findByText("Can't land while the agent is working")).toBeTruthy();
+    expect(top).toBe(200);
+
+    // ...but their own Land click follows its outcome to the tail.
+    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
+    expect(await screen.findByText("Changes outside this session are holding Land back")).toBeTruthy();
+    expect(top).toBe(2000);
+
+    // The same refusal again (answer, then its event): still one card, counted.
+    emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
+    fireEvent.click(screen.getByRole("button", { name: /Land into main/ }));
+    await waitFor(() => expect(client.landCalls).toHaveLength(2));
+    emitControl("merge.refused", { ...landPayload, reason: "dirty", files: ["scratch.txt"], outside: ["scratch.txt"] });
+    await waitFor(() => expect(screen.getByText("×2")).toBeTruthy());
+    expect(screen.getAllByText("Changes outside this session are holding Land back")).toHaveLength(1);
+  });
+
   it.each<[string, Record<string, unknown>, string]>([
     ["merge.completed", { merge_commit: "7be2d31aa", fast_forwarded: true }, "Landed into main"],
     ["merge.conflicted", { files: ["scripts/deploy.sh"], step: "base" }, "main moved on: 1 file conflicts"],

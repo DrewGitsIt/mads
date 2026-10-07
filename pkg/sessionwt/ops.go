@@ -221,7 +221,7 @@ func (o Ops) Undo(ctx context.Context, sessionID, hash string) (contracts.UndoCo
 // refusing checkout, else merge.attempted then merge.completed,
 // merge.conflicted or merge.auto_resolved.
 func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.LandResult, error) {
-	_, t, _, err := o.load(ctx, sessionID)
+	_, t, rows, err := o.load(ctx, sessionID)
 	if errors.Is(err, ErrNoFolder) {
 		t = Target{SessionID: sessionID}
 		err = nil
@@ -230,7 +230,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		return contracts.LandResult{}, err
 	}
 	if !t.Isolated() {
-		r, _ := LandGate(ctx, t, g, 0, false)
+		r, _ := LandGate(ctx, t, g, 0, false, nil)
 		return o.refused(ctx, t, r), nil
 	}
 
@@ -244,7 +244,7 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		if err != nil {
 			return err
 		}
-		refusal, err := LandGate(ctx, t, g, unlanded, true)
+		refusal, err := LandGate(ctx, t, g, unlanded, true, SessionFiles(t.Folder, rows))
 		if err != nil {
 			return err
 		}
@@ -299,10 +299,13 @@ func (o Ops) refused(ctx context.Context, t Target, r *contracts.LandRefusal) co
 	if len(r.Files) > 0 {
 		p["files"] = r.Files
 	}
+	if len(r.Outside) > 0 {
+		p["outside"] = r.Outside
+	}
 	o.event(ctx, t, contracts.MergeRefused, p)
 	return contracts.LandResult{
 		Outcome: contracts.LandRefused, Branch: t.Branch, Base: t.Base,
-		Reason: r.Reason, Detail: r.Detail, Files: r.Files,
+		Reason: r.Reason, Detail: r.Detail, Files: r.Files, Outside: r.Outside,
 	}
 }
 
@@ -403,8 +406,14 @@ func RefreshCounts(ctx context.Context, store Store, t Target) error {
 		if err != nil {
 			return err
 		}
-		if c.Uncommitted, err = CountUncommitted(ctx, t.Folder, SessionFiles(t.Folder, rows)); err != nil {
+		mine := SessionFiles(t.Folder, rows)
+		if c.Uncommitted, err = CountUncommitted(ctx, t.Folder, mine); err != nil {
 			return err
+		}
+		if t.Isolated() {
+			if c.Outside, err = CountOutside(ctx, t.Folder, mine); err != nil {
+				return err
+			}
 		}
 	}
 	if t.Isolated() {
@@ -414,7 +423,7 @@ func RefreshCounts(ctx context.Context, store Store, t Target) error {
 		}
 	}
 	return store.SetSessionWorktree(ctx, t.SessionID, contracts.SessionWorktreePatch{
-		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded,
+		UncommittedCount: &c.Uncommitted, UnlandedCount: &c.Unlanded, OutsideCount: &c.Outside,
 	})
 }
 

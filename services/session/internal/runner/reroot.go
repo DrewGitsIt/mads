@@ -82,14 +82,14 @@ func (r *Runner) rerootMissingDir(ctx context.Context, sess *contracts.Session) 
 		r.recordMu.Lock()
 		err := r.data.SetSessionWorktree(ctx, r.sessionID, contracts.SessionWorktreePatch{
 			WorktreeDir: &empty, WorktreeBranch: &empty, WorktreeBase: &empty,
-			UncommittedCount: &zero, UnlandedCount: &zero,
+			UncommittedCount: &zero, UnlandedCount: &zero, OutsideCount: &zero,
 		})
 		r.recordMu.Unlock()
 		if err != nil {
 			return "", fmt.Errorf("runner: clear lost worktree while re-rooting: %w", err)
 		}
 		sess.WorktreeDir, sess.WorktreeBranch, sess.WorktreeBase = "", "", ""
-		sess.UncommittedCount, sess.UnlandedCount = 0, 0
+		sess.UncommittedCount, sess.UnlandedCount, sess.OutsideCount = 0, 0, 0
 	}
 	sess.RerootedFrom = gone
 	sess.Dir = dir

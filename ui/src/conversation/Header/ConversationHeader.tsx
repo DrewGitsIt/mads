@@ -67,6 +67,7 @@ export interface ConversationHeaderProps {
   work?: {
     onCommit: () => void;
     onLand: () => void;
+    onAskAgent?: (text: string) => void;
     landing?: boolean;
     committing?: boolean;
   };
@@ -158,6 +159,7 @@ export function ConversationHeader({
               session={session}
               onCommit={work.onCommit}
               onLand={work.onLand}
+              onAskAgent={work.onAskAgent}
               landing={work.landing}
               committing={work.committing}
             />
