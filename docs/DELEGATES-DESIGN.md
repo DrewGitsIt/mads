@@ -136,7 +136,7 @@ what to read live instead of trusting the default.
 | | Claude Code | Codex | Kiro | Goose | Gemini CLI | ACP RFD (draft) |
 |---|---|---|---|---|---|---|
 | C1 Transcript | ✓ `subagents/agent-<id>.jsonl` (kept 30 days) | ✓ stored thread | ? | ✗ (probably in goose's store, not exposed) | ✗ | ~ replay via the parent's `session/load` |
-| C2a Resumable | ~ yes, except Explore/Plan | ✓ | ? | ✗ | ✗ | ✓ `idle` state |
+| C2a Resumable | ✓ (Explore too: it exposes `task_id` and forks; Plan untested) | ✓ | ? | ✗ | ✗ | ✓ `idle` state |
 | C2b Steer path | parent relay (`SendMessage`) ✓; direct ✗; fork-to-session ✓ via a synthetic fork (probe below) | direct thread is plausible; docs say steer via the parent | v2 private `_message/send`; v3 ? | ✗ | ✗ | **✗ in v1** (cancel only, per child) |
 | C3a Stop the delegate | ✓ `stop_task` | ✓ `turn/interrupt` / `close_agent` | v2 terminate; v3 `session/cancel` | ✗ | ✗ | ✓ `cancel`, if advertised |
 | C3b Stop the parent | kills all unless `perTaskStopAffordance` | ? | ? | n/a (foreground) | n/a | ✗ (children continue past the parent's turn) |
@@ -215,15 +215,29 @@ What this means:
 - **Direct in-place steering doesn't exist** in Claude Code. The only
   in-place path is the parent relay, and it is mediated by the model: the
   parent decides whether, and how faithfully, to pass the message on.
-- Not covered yet:
-  - the stream-json and PTY transports mads actually uses;
-  - backgrounded originals;
-  - a cross-folder fork;
-  - Explore/Plan agents, which return no agent id.
+- Stream-json follow-up (same day, mads's own argv minus MCP, hooks and
+  the permission prompt tool): **no contradictions.**
+  - The synthetic fork recalls for foreground, backgrounded and Explore
+    subagents. The earlier claim that Explore returns no agent id was wrong.
+  - A cross-folder fork works only if the synthetic file is placed in the
+    *new* cwd's projdir; `--fork-session` then rewrites `cwd` on every line.
+  - Still untested: PTY, permission control requests, interrupts during a
+    subagent, concurrent and depth ≥ 2 spawns.
 - Lifecycle consequence: a delegate can be **re-entered**, going from
   completed back to running under the same id, and the re-entry runs in
   the background across parent turns. The state machine must allow
   `completed → running`.
+- **Key on `task_id`, never `tool_use_id`.** A relay re-entry's
+  `task_started` and `task_notification` carry the *SendMessage*
+  `tool_use_id`, while the delegate's own lines keep the original spawn id
+  as `parent_tool_use_id`.
+- **Claude Code reports a list of running background tasks:**
+  `system/background_tasks_changed {tasks:[{task_id,task_type,description}]}`
+  fires on every change. It is an authoritative snapshot to reconcile
+  against; mads currently drops it as bookkeeping (`wire.go:437`).
+- A late finish's `result` carries
+  `origin:{kind:"task-notification",producer:"session-task"}`.
+- Nested `local_bash` tasks run by a delegate carry `owned_by_subagent: true`.
 - Import consequence: continuing an imported conversation forks it, so the
   parent's old delegates can't be relayed to afterwards. They can still be
   read and synthetically forked.
@@ -283,7 +297,12 @@ were spot-checked in the code.
    conversations have none.
 10. The sidebar shows "Ready" while a background subagent runs.
 11. The digest counts a delegate's tool uses as main-turn work.
-12. (Unrelated, found along the way) Deleting a link holder leaves a
+12. A relay re-entry re-anchors the task to the SendMessage call:
+    `applyTaskEvent` overwrites `toolUseId` from every phase, and
+    `tasksByToolUse` keys on it (found by the stream-json probe).
+13. `background_tasks_changed` is dropped, so mads never reconciles against
+    Claude Code's own list of running tasks.
+14. (Unrelated, found along the way) Deleting a link holder leaves a
     dangling link, and its subject disappears from the rail
     (`railLinks.ts` / `buildRailRows`).
 
