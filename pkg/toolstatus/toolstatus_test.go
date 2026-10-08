@@ -309,3 +309,54 @@ func TestPermissionRefusal(t *testing.T) {
 		}
 	}
 }
+
+// A delegate still running past its parent's turn keeps its in-flight calls:
+// the turn-end sweep must not stamp them interrupted, because that override
+// would outrank the result still on its way. The main agent's calls and a
+// finished delegate's calls are swept as before.
+func TestTurnEndExceptKeepsLiveDelegateCalls(t *testing.T) {
+	tr := toolstatus.New()
+	tr.ToolUse("main", "Bash", "", "")
+	tr.ToolUse("live1", "Read", "spawn-live", "")
+	tr.ToolUse("dead1", "Read", "spawn-dead", "")
+	live := func(parent string) bool { return parent == "spawn-live" }
+
+	got := tr.TurnEndExcept(live)
+	if len(got) != 2 || got[0].ToolUseID != "main" || got[1].ToolUseID != "dead1" {
+		t.Fatalf("swept %+v, want main and dead1 only", got)
+	}
+	// The kept call's result arrives after the turn and is stamped from the
+	// result, exactly as inside a turn.
+	if s := tr.ToolResult("live1", false, "ok", ""); s != toolstatus.Completed {
+		t.Errorf("late result for a kept call = %q, want completed", s)
+	}
+	tr.ToolUse("live2", "Grep", "spawn-live", "")
+	if again := tr.TurnEndExcept(live); len(again) != 0 {
+		t.Errorf("a live delegate's calls survive every turn end, swept %+v", again)
+	}
+
+	// The delegate ends: its unfinished call is interrupted, the finished
+	// one isn't reported, and neither stays tracked.
+	ended := tr.EndParent("spawn-live")
+	if len(ended) != 1 || ended[0].ToolUseID != "live2" || ended[0].Status != toolstatus.Interrupted || ended[0].ParentToolUseID != "spawn-live" {
+		t.Fatalf("EndParent = %+v, want live2 interrupted", ended)
+	}
+	if rest := tr.TurnEnd(); len(rest) != 0 {
+		t.Errorf("nothing should remain tracked, swept %+v", rest)
+	}
+}
+
+func TestEndParentLeavesOtherParentsAlone(t *testing.T) {
+	tr := toolstatus.New()
+	tr.ToolUse("a", "Read", "p1", "")
+	tr.ToolUse("b", "Read", "p2", "")
+	if got := tr.EndParent("p1"); len(got) != 1 || got[0].ToolUseID != "a" {
+		t.Fatalf("EndParent(p1) = %+v", got)
+	}
+	if got := tr.EndParent(""); got != nil {
+		t.Errorf("EndParent(\"\") must be a no-op, got %+v", got)
+	}
+	if got := tr.TurnEnd(); len(got) != 1 || got[0].ToolUseID != "b" {
+		t.Errorf("p2's call must still be tracked, swept %+v", got)
+	}
+}

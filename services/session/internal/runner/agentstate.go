@@ -140,6 +140,14 @@ func (r *Runner) observeAgentState(ev provider.Event) {
 		// Relabel only: "Compact now" (CompactNow) runs outside any turn,
 		// and nothing would ever mark that idle again.
 		r.relabelWorking(agentLabelCompacting)
+	case ev.Kind == provider.EventThinking && ev.Text == "":
+		// A bare token tick only relabels a turn already in flight: claude-
+		// code streams a backgrounded subagent's thinking_tokens lines with
+		// no parent tag (a "system" line carries none), so between turns a
+		// tick is as likely a delegate's as the main agent's — and turning
+		// the session "working" on one leaves nothing to ever mark it idle
+		// again (the a2256c3 stall).
+		r.relabelWorking(agentLabelThinking)
 	case ev.Kind == provider.EventThinking:
 		// Deliberately not the ticker's "Thinking · N tokens": a token
 		// count would make every tick its own transition, and the count is

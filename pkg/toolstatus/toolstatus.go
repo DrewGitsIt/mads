@@ -285,19 +285,63 @@ func (t *Tracker) PermissionResolved(id string) (Update, bool) {
 // All tracking state is then dropped; the next turn starts clean. Calling it
 // again with nothing tracked is a no-op returning nil.
 func (t *Tracker) TurnEnd() []Update {
+	return t.TurnEndExcept(nil)
+}
+
+// TurnEndExcept is TurnEnd that leaves alone every call whose parent
+// (the spawning tool_use id its sidechain is tagged with) keep reports true —
+// a delegate still running past its parent's turn (docs/DELEGATES-DESIGN.md).
+// Its in-flight calls are not interrupted: their results are still coming,
+// and an "interrupted" override would outrank them for good. Kept calls stay
+// tracked until EndParent closes them out; a nil keep keeps nothing.
+func (t *Tracker) TurnEndExcept(keep func(parent string) bool) []Update {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var out []Update
+	kept := map[string]*call{}
+	var keptOrder []string
 	for _, id := range t.order {
 		c := t.calls[id]
+		if c.parent != "" && keep != nil && keep(c.parent) {
+			kept[id] = c
+			keptOrder = append(keptOrder, id)
+			continue
+		}
 		if Terminal(c.status) {
 			continue
 		}
 		c.status = Interrupted
 		out = append(out, Update{ToolUseID: c.id, ParentToolUseID: c.parent, Status: c.status})
 	}
-	t.calls = map[string]*call{}
-	t.order = nil
+	t.calls = kept
+	t.order = keptOrder
+	return out
+}
+
+// EndParent closes out one delegate's calls once the delegate itself has
+// ended: every call tagged with parent and still without a result becomes
+// "interrupted" (returned in arrival order), and all of that parent's calls
+// stop being tracked. Calls of other parents are untouched.
+func (t *Tracker) EndParent(parent string) []Update {
+	if parent == "" {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []Update
+	order := t.order[:0:0]
+	for _, id := range t.order {
+		c := t.calls[id]
+		if c.parent != parent {
+			order = append(order, id)
+			continue
+		}
+		delete(t.calls, id)
+		if !Terminal(c.status) {
+			out = append(out, Update{ToolUseID: c.id, ParentToolUseID: c.parent, Status: Interrupted})
+		}
+	}
+	t.order = order
 	return out
 }
 

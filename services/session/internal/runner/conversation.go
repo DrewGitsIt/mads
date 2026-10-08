@@ -31,6 +31,7 @@ import (
 func (r *Runner) observeConversation(ev provider.Event) provider.Event {
 	ev = r.stampToolStatus(ev)
 	r.observeAgentState(ev)
+	r.observeDelegates(ev)
 	if ev.Kind == provider.EventTurnEnd {
 		r.flushInterruptedTools()
 	}
@@ -82,7 +83,9 @@ func (r *Runner) stampToolStatus(ev provider.Event) provider.Event {
 // left that could carry the status, so the event log (whose live SSE feed
 // the UI also subscribes to) is both the durable record and the live signal.
 func (r *Runner) flushInterruptedTools() {
-	for _, up := range r.toolStatus.TurnEnd() {
+	// A delegate still running past this turn keeps its calls in flight
+	// (their results are still coming); they close out when it ends.
+	for _, up := range r.toolStatus.TurnEndExcept(r.keepLiveDelegateCalls) {
 		r.appendConversation(contracts.SessionToolStatusChanged, contracts.ToolStatusChange{
 			ToolUseID:       up.ToolUseID,
 			Status:          up.Status,
@@ -105,25 +108,7 @@ func (r *Runner) persistConversation(ev provider.Event) {
 		// mid-task reconstructs the live counters from the log (the live
 		// /output stream has no replay), and volume is the same order as
 		// the sidechain's own persisted tool events.
-		t := ev.Task
-		r.appendConversation(contracts.SessionSubagentTask, contracts.SubagentTask{
-			Phase:           t.Phase,
-			TaskID:          t.TaskID,
-			ToolUseID:       t.ToolUseID,
-			Description:     t.Description,
-			SubagentType:    t.SubagentType,
-			Prompt:          t.Prompt,
-			IsBackgrounded:  t.IsBackgrounded,
-			SpawnDepth:      t.SpawnDepth,
-			TotalTokens:     t.TotalTokens,
-			ToolUses:        t.ToolUses,
-			DurationMS:      t.DurationMS,
-			LastToolName:    t.LastToolName,
-			Status:          t.Status,
-			Summary:         t.Summary,
-			OutputFile:      t.OutputFile,
-			ParentToolUseID: ev.ParentToolUseID,
-		})
+		r.appendConversation(contracts.SessionSubagentTask, contractsTask(ev))
 	case ev.ParentToolUseID != "":
 		var kind string
 		switch ev.Kind {

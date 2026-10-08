@@ -25,6 +25,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/credstore"
 	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/pkg/githook"
 	"github.com/drewkidwell/mads/pkg/sessionwt"
 	"github.com/drewkidwell/mads/pkg/toolstatus"
@@ -172,6 +173,14 @@ type Runner struct {
 	// reads for every session at once. Own internal lock, like toolStatus:
 	// the pump, Send/Inject and a coalescing timer all drive it.
 	agent agentState
+
+	// delegates owns this session's delegate lifecycle (pkg/delegates,
+	// docs/DELEGATES-DESIGN.md) — harness subagents, decided in one place
+	// and written through as delegate records (delegates.go). Fed by the
+	// pump (task lifecycle, roster, turn end), the process ending, and a
+	// roster-expiry timer. Own internal lock.
+	delegates   *delegates.Tracker
+	delegatePub delegatePublisher
 
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
@@ -357,6 +366,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		shutdownCh:       make(chan struct{}),
 		permPending:      make(map[string]*pendingPermission),
 		toolStatus:       toolstatus.New(),
+		delegates:        delegates.New(sessionID, 0),
 	}
 }
 
@@ -367,6 +377,9 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: load session %s: %w", r.sessionID, err)
 	}
+	// Before the provider starts: its first events may resume a delegate a
+	// previous process spawned, and must find that delegate's record.
+	r.seedDelegates(ctx)
 
 	p, err := r.providers.Get(sess.Provider)
 	if err != nil {
@@ -1308,6 +1321,10 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 			log.Printf("runner: close previous transport for %s: %v", r.sessionID, err)
 		}
 	}
+	// The old process's delegates died with it. Concluded here rather than
+	// by the old pump's wind-down, which can run after the new process has
+	// started delegates of its own (see pump).
+	r.endDelegatesForProcessExit()
 
 	opts.Mode = mode
 	opts.Resume = resumeRef
@@ -1727,7 +1744,16 @@ func (r *Runner) pump(sess provider.Session) {
 	// is a no-op; a mid-turn close (Shutdown, or the provider dying) is the
 	// "session stops" case of the status policy — resolve every still-open
 	// tool call to interrupted, and the agent state to idle, so the event
-	// log never shows either running forever.
+	// log never shows either running forever. The delegates that ran inside
+	// the process end with it — unless this is an intentional transport
+	// swap (r.sess no longer this session), which concludes them itself
+	// before starting the new process.
+	r.mu.Lock()
+	current := r.sess == sess
+	r.mu.Unlock()
+	if current {
+		r.endDelegatesForProcessExit()
+	}
 	r.flushTurnState()
 
 	r.mu.Lock()
