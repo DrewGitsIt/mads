@@ -75,6 +75,15 @@ const (
 	// below): this kind is the harness's own bookkeeping about the task —
 	// spawn, progress counters, final status + summary.
 	EventTask EventKind = "task"
+	// EventTaskRoster — the harness's own complete list of its currently
+	// running background subagents (TaskRoster: their task ids; empty means
+	// none). claude-code streams it as "system"/"background_tasks_changed"
+	// on every change. It is reconciliation evidence, not a lifecycle event:
+	// the roster drops a finished task just BEFORE that task's
+	// task_updated/task_notification arrive (both real captures in
+	// providers/claudecode/testdata), so absence alone means "ending", and
+	// only the lifecycle line says how.
+	EventTaskRoster EventKind = "task_roster"
 	// EventThinking — the model's extended-thinking output, distinct from
 	// EventText so chat-mode consumers that render only the reply never
 	// interleave reasoning into it. Two facets share the kind, mirroring
@@ -107,6 +116,9 @@ type Event struct {
 	Compact *CompactStatus `json:"compact,omitempty"`
 	// Task for EventTask.
 	Task *TaskStatus `json:"task,omitempty"`
+	// TaskRoster for EventTaskRoster: the running background subagents'
+	// task ids, in the harness's order.
+	TaskRoster []string `json:"task_roster,omitempty"`
 	// ThinkingTokens for EventThinking with no Text: the estimated token
 	// count so far while the model thinks (see EventThinking).
 	ThinkingTokens int `json:"thinking_tokens,omitempty"`

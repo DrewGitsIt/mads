@@ -1307,6 +1307,37 @@ func TestStreamSessionSubagentTaskKept(t *testing.T) {
 	}
 }
 
+// background_tasks_changed comes through as the subagent-only roster, in
+// stream order and never nil — the emptied roster is the evidence. Its
+// position matters to consumers: it drops the task BEFORE task_updated and
+// task_notification say how the task ended (both captures show it).
+func TestStreamSessionTaskRoster(t *testing.T) {
+	var got []string
+	for _, ev := range streamFixtureEvents(t, taskFixture) {
+		switch ev.Kind {
+		case provider.EventTaskRoster:
+			if ev.TaskRoster == nil {
+				t.Fatal("roster must never be nil")
+			}
+			got = append(got, "roster["+strings.Join(ev.TaskRoster, " ")+"]")
+		case provider.EventTask:
+			got = append(got, ev.Task.Phase)
+		}
+	}
+	want := "roster[a7f5f61655a886928],started,progress,roster[],updated,notification"
+	if s := strings.Join(got, ","); s != want {
+		t.Errorf("roster/lifecycle order = %s\nwant %s", s, want)
+	}
+
+	// A background Bash task is not a subagent: its rosters come through
+	// empty rather than naming it.
+	for _, ev := range streamFixtureEvents(t, "stream-task-bash.jsonl") {
+		if ev.Kind == provider.EventTaskRoster && len(ev.TaskRoster) != 0 {
+			t.Errorf("bash task leaked into the roster: %v", ev.TaskRoster)
+		}
+	}
+}
+
 // The CLI's <task-notification> user line (a background task finished) is
 // the harness talking to the model. It must not come back as a user message
 // full of raw XML; it becomes one "notification" entry carrying the summary.

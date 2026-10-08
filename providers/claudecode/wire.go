@@ -62,6 +62,9 @@ type wireLine struct {
 	Summary        string         `json:"summary"`
 	OutputFile     string         `json:"output_file"`
 	Patch          *wireTaskPatch `json:"patch"`
+	// Tasks is a "background_tasks_changed" line's roster: every background
+	// task still running, subagents and background Bash alike.
+	Tasks []wireRosterTask `json:"tasks"`
 
 	// thinking_tokens system-line field: the running estimate streamed while
 	// the model thinks.
@@ -127,6 +130,12 @@ func (l *wireLine) notificationTurnEnd() []provider.Event {
 		return []provider.Event{{Kind: provider.EventError, Text: l.Result}, ev}
 	}
 	return []provider.Event{ev}
+}
+
+// wireRosterTask is one entry of a "background_tasks_changed" roster.
+type wireRosterTask struct {
+	TaskID   string `json:"task_id"`
+	TaskType string `json:"task_type"`
 }
 
 // wireTaskPatch is a task_updated line's patch object. end_time also rides
@@ -434,8 +443,7 @@ func (l *wireLine) tagged(evs []provider.Event) []provider.Event {
 // completes, and the second one a background subagent's notification
 // re-invocation opens with — session.go's handleLine still reads it for
 // ref/model, and its refFired guard keeps the repeat harmless) and any other
-// subtype ("background_tasks_changed", ...) are bookkeeping, same as the
-// events() default case.
+// subtype are bookkeeping, same as the events() default case.
 func (l *wireLine) systemEvents() []provider.Event {
 	switch {
 	case l.Subtype == "status" && l.Status == "compacting":
@@ -448,6 +456,8 @@ func (l *wireLine) systemEvents() []provider.Event {
 		}}}
 	case l.isTaskLine():
 		return []provider.Event{{Kind: provider.EventTask, Task: l.taskStatus()}}
+	case l.Type == "system" && l.Subtype == "background_tasks_changed":
+		return []provider.Event{{Kind: provider.EventTaskRoster, TaskRoster: l.agentRoster()}}
 	case l.Subtype == "thinking_tokens":
 		return []provider.Event{{Kind: provider.EventThinking, ThinkingTokens: l.EstimatedTokens}}
 	default:
@@ -459,6 +469,19 @@ func (l *wireLine) systemEvents() []provider.Event {
 func (l *wireLine) isTaskLine() bool {
 	return l.Type == "system" && (l.Subtype == "task_started" || l.Subtype == "task_progress" ||
 		l.Subtype == "task_updated" || l.Subtype == "task_notification")
+}
+
+// agentRoster is the roster's subagent task ids, in order: background Bash
+// and the other task types are dropped the same way isAgentTask drops their
+// lifecycle lines. Never nil, so an emptied roster still says "none".
+func (l *wireLine) agentRoster() []string {
+	ids := []string{}
+	for _, t := range l.Tasks {
+		if t.TaskID != "" && (t.TaskType == "" || t.TaskType == "local_agent") {
+			ids = append(ids, t.TaskID)
+		}
+	}
+	return ids
 }
 
 // isAgentTask reports whether a task_started line spawns a subagent. The
