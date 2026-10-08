@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { ActivityGroup } from "./ActivityGroup";
+import { ActivityGroup, placePeek } from "./ActivityGroup";
 import type { PermissionRequest } from "../../router/types";
 import type { ActivityEntry } from "./conversationItems";
 
@@ -57,21 +57,29 @@ describe("ActivityGroup", () => {
     expect(header.textContent).not.toMatch(/\d+ms/);
   });
 
-  it("flips the peek above the row when the downward card would overflow the bottom", () => {
-    // jsdom has no layout: every rect is 0, so the default peek never
-    // crosses the boundary. Force the overflow case, then the normal case.
-    const spy = vi
-      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
-      .mockReturnValue({ bottom: window.innerHeight + 200 } as DOMRect);
-    const { unmount } = render(<ActivityGroup entries={entries} defaultOpen />);
-    fireEvent.mouseEnter(screen.getAllByTestId("activity-row")[0]);
-    expect(screen.getByTestId("activity-peek").getAttribute("data-up")).toBe("true");
-    unmount();
-    spy.mockReturnValue({ bottom: 0 } as DOMRect);
+  it("portals the peek out of the row, so no scroll container can clip it", () => {
     render(<ActivityGroup entries={entries} defaultOpen />);
-    fireEvent.mouseEnter(screen.getAllByTestId("activity-row")[0]);
-    expect(screen.getByTestId("activity-peek").getAttribute("data-up")).toBeNull();
-    spy.mockRestore();
+    const row = screen.getAllByTestId("activity-row")[0];
+    fireEvent.mouseEnter(row);
+    const peek = screen.getByTestId("activity-peek");
+    expect(row.contains(peek)).toBe(false);
+    expect(peek.parentElement).toBe(document.body);
+  });
+
+  it("places the peek below the row when it fits, above when only that fits", () => {
+    // 1000px viewport, 200px card.
+    expect(placePeek({ top: 100, bottom: 130 }, 200, 1000)).toEqual({ top: 132, up: false });
+    expect(placePeek({ top: 900, bottom: 930 }, 200, 1000)).toEqual({ top: 698, up: true });
+    // The reported case: a row near the top of the subagent dock used to flip
+    // up against the dock body's bottom edge and get cut off at its top. Only
+    // the viewport bounds it now, so it opens downward.
+    expect(placePeek({ top: 40, bottom: 70 }, 200, 1000)).toEqual({ top: 72, up: false });
+  });
+
+  it("clamps a peek that fits on neither side into the viewport, on the roomier side", () => {
+    // 400px viewport, 300px card: no room above or below a mid-low row.
+    expect(placePeek({ top: 250, bottom: 280 }, 300, 400)).toEqual({ top: 8, up: true });
+    expect(placePeek({ top: 90, bottom: 120 }, 300, 400)).toEqual({ top: 92, up: false });
   });
 
   it("prefixes unknown-kind rows with the tool name (fallback titles are bare input previews)", () => {

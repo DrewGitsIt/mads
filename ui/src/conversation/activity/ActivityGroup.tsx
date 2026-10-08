@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Chip } from "../../components/Chip/Chip";
 import type { PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
@@ -245,6 +246,7 @@ export function ActivityRow({
   onOpen?: (tool: ToolUse) => void;
 }) {
   const [hovered, setHovered] = useState(false);
+  const rowRef = useRef<HTMLDivElement>(null);
   const isTool = entry.type === "tool";
   const tool = isTool ? (entry as ToolEntry).tool : undefined;
   const kind = tool ? kindOf(tool) : "think";
@@ -290,6 +292,7 @@ export function ActivityRow({
 
   return (
     <div
+      ref={rowRef}
       className={rowCls}
       data-sel={selected || undefined}
       data-testid="activity-row"
@@ -308,7 +311,9 @@ export function ActivityRow({
       ) : (
         <div className={styles.rowLine}>{line}</div>
       )}
-      {peekVisible && <Peek entry={entry} status={status} clickable={clickable} />}
+      {peekVisible && (
+        <Peek entry={entry} status={status} clickable={clickable} anchor={rowRef} />
+      )}
     </div>
   );
 }
@@ -329,35 +334,89 @@ function inputPreview(tool: ToolUse): string | undefined {
   return lines.join("\n") || undefined;
 }
 
+// Peek geometry, mirroring the old in-row CSS: inset past the kind icon,
+// min(540px, 90% of the row) wide, a 2px gap off the row.
+const PEEK_INSET = 40;
+const PEEK_MAX_WIDTH = 540;
+const PEEK_GAP = 2;
+const PEEK_MARGIN = 8;
+
 /**
- * Flip-up detection: a peek opens downward by default, but a downward peek
- * from a row near the bottom would overflow its scroll container — growing
- * the scrollable area and snapping the scrollbar — so when the rendered
- * card crosses the container's (or viewport's) bottom edge it flips above
- * the row instead. Measured once per open in a layout effect (the peek is
- * pointer-events: none, so flipping can't re-trigger hover).
+ * Where a peek of `height` goes relative to its row, in viewport
+ * coordinates: below when it fits, above when only that fits, otherwise the
+ * roomier side clamped into the viewport. The viewport is the only boundary
+ * — the peek is portaled out of every scroll container, so none can clip it
+ * (the subagent dock's short body used to cut off every flipped-up peek).
  */
-function usePeekFlip() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [up, setUp] = useState(false);
-  useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    let boundary = window.innerHeight;
-    for (let a = el.parentElement; a; a = a.parentElement) {
-      const oy = getComputedStyle(a).overflowY;
-      if (oy === "auto" || oy === "scroll") {
-        boundary = Math.min(boundary, a.getBoundingClientRect().bottom);
-        break;
-      }
-    }
-    if (el.getBoundingClientRect().bottom > boundary) setUp(true);
-  }, []);
-  return { ref, up };
+export function placePeek(
+  row: Pick<DOMRect, "top" | "bottom">,
+  height: number,
+  viewportHeight: number,
+): { top: number; up: boolean } {
+  const below = row.bottom + PEEK_GAP;
+  const above = row.top - PEEK_GAP - height;
+  const maxTop = viewportHeight - PEEK_MARGIN - height;
+  if (below <= maxTop) return { top: below, up: false };
+  if (above >= PEEK_MARGIN) return { top: above, up: true };
+  const up = row.top > viewportHeight - row.bottom;
+  return { top: Math.max(PEEK_MARGIN, Math.min(up ? above : below, maxTop)), up };
 }
 
-/** Capped input/result preview under the hovered row (mockup's .peek). */
+/**
+ * Positions the portaled peek against its row: width first (height depends
+ * on it), then the vertical side. Runs before paint, and again on any
+ * scroll (capture catches the stream's and the dock's own scrollers) or
+ * resize so the card tracks its row. Writes style directly — the peek is
+ * pointer-events: none, so moving it can't re-trigger hover.
+ */
+function usePeekPlacement(anchor: RefObject<HTMLElement | null>) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const place = () => {
+      const el = ref.current;
+      const row = anchor.current;
+      if (!el || !row) return;
+      const r = row.getBoundingClientRect();
+      el.style.left = `${r.left + PEEK_INSET}px`;
+      el.style.width = `${Math.min(PEEK_MAX_WIDTH, r.width * 0.9)}px`;
+      const { top, up } = placePeek(r, el.getBoundingClientRect().height, window.innerHeight);
+      el.style.top = `${top}px`;
+      if (up) el.dataset.up = "true";
+      else delete el.dataset.up;
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [anchor]);
+  return ref;
+}
+
+/** Capped input/result preview beside the hovered row (mockup's .peek), portaled to the body. */
 function Peek({
+  entry,
+  status,
+  clickable,
+  anchor,
+}: {
+  entry: ActivityEntry;
+  status?: ToolStatus;
+  clickable: boolean;
+  anchor: RefObject<HTMLElement | null>;
+}) {
+  const ref = usePeekPlacement(anchor);
+  return createPortal(
+    <div className={styles.peek} ref={ref} data-testid="activity-peek">
+      <PeekBody entry={entry} status={status} clickable={clickable} />
+    </div>,
+    document.body,
+  );
+}
+
+function PeekBody({
   entry,
   status,
   clickable,
@@ -366,14 +425,12 @@ function Peek({
   status?: ToolStatus;
   clickable: boolean;
 }) {
-  const { ref, up } = usePeekFlip();
-  const cls = up ? `${styles.peek} ${styles.peekUp}` : styles.peek;
   if (entry.type === "thinking") {
     return (
-      <div className={cls} ref={ref} data-testid="activity-peek" data-up={up || undefined}>
+      <>
         <div className={styles.lbl}>thinking</div>
         <pre>{entry.text.slice(0, PEEK_TEXT_CAP)}</pre>
-      </div>
+      </>
     );
   }
   const tool = entry.tool;
@@ -381,7 +438,7 @@ function Peek({
   const input = hunks ? undefined : inputPreview(tool);
   const result = tool.result;
   return (
-    <div className={cls} ref={ref} data-testid="activity-peek" data-up={up || undefined}>
+    <>
       <div className={styles.lbl}>{tool.name} · input</div>
       {hunks ? (
         <DiffView hunks={hunks} lineCap={PEEK_DIFF_LINES} />
@@ -399,6 +456,6 @@ function Peek({
         </>
       )}
       {clickable && <div className={styles.peekHint}>click for full detail</div>}
-    </div>
+    </>
   );
 }

@@ -61,15 +61,6 @@
   position: relative;
   border-radius: 7px;
 }
-/* Lift the hovered row above its siblings: a sibling row that is a stacking
-   context (e.g. mid-entry animation) would otherwise paint its text over
-   this row's peek regardless of the peek's own z-index. 50 keeps the whole
-   hovered row — peek included — above the pinned bottom cluster (z 40) and
-   below the dock (z 60), matching the peek's stated place in that order. */
-.row:hover {
-  z-index: 50;
-}
-
 .rowLine {
   display: flex;
   align-items: center;
@@ -163,16 +154,16 @@ button.rowLine:hover {
 
 /* ---------- hover peek ---------- */
 
+/* Portaled to <body> and placed in viewport coordinates by
+   usePeekPlacement (left/width/top), so no scroll container — the
+   subagent dock's body especially — can clip it. Above the pinned bottom
+   cluster (z 40) and the dock (z 60) a subagent row's peek opens from;
+   below the command palette and dialogs (z 100+). */
 .peek {
-  position: absolute;
-  left: 40px;
-  top: calc(100% + 2px);
-  /* Above the pinned bottom cluster (z 40, translucent + backdrop-blur):
-     a peek opening from a low row would otherwise slide underneath it and
-     its text would ghost through the cluster's surface. Stays below the
-     dock (z 60). */
-  z-index: 50;
-  width: min(540px, 90%);
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 90;
   background: var(--bg2);
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -181,13 +172,6 @@ button.rowLine:hover {
   color: var(--text2);
   box-shadow: var(--shadow);
   pointer-events: none;
-}
-
-/* Flipped variant: opens above the row when the downward card would
-   overflow the scroll container's bottom edge (usePeekFlip). */
-.peekUp {
-  top: auto;
-  bottom: calc(100% + 2px);
 }
 
 .peek pre {
