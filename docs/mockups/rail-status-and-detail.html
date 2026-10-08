@@ -1,0 +1,571 @@
+<!doctype html>
+<!--
+  Session rail, pass 4 (2026-10-08). Self-contained: open in any browser.
+  Follows rail-links-and-harness.html (pass 3) and sessions-ux-v2.html.
+  This pass is about *legibility of state* — three asks:
+
+    #1  The status column is drawn six different ways. "Ready" and
+        "Sleeping" get a near-invisible ◦, "Stalled" a low-contrast ◌,
+        "Done" a text ✓, "Working" a CSS ring. Nothing shares a weight.
+    #2  "Active" vs "Earlier" collides with "pause" vs "resume". Two
+        orthogonal axes, one shared vocabulary.
+    #3  The hover detail panel is the native browser title attribute:
+        unstyleable by construction, and not a DOM node, so nothing in
+        it can be selected or copied.
+
+  Clay/dark tokens copied verbatim from ui/src/tokens/tokens.css. Card
+  chrome copied verbatim from SessionRail.module.css so the deltas below
+  are the only differences you are looking at.
+
+  Live surfaces this mocks:
+    ui/src/features/sessions/rail/railGroups.ts    (statusOf, isEarlier)
+    ui/src/features/sessions/rail/railLabels.ts    (railTooltip)
+    ui/src/features/sessions/rail/SessionRail.tsx  (title=, the cluster)
+    ui/src/features/sessions/rail/SessionRail.module.css (.statusGlyph)
+    ui/src/features/sessions/actions/sessionLifecycle.ts (resumeState)
+    ui/src/components/Popover/                     (the panel to reuse)
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — rail status marks, lifecycle words, detail panel</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15);
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:88ch; margin-top:var(--space-2); }
+  header.intro ol { color:var(--text2); max-width:88ch; margin:var(--space-3) 0 0 var(--space-4); }
+  header.intro li { margin-bottom:var(--space-1); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.rec { color:var(--ok-fg); background:var(--ok-soft); }
+  .block > h2 .tag.bug { color:var(--bad-fg); background:var(--bad-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:94ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:94ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); display:flex; align-items:baseline; gap:var(--space-2); flex-wrap:wrap; }
+  .rowlabel.good { color:var(--ok-fg); }
+  .rowlabel.bad { color:var(--bad-fg); }
+  .rowlabel .m { font-weight:500; letter-spacing:0; text-transform:none; color:var(--text3); font-family:var(--mono); }
+
+  .cols { display:flex; gap:var(--space-5); flex-wrap:wrap; align-items:flex-start; }
+  .col { flex:1 1 300px; min-width:290px; }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); }
+  td b { color:var(--text); font-weight:600; }
+  .ok { color:var(--ok-fg); } .warnc { color:var(--warn-fg); } .badc { color:var(--bad-fg); }
+  td.mark { text-align:center; width:46px; }
+
+  .railcol { width:312px; padding:var(--space-3); border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); }
+
+  /* ── verbatim from SessionRail.module.css ──────────────────────────────── */
+  .row { position:relative; display:flex; flex-direction:column; gap:var(--space-1); width:100%; padding:var(--space-2) var(--space-3); margin-bottom:2px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); color:var(--text); font:500 var(--fs-sm) var(--sans); text-align:left; cursor:pointer; }
+  .row:hover { background:var(--bg2); }
+  .rowTop { display:flex; align-items:flex-start; gap:var(--space-2); }
+  .name { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; }
+  .when { flex:none; margin-left:auto; padding-left:var(--space-2); color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; line-height:1.35; }
+  .status { display:flex; align-items:center; gap:6px; min-width:0; min-height:15px; color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .status .lbl { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status .el { flex:none; color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; opacity:.85; }
+  .status.working, .status.working .lbl { color:var(--accent); }
+  .status.needs,   .status.needs .lbl   { color:var(--warn-fg); }
+  .status.bad,     .status.bad .lbl     { color:var(--bad-fg); }
+  .status.done,    .status.done .lbl    { color:var(--ok-fg); }
+  .status.idle,    .status.idle .lbl    { color:var(--text3); }
+  .context { display:flex; align-items:center; gap:5px; min-width:0; min-height:13px; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; }
+  .context .branch, .context .dir { font-family:var(--mono); color:var(--text2); }
+  .context .sep { flex:none; opacity:.5; }
+  .hx { flex:none; width:14px; height:14px; margin-top:3px; border-radius:4px; background:var(--bg3); color:var(--text3); font:700 8px/1 var(--sans); display:inline-flex; align-items:center; justify-content:center; }
+  .hx svg { width:10px; height:10px; display:block; }
+
+  /* ══ #1 TODAY: six drawing systems in one 9px slot ═════════════════════ */
+  .g9 { flex:none; width:9px; text-align:center; font-size:9px; line-height:1; }
+  .g9.stalled { font-size:11px; }          /* the file's own per-glyph patch */
+  .g9.bell { animation:breathe 1.6s ease-in-out infinite; }
+  .spin9 { flex:none; width:9px; height:9px; border-radius:50%; border:1.5px solid var(--line); border-top-color:var(--accent); animation:sp .8s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  @keyframes breathe { 0%,100% { opacity:1; } 50% { opacity:.45; } }
+
+  /* ══ #1 OPTION A: one drawing system — 10px box, 1.6px stroke ══════════
+     The family is the STROKE WEIGHT and the box, not the shape. Every mark
+     is SVG, so weight is specified rather than inherited from whatever the
+     font decided ◦ and ◌ should weigh. Three independent channels:
+
+       interior  is a process alive?   empty ring · centre dot · sweeping arc
+       colour    does it want you?     text3 / warn / bad / ok / accent
+       motion    is it moving?         exactly one state moves
+
+     That last one is why working and stalled share a mark: "a spinner that
+     stopped" is what the code comment already wants ◌ to say, and drawing
+     the working spinner's own geometry without the animation says it, where
+     a different character from a different font only gestures at it. */
+  .m10 { flex:none; width:10px; height:10px; display:block; overflow:visible; }
+  .m10 .track { stroke:currentColor; opacity:.26; }
+  .m10.spin .arc { animation:sp .8s linear infinite; transform-origin:5px 5px; }
+  .m10.breathe { animation:breathe 1.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion:reduce) {
+    .m10.spin .arc, .m10.breathe, .g9.bell, .spin9 { animation:none; }
+  }
+
+  .legend { display:flex; flex-direction:column; gap:2px; }
+  .legend .lrow { display:flex; align-items:center; gap:var(--space-2); font-size:var(--fs-sm); color:var(--text2); padding:3px 0; }
+  .legend .lrow .k { width:80px; flex:none; color:var(--text); font-weight:600; font-size:var(--fs-chip); text-transform:uppercase; letter-spacing:.06em; }
+
+  /* ══ #3 the native title facsimile ═════════════════════════════════════
+     Chromium's own tooltip, approximated: system font at a size the app
+     never uses, a colour from no palette, square corners, 1px grey border,
+     and — the part a picture cannot show — no DOM node, so no selection,
+     no copy, ~1s delay, and dismissal on any pointer movement. */
+  .nativeTip { display:inline-block; background:#fcfcfc; color:#111; border:1px solid #767676;
+               border-radius:0; padding:3px 5px; font:11px/1.42 "Segoe UI",system-ui,sans-serif;
+               white-space:pre; box-shadow:0 2px 4px rgba(0,0,0,.35); user-select:none; cursor:default; }
+
+  /* ══ #3 the detail panel — Popover.module.css chrome ═══════════════════ */
+  .panel { width:268px; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm);
+           box-shadow:var(--shadow); padding:var(--space-1) 0; user-select:text; }
+  .panel .phead { display:flex; align-items:baseline; gap:var(--space-2); padding:6px 10px 7px; border-bottom:1px solid var(--line-soft); margin-bottom:var(--space-1); }
+  .panel .phead .pname { flex:1; min-width:0; color:var(--text); font:600 var(--fs-sm) var(--sans); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .panel .prow { display:flex; align-items:baseline; gap:var(--space-2); padding:3px 10px; font-size:var(--fs-chip); }
+  .panel .prow:hover { background:var(--bg3); }
+  .panel .prow .k { flex:none; width:64px; color:var(--text3); font:600 var(--fs-chip) var(--sans); }
+  .panel .prow .v { flex:1; min-width:0; color:var(--text2); font:500 var(--fs-chip) var(--sans); word-break:break-all; }
+  .panel .prow .v.m { font-family:var(--mono); color:var(--text); }
+  .panel .prow .cp { flex:none; opacity:0; border:none; background:none; color:var(--text3); cursor:pointer; font-size:10px; padding:0 2px; }
+  .panel .prow:hover .cp { opacity:1; }
+  .panel .prow .cp:hover { color:var(--accent); }
+  .panel .pdiv { height:1px; background:var(--line-soft); margin:var(--space-1) 0; }
+  .panel .pfoot { padding:5px 10px 4px; color:var(--text3); font:500 var(--fs-chip) var(--sans); border-top:1px solid var(--line-soft); margin-top:var(--space-1); }
+  .arrowmark { color:var(--text3); font-size:18px; align-self:center; padding:0 var(--space-2); }
+
+  .btn { flex:none; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text2); cursor:pointer; font-size:12px; line-height:1; }
+  .btn:hover { color:var(--text); background:var(--bg4); }
+  .btn.danger:hover { color:var(--bad-fg); background:var(--bad-soft); border-color:var(--bad); }
+  .btn.on { color:var(--accent); border-color:var(--accent); background:var(--accent-soft); }
+  .cluster { display:inline-flex; align-items:center; gap:2px; padding:3px 4px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); box-shadow:var(--shadow); }
+
+  .pill { display:inline-block; font:600 var(--fs-chip) var(--sans); border-radius:999px; padding:1px 8px; }
+  .pill.a { background:var(--ok-soft); color:var(--ok-fg); }
+  .pill.b { background:var(--info-soft); color:var(--info-fg); }
+  .axis { border:1px solid var(--line-soft); border-radius:var(--r-sm); background:var(--bg0); padding:var(--space-3); }
+  .axis h4 { font-size:var(--fs-sm); font-weight:650; margin-bottom:var(--space-1); }
+  .axis h4 .sm { font-weight:500; color:var(--text3); font-size:var(--fs-chip); }
+
+  .earlier { display:flex; align-items:center; gap:5px; width:100%; padding:5px var(--space-2); margin:var(--space-2) 0 var(--space-1); background:none; border:none; color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.05em; text-transform:uppercase; cursor:pointer; }
+  .earlier:hover { color:var(--text2); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Session rail — pass 4: status marks, lifecycle words, detail panel</h1>
+  <p>Three asks from the 2026-10-08 review. Each is shown as <b>today</b> beside the proposal, at the
+     real 312px rail width and the real type sizes, so nothing here flatters itself by being large.</p>
+  <ol>
+    <li><b>#1</b> The status mark column is drawn six different ways and has no shared weight.</li>
+    <li><b>#2</b> &ldquo;Active&rdquo;/&ldquo;Earlier&rdquo; and &ldquo;pause&rdquo;/&ldquo;resume&rdquo; are two axes sharing one vocabulary.</li>
+    <li><b>#3</b> The hover detail is the native <code>title</code> attribute — unstyleable, unselectable.</li>
+  </ol>
+</header>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     #1  THE STATUS MARK
+     ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#1 &nbsp;The status mark <span class="tag rec">recommend A</span>
+      <span class="sub">one drawing system · three channels · exactly one moving state</span></h2>
+  <div class="body">
+    <p class="lead">Today's seven states reach for seven unrelated things: four characters from the
+      UI font (<code>◦ ✓ ✕ ▲</code>), one more at a patched-up size (<code>◌</code> at 11px because
+      <i>&ldquo;at 9px it does not&rdquo;</i> carry — the CSS says so), and one ring drawn in CSS.
+      A font decides what <code>◦</code> weighs, and it decided &ldquo;almost nothing&rdquo;. That is the
+      invisible dot: not a tuning mistake, a consequence of borrowing marks from a typeface
+      instead of drawing them.</p>
+
+    <div class="cols">
+      <div class="col" style="flex:1 1 330px">
+        <div class="rowlabel bad">Today <span class="m">.statusGlyph, 9px</span></div>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="hx">C</span><span class="when">2m</span></div>
+            <div class="status working"><span class="spin9"></span><span class="lbl">Running bash · make check</span><span class="el">1m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when">4m</span></div>
+            <div class="status needs"><span class="g9 bell">▲</span><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="hx">C</span><span class="when">23h</span></div>
+            <div class="status needs"><span class="g9 stalled">◌</span><span class="lbl">Stalled · no agent activity</span><span class="el">23h</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">goose smoke run</span><span class="hx">G</span><span class="when">9m</span></div>
+            <div class="status bad"><span class="g9">✕</span><span class="lbl">Crashed · reopen to restart</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when">12m</span></div>
+            <div class="status done"><span class="g9">✓</span><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when">31m</span></div>
+            <div class="status idle"><span class="g9">◦</span><span class="lbl">Ready</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">pipeline notifications</span><span class="hx">C</span><span class="when">5h</span></div>
+            <div class="status idle"><span class="g9">◦</span><span class="lbl">Sleeping · wakes on send</span></div></div>
+        </div>
+        <p class="note" style="margin-top:var(--space-3)">Scan the left edge. There is no column — there
+          are two bright marks, two faint ones, and two gaps. The bottom two cards read as
+          <b>indented</b> rather than marked, which is exactly the complaint.</p>
+      </div>
+
+      <div class="col" style="flex:1 1 330px">
+        <div class="rowlabel good">A — one system <span class="m">10px box · 1.6px stroke · SVG</span></div>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="hx">C</span><span class="when">2m</span></div>
+            <div class="status working">
+              <svg class="m10 spin" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/>
+                <circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/>
+              </svg><span class="lbl">Running bash · make check</span><span class="el">1m</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when">4m</span></div>
+            <div class="status needs">
+              <svg class="m10 breathe" viewBox="0 0 10 10" aria-hidden="true">
+                <circle cx="5" cy="5" r="4" fill="currentColor"/>
+              </svg><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="hx">C</span><span class="when">23h</span></div>
+            <div class="status needs">
+              <svg class="m10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/>
+                <circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17" transform="rotate(-100 5 5)"/>
+              </svg><span class="lbl">Stalled · no agent activity</span><span class="el">23h</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">goose smoke run</span><span class="hx">G</span><span class="when">9m</span></div>
+            <div class="status bad">
+              <svg class="m10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M2.1 2.1 L7.9 7.9 M7.9 2.1 L2.1 7.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+              </svg><span class="lbl">Crashed · reopen to restart</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when">12m</span></div>
+            <div class="status done">
+              <svg class="m10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M1.5 5.3 L3.9 7.7 L8.5 2.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg><span class="lbl">Done · your turn</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when">31m</span></div>
+            <div class="status idle">
+              <svg class="m10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/>
+                <circle cx="5" cy="5" r="1.4" fill="currentColor"/>
+              </svg><span class="lbl">Ready</span></div></div>
+
+          <div class="row"><div class="rowTop"><span class="name">pipeline notifications</span><span class="hx">C</span><span class="when">5h</span></div>
+            <div class="status idle">
+              <svg class="m10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/>
+              </svg><span class="lbl">Sleeping · wakes on send</span></div></div>
+        </div>
+        <p class="note" style="margin-top:var(--space-3)">Now there <b>is</b> a column, and the two
+          calm states are <b>quiet without being absent</b> — a definite ring you can see but need not
+          read. The loud ones got louder by being solid, not by being bigger.</p>
+      </div>
+
+      <div class="col" style="flex:0 1 300px">
+        <div class="rowlabel">C — no mark at all <span class="m">for contrast</span></div>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="hx">C</span><span class="when">2m</span></div>
+            <div class="status working"><svg class="m10 spin" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg><span class="lbl">Running bash · make check</span><span class="el">1m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when">4m</span></div>
+            <div class="status needs"><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="hx">C</span><span class="when">23h</span></div>
+            <div class="status needs"><span class="lbl">Stalled · no agent activity</span><span class="el">23h</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">goose smoke run</span><span class="hx">G</span><span class="when">9m</span></div>
+            <div class="status bad"><span class="lbl">Crashed · reopen to restart</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when">12m</span></div>
+            <div class="status done"><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when">31m</span></div>
+            <div class="status idle"><span class="lbl">Ready</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">pipeline notifications</span><span class="hx">C</span><span class="when">5h</span></div>
+            <div class="status idle"><span class="lbl">Sleeping · wakes on send</span></div></div>
+        </div>
+        <p class="note" style="margin-top:var(--space-3)">Honest, and 16px cheaper. But it trades the
+          problem for its mirror image: the working card is now the only indented one, and the rail
+          loses its <b>peripheral</b> read — colour on 10.5px text is a thin signal when you are not
+          looking directly at it, where a solid amber puck is not.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel">Option A's three channels <span class="m">each independent, each answering one question</span></div>
+      <div class="cols">
+        <div class="col">
+          <div class="legend">
+            <div class="lrow"><span class="k">Interior</span>
+              <svg class="m10" viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg>
+              empty — no agent process is alive</div>
+            <div class="lrow"><span class="k"></span>
+              <svg class="m10" viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="5" cy="5" r="1.4" fill="currentColor"/></svg>
+              centre dot — a process is warm and waiting</div>
+            <div class="lrow"><span class="k"></span>
+              <svg class="m10" viewBox="0 0 10 10" fill="none" style="color:var(--accent)"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg>
+              arc — a turn is in flight</div>
+            <div class="lrow"><span class="k"></span>
+              <svg class="m10" viewBox="0 0 10 10" fill="none" style="color:var(--warn-fg)"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg>
+              solid — the state is about <i>you</i>, not the agent</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="legend">
+            <div class="lrow"><span class="k">Colour</span>unchanged — the <code>.status-*</code> tones already set it, label included</div>
+            <div class="lrow"><span class="k">Motion</span>only <b>working</b> moves, because it is the only thing that <i>is</i> moving.
+              <b>Stalled</b> is the same mark held still: that is the whole claim.</div>
+          </div>
+          <p class="note" style="margin-top:var(--space-3)"><b>The one real change in meaning.</b>
+            Today <code>◌</code> makes Stalled the <i>faintest</i> mark on the rail, while
+            <code>filterBucketOf</code> files it under &ldquo;Needs you&rdquo;. A wedged agent will not
+            recover on its own, so it should not be the quietest thing in the list. Sharing the
+            working geometry puts it at full weight and says <i>why</i> in one picture.</p>
+        </div>
+      </div>
+    </div>
+
+    <table style="margin-top:var(--space-5)">
+      <tr><th>Kind</th><th class="mark">Today</th><th class="mark">A</th><th>What changes</th></tr>
+      <tr><td><b>working</b></td>
+        <td class="mark"><span class="spin9" style="display:inline-block"></span></td>
+        <td class="mark"><svg class="m10 spin" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--accent)"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg></td>
+        <td>Round caps and a defined arc length; the CSS <code>border-top-color</code> ring has a hard-cornered 90° sweep it cannot control.</td></tr>
+      <tr><td><b>needs</b></td><td class="mark"><span class="g9">▲</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" style="display:inline-block;color:var(--warn-fg)"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg></td>
+        <td>Solid puck instead of a glyph. Loudest available mark at 10px, and it keeps the breathe.</td></tr>
+      <tr><td><b>stalled</b></td><td class="mark"><span class="g9 stalled">◌</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--warn-fg)"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17" transform="rotate(-100 5 5)"/></svg></td>
+        <td class="warnc">The meaning change above: a stopped spinner, at the weight its bucket deserves. Drops the 11px font-size patch.</td></tr>
+      <tr><td><b>crashed</b></td><td class="mark"><span class="g9">✕</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--bad-fg)"><path d="M2.1 2.1 L7.9 7.9 M7.9 2.1 L2.1 7.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></td>
+        <td>Same shape, drawn at the family weight rather than the font's.</td></tr>
+      <tr><td><b>done</b></td><td class="mark"><span class="g9">✓</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--ok-fg)"><path d="M1.5 5.3 L3.9 7.7 L8.5 2.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></td>
+        <td>Same — the check reads well and stays. Only the weight is now ours.</td></tr>
+      <tr><td><b>ready</b></td><td class="mark"><span class="g9">◦</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="5" cy="5" r="1.4" fill="currentColor"/></svg></td>
+        <td class="ok">Ring plus centre dot. Ready and Sleeping stop being the same mark — the dot <i>is</i> <code>activity === "active"</code>.</td></tr>
+      <tr><td><b>sleeping</b></td><td class="mark"><span class="g9">◦</span></td>
+        <td class="mark"><svg class="m10" viewBox="0 0 10 10" fill="none" style="display:inline-block;color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg></td>
+        <td class="ok">An empty ring at 62%: visible as a mark, not loud enough to read. Nothing is running, and the hole says so.</td></tr>
+    </table>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     #2  TWO AXES, ONE VOCABULARY
+     ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#2 &nbsp;&ldquo;Active&rdquo; / &ldquo;Earlier&rdquo; vs &ldquo;pause&rdquo; / &ldquo;resume&rdquo;
+      <span class="tag rec">rename, don't restructure</span>
+      <span class="sub">the grouping is sound; the words are overloaded</span></h2>
+  <div class="body">
+    <p class="lead">The structure is not the problem. There are two <b>orthogonal</b> facts about a
+      session, and today they share a vocabulary — so a sentence like &ldquo;this session is
+      active&rdquo; has two different answers depending on which one you meant.</p>
+
+    <div class="cols">
+      <div class="col"><div class="axis">
+        <h4><span class="pill b">axis 1</span> &nbsp;Recency <span class="sm">— when did it last reply?</span></h4>
+        <p class="note" style="margin-top:var(--space-2)">A continuous value, folded once:
+          <code>isEarlier()</code> puts a session in the collapsed tail when its last reply is
+          <b>≥ 24h</b> old. Nothing else. It never changes because of anything you click.</p>
+        <div class="railcol" style="margin-top:var(--space-3); width:auto">
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="5" cy="5" r="1.4" fill="currentColor"/></svg><span class="lbl">Ready</span></div></div>
+          <button class="earlier"><span>▸</span> Earlier <span style="letter-spacing:0;text-transform:none">· 14</span></button>
+        </div>
+      </div></div>
+
+      <div class="col"><div class="axis">
+        <h4><span class="pill a">axis 2</span> &nbsp;Is a process warm? <span class="sm">— <code>session.activity</code></span></h4>
+        <p class="note" style="margin-top:var(--space-2)">A boolean: is there a live provider child
+          behind this record. This is what <code>▶</code>/<code>⏸</code> toggle, and what makes the card
+          say <b>Ready</b> rather than <b>Sleeping</b>. It has <i>no</i> effect on list position.</p>
+        <div style="margin-top:var(--space-3)" class="cluster">
+          <span class="btn">▶</span><span class="btn">⏸</span><span class="btn">⇲</span><span class="btn">🔗</span><span class="btn danger">🗑</span>
+        </div>
+        <p class="note" style="margin-top:var(--space-2)">Today those two read
+          <code>"Resume agent"</code> and <code>"Close (pause) agent"</code> — a single tooltip that
+          needs two words for one act is already telling you the name is wrong.</p>
+      </div></div>
+    </div>
+
+    <table style="margin-top:var(--space-5)">
+      <tr><th>The four real combinations</th><th>Where in the list</th><th>What the card says</th><th>Does today's wording survive it?</th></tr>
+      <tr><td>Replied 5m ago · process alive</td><td>top</td><td>Ready</td><td class="ok">yes</td></tr>
+      <tr><td>Replied 5m ago · you closed it</td><td><b>still top</b></td><td>Sleeping</td><td class="badc">&ldquo;paused&rdquo; implies it left the active set. It did not — it did not move at all.</td></tr>
+      <tr><td>Replied 3d ago · process alive</td><td><b>Earlier</b></td><td>Ready</td><td class="badc">An <i>active</i> session filed under <i>Earlier</i>. Both words are correct and they contradict each other.</td></tr>
+      <tr><td>Replied 3d ago · nothing running</td><td>Earlier</td><td>Sleeping</td><td class="ok">yes</td></tr>
+    </table>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel good">The proposal — pick one word per axis and use it everywhere</div>
+      <p class="note">The deeper point about <code>⏸</code>/<code>▶</code>: <b>pause and resume are not
+        what they do.</b> Pause/resume implies work suspended mid-flight that resuming continues.
+        Nothing is suspended — the conversation is durable on disk either way, and
+        <code>SessionRail.tsx</code>'s own comment says a closed session
+        <i>&ldquo;wakes transparently on the first composer send&rdquo;</i>. So <code>⏸</code> frees a
+        process and <code>▶</code> pre-warms one. Neither is a state you must manage, which is why
+        asking &ldquo;what does pausing mean?&rdquo; has no satisfying answer: it is an answer to a
+        question about memory, dressed as an answer to a question about work.</p>
+      <table style="margin-top:var(--space-3)">
+        <tr><th>Surface</th><th>Today</th><th>Proposed</th><th>Why</th></tr>
+        <tr><td>Card, no process</td><td>Sleeping · wakes on send</td><td><b>unchanged</b></td><td>Already the only place that gets it right. Everything else moves to match <i>it</i>.</td></tr>
+        <tr><td><code>⏸</code> tooltip</td><td class="badc">Close (pause) agent</td><td><b>Sleep now</b><span style="display:block;color:var(--text3)">Frees the agent process · wakes on your next message</span></td><td>One word, and it is the card's word. The second line answers the question the button raises.</td></tr>
+        <tr><td><code>▶</code> tooltip</td><td class="badc">Resume agent</td><td><b>Wake now</b><span style="display:block;color:var(--text3)">Starts the agent before you send</span></td><td>&ldquo;before you send&rdquo; is the honest scope: it saves a few seconds, nothing more.</td></tr>
+        <tr><td>Kebab menu item</td><td class="badc">Resume</td><td><b>Wake now</b></td><td>Same act, same word. <code>resumeState()</code>'s disabled reason becomes &ldquo;Already awake&rdquo;.</td></tr>
+        <tr><td>Earlier fold</td><td>Earlier · 14</td><td><b>unchanged</b></td><td>Stops colliding the moment the other axis is Awake/Asleep instead of Active/Paused. Nothing structural to do.</td></tr>
+      </table>
+      <p class="note" style="margin-top:var(--space-3)"><b>The stronger option, if you want it:
+        delete <code>▶</code>.</b> It is a latency optimisation with no other user-visible effect, and
+        the first message wakes the session anyway. Removing a control costs nothing to explain;
+        keeping it costs a tooltip, a disabled state, a menu item and this conversation. It stays in
+        the workspace kebab for the rare deliberate pre-warm.</p>
+      <p class="note"><b>And the structural question worth naming:</b>
+        <code>railGroups.ts</code> says the filter chips <i>&ldquo;replace the old Active/Recent
+        grouping&rdquo;</i> — but the Earlier fold survived that change, so the rail now has two
+        grouping mechanisms. They do different jobs (chips are triage you choose; the fold is
+        24h of clutter going away without you choosing anything), so I would keep both. But if
+        #2 still feels muddy after the rename, <b>this</b> is the thing to cut, not the words.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     #3  THE DETAIL PANEL
+     ══════════════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>#3 &nbsp;The hover detail panel <span class="tag bug">one root cause, both symptoms</span>
+      <span class="sub">it is the native <code>title</code> attribute</span></h2>
+  <div class="body">
+    <p class="lead"><code>SessionRail.tsx:982</code> is <code>title={tooltip || undefined}</code>, and
+      <code>railTooltip()</code> builds a <code>\n</code>-joined string. So that panel is <b>Chromium's
+      own tooltip</b> — which explains both halves of your complaint at once: it is styled by the
+      browser and cannot be styled by us <i>at all</i>, and it is not a DOM node, so there is nothing
+      in it to select.</p>
+
+    <div class="cols" style="align-items:center">
+      <div class="col" style="flex:0 1 310px">
+        <div class="rowlabel bad">Today <span class="m">title=&quot;…&quot;</span></div>
+        <div class="nativeTip">Workspace: mads
+Folder: ~/repo/mads
+Branch: feat/rail-status
+Agent: builder
+Model: claude-opus-5
+Provider: claude-code
+Trust: auto_review → limited
+Isolation: worktree
+Context: 34% of 200k</div>
+        <p class="note" style="margin-top:var(--space-3)">Not a facsimile of a bad design — a facsimile
+          of <b>no</b> design. System font, a size the app never uses, square corners, a grey from no
+          palette. Plus, invisibly: <b>~1s delay</b>, dismissal on any pointer movement, no width
+          control, and it loses to every child <code>title</code> on the card (the harness mark, the
+          stamp, the work mark, each action button), so <i>which</i> tooltip you get depends on where
+          the pointer landed.</p>
+      </div>
+
+      <div class="col" style="flex:0 0 auto"><div class="arrowmark">→</div></div>
+
+      <div class="col" style="flex:0 1 310px">
+        <div class="rowlabel good">Proposed <span class="m">components/Popover + an ⓘ in the cluster</span></div>
+        <div class="panel">
+          <div class="phead"><span class="pname">port the dock to macOS</span>
+            <span style="color:var(--text3);font:500 var(--fs-chip) var(--mono)">4m</span></div>
+          <div class="prow"><span class="k">Workspace</span><span class="v">mads</span></div>
+          <div class="prow"><span class="k">Folder</span><span class="v m">~/repo/mads</span><button class="cp" title="Copy">⧉</button></div>
+          <div class="prow"><span class="k">Worktree</span><span class="v m">~/repo/mads-wt/dock</span><button class="cp" title="Copy">⧉</button></div>
+          <div class="prow"><span class="k">Branch</span><span class="v m">feat/rail-status</span><button class="cp" title="Copy">⧉</button></div>
+          <div class="pdiv"></div>
+          <div class="prow"><span class="k">Harness</span><span class="v">claude-code</span></div>
+          <div class="prow"><span class="k">Model</span><span class="v">claude-opus-5</span></div>
+          <div class="prow"><span class="k">Agent</span><span class="v">builder</span></div>
+          <div class="prow"><span class="k">Trust</span><span class="v">auto_review <span style="color:var(--text3)">→</span> limited</span></div>
+          <div class="prow"><span class="k">Isolation</span><span class="v">worktree</span></div>
+          <div class="prow"><span class="k">Context</span><span class="v">34% of 200k</span></div>
+          <div class="pdiv"></div>
+          <div class="prow"><span class="k">Session</span><span class="v m">ses_8f21c4ab</span><button class="cp" title="Copy">⧉</button></div>
+          <div class="pfoot">Click a value to select it · ⧉ copies</div>
+        </div>
+        <p class="note" style="margin-top:var(--space-3)">Same facts, in the app's own chrome — the
+          <code>Popover</code> primitive the launchpad pills and the link menus already use, so it
+          inherits <code>--bg2</code>, <code>--line</code>, <code>--r-sm</code>, the shadow, and
+          outside-click/Escape dismissal for free. Paths in mono, which the <code>title</code> string
+          could never do.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel">Trigger — the one real decision here</div>
+      <p class="note"><b>Selectable text and hover-dismissal are in direct conflict.</b> A surface that
+        vanishes when the pointer leaves the card cannot be one you drag a selection across. So either
+        the panel gets an explicit trigger, or it needs hover-intent logic (open after a delay, stay
+        open while the pointer is inside the panel itself, close on leaving both). I would not build
+        the second to get the first.</p>
+      <table style="margin-top:var(--space-3)">
+        <tr><th>&nbsp;</th><th>Trigger</th><th>Costs</th><th>&nbsp;</th></tr>
+        <tr><td><b>A</b></td>
+          <td><code>ⓘ</code> button in the hover action cluster, beside <code>⇲</code> and <code>🗑</code></td>
+          <td>One more button in a 5-button cluster. Detail is now two gestures away, not zero.</td>
+          <td class="ok"><b>Recommended.</b> It is where you just put link options, for the same reason — per-card actions live in the cluster. Keyboard-reachable, which the tooltip never was.</td></tr>
+        <tr><td><b>B</b></td>
+          <td>Keep hover, add intent: 400ms open, pointer-may-enter, close on leaving both</td>
+          <td>Hover-intent state machine, a surface that can swallow clicks meant for the card, and a panel that appears while you are merely passing through the rail.</td>
+          <td>Glanceable <i>and</i> selectable, but it is the fiddliest thing on this page and the failure mode is a panel in your way.</td></tr>
+        <tr><td><b>C</b></td>
+          <td>Both: a 3-line non-interactive hover card, plus A's full panel on click</td>
+          <td>Two surfaces to keep in agreement.</td>
+          <td>The upgrade, once A has settled and you know which three lines you actually glance at.</td></tr>
+      </table>
+      <p class="note" style="margin-top:var(--space-3)"><b>A bonus the <code>title</code> string could
+        not have.</b> Because it becomes real markup, the panel can hold things a tooltip could not:
+        per-row copy, mono for paths, and the <b>session id</b> — which is not in
+        <code>railTooltip()</code> today at all, and is the one value on this list you would genuinely
+        want on your clipboard for a <code>mads</code> command.</p>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2>Phasing <span class="sub">each row independently shippable</span></h2>
+  <div class="body">
+    <table>
+      <tr><th>#</th><th>Change</th><th>Touches</th><th>Risk</th></tr>
+      <tr><td>1</td><td><b>#1</b> Status marks → one SVG system (option A)</td><td>new <code>StatusMark.tsx</code>; <code>SessionRail.tsx</code>; <code>.statusGlyph/.statusStalled/.statusSpinner</code>; <code>RailStatus.glyph</code> becomes a mark <i>kind</i>, not a character</td><td class="ok">Low — presentational. Tests assert labels and tones, not glyph characters.</td></tr>
+      <tr><td>2</td><td><b>#2</b> Lifecycle wording → Sleep now / Wake now</td><td><code>SessionRail.tsx</code> titles + aria; <code>SessionActionsMenu.tsx</code>; <code>sessionLifecycle.ts</code> reason string</td><td class="ok">Low — strings and <code>aria-label</code>s. A few tests query by accessible name.</td></tr>
+      <tr><td>3</td><td><b>#2b</b> <i>optional:</i> drop <code>▶</code> from the rail cluster</td><td><code>SessionRail.tsx</code>; <code>onResume</code> stays for the workspace kebab</td><td class="warnc">Your call — a removal, not a rename. Reversible.</td></tr>
+      <tr><td>4</td><td><b>#3</b> Detail panel: <code>railTooltip()</code> string → structured rows</td><td><code>railLabels.ts</code> returns <code>{key, value, mono?, copy?}[]</code>; new <code>SessionDetailPanel.tsx</code>; drop <code>title=</code> from the card</td><td class="warnc">Medium — the one with new behaviour. <code>railTooltip</code>'s tests become tests of the row list.</td></tr>
+      <tr><td>5</td><td><b>#3b</b> <i>deferred:</i> option C's glance card</td><td>—</td><td>Only once 4 has settled.</td></tr>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)">Row 4 subsumes a smaller win worth calling out:
+      the card currently carries <code>title</code> on five nested elements that each steal the hover
+      from the card's own. Once the detail moves to a click, those can keep their tooltips without
+      competing with anything.</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
