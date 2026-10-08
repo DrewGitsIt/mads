@@ -2,6 +2,8 @@ import type { RouterClient, SessionEventSource } from "./client";
 import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
+  Delegate,
+  DelegateState,
   AttachmentOwner,
   QueuedMessage,
   SendResult,
@@ -816,6 +818,8 @@ export class FakeRouterClient implements RouterClient {
   private sessions: Map<string, Session>;
   private tasks: Map<string, Task>;
   private links: Map<string, Link>;
+  /** Delegate records listDelegates serves — tests push into it directly. */
+  readonly delegates: Delegate[] = [];
   private proposals: Map<string, Proposal>;
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
@@ -1620,6 +1624,10 @@ export class FakeRouterClient implements RouterClient {
 
   async publishRegistryItems(): Promise<{ job_id: string }> {
     throw new Error("not fixtured: publishRegistryItems");
+  }
+
+  async listDelegates(state?: DelegateState): Promise<Delegate[]> {
+    return this.delegates.filter((d) => !state || d.state === state).map((d) => structuredClone(d));
   }
 
   async getSessionLinks(sessionId: string): Promise<Link[]> {

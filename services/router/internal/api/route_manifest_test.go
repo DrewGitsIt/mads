@@ -25,6 +25,7 @@ var routeManifest = []struct {
 	{"POST", "/sessions/abc/trust", "POST /sessions/{id}/trust"},
 	{"POST", "/sessions/abc/model", "POST /sessions/{id}/model"},
 	{"GET", "/capabilities", "GET /capabilities"},
+	{"GET", "/delegates", "GET /delegates"},
 	{"GET", "/tasks", "GET /tasks"},
 	{"GET", "/tasks/abc", "GET /tasks/{id}"},
 	{"POST", "/tasks", "POST /tasks"},

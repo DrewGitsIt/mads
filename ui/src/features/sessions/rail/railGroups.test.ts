@@ -63,6 +63,23 @@ describe("statusOf", () => {
   const TURN_START = "2026-07-01T00:00:00Z";
   const DURING = Date.parse(TURN_START) + 60_000;
 
+  it("reads delegates still running after the turn as busy — never plain Idle", () => {
+    const session = makeSession({ activity: "active" });
+    const state = makeAgentState({ subagents: 2, blockingSubagents: 0, subagentsSince: TURN_START });
+    expect(statusOf(session, state, idle, DURING)).toMatchObject({
+      kind: "delegating",
+      tone: "working",
+      dot: "work",
+      label: "2 subagents running",
+      since: TURN_START,
+    });
+    expect(statusOf(session, { ...state, done: true }, idle, DURING).label).toBe("Done · 2 subagents running");
+    // A turn in flight still owns the line.
+    expect(statusOf(session, { ...state, workingSince: TURN_START }, idle, DURING).kind).toBe("working");
+    // Asleep, nothing can be running in it.
+    expect(statusOf(makeSession({ activity: "inactive" }), state, idle, DURING).kind).toBe("idle");
+  });
+
   it("reads a crash first, naming its blocked work when there is any", () => {
     const state = makeAgentState({ crashed: true, awaitingTool: "Bash", workingSince: "2026-07-01T00:00:00Z", done: true });
     expect(statusOf(makeSession({}), state, idle, DURING)).toMatchObject({
@@ -323,6 +340,10 @@ describe("filterBucketOf", () => {
   ) {
     return filterBucketOf(statusOf(session, makeAgentState(state), breakdown, now));
   }
+
+  it("files a session busy only with its delegates under Working", () => {
+    expect(bucket(live, { subagents: 1, blockingSubagents: 0 })).toBe("working");
+  });
 
   it("counts a crash and a parked approval as 'needs you'", () => {
     expect(bucket(live, { crashed: true })).toBe("needs");

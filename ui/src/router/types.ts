@@ -668,6 +668,41 @@ export interface QueueChanged {
 /** What POST /sessions/{id}/messages did with a send: ran it, or queued it behind the in-flight turn. */
 export type SendResult = { status: "accepted" } | { status: "queued"; queued: QueuedMessage };
 
+/** mirrors pkg/contracts/delegate.go DelegateState. No "idle": a finished delegate is finished. */
+export type DelegateState = "running" | "completed" | "failed" | "stopped" | "orphaned";
+
+/**
+ * mirrors pkg/contracts/delegate.go Delegate — a harness-run subagent
+ * (docs/DELEGATES-DESIGN.md), decided server-side by the session runner and
+ * announced as the payload of "session.delegate_changed". Keyed by
+ * harness_id within its session; tool_use_id is the spawning call and never
+ * moves (a resumed delegate's lifecycle lines report another one).
+ */
+export interface Delegate {
+  id: string;
+  session_id: string;
+  harness_id: string;
+  tool_use_id?: string;
+  depth?: number;
+  type?: string;
+  description?: string;
+  backgrounded?: boolean;
+  state: DelegateState;
+  /** The harness's status word, or what mads concluded from ("roster", "process_exit", …). */
+  reason?: string;
+  /** State concluded by mads rather than reported by the harness. */
+  inferred?: boolean;
+  runs: number;
+  started_at: string;
+  ended_at?: string;
+  transcript_path?: string;
+  total_tokens?: number;
+  tool_uses?: number;
+  duration_ms?: number;
+  created_at: string;
+  updated_at: string;
+}
+
 // mirrors providers/provider/event.go TaskStatus (payload of the "task"
 // stream event) and pkg/contracts/conversation.go SubagentTask (payload of
 // persisted "session.subagent_task" envelopes — identical shape, plus

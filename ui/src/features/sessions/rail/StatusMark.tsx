@@ -17,8 +17,9 @@ import type { RailStatusKind } from "./railGroups";
  *   shape    what the session is doing
  *   colour   whether it wants you — set by the .status-* tone on the parent,
  *            so every path paints with currentColor and none names a hue
- *   motion   whether it is moving. Exactly one state animates, and it is the
- *            one that is actually moving: `working`. `needs` deliberately
+ *   motion   whether it is moving. Only the states that are actually moving
+ *            animate: `working`, and `delegating` (the main agent is done
+ *            but its subagents aren't), which shares its spinner. `needs` deliberately
  *            does NOT breathe (the old .statusBell did) — a filled warn
  *            triangle is unmistakable standing still, and an exception here
  *            would cost the rule its whole meaning.
@@ -26,7 +27,7 @@ import type { RailStatusKind } from "./railGroups";
 export function StatusMark({ kind }: { kind: RailStatusKind }) {
   return (
     <svg
-      className={[styles.statusMark, kind === "working" ? styles.statusMarkSpin : ""]
+      className={[styles.statusMark, kind === "working" || kind === "delegating" ? styles.statusMarkSpin : ""]
         .filter(Boolean)
         .join(" ")}
       viewBox="0 0 10 10"
@@ -53,6 +54,14 @@ const ARC = { r: RING_R, strokeWidth: STROKE, strokeLinecap: "round", strokeDash
 const MARKS: Record<RailStatusKind, React.JSX.Element> = {
   // A spinner, and the only thing on the rail that moves.
   working: (
+    <>
+      <circle className={styles.statusMarkTrack} cx="5" cy="5" r={RING_R} strokeWidth={STROKE} />
+      <circle className={styles.statusMarkArc} cx="5" cy="5" stroke="currentColor" {...ARC} />
+    </>
+  ),
+  // Something is still running — the main agent's subagents — so the same
+  // moving spinner; the label says whose.
+  delegating: (
     <>
       <circle className={styles.statusMarkTrack} cx="5" cy="5" r={RING_R} strokeWidth={STROKE} />
       <circle className={styles.statusMarkArc} cx="5" cy="5" stroke="currentColor" {...ARC} />

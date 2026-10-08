@@ -1,5 +1,7 @@
 import type {
   Attachment,
+  Delegate,
+  DelegateState,
   AttachmentOwner,
   Agent,
   CapabilitySuggestion,
@@ -344,6 +346,10 @@ export interface RouterClient {
     version?: string,
   ): Promise<{ job_id: string }>;
   publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }>;
+
+  // --- Delegates (docs/DELEGATES-DESIGN.md) ---
+  /** Every session's delegates, only those in `state` when given — the rail's cold read is "running". */
+  listDelegates(state?: DelegateState): Promise<Delegate[]>;
 
   // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
   getSessionLinks(sessionId: string): Promise<Link[]>;
@@ -1259,6 +1265,10 @@ export class FetchRouterClient implements RouterClient {
 
   async publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }> {
     return routerPost(this.baseUrl, "/registry/publish", { items });
+  }
+
+  async listDelegates(state?: DelegateState): Promise<Delegate[]> {
+    return routerGet(this.baseUrl, state ? `/delegates?state=${encodeURIComponent(state)}` : "/delegates");
   }
 
   async getSessionLinks(sessionId: string): Promise<Link[]> {

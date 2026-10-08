@@ -1,8 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionAgentState } from "./useSessionAgentState";
+import { router } from "../../../router/client";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
-import type { AgentState, Session } from "../../../router/types";
+import type { AgentState, Delegate, DelegateState, Session } from "../../../router/types";
 
 let seq = 0;
 
@@ -19,6 +20,36 @@ function emit(type: string, sessionId: string, payload?: unknown, timestamp = "2
 /** The runner's own two edges, as they reach the browser. */
 function working(sessionId: string, label: string, since: string, at = since) {
   emit("session.agent_state", sessionId, { state: "working", label, since }, at);
+}
+
+/** The server's delegate record changing, as session.delegate_changed carries it. */
+function delegate(
+  sessionId: string,
+  harnessId: string,
+  state: DelegateState,
+  extra: Partial<Delegate> = {},
+  at = "2026-09-28T10:00:00Z",
+) {
+  emit(
+    "session.delegate_changed",
+    sessionId,
+    { session_id: sessionId, harness_id: harnessId, state, runs: 1, started_at: at, ...extra },
+    at,
+  );
+}
+
+function record(sessionId: string, harnessId: string, extra: Partial<Delegate> = {}): Delegate {
+  return {
+    id: `dlg_${harnessId}`,
+    session_id: sessionId,
+    harness_id: harnessId,
+    state: "running",
+    runs: 1,
+    started_at: "2026-09-28T09:30:00Z",
+    created_at: "2026-09-28T09:30:00Z",
+    updated_at: "2026-09-28T09:30:00Z",
+    ...extra,
+  };
 }
 
 function idle(sessionId: string, at = "2026-09-28T10:01:00Z") {
@@ -47,10 +78,12 @@ describe("useSessionAgentState", () => {
     seq = 0;
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(router, "listDelegates").mockResolvedValue([]);
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("is empty until a session says something", () => {
@@ -119,56 +152,84 @@ describe("useSessionAgentState", () => {
     await waitFor(() => expect(result.current.s1?.awaitingTool).toBe("Write"));
   });
 
-  it("counts running subagents, retiring one only on its final notification", async () => {
+  it("counts running delegates, retiring one when its record leaves running", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Delegating · review the diff", "2026-09-28T10:00:00Z");
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t2" });
-    emit("session.subagent_task", "s1", { phase: "progress", task_id: "t1", tool_uses: 3 });
+    delegate("s1", "t1", "running");
+    delegate("s1", "t2", "running");
     await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
 
-    emit("session.subagent_task", "s1", { phase: "notification", task_id: "t1", status: "completed" });
+    delegate("s1", "t1", "completed");
     await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
+    // A failed or stopped one is just as finished.
+    delegate("s1", "t2", "failed");
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(0));
   });
 
-  it("separates the subagents the main agent waits on from the backgrounded ones", async () => {
+  it("separates the delegates the main agent waits on from the backgrounded ones", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
-    // is_backgrounded rides the "started" line only, so it has to be
-    // remembered — a later phase's silence must not un-background a task.
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "bg", is_backgrounded: true });
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "fg" });
-    emit("session.subagent_task", "s1", { phase: "progress", task_id: "bg", tool_uses: 4 });
+    delegate("s1", "bg", "running", { backgrounded: true });
+    delegate("s1", "fg", "running");
     await waitFor(() => expect(result.current.s1?.subagents).toBe(2));
     expect(result.current.s1?.blockingSubagents).toBe(1);
 
-    emit("session.subagent_task", "s1", { phase: "notification", task_id: "fg", status: "completed" });
+    delegate("s1", "fg", "completed");
     await waitFor(() => expect(result.current.s1?.blockingSubagents).toBe(0));
     // The backgrounded one is still running — it just no longer speaks for the
     // session on the status line.
     expect(result.current.s1?.subagents).toBe(1);
   });
 
-  it("retires a subagent count when the session goes to sleep, not only on its notification", async () => {
+  it("keeps a backgrounded delegate past its parent's turn end — the 'Ready' bug", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1", is_backgrounded: true });
+    delegate("s1", "bg", "running", { backgrounded: true }, "2026-09-28T10:00:10Z");
+    idle("s1");
+    await waitFor(() =>
+      expect(result.current.s1).toEqual({
+        subagents: 1,
+        blockingSubagents: 0,
+        subagentsSince: "2026-09-28T10:00:10Z",
+        done: true,
+      }),
+    );
+    // Its later report doesn't retire the sticky "Done" either — it is not
+    // the next turn starting.
+    delegate("s1", "bg", "completed", { backgrounded: true }, "2026-09-28T10:03:00Z");
+    await waitFor(() => expect(result.current.s1).toEqual({ subagents: 0, done: true }));
+  });
+
+  it("makes a session with only a running delegate reportable, without calling it a turn", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    delegate("s1", "bg", "running", { backgrounded: true });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
+    expect(result.current.s1?.workingSince).toBeUndefined();
+  });
+
+  it("retires delegates when the session goes to sleep — its process is gone", async () => {
+    const { result } = renderHook(() => useSessionAgentState());
+    working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
+    delegate("s1", "t1", "running", { backgrounded: true });
     await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
 
-    // The ending a killed child actually produces: no idle, no notification,
-    // just the activity flip. Without it the card spins on a stale `working`
-    // and carries the count for the life of the tab — mirroredWorking() won't
-    // save it, because `live` outranks the record mirror.
+    // The ending a hard-killed runner produces: no record update ever comes,
+    // just the activity flip. Without this the card would spin for the life
+    // of the tab.
     emit("session.activity_changed", "s1", { activity: "inactive" }, "2026-09-28T10:05:00Z");
-    // Nothing left to say, so the session drops out of the map entirely and
-    // the card reads EMPTY_AGENT_STATE: no spinner, no count.
     await waitFor(() => expect(result.current.s1).toBeUndefined());
+  });
+
+  it("ignores running delegates on a session the record says is asleep", async () => {
+    const { result } = renderHook(() => useSessionAgentState([makeSession({ activity: "inactive" })]));
+    delegate("s1", "t1", "running");
+    await waitFor(() => expect(result.current).toEqual({}));
   });
 
   it("reads waking as no news about a turn", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
+    delegate("s1", "t1", "running");
     await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
 
     emit("session.activity_changed", "s1", { activity: "active" }, "2026-09-28T10:00:30Z");
@@ -176,26 +237,44 @@ describe("useSessionAgentState", () => {
     expect(result.current.s1?.subagents).toBe(1);
   });
 
+  it("seeds running delegates from one cold read, under anything the stream already said", async () => {
+    vi.mocked(router.listDelegates).mockResolvedValue([
+      record("s1", "early", { backgrounded: true }),
+      record("s2", "x"),
+      // The stream retires this one before the (older) snapshot lands.
+      record("s2", "done-already"),
+    ]);
+    let resolveLate: () => void = () => {};
+    const gate = new Promise<void>((r) => (resolveLate = r));
+    const listed = vi.mocked(router.listDelegates).getMockImplementation();
+    vi.mocked(router.listDelegates).mockImplementation(async (state) => {
+      await gate;
+      return listed!(state);
+    });
+
+    const { result } = renderHook(() => useSessionAgentState());
+    expect(router.listDelegates).toHaveBeenCalledWith("running");
+    delegate("s2", "done-already", "completed");
+    resolveLate();
+
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
+    expect(result.current.s1?.blockingSubagents).toBe(0);
+    expect(result.current.s1?.subagentsSince).toBe("2026-09-28T09:30:00Z");
+    expect(result.current.s2?.subagents).toBe(1);
+  });
+
   it("reports the turn in flight from agent_state alone — an in-turn signal is not a turn", async () => {
     const { result } = renderHook(() => useSessionAgentState());
-    // Subagent traffic used to be what made a card read "working". It no
-    // longer is: the authoritative signal has its own event now, and a count
-    // on its own was never news (the same rule as useOpenTaskCounts').
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
     emit("session.permission_resolved", "s1", { request_id: "r1" });
     await waitFor(() => expect(result.current).toEqual({}));
 
     working("s1", "Working…", "2026-09-28T10:00:00Z");
     await waitFor(() => expect(result.current.s1?.workingSince).toBe("2026-09-28T10:00:00Z"));
-    expect(result.current.s1?.subagents).toBe(1);
   });
 
   it("ends the turn on idle, with no session.turn_ended needed — the no-delta gap", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
-    await waitFor(() => expect(result.current.s1?.subagents).toBe(1));
-
     // No turn_ended at all: a turn that produced no digest delta never appends
     // one, which is exactly the "Done · your turn" gap phase 0 left open.
     idle("s1");
@@ -253,7 +332,7 @@ describe("useSessionAgentState", () => {
   it("drops in-flight work on a crash — nothing is running or parked any more", async () => {
     const { result } = renderHook(() => useSessionAgentState());
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
-    emit("session.subagent_task", "s1", { phase: "started", task_id: "t1" });
+    delegate("s1", "t1", "running", { backgrounded: true });
     emit("session.permission_requested", "s1", { request_id: "r1", tool: "Bash" });
     await waitFor(() => expect(result.current.s1?.awaitingTool).toBe("Bash"));
 

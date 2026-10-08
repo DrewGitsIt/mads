@@ -37,8 +37,10 @@ export interface SessionAgentState {
   awaitingSince?: string;
   /** The parked call's tool, when the request named one. */
   awaitingTool?: string;
-  /** Spawned subagents still running, backgrounded or not. */
+  /** Delegates (harness subagents) still running, backgrounded or not. */
   subagents: number;
+  /** When the longest-running of those started; set only while subagents > 0. */
+  subagentsSince?: string;
   /**
    * Of those, the ones the main agent is actually waiting on — a foreground
    * Agent call blocks the turn, a backgrounded one does not. Only a blocking
@@ -75,7 +77,7 @@ export const EMPTY_AGENT_STATE: SessionAgentState = { subagents: 0 };
  * child wakes transparently on the first send — so the rail was reporting an
  * implementation detail in the slot reserved for what the session is doing.
  */
-export type RailStatusKind = "crashed" | "needs" | "working" | "stalled" | "done" | "idle";
+export type RailStatusKind = "crashed" | "needs" | "working" | "delegating" | "stalled" | "done" | "idle";
 
 /** Maps 1:1 onto the mockup's `.status.bad|needs|working|done|idle` tones. */
 export type RailStatusTone = "bad" | "needs" | "working" | "done" | "idle";
@@ -192,6 +194,21 @@ export function statusOf(
       since: state.workingSince,
     };
   }
+  if (state.subagents > 0 && session.activity === "active") {
+    // The main agent's turn is over but its delegates aren't — the case the
+    // rail used to call "Ready" while a backgrounded subagent was still busy.
+    // It spins and files under Working: something is running. An unseen turn
+    // end is still news, so "Done" leads when there is one; otherwise the
+    // count stands alone — "Idle" would contradict it.
+    const running = `${plural(state.subagents, "subagent")} running`;
+    return {
+      kind: "delegating",
+      tone: "working",
+      dot: "work",
+      label: state.done ? `Done · ${running}` : running,
+      since: state.subagentsSince,
+    };
+  }
   const dot = dotState(session, breakdown);
   // Still gated on an active session. `done` is sticky until the card is
   // opened, so on a session whose child has since gone it is reporting a turn
@@ -266,7 +283,7 @@ export function filterBucketOf(status: RailStatus): RailFilterBucket {
   if (status.kind === "crashed" || status.kind === "needs" || status.kind === "stalled") {
     return "needs";
   }
-  if (status.kind === "working") return "working";
+  if (status.kind === "working" || status.kind === "delegating") return "working";
   return status.dot === "attn" ? "needs" : "idle";
 }
 

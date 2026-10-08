@@ -1101,7 +1101,7 @@ describe("SessionRail status line", () => {
     expect(screen.getByText("the session").closest('[role="button"]')!.querySelector('[class*="dot"]')).toBeNull();
   });
 
-  it("holds the documented precedence — crash over approval over working over done", () => {
+  it("holds the documented precedence — crash over approval over working over delegating over done", () => {
     const everything: SessionAgentState = {
       crashed: true,
       awaitingSince: "2026-07-01T00:00:00Z",
@@ -1142,7 +1142,31 @@ describe("SessionRail status line", () => {
         }}
       />,
     );
+    // The turn is over but its delegates aren't: still busy, and the unseen
+    // turn end is still news.
+    expect(statusOf("the session").textContent).toBe("Done · 2 subagents running");
+
+    rerender(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{
+          s1: { crashed: false, subagents: 0, done: true },
+        }}
+      />,
+    );
     expect(statusOf("the session").textContent).toBe("Done · your turn");
+  });
+
+  it("reads a session whose only activity is a running delegate as busy, not Idle", () => {
+    render(
+      <SessionRail
+        sessions={[live]}
+        openTaskCounts={{}}
+        agentStates={{ s1: { subagents: 1, blockingSubagents: 0, subagentsSince: inFlight() } }}
+      />,
+    );
+    expect(statusOf("the session").textContent).toMatch(/^1 subagent running/);
   });
 
   it("renders the same line shape in every state, so card height can't change with it", () => {
@@ -1151,6 +1175,7 @@ describe("SessionRail status line", () => {
       { subagents: 0, done: true },
       { subagents: 0, workingSince: inFlight() },
       { subagents: 3, workingSince: inFlight() },
+      { subagents: 2, subagentsSince: inFlight() },
       { subagents: 0, awaitingSince: "2026-07-01T00:00:00Z", awaitingTool: "Bash" },
       { subagents: 0, crashed: true },
     ];

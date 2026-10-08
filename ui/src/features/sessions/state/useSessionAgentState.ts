@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import type { SessionAgentState } from "../rail/railGroups";
-import type { AgentState, Envelope, Session, SubagentTask } from "../../../router/types";
+import type { AgentState, Delegate, Envelope, Session } from "../../../router/types";
 
 /**
  * The rail's status line (docs/mockups/sessions-ux-v2.html §1): every signal
@@ -12,7 +13,7 @@ import type { AgentState, Envelope, Session, SubagentTask } from "../../../route
  * session.agent_state is the authoritative turn signal (state, the live clause
  * and the turn's start), so working/idle is no longer inferred from whichever
  * in-turn event happened to arrive: the others each answer for their own field
- * only — a crash, an approval park, a subagent count. It also replaces
+ * only — a crash, an approval park, the running delegates. It also replaces
  * session.turn_ended as the end-of-turn signal, which is what closes the
  * "Done · your turn" gap on a turn that produced no digest delta (turn_ended
  * is skipped for those; a state transition is not).
@@ -23,7 +24,7 @@ const AGENT_STATE_EVENT_TYPES = [
   "session.crashed",
   "session.permission_requested",
   "session.permission_resolved",
-  "session.subagent_task",
+  "session.delegate_changed",
 ];
 
 /** Mutable per-session accumulator. Kept out of state: only its projection renders. */
@@ -31,14 +32,18 @@ interface Fold {
   crashed: boolean;
   /** Unresolved permission parks, request_id → the tool it named and when it parked. */
   pending: Map<string, { tool?: string; at: string }>;
-  /** Spawned subagents that haven't reported a final notification. */
-  running: Set<string>;
   /**
-   * Which of `running` were spawned backgrounded — the subset the main agent
-   * is NOT waiting on. `is_backgrounded` rides the "started" phase only, so
-   * it has to be remembered here rather than re-read off a later phase.
+   * Running delegates (docs/DELEGATES-DESIGN.md) by harness id — the server
+   * decides their lifecycle, so this only mirrors session.delegate_changed.
+   * `backgrounded`: the main agent is NOT waiting on it.
    */
-  backgrounded: Set<string>;
+  delegates: Map<string, { backgrounded: boolean; startedAt: string }>;
+  /**
+   * Every delegate this connection has heard about live, running or not. The
+   * cold read (GET /delegates?state=running) may answer after a newer event,
+   * and must never resurrect a delegate that event already retired.
+   */
+  heard: Set<string>;
   /**
    * The latest session.agent_state this connection saw. Once set it supersedes
    * the record mirror for good: the stream is newer than any list refetch.
@@ -51,8 +56,8 @@ function emptyFold(): Fold {
   return {
     crashed: false,
     pending: new Map(),
-    running: new Set(),
-    backgrounded: new Set(),
+    delegates: new Map(),
+    heard: new Set(),
     done: false,
   };
 }
@@ -69,16 +74,14 @@ function clearStale(fold: Fold): void {
 }
 
 /**
- * Nothing is in flight any more: no park is outstanding and no sidechain is
- * running. Every caller here is an event that ends the turn one way or
- * another, and each one has to retire the subagent set too — a subagent is
- * otherwise retired ONLY by its own final "notification", so a session whose
- * child dies mid-sidechain would carry that count for the life of the tab.
+ * The session's process is gone (asleep, or crashed): nothing is parked and
+ * no delegate can still be running inside it. The server concludes the same
+ * (the runner stops them on process exit), but a runner that died hard never
+ * gets to say so — this is what keeps such a card from spinning forever.
  */
 function clearInFlight(fold: Fold): void {
   fold.pending.clear();
-  fold.running.clear();
-  fold.backgrounded.clear();
+  fold.delegates.clear();
 }
 
 function apply(fold: Fold, env: Envelope): void {
@@ -95,9 +98,11 @@ function apply(fold: Fold, env: Envelope): void {
         return;
       }
       fold.crashed = false;
-      // A turn end with no notification leaves nothing running, the same
-      // conclusion finishRunningTasks() draws in the conversation.
-      clearInFlight(fold);
+      // The main agent's turn is over, so nothing of ITS is parked. Its
+      // delegates are another matter: a backgrounded one outlives the turn
+      // that spawned it, and only the server's delegate record says when it
+      // ends — retiring it here is what used to read a busy session "Ready".
+      fold.pending.clear();
       fold.done = true;
       return;
     }
@@ -138,21 +143,20 @@ function apply(fold: Fold, env: Envelope): void {
       fold.pending.delete(p.request_id ?? String(env.seq));
       return;
     }
-    case "session.subagent_task": {
-      const task = (env.payload ?? {}) as Partial<SubagentTask>;
-      clearStale(fold);
-      if (!task.task_id) return;
-      // Same vocabulary as the conversation's own fold (conversationItems.ts):
-      // only a final "notification" retires a subagent.
-      if (task.phase === "notification") {
-        fold.running.delete(task.task_id);
-        fold.backgrounded.delete(task.task_id);
-        return;
+    case "session.delegate_changed": {
+      const d = (env.payload ?? {}) as Partial<Delegate>;
+      // Not an in-turn signal: a delegate reports long after the turn that
+      // spawned it, and must not retire a sticky "Done · your turn".
+      if (!d.harness_id) return;
+      fold.heard.add(d.harness_id);
+      if (d.state === "running") {
+        fold.delegates.set(d.harness_id, {
+          backgrounded: Boolean(d.backgrounded),
+          startedAt: d.started_at ?? env.timestamp,
+        });
+      } else {
+        fold.delegates.delete(d.harness_id);
       }
-      fold.running.add(task.task_id);
-      // "started" is the only phase that carries the flag, so remember it —
-      // and never unset it from a later phase's silence.
-      if (task.is_backgrounded) fold.backgrounded.add(task.task_id);
       return;
     }
   }
@@ -195,11 +199,18 @@ function project(
     // The oldest unresolved park is the one the card names: it's the one that
     // has been waiting on the user longest.
     const park = [...(fold?.pending.values() ?? [])].sort((a, b) => a.at.localeCompare(b.at))[0];
-    const state: SessionAgentState = { subagents: fold?.running.size ?? 0 };
+    // Delegates count only on a live session: a sleeping one's process is
+    // gone, whatever a record that missed its last write still says.
+    const delegates =
+      fold && (!session || session.activity === "active") ? [...fold.delegates.values()] : [];
+    const state: SessionAgentState = { subagents: delegates.length };
     // Only when it says something, like every other field here: absent means
     // "they all block", so the common case keeps the shape it always had.
-    const blocking = fold ? [...fold.running].filter((id) => !fold.backgrounded.has(id)).length : 0;
+    const blocking = delegates.filter((d) => !d.backgrounded).length;
     if (blocking !== state.subagents) state.blockingSubagents = blocking;
+    if (delegates.length > 0) {
+      state.subagentsSince = delegates.map((d) => d.startedAt).sort()[0];
+    }
     if (fold?.crashed) state.crashed = true;
     if (park) {
       state.awaitingSince = park.at;
@@ -210,7 +221,9 @@ function project(
       if (agent.label) state.label = agent.label;
     }
     if (fold?.done) state.done = true;
-    if (state.crashed || state.awaitingSince || state.workingSince || state.done) next[id] = state;
+    if (state.crashed || state.awaitingSince || state.workingSince || state.done || state.subagents > 0) {
+      next[id] = state;
+    }
   }
   return next;
 }
@@ -253,7 +266,32 @@ export function useSessionAgentState(
       if (env.session_id === openRef.current) fold.done = false;
       publish();
     });
-    return unsubscribe;
+    // The cold read: delegates already running when this connection opened
+    // never announce themselves again, so one call answers for every
+    // session. Subscribed first, so nothing falls in the gap; anything the
+    // stream has spoken about since wins over this older snapshot.
+    let cancelled = false;
+    router
+      .listDelegates("running")
+      .then((running) => {
+        if (cancelled) return;
+        for (const d of running) {
+          let fold = folds.current.get(d.session_id);
+          if (!fold) {
+            fold = emptyFold();
+            folds.current.set(d.session_id, fold);
+          }
+          if (fold.heard.has(d.harness_id)) continue;
+          fold.delegates.set(d.harness_id, { backgrounded: Boolean(d.backgrounded), startedAt: d.started_at });
+        }
+        publish();
+      })
+      // Best effort: without it, live events still fill the count in.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [publish]);
 
   // Republish when the mirror itself changes — between transitions the stream

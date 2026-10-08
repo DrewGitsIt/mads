@@ -54,48 +54,83 @@ the harness owns the relationship, mads holds no grants over it, and it
 records *origin*, not reach. The sidebar may borrow the link rows' nesting
 and connector, but the two must never share a data model or code path.
 
-## Model (proposal)
+## Model *(#1, built 2026-10-08)*
 
-### Delegate record
+Decisions for #1, the server-side record and lifecycle *(agreed)*:
+- A dedicated `delegates` table (option C), built in its own worktree to
+  keep regression risk low.
+- No `idle` state: a finished delegate isn't warm, because mads has no notion
+  of a KV-cache TTL.
+- Stops cascade, which is Claude Code's default; `perTaskStopAffordance`
+  stays unset.
+- The sidebar count fix is part of #1.
+- Terminal (PTY) sessions are out of scope.
 
-One record per delegate, owned by the parent session and persisted by the
-session service:
+### Delegate record (`pkg/contracts/delegate.go`)
 
-| Field | Source |
+One row per (session, harness id) in the Data Service (`delegates` table,
+migration 0028). The session runner is the only writer: it sends the whole
+record with `PUT /sessions/{id}/delegates/{harness_id}`. The store keeps the
+`dlg_` id and `created_at`, and announces each real change as
+`session.delegate_changed` in the same transaction. Writing an unchanged
+record is a silent no-op, so retries are safe. Deleting a session deletes
+its delegates. Reads: `GET /sessions/{id}/delegates`, plus
+`GET /delegates?state=` (proxied by the Router) for the sidebar's single
+cross-session cold read.
+
+| Field | Meaning |
 |---|---|
-| `id` | harness id (Claude Code `agent_id` = `task_id`; Codex thread id; ACP child `sessionId`) |
-| `session_id` | the mads session that owns the tree |
-| `parent` | parent delegate id, empty for depth 1 |
-| `tool_use_id` | the spawning call, which anchors the in-stream card |
-| `depth`, `type`, `description` | harness metadata |
-| `state` | see the lifecycle below |
-| `started_at`, `ended_at` | **harness timestamps** (Claude Code stamps every line; mads drops them today) |
-| `cwd` / `worktree` | spawn location (Claude Code `.meta.json` `worktreePath`) |
-| `transcript` | locator for the delegate's own transcript, when one exists |
-| `capabilities` | resolved per delegate (see below) |
+| `harness_id` | the key. Claude Code's `task_id` = `agentId`, stable across resumes |
+| `tool_use_id` | the spawning call. First seen wins: a relay re-entry reports the SendMessage call's id and must not move the anchor |
+| `depth`, `type`, `description`, `backgrounded` | harness metadata; `backgrounded` is sticky (a re-entry is always backgrounded) |
+| `state`, `reason`, `inferred` | the state, its evidence (the harness's status word or mads's inference), and whether mads concluded it |
+| `runs`, `started_at`, `ended_at` | the run count (re-entries increment it), and the latest run's start and end. Arrival time: Claude Code's system task lines carry no timestamp |
+| `transcript_path`, totals | from the notification |
 
-### Lifecycle: one owner
+Not in the record yet: nesting parent, cwd/worktree, capabilities (#3).
 
-A single server-side state machine, emitted as one event type that every
-surface projects:
+### Lifecycle: one owner (`pkg/delegates`)
 
 ```
-spawned → running ⇄ idle → completed | failed | stopped | orphaned
-                ↑______________________________|
-                re-entry: a resume (e.g. SendMessage) re-fires task_started
-                for a known id, often backgrounded (seen in the probe)
+running → completed | failed | stopped | orphaned
+   ↑__________________________________|
+   re-entry: task_started for a known id (a Claude Code relay)
 ```
 
-- Transitions come **only** from harness evidence (lifecycle events,
-  notifications with their `status`, a resume re-firing `task_started` for a
-  known id) or from process death (→ `orphaned`).
-- The **parent's turn ending is not a transition.** This one rule
-  invalidates the assumption behind the bug history.
-- `idle` covers resumable delegates: Claude Code can run the same `agentId`
-  again via `SendMessage`, and the ACP RFD's `idle` state means the same.
-- The rail, the conversation, the dock and the tool-status tracker stop
-  deriving state and only read it. `toolstatus.TurnEnd` must skip calls
-  that belong to a live delegate.
+A pure tracker that the runner feeds and writes through (with
+agent_state-style retry), in `runner/delegates.go`:
+
+- **Harness reports win.** A `task_updated` / `task_notification` status
+  settles the state: completed; failed (including unrecognised words);
+  stopped (killed/stopped/cancelled). States mads infers are marked
+  `inferred`, and a later report overrides them.
+- **The parent's turn ending does not end a backgrounded delegate.** It does
+  end a *foreground* one still marked running (`turn_end`): the parent waits
+  on those, so a turn that ended without the delegate's report means an
+  interrupt.
+- **Leaving the roster is not an ending.** Claude Code drops a task from
+  `background_tasks_changed` just *before* reporting how it ended (both real
+  captures show this). A roster absence that outlasts a 5s grace period with
+  no report concludes `stopped` (`roster`), which is how a cascading kill
+  that goes unreported is caught.
+- **Process exit** (shutdown, crash, transport swap) stops every running
+  delegate (`process_exit`). A swap concludes them before starting the new
+  process, so the old stream winding down can't stop the new process's
+  delegates.
+- **Runner start** loads stored records (so resumed delegates keep their
+  identity) and marks any still `running` as `orphaned` (`runner_restart`).
+- **Tool status:** the turn-end sweep (`toolstatus.TurnEndExcept`) leaves a
+  live delegate's in-flight calls alone. They close out (`EndParent`) when
+  the delegate ends. This fixes the stuck-⊘ bug.
+- **Thinking ticks between turns** no longer start a "working" state. Claude
+  Code doesn't tag a subagent's `thinking_tokens` lines, so a tick between
+  turns only relabels a turn already in flight.
+
+The sidebar mirrors `session.delegate_changed` and no longer clears delegates
+when the main agent goes idle; only sleep and crash clear them. A session
+whose turn is over but whose delegates aren't reads
+**"Ready · N subagents running"** ("Done · …" when the turn end hasn't been
+seen yet), spinning and counted under Working.
 
 ### Transcript source
 
@@ -258,11 +293,12 @@ What this means:
 
 ## Phasing (proposal)
 
-0. **Model, no visible change.** Delegate record and lifecycle in the
-   session service; the four folds become projections. Parse wire
-   timestamps. Read Claude Code subagent transcripts. Set
-   `perTaskStopAffordance`. Fix the bugs listed below that the model
-   doesn't fix by itself.
+0. **Model (#1, done except as noted).** Delegate record and lifecycle in
+   the session service, plus the sidebar count. Not done here: switching
+   the conversation, panel and card over to the record (#2); per-line wire
+   timestamps (#2, they only matter for in-stream durations); reading
+   Claude Code subagent transcripts (#2/#3). `perTaskStopAffordance` is
+   deliberately left unset (cascading stops).
 1. **Sidebar and view.** Delegate rows, the parent's new status state, the
    full-pane delegate view, and the settings toggle.
 2. **Control.** Stop, Relay, and Continue-as-session (after the probe).
@@ -271,10 +307,13 @@ What this means:
 
 ## Known bugs to re-check after phase 0
 
+Tags mark what #1 addressed; every item still needs the post-increment
+check.
+
 Found by reading the code on 2026-10-08; none reproduced yet. #1 and #7
 were spot-checked in the code.
 
-1. `toolstatus.TurnEnd` marks a background delegate's in-flight inner calls
+1. **[#1: fixed, TurnEndExcept/EndParent]** `toolstatus.TurnEnd` marks a background delegate's in-flight inner calls
    `interrupted`, and the UI's `statusOf` lets that override beat the later
    result, so the row stays ⊘ for good.
 2. A `failed` or `killed` notification renders a green ✓.
@@ -285,22 +324,22 @@ were spot-checked in the code.
    background task from an earlier turn replays as interrupted.
 5. Tagged or task frames arriving between turns set the conversation's
    phase to live, and nothing ever closes it.
-6. Claude Code system lines are never parent-tagged. As a result
+6. **[#1: the thinking-tick half fixed; nested-spawn tagging open]** Claude Code system lines are never parent-tagged. As a result
    `SubagentTask.ParentToolUseID` is always empty, and a subagent's
    `thinking_tokens` can flip `agent_state` to working outside a turn (the
    a2256c3 stall class).
 7. `wireLine` drops Claude Code's per-line `timestamp`.
-8. Interrupting the parent kills every background task
+8. **[#1: cascading kept by decision; the record now concludes the stops]** Interrupting the parent kills every background task
    (`perTaskStopAffordance` is unset), and `handleInterrupt` retires them
    all in the UI regardless.
 9. Subagent history exists only in the mads event log; imported
    conversations have none.
-10. The sidebar shows "Ready" while a background subagent runs.
+10. **[#1: fixed]** The sidebar shows "Ready" while a background subagent runs.
 11. The digest counts a delegate's tool uses as main-turn work.
 12. A relay re-entry re-anchors the task to the SendMessage call:
     `applyTaskEvent` overwrites `toolUseId` from every phase, and
     `tasksByToolUse` keys on it (found by the stream-json probe).
-13. `background_tasks_changed` is dropped, so mads never reconciles against
+13. **[#1: fixed, roster consumed]** `background_tasks_changed` is dropped, so mads never reconciles against
     Claude Code's own list of running tasks.
 14. (Unrelated, found along the way) Deleting a link holder leaves a
     dangling link, and its subject disappears from the rail
