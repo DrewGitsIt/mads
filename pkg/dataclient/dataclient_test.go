@@ -295,3 +295,48 @@ func TestClientDraftConfirmDiscard(t *testing.T) {
 		}
 	}
 }
+
+// TestClientDelegateWireRoundTrip covers PutDelegate -> SessionDelegates ->
+// Delegates(state) against a real Data Service: the path is the key, the
+// store owns identity, and the cross-session running list is one call.
+func TestClientDelegateWireRoundTrip(t *testing.T) {
+	base := datatest.Start(t)
+	ctx := context.Background()
+	c := dataclient.New(base, "session")
+
+	sess := contracts.Session{Name: "parent"}
+	if err := c.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().UTC()
+	got, err := c.PutDelegate(ctx, contracts.Delegate{
+		SessionID: sess.ID, HarnessID: "a7f5", ToolUseID: "toolu_1", Type: "general-purpose",
+		State: contracts.DelegateRunning, Runs: 1, StartedAt: start,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID == "" || got.State != contracts.DelegateRunning {
+		t.Fatalf("PutDelegate = %+v", got)
+	}
+
+	ended := start.Add(time.Second)
+	got.State, got.Reason, got.EndedAt = contracts.DelegateFailed, "failed", &ended
+	if _, err := c.PutDelegate(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	list, err := c.SessionDelegates(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].State != contracts.DelegateFailed || list[0].EndedAt == nil || !list[0].EndedAt.Equal(ended) {
+		t.Fatalf("SessionDelegates = %+v", list)
+	}
+	running, err := c.Delegates(ctx, contracts.DelegateRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(running) != 0 {
+		t.Errorf("Delegates(running) = %+v, want none", running)
+	}
+}

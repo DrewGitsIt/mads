@@ -126,6 +126,14 @@ const (
 	// never fired for a subagent's parent-tagged events — a sidechain rolls
 	// up as a count, not as the main agent's label.
 	SessionAgentState EventType = "session.agent_state"
+	// SessionDelegateChanged fires when a session's delegate record
+	// (contracts.Delegate — a harness-run subagent, docs/DELEGATES-DESIGN.md)
+	// is created or changes state. Payload: contracts.Delegate, the full
+	// record after the change. Written by the Data Service in the same
+	// transaction as the record, so the record and its event can never
+	// disagree; transitions and first sightings only, never progress ticks
+	// (those stay session.subagent_task).
+	SessionDelegateChanged EventType = "session.delegate_changed"
 	// SessionTrustChanged fires when a session's trust level is set to a
 	// different value (POST /sessions/{id}/trust; re-setting the level it
 	// already has logs nothing). Payload: contracts.TrustChange — from, to,
@@ -451,7 +459,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
-	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState, SessionDelegateChanged,
 	SessionTrustChanged,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,

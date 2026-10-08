@@ -15,6 +15,7 @@
   "session.compact",
   "session.queue_changed",
   "session.agent_state",
+  "session.delegate_changed",
   "session.trust_changed",
   "task.created",
   "task.updated",

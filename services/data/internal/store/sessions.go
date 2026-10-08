@@ -379,6 +379,12 @@ func (s *Sessions) Delete(ctx context.Context, id, actor string) error {
 		if _, err := tx.Exec("DELETE FROM tasks WHERE session_id = ?", id); err != nil {
 			return err
 		}
+		// Delegates are the session's own (unlike links, which deletion
+		// deliberately leaves dangling): a deleted session's subagents must
+		// not linger in the rail's running list.
+		if _, err := tx.Exec("DELETE FROM delegates WHERE session_id = ?", id); err != nil {
+			return err
+		}
 		if _, err := tx.Exec("DELETE FROM sessions WHERE id = ?", id); err != nil {
 			return err
 		}

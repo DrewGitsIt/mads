@@ -280,6 +280,36 @@ func (c *Client) SetSessionAgentState(ctx context.Context, id string, state cont
 	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/agent-state", state, nil)
 }
 
+// PutDelegate creates or replaces one delegate record (keyed by session and
+// harness id) and announces a real change as session.delegate_changed, in one
+// atomic round trip; an unchanged record is a silent no-op, so a retry is
+// always safe. Returns the stored record.
+func (c *Client) PutDelegate(ctx context.Context, d contracts.Delegate) (contracts.Delegate, error) {
+	var out contracts.Delegate
+	err := c.do(ctx, http.MethodPut,
+		"/sessions/"+url.PathEscape(d.SessionID)+"/delegates/"+url.PathEscape(d.HarnessID), d, &out)
+	return out, err
+}
+
+// SessionDelegates lists one session's delegates, oldest first.
+func (c *Client) SessionDelegates(ctx context.Context, sessionID string) ([]contracts.Delegate, error) {
+	var out []contracts.Delegate
+	err := c.do(ctx, http.MethodGet, "/sessions/"+url.PathEscape(sessionID)+"/delegates", nil, &out)
+	return out, err
+}
+
+// Delegates lists every session's delegates, only those in state when it is
+// non-empty.
+func (c *Client) Delegates(ctx context.Context, state contracts.DelegateState) ([]contracts.Delegate, error) {
+	path := "/delegates"
+	if state != "" {
+		path += "?state=" + url.QueryEscape(string(state))
+	}
+	var out []contracts.Delegate
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out, err
+}
+
 // RecordSessionTurnEnd stamps LastTurnAt — and LastUsage, when the provider
 // reported any — in one atomic round trip, unlike the Session-then-
 // UpdateSession pair it replaces: that one could drop a field written
