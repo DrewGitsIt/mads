@@ -1059,6 +1059,10 @@ function SessionRow({
       title={tooltip || undefined}
       data-rail-card=""
       data-unseen={unseen ? "" : undefined}
+      // Awake or asleep isn't drawn any more (both read "Idle" — see
+      // RailStatusKind), but the e2e journeys still need to see which one the
+      // rail's list believes.
+      data-activity={session.activity}
       tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
       aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
       className={[

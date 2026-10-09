@@ -137,7 +137,7 @@ test.describe("session rail", () => {
     const card = cardFor(page, "alpha");
     const status = card.getByRole("status");
     // Live child, nothing in flight: the calm state the turn resolves back to.
-    await expect(status).toContainText("Ready");
+    await expect(status).toContainText("Idle");
 
     // A real turn against the fake provider, driven from outside the browser:
     // nothing in this journey touches the page, so what follows is the shared
@@ -164,7 +164,7 @@ test.describe("session rail", () => {
     ).toBeVisible();
     // Opening the session is the reader receipt for the sticky "Done"
     // (useSessionAgentState's openSessionId) — the line falls back to calm.
-    await expect(status).toContainText("Ready");
+    await expect(status).toContainText("Idle");
   });
 
   test("search finds a session by its directory when the workspace name doesn't", async ({

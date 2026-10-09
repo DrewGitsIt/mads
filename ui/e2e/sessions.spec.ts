@@ -76,7 +76,7 @@ test("sessions journey: agent replies to a composer message", async ({ page, rou
   await expect(page.getByRole("status", { name: /Working…|Using / })).not.toBeVisible();
 });
 
-test("sessions journey: close, resume affordance, delete", async ({ page, routerURL }) => {
+test("sessions journey: sleep, wake affordance, delete", async ({ page, routerURL }) => {
   await page.goto(routerURL);
 
   const goal = `e2e lifecycle journey ${Date.now()}`;
@@ -95,38 +95,33 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
 
   const rail = page.locator('[aria-label="Session list"]');
   // getByText resolves to the smallest matching element (the name span), so
-  // this stays unambiguous even once the row also gains a "Resume" button —
-  // rail.getByRole("button", { name: goal }) would match both.
+  // this stays unambiguous next to the card's own action buttons —
+  // rail.getByRole("button", { name: goal }) would match those too.
   const sessionRow = rail.getByText(goal, { exact: true });
   const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
-  const resumeAffordance = rail.getByLabel(`Resume ${goal}`);
   // Already open — creating from the hero auto-opens the conversation.
   await expect(page.getByLabel("Workspace actions")).toBeVisible();
 
-  // Close: live child terminates, session goes inactive, summary job runs.
-  // The kebab's "Resume" menu item is a plain button (accessible name
-  // "Resume"), unlike the rail's resume affordance whose aria-label
-  // ("Resume <session name>") overrides its accessible name — so
-  // getByRole("button", { name: "Resume", exact: true }) stays unambiguous.
+  // Sleep: live child terminates, session goes inactive, summary job runs.
   await page.getByLabel("Workspace actions").click();
 
   // All three lifecycle actions are always visible in the kebab — while the
-  // session is still active, Resume renders disabled with an inline reason
+  // session is still active, Wake renders disabled with an inline reason
   // instead of being hidden (discovery beats minimalism).
   // Scoped to the open menu's own list: other sessions elsewhere on the page
   // (created by e2e tests running in parallel against the same backend) also
-  // render "Resume ..." rail affordances, which an unscoped substring/regex
+  // render "Sleep ..." rail affordances, which an unscoped substring/regex
   // query would also match.
   const kebabList = page.getByRole("list");
-  await expect(page.getByRole("button", { name: "Close", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Sleep now", exact: true })).toBeEnabled();
   // Delete is NOT disabled here any more: the router terminates the session as
   // part of the delete, so the warning belongs in the confirm dialog rather
   // than in a dead menu item that pre-empts it.
   const deleteWhileActive = kebabList.getByRole("button", { name: /Delete/ });
   await expect(deleteWhileActive).toBeEnabled();
-  const resumeWhileActive = kebabList.getByRole("button", { name: /Resume/ });
-  await expect(resumeWhileActive).toBeDisabled();
-  await expect(resumeWhileActive).toContainText("Session is already active");
+  const wakeWhileActive = kebabList.getByRole("button", { name: /Wake now/ });
+  await expect(wakeWhileActive).toBeDisabled();
+  await expect(wakeWhileActive).toContainText("Already awake");
 
   // The live session's dialog names it and carries the verb the delete will
   // actually perform. Whether the first turn is still in flight decides
@@ -142,24 +137,24 @@ test("sessions journey: close, resume affordance, delete", async ({ page, router
   await expect(liveDialog).toHaveCount(0);
 
   await page.getByLabel("Workspace actions").click();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Sleep now", exact: true }).click();
 
-  await expect(resumeAffordance).toBeVisible();
-  // Rail repaints live, no reload. The Active/Recent sections are gone (one
-  // flat list, mockup §2 option B), so the card's own status line is the
-  // signal — and unlike a group header it is scoped to THIS row, which other
-  // e2e tests running in parallel against the same backend cannot disturb.
-  await expect(sessionCard.getByRole("status")).toContainText("Sleeping");
+  // Rail repaints live, no reload, scoped to THIS card, which other e2e tests
+  // running in parallel against the same backend cannot disturb. Asleep and
+  // awake both read "Idle" on the card, so the list's own belief is read off
+  // its data-activity.
+  await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
+  await expect(sessionCard.getByRole("status")).toContainText("Idle");
   await page.getByLabel("Workspace actions").click();
-  await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeVisible();
-  // Close stays enabled even while inactive ("honest Close", 495afa4): the
-  // activity record can drift from the real child state, so Close is always
-  // offered and the server treats an already-inactive close as a no-op.
-  const closeWhileInactive = kebabList.getByRole("button", { name: /Close/ });
-  await expect(closeWhileInactive).toBeVisible();
-  await expect(closeWhileInactive).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Wake now", exact: true })).toBeEnabled();
+  // Sleep stays enabled even while inactive ("honest Close", 495afa4): the
+  // activity record can drift from the real child state, so Sleep is always
+  // offered and the server treats an already-inactive sleep as a no-op.
+  const sleepWhileInactive = kebabList.getByRole("button", { name: /Sleep now/ });
+  await expect(sleepWhileInactive).toBeVisible();
+  await expect(sleepWhileInactive).toBeEnabled();
 
-  // Resume is reachable here (menu item present, wired to
+  // Wake is reachable here (menu item present, wired to
   // routerClient.resumeSession — covered by SessionWorkspace.test.tsx and
   // the router-level TestResumeSession), but isn't clicked-to-success in
   // this journey: the "fake" provider's session history is in-process
@@ -236,11 +231,11 @@ async function waitForRequestBatch(
   throw new Error(`waitForRequestBatch: never reached ${minCount} and stabilized (last=${last})`);
 }
 
-test("sessions journey: close survives an out-of-order rail refetch", async ({ page, routerURL }) => {
+test("sessions journey: sleep survives an out-of-order rail refetch", async ({ page, routerURL }) => {
   // Reproduces the actual stale-rail defect: useSessionsList.refetch() fires
   // on every session.* SSE event with no request-ordering guard
   // (useSessionsList.ts). An unrelated refetch already in flight when the
-  // close's own refetch is issued can resolve *after* it and overwrite the
+  // sleep's own refetch is issued can resolve *after* it and overwrite the
   // freshly-correct "inactive" state with the stale snapshot it captured —
   // and since no further event arrives to trigger another refetch, the rail
   // is stuck exactly like the bug report ("stays stale... until the whole
@@ -284,25 +279,25 @@ test("sessions journey: close survives an out-of-order rail refetch", async ({ p
   await createSessionNoSpawn(dataURL, { name: `unrelated ${Date.now()}`, provider: "fake" });
   const batchABoundary = await waitForRequestBatch(() => held.length, 1);
 
-  // Batch B: close the real session — its refetch(es) are issued (and
-  // held) strictly after batch A's, capturing the correct post-close
+  // Batch B: sleep the real session — its refetch(es) are issued (and
+  // held) strictly after batch A's, capturing the correct post-sleep
   // "inactive" snapshot.
   await page.getByLabel("Workspace actions").click();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Sleep now", exact: true }).click();
   const batchBBoundary = await waitForRequestBatch(() => held.length, batchABoundary + 1);
 
   // Release batch B (later-issued, correct) first...
   for (let i = batchABoundary; i < batchBBoundary; i++) await held[i].fulfill();
-  // The rail is one flat list now, so "went inactive" is read off this card's
-  // own status line rather than which group header it sits under.
-  const sessionStatus = sessionRow.locator('xpath=ancestor::div[@role="button"][1]').getByRole("status");
-  await expect(sessionStatus).toContainText("Sleeping");
+  // "Went inactive" is read off this card's data-activity: its status line
+  // reads "Idle" asleep or awake, so it can't show the stale snapshot winning.
+  const sessionCard = sessionRow.locator('xpath=ancestor::div[@role="button"][1]');
+  await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
 
   // ...then release batch A (earlier-issued, stale) after. Without the
   // request-ordering guard in useSessionsList.ts, this overwrites the rail
   // back to showing the session active — reproducing the reported bug.
   for (let i = 0; i < batchABoundary; i++) await held[i].fulfill();
-  await expect(sessionStatus).toContainText("Sleeping");
+  await expect(sessionCard).toHaveAttribute("data-activity", "inactive");
 });
 
 test("sessions journey: sending a message wakes a dormant session", async ({ page, routerURL }) => {
