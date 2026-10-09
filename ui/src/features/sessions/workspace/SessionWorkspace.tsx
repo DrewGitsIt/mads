@@ -34,6 +34,17 @@ export interface SessionWorkspaceProps {
   /** This session's live agent state (useSessionAgentState) — only the delete dialog reads it, and only to say what the turn in flight is doing. */
   agentState?: SessionAgentState;
   initialTab?: WorkspaceTabId;
+  /**
+   * Sleep and wake this session. Not done here: both go through the one
+   * controller the surface owns (useSessionSleep), which is what makes the
+   * kebab's "Sleep now" ask about unlanded commits exactly as the rail
+   * card's ⏸ does. Before that, this shell called terminate itself and the
+   * question went unasked from the one place you were most likely to have
+   * commits waiting.
+   */
+  onSleep: (session: Session) => void;
+  onWake: (session: Session) => void;
+  /** Leave this session's workspace for the Launchpad — not a lifecycle action. */
   onClose: () => void;
   /** Set for a session just created from the Launchpad — forwarded into the Conversation tab's context only. */
   provisioning?: boolean;
@@ -57,6 +68,8 @@ export function SessionWorkspace({
   openTaskBreakdown = EMPTY_OPEN_TASK_BREAKDOWN,
   agentState,
   initialTab,
+  onSleep,
+  onWake,
   onClose,
   provisioning,
   onProvisioningDone,
@@ -107,20 +120,6 @@ export function SessionWorkspace({
       },
     );
   }, [refetchSession, sessionId]);
-
-  function closeSession() {
-    setMenuOpen(false);
-    routerClient.closeSession(sessionId).catch((err: unknown) => {
-      setActionError(err instanceof Error ? err.message : String(err));
-    });
-  }
-
-  function resumeSession() {
-    setMenuOpen(false);
-    routerClient.resumeSession(sessionId).catch((err: unknown) => {
-      setActionError(err instanceof Error ? err.message : String(err));
-    });
-  }
 
   // BounceSession (supervisor.go) returns early with no respawn if
   // terminate fails (e.g. the child is busy past terminateGrace) — a
@@ -278,8 +277,14 @@ export function SessionWorkspace({
               }}
               onRestartAgent={restartAgent}
               restartingAgent={restarting}
-              onClose={closeSession}
-              onResume={resumeSession}
+              onSleep={() => {
+                setMenuOpen(false);
+                onSleep(session);
+              }}
+              onWake={() => {
+                setMenuOpen(false);
+                onWake(session);
+              }}
               onDeleteRequest={() => {
                 setMenuOpen(false);
                 setConfirmingDelete(true);

@@ -7,8 +7,8 @@ function renderMenu(props: Partial<Parameters<typeof SessionActionsMenu>[0]> = {
     <SessionActionsMenu
       sessionId="ses_abc123"
       activity="inactive"
-      onClose={vi.fn()}
-      onResume={vi.fn()}
+      onSleep={vi.fn()}
+      onWake={vi.fn()}
       onDeleteRequest={vi.fn()}
       {...props}
     />,
@@ -39,14 +39,14 @@ describe("SessionActionsMenu", () => {
   });
 
   it("copies the session id to the clipboard and shows a brief confirmation without dismissing the menu", async () => {
-    const onClose = vi.fn();
-    renderMenu({ onClose });
+    const onSleep = vi.fn();
+    renderMenu({ onSleep });
 
     fireEvent.click(screen.getByText("ses_abc123"));
 
     expect(writeText).toHaveBeenCalledWith("ses_abc123");
     expect(await screen.findByText("Copied")).toBeTruthy();
-    expect(onClose).not.toHaveBeenCalled();
+    expect(onSleep).not.toHaveBeenCalled();
     // The menu itself stays mounted — no unmount/close side effect from the copy.
     expect(screen.getByRole("button", { name: /^Wake now/ })).toBeTruthy();
   });

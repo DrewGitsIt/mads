@@ -319,6 +319,51 @@ describe("SessionsSurface", () => {
     await waitFor(() => expect(screen.queryByText(/Couldn't sleep/)).toBeNull());
   });
 
+  // Both controls that offer sleep go through the surface's one
+  // useSessionSleep controller, so both ask the unlanded-commits question
+  // (D6). The workspace kebab used to call terminate itself and skip it —
+  // from the one place you are most likely to have commits waiting.
+  describe("sleeping an isolated session with commits to land", () => {
+    const isolated = makeSession({
+      id: "s1",
+      name: "Alpha",
+      activity: "inactive",
+      worktree_dir: "/home/u/.mads/session-worktrees/s1",
+      worktree_branch: "mads/session/s1",
+      worktree_base: "main",
+      unlanded_count: 3,
+    });
+
+    async function renderSurface() {
+      stubSessionsAndConversationFetch([isolated]);
+      render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+      await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+    }
+
+    it("asks from the rail card's sleep button", async () => {
+      await renderSurface();
+
+      fireEvent.click(screen.getByRole("button", { name: "Sleep Alpha" }));
+
+      const dialog = screen.getByRole("alertdialog");
+      expect(within(dialog).getByText("Sleep “Alpha”?")).toBeTruthy();
+      expect(within(dialog).getByRole("button", { name: "Land into main and sleep" })).toBeTruthy();
+    });
+
+    it("asks from the workspace kebab's Sleep now, the same way", async () => {
+      await renderSurface();
+      fireEvent.click(rail().getByText("Alpha"));
+      await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
+
+      fireEvent.click(screen.getByLabelText("Workspace actions"));
+      fireEvent.click(screen.getByRole("button", { name: "Sleep now" }));
+
+      const dialog = screen.getByRole("alertdialog");
+      expect(within(dialog).getByText("Sleep “Alpha”?")).toBeTruthy();
+      expect(within(dialog).getByRole("button", { name: "Land into main and sleep" })).toBeTruthy();
+    });
+  });
+
   it("selecting an inactive session renders without crashing", async () => {
     const sessions = [makeSession({ id: "s1", name: "Alpha", activity: "inactive" })];
     stubSessionsAndConversationFetch(sessions);

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Panel, PanelBody, PanelFooter } from "../../../components/Panel/Panel";
 import type { SessionActivity } from "../../../router/types";
-import { closeState, resumeState, deleteState } from "./sessionLifecycle";
+import { sleepState, wakeState, deleteState } from "./sessionLifecycle";
 import styles from "./SessionActionsMenu.module.css";
 
 /**
@@ -19,8 +19,10 @@ export function shellMenuState(dockOpen: boolean, shellAlive: boolean): ShellMen
 export interface SessionActionsMenuProps {
   sessionId: string;
   activity: SessionActivity;
-  onClose: () => void;
-  onResume: () => void;
+  /** Sleep this session — the caller routes it through useSessionSleep, which may ask about unlanded commits first. */
+  onSleep: () => void;
+  /** Pre-warm a sleeping session. Never prompts. */
+  onWake: () => void;
   onDeleteRequest: () => void;
   /** Linked sessions (flag-gated): only passed for a row that is an actual link subject. */
   onUnlinkRequest?: () => void;
@@ -43,8 +45,8 @@ export interface SessionActionsMenuProps {
 export function SessionActionsMenu({
   sessionId,
   activity,
-  onClose,
-  onResume,
+  onSleep,
+  onWake,
   onDeleteRequest,
   onUnlinkRequest,
   onToggleShell,
@@ -53,8 +55,8 @@ export function SessionActionsMenu({
   restartingAgent,
   className,
 }: SessionActionsMenuProps) {
-  const close = closeState();
-  const resume = resumeState(activity);
+  const sleep = sleepState();
+  const wake = wakeState(activity);
   const del = deleteState();
   const [copied, setCopied] = useState(false);
 
@@ -101,22 +103,22 @@ export function SessionActionsMenu({
             <button
               type="button"
               className={styles.menuItem}
-              disabled={close.disabled}
-              onClick={onClose}
+              disabled={sleep.disabled}
+              onClick={onSleep}
             >
               Sleep now
-              {close.reason && <span className={styles.reason}>{close.reason}</span>}
+              {sleep.reason && <span className={styles.reason}>{sleep.reason}</span>}
             </button>
           </li>
           <li>
             <button
               type="button"
               className={styles.menuItem}
-              disabled={resume.disabled}
-              onClick={onResume}
+              disabled={wake.disabled}
+              onClick={onWake}
             >
               Wake now
-              {resume.reason && <span className={styles.reason}>{resume.reason}</span>}
+              {wake.reason && <span className={styles.reason}>{wake.reason}</span>}
             </button>
           </li>
           <li>

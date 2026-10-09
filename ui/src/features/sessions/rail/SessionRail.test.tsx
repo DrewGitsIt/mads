@@ -219,11 +219,11 @@ describe("SessionRail", () => {
     expect(onSelect).toHaveBeenCalledWith("r1");
   });
 
-  it("shows the sleep affordance for active and inactive sessions alike, wired to onClose", () => {
-    // Close/terminate is safe against the Supervisor in every activity
+  it("shows the sleep affordance for active and inactive sessions alike, wired to onSleep", () => {
+    // Sleep/terminate is safe against the Supervisor in every activity
     // state, and the activity record can drift from the real child state —
     // so it must never be hidden based on that record alone.
-    const onClose = vi.fn();
+    const onSleep = vi.fn();
     const onSelect = vi.fn();
     render(
       <SessionRail
@@ -233,7 +233,7 @@ describe("SessionRail", () => {
         ]}
         openTaskCounts={{}}
         onSelect={onSelect}
-        onClose={onClose}
+        onSleep={onSleep}
       />,
     );
 
@@ -241,7 +241,9 @@ describe("SessionRail", () => {
     expect(screen.getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Sleep resume me" }));
-    expect(onClose).toHaveBeenCalledWith("r1");
+    // The whole record, not just the id: the gate that decides whether to
+    // ask about unlanded commits lives in useSessionSleep, not here.
+    expect(onSleep).toHaveBeenCalledWith(expect.objectContaining({ id: "r1" }));
     expect(onSelect).not.toHaveBeenCalled();
   });
 
@@ -250,7 +252,7 @@ describe("SessionRail", () => {
       <SessionRail
         sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
         openTaskCounts={{}}
-        onClose={vi.fn()}
+        onSleep={vi.fn()}
       />,
     );
     const cluster = screen.getByRole("group", { name: "resume me actions" });

@@ -11,6 +11,7 @@ import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
 import { EMPTY_OPEN_TASK_BREAKDOWN } from "./rail/railGroups";
+import { SessionSleepPrompt, useSessionSleep } from "./actions/useSessionSleep";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionAgentState } from "./state/useSessionAgentState";
 import { useSessionLinks } from "./state/useSessionLinks";
@@ -85,6 +86,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     });
   }
 
+  // One controller for both sleep controls — the rail card's ⏸ and the
+  // workspace kebab's "Sleep now" — so the unlanded-commits question is asked
+  // from either, and the prompt below is the only one of its kind on screen.
+  const sleep = useSessionSleep(router, (verb, session, err) =>
+    reportActionError(verb, session.id, err),
+  );
+
   function handleSessionCreated(session: Session, goalText: string) {
     setSelectedId(session.id);
     setInitialTab(undefined);
@@ -133,11 +141,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
               // over an unrelated session.
               setActionError(undefined);
             }}
-            onClose={(id) => {
-              router.closeSession(id).catch((err: unknown) => {
-                reportActionError("sleep", id, err);
-              });
-            }}
+            onSleep={sleep.requestSleep}
             onSetAside={(id, aside) => {
               router.setSessionAside(id, aside).catch((err: unknown) => {
                 reportActionError(aside ? "set aside" : "bring back", id, err);
@@ -161,6 +165,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
             agentState={agentStates[selectedId]}
             initialTab={initialTab}
+            onSleep={sleep.requestSleep}
+            onWake={sleep.wake}
             onClose={() => setSelectedId(undefined)}
             provisioning={selectedId === provisioningSessionId}
             onProvisioningDone={() => setProvisioningSessionId(undefined)}
@@ -179,6 +185,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             links={links}
           />
         )}
+        <SessionSleepPrompt sleep={sleep} routerClient={router} />
         {error && error !== dismissedError && (
           // With a list already on screen this is a failed refresh, not a
           // failed load — say so, or the toast contradicts the visible rail.

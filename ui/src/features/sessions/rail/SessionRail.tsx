@@ -6,7 +6,6 @@ import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import type { ShellInfo } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
 import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
-import { SessionCloseLandDialog } from "../actions/SessionCloseLandDialog";
 import { LinkHolderMenu } from "./LinkHolderMenu";
 import type { LinkHolderSubject } from "./LinkHolderMenu";
 import { LinkOptionsMenu } from "./LinkOptionsMenu";
@@ -56,7 +55,7 @@ import { EMPTY_WORKSPACE_INDEX, workspaceIndex } from "../../../router/workspace
 import type { WorkspaceIndex } from "../../../router/workspaceRef";
 import { agentIndex } from "../../../router/agentRef";
 import { summaryTeaser } from "./summaryTeaser";
-import { isIsolated, workState, type WorkState } from "../../../conversation/Worktree/workState";
+import { workState, type WorkState } from "../../../conversation/Worktree/workState";
 import { plural } from "../../../conversation/Worktree/worktreeCopy";
 import { FLAGS } from "../../../featureFlags";
 import {
@@ -86,14 +85,19 @@ export interface SessionRailProps {
   selectedId?: string;
   onSelect?: (id: string) => void;
   /**
-   * Put a session to sleep: free the agent process. The rail deliberately has
-   * no counterpart — waking is not a step the user has to take, since the
-   * first send wakes a sleeping session transparently. An explicit pre-warm
-   * lived here as a ▶ button and only ever bought a few seconds of latency,
-   * at the price of a control that looked like a lifecycle state. The
-   * workspace kebab still offers it for a deliberate warm-up.
+   * Put a session to sleep: free the agent process. Takes the whole session
+   * because the decision isn't the rail's to make — useSessionSleep reads the
+   * record to know whether to ask about unlanded commits first, and asks the
+   * same question for the workspace kebab.
+   *
+   * The rail deliberately has no counterpart — waking is not a step the user
+   * has to take, since the first send wakes a sleeping session transparently.
+   * An explicit pre-warm lived here as a ▶ button and only ever bought a few
+   * seconds of latency, at the price of a control that looked like a
+   * lifecycle state. The workspace kebab still offers it for a deliberate
+   * warm-up.
    */
-  onClose?: (id: string) => void;
+  onSleep?: (session: Session) => void;
   onDelete?: (id: string) => void;
   /**
    * Set a session aside, or bring it back. Not a lifecycle action — nothing
@@ -146,7 +150,7 @@ export function SessionRail({
   agentStates = {},
   selectedId,
   onSelect,
-  onClose,
+  onSleep,
   onDelete,
   onSetAside,
   links = [],
@@ -183,7 +187,6 @@ export function SessionRail({
   const [earlierOpen, setEarlierOpen] = useState(false);
   const [asideOpen, setAsideOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
-  const [confirmCloseId, setConfirmCloseId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
   const [unlinkTarget, setUnlinkTarget] = useState<{ linkId: string; name: string }>();
@@ -379,19 +382,6 @@ export function SessionRail({
   // not just the id — including for a row inside the collapsed "Earlier" tail
   // or nested under a link, which is why this reads the unfiltered list.
   const deleteTarget = sessions.find((s) => s.id === confirmDeleteId);
-  const closeTarget = sessions.find((s) => s.id === confirmCloseId);
-
-  // Close asks once when an isolated session has commits its base doesn't
-  // (D6): land them first, or keep them for later. Close itself never
-  // discards anything, so every other close goes straight through.
-  function requestClose(id: string) {
-    const session = allSessionsById.get(id);
-    if (session && isIsolated(session) && (session.unlanded_count ?? 0) > 0) {
-      setConfirmCloseId(id);
-      return;
-    }
-    onClose?.(id);
-  }
 
   // Shared by the main list and the "Earlier" tail — the two render identical
   // cards, they only differ in whether the fold is hiding them.
@@ -405,7 +395,7 @@ export function SessionRail({
     isUnseen,
     onSeen: markSeen,
     onSelect,
-    onClose: onClose && requestClose,
+    onSleep,
     onSetAside,
     onDeleteRequest: setConfirmDeleteId,
     onUnlinkRequest: setUnlinkTarget,
@@ -577,17 +567,6 @@ export function SessionRail({
           onCancel={() => setConfirmDeleteId(undefined)}
         />
       )}
-      {closeTarget && (
-        <SessionCloseLandDialog
-          session={closeTarget}
-          routerClient={routerClient}
-          onClose={() => {
-            onClose?.(closeTarget.id);
-            setConfirmCloseId(undefined);
-          }}
-          onDismiss={() => setConfirmCloseId(undefined)}
-        />
-      )}
       {linkedSessionsEnabled && (
         <SessionUnlinkConfirmDialog
           open={unlinkTarget !== undefined}
@@ -627,7 +606,7 @@ function RailRowGroup({
   isUnseen,
   onSeen,
   onSelect,
-  onClose,
+  onSleep,
   onSetAside,
   onDeleteRequest,
   onUnlinkRequest,
@@ -653,7 +632,7 @@ function RailRowGroup({
   isUnseen: (id: string) => boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onClose?: (id: string) => void;
+  onSleep?: (session: Session) => void;
   onSetAside?: (id: string, aside: boolean) => void;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
@@ -680,7 +659,7 @@ function RailRowGroup({
         unseen={isUnseen(row.session.id)}
         onSeen={onSeen}
         onSelect={onSelect}
-        onClose={onClose}
+        onSleep={onSleep}
         onSetAside={onSetAside}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
@@ -722,7 +701,7 @@ function RailRowGroup({
               unseen={isUnseen(sub.session.id)}
               onSeen={onSeen}
               onSelect={onSelect}
-                    onClose={onClose}
+              onSleep={onSleep}
               onSetAside={onSetAside}
               onDeleteRequest={onDeleteRequest}
               linkBadge={sub.badge}
@@ -784,7 +763,7 @@ function SessionRow({
   unseen,
   onSeen,
   onSelect,
-  onClose,
+  onSleep,
   onSetAside,
   onDeleteRequest,
   linkBadge,
@@ -820,7 +799,7 @@ function SessionRow({
   unseen: boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onClose?: (id: string) => void;
+  onSleep?: (session: Session) => void;
   onSetAside?: (id: string, aside: boolean) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
@@ -1185,7 +1164,7 @@ function SessionRow({
           role="group"
           aria-label={`${name} actions`}
         >
-          {onClose && (
+          {onSleep && (
             // Always offered, regardless of the activity record: it's the
             // Supervisor's TerminateSession underneath, which is safe to call
             // in every state (kills a live child if one exists, or reconciles
@@ -1199,7 +1178,7 @@ function SessionRow({
               aria-label={`Sleep ${name}`}
               onClick={(e) => {
                 e.stopPropagation();
-                onClose(session.id);
+                onSleep(session);
               }}
             >
               ⏸

@@ -305,6 +305,8 @@ describe("the rail and the workspace kebab render the same text for the same ses
         pipelineClient={new FakePipelineClient()}
         openTaskBreakdown={PIPELINE}
         agentState={agentState}
+        onSleep={vi.fn()}
+        onWake={vi.fn()}
         onClose={vi.fn()}
       />,
     );

@@ -15,6 +15,8 @@ function renderWorkspace(props: Partial<Parameters<typeof SessionWorkspace>[0]> 
       sessionId={SESSION_ID}
       routerClient={new FakeRouterClient()}
       pipelineClient={new FakePipelineClient()}
+      onSleep={vi.fn()}
+      onWake={vi.fn()}
       onClose={vi.fn()}
       {...props}
     />,
@@ -73,6 +75,8 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -113,6 +117,8 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={new FakeRouterClient()}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -159,6 +165,8 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -184,6 +192,8 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -216,6 +226,8 @@ describe("SessionWorkspace", () => {
         sessionId={SESSION_ID}
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -237,6 +249,8 @@ describe("SessionWorkspace", () => {
         sessionId="session-inactive"
         routerClient={routerClient}
         pipelineClient={new FakePipelineClient()}
+          onSleep={vi.fn()}
+          onWake={vi.fn()}
           onClose={vi.fn()}
       />,
     );
@@ -328,57 +342,49 @@ describe("SessionWorkspace", () => {
     );
   });
 
-  it("Close calls routerClient.closeSession for this session", async () => {
+  // Sleep and wake are not this shell's to issue: it hands the session to the
+  // surface's one controller (useSessionSleep), which is what makes "Sleep
+  // now" here ask about unlanded commits exactly as the rail card's ⏸ does.
+  // This shell used to call terminate itself, and skipped that question.
+  it("Sleep now hands this session to the shared sleep controller, issuing nothing itself", async () => {
     const routerClient = new FakeRouterClient();
-    const spy = vi.spyOn(routerClient, "closeSession");
-    renderWorkspace({ sessionId: "session-active", routerClient });
+    const terminate = vi.spyOn(routerClient, "closeSession");
+    const onSleep = vi.fn();
+    renderWorkspace({ sessionId: "session-active", routerClient, onSleep });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
     fireEvent.click(screen.getByText("Sleep now"));
 
-    expect(spy).toHaveBeenCalledWith("session-active");
+    expect(onSleep).toHaveBeenCalledWith(expect.objectContaining({ id: "session-active" }));
+    expect(terminate).not.toHaveBeenCalled();
   });
 
-  it("Close is offered and issues terminate even when the cached record already says inactive", async () => {
-    const routerClient = new FakeRouterClient();
-    const spy = vi.spyOn(routerClient, "closeSession");
-    renderWorkspace({ sessionId: "session-inactive", routerClient });
+  it("Sleep now is offered, and still hands off, when the cached record already says inactive", async () => {
+    const onSleep = vi.fn();
+    renderWorkspace({ sessionId: "session-inactive", onSleep });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    const close = screen.getByRole("button", { name: "Sleep now" }) as HTMLButtonElement;
-    expect(close.disabled).toBe(false);
+    const sleepItem = screen.getByRole("button", { name: "Sleep now" }) as HTMLButtonElement;
+    expect(sleepItem.disabled).toBe(false);
 
-    fireEvent.click(close);
-    expect(spy).toHaveBeenCalledWith("session-inactive");
+    fireEvent.click(sleepItem);
+    expect(onSleep).toHaveBeenCalledWith(expect.objectContaining({ id: "session-inactive" }));
   });
 
-  it("Close/terminate failure surfaces in the action-error toast", async () => {
+  it("Wake now hands this session to the same controller", async () => {
     const routerClient = new FakeRouterClient();
-    vi.spyOn(routerClient, "closeSession").mockRejectedValue(
-      new Error("terminate session: child unresponsive"),
-    );
-    renderWorkspace({ sessionId: "session-active", routerClient });
-    await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
-
-    fireEvent.click(screen.getByLabelText("Workspace actions"));
-    fireEvent.click(screen.getByText("Sleep now"));
-
-    await waitFor(() => expect(screen.getByText("Session action failed")).toBeTruthy());
-    expect(screen.getByText("terminate session: child unresponsive")).toBeTruthy();
-  });
-
-  it("Wake now calls routerClient.resumeSession for this session", async () => {
-    const routerClient = new FakeRouterClient();
-    const spy = vi.spyOn(routerClient, "resumeSession");
-    renderWorkspace({ sessionId: "session-inactive", routerClient });
+    const resume = vi.spyOn(routerClient, "resumeSession");
+    const onWake = vi.fn();
+    renderWorkspace({ sessionId: "session-inactive", routerClient, onWake });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
     fireEvent.click(screen.getByText("Wake now"));
 
-    expect(spy).toHaveBeenCalledWith("session-inactive");
+    expect(onWake).toHaveBeenCalledWith(expect.objectContaining({ id: "session-inactive" }));
+    expect(resume).not.toHaveBeenCalled();
   });
 
   it("shows the session id as a footer row in the Workspace actions kebab", async () => {

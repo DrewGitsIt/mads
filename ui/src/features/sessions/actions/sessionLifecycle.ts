@@ -5,7 +5,7 @@ export interface LifecycleActionState {
   reason?: string;
 }
 
-// Close/terminate is safe against the Supervisor in every activity state —
+// Sleep (terminate) is safe against the Supervisor in every activity state —
 // TerminateSession kills a tracked child if one exists, or reconciles an
 // already-inactive record as a harmless no-op otherwise. The activity
 // record is a cache that can drift from the real child state (see
@@ -13,7 +13,7 @@ export interface LifecycleActionState {
 // that hides the one control that recovers from that drift. Always offer
 // it and let the server decide; any real failure surfaces via the caller's
 // action-error toast.
-export function closeState(): LifecycleActionState {
+export function sleepState(): LifecycleActionState {
   return { disabled: false };
 }
 
@@ -22,7 +22,7 @@ export function closeState(): LifecycleActionState {
 // That is why the rail's hover cluster no longer carries it and this menu
 // still does — a deliberate warm-up is a thing you can want, but not a thing
 // the common path should ask you to think about.
-export function resumeState(activity: SessionActivity): LifecycleActionState {
+export function wakeState(activity: SessionActivity): LifecycleActionState {
   return activity === "inactive"
     ? { disabled: false }
     : { disabled: true, reason: "Already awake" };
