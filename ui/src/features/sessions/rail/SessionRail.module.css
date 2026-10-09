@@ -420,52 +420,37 @@
   color: var(--text3);
 }
 
-.statusGlyph {
+/* The status mark (StatusMark.tsx). One box, one weight, every state — the
+   characters this replaced came from the UI font and carried whatever weight
+   it chose to give them, which for ◦ was almost nothing. */
+.statusMark {
   flex: none;
-  width: 9px;
-  text-align: center;
-  font-size: 9px;
-  line-height: 1;
+  display: block;
+  overflow: visible;
 }
 
-.statusBell {
-  animation: railBreathe 1.6s ease-in-out infinite;
+/* The unlit remainder of the working/stalled circle. Low enough to read as
+   "the rest of the ring" rather than as a second stroke competing with the
+   arc, and it is what keeps the arc's position legible when it is stopped. */
+.statusMarkTrack {
+  stroke: currentColor;
+  opacity: 0.26;
 }
 
-/* ◌ is a light glyph by design — it has to carry at the same optical weight as
-   ✓ and ▲ beside it, which at 9px it does not. */
-.statusStalled {
-  font-size: 11px;
-}
-
-.statusSpinner {
-  flex: none;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line);
-  border-top-color: var(--accent);
+/* styles/global.css kills every animation under prefers-reduced-motion, so
+   there is no override here: stopped, `working` falls back to the track plus
+   its arc at rest, which is `stalled`'s picture. They stay distinguishable by
+   tone (--accent against --warn-fg) and by a label that shares no words. The
+   CSS-border spinner this replaced did need an override — frozen, it showed
+   one accent side and three --line ones, a shape that meant nothing. */
+.statusMarkSpin .statusMarkArc {
+  transform-origin: 5px 5px;
   animation: railSpin 0.8s linear infinite;
 }
 
 @keyframes railSpin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes railBreathe {
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* global.css already strips every animation here; close the loop so what's
-   left reads as a deliberate static accent ring rather than a frozen spinner —
-   tone and copy carry the state on their own, as WorkingIndicator does. */
-@media (prefers-reduced-motion: reduce) {
-  .statusSpinner {
-    border-color: var(--accent);
   }
 }
 

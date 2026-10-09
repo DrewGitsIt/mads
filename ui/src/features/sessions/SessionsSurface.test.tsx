@@ -291,11 +291,9 @@ describe("SessionsSurface", () => {
       vi.fn().mockImplementation((input: URL, init?: RequestInit) => {
         const url = input.toString();
         const method = init?.method ?? "GET";
-        if (method === "POST" && url.match(/\/sessions\/[^/]+\/resume/)) {
+        if (method === "POST" && url.match(/\/sessions\/[^/]+\/terminate/)) {
           return Promise.resolve(
-            new Response(JSON.stringify({ error: "session already has a running child" }), {
-              status: 409,
-            }),
+            new Response(JSON.stringify({ error: "supervisor unreachable" }), { status: 500 }),
           );
         }
         if (url.match(/\/sessions\/[^/]+\/transcript/)) return json([]);
@@ -313,12 +311,12 @@ describe("SessionsSurface", () => {
     render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
     await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume Alpha" }));
-    await waitFor(() => expect(screen.getByText(/Couldn't resume/)).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Alpha" }));
+    await waitFor(() => expect(screen.getByText(/Couldn't sleep/)).toBeTruthy());
 
     // Navigating to another session drops the surface-scoped error.
     fireEvent.click(rail().getByText("Bravo"));
-    await waitFor(() => expect(screen.queryByText(/Couldn't resume/)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(/Couldn't sleep/)).toBeNull());
   });
 
   it("selecting an inactive session renders without crashing", async () => {

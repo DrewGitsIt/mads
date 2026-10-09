@@ -66,14 +66,16 @@ export interface SessionAgentState {
 
 export const EMPTY_AGENT_STATE: SessionAgentState = { subagents: 0 };
 
-export type RailStatusKind =
-  | "crashed"
-  | "needs"
-  | "working"
-  | "stalled"
-  | "done"
-  | "ready"
-  | "sleeping";
+/**
+ * One per mark in StatusMark.tsx, which switches on exactly this union.
+ *
+ * `idle` is one kind, not the old `ready` + `sleeping` pair: those named
+ * whether a provider child was alive, and that is not a fact worth a card's
+ * only status line. Nothing the user does depends on it — a session with no
+ * child wakes transparently on the first send — so the rail was reporting an
+ * implementation detail in the slot reserved for what the session is doing.
+ */
+export type RailStatusKind = "crashed" | "needs" | "working" | "stalled" | "done" | "idle";
 
 /** Maps 1:1 onto the mockup's `.status.bad|needs|working|done|idle` tones. */
 export type RailStatusTone = "bad" | "needs" | "working" | "done" | "idle";
@@ -84,8 +86,6 @@ export interface RailStatus {
   dot: DotState;
   /** One clause, ellipsis-truncated by the card — never wrapped, so height is fixed. */
   label: string;
-  /** The decorative leading mark. Absent means "draw the spinner instead". */
-  glyph?: string;
   /** When the state began, for the elapsed counter. Absent means no counter. */
   since?: string;
 }
@@ -140,7 +140,6 @@ export function statusOf(
       kind: "crashed",
       tone: "bad",
       dot: "bad",
-      glyph: "✕",
       label:
         breakdown.blocked > 0
           ? `Crashed · ${plural(breakdown.blocked, "blocked task")}`
@@ -152,7 +151,6 @@ export function statusOf(
       kind: "needs",
       tone: "needs",
       dot: "attn",
-      glyph: "▲",
       label: state.awaitingTool ? `Needs approval · ${state.awaitingTool}` : "Needs approval",
       since: state.awaitingSince,
     };
@@ -164,9 +162,6 @@ export function statusOf(
       kind: "stalled",
       tone: "needs",
       dot: "attn",
-      // A spinner that stopped. No animation: the one state that moves is the
-      // one that is actually moving.
-      glyph: "◌",
       label: "Stalled · no agent activity",
       since: state.workingSince,
     };
@@ -176,7 +171,6 @@ export function statusOf(
       kind: "working",
       tone: "working",
       dot: "work",
-      // No glyph: this is the one state that spins.
       label:
         (state.blockingSubagents ?? state.subagents) > 0
           ? // A sidechain's tools are the subagent's activity, not the main
@@ -199,27 +193,25 @@ export function statusOf(
     };
   }
   const dot = dotState(session, breakdown);
-  // A turn that ended on a session that has since gone to sleep isn't news
-  // any more — "Sleeping" is the truer line.
+  // Still gated on an active session. `done` is sticky until the card is
+  // opened, so on a session whose child has since gone it is reporting a turn
+  // that ended in some earlier life of the process — "your turn" overstates
+  // how live that is.
   if (state.done && session.activity === "active") {
-    return { kind: "done", tone: "done", dot, glyph: "✓", label: "Done · your turn" };
+    return { kind: "done", tone: "done", dot, label: "Done · your turn" };
   }
-  if (session.activity === "active") {
-    return { kind: "ready", tone: "idle", dot, glyph: "◦", label: "Ready" };
-  }
-  // The dot used to carry this alone: amber for blocked work on a sleeper. It
-  // is gone from the card, so the status line says it — in the needs tone,
-  // which is the amber the dot was.
+  // The dot used to carry this alone: amber for blocked work. It is gone from
+  // the card, so the status line says it — in the needs tone, which is the
+  // amber the dot was.
   if (dot === "attn") {
     return {
-      kind: "sleeping",
+      kind: "idle",
       tone: "needs",
       dot,
-      glyph: "◦",
-      label: `Sleeping · ${plural(breakdown.blocked, "blocked task")}`,
+      label: `Idle · ${plural(breakdown.blocked, "blocked task")}`,
     };
   }
-  return { kind: "sleeping", tone: "idle", dot, glyph: "◦", label: "Sleeping · wakes on send" };
+  return { kind: "idle", tone: "idle", dot, label: "Idle" };
 }
 
 /**

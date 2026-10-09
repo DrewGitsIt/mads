@@ -69,7 +69,6 @@ describe("statusOf", () => {
       kind: "crashed",
       tone: "bad",
       dot: "bad",
-      glyph: "✕",
       label: "Crashed · reopen to restart",
     });
     expect(statusOf(makeSession({}), state, makeBreakdown({ blocked: 2 }), DURING).label).toBe(
@@ -91,7 +90,6 @@ describe("statusOf", () => {
       kind: "needs",
       tone: "needs",
       dot: "attn",
-      glyph: "▲",
       label: "Needs approval · Bash",
       since: "2026-07-01T00:00:00Z",
     });
@@ -102,7 +100,7 @@ describe("statusOf", () => {
     expect(statusOf(makeSession({}), state, idle).label).toBe("Needs approval");
   });
 
-  it("spins — no glyph — while a turn is in flight, and counts subagents when it has them", () => {
+  it("spins while a turn is in flight, and counts subagents when it has them", () => {
     const working = makeAgentState({ workingSince: "2026-07-01T00:00:00Z", done: true });
     expect(statusOf(makeSession({}), working, idle, DURING)).toEqual({
       kind: "working",
@@ -127,48 +125,50 @@ describe("statusOf", () => {
       kind: "done",
       tone: "done",
       dot: "on",
-      glyph: "✓",
       label: "Done · your turn",
     });
   });
 
-  it("is 'Ready' for a live session that has said nothing", () => {
+  // "Ready" and "Sleeping" were one fact in two words — whether a provider
+  // child happened to be alive. Nothing the user does depends on it (a
+  // session with no child wakes on the first send), so both are "Idle" and
+  // the card's one status line goes back to naming what the session is doing.
+  it("is 'Idle' for a live session that has said nothing", () => {
     expect(statusOf(makeSession({ activity: "active" }), makeAgentState(), idle)).toEqual({
-      kind: "ready",
+      kind: "idle",
       tone: "idle",
       dot: "on",
-      glyph: "◦",
-      label: "Ready",
+      label: "Idle",
     });
   });
 
-  it("is 'Sleeping' for an inactive session, even one whose turn once ended", () => {
+  it("is the same 'Idle' for an inactive session, even one whose turn once ended", () => {
     const sleeping = makeSession({ activity: "inactive" });
     expect(statusOf(sleeping, makeAgentState({ done: true }), idle)).toEqual({
-      kind: "sleeping",
+      kind: "idle",
       tone: "idle",
+      // The dot still knows — the filter chips and the palette's attention
+      // badge read it. Only the words stopped saying so.
       dot: "off",
-      glyph: "◦",
-      label: "Sleeping · wakes on send",
+      label: "Idle",
     });
   });
 
-  it("names the blocked tasks, in the needs tone, for a sleeping session with blocked work", () => {
+  it("names the blocked tasks, in the needs tone, for an idle session with blocked work", () => {
     const sleeping = makeSession({ activity: "inactive" });
     expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 1 }))).toEqual({
-      kind: "sleeping",
+      kind: "idle",
       tone: "needs",
       dot: "attn",
-      glyph: "◦",
-      label: "Sleeping · 1 blocked task",
+      label: "Idle · 1 blocked task",
     });
     expect(statusOf(sleeping, makeAgentState(), makeBreakdown({ blocked: 3 })).label).toBe(
-      "Sleeping · 3 blocked tasks",
+      "Idle · 3 blocked tasks",
     );
     // Running/ready work is calm progress: no amber, no count.
     const calm = statusOf(sleeping, makeAgentState(), makeBreakdown({ running: 2, ready: 1 }));
     expect(calm.tone).toBe("idle");
-    expect(calm.label).toBe("Sleeping · wakes on send");
+    expect(calm.label).toBe("Idle");
   });
 
   it("leaves dotState() — which the palette's attention badge counts — agreeing with the label", () => {
@@ -179,7 +179,7 @@ describe("statusOf", () => {
     // An awake session's blocked work is not announced on the status line.
     expect(
       statusOf(makeSession({ activity: "active" }), makeAgentState(), makeBreakdown({ blocked: 2 })).label,
-    ).toBe("Ready");
+    ).toBe("Idle");
   });
 
   it("says what the agent is actually doing, from the server-built clause", () => {
@@ -266,8 +266,6 @@ describe("statusOf", () => {
       kind: "stalled",
       tone: "needs",
       dot: "attn",
-      // No spinner: the one state that animates is the one actually moving.
-      glyph: "◌",
       label: "Stalled · no agent activity",
       // Kept, so the counter reads "23h" — the age is the whole argument.
       since: TURN_START,

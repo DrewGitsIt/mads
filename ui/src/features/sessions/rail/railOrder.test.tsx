@@ -32,9 +32,13 @@ function ghost() {
   return screen.queryByRole("button", { name: /session[s]? moved/ });
 }
 
-function isSleeping(name: string): boolean {
+function isResting(name: string): boolean {
   const row = screen.getByText(name).closest('[role="button"]')!;
-  return (row.querySelector('[role="status"]')?.textContent ?? "").includes("Sleeping");
+  // The card no longer prints whether a provider child is alive — "Ready"
+  // and "Sleeping" are both "Idle" now. What these tests actually pin is that
+  // a live-state flip repaints in place, so they watch the tone class, which
+  // still moves: an in-flight turn is status-working, a resting one is not.
+  return !(row.querySelector('[role="status"]')?.className ?? "").includes("status-working");
 }
 
 const alpha = makeSession({ id: "a", name: "alpha", last_turn_at: "2026-07-01T10:00:00Z" });
@@ -65,7 +69,7 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(isSleeping("bravo")).toBe(true);
+    expect(isResting("bravo")).toBe(true);
     expect(ghost()).toBeNull();
   });
 
@@ -85,7 +89,7 @@ describe("settled rail order", () => {
     );
 
     expect(railOrder()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(isSleeping("alpha")).toBe(true);
+    expect(isResting("alpha")).toBe(true);
     expect(ghost()).toBeNull();
 
     fireEvent.mouseLeave(rail());

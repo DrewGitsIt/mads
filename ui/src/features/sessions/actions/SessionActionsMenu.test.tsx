@@ -33,7 +33,7 @@ describe("SessionActionsMenu", () => {
     const idRow = screen.getByText("ses_abc123");
     expect(idRow.tagName).toBe("BUTTON");
     // Not grouped with the lifecycle actions list.
-    expect(screen.getByRole("button", { name: /^Resume/ }).closest("ul")).not.toBe(
+    expect(screen.getByRole("button", { name: /^Wake now/ }).closest("ul")).not.toBe(
       idRow.closest("ul"),
     );
   });
@@ -48,7 +48,7 @@ describe("SessionActionsMenu", () => {
     expect(await screen.findByText("Copied")).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
     // The menu itself stays mounted — no unmount/close side effect from the copy.
-    expect(screen.getByRole("button", { name: /^Resume/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Wake now/ })).toBeTruthy();
   });
 
   describe("shell item", () => {

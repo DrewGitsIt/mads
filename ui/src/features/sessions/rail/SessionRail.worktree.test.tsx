@@ -67,16 +67,16 @@ describe("SessionRail — work marker", () => {
 describe("SessionRail — close with unlanded commits (D6)", () => {
   it("closes straight away when nothing waits to land", () => {
     const { onClose } = renderRail(isolated({ unlanded_count: 0 }));
-    fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Fix the deploy script" }));
     expect(onClose).toHaveBeenCalledWith("s1");
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("asks Land-and-close or Keep for later, and Keep for later just closes", () => {
     const { onClose, client } = renderRail(isolated());
-    fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Fix the deploy script" }));
     const dialog = screen.getByRole("alertdialog");
-    expect(within(dialog).getByText("Close “Fix the deploy script”?")).toBeTruthy();
+    expect(within(dialog).getByText("Sleep “Fix the deploy script”?")).toBeTruthy();
     expect(dialog.textContent).toContain("This session has 3 commits that aren't in main yet.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Keep for later" }));
     expect(onClose).toHaveBeenCalledWith("s1");
@@ -85,7 +85,7 @@ describe("SessionRail — close with unlanded commits (D6)", () => {
 
   it("dismissing neither lands nor closes", () => {
     const { onClose, client } = renderRail(isolated());
-    fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Fix the deploy script" }));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(onClose).not.toHaveBeenCalled();
@@ -94,8 +94,8 @@ describe("SessionRail — close with unlanded commits (D6)", () => {
 
   it("lands, then closes", async () => {
     const { onClose, client } = renderRail(isolated());
-    fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
-    fireEvent.click(screen.getByRole("button", { name: "Land into main and close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Fix the deploy script" }));
+    fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep" }));
     await waitFor(() => expect(onClose).toHaveBeenCalledWith("s1"));
     expect(client.landCalls).toEqual(["s1"]);
   });
@@ -104,8 +104,8 @@ describe("SessionRail — close with unlanded commits (D6)", () => {
     const client = new FakeRouterClient();
     client.landOutcome = { outcome: "refused", reason: "primary_dirty", base: "main", files: ["a.go"] } as LandResult;
     const { onClose } = renderRail(isolated(), client);
-    fireEvent.click(screen.getByRole("button", { name: "Close Fix the deploy script" }));
-    fireEvent.click(screen.getByRole("button", { name: "Land into main and close" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep Fix the deploy script" }));
+    fireEvent.click(screen.getByRole("button", { name: "Land into main and sleep" }));
     expect(await screen.findByText(/Didn't land — still open/)).toBeTruthy();
     expect(screen.getByRole("alert").textContent).toContain("Git won't land over a.go in your checkout.");
     expect(onClose).not.toHaveBeenCalled();

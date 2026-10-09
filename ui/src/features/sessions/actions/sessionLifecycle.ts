@@ -17,10 +17,15 @@ export function closeState(): LifecycleActionState {
   return { disabled: false };
 }
 
+// "Wake now" is a pre-warm, not a lifecycle step: a sleeping session wakes on
+// its own at the first send, so this only ever buys back the start-up seconds.
+// That is why the rail's hover cluster no longer carries it and this menu
+// still does — a deliberate warm-up is a thing you can want, but not a thing
+// the common path should ask you to think about.
 export function resumeState(activity: SessionActivity): LifecycleActionState {
   return activity === "inactive"
     ? { disabled: false }
-    : { disabled: true, reason: "Session is already active" };
+    : { disabled: true, reason: "Already awake" };
 }
 
 // Deleting no longer requires closing first: the router terminates the

@@ -9,7 +9,7 @@ export interface SessionCloseLandDialogProps {
   /** An isolated session with commits its base doesn't have yet. */
   session: Session;
   routerClient: RouterClient;
-  /** Close (pause) the session — "Keep for later", or after a successful Land. */
+  /** Put the session to sleep — "Keep for later", or after a successful Land. */
   onClose: () => void;
   /** Escape / backdrop: neither close nor land. */
   onDismiss: () => void;
@@ -59,9 +59,9 @@ export function SessionCloseLandDialog({ session, routerClient, onClose, onDismi
   return (
     <ConfirmDialog
       open
-      title={`Close “${session.name || "Untitled session"}”?`}
+      title={`Sleep “${session.name || "Untitled session"}”?`}
       confirmTone="primary"
-      confirmLabel={landing ? "Landing…" : `Land into ${base} and close`}
+      confirmLabel={landing ? "Landing…" : `Land into ${base} and sleep`}
       confirmDisabled={landing}
       cancelLabel="Keep for later"
       onConfirm={() => void landAndClose()}

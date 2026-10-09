@@ -285,18 +285,18 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Show shell/ })).toBeTruthy());
   });
 
-  it("kebab always shows all three actions; while active only Resume is disabled, since deleting now closes the session itself", async () => {
+  it("kebab always shows all three actions; while active only Wake now is disabled, since deleting now closes the session itself", async () => {
     renderWorkspace({ sessionId: "session-active" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
 
-    expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole("button", { name: "Sleep now" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
-    const resume = screen.getByRole("button", { name: /Resume/ }) as HTMLButtonElement;
+    const resume = screen.getByRole("button", { name: /Wake now/ }) as HTMLButtonElement;
     expect(resume.disabled).toBe(true);
-    expect(resume.textContent).toContain("Session is already active");
+    expect(resume.textContent).toContain("Already awake");
     // The warning moved into the confirm dialog: a dead Delete item would
     // pre-empt it the way the router's 409 used to.
     const del = screen.getByRole("button", { name: /Delete/ }) as HTMLButtonElement;
@@ -308,13 +308,13 @@ describe("SessionWorkspace", () => {
     expect(within(dialog).getByRole("button", { name: "Close and delete" })).toBeTruthy();
   });
 
-  it("kebab always shows all three actions; while inactive, Resume, Delete, and Close are all enabled", async () => {
+  it("kebab always shows all three actions; while inactive, Wake now, Delete, and Sleep now are all enabled", async () => {
     renderWorkspace({ sessionId: "session-inactive" });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
 
-    expect((screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole("button", { name: "Wake now" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
     expect((screen.getByRole("button", { name: "Delete" }) as HTMLButtonElement).disabled).toBe(
@@ -323,7 +323,7 @@ describe("SessionWorkspace", () => {
     // Close is never gated on the activity record — TerminateSession is safe
     // (and the only escape hatch) in every state, including one the record
     // claims is already inactive.
-    expect((screen.getByRole("button", { name: "Close" }) as HTMLButtonElement).disabled).toBe(
+    expect((screen.getByRole("button", { name: "Sleep now" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
   });
@@ -335,7 +335,7 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    fireEvent.click(screen.getByText("Close"));
+    fireEvent.click(screen.getByText("Sleep now"));
 
     expect(spy).toHaveBeenCalledWith("session-active");
   });
@@ -347,7 +347,7 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    const close = screen.getByRole("button", { name: "Close" }) as HTMLButtonElement;
+    const close = screen.getByRole("button", { name: "Sleep now" }) as HTMLButtonElement;
     expect(close.disabled).toBe(false);
 
     fireEvent.click(close);
@@ -363,20 +363,20 @@ describe("SessionWorkspace", () => {
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    fireEvent.click(screen.getByText("Close"));
+    fireEvent.click(screen.getByText("Sleep now"));
 
     await waitFor(() => expect(screen.getByText("Session action failed")).toBeTruthy());
     expect(screen.getByText("terminate session: child unresponsive")).toBeTruthy();
   });
 
-  it("Resume calls routerClient.resumeSession for this session", async () => {
+  it("Wake now calls routerClient.resumeSession for this session", async () => {
     const routerClient = new FakeRouterClient();
     const spy = vi.spyOn(routerClient, "resumeSession");
     renderWorkspace({ sessionId: "session-inactive", routerClient });
     await waitFor(() => expect(screen.getByLabelText("Workspace actions")).toBeTruthy());
 
     fireEvent.click(screen.getByLabelText("Workspace actions"));
-    fireEvent.click(screen.getByText("Resume"));
+    fireEvent.click(screen.getByText("Wake now"));
 
     expect(spy).toHaveBeenCalledWith("session-inactive");
   });

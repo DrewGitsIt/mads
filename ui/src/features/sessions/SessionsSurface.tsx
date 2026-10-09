@@ -133,14 +133,9 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
               // over an unrelated session.
               setActionError(undefined);
             }}
-            onResume={(id) => {
-              router.resumeSession(id).catch((err: unknown) => {
-                reportActionError("resume", id, err);
-              });
-            }}
             onClose={(id) => {
               router.closeSession(id).catch((err: unknown) => {
-                reportActionError("close", id, err);
+                reportActionError("sleep", id, err);
               });
             }}
             onDelete={(id) => {

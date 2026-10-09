@@ -104,7 +104,7 @@ export function SessionActionsMenu({
               disabled={close.disabled}
               onClick={onClose}
             >
-              Close
+              Sleep now
               {close.reason && <span className={styles.reason}>{close.reason}</span>}
             </button>
           </li>
@@ -115,7 +115,7 @@ export function SessionActionsMenu({
               disabled={resume.disabled}
               onClick={onResume}
             >
-              Resume
+              Wake now
               {resume.reason && <span className={styles.reason}>{resume.reason}</span>}
             </button>
           </li>

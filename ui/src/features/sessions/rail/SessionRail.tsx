@@ -13,6 +13,7 @@ import { LinkOptionsMenu } from "./LinkOptionsMenu";
 import { LinkChooserDialog } from "./LinkChooserDialog";
 import { HarnessMark } from "./HarnessMark";
 import { LinkConnector } from "./LinkConnector";
+import { StatusMark } from "./StatusMark";
 import {
   EMPTY_AGENT_STATE,
   EMPTY_OPEN_TASK_BREAKDOWN,
@@ -82,8 +83,14 @@ export interface SessionRailProps {
   agentStates?: Record<string, SessionAgentState>;
   selectedId?: string;
   onSelect?: (id: string) => void;
-  onResume?: (id: string) => void;
-  /** Close (pause) a running session — the terminate side of the resume/close pair. */
+  /**
+   * Put a session to sleep: free the agent process. The rail deliberately has
+   * no counterpart — waking is not a step the user has to take, since the
+   * first send wakes a sleeping session transparently. An explicit pre-warm
+   * lived here as a ▶ button and only ever bought a few seconds of latency,
+   * at the price of a control that looked like a lifecycle state. The
+   * workspace kebab still offers it for a deliberate warm-up.
+   */
   onClose?: (id: string) => void;
   onDelete?: (id: string) => void;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
@@ -131,7 +138,6 @@ export function SessionRail({
   agentStates = {},
   selectedId,
   onSelect,
-  onResume,
   onClose,
   onDelete,
   links = [],
@@ -366,7 +372,6 @@ export function SessionRail({
     isUnseen,
     onSeen: markSeen,
     onSelect,
-    onResume,
     onClose: onClose && requestClose,
     onDeleteRequest: setConfirmDeleteId,
     onUnlinkRequest: setUnlinkTarget,
@@ -569,7 +574,6 @@ function RailRowGroup({
   isUnseen,
   onSeen,
   onSelect,
-  onResume,
   onClose,
   onDeleteRequest,
   onUnlinkRequest,
@@ -595,7 +599,6 @@ function RailRowGroup({
   isUnseen: (id: string) => boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onResume?: (id: string) => void;
   onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
@@ -622,7 +625,6 @@ function RailRowGroup({
         unseen={isUnseen(row.session.id)}
         onSeen={onSeen}
         onSelect={onSelect}
-        onResume={onResume}
         onClose={onClose}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
@@ -664,8 +666,7 @@ function RailRowGroup({
               unseen={isUnseen(sub.session.id)}
               onSeen={onSeen}
               onSelect={onSelect}
-              onResume={onResume}
-              onClose={onClose}
+                    onClose={onClose}
               onDeleteRequest={onDeleteRequest}
               linkBadge={sub.badge}
               orchestrateStatus={sub.orchestrateStatus}
@@ -726,7 +727,6 @@ function SessionRow({
   unseen,
   onSeen,
   onSelect,
-  onResume,
   onClose,
   onDeleteRequest,
   linkBadge,
@@ -762,7 +762,6 @@ function SessionRow({
   unseen: boolean;
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
-  onResume?: (id: string) => void;
   onClose?: (id: string) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
@@ -1063,22 +1062,7 @@ function SessionRow({
       {/* Always rendered, one clause, never wrapped: the card's height must be
           identical in every state so a state change repaints and never reflows. */}
       <div className={[styles.status, styles[`status-${status.tone}`]].join(" ")} role="status">
-        {status.glyph ? (
-          <span
-            className={[
-              styles.statusGlyph,
-              status.kind === "needs" ? styles.statusBell : "",
-              status.kind === "stalled" ? styles.statusStalled : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            aria-hidden="true"
-          >
-            {status.glyph}
-          </span>
-        ) : (
-          <span className={styles.statusSpinner} aria-hidden="true" />
-        )}
+        <StatusMark kind={status.kind} />
         <span className={styles.statusLabel}>{status.label}</span>
         {status.since && <StatusElapsed since={status.since} />}
         {/* Only while resting: a live state's clause is the thing to read. */}
@@ -1141,20 +1125,6 @@ function SessionRow({
           role="group"
           aria-label={`${name} actions`}
         >
-          {isPaused && onResume && (
-            <button
-              type="button"
-              className={styles.actionButton}
-              title="Resume agent"
-              aria-label={`Resume ${name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onResume(session.id);
-              }}
-            >
-              ▶
-            </button>
-          )}
           {onClose && (
             // Always offered, regardless of the activity record: it's the
             // Supervisor's TerminateSession underneath, which is safe to call
@@ -1165,8 +1135,8 @@ function SessionRow({
             <button
               type="button"
               className={styles.actionButton}
-              title="Close (pause) agent"
-              aria-label={`Close ${name}`}
+              title="Sleep now — frees the agent process; it wakes on your next message"
+              aria-label={`Sleep ${name}`}
               onClick={(e) => {
                 e.stopPropagation();
                 onClose(session.id);
@@ -1209,7 +1179,7 @@ function SessionRow({
 }
 
 /** Status kinds with nothing live to say — the work note may share the line. */
-const RESTING = new Set(["done", "ready", "sleeping"]);
+const RESTING = new Set(["done", "idle"]);
 
 /** The work marker's words: what the dock's Commit/Land control would offer next. */
 function workNote(work: NonNullable<WorkState>): string {

@@ -56,7 +56,7 @@ describe("SessionRail", () => {
     ]);
   });
 
-  it("says 'Sleeping · N blocked tasks' in the needs tone for a sleeper with blocked work", () => {
+  it("says 'Idle · N blocked tasks' in the needs tone for an idle session with blocked work", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "needs work" })]}
@@ -65,13 +65,13 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("needs work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("◦Sleeping · 1 blocked task");
+    expect(status.textContent).toBe("Idle · 1 blocked task");
     expect(status.className).toMatch(/status-needs/);
     expect(row.querySelector('[class*="dot"]')).toBeNull();
     expect(screen.getByText("1 blocked")).toBeTruthy();
   });
 
-  it("keeps 'wakes on send' in the idle tone for a sleeper that only has running/ready work", () => {
+  it("stays plain 'Idle' in the idle tone when the open work is only running/ready", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", activity: "inactive", name: "steady work" })]}
@@ -80,7 +80,7 @@ describe("SessionRail", () => {
     );
     const row = screen.getByText("steady work").closest('[role="button"]')!;
     const status = row.querySelector('[role="status"]')!;
-    expect(status.textContent).toBe("◦Sleeping · wakes on send");
+    expect(status.textContent).toBe("Idle");
     expect(status.className).toMatch(/status-idle/);
   });
 
@@ -152,7 +152,10 @@ describe("SessionRail", () => {
     expect(onSelect).toHaveBeenCalledWith("a1");
   });
 
-  it("shows a resume affordance only for non-active sessions when onResume is passed", () => {
+  it("offers no wake control on a sleeping card — the first send wakes it", () => {
+    // The ▶ pre-warm is gone from the rail. It only ever bought back the
+    // start-up seconds, and it read as a lifecycle state the user had to
+    // manage; the kebab in the workspace keeps it for a deliberate warm-up.
     render(
       <SessionRail
         sessions={[
@@ -160,37 +163,10 @@ describe("SessionRail", () => {
           makeSession({ id: "r1", name: "resume me", activity: "inactive" }),
         ]}
         openTaskCounts={{}}
-        onResume={vi.fn()}
-      />,
-    );
-    expect(screen.queryByRole("button", { name: "Resume live one" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Resume resume me" })).toBeTruthy();
-  });
-
-  it("omits the resume affordance entirely when onResume is not passed", () => {
-    render(
-      <SessionRail
-        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
-        openTaskCounts={{}}
       />,
     );
     expect(screen.queryByRole("button", { name: "Resume resume me" })).toBeNull();
-  });
-
-  it("clicking resume calls onResume with the id and not onSelect", () => {
-    const onSelect = vi.fn();
-    const onResume = vi.fn();
-    render(
-      <SessionRail
-        sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
-        openTaskCounts={{}}
-        onSelect={onSelect}
-        onResume={onResume}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Resume resume me" }));
-    expect(onResume).toHaveBeenCalledWith("r1");
-    expect(onSelect).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Wake resume me" })).toBeNull();
   });
 
   it("shows no checkbox gutter or persistent kebab on any row", () => {
@@ -209,9 +185,8 @@ describe("SessionRail", () => {
     expect(screen.queryByText("⋯")).toBeNull();
   });
 
-  it("clicking a card only opens it — a paused card is not eagerly resumed", () => {
+  it("clicking a card only opens it, asleep or awake", () => {
     const onSelect = vi.fn();
-    const onResume = vi.fn();
     render(
       <SessionRail
         sessions={[
@@ -220,43 +195,34 @@ describe("SessionRail", () => {
         ]}
         openTaskCounts={{}}
         onSelect={onSelect}
-        onResume={onResume}
       />,
     );
-
-    // Active card: opens, no resume (it's already running).
     fireEvent.click(screen.getByText("live one"));
     expect(onSelect).toHaveBeenCalledWith("a1");
-
-    // Paused card: opens read-only (so the summary shows / it wakes on send) —
-    // resume is the explicit ▶ pre-warm button, not a side effect of opening.
+    // A sleeping card opens read-only — so SessionSummaryCard shows the full
+    // summary — and wakes on the first send rather than on the click.
     fireEvent.click(screen.getByText("resume me"));
     expect(onSelect).toHaveBeenCalledWith("r1");
-    expect(onResume).not.toHaveBeenCalled();
   });
 
-  it("pressing Enter on a paused row opens it without resuming (keyboard-driven)", () => {
+  it("pressing Enter on a sleeping row opens it (keyboard-driven)", () => {
     const onSelect = vi.fn();
-    const onResume = vi.fn();
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
         openTaskCounts={{}}
         onSelect={onSelect}
-        onResume={onResume}
       />,
     );
     const row = screen.getByText("resume me").closest('[role="button"]')!;
     fireEvent.keyDown(row, { key: "Enter" });
     expect(onSelect).toHaveBeenCalledWith("r1");
-    expect(onResume).not.toHaveBeenCalled();
   });
 
-  it("shows a Close (pause) affordance for active and inactive sessions alike, wired to onClose", () => {
+  it("shows the sleep affordance for active and inactive sessions alike, wired to onClose", () => {
     // Close/terminate is safe against the Supervisor in every activity
     // state, and the activity record can drift from the real child state —
-    // so it must never be hidden based on that record alone (unlike Resume,
-    // which stays gated to non-active sessions above).
+    // so it must never be hidden based on that record alone.
     const onClose = vi.fn();
     const onSelect = vi.fn();
     render(
@@ -271,24 +237,24 @@ describe("SessionRail", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: "Close live one" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Close resume me" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sleep live one" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: "Close resume me" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sleep resume me" }));
     expect(onClose).toHaveBeenCalledWith("r1");
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("action cluster exposes labeled resume and archive buttons, grouped under an aria-label", () => {
+  it("action cluster exposes labeled sleep and archive buttons, grouped under an aria-label", () => {
     render(
       <SessionRail
         sessions={[makeSession({ id: "r1", name: "resume me", activity: "inactive" })]}
         openTaskCounts={{}}
-        onResume={vi.fn()}
+        onClose={vi.fn()}
       />,
     );
     const cluster = screen.getByRole("group", { name: "resume me actions" });
-    expect(within(cluster).getByRole("button", { name: "Resume resume me" })).toBeTruthy();
+    expect(within(cluster).getByRole("button", { name: "Sleep resume me" })).toBeTruthy();
     expect(within(cluster).getByRole("button", { name: "Archive resume me" })).toBeTruthy();
   });
 
@@ -322,7 +288,6 @@ describe("SessionRail", () => {
           <SessionRail
             sessions={[makeSession({ id: "r1", name: "anchor me", activity: "inactive" })]}
             openTaskCounts={{}}
-            onResume={vi.fn()}
           />
         </div>,
       );
@@ -355,9 +320,9 @@ describe("SessionRail", () => {
       row.getBoundingClientRect = () =>
         fakeRect({ top: 100, bottom: 200, height: 100, left: 12, right: 300, width: 288 });
 
-      const resume = within(cluster).getByRole("button", { name: "Resume anchor me" });
-      act(() => resume.focus());
-      expect(document.activeElement).toBe(resume);
+      const archive = within(cluster).getByRole("button", { name: "Archive anchor me" });
+      act(() => archive.focus());
+      expect(document.activeElement).toBe(archive);
       expect(cluster.getAttribute("data-anchored")).toBe("");
 
       // :focus-within still holds it open, so the coordinates must not go.
@@ -1033,11 +998,15 @@ describe("SessionRail status line", () => {
     );
   }
 
-  it("renders 'Ready' with a muted glyph for a live session that has said nothing", () => {
+  it("renders 'Idle' with a dial for a live session that has said nothing", () => {
     renderWith({});
     const status = statusOf("the session");
-    expect(status.textContent).toBe("◦Ready");
+    // The mark is an <svg>, so it contributes no text and the line reads as
+    // the words alone. That is part of the point: the characters it replaced
+    // were in the accessibility tree as well as on screen.
+    expect(status.textContent).toBe("Idle");
     expect(status.className).toMatch(/status-idle/);
+    expect(status.querySelector('[class*="statusMark"]')).toBeTruthy();
   });
 
   it("keeps the main agent's clause while only backgrounded subagents run, and counts them in the tooltip", () => {
@@ -1067,28 +1036,33 @@ describe("SessionRail status line", () => {
     expect(card.getAttribute("title") ?? "").not.toContain("Background subagents");
   });
 
-  it("renders 'Sleeping · wakes on send' for an inactive session", () => {
+  it("renders the same 'Idle' for an inactive session — the process is not the user's business", () => {
     renderWith({}, makeSession({ id: "s1", name: "the session", activity: "inactive" }));
-    expect(statusOf("the session").textContent).toBe("◦Sleeping · wakes on send");
+    expect(statusOf("the session").textContent).toBe("Idle");
   });
 
-  it("renders 'Done · your turn' in the ok tone with a check", () => {
+  it("renders 'Done · your turn' in the ok tone, as a closed ring", () => {
     renderWith({ done: true });
     const status = statusOf("the session");
-    expect(status.textContent).toBe("✓Done · your turn");
+    expect(status.textContent).toBe("Done · your turn");
+    // One closed circle — not the working mark's track-plus-arc pair, and not
+    // the tick, which now belongs to the Set-aside control.
+    expect(status.querySelectorAll('[class*="statusMark"] circle').length).toBe(1);
     expect(status.className).toMatch(/status-done/);
     expect(statusOf("the session").querySelector('[class*="dot"]')).toBeNull();
   });
 
-  it("spins — with no glyph — while a turn is in flight, and names its subagents", () => {
+  it("spins while a turn is in flight, and names its subagents", () => {
     renderWith({ workingSince: inFlight(), subagents: 3 });
     const status = statusOf("the session");
     expect(status.textContent).toContain("3 subagents running");
     expect(status.className).toMatch(/status-working/);
-    const spinner = status.querySelector('[class*="statusSpinner"]')!;
-    expect(spinner).toBeTruthy();
+    const mark = status.querySelector('[class*="statusMark"]')!;
+    // The only animated mark on the rail, and the class that animates it is
+    // applied to this kind alone.
+    expect(mark.getAttribute("class")).toMatch(/statusMarkSpin/);
     // Decorative: colour and copy carry the state, the motion doesn't.
-    expect(spinner.getAttribute("aria-hidden")).toBe("true");
+    expect(mark.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("renders a parked approval in the warn tone, naming the tool", () => {
@@ -1096,13 +1070,17 @@ describe("SessionRail status line", () => {
     const status = statusOf("the session");
     expect(status.textContent).toContain("Needs approval · Bash");
     expect(status.className).toMatch(/status-needs/);
-    expect(status.querySelector('[class*="statusGlyph"]')!.textContent).toBe("▲");
+    // A filled triangle, drawn rather than borrowed from the UI font — and
+    // deliberately still: `working` is the one state that moves.
+    const mark = status.querySelector('[class*="statusMark"]')!;
+    expect(mark.querySelector("path")!.getAttribute("fill")).toBe("currentColor");
+    expect(mark.getAttribute("class")).not.toMatch(/statusMarkSpin/);
   });
 
   it("renders a crash in the bad tone, counting the blocked work it left behind", () => {
     renderWith({ crashed: true }, live, { s1: { running: 0, ready: 0, blocked: 2 } });
     const status = statusOf("the session");
-    expect(status.textContent).toBe("✕Crashed · 2 blocked tasks");
+    expect(status.textContent).toBe("Crashed · 2 blocked tasks");
     expect(status.className).toMatch(/status-bad/);
   });
 
@@ -1162,7 +1140,7 @@ describe("SessionRail status line", () => {
         }}
       />,
     );
-    expect(statusOf("the session").textContent).toBe("✓Done · your turn");
+    expect(statusOf("the session").textContent).toBe("Done · your turn");
   });
 
   it("renders the same line shape in every state, so card height can't change with it", () => {
@@ -1222,10 +1200,12 @@ describe("SessionRail status line", () => {
       label: "Thinking…",
     });
     const status = statusOf("the session");
-    expect(status.textContent).toBe("◌Stalled · no agent activity23h");
+    expect(status.textContent).toBe("Stalled · no agent activity23h");
     expect(status.className).toMatch(/status-needs/);
-    // A glyph, not the spinner: the one state that animates is the one moving.
-    expect(status.querySelector('[class*="statusSpinner"]')).toBeNull();
+    // The working spinner's own geometry, held still — which is exactly the
+    // claim the line makes. The one state that animates is the one moving.
+    expect(status.querySelector('[class*="statusMarkSpin"]')).toBeNull();
+    expect(status.querySelectorAll('[class*="statusMark"] circle').length).toBe(2);
     // The clause it last reported is still the most useful thing to know — it
     // just has to come with the time attached rather than as present tense.
     const card = screen.getByText("the session").closest('[role="button"]')!;
@@ -1257,13 +1237,17 @@ describe("SessionRail status line", () => {
 describe("SessionRail status line motion and truncation", () => {
   const css = () => readFileSync("src/features/sessions/rail/SessionRail.module.css", "utf8");
 
-  it("spins by default and degrades to a static accent ring under prefers-reduced-motion", () => {
+  it("spins exactly one mark, and only the working one", () => {
     const sheet = css();
-    expect(sheet.match(/\.statusSpinner \{([^}]*)\}/)![1]).toMatch(/animation:\s*railSpin/);
-    const reduced = sheet.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)![1];
-    expect(reduced).toContain(".statusSpinner");
-    // Still a ring, and still readable as one: the accent survives the motion.
-    expect(reduced).toMatch(/border-color:\s*var\(--accent\)/);
+    expect(sheet.match(/\.statusMarkSpin \.statusMarkArc \{([^}]*)\}/)![1]).toMatch(
+      /animation:\s*railSpin/,
+    );
+    // No per-mark reduced-motion override: styles/global.css stops every
+    // animation wholesale, and stopped, the arc simply rests. The CSS-border
+    // spinner this replaced did need one — frozen, it showed a single accent
+    // side against three --line ones, a shape that meant nothing.
+    expect(sheet).not.toContain("statusSpinner");
+    expect(sheet.match(/animation:\s*railSpin/g)!.length).toBe(1);
   });
 
   it("truncates its one clause instead of wrapping, so the line can never grow", () => {
@@ -1317,8 +1301,8 @@ describe("SessionRail status subscription", () => {
     // delta, which is what session.turn_ended could not promise.
     emitAgentState("s7", { state: "idle", since: "2026-09-28T13:40:00Z" });
 
-    await waitFor(() => expect(statusOf("session 7").textContent).toBe("✓Done · your turn"));
-    expect(statusOf("session 3").textContent).toBe("◦Ready");
+    await waitFor(() => expect(statusOf("session 7").textContent).toBe("Done · your turn"));
+    expect(statusOf("session 3").textContent).toBe("Idle");
     expect(FakeEventSource.instances.filter((i) => !i.closed)).toHaveLength(1);
   });
 
@@ -1391,7 +1375,7 @@ describe("SessionRail status subscription", () => {
       agent_state: { state: "working", label: "Running bash · make check", since: "2026-09-28T09:00:00Z" },
     });
     render(<Harness sessions={[stale]} />);
-    await waitFor(() => expect(statusOf("killed one").textContent).toBe("◦Sleeping · wakes on send"));
+    await waitFor(() => expect(statusOf("killed one").textContent).toBe("Idle"));
   });
 });
 
