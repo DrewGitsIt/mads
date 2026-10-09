@@ -443,7 +443,13 @@ export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<strin
 // Subagent streams (dock content) — live-tagged events and persisted
 // session.subagent_event envelopes fold into the same shape.
 
-export type SubStreamItem = { type: "text"; text: string } | ActivityEntry;
+export type SubStreamItem =
+  | { type: "text"; text: string }
+  /** Input the subagent was given — its prompt, or a message relayed through
+   * its parent. Only the subagent's own transcript has these: the live
+   * stream never carries them. */
+  | { type: "message"; text: string; timestamp?: string }
+  | ActivityEntry;
 
 /** Appends one subagent-tagged event, folding a tool_result into its tool by
  * id. `timestamp` is the event's arrival/persistence time — it becomes the
@@ -568,6 +574,44 @@ export function foldHistoryEvents(envelopes: Envelope[]): ConversationHistory {
     }
   }
   return { statuses, tasks, subagentStreams, thinking, compact };
+}
+
+/**
+ * A subagent's own transcript (GET .../delegates/{harnessId}/transcript) as
+ * the same stream the dock folds from live events: the file's agent text,
+ * tool calls and results, plus what only the file has — its prompt and any
+ * message relayed to it, as `message` items. Timestamps are the harness's
+ * own, per line. Thinking never appears: the file keeps it without text.
+ */
+export function transcriptSubStream(messages: readonly TranscriptMessage[]): SubStreamItem[] {
+  const KEY = "";
+  let streams = new Map<string, SubStreamItem[]>();
+  const push = (item: SubStreamItem) => streams.set(KEY, [...(streams.get(KEY) ?? []), item]);
+  for (const m of messages) {
+    switch (m.role) {
+      case "user":
+        if (m.text) push({ type: "message", text: m.text, timestamp: m.timestamp });
+        break;
+      case "agent":
+        // A paragraph per message: the file's text blocks are whole, unlike
+        // the live stream's deltas, so they don't run together.
+        if (m.text) push({ type: "text", text: m.text });
+        break;
+      case "tool":
+        streams = appendSubagentItem(streams, KEY, { kind: "tool_use", tool: m.tool, timestamp: m.timestamp });
+        break;
+      case "tool_result":
+        streams = appendSubagentItem(streams, KEY, {
+          kind: "tool_result",
+          text: m.text,
+          tool: m.tool,
+          is_error: m.is_error,
+          timestamp: m.timestamp,
+        });
+        break;
+    }
+  }
+  return streams.get(KEY) ?? [];
 }
 
 /**

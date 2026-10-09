@@ -290,8 +290,13 @@ type TranscriptReader interface {
 // delegate's capabilities — the matrix gives the defaults, this the facts.
 // ok is false when the store has nothing for it (yet: a delegate's files may
 // appear after its first lifecycle line).
+//
+// DelegateTranscript reads that delegate's own transcript in the same
+// normalized form as TranscriptReader, its prompt included as the first
+// "user" message. ok is false, with no error, when there is none to read.
 type DelegateInspector interface {
 	InspectDelegate(ctx context.Context, ref, harnessID string) (info DelegateInfo, ok bool, err error)
+	DelegateTranscript(ctx context.Context, ref, harnessID string) (msgs []Message, ok bool, err error)
 }
 
 // DelegateInfo is one delegate as the harness's own store records it. Zero

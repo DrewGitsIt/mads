@@ -3,6 +3,7 @@ import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
   Delegate,
+  DelegateTranscript,
   DelegateState,
   AttachmentOwner,
   QueuedMessage,
@@ -820,6 +821,8 @@ export class FakeRouterClient implements RouterClient {
   private links: Map<string, Link>;
   /** Delegate records listDelegates serves — tests push into it directly. */
   readonly delegates: Delegate[] = [];
+  /** Delegate transcripts getDelegateTranscript serves, by "sessionId/harnessId"; absent reads unavailable. */
+  readonly delegateTranscripts = new Map<string, DelegateTranscript>();
   private proposals: Map<string, Proposal>;
   private nextTaskSeq = 1000;
   private nextNoteSeq = 1000;
@@ -1632,6 +1635,11 @@ export class FakeRouterClient implements RouterClient {
 
   async listDelegates(state?: DelegateState): Promise<Delegate[]> {
     return this.delegates.filter((d) => !state || d.state === state).map((d) => structuredClone(d));
+  }
+
+  async getDelegateTranscript(sessionId: string, harnessId: string): Promise<DelegateTranscript> {
+    const t = this.delegateTranscripts.get(`${sessionId}/${harnessId}`);
+    return t ? structuredClone(t) : { available: false, messages: [] };
   }
 
   async getSessionLinks(sessionId: string): Promise<Link[]> {

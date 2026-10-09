@@ -120,3 +120,12 @@ type DelegateCapabilities struct {
 	// StopsWithParent (C3b): stopping its parent's turn stops it too.
 	StopsWithParent bool `json:"stops_with_parent"`
 }
+
+// DelegateTranscript is a delegate's own transcript as its harness keeps it
+// (GET /sessions/{id}/delegates/{harnessId}/transcript). Available is false
+// when the harness keeps none or it isn't there (yet, or any more); the view
+// then has only what mads recorded from the live stream.
+type DelegateTranscript struct {
+	Available bool                `json:"available"`
+	Messages  []TranscriptMessage `json:"messages"`
+}

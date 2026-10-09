@@ -118,6 +118,27 @@
   margin-bottom: var(--space-3);
 }
 
+/* Input the subagent was given (its prompt, a relayed message) — only a
+   subagent's own transcript has these. Set apart as the other voice. */
+.subMessage {
+  font: 13.5px var(--sans);
+  color: var(--text2);
+  max-width: 84ch;
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid var(--line);
+  background: var(--bg1);
+  white-space: pre-wrap;
+}
+
+.subMessageLabel {
+  margin-bottom: 2px;
+  color: var(--text3);
+  font: 11px var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 /* The subagent header's way out to the full-pane delegate view. */
 .openPage {
   flex: none;

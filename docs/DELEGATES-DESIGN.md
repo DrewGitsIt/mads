@@ -134,15 +134,42 @@ yet), with the working spinner as its status mark, counted under Working.
 (It led with "Ready · " until main retired Ready for Idle; "Idle · N
 subagents running" would contradict itself.)
 
-### Transcript source
+### Transcript source *(B, built 2026-10-09)*
 
 Where the harness keeps a delegate transcript, mads reads it. That is the
 same principle as for sessions: mads points at provider storage and never
-copies it (REBUILD-SPEC §1.9). The mads event log stays as the fallback for
-harnesses without one. For Claude Code that means
+copies it (REBUILD-SPEC §1.9). For Claude Code that means
 `~/.claude/projects/<proj>/<session>/subagents/agent-<id>.jsonl` and its
-`.meta.json`; mads currently skips these on purpose (`history.go`,
-`transcript.go`).
+`.meta.json`.
+
+- **Route.** `GET /sessions/{id}/delegates/{harnessId}/transcript` →
+  `{available, messages}`, read by the router through the session's provider
+  (`DelegateInspector.DelegateTranscript`), never proxied to the child: the
+  harness writes the file as the delegate runs. The harness id comes from
+  the path, so the provider checks it before it reaches a glob.
+- **Where to look.** Under `ProviderRef`, then `ImportedFrom`: continuing an
+  import forks it, and the original's delegates stay in the original's
+  folder. (Drew is inclined to drop fork-on-resume for imports; a separate
+  change.)
+- **The view.** `DelegateView` reads the file, and re-reads it 1s after the
+  last live event or record change. No file, or not yet: the event log, as
+  before. The header says which.
+- **The two sources differ** (measured on a live mads database and 30 real
+  files, 2026-10-09):
+
+  | | Live (`session.subagent_event`) | File |
+  |---|---|---|
+  | Tool calls and results | yes | yes |
+  | The delegate's own text, final report included | **no** (0 events) | yes |
+  | Its prompt, and messages relayed to it | no | yes |
+  | Thinking | text (83 events) | **signature only, no text** (495 blocks) |
+  | Timestamps | arrival time | the harness's, per line |
+  | Bound | `GET /events` cap (500) | none |
+
+  So the file view drops thinking text the live stream had. Not merged:
+  rare, and the order of the two can only be matched by timestamp.
+- **Not yet:** the in-conversation card and dock still read the event log;
+  imported sessions have no records, so no rows (open question below).
 
 ## Capabilities
 
@@ -385,11 +412,11 @@ were spot-checked in the code.
    `SubagentTask.ParentToolUseID` is always empty, and a subagent's
    `thinking_tokens` can flip `agent_state` to working outside a turn (the
    a2256c3 stall class).
-7. `wireLine` drops Claude Code's per-line `timestamp`.
+7. **[B: moot for the full-pane view, which reads the file's own timestamps]** `wireLine` drops Claude Code's per-line `timestamp`.
 8. **[#1: cascading kept by decision; the record now concludes the stops]** Interrupting the parent kills every background task
    (`perTaskStopAffordance` is unset), and `handleInterrupt` retires them
    all in the UI regardless.
-9. Subagent history exists only in the mads event log; imported
+9. **[B: the full-pane view reads the file; imports still have no records]** Subagent history exists only in the mads event log; imported
    conversations have none.
 10. **[#1: fixed]** The sidebar shows "Ready" while a background subagent runs.
 11. The digest counts a delegate's tool uses as main-turn work.

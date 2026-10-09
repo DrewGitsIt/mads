@@ -10,6 +10,7 @@ import {
   mergeTranscript,
   replayedCompactStatus,
   resumeRunningTasks,
+  transcriptSubStream,
   type SourceEntry,
   type TaskModel,
 } from "./conversationItems";
@@ -338,5 +339,29 @@ describe("delegate records over the task-line fold", () => {
     expect(got.get("a1")).toMatchObject({
       taskId: "a1", toolUseId: "toolu_spawn", description: "audit", subagentType: "Explore", completed: true, durationMs: 1900,
     });
+  });
+});
+
+describe("transcriptSubStream", () => {
+  it("folds a subagent's own file into the dock's stream, with what only the file has", () => {
+    const messages: TranscriptMessage[] = [
+      { role: "user", text: "Map the transcript code", timestamp: "2026-10-09T10:00:00Z" },
+      { role: "tool", tool: { id: "t1", name: "Grep", status: "completed" }, timestamp: "2026-10-09T10:00:01Z" },
+      { role: "tool_result", text: "transcript.go", tool: { id: "t1", name: "" }, timestamp: "2026-10-09T10:00:02Z" },
+      { role: "agent", text: "Here's the map." },
+      { role: "agent", text: "Second paragraph." },
+      { role: "user", text: "Also check imports", timestamp: "2026-10-09T10:05:00Z" },
+    ];
+    const items = transcriptSubStream(messages);
+    expect(items.map((i) => i.type)).toEqual(["message", "tool", "text", "text", "message"]);
+    expect(items[0]).toMatchObject({ type: "message", text: "Map the transcript code" });
+    // The result folds into its call, stamped with the harness's own times.
+    expect(items[1]).toMatchObject({
+      type: "tool",
+      timestamp: "2026-10-09T10:00:01Z",
+      tool: { id: "t1", result: { text: "transcript.go", timestamp: "2026-10-09T10:00:02Z" } },
+    });
+    // Whole messages stay separate paragraphs, unlike live deltas.
+    expect(items[2]).toEqual({ type: "text", text: "Here's the map." });
   });
 });

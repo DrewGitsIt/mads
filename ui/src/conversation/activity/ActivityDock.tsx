@@ -354,9 +354,13 @@ export function SubagentStream({
   // Same grouping components as the main stream: fold contiguous
   // tool/thinking items into groups between text paragraphs.
   const blocks = useMemo(() => {
-    const out: ({ type: "text"; text: string } | { type: "group"; entries: ActivityEntry[] })[] = [];
+    const out: (
+      | { type: "text"; text: string }
+      | { type: "message"; text: string }
+      | { type: "group"; entries: ActivityEntry[] }
+    )[] = [];
     for (const item of items) {
-      if (item.type === "text") {
+      if (item.type === "text" || item.type === "message") {
         out.push(item);
         continue;
       }
@@ -371,7 +375,12 @@ export function SubagentStream({
     <>
       {items.length === 0 && <div className={styles.subText}>No subagent activity recorded yet.</div>}
       {blocks.map((b, i) =>
-        b.type === "text" ? (
+        b.type === "message" ? (
+          <div key={i} className={styles.subMessage} data-testid="subagent-message">
+            <div className={styles.subMessageLabel}>{i === 0 ? "Prompt" : "From the parent"}</div>
+            {b.text}
+          </div>
+        ) : b.type === "text" ? (
           <div key={i} className={styles.subText}>
             {b.text}
           </div>

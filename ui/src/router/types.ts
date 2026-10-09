@@ -722,6 +722,16 @@ export interface Delegate {
   updated_at: string;
 }
 
+/**
+ * mirrors pkg/contracts/delegate.go DelegateTranscript — a delegate's own
+ * transcript as its harness keeps it. `available` false: the harness keeps
+ * none, or it isn't there (yet, or any more).
+ */
+export interface DelegateTranscript {
+  available: boolean;
+  messages: TranscriptMessage[];
+}
+
 // mirrors providers/provider/event.go TaskStatus (payload of the "task"
 // stream event) and pkg/contracts/conversation.go SubagentTask (payload of
 // persisted "session.subagent_task" envelopes — identical shape, plus

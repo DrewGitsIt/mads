@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import type { Delegate, DelegateCapabilities, Envelope } from "../../../router/types";
+import type { Delegate, DelegateCapabilities, DelegateTranscript, Envelope } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { SubagentStream } from "../../../conversation/activity/ActivityDock";
-import { foldHistoryEvents, mergeDelegates } from "../../../conversation/activity/conversationItems";
+import {
+  foldHistoryEvents,
+  mergeDelegates,
+  transcriptSubStream,
+} from "../../../conversation/activity/conversationItems";
 import { KindIcon } from "../../../conversation/activity/primitives";
 import { TaskCounters, TaskStatusGlyph } from "../../../conversation/activity/TaskCard";
 import styles from "./DelegateView.module.css";
@@ -19,6 +23,15 @@ export const DELEGATE_EVENT_TYPES = [
   "session.subagent_task",
   "session.tool_status_changed",
 ];
+
+/**
+ * How long the view waits after the last sign of activity before re-reading
+ * the delegate's transcript file. The harness writes the file as the delegate
+ * runs, but nothing announces a write: a live event for the delegate (or a
+ * change to its record) is the cue, and this batches a burst of them into one
+ * read.
+ */
+export const DELEGATE_FILE_REFRESH_MS = 1000;
 
 export interface DelegateViewProps {
   sessionId: string;
@@ -37,19 +50,41 @@ export interface DelegateViewProps {
  * what its harness supports (the design's C2 capabilities), which this view
  * doesn't assume.
  *
- * The stream comes from the mads event log (session.subagent_event), the
- * only source today — subject to GET /events' cap on very long streams.
+ * The stream comes from the delegate's own transcript, where its harness
+ * keeps one (GET .../delegates/{harnessId}/transcript): whole, with its
+ * prompt, its own text and the harness's timestamps. Where it doesn't — or
+ * not yet — it comes from what mads recorded live (session.subagent_event),
+ * which has the tool calls but none of the delegate's text, and is subject
+ * to GET /events' cap on very long streams.
  */
 export function DelegateView({ sessionId, harnessId, parentName, routerClient, onBack }: DelegateViewProps) {
   const [record, setRecord] = useState<Delegate>();
   const [missing, setMissing] = useState(false);
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
+  const [file, setFile] = useState<DelegateTranscript>();
+  // Only the newest read may land: a slow early read must not replace a
+  // later, longer one.
+  const fileRead = useRef(0);
+  const readFile = useMemo(
+    () => () => {
+      const n = ++fileRead.current;
+      routerClient
+        .getDelegateTranscript(sessionId, harnessId)
+        .then((t) => {
+          if (n === fileRead.current) setFile(t);
+        })
+        .catch(() => {});
+    },
+    [routerClient, sessionId, harnessId],
+  );
 
   useEffect(() => {
     let cancelled = false;
     setRecord(undefined);
     setMissing(false);
     setEnvelopes([]);
+    setFile(undefined);
+    readFile();
     // Subscribed before the reads, so nothing falls in the gap; the reads
     // merge under anything live (dedupe by seq; newest record wins).
     const unsubRecord = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
@@ -82,10 +117,21 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
       .catch(() => {});
     return () => {
       cancelled = true;
+      fileRead.current++;
       unsubRecord();
       unsubStream();
     };
-  }, [routerClient, sessionId, harnessId]);
+  }, [routerClient, sessionId, harnessId, readFile]);
+
+  // Re-read the file once activity settles: new events while it runs, and
+  // the record's last change when it ends (its final lines land then).
+  const lastChange = `${envelopes.length}/${record?.state ?? ""}/${record?.updated_at ?? ""}`;
+  const firstChange = useRef(lastChange);
+  useEffect(() => {
+    if (lastChange === firstChange.current) return;
+    const t = setTimeout(readFile, DELEGATE_FILE_REFRESH_MS);
+    return () => clearTimeout(t);
+  }, [lastChange, readFile]);
 
   const history = useMemo(() => foldHistoryEvents(envelopes), [envelopes]);
   const model = useMemo(() => {
@@ -93,7 +139,8 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
     return merged.get(harnessId);
   }, [history.tasks, record, harnessId]);
   const anchor = record?.tool_use_id ?? model?.toolUseId;
-  const items = (anchor && history.subagentStreams.get(anchor)) || [];
+  const fromFile = useMemo(() => (file?.available ? transcriptSubStream(file.messages) : undefined), [file]);
+  const items = fromFile ?? ((anchor && history.subagentStreams.get(anchor)) || []);
   const title = record?.description || model?.description || record?.type || "Subagent";
   const type = record?.type ?? model?.subagentType;
 
@@ -116,7 +163,12 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
             <TaskStatusGlyph model={model} />
           </span>
         </div>
-        {record && <div className={styles.facts}>{facts(record)}</div>}
+        {record && (
+          <div className={styles.facts}>
+            {facts(record)}
+            {file && (fromFile ? " · From its own transcript" : " · As mads recorded it live")}
+          </div>
+        )}
         {record?.capabilities && <Capabilities caps={record.capabilities} worktree={record.worktree_path} />}
       </header>
       <div className={styles.body}>

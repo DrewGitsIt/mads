@@ -175,6 +175,13 @@ func (l *lineReader) Err() error {
 // (Role "tool_result", correlated back to its tool_use via Tool.ID); subagent
 // sidechains are dropped.
 func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
+	return normalizeLines(r, false)
+}
+
+// normalizeLines is normalizeTranscript with the choice of chain: the main
+// conversation's lines, or (sidechain) a subagent's own file's, which are all
+// sidechain lines (DelegateTranscript).
+func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 	var msgs []provider.Message
 	seen := map[string]struct{}{}
 	sc := newLineReader(r)
@@ -187,7 +194,7 @@ func normalizeTranscript(r io.Reader) ([]provider.Message, error) {
 		if err := json.Unmarshal([]byte(raw), &l); err != nil {
 			continue // tolerate unknown lines; the format is claude's, not ours
 		}
-		if l.IsSidechain {
+		if l.IsSidechain != sidechain {
 			continue
 		}
 		if l.UUID != "" {

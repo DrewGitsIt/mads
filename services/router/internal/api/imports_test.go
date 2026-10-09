@@ -467,3 +467,51 @@ func TestImportConversationsTrustFromPermissionMode(t *testing.T) {
 		}
 	}
 }
+
+// A delegate's own transcript is read from the harness's store: for an
+// imported session, before and after continuing it — the continue forks, and
+// the original's delegates stay in the original's folder.
+func TestDelegateTranscriptFromTheNativeStore(t *testing.T) {
+	f := newImportFixture(t)
+	f.native(t, "-repo", "normal", convo(f.repo, "cli", "fix the login bug")...)
+	f.native(t, filepath.Join("-repo", "normal"), "subagents/agent-a1",
+		`{"type":"user","isSidechain":true,"agentId":"a1","uuid":"s1","message":{"role":"user","content":"find the login handler"}}`,
+		`{"type":"assistant","isSidechain":true,"agentId":"a1","uuid":"s2","message":{"role":"assistant","content":[{"type":"text","text":"It's in auth.go."}]}}`,
+	)
+	f.importAll(t)
+	all, _ := f.data.Sessions(context.Background(), "")
+	if len(all) != 1 {
+		t.Fatalf("%d sessions, want 1", len(all))
+	}
+	sess := all[0]
+
+	read := func(harnessID string) contracts.DelegateTranscript {
+		t.Helper()
+		resp, err := http.Get(f.srv.URL + "/sessions/" + sess.ID + "/delegates/" + harnessID + "/transcript")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", resp.StatusCode)
+		}
+		return decodeJSON[contracts.DelegateTranscript](t, resp)
+	}
+	check := func(when string) {
+		t.Helper()
+		got := read("a1")
+		if !got.Available || len(got.Messages) != 2 || got.Messages[0].Role != "user" ||
+			got.Messages[0].Text != "find the login handler" || got.Messages[1].Text != "It's in auth.go." {
+			t.Errorf("%s: delegate transcript = %+v", when, got)
+		}
+	}
+	check("as imported")
+	if got := read("nobody"); got.Available || got.Messages == nil || len(got.Messages) != 0 {
+		t.Errorf("unknown delegate = %+v, want unavailable with an empty (non-null) list", got)
+	}
+
+	sess.ProviderRef, sess.ForkOnResume = "forked-ref", false
+	if err := f.data.UpdateSession(context.Background(), &sess); err != nil {
+		t.Fatal(err)
+	}
+	check("after the continue forked it")
+}

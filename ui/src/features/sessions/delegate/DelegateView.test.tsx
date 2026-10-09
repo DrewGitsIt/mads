@@ -116,3 +116,80 @@ describe("DelegateView — capabilities", () => {
     expect(caps.textContent).not.toContain("continue");
   });
 });
+
+describe("DelegateView — the delegate's own transcript", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads the stream from the delegate's own file over the live record", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    client.delegateTranscripts.set("s1/a1", {
+      available: true,
+      messages: [
+        { role: "user", text: "Audit the error handling in api/" },
+        { role: "tool", tool: { id: "t1", name: "Grep", kind: "search", title: "swallowed errors" } },
+        { role: "agent", text: "Three handlers drop the error." },
+      ],
+    });
+    vi.spyOn(client, "getEvents").mockResolvedValue([
+      env(1, "session.subagent_event", {
+        parent_tool_use_id: "toolu_spawn",
+        kind: "tool_use",
+        tool: { id: "t9", name: "Read", kind: "read", title: "only in the event log" },
+      }),
+    ]);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+
+    const prompt = await screen.findByTestId("subagent-message");
+    expect(prompt.textContent).toContain("Prompt");
+    expect(prompt.textContent).toContain("Audit the error handling in api/");
+    expect(screen.getByText("Three handlers drop the error.")).toBeTruthy();
+    expect(screen.getByText("swallowed errors")).toBeTruthy();
+    expect(screen.queryByText("only in the event log")).toBeNull();
+    expect(screen.getByText(/From its own transcript/)).toBeTruthy();
+  });
+
+  it("falls back to what mads recorded live when there is no file", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    vi.spyOn(client, "getEvents").mockResolvedValue([
+      env(1, "session.subagent_event", {
+        parent_tool_use_id: "toolu_spawn",
+        kind: "tool_use",
+        tool: { id: "t1", name: "Grep", kind: "search", title: "swallowed errors" },
+      }),
+    ]);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    await waitFor(() => expect(screen.getByText("swallowed errors")).toBeTruthy());
+    expect(await screen.findByText(/As mads recorded it live/)).toBeTruthy();
+  });
+
+  it("re-reads the file once live activity settles", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    const read = vi.spyOn(client, "getDelegateTranscript");
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    await screen.findByText(/As mads recorded it live/);
+    const before = read.mock.calls.length;
+
+    // The harness wrote more; a live event for the delegate is the cue.
+    client.delegateTranscripts.set("s1/a1", {
+      available: true,
+      messages: [{ role: "agent", text: "Written since the first read." }],
+    });
+    const stream = FakeEventSource.instances.find((s) => s.url.includes("session.subagent_event"));
+    act(() => {
+      stream!.emit(
+        "session.subagent_event",
+        JSON.stringify(env(5, "session.subagent_event", { parent_tool_use_id: "toolu_spawn", kind: "tool_use", tool: { id: "t2", name: "Read" } })),
+      );
+    });
+    expect(await screen.findByText("Written since the first read.", undefined, { timeout: 3000 })).toBeTruthy();
+    expect(read.mock.calls.length).toBe(before + 1);
+  });
+});

@@ -1,6 +1,7 @@
 import type {
   Attachment,
   Delegate,
+  DelegateTranscript,
   DelegateState,
   AttachmentOwner,
   Agent,
@@ -352,6 +353,8 @@ export interface RouterClient {
   listDelegates(state?: DelegateState): Promise<Delegate[]>;
   /** One session's delegates, oldest first. */
   getSessionDelegates(sessionId: string): Promise<Delegate[]>;
+  /** One delegate's own transcript, read from its harness's store. */
+  getDelegateTranscript(sessionId: string, harnessId: string): Promise<DelegateTranscript>;
 
   // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
   getSessionLinks(sessionId: string): Promise<Link[]>;
@@ -1275,6 +1278,13 @@ export class FetchRouterClient implements RouterClient {
 
   async listDelegates(state?: DelegateState): Promise<Delegate[]> {
     return routerGet(this.baseUrl, state ? `/delegates?state=${encodeURIComponent(state)}` : "/delegates");
+  }
+
+  async getDelegateTranscript(sessionId: string, harnessId: string): Promise<DelegateTranscript> {
+    return routerGet(
+      this.baseUrl,
+      `/sessions/${sessionId}/delegates/${encodeURIComponent(harnessId)}/transcript`,
+    );
   }
 
   async getSessionLinks(sessionId: string): Promise<Link[]> {
