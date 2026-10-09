@@ -53,6 +53,17 @@ export interface Session {
   dir?: string;
   /** Absolute directory the agent runs in — the docked shell opens here so it shares the agent's context. */
   cwd?: string;
+  /**
+   * The session-summary job's compressed narrative (pkg/sessionsummary),
+   * rewritten from task data on every active → inactive transition. Nothing
+   * in the UI renders it: the rail teaser and the full SessionSummaryCard
+   * were both pulled 2026-10-09 — a clamped fragment of a document written
+   * to be read whole, and a full card placed at the top of a stream that
+   * opens scrolled to the bottom. The field is not dead: get_summary hands
+   * it to a leader session as the `prologue` beside the live turn digest
+   * (services/router/internal/api/orchestrate.go), which is the only
+   * consumer it has ever really had.
+   */
   summary?: string;
   active_task_id?: string;
   tags?: string[];

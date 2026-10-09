@@ -55,7 +55,6 @@ import type { RailLabelContext, RailLabels } from "./railLabels";
 import { EMPTY_WORKSPACE_INDEX, workspaceIndex } from "../../../router/workspaceRef";
 import type { WorkspaceIndex } from "../../../router/workspaceRef";
 import { agentIndex } from "../../../router/agentRef";
-import { summaryTeaser } from "./summaryTeaser";
 import { workState, type WorkState } from "../../../conversation/Worktree/workState";
 import { plural } from "../../../conversation/Worktree/worktreeCopy";
 import { FLAGS } from "../../../featureFlags";
@@ -903,7 +902,6 @@ function SessionRow({
     (session.last_turn_at
       ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
       : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
-  const isPaused = session.activity !== "active";
   const setAside = isSetAside(session);
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const labels = railLabelsFor(session, labelContext);
@@ -965,7 +963,6 @@ function SessionRow({
     .join("\n");
   const hasMeta = openTaskCount > 0;
   const showContext = hasRailLabels(labels);
-  const showSummary = isPaused && Boolean(session.summary);
   // Link controls — the update policy and Unlink — used to hang off the
   // LINKED / WATCHED pill, which was both the label and the trigger. The pill
   // is gone (the connector states the relationship), so they move to the
@@ -1043,9 +1040,9 @@ function SessionRow({
   }, [clusterAnchored]);
 
   // Clicking a card opens it read-only — no eager resume. A paused session
-  // keeps its inactive state (so SessionSummaryCard shows the full summary)
-  // and wakes transparently on the first composer send. Explicit resume is the
-  // ▶ pre-warm button below (and the workspace kebab).
+  // keeps its inactive state and wakes transparently on the first composer
+  // send. Explicit resume is the ▶ pre-warm button below (and the workspace
+  // kebab).
   function activate() {
     onSelect?.(session.id);
   }
@@ -1188,7 +1185,6 @@ function SessionRow({
           )}
         </div>
       )}
-      {showSummary && <div className={styles.summary}>{summaryTeaser(session.summary!)}</div>}
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}

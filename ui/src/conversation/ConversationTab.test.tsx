@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-// ChatRenderer/SessionSummaryCard render markdown through DOMPurify, which
-// doesn't sanitize correctly under happy-dom (see ChatRenderer/markdown.test.tsx).
+// ChatRenderer renders markdown through DOMPurify, which doesn't sanitize
+// correctly under happy-dom (see ChatRenderer/markdown.test.tsx).
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
@@ -440,7 +440,7 @@ describe("ConversationTab", () => {
     const switchSpy = vi.spyOn(client, "switchTransport");
 
     rerender(<ConversationTab sessionId="session-inactive" routerClient={client} />);
-    await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
+    await waitFor(() => expect(dockMode()).toBe("chat"));
     expect(document.querySelector('[data-testid="terminal-view"]')).toBeNull();
 
     rerender(<ConversationTab sessionId="session-active" routerClient={client} />);
@@ -450,13 +450,6 @@ describe("ConversationTab", () => {
     expect(dockMode()).toBe("terminal");
 
     expect(switchSpy).not.toHaveBeenCalled();
-  });
-
-  it("shows the summary card for an inactive session with a summary", async () => {
-    const client = new FakeRouterClient();
-    render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
-
-    await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
   });
 
   const shellVisible = () => screen.queryByRole("button", { name: "End shell" }) !== null;
@@ -546,7 +539,7 @@ describe("ConversationTab", () => {
 
     // Another session has its own state.
     const other = render(<ConversationTab sessionId="session-inactive" routerClient={client} />);
-    await waitFor(() => expect(screen.getByText("Accomplished")).toBeTruthy());
+    await waitForChat();
     expect(shellVisible()).toBe(false);
     other.unmount();
 

@@ -338,14 +338,6 @@
   line-height: 1.35;
 }
 
-.summary {
-  color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* ── the status line (mockup §1) ─────────────────────────────────────────
    One row, one clause, ellipsis-truncated — never wraps, so the card's height
    is the same in every state and the rail can't reflow as states change. */
@@ -947,7 +939,6 @@
 }
 
 .shellCard .status,
-.shellCard .detail,
-.shellCard .summary {
+.shellCard .detail {
   padding-left: 22px;
 }

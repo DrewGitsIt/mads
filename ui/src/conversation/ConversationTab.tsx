@@ -60,7 +60,6 @@ import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpee
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
 import { formatBracketedPaste } from "./TerminalRenderer/bracketedPaste";
-import { SessionSummaryCard } from "./SummaryCard/SessionSummaryCard";
 import { Composer } from "./Composer/Composer";
 import { ExpandedComposer } from "./Composer/ExpandedComposer";
 import { QueuedMessages } from "./Composer/QueuedMessages";
@@ -1411,7 +1410,6 @@ export function ConversationTab({
                 <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
               </div>
             )}
-            <SessionSummaryCard session={session} />
             {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
               <>
                 <div className={styles.emptyTranscript}>No conversation yet</div>

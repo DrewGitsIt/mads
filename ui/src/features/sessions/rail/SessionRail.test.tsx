@@ -199,8 +199,8 @@ describe("SessionRail", () => {
     );
     fireEvent.click(screen.getByText("live one"));
     expect(onSelect).toHaveBeenCalledWith("a1");
-    // A sleeping card opens read-only — so SessionSummaryCard shows the full
-    // summary — and wakes on the first send rather than on the click.
+    // A sleeping card opens read-only, and wakes on the first send rather
+    // than on the click.
     fireEvent.click(screen.getByText("resume me"));
     expect(onSelect).toHaveBeenCalledWith("r1");
   });
