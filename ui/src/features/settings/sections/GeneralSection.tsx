@@ -217,6 +217,23 @@ export function GeneralSection({ config }: GeneralSectionProps) {
             ))}
         </select>
       </div>
+      {/* Delegates (docs/DELEGATES-DESIGN.md): a session's harness-run
+          subagents as nested rows in the session list. Bound to the negation
+          of the stored field, so a config predating it shows them. */}
+      <div className={styles.row}>
+        <label className={styles.toggleLabel}>
+          <input
+            type="checkbox"
+            checked={draft.hide_delegates_in_session_list !== true}
+            onChange={(e) => setDraft({ ...draft, hide_delegates_in_session_list: !e.target.checked })}
+          />
+          Expose subagents in session list
+        </label>
+        <div className={styles.hint}>
+          Subagents a session's agent runs appear under it in the session list while they work, and briefly after they
+          finish. Turn off to keep the list to sessions only — the conversation still shows every subagent.
+        </div>
+      </div>
       {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): Commit… in
           the session dock's status line (and in its ⎇ popover) skips the
           dialog. Off and disabled without a Fast Model to write the

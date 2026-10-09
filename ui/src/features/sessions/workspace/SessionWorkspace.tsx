@@ -51,6 +51,8 @@ export interface SessionWorkspaceProps {
   onProvisioningDone?: () => void;
   pendingFirstMessage?: string;
   onPendingFirstMessageHandled?: () => void;
+  /** Open one of this session's delegates as a full-pane view (SessionsSurface owns the main pane). */
+  onOpenDelegate?: (harnessId: string) => void;
 }
 
 /**
@@ -75,6 +77,7 @@ export function SessionWorkspace({
   onProvisioningDone,
   pendingFirstMessage,
   onPendingFirstMessageHandled,
+  onOpenDelegate,
 }: SessionWorkspaceProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>(initialTab ?? "conversation");
@@ -330,6 +333,7 @@ export function SessionWorkspace({
             focusFilePath={focusFilePath}
             onOpenCommitFile={openCommitFileDiff}
             focusCommitFile={focusCommitFile}
+            onOpenDelegate={onOpenDelegate}
           />
         </div>
       ))}

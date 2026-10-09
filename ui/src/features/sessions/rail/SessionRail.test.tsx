@@ -1169,6 +1169,36 @@ describe("SessionRail status line", () => {
     expect(statusOf("the session").textContent).toMatch(/^1 subagent running/);
   });
 
+  it("nests a session's delegates under its card, opens one on click, and hides them when the setting is off", () => {
+    const running = {
+      id: "dlg_1",
+      session_id: "s1",
+      harness_id: "a1",
+      description: "Audit error handling",
+      state: "running" as const,
+      runs: 1,
+      started_at: inFlight(),
+      created_at: inFlight(),
+      updated_at: inFlight(),
+    };
+    const onOpenDelegate = vi.fn();
+    const state = { s1: { subagents: 1, subagentsSince: inFlight(), delegates: [running] } };
+    const { rerender } = render(
+      <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={state} onOpenDelegate={onOpenDelegate} />,
+    );
+    const rows = screen.getByTestId("delegate-rows");
+    expect(rows.textContent).toContain("Audit error handling");
+    fireEvent.click(within(rows).getByRole("button"));
+    expect(onOpenDelegate).toHaveBeenCalledWith(expect.objectContaining({ harness_id: "a1" }));
+
+    rerender(
+      <SessionRail sessions={[live]} openTaskCounts={{}} agentStates={state} showDelegates={false} />,
+    );
+    expect(screen.queryByTestId("delegate-rows")).toBeNull();
+    // The status line still counts them: the setting hides rows, not facts.
+    expect(statusOf("the session").textContent).toMatch(/1 subagent running/);
+  });
+
   it("renders the same line shape in every state, so card height can't change with it", () => {
     const states: SessionAgentState[] = [
       { subagents: 0 },

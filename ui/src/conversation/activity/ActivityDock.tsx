@@ -40,6 +40,8 @@ export interface ActivityDockProps {
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   onClose: () => void;
+  /** Opens the dock's subagent as a full-pane view (a delegate); absent hides the control. */
+  onOpenPage?: () => void;
 }
 
 /**
@@ -59,6 +61,7 @@ export function ActivityDock({
   permissions,
   onResolvePermission,
   onClose,
+  onOpenPage,
 }: ActivityDockProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -103,6 +106,7 @@ export function ActivityDock({
           permissions={permissions}
           onResolvePermission={onResolvePermission}
           onClose={onClose}
+          onOpenPage={onOpenPage}
         />
       )}
     </div>
@@ -270,31 +274,17 @@ function SubagentDetail({
   permissions,
   onResolvePermission,
   onClose,
+  onOpenPage,
 }: {
   view: Extract<DockView, { type: "subagent" }>;
   statuses?: ReadonlyMap<string, ToolStatus>;
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   onClose: () => void;
+  onOpenPage?: () => void;
 }) {
   const blocked = statuses?.get(view.parentToolUseId) === "blocked";
   const running = !blocked && (view.task?.running ?? false);
-  // Same grouping components as the main stream: fold contiguous
-  // tool/thinking items into groups between text paragraphs.
-  const blocks = useMemo(() => {
-    const out: ({ type: "text"; text: string } | { type: "group"; entries: ActivityEntry[] })[] = [];
-    for (const item of view.items) {
-      if (item.type === "text") {
-        out.push(item);
-        continue;
-      }
-      const last = out[out.length - 1];
-      if (last && last.type === "group") last.entries.push(item);
-      else out.push({ type: "group", entries: [item] });
-    }
-    return out;
-  }, [view.items]);
-
   return (
     <>
       <div className={styles.head}>
@@ -317,32 +307,88 @@ function SubagentDetail({
             <StatusGlyph status="interrupted" />
           ) : null}
         </span>
+        {onOpenPage && (
+          <button type="button" className={styles.openPage} onClick={onOpenPage} title="Open this subagent as a page">
+            Open as page ↗
+          </button>
+        )}
         <button type="button" className={styles.close} aria-label="Close detail" onClick={onClose}>
           ✕
         </button>
       </div>
       <div className={styles.body} data-testid="subagent-stream">
-        {view.items.length === 0 && <div className={styles.subText}>No subagent activity recorded yet.</div>}
-        {blocks.map((b, i) =>
-          b.type === "text" ? (
-            <div key={i} className={styles.subText}>
-              {b.text}
-            </div>
-          ) : (
-            <div key={i} className={styles.subGroup}>
-              <ActivityGroup
-                entries={b.entries}
-                defaultOpen
-                live={running && i === blocks.length - 1}
-                statuses={statuses}
-                permissions={permissions}
-                onResolvePermission={onResolvePermission}
-              />
-            </div>
-          ),
-        )}
-        {view.task?.summary && <div className={styles.subText}>{view.task.summary}</div>}
+        <SubagentStream
+          items={view.items}
+          running={running}
+          summary={view.task?.summary}
+          statuses={statuses}
+          permissions={permissions}
+          onResolvePermission={onResolvePermission}
+        />
       </div>
+    </>
+  );
+}
+
+/**
+ * A subagent's own stream — text paragraphs between groups of tool/thinking
+ * rows, folded with the same components as the main conversation. Shared by
+ * the dock and the full-pane delegate view, so a delegate reads the same in
+ * both. The newest group is live while the subagent runs.
+ */
+export function SubagentStream({
+  items,
+  running,
+  summary,
+  statuses,
+  permissions,
+  onResolvePermission,
+}: {
+  items: SubStreamItem[];
+  running: boolean;
+  summary?: string;
+  statuses?: ReadonlyMap<string, ToolStatus>;
+  permissions?: ReadonlyMap<string, PermissionRequest[]>;
+  onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
+}) {
+  // Same grouping components as the main stream: fold contiguous
+  // tool/thinking items into groups between text paragraphs.
+  const blocks = useMemo(() => {
+    const out: ({ type: "text"; text: string } | { type: "group"; entries: ActivityEntry[] })[] = [];
+    for (const item of items) {
+      if (item.type === "text") {
+        out.push(item);
+        continue;
+      }
+      const last = out[out.length - 1];
+      if (last && last.type === "group") last.entries.push(item);
+      else out.push({ type: "group", entries: [item] });
+    }
+    return out;
+  }, [items]);
+
+  return (
+    <>
+      {items.length === 0 && <div className={styles.subText}>No subagent activity recorded yet.</div>}
+      {blocks.map((b, i) =>
+        b.type === "text" ? (
+          <div key={i} className={styles.subText}>
+            {b.text}
+          </div>
+        ) : (
+          <div key={i} className={styles.subGroup}>
+            <ActivityGroup
+              entries={b.entries}
+              defaultOpen
+              live={running && i === blocks.length - 1}
+              statuses={statuses}
+              permissions={permissions}
+              onResolvePermission={onResolvePermission}
+            />
+          </div>
+        ),
+      )}
+      {summary && <div className={styles.subText}>{summary}</div>}
     </>
   );
 }

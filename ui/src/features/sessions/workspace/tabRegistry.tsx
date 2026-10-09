@@ -28,6 +28,8 @@ export interface WorkspaceTabContext {
   onOpenCommitFile?: (hash: string, path: string) => void;
   /** Commit file to select in the Files tab, set by onOpenCommitFile. A new object each time, so a repeat click re-selects. */
   focusCommitFile?: { hash: string; path: string };
+  /** Open one of this session's delegates (harness subagents) as a full-pane view — the dock's "Open as page". */
+  onOpenDelegate?: (harnessId: string) => void;
 }
 
 export interface WorkspaceTabDef {
@@ -51,6 +53,7 @@ function ConversationTabView({
   onPendingFirstMessageHandled,
   onOpenFile,
   onOpenCommitFile,
+  onOpenDelegate,
 }: WorkspaceTabContext) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   return (
@@ -65,6 +68,7 @@ function ConversationTabView({
           onPendingFirstMessageHandled={onPendingFirstMessageHandled}
           onOpenFile={onOpenFile}
           onOpenCommitFile={onOpenCommitFile}
+          onOpenDelegate={onOpenDelegate}
         />
       </div>
       <ContextRail

@@ -37,7 +37,13 @@ interface Fold {
    * decides their lifecycle, so this only mirrors session.delegate_changed.
    * `backgrounded`: the main agent is NOT waiting on it.
    */
-  delegates: Map<string, { backgrounded: boolean; startedAt: string }>;
+  delegates: Map<string, Delegate>;
+  /**
+   * Delegates this connection saw end, newest last and capped — the rail
+   * keeps a finished one on screen briefly (DelegateRows) so a completion
+   * doesn't vanish mid-glance. Live-only: a reload starts it empty.
+   */
+  recent: Map<string, Delegate>;
   /**
    * Every delegate this connection has heard about live, running or not. The
    * cold read (GET /delegates?state=running) may answer after a newer event,
@@ -57,6 +63,7 @@ function emptyFold(): Fold {
     crashed: false,
     pending: new Map(),
     delegates: new Map(),
+    recent: new Map(),
     heard: new Set(),
     done: false,
   };
@@ -82,7 +89,11 @@ function clearStale(fold: Fold): void {
 function clearInFlight(fold: Fold): void {
   fold.pending.clear();
   fold.delegates.clear();
+  fold.recent.clear();
 }
+
+/** How many finished delegates a session keeps for the rail's brief afterglow. */
+const RECENT_DELEGATES_CAP = 8;
 
 function apply(fold: Fold, env: Envelope): void {
   switch (env.type) {
@@ -149,13 +160,17 @@ function apply(fold: Fold, env: Envelope): void {
       // spawned it, and must not retire a sticky "Done · your turn".
       if (!d.harness_id) return;
       fold.heard.add(d.harness_id);
-      if (d.state === "running") {
-        fold.delegates.set(d.harness_id, {
-          backgrounded: Boolean(d.backgrounded),
-          startedAt: d.started_at ?? env.timestamp,
-        });
+      const record = { ...d, started_at: d.started_at ?? env.timestamp } as Delegate;
+      if (record.state === "running") {
+        fold.delegates.set(record.harness_id, record);
+        fold.recent.delete(record.harness_id);
       } else {
-        fold.delegates.delete(d.harness_id);
+        fold.delegates.delete(record.harness_id);
+        fold.recent.delete(record.harness_id);
+        fold.recent.set(record.harness_id, { ...record, ended_at: record.ended_at ?? env.timestamp });
+        while (fold.recent.size > RECENT_DELEGATES_CAP) {
+          fold.recent.delete(fold.recent.keys().next().value!);
+        }
       }
       return;
     }
@@ -209,7 +224,11 @@ function project(
     const blocking = delegates.filter((d) => !d.backgrounded).length;
     if (blocking !== state.subagents) state.blockingSubagents = blocking;
     if (delegates.length > 0) {
-      state.subagentsSince = delegates.map((d) => d.startedAt).sort()[0];
+      state.subagentsSince = delegates.map((d) => d.started_at).sort()[0];
+    }
+    const recent = fold && (!session || session.activity === "active") ? [...fold.recent.values()] : [];
+    if (delegates.length + recent.length > 0) {
+      state.delegates = [...delegates, ...recent].sort((a, b) => a.started_at.localeCompare(b.started_at));
     }
     if (fold?.crashed) state.crashed = true;
     if (park) {
@@ -221,7 +240,7 @@ function project(
       if (agent.label) state.label = agent.label;
     }
     if (fold?.done) state.done = true;
-    if (state.crashed || state.awaitingSince || state.workingSince || state.done || state.subagents > 0) {
+    if (state.crashed || state.awaitingSince || state.workingSince || state.done || state.delegates) {
       next[id] = state;
     }
   }
@@ -282,7 +301,7 @@ export function useSessionAgentState(
             folds.current.set(d.session_id, fold);
           }
           if (fold.heard.has(d.harness_id)) continue;
-          fold.delegates.set(d.harness_id, { backgrounded: Boolean(d.backgrounded), startedAt: d.started_at });
+          fold.delegates.set(d.harness_id, d);
         }
         publish();
       })

@@ -169,6 +169,15 @@ describe("GeneralSection", () => {
     expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
   });
 
+  it("shows subagents in the session list by default, and unticking stores the hide flag", () => {
+    const setDraft = vi.fn();
+    render(<GeneralSection config={makeConfig({ setDraft })} />);
+    const box = screen.getByLabelText("Expose subagents in session list") as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    fireEvent.click(box);
+    expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ hide_delegates_in_session_list: true }));
+  });
+
   describe("Write commit messages for me", () => {
     function stubFastModel(providerCompleter: boolean) {
       const base = (globalThis.fetch as unknown as (i: RequestInfo | URL) => Promise<Response>);

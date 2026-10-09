@@ -1,4 +1,4 @@
-import type { Session } from "../../../router/types";
+import type { Delegate, Session } from "../../../router/types";
 
 export type DotState = "on" | "attn" | "off" | "bad" | "work";
 
@@ -41,6 +41,12 @@ export interface SessionAgentState {
   subagents: number;
   /** When the longest-running of those started; set only while subagents > 0. */
   subagentsSince?: string;
+  /**
+   * The rows behind the count, for the rail's nested delegate rows: every
+   * running delegate plus ones this connection saw finish (with ended_at),
+   * oldest start first. Absent when there are none.
+   */
+  delegates?: Delegate[];
   /**
    * Of those, the ones the main agent is actually waiting on — a foreground
    * Agent call blocks the turn, a backgrounded one does not. Only a blocking

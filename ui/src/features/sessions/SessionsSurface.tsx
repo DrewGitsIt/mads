@@ -17,6 +17,8 @@ import { useSessionAgentState } from "./state/useSessionAgentState";
 import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
 import { SessionWorkspace } from "./workspace/SessionWorkspace";
+import { DelegateView } from "./delegate/DelegateView";
+import { useShowDelegates } from "./state/useShowDelegates";
 import type { WorkspaceTabId } from "./workspace/tabRegistry";
 import styles from "./SessionsSurface.module.css";
 
@@ -55,6 +57,10 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   const { workspaces } = useWorkspaces();
   const { agents } = useAgents();
   const [selectedId, setSelectedId] = useState<string>();
+  // A delegate (harness-run subagent) open in the main pane in place of its
+  // parent's workspace — opened from its row in the rail.
+  const [openDelegate, setOpenDelegate] = useState<{ sessionId: string; harnessId: string }>();
+  const showDelegates = useShowDelegates(router);
   // One subscription for the whole rail, however many cards are listed. The
   // list is handed in too: each record mirrors its session's latest agent
   // state, which is what makes a reload mid-turn correct before the next
@@ -69,6 +75,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   useEffect(() => {
     if (jumpToSessionId) {
       setSelectedId(jumpToSessionId);
+      setOpenDelegate(undefined);
       setInitialTab(jumpToTab);
     }
   }, [jumpToSessionId, jumpToTab]);
@@ -95,6 +102,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
 
   function handleSessionCreated(session: Session, goalText: string) {
     setSelectedId(session.id);
+    setOpenDelegate(undefined);
     setInitialTab(undefined);
     setProvisioningSessionId(session.id);
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
@@ -115,6 +123,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
           size="sm"
           onClick={() => {
             setSelectedId(undefined);
+            setOpenDelegate(undefined);
             setActionError(undefined);
           }}
         >
@@ -133,7 +142,23 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             sessionsLoaded={!loading}
             routerClient={router}
             selectedId={selectedId}
+            showDelegates={showDelegates}
+            selectedDelegate={openDelegate}
+            onOpenDelegate={(d) => {
+              setOpenDelegate({ sessionId: d.session_id, harnessId: d.harness_id });
+              setSelectedId(d.session_id);
+              setActionError(undefined);
+            }}
             onSelect={(id) => {
+              // A card click from a delegate view lands on that session's own
+              // workspace — the parent's included, which stays selected.
+              if (openDelegate) {
+                setOpenDelegate(undefined);
+                setSelectedId(id);
+                setInitialTab(undefined);
+                setActionError(undefined);
+                return;
+              }
               setSelectedId((cur) => (cur === id ? undefined : id));
               setInitialTab(undefined);
               // A prior action's error toast is scoped to the surface, not the
@@ -156,7 +181,19 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
         )}
       </aside>
       <main className={styles.main}>
-        {selectedId ? (
+        {openDelegate ? (
+          <DelegateView
+            key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
+            sessionId={openDelegate.sessionId}
+            harnessId={openDelegate.harnessId}
+            parentName={sessions.find((s) => s.id === openDelegate.sessionId)?.name}
+            routerClient={router}
+            onBack={() => {
+              setSelectedId(openDelegate.sessionId);
+              setOpenDelegate(undefined);
+            }}
+          />
+        ) : selectedId ? (
           <SessionWorkspace
             key={selectedId}
             sessionId={selectedId}
@@ -176,6 +213,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 : undefined
             }
             onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
+            onOpenDelegate={(harnessId) => setOpenDelegate({ sessionId: selectedId, harnessId })}
           />
         ) : (
           <Launchpad

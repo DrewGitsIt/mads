@@ -277,19 +277,42 @@ What this means:
   parent's old delegates can't be relayed to afterwards. They can still be
   read and synthetically forked.
 
-## Sidebar *(direction agreed, UX deferred)*
+## Sidebar and views *(#2, built 2026-10-09; defaults await review)*
 
-- Delegates appear in the session list as session-like rows nested under
-  their parent, using the link rows' nesting with a distinct connector and
-  caption. Volume is a UX problem to solve, not a reason to leave them out
-  *(agreed)*.
-- Escape hatch: a setting, **"Expose subagents in session list"** *(agreed)*.
-- The parent's status line gets a state for "idle, but delegates still
-  running". It is neither "Working" nor "Ready".
-- Opening a delegate shows a full conversation view in the main pane, not
-  the bottom dock, with controls gated by its capabilities.
-- Deferred: whether finished delegates fold, fade or stay; foreground vs
-  background presentation; how many rows to show before collapsing.
+- **Conversation.** The tab loads its session's delegate records and follows
+  `session.delegate_changed`. `mergeDelegates` makes a record the authority
+  on whether a delegate is running and how it ended, over the task-line
+  fold. The card, strip and dock render failed and stopped properly; an
+  inferred ending says so on hover. While a delegate runs, its duration is a
+  live 1s clock from its start (it used to move only when a subagent tool
+  finished). Only the main agent's own frames open the live turn phase.
+- **Sidebar rows.** A session's delegates nest under its card, before any
+  linked subjects. Each row is one line: name, live elapsed, and a spinner
+  or end glyph. The type is in the row's hover title. The connector is a
+  thin **dashed** trunk with plain elbows and no arrowhead, deliberately
+  unlike a link's solid curve.
+- **Settings.** General → "Expose subagents in session list"
+  (`Config.hide_delegates_in_session_list`, negated, default shown). It hides
+  the rows, not the count on the status line.
+- **Full-pane view.** Clicking a row, or the dock's "Open as page ↗", shows
+  the delegate in the main pane in place of its parent's workspace. It has a
+  breadcrumb back, the record's state and counters, and the delegate's
+  stream (from the event log, live over the shared control-plane
+  connection). It is read-only: steering waits on the C2 capabilities. Any
+  card click leaves the view.
+
+Defaults chosen without a ruling (all one-line changes):
+- Finished rows stay for **2 minutes** after they end (`RECENT_DELEGATE_MS`),
+  then drop. The parent's conversation keeps them for good. The afterglow is
+  live-only: a reload shows running rows only.
+- **3 rows**, then "+N more" (`DELEGATE_ROWS_SHOWN`).
+- The status-line wording ("Ready · N subagents running") awaits Drew's look
+  at it live.
+
+Not done: a nested subject's trunk runs past its delegates block; the
+delegate view doesn't surface the delegate's permission asks (the parent's
+conversation does); very long delegate streams hit `GET /events`' cap. The
+durable fix for that cap is reading the harness transcript (C1, #3).
 
 ## Phasing (proposal)
 
@@ -316,13 +339,13 @@ were spot-checked in the code.
 1. **[#1: fixed, TurnEndExcept/EndParent]** `toolstatus.TurnEnd` marks a background delegate's in-flight inner calls
    `interrupted`, and the UI's `statusOf` lets that override beat the later
    result, so the row stays ⊘ for good.
-2. A `failed` or `killed` notification renders a green ✓.
+2. **[#2: fixed — the record's state]** A `failed` or `killed` notification renders a green ✓.
    `task_updated{status:"completed"}` is ignored.
-3. `finishRunningTasks` stamps live background tasks `interrupted`. Later
+3. **[#2: overridden by the record where one exists]** `finishRunningTasks` stamps live background tasks `interrupted`. Later
    progress sets `running` again, but the status stays `interrupted`.
-4. `resumeRunningTasks` revives only tasks spawned in the current turn, so a
+4. **[#2: overridden by the record where one exists]** `resumeRunningTasks` revives only tasks spawned in the current turn, so a
    background task from an earlier turn replays as interrupted.
-5. Tagged or task frames arriving between turns set the conversation's
+5. **[#2: fixed]** Tagged or task frames arriving between turns set the conversation's
    phase to live, and nothing ever closes it.
 6. **[#1: the thinking-tick half fixed; nested-spawn tagging open]** Claude Code system lines are never parent-tagged. As a result
    `SubagentTask.ParentToolUseID` is always empty, and a subagent's
@@ -336,7 +359,7 @@ were spot-checked in the code.
    conversations have none.
 10. **[#1: fixed]** The sidebar shows "Ready" while a background subagent runs.
 11. The digest counts a delegate's tool uses as main-turn work.
-12. A relay re-entry re-anchors the task to the SendMessage call:
+12. **[#1 server + #2 UI: fixed, first anchor wins]** A relay re-entry re-anchors the task to the SendMessage call:
     `applyTaskEvent` overwrites `toolUseId` from every phase, and
     `tasksByToolUse` keys on it (found by the stream-json probe).
 13. **[#1: fixed, roster consumed]** `background_tasks_changed` is dropped, so mads never reconciles against

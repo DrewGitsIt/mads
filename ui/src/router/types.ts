@@ -1298,6 +1298,10 @@ export interface Config {
   // dock's Commit skips the dialog and the Fast Model drafts the message.
   // Optional: configs saved before it read as off.
   auto_commit_messages?: boolean;
+  // hide_delegates_in_session_list mirrors pkg/contracts/config.go's
+  // HideDelegatesInSessionList — the inverse of Settings' "Expose subagents
+  // in session list". Optional and negatively named: absent shows them.
+  hide_delegates_in_session_list?: boolean;
 
   default_workspace?: string;
   default_provider?: string;

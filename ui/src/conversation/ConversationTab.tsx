@@ -119,6 +119,8 @@ export interface ConversationTabProps {
   onOpenFile?: (path: string) => void;
   /** Opens one file's diff in a recorded commit in the Files tab — the auto-merged Land card's "See the changes". */
   onOpenCommitFile?: (hash: string, path: string) => void;
+  /** Opens one of this session's delegates (by harness id) as a full-pane view — the dock's "Open as page". */
+  onOpenDelegate?: (harnessId: string) => void;
 }
 
 type DisplayMode = "chat" | "terminal";
@@ -166,6 +168,7 @@ export function ConversationTab({
   onPendingFirstMessageHandled,
   onOpenFile,
   onOpenCommitFile,
+  onOpenDelegate,
 }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -1648,6 +1651,14 @@ export function ConversationTab({
           permissions={permissionsByToolUse}
           onResolvePermission={resolvePermission}
           onClose={() => setDockTarget(null)}
+          onOpenPage={
+            onOpenDelegate && dockView.type === "subagent" && dockView.task
+              ? () => {
+                  setDockTarget(null);
+                  onOpenDelegate(dockView.task!.taskId);
+                }
+              : undefined
+          }
         />
       )}
 

@@ -187,17 +187,23 @@ describe("useSessionAgentState", () => {
     delegate("s1", "bg", "running", { backgrounded: true }, "2026-09-28T10:00:10Z");
     idle("s1");
     await waitFor(() =>
-      expect(result.current.s1).toEqual({
+      expect(result.current.s1).toMatchObject({
         subagents: 1,
         blockingSubagents: 0,
         subagentsSince: "2026-09-28T10:00:10Z",
         done: true,
       }),
     );
+    expect(result.current.s1?.delegates?.map((d) => [d.harness_id, d.state])).toEqual([["bg", "running"]]);
     // Its later report doesn't retire the sticky "Done" either — it is not
-    // the next turn starting.
+    // the next turn starting. The finished row stays, stamped with its end,
+    // for the rail's brief afterglow.
     delegate("s1", "bg", "completed", { backgrounded: true }, "2026-09-28T10:03:00Z");
-    await waitFor(() => expect(result.current.s1).toEqual({ subagents: 0, done: true }));
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(0));
+    expect(result.current.s1?.done).toBe(true);
+    expect(result.current.s1?.delegates?.map((d) => [d.harness_id, d.state, d.ended_at])).toEqual([
+      ["bg", "completed", "2026-09-28T10:03:00Z"],
+    ]);
   });
 
   it("makes a session with only a running delegate reportable, without calling it a turn", async () => {

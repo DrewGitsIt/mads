@@ -61,6 +61,7 @@ export const FIELD_SECTION: Partial<Record<keyof Config, SectionId>> = {
   default_agent: "general",
   default_isolation: "general",
   auto_commit_messages: "general",
+  hide_delegates_in_session_list: "general",
 
   synthesis_mode: "pipeline",
   agent_selection_mode: "pipeline",
@@ -93,6 +94,7 @@ export const FIELD_LABELS: Partial<Record<keyof Config, string>> = {
   default_agent: "Default persona",
   default_isolation: "Default isolation",
   auto_commit_messages: "Write commit messages for me",
+  hide_delegates_in_session_list: "Expose subagents in session list",
 
   synthesis_mode: "Synthesis mode",
   agent_selection_mode: "Agent selection mode",

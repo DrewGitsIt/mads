@@ -1,0 +1,102 @@
+/* A session's delegates (docs/DELEGATES-DESIGN.md), nested under its card.
+   Kept visibly apart from linked-session subjects (.subjects in
+   SessionRail.module.css): a thin dashed trunk with plain elbows and no
+   arrowhead, and compact one-line rows rather than full cards — these are
+   the session's own work, not other sessions. */
+
+.delegates {
+  position: relative;
+  margin: 2px 0 6px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text2);
+  font: var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.row:hover {
+  background: var(--bg2);
+}
+
+.row[data-selected] {
+  background: var(--bg2);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+/* The elbow: dashed, from the trunk into the row. */
+.row::before {
+  content: "";
+  position: absolute;
+  left: -19px;
+  top: -2px;
+  width: 14px;
+  height: 15px;
+  border-left: 1.5px dashed var(--text3);
+  border-bottom: 1.5px dashed var(--text3);
+  border-bottom-left-radius: 6px;
+  pointer-events: none;
+}
+
+/* The trunk continues past every row but the last. */
+.row:not(:last-of-type)::after {
+  content: "";
+  position: absolute;
+  left: -19px;
+  top: 13px;
+  bottom: -3px;
+  border-left: 1.5px dashed var(--text3);
+  pointer-events: none;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: var(--text3);
+  font: 11px var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.row[data-state="failed"] .name {
+  color: var(--text2);
+}
+
+.more {
+  align-self: flex-start;
+  margin-left: 8px;
+  padding: 1px 4px;
+  background: none;
+  border: 0;
+  color: var(--text3);
+  font: 11px var(--sans);
+  cursor: pointer;
+}
+
+.more:hover {
+  color: var(--text2);
+}

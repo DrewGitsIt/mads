@@ -117,3 +117,20 @@
 .subGroup {
   margin-bottom: var(--space-3);
 }
+
+/* The subagent header's way out to the full-pane delegate view. */
+.openPage {
+  flex: none;
+  padding: 3px 8px;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text2);
+  font: var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.openPage:hover {
+  color: var(--text);
+  background: var(--bg2);
+}

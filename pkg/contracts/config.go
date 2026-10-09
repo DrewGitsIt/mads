@@ -204,6 +204,13 @@ type Config struct {
 	// also what every stored config predating it decodes to.
 	AutoCommitMessages bool `json:"auto_commit_messages"`
 
+	// HideDelegatesInSessionList is the inverse of Settings' "Expose
+	// subagents in session list" (docs/DELEGATES-DESIGN.md): the rail's
+	// nested rows for a session's harness-run subagents. Negatively named so
+	// the zero value — every stored config predating it — shows them, the
+	// same idiom as AllowSleepDuringPipelines.
+	HideDelegatesInSessionList bool `json:"hide_delegates_in_session_list"`
+
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`

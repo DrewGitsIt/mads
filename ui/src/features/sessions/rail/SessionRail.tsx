@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
@@ -13,6 +13,7 @@ import { LinkChooserDialog } from "./LinkChooserDialog";
 import { HarnessMark } from "./HarnessMark";
 import { LinkConnector } from "./LinkConnector";
 import { StatusMark } from "./StatusMark";
+import { DelegateRows } from "./DelegateRows";
 import {
   EMPTY_AGENT_STATE,
   EMPTY_OPEN_TASK_BREAKDOWN,
@@ -68,6 +69,7 @@ import {
 import { router, type RouterClient } from "../../../router/client";
 import type {
   Agent,
+  Delegate,
   Grant,
   Link,
   LinkCadence,
@@ -136,6 +138,15 @@ export interface SessionRailProps {
    */
   filterKey?: string;
   className?: string;
+  /**
+   * Settings' "Expose subagents in session list": each session's delegates
+   * (harness-run subagents) as rows nested under its card. Default on.
+   */
+  showDelegates?: boolean;
+  /** The delegate open in the main pane, if any — its row reads selected. */
+  selectedDelegate?: { sessionId: string; harnessId: string };
+  /** Opens a delegate in the main pane. */
+  onOpenDelegate?: (d: Delegate) => void;
 }
 
 /** Link mode: anchor session (chosen by clicking a card's link action) plus every session tapped in after it. */
@@ -160,6 +171,9 @@ export function SessionRail({
   sessionsLoaded,
   filterKey,
   className,
+  showDelegates = true,
+  selectedDelegate,
+  onOpenDelegate,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
   // Subscribed once here, not per card: N cards must not each hold a listener
@@ -406,6 +420,9 @@ export function SessionRail({
     onToggleLinkSelection: toggleLinkSelection,
     labelContext,
     routerClient,
+    showDelegates,
+    selectedDelegate,
+    onOpenDelegate,
   };
 
   return (
@@ -617,6 +634,9 @@ function RailRowGroup({
   onToggleLinkSelection,
   labelContext,
   routerClient,
+  showDelegates,
+  selectedDelegate,
+  onOpenDelegate,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
@@ -643,8 +663,24 @@ function RailRowGroup({
   onToggleLinkSelection: (id: string) => void;
   labelContext: RailLabelContext;
   routerClient: RouterClient;
+  showDelegates: boolean;
+  selectedDelegate?: { sessionId: string; harnessId: string };
+  onOpenDelegate?: (d: Delegate) => void;
 }) {
   const isAnchor = linkMode?.anchorId === row.session.id;
+  // A session's delegates nest right under its own card — before any linked
+  // subjects, which are other sessions.
+  const delegatesOf = (sessionId: string) => {
+    const list = showDelegates ? agentStates[sessionId]?.delegates : undefined;
+    if (!list || list.length === 0) return null;
+    return (
+      <DelegateRows
+        delegates={list}
+        selectedHarnessId={selectedDelegate?.sessionId === sessionId ? selectedDelegate.harnessId : undefined}
+        onOpen={onOpenDelegate}
+      />
+    );
+  };
   const isCrossWorkspace = Boolean(linkMode) && !isAnchor && row.session.workspace !== anchorWorkspace;
   const subjects = linkedSessionsEnabled ? row.subjects : [];
   return (
@@ -678,6 +714,7 @@ function RailRowGroup({
         onStartLinkMode={() => onStartLinkMode(row.session.id)}
         onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
       />
+      {delegatesOf(row.session.id)}
       {/* The subjects share one container so the trunk can be drawn by rules
           that only ever measure their own box — see .subjects in the CSS. A
           holder of several subjects gets one numeral on the trunk rather than
@@ -690,41 +727,43 @@ function RailRowGroup({
             </span>
           )}
           {subjects.map((sub) => (
-            <SessionRow
-              key={sub.session.id}
-              session={sub.session}
-              openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-              agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
-              shell={shellBySession.get(sub.session.id)}
-              matchReason={reasonFor(sub.session, matchById, wsIndex)}
-              selected={sub.session.id === selectedId}
-              unseen={isUnseen(sub.session.id)}
-              onSeen={onSeen}
-              onSelect={onSelect}
-              onSleep={onSleep}
-              onSetAside={onSetAside}
-              onDeleteRequest={onDeleteRequest}
-              linkBadge={sub.badge}
-              orchestrateStatus={sub.orchestrateStatus}
-              orchestrateError={sub.orchestrateError}
-              nested
-              onUnlinkRequest={() =>
-                onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
-              }
-              linkedSessionsEnabled={linkedSessionsEnabled}
-              linkModeActive={false}
-              isLinkAnchor={false}
-              isLinkCrossWorkspace={false}
-              isLinkSelected={false}
-              onStartLinkMode={() => {}}
-              onToggleLinkSelection={() => {}}
-              labelContext={labelContext}
-              cadence={sub.cadence}
-              grants={sub.grants}
-              grantingSessionId={sub.grantingSessionId}
-              linkId={sub.linkId}
-              routerClient={routerClient}
-            />
+            <Fragment key={sub.session.id}>
+              <SessionRow
+                session={sub.session}
+                openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+                agentState={agentStates[sub.session.id] ?? EMPTY_AGENT_STATE}
+                shell={shellBySession.get(sub.session.id)}
+                matchReason={reasonFor(sub.session, matchById, wsIndex)}
+                selected={sub.session.id === selectedId}
+                unseen={isUnseen(sub.session.id)}
+                onSeen={onSeen}
+                onSelect={onSelect}
+                onSleep={onSleep}
+                onSetAside={onSetAside}
+                onDeleteRequest={onDeleteRequest}
+                linkBadge={sub.badge}
+                orchestrateStatus={sub.orchestrateStatus}
+                orchestrateError={sub.orchestrateError}
+                nested
+                onUnlinkRequest={() =>
+                  onUnlinkRequest({ linkId: sub.linkId, name: sub.session.name || "Untitled session" })
+                }
+                linkedSessionsEnabled={linkedSessionsEnabled}
+                linkModeActive={false}
+                isLinkAnchor={false}
+                isLinkCrossWorkspace={false}
+                isLinkSelected={false}
+                onStartLinkMode={() => {}}
+                onToggleLinkSelection={() => {}}
+                labelContext={labelContext}
+                cadence={sub.cadence}
+                grants={sub.grants}
+                grantingSessionId={sub.grantingSessionId}
+                linkId={sub.linkId}
+                routerClient={routerClient}
+              />
+              {delegatesOf(sub.session.id)}
+            </Fragment>
           ))}
         </div>
       )}
