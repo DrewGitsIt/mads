@@ -166,6 +166,20 @@
   .opt .risk { color:var(--warn-fg); }
   .opt .railcol { width:auto; padding:var(--space-2); margin-top:var(--space-2); }
   .opt .row { margin-bottom:1px; }
+
+  /* ══ (e) the clock test ════════════════════════════════════════════════ */
+  .zoom { display:flex; align-items:flex-end; gap:var(--space-5); flex-wrap:wrap; }
+  .zoom .z { text-align:center; }
+  .zoom .z .at1 { height:16px; display:flex; align-items:center; justify-content:center; margin-bottom:var(--space-2); }
+  .zoom .z .at1 svg { width:10px; height:10px; }
+  .zoom .z .at6 svg { width:60px; height:60px; display:block; }
+  .zoom .z .cap { color:var(--text3); font:500 var(--fs-chip) var(--sans); margin-top:var(--space-2); max-width:90px; line-height:1.4; }
+  .zoom .z .cap b { color:var(--text2); }
+  .zoom .z.pick .cap b { color:var(--ok-fg); }
+  .m10.idleclock { color:var(--text3); }
+  .twin { display:flex; gap:var(--space-5); flex-wrap:wrap; }
+  .twin .railcol { width:300px; }
+  .twin .row { padding:6px var(--space-3); }
 </style>
 </head>
 <body>
@@ -606,6 +620,160 @@
             in situ.</p>
         </div>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ (e) THE CLOCK ══════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>(e) C for Done, a clock for Idle <span class="tag new">tested, with one reservation</span>
+      <span class="sub">the swap repairs C · the clock has a different problem</span></h2>
+  <div class="body">
+    <p class="lead"><b>Moving Idle off the ring fixes C outright.</b> C's only real objection was
+      that its silhouette was Idle's, leaving hue to carry the most important resting signal on
+      the rail. Give Idle a different shape and that objection is simply gone — C keeps everything
+      that made it the nicest idea (the working arc closing into a completed circle) and loses the
+      thing that made me argue against it. Good trade, and it is the move I missed.</p>
+
+    <div class="rowlabel">First: does the clock survive 10px?</div>
+    <p class="note" style="margin-bottom:var(--space-3)">Each drawn at the size it ships at, then
+      the same path at 6×. The 6× row is <b>construction</b>, not evidence — the row above it is
+      the only one that counts.</p>
+    <div class="zoom">
+      <div class="z"><div class="at1"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 5 L5 3.2 M5 5 L6.13 5.65" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg></div><div class="at6"><svg viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M5 5 L5 3.2 M5 5 L6.13 5.65" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg></div>
+        <div class="cap"><b>1.6px rim</b><br>1.1px hands</div></div>
+      <div class="z pick"><div class="at1"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg></div><div class="at6"><svg viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg></div>
+        <div class="cap"><b>1.3px rim</b><br>1.1px hands, longer</div></div>
+      <div class="z"><div class="at1"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg></div><div class="at6"><svg viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" fill="none"/></svg></div>
+        <div class="cap"><b>Dial</b><br>one hand only</div></div>
+      <div class="z"><div class="at1"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></div><div class="at6"><svg viewBox="0 0 10 10" fill="none" style="color:var(--text3)"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg></div>
+        <div class="cap">plain ring<br>(today's Idle)</div></div>
+    </div>
+    <p class="note" style="margin-top:var(--space-3)"><b>The rim has to get thinner.</b> At the
+      family's 1.6px the interior is about 5.0px across and the hands have nowhere to go — the
+      minute hand's round cap lands 0.35px off the rim and the two merge into a blob. Dropping
+      the rim to <b>1.3px</b> buys back the clearance and the hands read. That is a deliberate
+      exception to the one-weight rule, and a defensible one: the rule exists so marks carry
+      equal optical weight, and a circle with two strokes inside it is already heavier than a
+      bare ring at the same gauge. Thinning it is what keeps the weights <i>matched</i>.</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Second: the one that worries me</div>
+    <div class="twin">
+      <div>
+        <div class="rowlabel bad" style="font-size:9.5px">Clock · 12 idle cards</div>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="when">2m</span></div>
+            <div class="status working"><svg class="m10 spin" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg><span class="lbl">Running bash · make check</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval · Bash</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="when">23h</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17" transform="rotate(-100 5 5)"/></svg><span class="lbl">Stalled · no agent activity</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">14m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">pipeline notifications</span><span class="when">21m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">electron 44 upgrade</span><span class="when">28m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">retro: launchpad incident</span><span class="when">35m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">acp capture review</span><span class="when">42m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">worktree land flow</span><span class="when">49m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">composer dock spike</span><span class="when">56m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">model discovery probe</span><span class="when">63m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">logind inhibit note</span><span class="when">70m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">shell rail card</span><span class="when">77m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">ports 17373 sweep</span><span class="when">84m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">digest watch tuning</span><span class="when">91m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.5" stroke="currentColor" stroke-width="1.3" fill="none"/><path d="M5 5 L5 2.9 M5 5 L6.3 5.75" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+      <div>
+        <div class="rowlabel" style="font-size:9.5px">Ring · the same 12</div>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="when">2m</span></div>
+            <div class="status working"><svg class="m10 spin" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg><span class="lbl">Running bash · make check</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval · Bash</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="when">23h</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17" transform="rotate(-100 5 5)"/></svg><span class="lbl">Stalled · no agent activity</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">14m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">pipeline notifications</span><span class="when">21m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">electron 44 upgrade</span><span class="when">28m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">retro: launchpad incident</span><span class="when">35m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">acp capture review</span><span class="when">42m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">worktree land flow</span><span class="when">49m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">composer dock spike</span><span class="when">56m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">model discovery probe</span><span class="when">63m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">logind inhibit note</span><span class="when">70m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">shell rail card</span><span class="when">77m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">ports 17373 sweep</span><span class="when">84m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">digest watch tuning</span><span class="when">91m</span></div>
+            <div class="status idle"><svg class="m10 idleclock" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" fill="none"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+      <div style="flex:1 1 300px; min-width:280px">
+        <p class="note"><b>Idle is the most common state on your rail by a wide margin</b> — most
+          of twenty sessions, most of the time. So the Idle mark is not one glyph, it is a column
+          of fifteen, and that is the only test that matters for it. The three-card demos earlier
+          on this page cannot show this.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>And the right-hand column is the
+          best argument for your swap on this page.</b> Look at <i>rail link connectors</i>
+          (Done) and <i>tokens sweep</i> (Idle) there: two rows apart, and all but identical.
+          That is C-with-a-ring-Idle, and it is as weak as I said it was. In the left column the
+          same pair is unmistakable. The swap earns itself.</p>
+        <p class="note" style="margin-top:var(--space-3)">On my own reservation I have to mark
+          down my first draft of this paragraph, which called the clock column &ldquo;texture&rdquo;.
+          Side by side at 1× the difference is <b>real but modest</b> — the clocks sit a little
+          denser and darker, and the plain ring recedes further. It is a preference, not a
+          defect, and I would not have been able to tell you that without rendering fifteen of
+          them.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>There is also a convention risk.</b>
+          A clock in a list most often means <i>pending</i>, <i>queued</i> or <i>scheduled</i> —
+          something is going to happen. Here it would mean the opposite: nothing is happening.
+          The word &ldquo;Idle&rdquo; sits right beside it so the card is never ambiguous, but a
+          peripheral read is exactly what the mark is <i>for</i>, and peripherally the clock says
+          &ldquo;in progress&rdquo;.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel good">Where I land</div>
+      <p class="note"><b>Take C. It is clearly right, and your swap is what makes it right.</b> On
+        the clock I am less sure, and the reservation is about repetition rather than legibility —
+        the 1.3px build <i>does</i> read at 10px, so it is buildable; it is whether you want
+        fifteen of them.</p>
+      <p class="note" style="margin-top:var(--space-2)"><b>The dial is the compromise worth a
+        look</b> — a rim and a single hour hand at 4. It still says clock (one hand at an angle in
+        a circle is enough), it cannot be confused with the closed ring of C, and it is quiet
+        enough to repeat. It also sidesteps the convention problem a little: a two-handed clock
+        reads &ldquo;timer&rdquo;, where a single hand reads more like a dial at rest.</p>
+      <p class="note" style="margin-top:var(--space-2)">Either way this is your call and none of it
+        blocks the build — the mark is one component with one export, and swapping Idle's path
+        later is a two-line change. Say the word and I will build rows 1–3 with whichever you
+        want; if you are undecided, I would ship the dial and look at it on your real rail, which
+        is the only place the repetition question gets a true answer.</p>
     </div>
   </div>
 </section>
