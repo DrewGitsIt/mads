@@ -128,6 +128,49 @@ const (
 	SessionNameSourceGenerated SessionNameSource = "generated"
 )
 
+// SessionTagAside marks a session the user has set aside: done with for now,
+// folded out of the rail's main list until they go looking for it again — or
+// until it needs them, which pulls it back on its own.
+//
+// It is the user's own judgement about a session, so unlike every other state
+// the rail paints it cannot be derived from anything the session does, and it
+// has to outlive a browser. That is why it lives on the record rather than in
+// localStorage beside the rail's unseen set (ui/.../railUnseen.ts), which is a
+// view preference and rightly stays local.
+const SessionTagAside = "aside"
+
+// IsAside reports whether the user has set this session aside.
+func (s *Session) IsAside() bool {
+	for _, tag := range s.Tags {
+		if tag == SessionTagAside {
+			return true
+		}
+	}
+	return false
+}
+
+// SetAside adds or removes SessionTagAside, leaving every other tag alone and
+// never adding a duplicate. Idempotent in both directions: the rail's control
+// is a toggle, and a double click must not leave two of them on the record.
+func (s *Session) SetAside(aside bool) {
+	kept := make([]string, 0, len(s.Tags)+1)
+	for _, tag := range s.Tags {
+		if tag != SessionTagAside {
+			kept = append(kept, tag)
+		}
+	}
+	if aside {
+		kept = append(kept, SessionTagAside)
+	}
+	if len(kept) == 0 {
+		// Back to nil rather than an empty slice, so `tags` stays omitted from
+		// the JSON exactly as it was before the session was ever set aside.
+		s.Tags = nil
+		return
+	}
+	s.Tags = kept
+}
+
 // Session is the workspace-of-record for one conversation-with-work (spec §1).
 // Provider and Model bind at first message (spec §11.5); Summary is the
 // compressed narrative regenerated on each deactivation (spec §16).
@@ -217,9 +260,10 @@ type Session struct {
 	// ActiveTaskID is the session's current task context (spec §1) — the
 	// second rung of the commit-linkage chain.
 	ActiveTaskID string `json:"active_task_id,omitempty"`
-	// Tags marks a session for cross-cutting classification — currently just
-	// "retro" for a retro-generated follow-up session (spec §7's retro-of-retros:
-	// selecting tagged sessions, not a separate mode).
+	// Tags marks a session for cross-cutting classification — "retro" for a
+	// retro-generated follow-up session (spec §7's retro-of-retros: selecting
+	// tagged sessions, not a separate mode), "imported" for one the
+	// conversation import created, and SessionTagAside below.
 	Tags []string `json:"tags,omitempty"`
 	// RetroID is set when this session was created as a retro's follow-up
 	// (spec §7 DPA → task flow) — the traceability link back to the analysis.

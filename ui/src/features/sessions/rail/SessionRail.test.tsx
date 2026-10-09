@@ -1585,6 +1585,129 @@ function cards(): HTMLElement[] {
   ];
 }
 
+describe("SessionRail — set aside", () => {
+  // The user's own judgement about a session, which is the one piece of rail
+  // state no amount of watching the session could derive.
+  const kept = makeSession({ id: "k", name: "keep me", last_turn_at: isoAgo(5 * MINUTE) });
+  const aside = makeSession({
+    id: "a",
+    name: "done with this",
+    last_turn_at: isoAgo(5 * MINUTE),
+    tags: ["aside"],
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("folds a set-aside session out of the list, under its own toggle", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} />);
+
+    expect(cardNames()).toEqual(["keep me"]);
+    const toggle = screen.getByRole("button", { name: /Set aside/ });
+    expect(toggle.textContent).toContain("· 1");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(toggle);
+    expect(cardNames()).toEqual(["keep me", "done with this"]);
+  });
+
+  it("keeps its own fold rather than sharing 'Earlier' — the two tails mean different things", () => {
+    vi.useFakeTimers({ now: NOW });
+    const old = makeSession({ id: "o", name: "old one", last_turn_at: isoAgo(2 * DAY) });
+    render(<SessionRail sessions={[kept, aside, old]} openTaskCounts={{}} />);
+
+    expect(screen.getByRole("button", { name: /Set aside/ }).textContent).toContain("· 1");
+    expect(screen.getByRole("button", { name: /Earlier/ }).textContent).toContain("· 1");
+  });
+
+  it("pulls a set-aside session back out the moment it needs the user", () => {
+    // "Until I need it again" implemented as "until it needs me". A dismissal
+    // that could swallow a parked approval would stop being trusted, and an
+    // untrusted one is worse than no dismissal at all.
+    vi.useFakeTimers({ now: NOW });
+    render(
+      <SessionRail
+        sessions={[kept, aside]}
+        openTaskCounts={{}}
+        agentStates={{ a: { subagents: 0, awaitingSince: isoAgo(MINUTE) } }}
+      />,
+    );
+
+    // Order is the rail's own (railOrder.ts puts the parked card first); what
+    // this pins is that it is in the main list at all, and that the fold it
+    // came from is gone with it.
+    expect(cardNames().sort()).toEqual(["done with this", "keep me"]);
+    expect(screen.queryByRole("button", { name: /Set aside/ })).toBeNull();
+  });
+
+  it("returns it to the fold once the attention is resolved, without clearing the tag", () => {
+    vi.useFakeTimers({ now: NOW });
+    const { rerender } = render(
+      <SessionRail
+        sessions={[kept, aside]}
+        openTaskCounts={{}}
+        agentStates={{ a: { subagents: 0, awaitingSince: isoAgo(MINUTE) } }}
+      />,
+    );
+    expect(cardNames().sort()).toEqual(["done with this", "keep me"]);
+
+    rerender(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} agentStates={{}} />);
+    expect(cardNames()).toEqual(["keep me"]);
+    expect(screen.getByRole("button", { name: /Set aside/ })).toBeTruthy();
+  });
+
+  it("shows every set-aside card while a query is live — going looking is the point", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/Search sessions/), {
+      target: { value: "done" },
+    });
+    expect(cardNames()).toEqual(["done with this"]);
+    expect(screen.queryByRole("button", { name: /Set aside/ })).toBeNull();
+  });
+
+  it("toggles through onSetAside, and never opens the card", () => {
+    vi.useFakeTimers({ now: NOW });
+    const onSetAside = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <SessionRail
+        sessions={[kept]}
+        openTaskCounts={{}}
+        onSetAside={onSetAside}
+        onSelect={onSelect}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Set aside keep me" }));
+    expect(onSetAside).toHaveBeenCalledWith("k", true);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers the reverse on a card already set aside", () => {
+    vi.useFakeTimers({ now: NOW });
+    const onSetAside = vi.fn();
+    render(<SessionRail sessions={[aside]} openTaskCounts={{}} onSetAside={onSetAside} />);
+
+    // Nothing is in the main list, so the fold is the whole rail; open it.
+    fireEvent.click(screen.getByRole("button", { name: /Set aside · 1/ }));
+    const button = screen.getByRole("button", { name: "Bring back done with this" });
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(button);
+    expect(onSetAside).toHaveBeenCalledWith("a", false);
+  });
+
+  it("offers no control at all when the surface passes no handler", () => {
+    vi.useFakeTimers({ now: NOW });
+    render(<SessionRail sessions={[kept]} openTaskCounts={{}} />);
+    expect(screen.queryByRole("button", { name: "Set aside keep me" })).toBeNull();
+  });
+});
+
 describe("SessionRail omni search", () => {
   // The mockup's own fixture set. "rail readability pass" is the case that
   // decides the field list: its workspace is "Main work", which shares no

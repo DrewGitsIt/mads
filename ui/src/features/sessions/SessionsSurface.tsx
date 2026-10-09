@@ -138,6 +138,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 reportActionError("sleep", id, err);
               });
             }}
+            onSetAside={(id, aside) => {
+              router.setSessionAside(id, aside).catch((err: unknown) => {
+                reportActionError(aside ? "set aside" : "bring back", id, err);
+              });
+            }}
             onDelete={(id) => {
               router.deleteSession(id).catch((err: unknown) => {
                 reportActionError("delete", id, err);

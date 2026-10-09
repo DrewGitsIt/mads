@@ -149,6 +149,8 @@ export interface RouterClient {
   closeSession(sessionId: string): Promise<void>;
   resumeSession(sessionId: string): Promise<{ addr: string }>;
   renameSession(id: string, name: string): Promise<Session>;
+  /** Fold a session out of the rail's main list (or bring it back). Touches no child. */
+  setSessionAside(id: string, aside: boolean): Promise<Session>;
   setSessionTrust(id: string, trust: SessionTrust): Promise<Session>;
   setSessionModel(id: string, model: string): Promise<SetSessionModelResponse>;
   deleteSession(id: string): Promise<void>;
@@ -712,6 +714,13 @@ export class FetchRouterClient implements RouterClient {
 
   async renameSession(id: string, name: string): Promise<Session> {
     return routerPost(this.baseUrl, `/sessions/${id}/rename`, { name });
+  }
+
+  // Records the user's judgement about a session, not anything the session
+  // did — so it persists on the record rather than in this browser, and
+  // deliberately leaves the running child alone.
+  async setSessionAside(id: string, aside: boolean): Promise<Session> {
+    return routerPost(this.baseUrl, `/sessions/${id}/aside`, { aside });
   }
 
   async setSessionTrust(id: string, trust: SessionTrust): Promise<Session> {

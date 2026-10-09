@@ -831,6 +831,15 @@
 /* The one thing a nested row still says out loud about its link: something
    is wrong with the orchestrate grant. A mark, not a word — the sentence is
    in the flyout this trigger opens (LinkOptionsMenu's note). */
+/* A set-aside card's own control, held lit so the toggle's state is legible
+   without opening anything — the card itself is in a fold that already says
+   so, but the button is what you press to undo it. */
+.actionButtonOn {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .linkBadgeAlert {
   position: absolute;
   top: 2px;

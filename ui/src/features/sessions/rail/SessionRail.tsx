@@ -19,7 +19,9 @@ import {
   EMPTY_OPEN_TASK_BREAKDOWN,
   RAIL_FILTERS,
   filterBucketOf,
+  asideDemandsAttention,
   isEarlier,
+  isSetAside,
   mostUrgentBucket,
   statusOf,
   totalOpenTasks,
@@ -93,6 +95,12 @@ export interface SessionRailProps {
    */
   onClose?: (id: string) => void;
   onDelete?: (id: string) => void;
+  /**
+   * Set a session aside, or bring it back. Not a lifecycle action — nothing
+   * about the running session changes — which is why it sits beside Archive
+   * rather than beside Sleep.
+   */
+  onSetAside?: (id: string, aside: boolean) => void;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
   /**
@@ -140,6 +148,7 @@ export function SessionRail({
   onSelect,
   onClose,
   onDelete,
+  onSetAside,
   links = [],
   workspaces = [],
   agents = [],
@@ -172,6 +181,7 @@ export function SessionRail({
   const now = useRelativeNow();
   const [filter, setFilter] = useState<RailFilter>("all");
   const [earlierOpen, setEarlierOpen] = useState(false);
+  const [asideOpen, setAsideOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [confirmCloseId, setConfirmCloseId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
@@ -249,14 +259,37 @@ export function SessionRail({
     agents: agentIndex(agents),
   };
 
+  // Three destinations, in priority order: a card the user set aside goes to
+  // its own fold unless it currently needs them, a card that has been quiet
+  // for a day goes to "Earlier", everything else stays in the list.
+  //
+  // Aside is checked on the HOLDER only. A linked group is one card with its
+  // subjects drawn under it (railLinks.ts), so setting a leader aside takes
+  // the connector and its subjects with it — splitting a group across two
+  // folds would leave arrows pointing at nothing.
   const head: RailRow[] = [];
   const earlier: RailRow[] = [];
-  for (const row of visible) (isEarlier(row.session, now) ? earlier : head).push(row);
+  const aside: RailRow[] = [];
+  for (const row of visible) {
+    // The group-aware bucket, so a parked subject pulls its whole group back
+    // out of the fold — the same reason the filter chips count a holder by its
+    // most urgent member.
+    const bucket = bucketByRowId.get(row.session.id) ?? "idle";
+    if (isSetAside(row.session) && !asideDemandsAttention(bucket)) {
+      aside.push(row);
+    } else if (isEarlier(row.session, now)) {
+      earlier.push(row);
+    } else {
+      head.push(row);
+    }
+  }
   // A tail needs a head. With nothing recent above it, the fold would hide the
   // entire rail behind one line, so the whole list just renders. While a query
-  // is live there is no fold at all: every hit is a result.
+  // is live there is no fold at all: every hit is a result — including the
+  // ones the user set aside, which is the whole point of going looking.
   const listRows = searching ? visible : head.length > 0 ? head : earlier;
   const tailRows = searching || head.length === 0 ? [] : earlier;
+  const asideRows = searching ? [] : aside;
 
   function startLinkMode(id: string) {
     setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
@@ -373,6 +406,7 @@ export function SessionRail({
     onSeen: markSeen,
     onSelect,
     onClose: onClose && requestClose,
+    onSetAside,
     onDeleteRequest: setConfirmDeleteId,
     onUnlinkRequest: setUnlinkTarget,
     linkedSessionsEnabled,
@@ -494,6 +528,25 @@ export function SessionRail({
           </div>
         )}
       </div>
+      {asideRows.length > 0 && (
+        <div className={styles.list}>
+          {/* Its own fold rather than a second door into "Earlier": the two
+              tails mean different things — I decided this, versus time decided
+              this — and only one of them is a list worth scanning on purpose. */}
+          <button
+            type="button"
+            className={styles.earlierToggle}
+            aria-expanded={asideOpen}
+            onClick={() => setAsideOpen((open) => !open)}
+          >
+            <span aria-hidden="true">{asideOpen ? "▾" : "▸"}</span>
+            Set aside
+            <span className={styles.earlierCount}>· {asideRows.length}</span>
+          </button>
+          {asideOpen &&
+            asideRows.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
+        </div>
+      )}
       {tailRows.length > 0 && (
         <div className={styles.list}>
           <button
@@ -575,6 +628,7 @@ function RailRowGroup({
   onSeen,
   onSelect,
   onClose,
+  onSetAside,
   onDeleteRequest,
   onUnlinkRequest,
   linkedSessionsEnabled,
@@ -600,6 +654,7 @@ function RailRowGroup({
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onClose?: (id: string) => void;
+  onSetAside?: (id: string, aside: boolean) => void;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
@@ -626,6 +681,7 @@ function RailRowGroup({
         onSeen={onSeen}
         onSelect={onSelect}
         onClose={onClose}
+        onSetAside={onSetAside}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
         heldSubjects={subjects.map((sub) => ({
@@ -667,6 +723,7 @@ function RailRowGroup({
               onSeen={onSeen}
               onSelect={onSelect}
                     onClose={onClose}
+              onSetAside={onSetAside}
               onDeleteRequest={onDeleteRequest}
               linkBadge={sub.badge}
               orchestrateStatus={sub.orchestrateStatus}
@@ -728,6 +785,7 @@ function SessionRow({
   onSeen,
   onSelect,
   onClose,
+  onSetAside,
   onDeleteRequest,
   linkBadge,
   heldSubjects,
@@ -763,6 +821,7 @@ function SessionRow({
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onClose?: (id: string) => void;
+  onSetAside?: (id: string, aside: boolean) => void;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
   /**
@@ -820,6 +879,7 @@ function SessionRow({
       ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
       : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
   const isPaused = session.activity !== "active";
+  const setAside = isSetAside(session);
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
@@ -1158,6 +1218,31 @@ function SessionRow({
               }}
             >
               🔗
+            </button>
+          )}
+          {onSetAside && !nested && (
+            // ✓ is the task-list gesture, and in this rail it now means
+            // exactly one thing: a judgement the user made. Every other mark
+            // on the card reports what the session is doing — which is why
+            // the Done status gave its tick up for a closed ring.
+            <button
+              type="button"
+              className={[styles.actionButton, setAside ? styles.actionButtonOn : ""]
+                .filter(Boolean)
+                .join(" ")}
+              title={
+                setAside
+                  ? "Bring back — return this to the list"
+                  : "Set aside — fold this away; it comes back if it needs you"
+              }
+              aria-label={setAside ? `Bring back ${name}` : `Set aside ${name}`}
+              aria-pressed={setAside}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSetAside(session.id, !setAside);
+              }}
+            >
+              ✓
             </button>
           )}
           <button

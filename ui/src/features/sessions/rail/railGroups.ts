@@ -286,6 +286,32 @@ export function lastReplyKey(session: Session): string {
   return session.last_turn_at ?? session.created_at;
 }
 
+/**
+ * The user's own judgement about a session: done with for now, fold it away.
+ * Mirrors contracts.SessionTagAside — a tag rather than a browser-local flag
+ * because a task list has to survive a reload and a machine, unlike the rail's
+ * unseen set (railUnseen.ts), which is a view preference.
+ */
+export const ASIDE_TAG = "aside";
+
+export function isSetAside(session: Session): boolean {
+  return (session.tags ?? []).includes(ASIDE_TAG);
+}
+
+/**
+ * Whether a set-aside session has to come back out of its fold.
+ *
+ * "Until I need it again" is implemented as "until it needs me", which is both
+ * closer to what the fold is for and the thing that makes the gesture safe to
+ * use: a dismissal that could swallow a parked approval would stop being
+ * trusted, and an untrusted one is worse than none. The tag is deliberately
+ * NOT cleared when this fires — resolving the approval returns the card to the
+ * fold on its own, which is what "aside until it needs me" means.
+ */
+export function asideDemandsAttention(bucket: RailFilterBucket): boolean {
+  return bucket === "needs";
+}
+
 /** A session falls into the collapsed "Earlier" tail once its last reply is a day old. */
 export const EARLIER_AFTER_MS = 24 * 60 * 60 * 1000;
 

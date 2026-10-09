@@ -147,6 +147,35 @@ func (s *server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// handleSetSessionAside records the user's own judgement about a session:
+// done with for now, fold it out of the rail's main list. Nothing about the
+// running session changes — no child is touched, no state is written beyond
+// the tag — because the act means "I am finished looking at this", not
+// "stop". A set-aside session that later needs its user is pulled back into
+// the list by the rail, without the tag being cleared: handling the approval
+// returns it to the fold, which is what "aside until it needs me" means.
+func (s *server) handleSetSessionAside(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Aside bool `json:"aside"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	sess.SetAside(body.Aside)
+	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
+		writeError(w, err)
+		return
+	}
+	s.decorateSession(&sess)
+	writeJSON(w, http.StatusOK, sess)
+}
+
 // handleSetSessionTrust changes a session's trust level after creation —
 // the "raise trust" path the blocked-permission banner points at. Trust is
 // read exactly once, at child spawn (services/session/internal/runner), so

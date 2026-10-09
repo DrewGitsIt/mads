@@ -987,6 +987,14 @@ export class FakeRouterClient implements RouterClient {
     return session;
   }
 
+  async setSessionAside(id: string, aside: boolean): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`fixture session not found: ${id}`);
+    const kept = (session.tags ?? []).filter((tag) => tag !== "aside");
+    session.tags = aside ? [...kept, "aside"] : kept;
+    return session;
+  }
+
   async setSessionTrust(id: string, trust: SessionTrust): Promise<Session> {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`fixture session not found: ${id}`);
