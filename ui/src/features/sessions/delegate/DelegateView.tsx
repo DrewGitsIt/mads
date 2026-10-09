@@ -115,9 +115,10 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
         });
       })
       .catch(() => {});
+    const reads = fileRead;
     return () => {
       cancelled = true;
-      fileRead.current++;
+      reads.current++; // an in-flight file read for this delegate must not land
       unsubRecord();
       unsubStream();
     };

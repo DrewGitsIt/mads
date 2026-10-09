@@ -213,27 +213,6 @@ func (r *Runner) inspectDelegateAfter(harnessID string, delay time.Duration) {
 	time.AfterFunc(delay, run)
 }
 
-// delegateDefaults maps a provider's matrix onto the capability defaults
-// every delegate of its sessions starts from. StopsWithParent is mads's own
-// choice, not the harness's: claude-code stops its background tasks with an
-// interrupt unless perTaskStopAffordance is set, and mads leaves it unset
-// (cascading stops, docs/DELEGATES-DESIGN.md) — and a harness whose
-// delegates are foreground-only stops them with its turn by construction.
-func delegateDefaults(m provider.Matrix) contracts.DelegateCapabilities {
-	caps := contracts.DelegateCapabilities{
-		Steer:           contracts.DelegateSteerNone,
-		Stop:            m[provider.BehaviorDelegateStop].Works(),
-		StopsWithParent: true,
-	}
-	switch m[provider.BehaviorDelegateSteer] {
-	case provider.Native:
-		caps.Steer = contracts.DelegateSteerDirect
-	case provider.Emulated:
-		caps.Steer = contracts.DelegateSteerRelay
-	}
-	return caps
-}
-
 // contractsTask maps a provider task lifecycle event onto its contracts
 // mirror — the shape both the event log (session.subagent_task) and the
 // delegate tracker take.

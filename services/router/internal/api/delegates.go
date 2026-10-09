@@ -1,11 +1,14 @@
 package api
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -102,4 +105,74 @@ func delegateRefs(sess contracts.Session) []string {
 		refs = append(refs, sess.ImportedFrom)
 	}
 	return refs
+}
+
+// RecordImportedDelegates gives an imported session the delegate records a
+// live one would have: every subagent its harness's history holds for it
+// (provider.DelegateInspector.DelegateHistory), under both of its refs (see
+// delegateRefs), as delegates.FromHistory maps it. Only for a session with no
+// records yet: once it has any, its runner keeps them, and history must not
+// overwrite what it has since learned (a re-run, a capability check).
+// Returns how many it recorded.
+func RecordImportedDelegates(ctx context.Context, data *dataclient.Client, providers *provider.Registry, sess contracts.Session) (int, error) {
+	if sess.ImportedFrom == "" {
+		return 0, nil
+	}
+	p, err := providers.Get(sess.Provider)
+	if err != nil {
+		return 0, nil // a provider no longer installed: nothing to read with
+	}
+	inspector, ok := p.(provider.DelegateInspector)
+	if !ok {
+		return 0, nil
+	}
+	existing, err := data.SessionDelegates(ctx, sess.ID)
+	if err != nil || len(existing) > 0 {
+		return 0, err
+	}
+	defaults := delegates.Defaults(p.Matrix())
+	recorded, seen := 0, map[string]bool{}
+	for _, ref := range delegateRefs(sess) {
+		history, err := inspector.DelegateHistory(ctx, ref)
+		if err != nil {
+			return recorded, err
+		}
+		for _, r := range history {
+			if seen[r.HarnessID] {
+				continue
+			}
+			seen[r.HarnessID] = true
+			if _, err := data.PutDelegate(ctx, delegates.FromHistory(sess.ID, r, defaults)); err != nil {
+				return recorded, err
+			}
+			recorded++
+		}
+	}
+	return recorded, nil
+}
+
+// BackfillImportedDelegates runs RecordImportedDelegates over every imported
+// session — the ones imported before delegates were recorded at import. Each
+// one with records already is skipped, so a later run costs a list and a
+// folder glob per import. Best effort: a failure is logged, never fatal.
+func BackfillImportedDelegates(ctx context.Context, data *dataclient.Client, providers *provider.Registry) {
+	sessions, err := data.Sessions(ctx, "")
+	if err != nil {
+		log.Printf("api: backfill imported delegates: list sessions: %v", err)
+		return
+	}
+	total := 0
+	for _, sess := range sessions {
+		if ctx.Err() != nil {
+			return
+		}
+		n, err := RecordImportedDelegates(ctx, data, providers, sess)
+		if err != nil {
+			log.Printf("api: backfill imported delegates: session %s: %v", sess.ID, err)
+		}
+		total += n
+	}
+	if total > 0 {
+		log.Printf("api: recorded %d delegates from imported sessions' history", total)
+	}
 }

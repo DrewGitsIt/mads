@@ -469,6 +469,22 @@ describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent
     expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["fin"]);
   });
 
+  it("brings back a finished delegate a narrower window pruned, once the window widens", async () => {
+    // The default window is in force until Config loads — long enough for a
+    // live report of an old ending (an import) to arrive and be pruned.
+    const old = { ...record("s1", "old"), state: "completed" as const, ended_at: ago(8 * 24 * 3600_000) };
+    vi.mocked(router.listDelegates).mockResolvedValue([old]);
+    const { result, rerender } = renderHook(({ fade }) => useSessionAgentState([], undefined, fade), {
+      initialProps: { fade: 10 * 60_000 },
+    });
+    emit("session.delegate_changed", "s1", old);
+    await waitFor(() => expect(router.listDelegatesEndedAfter).toHaveBeenCalled());
+    expect(result.current.s1).toBeUndefined();
+
+    rerender({ fade: Infinity });
+    await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["old"]));
+  });
+
   it("drops a finished delegate the window has passed", async () => {
     const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
     emit("session.delegate_changed", "s1", { ...record("s1", "old"), state: "completed", ended_at: ago(120_000) });

@@ -56,6 +56,10 @@ func (s *stub) DelegateTranscript(context.Context, string, string) ([]provider.M
 	return nil, false, nil
 }
 
+func (s *stub) DelegateHistory(context.Context, string) ([]provider.DelegateRecord, error) {
+	return nil, nil
+}
+
 // stubScript is the stub's prompt dialect. The attempt prompts drive the
 // goose-shaped denial ordering (announce, then a failed result — see
 // stubSession.Send), so the honest stub exercises the trust probe's

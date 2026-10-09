@@ -215,7 +215,7 @@ func TestDelegateCapabilitiesFromMatrixThenInspection(t *testing.T) {
 	p := claudecode.New(claudecode.Config{TranscriptDir: root})
 	r.prov = p
 	r.lastRef = "ref-1"
-	r.delegates.SetDefaults(delegateDefaults(p.Matrix()), p.Matrix()[provider.BehaviorBranching].Works())
+	r.delegates.SetDefaults(delegates.Defaults(p.Matrix()))
 
 	r.observeConversation(taskEv("started", "a1", "toolu_agent", "", true))
 	d := storedDelegate(t, data, sid, "a1")

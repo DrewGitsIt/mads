@@ -32,6 +32,7 @@ type importFixture struct {
 	home       string
 	repo       string
 	missingDir string
+	reg        *provider.Registry
 }
 
 const (
@@ -84,6 +85,7 @@ func newImportFixture(t *testing.T) *importFixture {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	f.reg = reg
 	opts := testOptions(t, f.data, f.sup)
 	opts.Providers = reg
 	f.srv = httptest.NewServer(api.New(opts))
@@ -514,4 +516,87 @@ func TestDelegateTranscriptFromTheNativeStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("after the continue forked it")
+}
+
+// An imported conversation's subagents become records at import — the same
+// records a live session's runner keeps, so they show in the rail, the
+// conversation and the full-pane view — with how each ended read from the
+// parent's own history.
+func TestImportRecordsTheSubagentsItRan(t *testing.T) {
+	f := newImportFixture(t)
+	f.native(t, "-repo", "normal", append(convo(f.repo, "cli", "fix the login bug"),
+		`{"type":"queue-operation","operation":"enqueue","timestamp":"2026-10-09T10:01:05Z","content":"<task-notification>\n<task-id>bg1</task-id>\n<status>completed</status>\n<usage><subagent_tokens>100</subagent_tokens><tool_uses>3</tool_uses><duration_ms>65000</duration_ms></usage>\n</task-notification>"}`)...)
+	sub := filepath.Join("-repo", "normal", "subagents")
+	f.native(t, sub, "agent-bg1",
+		`{"type":"user","isSidechain":true,"uuid":"s1","timestamp":"2026-10-09T10:00:00Z","message":{"role":"user","content":"find the handler"}}`)
+	f.native(t, sub, "agent-lost",
+		`{"type":"user","isSidechain":true,"uuid":"s2","timestamp":"2026-10-09T10:02:00Z","message":{"role":"user","content":"never finished"}}`)
+	if err := os.WriteFile(filepath.Join(f.projects, sub, "agent-bg1.meta.json"),
+		[]byte(`{"agentType":"Explore","description":"Find the handler","toolUseId":"toolu_bg","spawnDepth":1,"requestShape":"background"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.importAll(t)
+	all, _ := f.data.Sessions(context.Background(), "")
+	if len(all) != 1 {
+		t.Fatalf("%d sessions, want 1", len(all))
+	}
+
+	resp, err := http.Get(f.srv.URL + "/sessions/" + all[0].ID + "/delegates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[[]contracts.Delegate](t, resp)
+	byID := map[string]contracts.Delegate{}
+	for _, d := range got {
+		byID[d.HarnessID] = d
+	}
+	bg, lost := byID["bg1"], byID["lost"]
+	if len(got) != 2 || bg.State != contracts.DelegateCompleted || bg.Inferred || bg.ToolUseID != "toolu_bg" ||
+		bg.Description != "Find the handler" || bg.Type != "Explore" || !bg.Backgrounded || bg.DurationMS != 65000 ||
+		bg.EndedAt == nil || bg.Capabilities == nil || !bg.Capabilities.Transcript {
+		t.Fatalf("imported delegates = %+v", got)
+	}
+	if lost.State != contracts.DelegateOrphaned || !lost.Inferred {
+		t.Errorf("a subagent with no recorded ending = %+v, want orphaned, concluded by mads", lost)
+	}
+}
+
+// Sessions imported before delegates were recorded at import get them from
+// the router's start-up backfill — once: a session with records is left
+// alone, so what its runner has since learned is never overwritten.
+func TestBackfillImportedDelegates(t *testing.T) {
+	f := newImportFixture(t)
+	f.native(t, filepath.Join("-repo", "orig", "subagents"), "agent-a1",
+		`{"type":"user","isSidechain":true,"uuid":"s1","timestamp":"2026-10-09T10:00:00Z","message":{"role":"user","content":"go"}}`)
+	ctx := context.Background()
+	// Imported, and since continued: the fork's ref is current, the
+	// original's folder holds the subagent.
+	sess := contracts.Session{Name: "old import", Provider: "claude-code", ProviderRef: "forked", ImportedFrom: "orig", Activity: contracts.SessionInactive}
+	if err := f.data.CreateSession(ctx, &sess); err != nil {
+		t.Fatal(err)
+	}
+	plain := contracts.Session{Name: "never imported", Provider: "claude-code", ProviderRef: "orig", Activity: contracts.SessionInactive}
+	if err := f.data.CreateSession(ctx, &plain); err != nil {
+		t.Fatal(err)
+	}
+
+	api.BackfillImportedDelegates(ctx, f.data, f.reg)
+	got, _ := f.data.SessionDelegates(ctx, sess.ID)
+	if len(got) != 1 || got[0].HarnessID != "a1" {
+		t.Fatalf("after backfill = %+v", got)
+	}
+	if other, _ := f.data.SessionDelegates(ctx, plain.ID); len(other) != 0 {
+		t.Errorf("a session that wasn't imported got history records: %+v", other)
+	}
+
+	// What the runner learned since stands.
+	got[0].Runs = 5
+	if _, err := f.data.PutDelegate(ctx, got[0]); err != nil {
+		t.Fatal(err)
+	}
+	api.BackfillImportedDelegates(ctx, f.data, f.reg)
+	again, _ := f.data.SessionDelegates(ctx, sess.ID)
+	if len(again) != 1 || again[0].Runs != 5 {
+		t.Errorf("a second backfill = %+v, want the record untouched", again)
+	}
 }

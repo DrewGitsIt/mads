@@ -318,6 +318,10 @@ func main() {
 	synthWatcher := synthwatch.NewWatcher(data, jobs, resolveFastModel)
 	go synthWatcher.Run(ctx)
 
+	// Conversations imported before their subagents were recorded at import
+	// get them now; already-recorded ones are skipped.
+	go api.BackfillImportedDelegates(ctx, data, providers)
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(ln) }()
 

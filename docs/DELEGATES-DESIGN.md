@@ -168,8 +168,36 @@ copies it (REBUILD-SPEC §1.9). For Claude Code that means
 
   So the file view drops thinking text the live stream had. Not merged:
   rare, and the order of the two can only be matched by timestamp.
-- **Not yet:** the in-conversation card and dock still read the event log;
-  imported sessions have no records, so no rows (open question below).
+- **Not yet:** the in-conversation card and dock still read the event log
+  (Drew to test the gap first).
+
+### Imported sessions *(built 2026-10-09)*
+
+An import records its subagents as ordinary delegate records — the same
+table, shape and API as a live session's, so they show in the rail, the
+conversation and the full-pane view, and a later re-run under a live runner
+picks them up (Seed) with no special case. `DelegateInspector.DelegateHistory`
+reads them from the harness's store; `delegates.FromHistory` maps them under
+the live rules; the router records them at import
+(`RecordImportedDelegates`) and backfills older imports at start
+(`BackfillImportedDelegates` — sessions with no records only, so nothing a
+runner learned since is overwritten).
+
+How each ended comes from the **parent's** file (on 194 real subagents: 193
+ended, 1 had no ending; 13 ran more than once):
+
+| | Where the ending is |
+|---|---|
+| Foreground | The Agent call's `toolUseResult` (status, duration, tokens, tool count) |
+| Background | A `<task-notification>` (task id, status, usage). Its Agent result only says `async_launched` |
+
+A background notice is written when queued (`queue-operation` enqueue —
+always) and again if delivered: a user line when the parent was idle, an
+`attachment` (`queued_command`) mid-turn. The enqueues are the record (every
+delivery had one; 80 enqueues had no delivery); deliveries count only for
+an id with no enqueue. Each one is a run — a subagent the parent messaged
+again ends again — and the last says how it ended. No ending anywhere:
+`orphaned`, `reason: no_ending`, concluded by mads.
 
 ## Capabilities
 
@@ -362,10 +390,15 @@ What this means:
   connection). It is read-only: steering waits on the C2 capabilities. Any
   card click leaves the view.
 
+- **Fade** (Drew, 2026-10-09): Settings → "Fade out subagent cards after
+  inactivity": 0 min, **10 min** (default), Never — counted from when a
+  subagent finished; a running one never fades. The rail's cold read follows
+  it (`?state=running`, `?ended_after=`, or everything), so finished rows
+  survive a reload. They stay under a sleeping session's card too. Rows order
+  running first, then most recently finished, so under Never the oldest fold
+  behind "+N more".
+
 Defaults chosen without a ruling (all one-line changes):
-- Finished rows stay for **2 minutes** after they end (`RECENT_DELEGATE_MS`),
-  then drop. The parent's conversation keeps them for good. The afterglow is
-  live-only: a reload shows running rows only.
 - **3 rows**, then "+N more" (`DELEGATE_ROWS_SHOWN`).
 - The status-line wording ("N subagents running") awaits Drew's look at it
   live.
@@ -416,7 +449,7 @@ were spot-checked in the code.
 8. **[#1: cascading kept by decision; the record now concludes the stops]** Interrupting the parent kills every background task
    (`perTaskStopAffordance` is unset), and `handleInterrupt` retires them
    all in the UI regardless.
-9. **[B: the full-pane view reads the file; imports still have no records]** Subagent history exists only in the mads event log; imported
+9. **[B: fixed — the full-pane view reads the file; imports record their subagents]** Subagent history exists only in the mads event log; imported
    conversations have none.
 10. **[#1: fixed]** The sidebar shows "Ready" while a background subagent runs.
 11. The digest counts a delegate's tool uses as main-turn work.

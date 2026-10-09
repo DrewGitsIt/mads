@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // Grace is how long a backgrounded delegate may be missing from the roster
@@ -46,6 +47,7 @@ const (
 	ReasonTurnEnd       = "turn_end"       // foreground, still running when its parent's turn ended
 	ReasonProcessExit   = "process_exit"   // the harness process ended under it
 	ReasonRunnerRestart = "runner_restart" // found running when a runner started
+	ReasonNoEnding      = "no_ending"      // imported: its harness's history records no ending
 )
 
 type entry struct {
@@ -62,10 +64,8 @@ type Tracker struct {
 	grace     time.Duration
 	byID      map[string]*entry
 	// defaults is the harness's capability set from its provider matrix
-	// (SetDefaults); continuable is whether a found transcript can be
-	// continued as a forked session.
-	defaults    contracts.DelegateCapabilities
-	continuable bool
+	// (SetDefaults).
+	defaults CapabilityDefaults
 }
 
 // Observation is what the harness's own store says about one delegate at
@@ -79,16 +79,43 @@ type Observation struct {
 	Background     bool
 }
 
-// SetDefaults sets the capability defaults every new delegate starts from —
-// the provider matrix's answer for this harness. continuable says whether a
-// delegate whose transcript is found could be continued as a forked session
-// (the harness can fork-on-resume). Transcript itself is never a default:
-// it is only ever true on evidence (Inspect).
-func (t *Tracker) SetDefaults(defaults contracts.DelegateCapabilities, continuable bool) {
+// CapabilityDefaults is a harness's delegate capabilities before any
+// evidence: its provider matrix's answer, and whether a delegate whose
+// transcript is found could be continued as a forked session (the harness can
+// fork-on-resume). Transcript itself is never a default: it is only ever true
+// on evidence (Inspect, FromHistory).
+type CapabilityDefaults struct {
+	Caps        contracts.DelegateCapabilities
+	Continuable bool
+}
+
+// Defaults maps a provider's matrix onto its delegates' capability defaults
+// (docs/DELEGATES-DESIGN.md C2b/C3): native steer is direct, emulated is a
+// relay through the parent. StopsWithParent is mads's own choice, not the
+// harness's: claude-code stops its background tasks with an interrupt unless
+// perTaskStopAffordance is set, and mads leaves it unset (cascading stops) —
+// and a harness whose delegates are foreground-only stops them with its turn
+// by construction.
+func Defaults(m provider.Matrix) CapabilityDefaults {
+	caps := contracts.DelegateCapabilities{
+		Steer:           contracts.DelegateSteerNone,
+		Stop:            m[provider.BehaviorDelegateStop].Works(),
+		StopsWithParent: true,
+	}
+	switch m[provider.BehaviorDelegateSteer] {
+	case provider.Native:
+		caps.Steer = contracts.DelegateSteerDirect
+	case provider.Emulated:
+		caps.Steer = contracts.DelegateSteerRelay
+	}
+	return CapabilityDefaults{Caps: caps, Continuable: m[provider.BehaviorBranching].Works()}
+}
+
+// SetDefaults sets the capability defaults every new delegate starts from.
+func (t *Tracker) SetDefaults(d CapabilityDefaults) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	defaults.Transcript, defaults.Continuable = false, false
-	t.defaults, t.continuable = defaults, continuable
+	t.defaults = d
 }
 
 // Inspect folds a run-time observation into the delegate's record — its
@@ -129,13 +156,54 @@ func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate 
 // the evidence on the record. Always a fresh value — records are compared by
 // field, and a shared pointer would hide a change.
 func (t *Tracker) resolveLocked(d contracts.Delegate) *contracts.DelegateCapabilities {
-	caps := t.defaults
+	return resolve(t.defaults, d)
+}
+
+// resolve is a record's capability set: the defaults, corrected by the
+// evidence on the record.
+func resolve(defaults CapabilityDefaults, d contracts.Delegate) *contracts.DelegateCapabilities {
+	caps := defaults.Caps
 	if caps.Steer == "" {
 		caps.Steer = contracts.DelegateSteerNone
 	}
 	caps.Transcript = d.TranscriptPath != ""
-	caps.Continuable = caps.Transcript && t.continuable
+	caps.Continuable = caps.Transcript && defaults.Continuable
 	return &caps
+}
+
+// FromHistory is the record for a delegate mads never watched run — one
+// found in an imported conversation's history — under the same rules as a
+// live one: the harness's word for how it ended settles its state, and its
+// capabilities are the defaults corrected by the evidence. A history with no
+// ending records it orphaned, concluded by mads.
+func FromHistory(sessionID string, r provider.DelegateRecord, defaults CapabilityDefaults) contracts.Delegate {
+	d := contracts.Delegate{
+		SessionID:      sessionID,
+		HarnessID:      r.HarnessID,
+		ToolUseID:      r.ToolUseID,
+		Depth:          r.Depth,
+		Type:           r.Type,
+		Description:    r.Description,
+		Backgrounded:   r.Background,
+		Runs:           max(r.Runs, 1),
+		StartedAt:      r.StartedAt.UTC(),
+		TranscriptPath: r.TranscriptPath,
+		WorktreePath:   r.WorktreePath,
+		TotalTokens:    r.TotalTokens,
+		ToolUses:       r.ToolUses,
+		DurationMS:     r.DurationMS,
+	}
+	if r.Status == "" {
+		d.State, d.Reason, d.Inferred = contracts.DelegateOrphaned, ReasonNoEnding, true
+	} else {
+		d.State, d.Reason = settle(r.Status)
+		if !r.EndedAt.IsZero() {
+			end := r.EndedAt.UTC()
+			d.EndedAt = &end
+		}
+	}
+	d.Capabilities = resolve(defaults, d)
+	return d
 }
 
 // New returns an empty tracker for sessionID. grace ≤ 0 means Grace.

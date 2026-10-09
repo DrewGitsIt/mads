@@ -322,7 +322,14 @@ export function useSessionAgentState(
             fold = emptyFold();
             folds.current.set(d.session_id, fold);
           }
-          if (fold.heard.has(d.harness_id)) continue;
+          if (fold.heard.has(d.harness_id)) {
+            // The stream spoke since this snapshot was taken, and wins —
+            // except over a finished record the window merely pruned: the
+            // snapshot can't be staler than an ending, and a window that has
+            // since widened (Never, once Config loads) wants it back.
+            const tracked = fold.delegates.has(d.harness_id) || fold.recent.has(d.harness_id);
+            if (tracked || d.state === "running") continue;
+          }
           if (d.state === "running") fold.delegates.set(d.harness_id, d);
           else fold.recent.set(d.harness_id, d);
         }

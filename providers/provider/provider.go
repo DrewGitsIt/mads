@@ -297,6 +297,34 @@ type TranscriptReader interface {
 type DelegateInspector interface {
 	InspectDelegate(ctx context.Context, ref, harnessID string) (info DelegateInfo, ok bool, err error)
 	DelegateTranscript(ctx context.Context, ref, harnessID string) (msgs []Message, ok bool, err error)
+	// DelegateHistory lists every delegate the harness's store holds for the
+	// session ref, with what the parent's own history says about how each
+	// ended — for a conversation mads never watched run (an import). None is
+	// an empty list, not an error.
+	DelegateHistory(ctx context.Context, ref string) ([]DelegateRecord, error)
+}
+
+// DelegateRecord is one delegate as a harness's history records it, start to
+// end. Zero values mean the history didn't say.
+type DelegateRecord struct {
+	DelegateInfo
+	// HarnessID is the harness's id for the delegate (Claude Code's agentId).
+	HarnessID string
+	// ToolUseID is the parent's call that spawned it.
+	ToolUseID   string
+	Description string
+	// StartedAt and EndedAt are the harness's own stamps. EndedAt is set
+	// whenever Status is.
+	StartedAt, EndedAt time.Time
+	// Status is the harness's word for how it ended ("completed", "failed",
+	// "killed"); empty when the history holds no ending.
+	Status string
+	// Runs is how many times it ran: more than one when the parent messaged
+	// it again after it ended.
+	Runs        int
+	DurationMS  int
+	TotalTokens int
+	ToolUses    int
 }
 
 // DelegateInfo is one delegate as the harness's own store records it. Zero

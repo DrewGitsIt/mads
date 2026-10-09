@@ -6,6 +6,7 @@ import (
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/delegates"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 var t0 = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
@@ -206,10 +207,10 @@ func TestProgressWithoutStartCreates(t *testing.T) {
 // and with it continuing as a forked session — only on evidence.
 func TestCapabilitiesFromDefaultsThenEvidence(t *testing.T) {
 	tr := delegates.New("ses_1", 0)
-	tr.SetDefaults(contracts.DelegateCapabilities{
+	tr.SetDefaults(delegates.CapabilityDefaults{Caps: contracts.DelegateCapabilities{
 		Steer: contracts.DelegateSteerRelay, StopsWithParent: true,
 		Transcript: true, Continuable: true, // never defaults: dropped
-	}, true)
+	}, Continuable: true})
 
 	d := one(t, tr.Task(started("a1", "toolu_a1", true), at(0)))
 	want := contracts.DelegateCapabilities{Steer: contracts.DelegateSteerRelay, StopsWithParent: true}
@@ -236,10 +237,40 @@ func TestCapabilitiesFromDefaultsThenEvidence(t *testing.T) {
 // with no matrix answer reads as watch-only.
 func TestCapabilitiesWithoutForkOrDefaults(t *testing.T) {
 	tr := delegates.New("ses_1", 0)
-	tr.SetDefaults(contracts.DelegateCapabilities{}, false)
+	tr.SetDefaults(delegates.CapabilityDefaults{})
 	one(t, tr.Task(started("a1", "toolu_a1", true), at(0)))
 	d := one(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/p/a1.jsonl"}))
 	if !d.Capabilities.Transcript || d.Capabilities.Continuable || d.Capabilities.Steer != contracts.DelegateSteerNone {
 		t.Fatalf("caps = %+v", d.Capabilities)
+	}
+}
+
+// An imported conversation's delegate, under the live rules: the harness's
+// word settles the state, its transcript is evidence, and no recorded ending
+// is mads's conclusion — orphaned, never a guessed "completed".
+func TestFromHistory(t *testing.T) {
+	defaults := delegates.CapabilityDefaults{
+		Caps:        contracts.DelegateCapabilities{Steer: contracts.DelegateSteerRelay, StopsWithParent: true},
+		Continuable: true,
+	}
+	start, end := at(0), at(90)
+	d := delegates.FromHistory("ses_1", provider.DelegateRecord{
+		DelegateInfo: provider.DelegateInfo{TranscriptPath: "/p/agent-a1.jsonl", Type: "Explore", Depth: 1, Background: true},
+		HarnessID:    "a1", ToolUseID: "toolu_a1", Description: "Audit",
+		StartedAt: start, EndedAt: end, Status: "killed", Runs: 2, TotalTokens: 10, ToolUses: 3, DurationMS: 90000,
+	}, defaults)
+	if d.SessionID != "ses_1" || d.HarnessID != "a1" || d.ToolUseID != "toolu_a1" || d.Type != "Explore" || !d.Backgrounded ||
+		d.State != contracts.DelegateStopped || d.Reason != "killed" || d.Inferred || d.Runs != 2 ||
+		d.EndedAt == nil || !d.EndedAt.Equal(end) || !d.StartedAt.Equal(start) || d.TotalTokens != 10 {
+		t.Fatalf("FromHistory = %+v", d)
+	}
+	if c := d.Capabilities; c == nil || !c.Transcript || !c.Continuable || c.Steer != contracts.DelegateSteerRelay {
+		t.Fatalf("caps = %+v", d.Capabilities)
+	}
+
+	u := delegates.FromHistory("ses_1", provider.DelegateRecord{HarnessID: "b2", StartedAt: start}, defaults)
+	if u.State != contracts.DelegateOrphaned || !u.Inferred || u.Reason != delegates.ReasonNoEnding || u.EndedAt != nil || u.Runs != 1 ||
+		u.Capabilities.Transcript || u.Capabilities.Continuable {
+		t.Fatalf("no ending = %+v caps %+v", u, u.Capabilities)
 	}
 }

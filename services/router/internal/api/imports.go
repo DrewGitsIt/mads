@@ -238,6 +238,12 @@ func (s *server) handleImportConversations(w http.ResponseWriter, r *http.Reques
 				writeError(w, err)
 				return
 			}
+			// The subagents it ran, as records — so they show like a live
+			// session's. Best effort: the conversation imported either way,
+			// and the next router start's backfill tries again.
+			if _, err := RecordImportedDelegates(ctx, s.data, s.providers, sess); err != nil {
+				log.Printf("api: import: delegates of %s: %v", sess.ID, err)
+			}
 			imported++
 		}
 	}

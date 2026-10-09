@@ -385,7 +385,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	// Delegate capability defaults come from the provider's matrix; then,
 	// before the provider starts, the stored delegates — its first events may
 	// resume one a previous process spawned, and must find that record.
-	r.delegates.SetDefaults(delegateDefaults(p.Matrix()), p.Matrix()[provider.BehaviorBranching].Works())
+	r.delegates.SetDefaults(delegates.Defaults(p.Matrix()))
 	r.seedDelegates(ctx)
 
 	// A directory the session asked for (Launchpad folder, workspace
