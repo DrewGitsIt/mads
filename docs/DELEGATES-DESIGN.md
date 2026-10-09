@@ -129,8 +129,10 @@ agent_state-style retry), in `runner/delegates.go`:
 The sidebar mirrors `session.delegate_changed` and no longer clears delegates
 when the main agent goes idle; only sleep and crash clear them. A session
 whose turn is over but whose delegates aren't reads
-**"Ready · N subagents running"** ("Done · …" when the turn end hasn't been
-seen yet), spinning and counted under Working.
+**"N subagents running"** ("Done · …" when the turn end hasn't been seen
+yet), with the working spinner as its status mark, counted under Working.
+(It led with "Ready · " until main retired Ready for Idle; "Idle · N
+subagents running" would contradict itself.)
 
 ### Transcript source
 
@@ -338,8 +340,8 @@ Defaults chosen without a ruling (all one-line changes):
   then drop. The parent's conversation keeps them for good. The afterglow is
   live-only: a reload shows running rows only.
 - **3 rows**, then "+N more" (`DELEGATE_ROWS_SHOWN`).
-- The status-line wording ("Ready · N subagents running") awaits Drew's look
-  at it live.
+- The status-line wording ("N subagents running") awaits Drew's look at it
+  live.
 
 Not done: a nested subject's trunk runs past its delegates block; the
 delegate view doesn't surface the delegate's permission asks (the parent's
