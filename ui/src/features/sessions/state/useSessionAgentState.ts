@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { router } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
+import { DEFAULT_DELEGATE_FADE_MS } from "../rail/DelegateRows";
 import type { SessionAgentState } from "../rail/railGroups";
 import type { AgentState, Delegate, Envelope, Session } from "../../../router/types";
 
@@ -39,9 +40,10 @@ interface Fold {
    */
   delegates: Map<string, Delegate>;
   /**
-   * Delegates this connection saw end, newest last and capped — the rail
-   * keeps a finished one on screen briefly (DelegateRows) so a completion
-   * doesn't vanish mid-glance. Live-only: a reload starts it empty.
+   * Finished delegates still inside the fade window (Settings' "Fade out
+   * subagent cards after inactivity") — seen ending live, or loaded by the
+   * cold read, so they survive a reload. DelegateRows decides, minute by
+   * minute, which are still shown; this only drops what is past the window.
    */
   recent: Map<string, Delegate>;
   /**
@@ -85,17 +87,24 @@ function clearStale(fold: Fold): void {
  * no delegate can still be running inside it. The server concludes the same
  * (the runner stops them on process exit), but a runner that died hard never
  * gets to say so — this is what keeps such a card from spinning forever.
+ * Finished delegates stay: they are history, and a sleeping session's card
+ * keeps showing them for the fade window like any other.
  */
 function clearInFlight(fold: Fold): void {
   fold.pending.clear();
   fold.delegates.clear();
-  fold.recent.clear();
 }
 
-/** How many finished delegates a session keeps for the rail's brief afterglow. */
-const RECENT_DELEGATES_CAP = 8;
+/** Drops finished delegates past the fade window (Infinity: never). */
+function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
+  if (fadeMs === Infinity) return;
+  for (const [id, d] of fold.recent) {
+    const ended = d.ended_at ? Date.parse(d.ended_at) : NaN;
+    if (!Number.isFinite(ended) || now - ended >= fadeMs) fold.recent.delete(id);
+  }
+}
 
-function apply(fold: Fold, env: Envelope): void {
+function apply(fold: Fold, env: Envelope, fadeMs: number): void {
   switch (env.type) {
     case "session.agent_state": {
       const state = (env.payload ?? {}) as Partial<AgentState>;
@@ -168,9 +177,7 @@ function apply(fold: Fold, env: Envelope): void {
         fold.delegates.delete(record.harness_id);
         fold.recent.delete(record.harness_id);
         fold.recent.set(record.harness_id, { ...record, ended_at: record.ended_at ?? env.timestamp });
-        while (fold.recent.size > RECENT_DELEGATES_CAP) {
-          fold.recent.delete(fold.recent.keys().next().value!);
-        }
+        pruneRecent(fold, fadeMs, Date.now());
       }
       return;
     }
@@ -226,7 +233,7 @@ function project(
     if (delegates.length > 0) {
       state.subagentsSince = delegates.map((d) => d.started_at).sort()[0];
     }
-    const recent = fold && (!session || session.activity === "active") ? [...fold.recent.values()] : [];
+    const recent = fold ? [...fold.recent.values()] : [];
     if (delegates.length + recent.length > 0) {
       state.delegates = [...delegates, ...recent].sort((a, b) => a.started_at.localeCompare(b.started_at));
     }
@@ -260,6 +267,8 @@ function project(
 export function useSessionAgentState(
   sessions: Session[] = [],
   openSessionId?: string,
+  /** How long a finished delegate keeps its row (DelegateRows' delegateFadeMs); Infinity: never fades. */
+  fadeMs: number = DEFAULT_DELEGATE_FADE_MS,
 ): Record<string, SessionAgentState> {
   const folds = useRef(new Map<string, Fold>());
   const [states, setStates] = useState<Record<string, SessionAgentState>>({});
@@ -269,6 +278,8 @@ export function useSessionAgentState(
   openRef.current = openSessionId;
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const fadeRef = useRef(fadeMs);
+  fadeRef.current = fadeMs;
 
   const publish = useCallback(() => setStates(project(folds.current, sessionsRef.current)), []);
 
@@ -280,38 +291,50 @@ export function useSessionAgentState(
         fold = emptyFold();
         folds.current.set(env.session_id, fold);
       }
-      apply(fold, env);
+      apply(fold, env, fadeRef.current);
       // A turn that ends in the session you're looking at was never news.
       if (env.session_id === openRef.current) fold.done = false;
       publish();
     });
-    // The cold read: delegates already running when this connection opened
-    // never announce themselves again, so one call answers for every
-    // session. Subscribed first, so nothing falls in the gap; anything the
-    // stream has spoken about since wins over this older snapshot.
+    return unsubscribe;
+  }, [publish]);
+
+  // The cold read: delegates that started or ended before this connection
+  // opened never announce themselves again, so one call answers for every
+  // session — the running ones, plus the finished ones the fade window still
+  // shows. Declared after the subscription, so nothing falls in the gap;
+  // anything the stream has spoken about since wins over this older snapshot.
+  // A changed window reads again.
+  useEffect(() => {
     let cancelled = false;
-    router
-      .listDelegates("running")
-      .then((running) => {
+    const read =
+      fadeMs === 0
+        ? router.listDelegates("running")
+        : fadeMs === Infinity
+          ? router.listDelegates()
+          : router.listDelegatesEndedAfter(new Date(Date.now() - fadeMs).toISOString());
+    read
+      .then((list) => {
         if (cancelled) return;
-        for (const d of running) {
+        for (const d of list) {
           let fold = folds.current.get(d.session_id);
           if (!fold) {
             fold = emptyFold();
             folds.current.set(d.session_id, fold);
           }
           if (fold.heard.has(d.harness_id)) continue;
-          fold.delegates.set(d.harness_id, d);
+          if (d.state === "running") fold.delegates.set(d.harness_id, d);
+          else fold.recent.set(d.harness_id, d);
         }
+        for (const fold of folds.current.values()) pruneRecent(fold, fadeMs, Date.now());
         publish();
       })
       // Best effort: without it, live events still fill the count in.
       .catch(() => undefined);
     return () => {
       cancelled = true;
-      unsubscribe();
     };
-  }, [publish]);
+  }, [fadeMs, publish]);
 
   // Republish when the mirror itself changes — between transitions the stream
   // says nothing, so a refetch is where a cold reader's state arrives. Keyed

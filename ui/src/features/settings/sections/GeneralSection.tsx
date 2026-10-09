@@ -3,7 +3,7 @@ import { Button } from "../../../components/Button/Button";
 import { PathField } from "../../../components/PathField/PathField";
 import { router } from "../../../router/client";
 import { fastModelAvailable } from "../../../router/fastModel";
-import type { Workspace } from "../../../router/types";
+import type { DelegateFade, Workspace } from "../../../router/types";
 import { ConversationImport } from "../ConversationImport";
 import { PreflightChecks } from "../PreflightChecks";
 import { RestartBadge } from "../RestartBadge";
@@ -230,9 +230,26 @@ export function GeneralSection({ config }: GeneralSectionProps) {
           Expose subagents in session list
         </label>
         <div className={styles.hint}>
-          Subagents a session's agent runs appear under it in the session list while they work, and briefly after they
+          Subagents a session's agent runs appear under it in the session list while they work, and for a while after they
           finish. Turn off to keep the list to sessions only — the conversation still shows every subagent.
         </div>
+      </div>
+      <div className={styles.row}>
+        <label className={styles.label} htmlFor="delegate-fade">
+          Fade out subagent cards after inactivity
+        </label>
+        <select
+          id="delegate-fade"
+          className={styles.input}
+          value={draft.delegate_fade ?? "10m"}
+          disabled={draft.hide_delegates_in_session_list === true}
+          onChange={(e) => setDraft({ ...draft, delegate_fade: e.target.value as DelegateFade })}
+        >
+          <option value="0m">0 min</option>
+          <option value="10m">10 min</option>
+          <option value="never">Never</option>
+        </select>
+        <div className={styles.hint}>Counted from when a subagent finishes. A running one never fades.</div>
       </div>
       {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): Commit… in
           the session dock's status line (and in its ⎇ popover) skips the

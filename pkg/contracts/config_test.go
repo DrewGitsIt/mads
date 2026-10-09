@@ -268,3 +268,18 @@ func TestFastModelEffectiveModeExplicitWins(t *testing.T) {
 		t.Errorf("effective mode = %q, want %q", got, FastModelModeOff)
 	}
 }
+
+// Empty is the 10-minute default, so a config predating the setting is valid.
+func TestValidateConfigDelegateFade(t *testing.T) {
+	c := DefaultConfig()
+	for _, f := range append([]DelegateFade{""}, DelegateFades...) {
+		c.DelegateFade = f
+		if verr := ValidateConfig(&c); !verr.Empty() {
+			t.Errorf("delegate_fade %q rejected: %+v", f, verr.Errors)
+		}
+	}
+	c.DelegateFade = "2m"
+	if verr := ValidateConfig(&c); verr.Empty() {
+		t.Error("delegate_fade 2m accepted")
+	}
+}

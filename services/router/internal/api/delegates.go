@@ -3,6 +3,7 @@ package api
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/providers/provider"
@@ -10,8 +11,25 @@ import (
 
 // handleListDelegates serves the delegate records (docs/DELEGATES-DESIGN.md),
 // filtered by ?state= — the session rail's cold read is state=running, one
-// call for every session rather than one per card.
+// call for every session rather than one per card — or by ?ended_after=, the
+// running ones plus those finished since (the rail under a fade window).
 func (s *server) handleListDelegates(w http.ResponseWriter, r *http.Request) {
+	if raw := r.URL.Query().Get("ended_after"); raw != "" {
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			var v contracts.ValidationError
+			v.Add("ended_after", "must be an RFC 3339 time")
+			writeError(w, &v)
+			return
+		}
+		list, err := s.data.DelegatesEndedAfter(r.Context(), t)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, list)
+		return
+	}
 	list, err := s.data.Delegates(r.Context(), contracts.DelegateState(r.URL.Query().Get("state")))
 	if err != nil {
 		writeError(w, err)

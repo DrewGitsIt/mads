@@ -1637,6 +1637,13 @@ export class FakeRouterClient implements RouterClient {
     return this.delegates.filter((d) => !state || d.state === state).map((d) => structuredClone(d));
   }
 
+  async listDelegatesEndedAfter(endedAfter: string): Promise<Delegate[]> {
+    const cutoff = Date.parse(endedAfter);
+    return this.delegates
+      .filter((d) => d.state === "running" || (d.ended_at !== undefined && Date.parse(d.ended_at) >= cutoff))
+      .map((d) => structuredClone(d));
+  }
+
   async getDelegateTranscript(sessionId: string, harnessId: string): Promise<DelegateTranscript> {
     const t = this.delegateTranscripts.get(`${sessionId}/${harnessId}`);
     return t ? structuredClone(t) : { available: false, messages: [] };

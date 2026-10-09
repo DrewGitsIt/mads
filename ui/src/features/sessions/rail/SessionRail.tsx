@@ -143,6 +143,8 @@ export interface SessionRailProps {
    * (harness-run subagents) as rows nested under its card. Default on.
    */
   showDelegates?: boolean;
+  /** Settings' "Fade out subagent cards after inactivity", in ms (delegateFadeMs). */
+  delegateFadeMs?: number;
   /** The delegate open in the main pane, if any — its row reads selected. */
   selectedDelegate?: { sessionId: string; harnessId: string };
   /** Opens a delegate in the main pane. */
@@ -172,6 +174,7 @@ export function SessionRail({
   filterKey,
   className,
   showDelegates = true,
+  delegateFadeMs,
   selectedDelegate,
   onOpenDelegate,
 }: SessionRailProps) {
@@ -421,6 +424,7 @@ export function SessionRail({
     labelContext,
     routerClient,
     showDelegates,
+    delegateFadeMs,
     selectedDelegate,
     onOpenDelegate,
   };
@@ -635,6 +639,7 @@ function RailRowGroup({
   labelContext,
   routerClient,
   showDelegates,
+  delegateFadeMs,
   selectedDelegate,
   onOpenDelegate,
 }: {
@@ -664,6 +669,7 @@ function RailRowGroup({
   labelContext: RailLabelContext;
   routerClient: RouterClient;
   showDelegates: boolean;
+  delegateFadeMs?: number;
   selectedDelegate?: { sessionId: string; harnessId: string };
   onOpenDelegate?: (d: Delegate) => void;
 }) {
@@ -678,6 +684,7 @@ function RailRowGroup({
         delegates={list}
         selectedHarnessId={selectedDelegate?.sessionId === sessionId ? selectedDelegate.harnessId : undefined}
         onOpen={onOpenDelegate}
+        fadeMs={delegateFadeMs}
       />
     );
   };

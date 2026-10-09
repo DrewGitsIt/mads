@@ -178,6 +178,16 @@ describe("GeneralSection", () => {
     expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ hide_delegates_in_session_list: true }));
   });
 
+  it("fades subagent cards after 10 min by default, and stores the choice", () => {
+    const setDraft = vi.fn();
+    render(<GeneralSection config={makeConfig({ setDraft })} />);
+    const select = screen.getByLabelText("Fade out subagent cards after inactivity") as HTMLSelectElement;
+    expect(select.value).toBe("10m");
+    expect([...select.options].map((o) => o.text)).toEqual(["0 min", "10 min", "Never"]);
+    fireEvent.change(select, { target: { value: "never" } });
+    expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ delegate_fade: "never" }));
+  });
+
   describe("Write commit messages for me", () => {
     function stubFastModel(providerCompleter: boolean) {
       const base = (globalThis.fetch as unknown as (i: RequestInfo | URL) => Promise<Response>);

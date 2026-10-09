@@ -1,26 +1,53 @@
 import { useState } from "react";
-import type { Delegate } from "../../../router/types";
+import type { Delegate, DelegateFade } from "../../../router/types";
 import { KindIcon, Spinner, StatusGlyph } from "../../../conversation/activity/primitives";
 import { formatElapsed, formatMs } from "../../../conversation/activity/toolDisplay";
 import { useElapsedNow, useRelativeNow } from "../../../utils/relativeTime";
 import styles from "./DelegateRows.module.css";
 
 /** How long a finished delegate keeps its row — long enough to see it land. */
-export const RECENT_DELEGATE_MS = 2 * 60 * 1000;
+export const DEFAULT_DELEGATE_FADE_MS = 10 * 60 * 1000;
+
+/**
+ * Settings' "Fade out subagent cards after inactivity" (Config.delegate_fade)
+ * as a window in ms: how long a finished delegate keeps its row, counted from
+ * when it finished. Infinity is "Never"; absent is the 10-minute default.
+ */
+export function delegateFadeMs(fade?: DelegateFade): number {
+  switch (fade) {
+    case "0m":
+      return 0;
+    case "never":
+      return Infinity;
+    default:
+      return DEFAULT_DELEGATE_FADE_MS;
+  }
+}
 
 /** Rows shown before the rest fold behind "+N more". */
 export const DELEGATE_ROWS_SHOWN = 3;
 
 /**
  * The delegates still worth a row: every running one, plus finished ones
- * whose end is within RECENT_DELEGATE_MS of now. Oldest start first.
+ * whose end is within `fadeMs` of now (delegateFadeMs). Running first, oldest
+ * start first; then finished, most recently ended first — under "Never" a
+ * session's history piles up behind "+N more", and what is running or just
+ * ended must not be what gets folded away.
  */
-export function visibleDelegates(delegates: Delegate[], now: number): Delegate[] {
-  return delegates.filter((d) => {
-    if (d.state === "running") return true;
-    const ended = d.ended_at ? Date.parse(d.ended_at) : NaN;
-    return Number.isFinite(ended) && now - ended < RECENT_DELEGATE_MS;
-  });
+export function visibleDelegates(delegates: Delegate[], now: number, fadeMs = DEFAULT_DELEGATE_FADE_MS): Delegate[] {
+  const ended = (d: Delegate) => (d.ended_at ? Date.parse(d.ended_at) : NaN);
+  const running = delegates
+    .filter((d) => d.state === "running")
+    .sort((a, b) => a.started_at.localeCompare(b.started_at));
+  const finished = delegates
+    .filter((d) => {
+      if (d.state === "running") return false;
+      if (fadeMs === Infinity) return true;
+      const end = ended(d);
+      return Number.isFinite(end) && now - end < fadeMs;
+    })
+    .sort((a, b) => (ended(b) || 0) - (ended(a) || 0));
+  return [...running, ...finished];
 }
 
 /**
@@ -34,14 +61,17 @@ export function DelegateRows({
   delegates,
   selectedHarnessId,
   onOpen,
+  fadeMs = DEFAULT_DELEGATE_FADE_MS,
 }: {
   delegates: Delegate[];
   selectedHarnessId?: string;
   onOpen?: (d: Delegate) => void;
+  /** How long a finished delegate keeps its row (delegateFadeMs). */
+  fadeMs?: number;
 }) {
   const now = useRelativeNow();
   const [expanded, setExpanded] = useState(false);
-  const visible = visibleDelegates(delegates, now);
+  const visible = visibleDelegates(delegates, now, fadeMs);
   if (visible.length === 0) return null;
   const shown = expanded ? visible : visible.slice(0, DELEGATE_ROWS_SHOWN);
   const hidden = visible.length - shown.length;

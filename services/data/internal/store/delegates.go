@@ -138,6 +138,25 @@ func (s *Delegates) List(ctx context.Context, state contracts.DelegateState) ([]
 	return s.query(ctx, `SELECT data FROM delegates WHERE state = ? ORDER BY created_at`, string(state))
 }
 
+// LiveOrEndedAfter lists every running delegate plus every finished one that
+// ended at or after t, oldest first — the session rail's cold read under a
+// fade window (Config.DelegateFade). Filtered here rather than in SQL: the
+// end time lives inside the JSON document, where its RFC 3339 form (a
+// variable number of fractional digits) doesn't sort as text.
+func (s *Delegates) LiveOrEndedAfter(ctx context.Context, t time.Time) ([]contracts.Delegate, error) {
+	all, err := s.query(ctx, `SELECT data FROM delegates ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	out := []contracts.Delegate{}
+	for _, d := range all {
+		if d.State == contracts.DelegateRunning || (d.EndedAt != nil && !d.EndedAt.Before(t)) {
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
 func (s *Delegates) query(ctx context.Context, q string, args ...any) ([]contracts.Delegate, error) {
 	rows, err := s.log.db.QueryContext(ctx, q, args...)
 	if err != nil {

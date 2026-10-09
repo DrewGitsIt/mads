@@ -18,7 +18,8 @@ import { useSessionLinks } from "./state/useSessionLinks";
 import { useSessionsList } from "./state/useSessionsList";
 import { SessionWorkspace } from "./workspace/SessionWorkspace";
 import { DelegateView } from "./delegate/DelegateView";
-import { useShowDelegates } from "./state/useShowDelegates";
+import { useDelegateSettings } from "./state/useDelegateSettings";
+import { delegateFadeMs } from "./rail/DelegateRows";
 import type { WorkspaceTabId } from "./workspace/tabRegistry";
 import styles from "./SessionsSurface.module.css";
 
@@ -60,12 +61,13 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
   // A delegate (harness-run subagent) open in the main pane in place of its
   // parent's workspace — opened from its row in the rail.
   const [openDelegate, setOpenDelegate] = useState<{ sessionId: string; harnessId: string }>();
-  const showDelegates = useShowDelegates(router);
+  const delegateSettings = useDelegateSettings(router);
+  const fadeMs = delegateFadeMs(delegateSettings.fade);
   // One subscription for the whole rail, however many cards are listed. The
   // list is handed in too: each record mirrors its session's latest agent
   // state, which is what makes a reload mid-turn correct before the next
   // transition arrives. Opening a session retires its sticky "Done · your turn".
-  const agentStates = useSessionAgentState(sessions, selectedId);
+  const agentStates = useSessionAgentState(sessions, selectedId, fadeMs);
   const [initialTab, setInitialTab] = useState<WorkspaceTabId>();
   const [actionError, setActionError] = useState<{ title: string; message: string }>();
   const [provisioningSessionId, setProvisioningSessionId] = useState<string>();
@@ -142,7 +144,8 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             sessionsLoaded={!loading}
             routerClient={router}
             selectedId={selectedId}
-            showDelegates={showDelegates}
+            showDelegates={delegateSettings.show}
+            delegateFadeMs={fadeMs}
             selectedDelegate={openDelegate}
             onOpenDelegate={(d) => {
               setOpenDelegate({ sessionId: d.session_id, harnessId: d.harness_id });

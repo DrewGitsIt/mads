@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/services/data/internal/store"
@@ -37,8 +38,26 @@ func delegateRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, list)
 	})
 
-	// ?state= filters (the rail's cold read is state=running).
+	// ?state= filters (the rail's cold read is state=running);
+	// ?ended_after=<RFC 3339> instead lists the running ones plus those that
+	// finished since then (the rail under a fade window).
 	mux.HandleFunc("GET /delegates", func(w http.ResponseWriter, r *http.Request) {
+		if raw := r.URL.Query().Get("ended_after"); raw != "" {
+			t, err := time.Parse(time.RFC3339Nano, raw)
+			if err != nil {
+				var v contracts.ValidationError
+				v.Add("ended_after", "must be an RFC 3339 time")
+				writeStoreError(w, &v)
+				return
+			}
+			list, err := delegates.LiveOrEndedAfter(r.Context(), t)
+			if err != nil {
+				writeStoreError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, list)
+			return
+		}
 		list, err := delegates.List(r.Context(), contracts.DelegateState(r.URL.Query().Get("state")))
 		if err != nil {
 			writeStoreError(w, err)

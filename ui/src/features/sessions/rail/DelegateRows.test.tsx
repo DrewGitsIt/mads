@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { DelegateRows, RECENT_DELEGATE_MS, visibleDelegates } from "./DelegateRows";
+import { DEFAULT_DELEGATE_FADE_MS, DelegateRows, delegateFadeMs, visibleDelegates } from "./DelegateRows";
 import type { Delegate } from "../../../router/types";
 
 const NOW = Date.parse("2026-10-08T12:00:00Z");
@@ -22,10 +22,35 @@ function d(id: string, extra: Partial<Delegate> = {}): Delegate {
 }
 
 describe("visibleDelegates", () => {
-  it("keeps every running delegate and finished ones only briefly", () => {
-    const fresh = d("fresh", { state: "completed", ended_at: new Date(NOW - 10_000).toISOString() });
-    const stale = d("stale", { state: "failed", ended_at: new Date(NOW - RECENT_DELEGATE_MS - 1).toISOString() });
-    expect(visibleDelegates([d("a"), fresh, stale], NOW).map((x) => x.harness_id)).toEqual(["a", "fresh"]);
+  const ago = (ms: number) => new Date(NOW - ms).toISOString();
+  const fresh = d("fresh", { state: "completed", ended_at: ago(10_000) });
+  const stale = d("stale", { state: "failed", ended_at: ago(DEFAULT_DELEGATE_FADE_MS + 1) });
+  const ancient = d("ancient", { state: "completed", ended_at: ago(30 * 24 * 3600_000) });
+  const ids = (list: Delegate[]) => list.map((x) => x.harness_id);
+
+  it("keeps every running delegate, and finished ones for the fade window (10 min by default)", () => {
+    expect(ids(visibleDelegates([d("a"), fresh, stale], NOW))).toEqual(["a", "fresh"]);
+  });
+
+  it("follows the setting: 0 min shows only running ones, Never shows every one", () => {
+    expect(ids(visibleDelegates([d("a"), fresh, stale], NOW, delegateFadeMs("0m")))).toEqual(["a"]);
+    expect(ids(visibleDelegates([ancient, d("a"), fresh, stale], NOW, delegateFadeMs("never")))).toEqual([
+      "a",
+      "fresh",
+      "stale",
+      "ancient",
+    ]);
+    expect(delegateFadeMs(undefined)).toBe(DEFAULT_DELEGATE_FADE_MS);
+  });
+
+  it("puts running ones first, then the most recently finished — what folds behind '+N more' is the oldest", () => {
+    const early = d("early", { started_at: "2026-10-08T11:00:00Z" });
+    expect(ids(visibleDelegates([stale, fresh, d("late"), early], NOW, Infinity))).toEqual([
+      "early",
+      "late",
+      "fresh",
+      "stale",
+    ]);
   });
 });
 

@@ -351,6 +351,8 @@ export interface RouterClient {
   // --- Delegates (docs/DELEGATES-DESIGN.md) ---
   /** Every session's delegates, only those in `state` when given — the rail's cold read is "running". */
   listDelegates(state?: DelegateState): Promise<Delegate[]>;
+  /** Every running delegate plus every finished one that ended at or after `endedAfter` (RFC 3339). */
+  listDelegatesEndedAfter(endedAfter: string): Promise<Delegate[]>;
   /** One session's delegates, oldest first. */
   getSessionDelegates(sessionId: string): Promise<Delegate[]>;
   /** One delegate's own transcript, read from its harness's store. */
@@ -1278,6 +1280,10 @@ export class FetchRouterClient implements RouterClient {
 
   async listDelegates(state?: DelegateState): Promise<Delegate[]> {
     return routerGet(this.baseUrl, state ? `/delegates?state=${encodeURIComponent(state)}` : "/delegates");
+  }
+
+  async listDelegatesEndedAfter(endedAfter: string): Promise<Delegate[]> {
+    return routerGet(this.baseUrl, `/delegates?ended_after=${encodeURIComponent(endedAfter)}`);
   }
 
   async getDelegateTranscript(sessionId: string, harnessId: string): Promise<DelegateTranscript> {

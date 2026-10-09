@@ -669,6 +669,9 @@ export interface QueueChanged {
 export type SendResult = { status: "accepted" } | { status: "queued"; queued: QueuedMessage };
 
 /** mirrors pkg/contracts/delegate.go DelegateCapabilities (docs/DELEGATES-DESIGN.md C1–C3). */
+/** mirrors pkg/contracts/config.go DelegateFade. */
+export type DelegateFade = "0m" | "10m" | "never";
+
 export interface DelegateCapabilities {
   /** C1: its own durable transcript is on disk — only ever true on evidence. */
   transcript: boolean;
@@ -1331,6 +1334,9 @@ export interface Config {
   // HideDelegatesInSessionList — the inverse of Settings' "Expose subagents
   // in session list". Optional and negatively named: absent shows them.
   hide_delegates_in_session_list?: boolean;
+  // delegate_fade mirrors pkg/contracts/config.go's DelegateFade — Settings'
+  // "Fade out subagent cards after inactivity". Absent means "10m".
+  delegate_fade?: DelegateFade;
 
   default_workspace?: string;
   default_provider?: string;

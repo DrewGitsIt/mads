@@ -3,6 +3,7 @@ package dataclient_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -338,5 +339,25 @@ func TestClientDelegateWireRoundTrip(t *testing.T) {
 	}
 	if len(running) != 0 {
 		t.Errorf("Delegates(running) = %+v, want none", running)
+	}
+
+	// The rail under a fade window: running ones always, finished ones only
+	// when they ended at or after the cutoff.
+	if _, err := c.PutDelegate(ctx, contracts.Delegate{
+		SessionID: sess.ID, HarnessID: "b2", State: contracts.DelegateRunning, Runs: 1, StartedAt: start,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(list []contracts.Delegate) (out []string) {
+		for _, d := range list {
+			out = append(out, d.HarnessID)
+		}
+		return out
+	}
+	if got, err := c.DelegatesEndedAfter(ctx, ended); err != nil || fmt.Sprint(ids(got)) != "[a7f5 b2]" {
+		t.Errorf("DelegatesEndedAfter(the end) = %v, %v; want both", ids(got), err)
+	}
+	if got, err := c.DelegatesEndedAfter(ctx, ended.Add(time.Nanosecond)); err != nil || fmt.Sprint(ids(got)) != "[b2]" {
+		t.Errorf("DelegatesEndedAfter(just after the end) = %v, %v; want only the running one", ids(got), err)
 	}
 }

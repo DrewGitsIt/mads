@@ -79,6 +79,7 @@ describe("useSessionAgentState", () => {
     FakeEventSource.instances = [];
     vi.stubGlobal("EventSource", FakeEventSource);
     vi.spyOn(router, "listDelegates").mockResolvedValue([]);
+    vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -182,7 +183,8 @@ describe("useSessionAgentState", () => {
   });
 
   it("keeps a backgrounded delegate past its parent's turn end — the 'Ready' bug", async () => {
-    const { result } = renderHook(() => useSessionAgentState());
+    // Never fades: this story's stamps are fixed, long before the test runs.
+    const { result } = renderHook(() => useSessionAgentState([], undefined, Infinity));
     working("s1", "Running bash · make check", "2026-09-28T10:00:00Z");
     delegate("s1", "bg", "running", { backgrounded: true }, "2026-09-28T10:00:10Z");
     idle("s1");
@@ -197,7 +199,7 @@ describe("useSessionAgentState", () => {
     expect(result.current.s1?.delegates?.map((d) => [d.harness_id, d.state])).toEqual([["bg", "running"]]);
     // Its later report doesn't retire the sticky "Done" either — it is not
     // the next turn starting. The finished row stays, stamped with its end,
-    // for the rail's brief afterglow.
+    // for the fade window.
     delegate("s1", "bg", "completed", { backgrounded: true }, "2026-09-28T10:03:00Z");
     await waitFor(() => expect(result.current.s1?.subagents).toBe(0));
     expect(result.current.s1?.done).toBe(true);
@@ -258,7 +260,8 @@ describe("useSessionAgentState", () => {
       return listed!(state);
     });
 
-    const { result } = renderHook(() => useSessionAgentState());
+    // "0 min": only running delegates are worth a cold read.
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 0));
     expect(router.listDelegates).toHaveBeenCalledWith("running");
     delegate("s2", "done-already", "completed");
     resolveLate();
@@ -415,5 +418,61 @@ describe("useSessionAgentState", () => {
       rerender({ sessions: [makeSession({ agent_state: MID_TURN })] });
       await waitFor(() => expect(result.current.s1?.label).toBe("Running bash · make check"));
     });
+  });
+});
+
+describe("useSessionAgentState — the fade window (Settings' 'Fade out subagent cards after inactivity')", () => {
+  beforeEach(() => {
+    seq = 0;
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.spyOn(router, "listDelegates").mockResolvedValue([]);
+    vi.spyOn(router, "listDelegatesEndedAfter").mockResolvedValue([]);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it("cold-reads what the window shows — running plus recently finished — so a reload keeps them", async () => {
+    vi.mocked(router.listDelegatesEndedAfter).mockResolvedValue([
+      record("s1", "run"),
+      { ...record("s1", "fin"), state: "completed", ended_at: ago(60_000) },
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 10 * 60_000));
+    await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id).sort()).toEqual(["fin", "run"]));
+    expect(result.current.s1?.subagents).toBe(1);
+    const cutoff = Date.parse(vi.mocked(router.listDelegatesEndedAfter).mock.calls[0][0]);
+    expect(Math.abs(Date.now() - 10 * 60_000 - cutoff)).toBeLessThan(5_000);
+  });
+
+  it("reads every delegate ever under Never", async () => {
+    vi.mocked(router.listDelegates).mockResolvedValue([
+      { ...record("s1", "old"), state: "completed", ended_at: "2026-01-01T00:00:00Z" },
+    ]);
+    const { result } = renderHook(() => useSessionAgentState([], undefined, Infinity));
+    await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["old"]));
+    expect(router.listDelegates).toHaveBeenCalledWith();
+  });
+
+  it("keeps finished delegates under a session that goes to sleep, and drops its running ones", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, Infinity));
+    delegate("s1", "fin", "running");
+    delegate("s1", "fin", "completed");
+    delegate("s1", "live", "running");
+    await waitFor(() => expect(result.current.s1?.delegates).toHaveLength(2));
+
+    emit("session.activity_changed", "s1", { activity: "inactive" });
+    await waitFor(() => expect(result.current.s1?.subagents).toBe(0));
+    expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["fin"]);
+  });
+
+  it("drops a finished delegate the window has passed", async () => {
+    const { result } = renderHook(() => useSessionAgentState([], undefined, 60_000));
+    emit("session.delegate_changed", "s1", { ...record("s1", "old"), state: "completed", ended_at: ago(120_000) });
+    emit("session.delegate_changed", "s1", { ...record("s1", "new"), state: "completed", ended_at: ago(1_000) });
+    await waitFor(() => expect(result.current.s1?.delegates?.map((d) => d.harness_id)).toEqual(["new"]));
   });
 });

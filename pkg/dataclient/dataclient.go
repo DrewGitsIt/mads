@@ -310,6 +310,14 @@ func (c *Client) Delegates(ctx context.Context, state contracts.DelegateState) (
 	return out, err
 }
 
+// DelegatesEndedAfter lists every running delegate plus every finished one
+// that ended at or after t.
+func (c *Client) DelegatesEndedAfter(ctx context.Context, t time.Time) ([]contracts.Delegate, error) {
+	var out []contracts.Delegate
+	err := c.do(ctx, http.MethodGet, "/delegates?ended_after="+url.QueryEscape(t.UTC().Format(time.RFC3339Nano)), nil, &out)
+	return out, err
+}
+
 // RecordSessionTurnEnd stamps LastTurnAt — and LastUsage, when the provider
 // reported any — in one atomic round trip, unlike the Session-then-
 // UpdateSession pair it replaces: that one could drop a field written

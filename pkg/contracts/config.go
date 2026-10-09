@@ -48,6 +48,34 @@ func (t ModelTier) Valid() bool {
 	return false
 }
 
+// DelegateFade is Settings' "Fade out subagent cards after inactivity": how
+// long a finished delegate keeps its row in the session rail. Measured from
+// when it finished — a running delegate never fades. Empty means the default,
+// DelegateFade10m, so every stored config predating it reads as that.
+type DelegateFade string
+
+const (
+	DelegateFadeImmediate DelegateFade = "0m"
+	DelegateFade10m       DelegateFade = "10m"
+	DelegateFadeNever     DelegateFade = "never"
+)
+
+// DelegateFades is the full registry, for validation and enumeration.
+var DelegateFades = []DelegateFade{DelegateFadeImmediate, DelegateFade10m, DelegateFadeNever}
+
+// Valid reports whether f is a registered fade, or empty (the default).
+func (f DelegateFade) Valid() bool {
+	if f == "" {
+		return true
+	}
+	for _, v := range DelegateFades {
+		if f == v {
+			return true
+		}
+	}
+	return false
+}
+
 // ThemeMode is the display theme (MADS-UX §3.9 Theme & Palette panel):
 // dark/light are explicit choices, system follows the OS preference.
 type ThemeMode string
@@ -210,6 +238,9 @@ type Config struct {
 	// the zero value — every stored config predating it — shows them, the
 	// same idiom as AllowSleepDuringPipelines.
 	HideDelegatesInSessionList bool `json:"hide_delegates_in_session_list"`
+	// DelegateFade is Settings' "Fade out subagent cards after inactivity"
+	// (see DelegateFade); empty is the 10-minute default.
+	DelegateFade DelegateFade `json:"delegate_fade,omitempty"`
 
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
@@ -371,6 +402,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if c.EnvMode != "" && !c.EnvMode.Valid() {
 		v.Add("env_mode", "must be one of: inherit, isolated")
+	}
+	if !c.DelegateFade.Valid() {
+		v.Add("delegate_fade", "must be one of: 0m, 10m, never")
 	}
 	if !c.Theme.Valid() {
 		v.Add("theme", "must be one of: dark, light, system")
