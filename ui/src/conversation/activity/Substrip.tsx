@@ -1,6 +1,6 @@
 import type { TaskModel } from "./conversationItems";
 import { KindIcon, Spinner } from "./primitives";
-import { taskCounters } from "./TaskCard";
+import { TaskCounters } from "./TaskCard";
 import styles from "./Substrip.module.css";
 
 export interface SubstripEntry {
@@ -42,7 +42,9 @@ export function Substrip({
             </span>
           )}
           <span className={styles.counters}>
-            <span>{taskCounters(model)}</span>
+            <span>
+              <TaskCounters model={model} />
+            </span>
             <Spinner />
           </span>
         </button>

@@ -2,7 +2,8 @@ import type { PermissionRequest, ToolStatus, ToolUse } from "../../router/types"
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
 import type { TaskModel } from "./conversationItems";
 import { KindIcon, Spinner, StatusGlyph } from "./primitives";
-import { formatMs, formatTokens } from "./toolDisplay";
+import { formatElapsed, formatMs, formatTokens } from "./toolDisplay";
+import { useElapsedNow } from "../../utils/relativeTime";
 import styles from "./TaskCard.module.css";
 
 export interface TaskCardProps {
@@ -24,12 +25,60 @@ export interface TaskCardProps {
 
 const noResolve = async () => {};
 
-export function taskCounters(model: TaskModel): string {
+/** Hover text for an ended delegate: what ended it, and whether mads had to conclude that. */
+function stateTitle(model?: TaskModel): string | undefined {
+  if (!model?.state || model.state === "running") return undefined;
+  const why = model.status ? ` (${model.status.replace("_", " ")})` : "";
+  return model.inferred ? `${model.state}${why} — concluded by mads, no report from the agent` : `${model.state}${why}`;
+}
+
+/**
+ * The card's counters. With `now` (a running task), the duration is a live
+ * clock from the run's start — the harness only reports duration_ms when a
+ * subagent tool finishes, so read alone it moved in steps between tools.
+ */
+export function taskCounters(model: TaskModel, now?: number): string {
   const parts: string[] = [];
   if (model.totalTokens !== undefined) parts.push(`${formatTokens(model.totalTokens)} tok`);
   if (model.toolUses !== undefined) parts.push(`${model.toolUses} tools`);
-  if (model.durationMs !== undefined) parts.push(formatMs(model.durationMs));
+  const started = model.startedAt ? Date.parse(model.startedAt) : NaN;
+  if (now !== undefined && model.running && Number.isFinite(started)) {
+    parts.push(formatElapsed(Math.max(model.durationMs ?? 0, now - started)));
+  } else if (model.durationMs !== undefined) {
+    parts.push(formatMs(model.durationMs));
+  }
   return parts.join(" · ");
+}
+
+/** taskCounters as a component: a running task's re-render on the shared 1s clock. */
+export function TaskCounters({ model }: { model: TaskModel }) {
+  return model.running ? <LiveTaskCounters model={model} /> : <>{taskCounters(model)}</>;
+}
+
+function LiveTaskCounters({ model }: { model: TaskModel }) {
+  const now = useElapsedNow();
+  return <>{taskCounters(model, now)}</>;
+}
+
+/**
+ * The status glyph for a task's state. A delegate record (model.state) says
+ * how it ended — failed and stopped included, which the task-line fold used
+ * to render as a green check (any notification) or an interrupted mark.
+ */
+export function TaskStatusGlyph({ model, blocked }: { model?: TaskModel; blocked?: boolean }) {
+  if (blocked) return <StatusGlyph status="blocked" />;
+  switch (model?.state) {
+    case "running":
+      return <Spinner />;
+    case "completed":
+      return <StatusGlyph status="completed" />;
+    case "failed":
+      return <StatusGlyph status="failed" />;
+    case "stopped":
+    case "orphaned":
+      return <StatusGlyph status="interrupted" />;
+  }
+  return null;
 }
 
 function inputField(tool: ToolUse, key: string): string | undefined {
@@ -80,10 +129,14 @@ export function TaskCard({
             {model.currentStep}
           </span>
         )}
-        <span className={styles.meta}>
-          {counters && <span data-testid="task-counters">{counters}</span>}
-          {blocked ? (
-            <StatusGlyph status="blocked" />
+        <span className={styles.meta} title={stateTitle(model)}>
+          {counters && (
+            <span data-testid="task-counters">
+              <TaskCounters model={model!} />
+            </span>
+          )}
+          {blocked || model?.state ? (
+            <TaskStatusGlyph model={model} blocked={blocked} />
           ) : running ? (
             <Spinner />
           ) : completed ? (

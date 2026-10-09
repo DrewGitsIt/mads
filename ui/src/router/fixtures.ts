@@ -1626,6 +1626,10 @@ export class FakeRouterClient implements RouterClient {
     throw new Error("not fixtured: publishRegistryItems");
   }
 
+  async getSessionDelegates(sessionId: string): Promise<Delegate[]> {
+    return this.delegates.filter((d) => d.session_id === sessionId).map((d) => structuredClone(d));
+  }
+
   async listDelegates(state?: DelegateState): Promise<Delegate[]> {
     return this.delegates.filter((d) => !state || d.state === state).map((d) => structuredClone(d));
   }

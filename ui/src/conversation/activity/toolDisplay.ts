@@ -212,6 +212,16 @@ export function formatMs(ms: number): string {
   return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s`;
 }
 
+/**
+ * A live elapsed counter: whole seconds, so a 1s tick moves it by exactly
+ * one and never flickers tenths ("31s", "6m 02s").
+ */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total}s`;
+  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
+}
+
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   return `${(n / 1000).toFixed(1)}k`;

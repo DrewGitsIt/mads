@@ -4,7 +4,7 @@ import { ActivityGroup } from "./ActivityGroup";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
-import { taskCounters } from "./TaskCard";
+import { TaskCounters, TaskStatusGlyph } from "./TaskCard";
 import {
   commandInput,
   diffHunks,
@@ -302,9 +302,13 @@ function SubagentDetail({
         <span className={styles.title}>{view.title}</span>
         <span className={styles.meta}>
           {view.subtype && <span>{view.subtype}</span>}
-          {view.task && <span>{taskCounters(view.task)}</span>}
-          {blocked ? (
-            <StatusGlyph status="blocked" />
+          {view.task && (
+            <span>
+              <TaskCounters model={view.task} />
+            </span>
+          )}
+          {blocked || view.task?.state ? (
+            <TaskStatusGlyph model={view.task} blocked={blocked} />
           ) : running ? (
             <Spinner />
           ) : view.task?.completed ? (

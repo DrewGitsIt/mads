@@ -1,5 +1,7 @@
 import type {
   CompactStatus,
+  Delegate,
+  DelegateState,
   Envelope,
   PermissionRequest,
   SubagentEvent,
@@ -297,8 +299,21 @@ export interface TaskModel {
   running: boolean;
   /** A task_notification arrived — the completed variant with inline summary. */
   completed: boolean;
-  /** When the task's first lifecycle event was logged — replay only (see resumeRunningTasks). */
+  /**
+   * When the task (its latest run, once a delegate record says so) started —
+   * the live elapsed counter's origin. From a replayed lifecycle it is the
+   * first event's log stamp (see resumeRunningTasks).
+   */
   startedAt?: string;
+  /**
+   * The server's delegate state (docs/DELEGATES-DESIGN.md), when a record
+   * exists — authoritative over everything folded from task lines here:
+   * mergeDelegates() sets running/completed from it. Absent for harnesses
+   * that keep no record, which fall back to the task-line fold.
+   */
+  state?: DelegateState;
+  /** Whether mads concluded `state` rather than the harness reporting it. */
+  inferred?: boolean;
 }
 
 /** Folds one task lifecycle event into the map (immutably — safe as a state update). */
@@ -313,7 +328,11 @@ export function applyTaskEvent(
   const model: TaskModel = prev
     ? { ...prev }
     : { taskId: task.task_id, running: false, completed: false, startedAt: at };
-  if (task.tool_use_id) model.toolUseId = task.tool_use_id;
+  // First seen wins: a resumed delegate's lifecycle lines (a Claude Code
+  // relay) carry the resuming SendMessage call's id, while its own events
+  // stay tagged with the original spawn — moving the anchor would detach
+  // the card from its stream.
+  if (task.tool_use_id && !model.toolUseId) model.toolUseId = task.tool_use_id;
   // A progress line's description narrates the current step; letting it
   // overwrite the name would retitle the card on every tick.
   if (task.description) {
@@ -377,6 +396,41 @@ export function finishRunningTasks(tasks: ReadonlyMap<string, TaskModel>): Map<s
     }
   }
   return changed ? next : new Map(tasks);
+}
+
+/**
+ * Lays the server's delegate records over the task-line fold: a record is
+ * the one authority on whether a delegate is running and how it ended, so
+ * it overrides running/completed (and the turn-edge guesses
+ * finishRunningTasks/resumeRunningTasks make) wherever one exists. Live
+ * counters and the current step keep coming from the task lines; the
+ * anchor, name and start come from the record when the fold lacks them.
+ */
+export function mergeDelegates(
+  tasks: ReadonlyMap<string, TaskModel>,
+  delegates: ReadonlyMap<string, Delegate>,
+): Map<string, TaskModel> {
+  const next = new Map(tasks);
+  for (const d of delegates.values()) {
+    const prev = next.get(d.harness_id) ?? { taskId: d.harness_id, running: false, completed: false };
+    next.set(d.harness_id, {
+      ...prev,
+      toolUseId: d.tool_use_id ?? prev.toolUseId,
+      description: prev.description ?? d.description,
+      subagentType: prev.subagentType ?? d.type,
+      isBackgrounded: prev.isBackgrounded ?? d.backgrounded,
+      startedAt: d.started_at,
+      state: d.state,
+      inferred: d.inferred,
+      running: d.state === "running",
+      completed: d.state === "completed",
+      status: d.reason ?? prev.status,
+      totalTokens: d.total_tokens ?? prev.totalTokens,
+      toolUses: d.tool_uses ?? prev.toolUses,
+      durationMs: d.duration_ms ?? prev.durationMs,
+    });
+  }
+  return next;
 }
 
 export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<string, TaskModel> {

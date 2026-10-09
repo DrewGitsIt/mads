@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { Envelope, TranscriptMessage } from "../../router/types";
+import type { Delegate, Envelope, TranscriptMessage } from "../../router/types";
 import {
+  mergeDelegates,
   appendSubagentItem,
   applyTaskEvent,
   buildItems,
@@ -294,5 +295,48 @@ describe("replayedCompactStatus", () => {
     });
     const h = foldHistoryEvents([env(2, { phase: "done", success: true }), env(1, { phase: "start" })]);
     expect(h.compact).toEqual({ status: { phase: "done", success: true }, timestamp: "2026-09-28T10:00:02Z" });
+  });
+});
+
+describe("delegate records over the task-line fold", () => {
+  const rec = (extra: Partial<Delegate>): Delegate => ({
+    id: "dlg_1",
+    session_id: "s1",
+    harness_id: "a1",
+    tool_use_id: "toolu_spawn",
+    state: "running",
+    runs: 1,
+    started_at: "2026-10-08T10:00:00Z",
+    created_at: "2026-10-08T10:00:00Z",
+    updated_at: "2026-10-08T10:00:00Z",
+    ...extra,
+  });
+
+  it("keeps the first anchor when a resumed delegate reports the resuming call's id", () => {
+    let tasks = applyTaskEvent(new Map(), { phase: "started", task_id: "a1", tool_use_id: "toolu_spawn" }, true);
+    tasks = applyTaskEvent(tasks, { phase: "notification", task_id: "a1", tool_use_id: "toolu_spawn", status: "completed" }, true);
+    tasks = applyTaskEvent(tasks, { phase: "started", task_id: "a1", tool_use_id: "toolu_sendmessage" }, true);
+    expect(tasks.get("a1")?.toolUseId).toBe("toolu_spawn");
+  });
+
+  it("lets the record decide running and how it ended, over turn-edge guesses", () => {
+    // The fold concluded "interrupted" at a turn end; the record knows better.
+    const folded = finishRunningTasks(
+      applyTaskEvent(new Map(), { phase: "started", task_id: "a1", tool_use_id: "toolu_spawn", description: "audit" }, true),
+    );
+    expect(folded.get("a1")?.running).toBe(false);
+
+    const live = mergeDelegates(folded, new Map([["a1", rec({ state: "running" })]])).get("a1")!;
+    expect(live).toMatchObject({ running: true, completed: false, state: "running", description: "audit", startedAt: "2026-10-08T10:00:00Z" });
+
+    const failed = mergeDelegates(folded, new Map([["a1", rec({ state: "failed", reason: "failed" })]])).get("a1")!;
+    expect(failed).toMatchObject({ running: false, completed: false, state: "failed", status: "failed" });
+  });
+
+  it("materializes a delegate the fold never saw, anchored and named from its record", () => {
+    const got = mergeDelegates(new Map(), new Map([["a1", rec({ description: "audit", type: "Explore", state: "completed", duration_ms: 1900 })]]));
+    expect(got.get("a1")).toMatchObject({
+      taskId: "a1", toolUseId: "toolu_spawn", description: "audit", subagentType: "Explore", completed: true, durationMs: 1900,
+    });
   });
 });

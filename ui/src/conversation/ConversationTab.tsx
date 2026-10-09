@@ -11,6 +11,7 @@ import {
   WORKSPACE_SESSION_EVENT_TYPES,
 } from "../router/sessionEventTypes";
 import type {
+  Delegate,
   AgentState,
   CommitError,
   QueueChanged,
@@ -45,6 +46,7 @@ import {
   CONVERSATION_EVENT_TYPES,
   finishRunningTasks,
   foldHistoryEvents,
+  mergeDelegates,
   replayedCompactStatus,
   resumeRunningTasks,
   tasksByToolUse,
@@ -274,6 +276,10 @@ export function ConversationTab({
   // Task subagent lifecycles by task_id (live "task" stream frames +
   // replayed session.subagent_task envelopes).
   const [tasks, setTasks] = useState<Map<string, TaskModel>>(new Map());
+  // The server's delegate records for this session (docs/DELEGATES-DESIGN.md),
+  // by harness id — laid over `tasks` at render (mergeDelegates) as the one
+  // authority on whether each subagent is running and how it ended.
+  const [delegates, setDelegates] = useState<Map<string, Delegate>>(new Map());
   // Each subagent's own conversation stream, keyed by the spawning Agent
   // tool_use id. Parent-tagged /output events land here and NEVER in the
   // main stream (the interleave bug this redesign fixes); history replays
@@ -351,6 +357,7 @@ export function ConversationTab({
     setQueuedMessages([]);
     setToolStatuses(new Map());
     setTasks(new Map());
+    setDelegates(new Map());
     setSubagentStreams(new Map());
     setThinkingHistory([]);
     setCurrentActivity(undefined);
@@ -436,6 +443,15 @@ export function ConversationTab({
         setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
         setThinkingHistory(h.thinking);
         setPendingReplay({ compact: h.compact });
+      })
+      .catch(() => {});
+    // Live-wins, like the event replay: a delegate_changed that landed while
+    // this was in flight is newer than the snapshot.
+    void routerClient
+      .getSessionDelegates(sessionId)
+      .then((list) => {
+        if (cancelled) return;
+        setDelegates((live) => new Map([...list.map((d) => [d.harness_id, d] as const), ...live]));
       })
       .catch(() => {});
     void routerClient
@@ -783,6 +799,17 @@ export function ConversationTab({
   // a linked-session wake, a reconnect) and carries the turn's start for the
   // elapsed counter; "idle" closes the turn exactly as turn_ended does — and
   // unlike turn_ended, it fires for a turn with no digest delta too.
+  // Delegate records change on the control plane — a backgrounded subagent
+  // finishes long after the turn (and the /output stream's frames) that
+  // spawned it, so this is the signal that ends its spinner.
+  useEffect(() => {
+    return subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (envelope) => {
+      const d = envelope.payload as Delegate | undefined;
+      if (!d?.harness_id) return;
+      setDelegates((m) => new Map(m).set(d.harness_id, d));
+    });
+  }, [sessionId]);
+
   useEffect(() => {
     return subscribeToEvents({ sessionId, types: ["session.turn_ended", "session.agent_state"] }, (envelope) => {
       if (envelope.type === "session.agent_state") {
@@ -873,21 +900,24 @@ export function ConversationTab({
     const onText = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "text") return;
-      setTurnPhase("live");
       if (parsed.parent_tool_use_id) {
         appendSubagent(parsed.parent_tool_use_id, { kind: "text", text: parsed.text });
         return;
       }
+      // Only the main agent's own output is a turn: a backgrounded
+      // subagent keeps streaming after its parent's turn ended, and nothing
+      // would ever close a phase it opened.
+      setTurnPhase("live");
       pacerEnqueueText(parsed.text);
     };
     const onTool = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "tool_use") return;
-      setTurnPhase("live");
       if (parsed.parent_tool_use_id) {
         appendSubagent(parsed.parent_tool_use_id, { kind: "tool_use", tool: parsed.tool });
         return;
       }
+      setTurnPhase("live");
       pacerEnqueueTool(parsed.tool, new Date().toISOString());
       setCurrentActivity(toolTitle(parsed.tool));
     };
@@ -919,13 +949,16 @@ export function ConversationTab({
     const onThinking = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "thinking") return;
-      setTurnPhase("live");
       if (parsed.parent_tool_use_id) {
         if (parsed.text) {
           appendSubagent(parsed.parent_tool_use_id, { kind: "thinking", text: parsed.text });
         }
         return;
       }
+      // A whole block is the main agent's. A bare token tick may not be:
+      // claude-code streams a subagent's thinking_tokens untagged, so a tick
+      // only feeds a turn already live (session.agent_state opens turns).
+      if (parsed.text) setTurnPhase("live");
       // A whole block joins the live stream as a think row; a bare
       // thinking_tokens count is just the indicator's ticker.
       if (parsed.text) pacerEnqueueThinking(parsed.text);
@@ -938,7 +971,7 @@ export function ConversationTab({
     const onTask = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "task") return;
-      setTurnPhase("live");
+      // Not a turn signal: lifecycle lines arrive between turns too.
       setTasks((m) => applyTaskEvent(m, parsed.task, true));
     };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
@@ -1222,7 +1255,9 @@ export function ConversationTab({
     ]);
   }
   // --- Redesign wiring: dock targets, running-subagent substrip ---
-  const tasksByToolUseMap = tasksByToolUse(tasks);
+  // The record is authoritative wherever one exists (mergeDelegates).
+  const effectiveTasks = mergeDelegates(tasks, delegates);
+  const tasksByToolUseMap = tasksByToolUse(effectiveTasks);
   // The approval jump's "· <subagent>" — named as its task card titles it.
   const subagentName = (req: PermissionRequest) => {
     if (!req.parent_tool_use_id) return undefined;
@@ -1231,7 +1266,7 @@ export function ConversationTab({
   };
   // A running task gets a strip only while its in-stream card is off screen
   // — one copy of each subagent, never the card and its strip together.
-  const substripEntries: SubstripEntry[] = [...tasks.values()]
+  const substripEntries: SubstripEntry[] = [...effectiveTasks.values()]
     .filter((t) => t.running && !visibleTaskCards.has(t.taskId))
     .map((model) => {
       const stream = model.toolUseId ? subagentStreams.get(model.toolUseId) : undefined;
@@ -1271,7 +1306,7 @@ export function ConversationTab({
     }
     dockView = { type: "tool", tool, timestamp: toolTimestamp };
   } else if (dockTarget?.type === "subagent") {
-    const model = [...tasks.values()].find((t) => t.toolUseId === dockTarget.parentToolUseId);
+    const model = [...effectiveTasks.values()].find((t) => t.toolUseId === dockTarget.parentToolUseId);
     dockView = {
       type: "subagent",
       parentToolUseId: dockTarget.parentToolUseId,

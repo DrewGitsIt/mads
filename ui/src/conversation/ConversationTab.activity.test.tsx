@@ -11,7 +11,7 @@ import { render, screen, fireEvent, waitFor, act, within } from "@testing-librar
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
-import type { Envelope } from "../router/types";
+import type { Delegate, Envelope } from "../router/types";
 
 vi.mock("@monaco-editor/react", () => ({
   Editor: () => <textarea data-testid="fake-monaco-editor" />,
@@ -1011,5 +1011,108 @@ describe("ConversationTab — approval jump", () => {
     fireEvent.click(mainAllow);
     expect(resolve).toHaveBeenCalledWith("session-active", "perm-1", "allow");
     expect(screen.getByRole("dialog", { name: "Activity detail" })).toBeTruthy();
+  });
+});
+
+describe("ConversationTab — delegate records (docs/DELEGATES-DESIGN.md)", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const record = (state: Delegate["state"], extra: Partial<Delegate> = {}): Delegate => ({
+    id: "dlg_1",
+    session_id: "session-active",
+    harness_id: "tk1",
+    tool_use_id: "tu1",
+    description: "audit",
+    backgrounded: true,
+    state,
+    runs: 1,
+    started_at: "2026-10-08T10:00:00Z",
+    created_at: "2026-10-08T10:00:00Z",
+    updated_at: "2026-10-08T10:00:00Z",
+    ...extra,
+  });
+
+  function delegateChanged(d: Delegate) {
+    const control = FakeEventSource.instances.find((s) => s.url.includes("session.delegate_changed"));
+    expect(control).toBeTruthy();
+    act(() => {
+      control!.emit(
+        "session.delegate_changed",
+        JSON.stringify({ seq: 50, type: "session.delegate_changed", actor: "runner", session_id: "session-active", payload: d }),
+      );
+    });
+  }
+
+  async function spawnBackgrounded(source: Awaited<ReturnType<typeof mountActive>>) {
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Agent", kind: "agent", input: { description: "audit" } },
+      });
+      source.emit({
+        kind: "task",
+        task: { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "audit", is_backgrounded: true },
+      });
+    });
+  }
+
+  it("keeps a backgrounded subagent running past its parent's turn until its record ends it", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record("running"));
+    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const source = await mountActive(client);
+    await spawnBackgrounded(source);
+    expect(screen.getByTestId("substrip")).toBeTruthy();
+
+    await act(async () => {
+      source.emit({ kind: "turn_end" });
+      await Promise.resolve();
+    });
+    // The record still says running: the turn ending is not its ending.
+    expect(screen.getByTestId("substrip")).toBeTruthy();
+
+    delegateChanged(record("completed", { reason: "completed" }));
+    await waitFor(() => expect(screen.queryByTestId("substrip")).toBeNull());
+    const card = screen.getByTestId("task-card");
+    expect(card.querySelector('[data-status="completed"]')).toBeTruthy();
+  });
+
+  it("renders a failed delegate as failed — not the green check any notification used to earn", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const source = await mountActive(client);
+    await spawnBackgrounded(source);
+    act(() => {
+      source.emit({ kind: "task", task: { phase: "notification", task_id: "tk1", status: "failed" } });
+    });
+    delegateChanged(record("failed", { reason: "failed" }));
+    const card = await screen.findByTestId("task-card");
+    await waitFor(() => expect(card.querySelector('[data-status="failed"]')).toBeTruthy());
+    expect(card.querySelector('[data-status="completed"]')).toBeNull();
+  });
+
+  it("doesn't reopen the working indicator for a subagent's frames between turns", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const source = await mountActive(client);
+    await spawnBackgrounded(source);
+    await act(async () => {
+      source.emit({ kind: "turn_end" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByTestId("working-ticker")).toBeNull());
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool: { id: "sub1", name: "Read" }, parent_tool_use_id: "tu1" });
+      source.emit({ kind: "thinking", thinking_tokens: 300 });
+      source.emit({ kind: "task", task: { phase: "progress", task_id: "tk1", tool_uses: 2 } });
+    });
+    expect(screen.queryByTestId("working-ticker")).toBeNull();
   });
 });

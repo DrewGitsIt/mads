@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { TaskCard } from "./TaskCard";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { TaskCard, taskCounters } from "./TaskCard";
+import { formatElapsed } from "./toolDisplay";
 import type { TaskModel } from "./conversationItems";
 
 const spawnTool = {
@@ -109,5 +110,51 @@ describe("TaskCard", () => {
     render(<TaskCard tool={spawnTool} onOpen={onOpen} />);
     fireEvent.click(screen.getByRole("button"));
     expect(onOpen).toHaveBeenCalled();
+  });
+});
+
+describe("TaskCard — live elapsed and delegate states", () => {
+  it("ticks the running duration every second instead of waiting for the next tool", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T10:06:00Z"));
+    try {
+      const model: TaskModel = {
+        taskId: "a1", running: true, completed: false, toolUses: 23, durationMs: 300_000,
+        startedAt: "2026-10-08T10:00:00Z", state: "running",
+      };
+      render(<TaskCard tool={spawnTool} model={model} />);
+      const counters = screen.getByTestId("task-counters");
+      expect(counters.textContent).toContain("6m 00s");
+      act(() => {
+        vi.advanceTimersByTime(2_000);
+      });
+      expect(counters.textContent).toContain("6m 02s");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never lets the live clock run behind the harness's own report", () => {
+    const model: TaskModel = { taskId: "a1", running: true, completed: false, durationMs: 90_000, startedAt: "2026-10-08T10:00:00Z" };
+    expect(taskCounters(model, Date.parse("2026-10-08T10:00:30Z"))).toBe("1m 30s");
+    expect(formatElapsed(59_999)).toBe("59s");
+    expect(formatElapsed(119_600)).toBe("1m 59s");
+  });
+
+  it.each([
+    ["failed", "failed"],
+    ["stopped", "interrupted"],
+    ["orphaned", "interrupted"],
+    ["completed", "completed"],
+  ] as const)("renders a %s delegate with the %s glyph", (state, glyph) => {
+    const model: TaskModel = { taskId: "a1", running: false, completed: state === "completed", state };
+    render(<TaskCard tool={spawnTool} model={model} />);
+    expect(screen.getByTestId("task-card").querySelector(`[data-status="${glyph}"]`)).toBeTruthy();
+  });
+
+  it("says when mads concluded the ending rather than the agent reporting it", () => {
+    const model: TaskModel = { taskId: "a1", running: false, completed: false, state: "stopped", status: "roster", inferred: true };
+    render(<TaskCard tool={spawnTool} model={model} />);
+    expect(screen.getByTestId("task-card").querySelector("[title]")?.getAttribute("title")).toMatch(/concluded by mads/);
   });
 });

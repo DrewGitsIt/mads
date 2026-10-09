@@ -350,6 +350,8 @@ export interface RouterClient {
   // --- Delegates (docs/DELEGATES-DESIGN.md) ---
   /** Every session's delegates, only those in `state` when given — the rail's cold read is "running". */
   listDelegates(state?: DelegateState): Promise<Delegate[]>;
+  /** One session's delegates, oldest first. */
+  getSessionDelegates(sessionId: string): Promise<Delegate[]>;
 
   // --- Linked sessions (flag-gated, docs/LINKED-SESSIONS-DESIGN.md) ---
   getSessionLinks(sessionId: string): Promise<Link[]>;
@@ -1265,6 +1267,10 @@ export class FetchRouterClient implements RouterClient {
 
   async publishRegistryItems(items: RegistryPublishItem[]): Promise<{ job_id: string }> {
     return routerPost(this.baseUrl, "/registry/publish", { items });
+  }
+
+  async getSessionDelegates(sessionId: string): Promise<Delegate[]> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/delegates`);
   }
 
   async listDelegates(state?: DelegateState): Promise<Delegate[]> {
