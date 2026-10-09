@@ -154,6 +154,18 @@
 
   .evid { border-left:2px solid var(--line); padding-left:var(--space-3); margin:var(--space-3) 0; }
   .evid .src { color:var(--text3); font:500 var(--fs-chip) var(--mono); }
+
+  /* ══ (d) candidates for the Done mark ══════════════════════════════════ */
+  .opt { flex:1 1 236px; min-width:228px; border:1px solid var(--line-soft); border-radius:var(--r-sm); background:var(--bg0); padding:var(--space-3); }
+  .opt.pick { border-color:var(--ok); background:linear-gradient(var(--ok-soft), transparent 70%); }
+  .opt h5 { font-size:var(--fs-sm); font-weight:650; display:flex; align-items:center; gap:var(--space-2); margin-bottom:var(--space-1); }
+  .opt h5 .big { flex:none; width:20px; height:20px; display:block; color:var(--ok-fg); }
+  .opt h5 .k { flex:none; font:700 var(--fs-chip) var(--sans); color:var(--text3); letter-spacing:.08em; }
+  .opt .why { color:var(--text3); font-size:var(--fs-chip); line-height:1.5; margin-top:var(--space-2); }
+  .opt .why b { color:var(--text2); }
+  .opt .risk { color:var(--warn-fg); }
+  .opt .railcol { width:auto; padding:var(--space-2); margin-top:var(--space-2); }
+  .opt .row { margin-bottom:1px; }
 </style>
 </head>
 <body>
@@ -166,6 +178,12 @@
     indicator to carry, and whether it can. <b>It can — but not all in the same place.</b> They
     are three different kinds of fact, and the design works by sorting them by kind rather than
     stacking them on one glyph.</p>
+  <p><b>Updated 2026-10-09.</b> §(b) is <b>parked</b> — a visible countdown turns a cost hint
+    into a deadline, and nobody should be hurrying to type before a timer runs out. The section
+    is kept rather than deleted: the findings are the groundwork for a later conversation about
+    what mads can do to <i>reduce</i> token cost, where the right answer is probably to act on
+    the cache rather than to report it. §(d) is new — the checkmark has been reassigned to Set
+    aside, so the Done status needs a different mark.</p>
 </header>
 
 <!-- ═══ THE STRUCTURAL CLAIM ═══════════════════════════════════════════════ -->
@@ -255,9 +273,22 @@
 
 <!-- ═══ (b) CACHE WARMTH ═══════════════════════════════════════════════════ -->
 <section class="block">
-  <h2>(b) Cache warmth <span class="tag new">new</span>
-      <span class="sub">the data is already in the tree — with one gap</span></h2>
+  <h2>(b) Cache warmth <span class="tag bug">parked 2026-10-09</span>
+      <span class="sub">kept as groundwork, not as a proposal</span></h2>
   <div class="body">
+    <div class="evid" style="border-left-color:var(--bad); margin-top:0">
+      <p class="note"><b>Withdrawn, and for a better reason than the ones I was weighing.</b> I
+        was arguing about accuracy — the turn-start gap, inferring the TTL. The actual objection
+        is that <b>a visible countdown is a deadline</b>, and a rail full of draining rules
+        would have you racing a timer to get a reply in. That is a worse rail even when the
+        number is perfectly correct, so none of the accuracy work would have saved it.</p>
+      <p class="note" style="margin-top:var(--space-2)">Everything below stays, because the
+        findings outlive the proposal: the cache numbers are already recorded end to end, only
+        claude-code reports them, the clock starts at the request's start, and the TTL can be
+        inferred from gaps we already observe. That is the factual base for the real question —
+        <b>what mads can do to cut token cost</b> — where the useful moves act on the cache
+        (keep-alives, prefix stability, when to compact) rather than narrating it at you.</p>
+    </div>
 
     <div class="rowlabel good">What is actually available</div>
     <div class="evid">
@@ -384,16 +415,16 @@
     <div class="cols">
       <div class="col" style="flex:0 1 330px">
         <div class="railcol">
-          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when warm" style="--warm:.7">4m</span></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when">4m</span></div>
             <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
-          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when warm" style="--warm:.45">18m</span></div>
-            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle · warm</span></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when">18m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div>
             <div class="cluster" style="position:absolute; right:6px; top:50%; transform:translateY(-50%)"><span class="btn" title="Set aside">⌄</span><span class="btn">ⓘ</span><span class="btn danger">🗑</span></div></div>
           <button class="fold"><span>▾</span> Set aside <span class="n">· 6</span></button>
           <div class="row aside"><div class="rowTop"><span class="name">retro: launchpad incident</span><span class="hx">C</span><span class="when">2h</span></div>
-            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle · cold start</span></div></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle</span></div></div>
           <div class="row aside"><div class="rowTop"><span class="name">electron 44 upgrade</span><span class="hx">C</span><span class="when">6h</span></div>
-            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle · cold start</span></div></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle</span></div></div>
           <button class="fold"><span>▸</span> Earlier <span class="n">· 14</span></button>
         </div>
       </div>
@@ -439,42 +470,168 @@
     </div>
 
     <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
-      <div class="rowlabel good">Where (b) and (c) pay for each other</div>
-      <p class="note">Your keyless-entry point asked what becomes of <code>⏸</code>. Here is the
-        answer: <b>setting a session aside is the gesture that frees its process</b> — you don't
-        lock the car, you walk away and it locks itself. That retires the control by folding it
-        into something that means something to you, rather than by deleting it and hoping.</p>
-      <p class="note" style="margin-top:var(--space-2)"><b>With one caveat that needs checking
-        before building it.</b> Killing the harness may cost the cache: a restart replays the
-        conversation, and whether the server-side entry still hits depends on the replayed
-        prefix matching byte-for-byte. If it doesn't, sleeping a <i>warm</i> session actively
-        burns money. So the rule is <b>set aside sleeps the process once the session is
-        cold</b>, never while it's warm — at which point there is nothing left to lose and the
-        sleep is free. I have not verified the prefix behaviour on a claude-code resume; that's
-        a measurement to run, not an assumption to ship.</p>
+      <div class="rowlabel bad">What parking (b) costs here</div>
+      <p class="note">This block used to argue that setting a session aside is the gesture that
+        frees its process — you don't lock the car, you walk away and it locks itself — guarded
+        by <i>only once the session has gone cold</i>, so the sleep could never cost you a warm
+        cache. <b>Parking (b) removes the guard, so the argument goes with it.</b></p>
+      <p class="note" style="margin-top:var(--space-2)">The honest consequence: <b>Set aside
+        does not touch the process.</b> It is a list operation and nothing else. That is a
+        smaller feature than the one this page proposed yesterday, and it is the right size —
+        the alternative is killing a harness on a timer we have just decided not to measure.
+        <code>⏸</code> now stands or falls on pass 4's own argument (a latency optimisation with
+        no other user-visible effect), not on this one.</p>
+  </div>
+</section>
+
+<!-- ═══ (d) THE DONE MARK ══════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>(d) Done, without the checkmark <span class="tag new">pick one</span>
+      <span class="sub">✓ now belongs to Set aside</span></h2>
+  <div class="body">
+    <p class="lead">Giving <code>✓</code> to Set aside is the right trade — it is the gesture
+      everyone already has for &ldquo;I'm done with this&rdquo;, and the rail gains something by
+      the swap: <b>✓ comes to mean exactly one thing, and it is a thing <i>you</i> do.</b>
+      Every other mark on the card reports what the session is doing. Reserving the checkmark
+      for the one control that records <i>your</i> judgement is a cleaner division than the one
+      it replaces.</p>
+
+    <p class="note" style="margin-bottom:var(--space-4)"><b>What the Done mark actually has to
+      say.</b> Worth being precise, because it is not &ldquo;completion&rdquo;:
+      <code>state.done</code> is documented as <i>&ldquo;sticky: a turn ended and the session
+      hasn't been opened since&rdquo;</i>, and it clears when you open the card. That is not a
+      finished task — <b>it is an unread flag</b>, and the label already says so
+      (&ldquo;Done · <i>your turn</i>&rdquo;). The mark should mean <i>there is a reply in here
+      you haven't read</i>, which opens up better options than hunting for another checkmark.</p>
+
+    <div class="cols">
+      <div class="opt pick">
+        <h5><span class="k">A</span> <svg class="big" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg> Solid dot <span class="k" style="color:var(--ok-fg)">RECOMMEND</span></h5>
+        <p class="why">The universal unread marker, for a flag that <b>is</b> an unread marker.
+          It is the Idle ring <b>filled in</b> — same box, same family, and the fill carries the
+          whole meaning: there is something in here for you. Loudest mark in the set without
+          being alarming, which is right for &ldquo;a reply landed&rdquo; as against
+          &ldquo;approve this now&rdquo;.</p>
+        <p class="why"><b>Against Idle:</b> differs in fill <i>and</i> hue — the widest gap of
+          any option, and Done-vs-Idle is the pair that will actually sit adjacent.</p>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">port the dock</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+
+      <div class="opt">
+        <h5><span class="k">B</span> <svg class="big" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="5" cy="5" r="1.5" fill="currentColor"/></svg> Ring with a centre dot</h5>
+        <p class="why">Uses the <b>interior</b> channel from pass 4 directly: an empty ring means
+          nothing is waiting, a filled centre means a reply is. Reads as a container with
+          contents. Quieter than A and more obviously a sibling of the Idle ring.</p>
+        <p class="why risk"><b>Risk:</b> at 10px the gap between the centre dot and the ring is
+          about 1.4px. It survives — it is drawn here, judge it — but it is the one option whose
+          legibility depends on sub-pixel rendering going well.</p>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">port the dock</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/><circle cx="5" cy="5" r="1.5" fill="currentColor"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+
+      <div class="opt">
+        <h5><span class="k">C</span> <svg class="big" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg> The completed ring</h5>
+        <p class="why">The most <i>narrative</i> option: the working spinner is an arc sweeping
+          round a track, and this is that arc having gone <b>all the way round and closed</b>.
+          Same geometry as the spinner, stopped at 100%. &ldquo;The turn completed&rdquo;, drawn
+          literally.</p>
+        <p class="why risk"><b>Risk:</b> identical silhouette to Idle — only hue separates them.
+          That is a lot of weight on colour for the one signal that means something is waiting
+          for you, and it is the option that fails hardest for anyone who reads green and grey
+          similarly.</p>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">port the dock</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+
+      <div class="opt">
+        <h5><span class="k">D</span> <svg class="big" viewBox="0 0 10 10"><path d="M8.2 1.2 L8.2 8.8 L1.6 5 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg> Handed back</h5>
+        <p class="why">A different axis entirely: not &ldquo;something is here&rdquo; but
+          &ldquo;the ball is in your court&rdquo; — which is what &ldquo;your turn&rdquo; in the
+          label already says. Points left, back toward you.</p>
+        <p class="why risk"><b>Risk:</b> a second triangle on the same rail. It is distinguished
+          from Needs-you by rotation and hue only, and rotation is the weakest discriminator in
+          the set. The rail's link connectors also end in arrowheads, so a third arrow-like mark
+          starts to crowd.</p>
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">port the dock</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10"><path d="M8.2 1.2 L8.2 8.8 L1.6 5 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel">The pairing, in place</div>
+      <div class="cols" style="align-items:center">
+        <div class="col" style="flex:0 1 330px">
+          <div class="railcol">
+            <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when">12m</span></div>
+              <div class="status done"><svg class="m10" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg><span class="lbl">Done · your turn</span></div>
+              <div class="cluster" style="position:absolute; right:6px; top:50%; transform:translateY(-50%)"><span class="btn" title="Set aside">✓</span><span class="btn" title="Details">ⓘ</span><span class="btn danger" title="Archive">🗑</span></div></div>
+          </div>
+        </div>
+        <div class="col">
+          <p class="note"><b>Both marks on one card, and they do not compete.</b> The green dot
+            on the status line is the session telling you it replied; the ✓ in the cluster is you
+            telling the session you're finished with it. One is reported, one is pressed — and
+            they are never the same colour, size or place.</p>
+          <p class="note" style="margin-top:var(--space-3)"><b>One thing to check when this is
+            built.</b> The rail already has a second unread-ish signal: <code>railUnseen.ts</code>
+            tints a card you have never met. Done-unseen and rail-unseen are different facts
+            (a reply you haven't read, versus a session you have never opened), and today they
+            can be true at once. With Done drawn as an unread dot they should be looked at
+            together on a real rail — not a blocker, but the kind of thing that only shows up
+            in situ.</p>
+        </div>
+      </div>
     </div>
   </div>
 </section>
 
 <!-- ═══ PHASING ════════════════════════════════════════════════════════════ -->
 <section class="block">
-  <h2>Phasing <span class="sub">front-loaded: everything cheap ships before anything that touches a service</span></h2>
+  <h2>Phasing <span class="sub">updated 2026-10-09 — (b) out, (d) in; everything left is UI-only</span></h2>
   <div class="body">
     <table>
       <tr><th>#</th><th>Change</th><th>Where</th><th>Cost</th></tr>
-      <tr><td>1</td><td><b>(a)</b> The mark set, with the triangle</td><td>new <code>StatusMark.tsx</code>; <code>SessionRail.tsx</code>; the <code>.statusGlyph/.statusStalled/.statusSpinner</code> rules</td><td class="ok">Low · UI only · settled, buildable now</td></tr>
-      <tr><td>2</td><td>Ready + Sleeping → <b>Idle</b>; Sleep now / Wake now wording; drop <code>▶</code></td><td><code>railGroups.ts</code> <code>statusOf</code>; <code>SessionRail.tsx</code>; <code>SessionActionsMenu.tsx</code></td><td class="ok">Low · UI only · your keyless-entry call makes this a deletion, not a rename</td></tr>
-      <tr><td>3</td><td><b>(c)</b> Set aside: tag, fold, auto-return on attention</td><td>a tag write through the Router; <code>railGroups.ts</code>; <code>SessionRail.tsx</code></td><td class="warnc">Medium · a tag round-trip, no new contract</td></tr>
-      <tr><td>4</td><td><b>(b)</b> Warmth from <code>last_turn_at</code> + <code>last_usage</code>, 5-min assumption</td><td>new <code>cacheWarmth.ts</code>; the stamp rule; the <code>· warm/cooling/cold start</code> clause</td><td class="warnc">Medium · UI only, and <i>wrong at the margin</i> until #5</td></tr>
-      <tr><td>5</td><td>Persist <code>last_turn_started_at</code> — the gap above</td><td><code>pkg/contracts</code>, <code>RecordSessionTurnEnd</code>, the store write</td><td class="warnc">Small but crosses three services. The one server change on this page.</td></tr>
-      <tr><td>6</td><td>TTL inference from observed gap + cache-read evidence</td><td><code>cacheWarmth.ts</code>, fed by the turn history</td><td>Defer. #4 is useful at the 5-minute default alone; this only sharpens it.</td></tr>
-      <tr><td>7</td><td>Set aside sleeps the process once cold</td><td>—</td><td class="badc">Blocked on measuring whether a claude-code resume still hits cache.</td></tr>
+      <tr><td>1</td><td><b>(a)+(d)</b> The mark set — triangle for Needs, and the chosen Done mark</td><td>new <code>StatusMark.tsx</code>; <code>SessionRail.tsx</code>; the <code>.statusGlyph/.statusStalled/.statusSpinner</code> rules</td><td class="ok">Low · UI only · settled once you pick from §(d)</td></tr>
+      <tr><td>2</td><td>Ready + Sleeping → <b>Idle</b>; Sleep now / Wake now wording; drop <code>▶</code></td><td><code>railGroups.ts</code> <code>statusOf</code>; <code>SessionRail.tsx</code>; <code>SessionActionsMenu.tsx</code></td><td class="ok">Low · UI only</td></tr>
+      <tr><td>3</td><td><b>(c)</b> Set aside: the <code>✓</code> control, the tag, the fold, auto-return on attention</td><td>a tag write through the Router; <code>railGroups.ts</code>; <code>SessionRail.tsx</code></td><td class="warnc">Medium · a tag round-trip, no new contract, and no process involvement</td></tr>
+      <tr><td>—</td><td><b>(b)</b> Cache warmth, in every form</td><td>—</td><td class="badc">Parked. Returns as part of <i>cutting</i> token cost, not reporting it.</td></tr>
     </table>
-    <p class="note" style="margin-top:var(--space-4)"><b>If you only want one thing from this
-      page:</b> rows 1–3 are all UI, all settled, and together they deliver (a) and (c) — the
-      two wants that don't depend on a single fact we can't already see. (b) is real and the
-      data is genuinely there, but it is the one that earns a caveat: until row 5, a long turn
-      on the 5-minute default will show warm when it isn't.</p>
+    <p class="note" style="margin-top:var(--space-4)"><b>What parking (b) did to the plan:</b> it
+      removed the only item that crossed a service boundary. Rows 1–3 are all UI, all settled,
+      and the single open question left on this page is which mark in §(d) you want.</p>
+    <p class="note" style="margin-top:var(--space-2)"><b>One consequence worth naming.</b>
+      Collapsing Ready and Sleeping into Idle was argued partly on the warmth clause answering
+      the question they answered badly (&ldquo;how expensive is it to pick this up?&rdquo;). With
+      (b) parked, nothing answers it — so row 2 is now a straight simplification rather than a
+      trade. It still stands on its own: the process axis is the car door you no longer lock by
+      hand, and naming it on every card is noise. But if you'd rather keep the latency hint until
+      the token-cost work lands, <code>Sleeping · wakes on send</code> can survive as the
+      no-process clause and only <i>Ready</i> folds into Idle.</p>
   </div>
 </section>
 
