@@ -137,6 +137,15 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		sess.UncommittedCount = old.UncommittedCount
 		sess.UnlandedCount = old.UnlandedCount
 		sess.OutsideCount = old.OutsideCount
+		// So is the one bit of Tags the user owns. SessionTagAside reaches
+		// the record only through SetAside, and the runner full-PUTs this
+		// record at times it chooses — persistProviderRef and the shutdown
+		// flip both re-read and write it back — so a send that clears the
+		// tag could be undone by a watcher that read the record a moment
+		// earlier, putting the session back in the fold the user just took
+		// it out of. Only this tag is carried: the rest of Tags is a client
+		// field, and the runner's own re-root marker lands through a PUT.
+		sess.SetAside(old.IsAside())
 		sess.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, sess); err != nil {
 			return err
@@ -201,6 +210,43 @@ func (s *Sessions) SetActivity(ctx context.Context, id string, activity contract
 		payload, _ := json.Marshal(map[string]string{"from": string(old), "to": string(activity)})
 		return tx.Append(&contracts.Envelope{
 			Type: contracts.SessionActivityChanged, SessionID: id, Actor: actor, Payload: payload,
+		})
+	})
+}
+
+// SetAside adds or clears SessionTagAside in a single transaction, and is
+// scoped for the same reason SetActivity is (see its doc): the two callers
+// both write while someone else is writing the same record. The rail's ✓ can
+// land while the session's own runner is persisting a ProviderRef, and the
+// send path clears the tag at the very moment a turn is starting — the
+// busiest instant in a session's life for record writes. A
+// Session-then-UpdateSession pair would carry a whole snapshot across two
+// network calls and drop whatever the other writer landed in the gap.
+//
+// No-op when already at the target value, so the send path can clear
+// unconditionally without a read first: the common case (a session that was
+// never set aside) writes nothing and announces nothing.
+func (s *Sessions) SetAside(ctx context.Context, id string, aside bool, actor string) error {
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if sess.IsAside() == aside {
+			return nil
+		}
+		sess.SetAside(aside)
+		// Bumped, unlike SetAgentState's: setting a session aside IS a change
+		// to its user-visible state, and it is the user who made it.
+		sess.UpdatedAt = time.Now().UTC()
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
+		// session.updated is what the rail's list subscribes to, so the fold
+		// closes (or opens) on every browser watching, not just the one that
+		// clicked.
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})
 	})
 }

@@ -609,3 +609,86 @@ func TestSessionEffectiveTrustNeverStored(t *testing.T) {
 		t.Fatalf("after update: effective %q stored, want dropped", again.EffectiveTrust)
 	}
 }
+
+// TestSetAsideScopedWrite: the user's "done with this for now" judgement
+// lands through its own scoped write, an unchanged set is not announced, and
+// a stale full PUT racing it can't resurrect a tag the user just cleared.
+func TestSetAsideScopedWrite(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Parked", Tags: []string{"retro"}})
+	updates := func() int {
+		return len(eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"session.updated"}}))
+	}
+
+	if err := s.SetAside(ctx, sess.ID, true, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.IsAside() {
+		t.Fatalf("tags = %v, want the aside tag", got.Tags)
+	}
+	// Tags are shared ground — provenance must survive the user's judgement.
+	if len(got.Tags) != 2 || got.Tags[0] != "retro" {
+		t.Errorf("tags = %v, want retro kept alongside aside", got.Tags)
+	}
+
+	// The rail's list subscribes to session.updated; without it the fold
+	// closes only on the browser that clicked.
+	n := updates()
+	if n == 0 {
+		t.Fatal("setting a session aside announced no session.updated")
+	}
+	if err := s.SetAside(ctx, sess.ID, true, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if updates() != n {
+		t.Error("an unchanged SetAside announced session.updated")
+	}
+
+	// The send path's reason for being able to clear unconditionally: a
+	// session that was never set aside writes nothing at all.
+	fresh := mkSession(t, s, contracts.Session{Name: "Never parked"})
+	before, err := s.Get(ctx, fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAside(ctx, fresh.ID, false, "router"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.Get(ctx, fresh.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) || after.Tags != nil {
+		t.Errorf("clearing an unset tag touched the record: %+v", after)
+	}
+
+	// The lost-update case the scoped writer exists for. A client reads the
+	// record while the session is parked, the user sends it a message (which
+	// clears the tag), and only then does the stale PUT land.
+	stale, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAside(ctx, sess.ID, false, "router"); err != nil {
+		t.Fatal(err)
+	}
+	stale.Name = "Picked back up"
+	if err := s.Update(ctx, stale, "user"); err != nil {
+		t.Fatal(err)
+	}
+	final, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Name != "Picked back up" {
+		t.Errorf("name = %q, want the rename to have landed", final.Name)
+	}
+	if final.IsAside() {
+		t.Errorf("tags = %v — a stale PUT put the session back in the fold", final.Tags)
+	}
+}

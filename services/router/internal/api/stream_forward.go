@@ -2,8 +2,10 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -56,7 +58,38 @@ func (s *server) handleSessionMessages(w http.ResponseWriter, r *http.Request) {
 		writeWakeError(w, err)
 		return
 	}
+	s.clearAsideOnSend(r.Context(), id)
 	s.proxyTo(w, r, addr, "/messages")
+}
+
+// clearAsideOnSend retires the user's "set aside" judgement because the user
+// just contradicted it.
+//
+// Set aside means "I am done with this for now" (contracts.SessionTagAside),
+// and the rail folds the card away on the strength of that. Sending the
+// session a message is the user saying the opposite, so the tag goes — the
+// card is not merely surfaced for the duration of the turn. Surfacing would
+// have been the smaller change and it is the wrong one twice over: the card
+// would drop back into the fold the moment the turn ended, taking the answer
+// with it, and the ✓ would keep reading pressed on a session sitting in the
+// main list. A judgement the user has revised should not survive as view
+// state the system keeps re-applying.
+//
+// This is the one place in the system that can tell the difference. A user
+// message arrives at POST /messages; everything the system starts on its own
+// — a linked session's push, a digest, a task-terminal notice — arrives at
+// the child's POST /inject with an attribution attached (runner.Inject). So
+// an unprompted turn leaves a set-aside session exactly where it is, which
+// is the whole point of the fold.
+//
+// Placed after the wake, so a send to a session that cannot start leaves the
+// record alone; and best-effort, because a tag is never worth failing the
+// user's message over. The store no-ops when the tag isn't there, so the
+// common send writes nothing.
+func (s *server) clearAsideOnSend(ctx context.Context, id string) {
+	if err := s.data.SetSessionAside(ctx, id, false); err != nil {
+		log.Printf("router: clear aside on send for %s: %v", id, err)
+	}
 }
 
 // handleSessionQueue and handleSessionCancelQueued forward the composer's

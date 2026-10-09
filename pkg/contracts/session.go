@@ -129,8 +129,11 @@ const (
 )
 
 // SessionTagAside marks a session the user has set aside: done with for now,
-// folded out of the rail's main list until they go looking for it again — or
-// until it needs them, which pulls it back on its own.
+// folded out of the rail's main list. Three things bring it back: going
+// looking for it; the session needing its user, which surfaces the card with
+// the tag intact until the approval is handled; and the user sending it a
+// message, which clears the tag outright, because that is the user revising
+// the judgement rather than the rail reinterpreting it.
 //
 // It is the user's own judgement about a session, so unlike every other state
 // the rail paints it cannot be derived from anything the session does, and it

@@ -299,7 +299,9 @@ export function isSetAside(session: Session): boolean {
 }
 
 /**
- * Whether a set-aside session has to come back out of its fold.
+ * Whether a set-aside session has to come back out of its fold *without the
+ * user having picked it up* — the session asking for them, rather than the
+ * other way round.
  *
  * "Until I need it again" is implemented as "until it needs me", which is both
  * closer to what the fold is for and the thing that makes the gesture safe to
@@ -307,6 +309,14 @@ export function isSetAside(session: Session): boolean {
  * trusted, and an untrusted one is worse than none. The tag is deliberately
  * NOT cleared when this fires — resolving the approval returns the card to the
  * fold on its own, which is what "aside until it needs me" means.
+ *
+ * Deliberately not "working": a turn is not a reason to surface a card, since
+ * the system starts turns the user did not ask for (a linked session's push, a
+ * digest, a task-terminal notice). The user asking for one *is* a reason, and
+ * it retires the tag outright rather than surfacing the card for the length of
+ * the turn — that happens server-side on the send, not here, because it is a
+ * change to the judgement rather than to how the rail reads it. See
+ * clearAsideOnSend (services/router/internal/api/stream_forward.go).
  */
 export function asideDemandsAttention(bucket: RailFilterBucket): boolean {
   return bucket === "needs";

@@ -72,6 +72,24 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// The user's own "done with this for now" judgement (the rail's ✓), and
+	// the send path clearing it. Scoped and atomic for the reason
+	// store.Sessions.SetAside documents: both land while the session's own
+	// runner is writing the same record.
+	mux.HandleFunc("PUT /sessions/{id}/aside", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Aside bool `json:"aside"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := s.SetAside(r.Context(), r.PathValue("id"), body.Aside, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	// The Session runner's main-agent transitions: one call mirrors the
 	// state onto the record and appends its event, so the rail's cold read
 	// and its live stream can never disagree (store.Sessions.SetAgentState).

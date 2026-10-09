@@ -151,9 +151,18 @@ func (s *server) handleRenameSession(w http.ResponseWriter, r *http.Request) {
 // done with for now, fold it out of the rail's main list. Nothing about the
 // running session changes — no child is touched, no state is written beyond
 // the tag — because the act means "I am finished looking at this", not
-// "stop". A set-aside session that later needs its user is pulled back into
-// the list by the rail, without the tag being cleared: handling the approval
-// returns it to the fold, which is what "aside until it needs me" means.
+// "stop".
+//
+// Two things bring a set-aside session back. It is pulled out of the fold,
+// tag intact, for as long as it needs its user: handling the approval
+// returns it, which is what "aside until it needs me" means. And the tag is
+// cleared outright when the user sends it a message — see
+// handleSessionMessages, where the other half of this lives.
+//
+// The write goes through the scoped SetSessionAside rather than
+// Session-then-UpdateSession: this lands while the session's own runner may
+// be writing the same record, and the pair would drop whichever field the
+// other writer landed in the gap (store.Sessions.SetAside).
 func (s *server) handleSetSessionAside(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
@@ -162,13 +171,14 @@ func (s *server) handleSetSessionAside(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	sess, err := s.data.Session(r.Context(), id)
-	if err != nil {
+	if err := s.data.SetSessionAside(r.Context(), id, body.Aside); err != nil {
 		writeError(w, err)
 		return
 	}
-	sess.SetAside(body.Aside)
-	if err := s.data.UpdateSession(r.Context(), &sess); err != nil {
+	// Re-read rather than echo a locally-patched copy: the store is the one
+	// that decided what the record now says.
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
 		writeError(w, err)
 		return
 	}

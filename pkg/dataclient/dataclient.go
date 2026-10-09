@@ -263,6 +263,15 @@ func (c *Client) SetSessionActivity(ctx context.Context, id string, activity con
 		map[string]any{"activity": activity}, nil)
 }
 
+// SetSessionAside sets or clears the user's "set aside" judgement in one
+// atomic round trip, and no-ops when the record already says that — so the
+// composer-send path can clear it without reading the session first
+// (store.Sessions.SetAside).
+func (c *Client) SetSessionAside(ctx context.Context, id string, aside bool) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/aside",
+		map[string]any{"aside": aside}, nil)
+}
+
 // SetSessionAgentState mirrors one main-agent transition onto the session
 // record AND appends its session.agent_state event, in one atomic round trip
 // — the pair has to land together or a cold reader and a live stream can
