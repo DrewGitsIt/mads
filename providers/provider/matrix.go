@@ -89,6 +89,30 @@ const (
 	// all (a provider is allowed to declare this Unsupported if it genuinely
 	// has nothing — none of the three shipped providers do).
 	BehaviorRefAnnounce Behavior = "ref_announce"
+
+	// Delegates (docs/DELEGATES-DESIGN.md): subagents the harness runs on a
+	// session's behalf. These rows are the per-harness defaults; what is
+	// observed about one delegate at run time (DelegateInspector) overrides
+	// them for that delegate. All optional — most harnesses have none.
+
+	// BehaviorDelegateLifecycle — the adapter reports a delegate's lifecycle
+	// (EventTask/EventTaskRoster) separately from the tool call that spawned
+	// it, so a delegate can outlive its parent's turn. Without it a delegate
+	// is only ever its spawning call.
+	BehaviorDelegateLifecycle Behavior = "delegate_lifecycle"
+	// BehaviorDelegateTranscript — a delegate keeps its own durable
+	// transcript the adapter can locate (DelegateInspector). Native means
+	// the strategy is implemented; whether a given delegate has one is a
+	// run-time answer.
+	BehaviorDelegateTranscript Behavior = "delegate_transcript"
+	// BehaviorDelegateSteer — a user's message can reach a running or
+	// finished delegate: Native = sent to it directly; Emulated = relayed by
+	// its parent agent (a message to the parent asking it to pass it on —
+	// Claude Code's SendMessage), so the parent decides how faithfully.
+	BehaviorDelegateSteer Behavior = "delegate_steer"
+	// BehaviorDelegateStop — mads can stop one delegate without stopping
+	// its parent.
+	BehaviorDelegateStop Behavior = "delegate_stop"
 )
 
 // Support is a provider's declared implementation status for one behavior.
@@ -142,6 +166,11 @@ var requirements = map[Behavior]Level{
 	BehaviorTrustAutoReview: LevelOptional,
 	BehaviorOneShotStream:   LevelOptional,
 	BehaviorRefAnnounce:     LevelExpected,
+
+	BehaviorDelegateLifecycle:  LevelOptional,
+	BehaviorDelegateTranscript: LevelOptional,
+	BehaviorDelegateSteer:      LevelOptional,
+	BehaviorDelegateStop:       LevelOptional,
 }
 
 // Requirement returns the platform's requirement level for a behavior, or ""

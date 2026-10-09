@@ -46,6 +46,12 @@ func newStub(overrides map[provider.Behavior]provider.Support, l lies) *stub {
 	return &stub{matrix: m, lies: l, sessions: map[string][]provider.Message{}}
 }
 
+// InspectDelegate makes the stub's native delegate_transcript row honest:
+// the strategy exists, and its store simply never has a delegate.
+func (s *stub) InspectDelegate(context.Context, string, string) (provider.DelegateInfo, bool, error) {
+	return provider.DelegateInfo{}, false, nil
+}
+
 // stubScript is the stub's prompt dialect. The attempt prompts drive the
 // goose-shaped denial ordering (announce, then a failed result — see
 // stubSession.Send), so the honest stub exercises the trust probe's

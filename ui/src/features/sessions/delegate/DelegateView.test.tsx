@@ -76,3 +76,43 @@ describe("DelegateView", () => {
     expect(await screen.findByText(/record isn't available/)).toBeTruthy();
   });
 });
+
+describe("DelegateView — capabilities", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("states what the delegate supports as resolved for it, without offering controls", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push({
+      ...record,
+      worktree_path: "/wt/a1",
+      capabilities: { transcript: true, continuable: true, steer: "relay", stop: false, stops_with_parent: true },
+    });
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    const caps = await screen.findByTestId("delegate-capabilities");
+    expect(caps.textContent).toContain("Own transcript on disk");
+    expect(caps.textContent).toContain("Reachable through its parent");
+    expect(caps.textContent).toContain("Stops with its parent");
+    expect(caps.textContent).toContain("Could continue as a session");
+    expect(caps.textContent).toContain("Worktree /wt/a1");
+    expect(caps.querySelector("button")).toBeNull();
+  });
+
+  it("reads watch-only for a delegate nothing can reach", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push({
+      ...record,
+      capabilities: { transcript: false, continuable: false, steer: "none", stop: false, stops_with_parent: true },
+    });
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    const caps = await screen.findByTestId("delegate-capabilities");
+    expect(caps.textContent).toContain("Watch only");
+    expect(caps.textContent).toContain("No transcript of its own");
+    expect(caps.textContent).not.toContain("continue");
+  });
+});

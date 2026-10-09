@@ -72,13 +72,51 @@ type Delegate struct {
 	// running (nil while running).
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
-	// TranscriptPath is the harness's on-disk transcript for the delegate,
-	// when it reported one.
+	// TranscriptPath is the delegate's own durable transcript, found in the
+	// harness's store at run time (provider.DelegateInspector). Not the
+	// notification's output_file, which is a task output, not a conversation.
 	TranscriptPath string `json:"transcript_path,omitempty"`
+	// WorktreePath is the separate worktree the harness ran it in, if any.
+	WorktreePath string `json:"worktree_path,omitempty"`
+	// Capabilities is what can be done with it — the provider matrix's
+	// defaults, corrected by what was observed about this one delegate.
+	// Nil until the runner has resolved them.
+	Capabilities *DelegateCapabilities `json:"capabilities,omitempty"`
 	// Final counters as the harness last reported them.
 	TotalTokens int       `json:"total_tokens,omitempty"`
 	ToolUses    int       `json:"tool_uses,omitempty"`
 	DurationMS  int       `json:"duration_ms,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// DelegateSteer is how a user's message can reach a delegate.
+type DelegateSteer string
+
+const (
+	// DelegateSteerNone: nothing can reach it — watch only.
+	DelegateSteerNone DelegateSteer = "none"
+	// DelegateSteerRelay: through its parent agent, which decides how
+	// faithfully to pass it on (Claude Code's SendMessage).
+	DelegateSteerRelay DelegateSteer = "relay"
+	// DelegateSteerDirect: sent to the delegate itself.
+	DelegateSteerDirect DelegateSteer = "direct"
+)
+
+// DelegateCapabilities is the resolved capability set for one delegate
+// (docs/DELEGATES-DESIGN.md C1–C7): the harness's defaults from its provider
+// matrix, overridden by run-time evidence.
+type DelegateCapabilities struct {
+	// Transcript (C1): its own durable transcript is on disk
+	// (Delegate.TranscriptPath). Only ever true on evidence.
+	Transcript bool `json:"transcript"`
+	// Continuable (C2a): it could be continued as a new session forked from
+	// that transcript. Requires Transcript.
+	Continuable bool `json:"continuable"`
+	// Steer (C2b).
+	Steer DelegateSteer `json:"steer"`
+	// Stop (C3a): mads can stop it alone.
+	Stop bool `json:"stop"`
+	// StopsWithParent (C3b): stopping its parent's turn stops it too.
+	StopsWithParent bool `json:"stops_with_parent"`
 }

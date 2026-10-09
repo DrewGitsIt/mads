@@ -238,6 +238,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// could break. Emulated is the honest one-row summary across both
 		// transports (design doc).
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
+		// this adapter's wire.
+		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
+		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorDelegateSteer:      provider.Unsupported,
+		provider.BehaviorDelegateStop:       provider.Unsupported,
 		// `goose session` under a pty (pty.go).
 		provider.BehaviorPTY: provider.Native,
 		// `session export --format json` (transcript.go) — richer than

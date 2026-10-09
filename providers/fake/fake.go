@@ -191,6 +191,12 @@ func (f *Fake) Matrix() provider.Matrix {
 		// The fake implements RefAnnouncer and scripts timing via
 		// Scenario.RefAnnounce for conformance/runner test coverage.
 		provider.BehaviorRefAnnounce: provider.Native,
+		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
+		// this adapter's wire.
+		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
+		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorDelegateSteer:      provider.Unsupported,
+		provider.BehaviorDelegateStop:       provider.Unsupported,
 	}
 }
 

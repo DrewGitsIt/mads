@@ -377,14 +377,16 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: load session %s: %w", r.sessionID, err)
 	}
-	// Before the provider starts: its first events may resume a delegate a
-	// previous process spawned, and must find that delegate's record.
-	r.seedDelegates(ctx)
 
 	p, err := r.providers.Get(sess.Provider)
 	if err != nil {
 		return fmt.Errorf("runner: provider %q: %w", sess.Provider, err)
 	}
+	// Delegate capability defaults come from the provider's matrix; then,
+	// before the provider starts, the stored delegates — its first events may
+	// resume one a previous process spawned, and must find that record.
+	r.delegates.SetDefaults(delegateDefaults(p.Matrix()), p.Matrix()[provider.BehaviorBranching].Works())
+	r.seedDelegates(ctx)
 
 	// A directory the session asked for (Launchpad folder, workspace
 	// primary repo, Config.DefaultDir — resolved by the Router at create)

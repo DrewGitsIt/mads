@@ -146,3 +146,19 @@ func TestMismatchesAreCaught(t *testing.T) {
 		})
 	}
 }
+
+// delegate_transcript is checked structurally: an unsupported declaration
+// over a provider that carries the DelegateInspector strategy is a mismatch.
+func TestDelegateTranscriptDeclarationMustMatchStrategy(t *testing.T) {
+	p := newStub(map[provider.Behavior]provider.Support{provider.BehaviorDelegateTranscript: provider.Unsupported}, lies{})
+	for _, res := range Check(context.Background(), p, stubScript()) {
+		if res.Behavior != provider.BehaviorDelegateTranscript {
+			continue
+		}
+		if res.Err == nil {
+			t.Fatal("an unsupported declaration over an implemented strategy must fail")
+		}
+		return
+	}
+	t.Fatal("no delegate_transcript result")
+}

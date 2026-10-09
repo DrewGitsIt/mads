@@ -86,3 +86,22 @@
   color: var(--text3);
   font: var(--fs-sm) var(--sans);
 }
+
+/* What this delegate supports — facts, not controls (see Capabilities). */
+.caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.caps li {
+  padding: 1px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text3);
+  font: 11px var(--sans);
+  cursor: help;
+}

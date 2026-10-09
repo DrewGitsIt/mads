@@ -57,7 +57,9 @@ func TestBackgroundLifecycleInWireOrder(t *testing.T) {
 	}
 	d = one(t, tr.Task(contracts.SubagentTask{Phase: "notification", TaskID: "a7f5", Status: "completed",
 		OutputFile: "/tmp/out", TotalTokens: 99, ToolUses: 1, DurationMS: 1900}, at(2)))
-	if d.TranscriptPath != "/tmp/out" || d.TotalTokens != 99 || d.Description != "Run ls" {
+	// output_file is the task's output, not its conversation: only a run-time
+	// inspection of the harness's store sets the transcript.
+	if d.TranscriptPath != "" || d.TotalTokens != 99 || d.Description != "Run ls" {
 		t.Fatalf("notification = %+v", d)
 	}
 	if _, ok := tr.NextExpiry(); ok {
@@ -197,5 +199,47 @@ func TestProgressWithoutStartCreates(t *testing.T) {
 	d := one(t, tr.Task(contracts.SubagentTask{Phase: "progress", TaskID: "a", ToolUseID: "toolu_a", Description: "Running ls"}, at(0)))
 	if d.State != contracts.DelegateRunning || d.Description != "" || d.ToolUseID != "toolu_a" {
 		t.Fatalf("progress-first = %+v (a step is not a name)", d)
+	}
+}
+
+// Capabilities start from the harness's matrix defaults, and a transcript —
+// and with it continuing as a forked session — only on evidence.
+func TestCapabilitiesFromDefaultsThenEvidence(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	tr.SetDefaults(contracts.DelegateCapabilities{
+		Steer: contracts.DelegateSteerRelay, StopsWithParent: true,
+		Transcript: true, Continuable: true, // never defaults: dropped
+	}, true)
+
+	d := one(t, tr.Task(started("a1", "toolu_a1", true), at(0)))
+	want := contracts.DelegateCapabilities{Steer: contracts.DelegateSteerRelay, StopsWithParent: true}
+	if d.Capabilities == nil || *d.Capabilities != want {
+		t.Fatalf("defaults = %+v, want %+v", d.Capabilities, want)
+	}
+
+	d = one(t, tr.Inspect("a1", delegates.Observation{
+		TranscriptPath: "/p/agent-a1.jsonl", Type: "Explore", WorktreePath: "/wt",
+	}))
+	if d.TranscriptPath != "/p/agent-a1.jsonl" || d.WorktreePath != "/wt" ||
+		!d.Capabilities.Transcript || !d.Capabilities.Continuable || d.Capabilities.Steer != contracts.DelegateSteerRelay {
+		t.Fatalf("after inspection = %+v caps %+v", d, d.Capabilities)
+	}
+	// The started line's type stands; the store only fills gaps.
+	if d.Type != "general-purpose" {
+		t.Errorf("type = %q, want the lifecycle's own", d.Type)
+	}
+	none(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/p/agent-a1.jsonl"}))
+	none(t, tr.Inspect("unknown", delegates.Observation{TranscriptPath: "/x"}))
+}
+
+// A harness that can't fork never offers continuing, transcript or not; one
+// with no matrix answer reads as watch-only.
+func TestCapabilitiesWithoutForkOrDefaults(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	tr.SetDefaults(contracts.DelegateCapabilities{}, false)
+	one(t, tr.Task(started("a1", "toolu_a1", true), at(0)))
+	d := one(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/p/a1.jsonl"}))
+	if !d.Capabilities.Transcript || d.Capabilities.Continuable || d.Capabilities.Steer != contracts.DelegateSteerNone {
+		t.Fatalf("caps = %+v", d.Capabilities)
 	}
 }

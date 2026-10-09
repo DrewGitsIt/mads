@@ -141,6 +141,15 @@ func (p *Provider) Matrix() provider.Matrix {
 		// (rung 2). Weaker and slower than the wire announcement, hence
 		// Emulated as the one-row summary across both transports. See README.
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// Delegates (docs/DELEGATES-DESIGN.md): task_*/background_tasks_changed
+		// lines carry a subagent's lifecycle past its spawning call; its own
+		// transcript sits under <ref>/subagents/ (InspectDelegate). Steering is
+		// a relay — the parent's SendMessage — never direct (probed on
+		// 2.1.285). Stopping one alone (stop_task) isn't wired yet.
+		provider.BehaviorDelegateLifecycle:  provider.Native,
+		provider.BehaviorDelegateTranscript: provider.Native,
+		provider.BehaviorDelegateSteer:      provider.Emulated,
+		provider.BehaviorDelegateStop:       provider.Unsupported,
 	}
 }
 

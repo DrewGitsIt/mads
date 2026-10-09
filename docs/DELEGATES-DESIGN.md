@@ -163,6 +163,38 @@ Drew's four, with two of them split, plus three more:
 | C6 | **Permission routing** | Do the delegate's approval requests arrive through the parent's channel, and are they attributed to the delegate? | Where "Needs approval" shows: the delegate's row, the parent's, or both. |
 | C7 | **Nesting** | Can delegates spawn delegates, and is the parent reported? | A tree, or one level of rows. |
 
+### Run-time checks *(#3, first pass built 2026-10-09)*
+
+- **Defaults: the provider matrix.** The matrix has four new optional rows:
+  `delegate_lifecycle` (C5), `delegate_transcript` (C1),
+  `delegate_steer` (C2b: Native = direct, Emulated = relay through the
+  parent) and `delegate_stop` (C3a). Claude Code declares native / native /
+  emulated / unsupported (`stop_task` isn't wired). Every other adapter
+  declares all four unsupported. Conformance checks the transcript row
+  structurally (declared ⇔ `DelegateInspector` implemented). The other three
+  need a live subagent, which a scripted run doesn't have.
+- **Evidence: `provider.DelegateInspector`.** Claude Code's adapter reads
+  `<projects>/*/<ref>/subagents/agent-<id>.{jsonl,meta.json}`: transcript,
+  type, depth, worktree, background. The runner inspects 1s after a delegate
+  starts (its files trail the first line) and again when it ends.
+- **Resolved per delegate (`Delegate.capabilities`):**
+  - `transcript` is true only on evidence.
+  - `continuable` = transcript + the harness can fork (BehaviorBranching).
+  - `steer` and `stop` come from the matrix.
+  - `stops_with_parent` = true: cascading stops are mads's choice.
+- **Correction from #1:** the notification's `output_file` is a task output
+  under `/tmp/claude-*/…/tasks/`, not the conversation. It no longer becomes
+  `transcript_path`; only inspection sets that.
+- **UI:** the delegate view states the resolved capabilities as facts (own
+  transcript / reachable through its parent / stops with its parent / could
+  continue as a session / worktree). There are no controls yet: relay, stop
+  and continue-as-session are the next actions to build on these.
+
+Not yet: C6 (permission routing) and C7 (nesting parent) aren't resolved; a
+delegate's `cwd` without a worktree isn't recorded; the ACP RFD's per-child
+`capabilities` (the natural run-time source for ACP harnesses) awaits an
+ACP adapter that announces children.
+
 ### Harness matrix
 
 ✓ = yes, ✗ = no, ~ = partial, ? = unverified. The *Run time* column lists

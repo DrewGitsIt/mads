@@ -61,6 +61,81 @@ type Tracker struct {
 	sessionID string
 	grace     time.Duration
 	byID      map[string]*entry
+	// defaults is the harness's capability set from its provider matrix
+	// (SetDefaults); continuable is whether a found transcript can be
+	// continued as a forked session.
+	defaults    contracts.DelegateCapabilities
+	continuable bool
+}
+
+// Observation is what the harness's own store says about one delegate at
+// run time (provider.DelegateInspector, mapped by the runner). Zero values
+// mean it didn't say.
+type Observation struct {
+	TranscriptPath string
+	Type           string
+	Depth          int
+	WorktreePath   string
+	Background     bool
+}
+
+// SetDefaults sets the capability defaults every new delegate starts from —
+// the provider matrix's answer for this harness. continuable says whether a
+// delegate whose transcript is found could be continued as a forked session
+// (the harness can fork-on-resume). Transcript itself is never a default:
+// it is only ever true on evidence (Inspect).
+func (t *Tracker) SetDefaults(defaults contracts.DelegateCapabilities, continuable bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	defaults.Transcript, defaults.Continuable = false, false
+	t.defaults, t.continuable = defaults, continuable
+}
+
+// Inspect folds a run-time observation into the delegate's record — its
+// transcript, worktree, and what the store adds to its identity — and
+// re-resolves its capabilities. Returns the record if it changed; an unknown
+// delegate is ignored.
+func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	e, ok := t.byID[harnessID]
+	if !ok {
+		return nil
+	}
+	before := e.d
+	if o.TranscriptPath != "" {
+		e.d.TranscriptPath = o.TranscriptPath
+	}
+	if o.WorktreePath != "" {
+		e.d.WorktreePath = o.WorktreePath
+	}
+	if e.d.Type == "" {
+		e.d.Type = o.Type
+	}
+	if e.d.Depth == 0 {
+		e.d.Depth = o.Depth
+	}
+	if o.Background {
+		e.d.Backgrounded = true
+	}
+	e.d.Capabilities = t.resolveLocked(e.d)
+	if sameRecord(before, e.d) {
+		return nil
+	}
+	return []contracts.Delegate{e.d}
+}
+
+// resolveLocked is the record's capability set: the defaults, corrected by
+// the evidence on the record. Always a fresh value — records are compared by
+// field, and a shared pointer would hide a change.
+func (t *Tracker) resolveLocked(d contracts.Delegate) *contracts.DelegateCapabilities {
+	caps := t.defaults
+	if caps.Steer == "" {
+		caps.Steer = contracts.DelegateSteerNone
+	}
+	caps.Transcript = d.TranscriptPath != ""
+	caps.Continuable = caps.Transcript && t.continuable
+	return &caps
 }
 
 // New returns an empty tracker for sessionID. grace ≤ 0 means Grace.
@@ -82,6 +157,9 @@ func (t *Tracker) Seed(stored []contracts.Delegate, now time.Time) []contracts.D
 	var out []contracts.Delegate
 	for _, d := range stored {
 		e := &entry{d: d}
+		if e.d.Capabilities == nil {
+			e.d.Capabilities = t.resolveLocked(e.d)
+		}
 		t.byID[d.HarnessID] = e
 		if d.State == contracts.DelegateRunning {
 			t.endLocked(e, contracts.DelegateOrphaned, ReasonRunnerRestart, true, now)
@@ -138,9 +216,6 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 			e = t.createLocked(r, now)
 		}
 		if r.Phase == "notification" {
-			if r.OutputFile != "" {
-				e.d.TranscriptPath = r.OutputFile
-			}
 			if r.TotalTokens != 0 || r.ToolUses != 0 || r.DurationMS != 0 {
 				e.d.TotalTokens, e.d.ToolUses, e.d.DurationMS = r.TotalTokens, r.ToolUses, r.DurationMS
 			}
@@ -278,6 +353,7 @@ func (t *Tracker) createLocked(r contracts.SubagentTask, now time.Time) *entry {
 	}}
 	t.fillLocked(e, r)
 	e.d.Backgrounded = r.IsBackgrounded
+	e.d.Capabilities = t.resolveLocked(e.d)
 	t.byID[r.TaskID] = e
 	return e
 }
@@ -341,14 +417,18 @@ func settle(status string) (contracts.DelegateState, string) {
 	}
 }
 
-// sameRecord compares two records field for field, the times by instant.
+// sameRecord compares two records field for field — the times by instant,
+// the capabilities by value.
 func sameRecord(a, b contracts.Delegate) bool {
 	sameEnd := (a.EndedAt == nil && b.EndedAt == nil) ||
 		(a.EndedAt != nil && b.EndedAt != nil && a.EndedAt.Equal(*b.EndedAt))
-	if !sameEnd || !a.StartedAt.Equal(b.StartedAt) {
+	sameCaps := (a.Capabilities == nil && b.Capabilities == nil) ||
+		(a.Capabilities != nil && b.Capabilities != nil && *a.Capabilities == *b.Capabilities)
+	if !sameEnd || !sameCaps || !a.StartedAt.Equal(b.StartedAt) {
 		return false
 	}
 	a.EndedAt, b.EndedAt = nil, nil
+	a.Capabilities, b.Capabilities = nil, nil
 	a.StartedAt, b.StartedAt = time.Time{}, time.Time{}
 	return a == b
 }

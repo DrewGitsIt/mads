@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import type { Delegate, Envelope } from "../../../router/types";
+import type { Delegate, DelegateCapabilities, Envelope } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { SubagentStream } from "../../../conversation/activity/ActivityDock";
 import { foldHistoryEvents, mergeDelegates } from "../../../conversation/activity/conversationItems";
@@ -117,6 +117,7 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
           </span>
         </div>
         {record && <div className={styles.facts}>{facts(record)}</div>}
+        {record?.capabilities && <Capabilities caps={record.capabilities} worktree={record.worktree_path} />}
       </header>
       <div className={styles.body}>
         <ContentColumn>
@@ -146,4 +147,42 @@ function facts(d: Delegate): string {
     parts.push(`${d.state[0].toUpperCase()}${d.state.slice(1)}${why}${d.inferred ? " — concluded by mads, no report from the agent" : ""}`);
   }
   return parts.join(" · ");
+}
+
+/**
+ * What can be done with this delegate, as resolved for it (matrix defaults
+ * corrected at run time). Stated as facts, not offered as controls: the
+ * actions they enable — relaying a message, stopping it alone, continuing it
+ * as a session — aren't built yet, and a control that does nothing would be
+ * worse than a sentence.
+ */
+function Capabilities({ caps, worktree }: { caps: DelegateCapabilities; worktree?: string }) {
+  const items: { label: string; title: string }[] = [
+    caps.transcript
+      ? { label: "Own transcript on disk", title: "The harness kept this subagent's conversation in a file of its own." }
+      : { label: "No transcript of its own", title: "Its history is only what mads recorded from the live stream." },
+    caps.steer === "direct"
+      ? { label: "Can be messaged directly", title: "A message can be sent to this subagent itself." }
+      : caps.steer === "relay"
+        ? { label: "Reachable through its parent", title: "A message can only reach it by asking the parent agent to pass it on — the parent decides how faithfully." }
+        : { label: "Watch only", title: "Nothing can send this subagent a message." },
+    caps.stop
+      ? { label: "Can be stopped on its own", title: "It can be stopped without stopping its parent." }
+      : caps.stops_with_parent
+        ? { label: "Stops with its parent", title: "Stopping the parent session's turn stops this subagent too." }
+        : { label: "Can't be stopped from mads", title: "Neither it nor its parent's stop reaches it." },
+  ];
+  if (caps.continuable) {
+    items.push({ label: "Could continue as a session", title: "Its transcript can seed a new session of your own (a fork) — not yet available in mads." });
+  }
+  if (worktree) items.push({ label: `Worktree ${worktree}`, title: "It ran in a separate worktree." });
+  return (
+    <ul className={styles.caps} aria-label="What this subagent supports" data-testid="delegate-capabilities">
+      {items.map((i) => (
+        <li key={i.label} title={i.title}>
+          {i.label}
+        </li>
+      ))}
+    </ul>
+  );
 }

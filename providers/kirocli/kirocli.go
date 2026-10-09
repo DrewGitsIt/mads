@@ -126,6 +126,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// so a fresh PTY session's ref is never learned. Emulated as the
 		// one-row summary across both transports. See README.
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
+		// this adapter's wire.
+		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
+		provider.BehaviorDelegateTranscript: provider.Unsupported,
+		provider.BehaviorDelegateSteer:      provider.Unsupported,
+		provider.BehaviorDelegateStop:       provider.Unsupported,
 	}
 }
 

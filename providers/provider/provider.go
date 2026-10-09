@@ -283,6 +283,32 @@ type TranscriptReader interface {
 	Transcript(ctx context.Context, ref string) ([]Message, error)
 }
 
+// DelegateInspector is the optional strategy for BehaviorDelegateTranscript:
+// what the harness's own store says about one delegate (docs/
+// DELEGATES-DESIGN.md) of the session whose provider-native ref is ref, found
+// by the harness's id for it (Claude Code's agentId). The run-time half of a
+// delegate's capabilities — the matrix gives the defaults, this the facts.
+// ok is false when the store has nothing for it (yet: a delegate's files may
+// appear after its first lifecycle line).
+type DelegateInspector interface {
+	InspectDelegate(ctx context.Context, ref, harnessID string) (info DelegateInfo, ok bool, err error)
+}
+
+// DelegateInfo is one delegate as the harness's own store records it. Zero
+// values mean the store didn't say.
+type DelegateInfo struct {
+	// TranscriptPath is the delegate's own durable transcript.
+	TranscriptPath string
+	// Type is the delegate's agent type ("general-purpose", "Explore").
+	Type string
+	// Depth is its nesting depth (1 = spawned by the main agent).
+	Depth int
+	// WorktreePath is the separate worktree it runs in, when it has one.
+	WorktreePath string
+	// Background reports the harness ran it in the background.
+	Background bool
+}
+
 // HistoryScanner is the optional capability of listing the conversations a
 // user already has in the provider's own native store, from before mads
 // existed or outside it — what the onboarding import turns into session

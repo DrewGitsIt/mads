@@ -2,12 +2,15 @@ package runner
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
 	"github.com/drewkidwell/mads/pkg/dataclient"
 	"github.com/drewkidwell/mads/pkg/delegates"
+	"github.com/drewkidwell/mads/providers/claudecode"
 	"github.com/drewkidwell/mads/providers/provider"
 	"github.com/drewkidwell/mads/services/data/datatest"
 )
@@ -78,16 +81,16 @@ func TestDelegateOutlivesParentTurn(t *testing.T) {
 	}})
 
 	d := storedDelegate(t, data, sid, "a1")
-	if d.State != contracts.DelegateCompleted || d.Inferred || d.TranscriptPath != "/tmp/a1.md" {
+	if d.State != contracts.DelegateCompleted || d.Inferred {
 		t.Fatalf("settled = %+v", d)
 	}
 	var states []contracts.DelegateState
 	for _, c := range eventsOfType[contracts.Delegate](t, data, sid, contracts.SessionDelegateChanged) {
 		states = append(states, c.State)
 	}
-	want := []contracts.DelegateState{contracts.DelegateRunning, contracts.DelegateCompleted, contracts.DelegateCompleted}
-	if len(states) != len(want) || states[0] != want[0] || states[1] != want[1] || states[2] != want[2] {
-		t.Errorf("delegate_changed states = %v, want %v (running, settled, enriched — never stopped)", states, want)
+	want := []contracts.DelegateState{contracts.DelegateRunning, contracts.DelegateCompleted}
+	if len(states) != len(want) || states[0] != want[0] || states[1] != want[1] {
+		t.Errorf("delegate_changed states = %v, want %v (running, settled — never stopped)", states, want)
 	}
 }
 
@@ -187,5 +190,54 @@ func TestThinkingTickDoesNotStartWorking(t *testing.T) {
 	r.observeConversation(provider.Event{Kind: provider.EventThinking, ThinkingTokens: 128})
 	if got := eventsOfType[contracts.AgentState](t, data, sid, contracts.SessionAgentState); len(got) != 0 {
 		t.Fatalf("a tick between turns published agent state: %+v", got)
+	}
+}
+
+// Run-time capability checks: the provider matrix seeds a delegate's
+// capabilities, and the harness's own store — read through the real
+// claude-code adapter, over the layout 2.1.285 writes — corrects them for
+// this delegate: its transcript is found, so it is continuable, and its
+// worktree is recorded.
+func TestDelegateCapabilitiesFromMatrixThenInspection(t *testing.T) {
+	r, data, sid := newDelegateRunner(t)
+	root := t.TempDir()
+	dir := filepath.Join(root, "-private-tmp-work", "ref-1", "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-a1.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-a1.meta.json"),
+		[]byte(`{"agentType":"Explore","spawnDepth":1,"requestShape":"background","worktreePath":"/wt/a1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := claudecode.New(claudecode.Config{TranscriptDir: root})
+	r.prov = p
+	r.lastRef = "ref-1"
+	r.delegates.SetDefaults(delegateDefaults(p.Matrix()), p.Matrix()[provider.BehaviorBranching].Works())
+
+	r.observeConversation(taskEv("started", "a1", "toolu_agent", "", true))
+	d := storedDelegate(t, data, sid, "a1")
+	if c := d.Capabilities; c == nil || c.Transcript || c.Steer != contracts.DelegateSteerRelay || c.Stop || !c.StopsWithParent {
+		t.Fatalf("matrix defaults = %+v", d.Capabilities)
+	}
+
+	r.observeConversation(provider.Event{Kind: provider.EventTask, Task: &provider.TaskStatus{
+		Phase: "notification", TaskID: "a1", Status: "completed",
+	}})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d = storedDelegate(t, data, sid, "a1")
+		if d.Capabilities != nil && d.Capabilities.Transcript {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("inspection never landed: %+v caps %+v", d, d.Capabilities)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if d.TranscriptPath != filepath.Join(dir, "agent-a1.jsonl") || d.WorktreePath != "/wt/a1" || !d.Capabilities.Continuable {
+		t.Fatalf("after inspection = %+v caps %+v", d, d.Capabilities)
 	}
 }

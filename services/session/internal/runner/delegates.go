@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/delegates"
 	"github.com/drewkidwell/mads/providers/provider"
 )
 
@@ -57,6 +58,15 @@ func (r *Runner) observeDelegates(ev provider.Event) {
 	switch {
 	case ev.Kind == provider.EventTask && ev.Task != nil:
 		r.publishDelegates(r.delegates.Task(contractsTask(ev), now))
+		// Look in the harness's own store when a run starts (its files can
+		// trail the first line, hence the delay) and again when it ends, when
+		// they are certainly there.
+		switch ev.Task.Phase {
+		case "started":
+			r.inspectDelegateAfter(ev.Task.TaskID, delegateInspectDelay)
+		case "notification":
+			r.inspectDelegateAfter(ev.Task.TaskID, 0)
+		}
 	case ev.Kind == provider.EventTaskRoster:
 		r.delegates.Roster(ev.TaskRoster, now)
 		r.armDelegateExpiry()
@@ -156,6 +166,72 @@ func (r *Runner) sendDelegatesLocked() {
 		p.retry = nil
 		r.sendDelegatesLocked()
 	})
+}
+
+// delegateInspectDelay is how long after a delegate starts its harness store
+// is first read: claude-code writes a subagent's transcript as it runs, a
+// beat after the task_started line.
+const delegateInspectDelay = time.Second
+
+// inspectDelegateAfter reads what the harness's own store says about one
+// delegate (provider.DelegateInspector — its transcript, worktree, type) and
+// folds it into the record, re-resolving its capabilities. Off the pump:
+// it touches the filesystem. A provider without the strategy, or a session
+// with no ref yet, has nothing to look in.
+func (r *Runner) inspectDelegateAfter(harnessID string, delay time.Duration) {
+	insp, ok := r.prov.(provider.DelegateInspector)
+	if !ok || harnessID == "" {
+		return
+	}
+	run := func() {
+		r.mu.Lock()
+		ref := r.lastRef
+		r.mu.Unlock()
+		if ref == "" {
+			return
+		}
+		info, found, err := insp.InspectDelegate(context.Background(), ref, harnessID)
+		if err != nil {
+			log.Printf("runner: inspect delegate %s/%s: %v", r.sessionID, harnessID, err)
+			return
+		}
+		if !found {
+			return
+		}
+		r.publishDelegates(r.delegates.Inspect(harnessID, delegates.Observation{
+			TranscriptPath: info.TranscriptPath,
+			Type:           info.Type,
+			Depth:          info.Depth,
+			WorktreePath:   info.WorktreePath,
+			Background:     info.Background,
+		}))
+	}
+	if delay <= 0 {
+		go run()
+		return
+	}
+	time.AfterFunc(delay, run)
+}
+
+// delegateDefaults maps a provider's matrix onto the capability defaults
+// every delegate of its sessions starts from. StopsWithParent is mads's own
+// choice, not the harness's: claude-code stops its background tasks with an
+// interrupt unless perTaskStopAffordance is set, and mads leaves it unset
+// (cascading stops, docs/DELEGATES-DESIGN.md) — and a harness whose
+// delegates are foreground-only stops them with its turn by construction.
+func delegateDefaults(m provider.Matrix) contracts.DelegateCapabilities {
+	caps := contracts.DelegateCapabilities{
+		Steer:           contracts.DelegateSteerNone,
+		Stop:            m[provider.BehaviorDelegateStop].Works(),
+		StopsWithParent: true,
+	}
+	switch m[provider.BehaviorDelegateSteer] {
+	case provider.Native:
+		caps.Steer = contracts.DelegateSteerDirect
+	case provider.Emulated:
+		caps.Steer = contracts.DelegateSteerRelay
+	}
+	return caps
 }
 
 // contractsTask maps a provider task lifecycle event onto its contracts

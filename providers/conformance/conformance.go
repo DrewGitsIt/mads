@@ -247,6 +247,17 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 		c.add(provider.BehaviorTrustAutoReview, nil, "declared unsupported: not probed for a negative")
 	}
 
+	// Delegates (docs/DELEGATES-DESIGN.md). A scripted run has no subagent
+	// to watch, so only the transcript row is checkable — structurally: a
+	// working declaration needs the DelegateInspector strategy, and an
+	// unsupported one must not quietly carry it.
+	c.add(provider.BehaviorDelegateTranscript, c.delegateInspector(), "structural: the strategy, not a live delegate")
+	for _, b := range []provider.Behavior{
+		provider.BehaviorDelegateLifecycle, provider.BehaviorDelegateSteer, provider.BehaviorDelegateStop,
+	} {
+		c.add(b, nil, "not probed: needs a live harness subagent (see the provider's own fixture tests)")
+	}
+
 	return c.results
 }
 
@@ -256,6 +267,19 @@ type checker struct {
 	s       Script
 	ctx     context.Context
 	results []Result
+}
+
+// delegateInspector checks BehaviorDelegateTranscript against the
+// DelegateInspector strategy: declared and implemented must agree.
+func (c *checker) delegateInspector() error {
+	_, has := c.p.(provider.DelegateInspector)
+	switch works := c.m[provider.BehaviorDelegateTranscript].Works(); {
+	case works && !has:
+		return errors.New("declared working but the provider doesn't implement DelegateInspector")
+	case !works && has:
+		return errors.New("declared unsupported but the provider implements DelegateInspector")
+	}
+	return nil
 }
 
 func (c *checker) add(b provider.Behavior, err error, note string) {

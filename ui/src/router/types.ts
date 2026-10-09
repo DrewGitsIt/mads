@@ -668,6 +668,20 @@ export interface QueueChanged {
 /** What POST /sessions/{id}/messages did with a send: ran it, or queued it behind the in-flight turn. */
 export type SendResult = { status: "accepted" } | { status: "queued"; queued: QueuedMessage };
 
+/** mirrors pkg/contracts/delegate.go DelegateCapabilities (docs/DELEGATES-DESIGN.md C1–C3). */
+export interface DelegateCapabilities {
+  /** C1: its own durable transcript is on disk — only ever true on evidence. */
+  transcript: boolean;
+  /** C2a: could be continued as a new session forked from that transcript. */
+  continuable: boolean;
+  /** C2b: how a message can reach it. */
+  steer: "none" | "relay" | "direct";
+  /** C3a: mads can stop it alone. */
+  stop: boolean;
+  /** C3b: stopping its parent's turn stops it too. */
+  stops_with_parent: boolean;
+}
+
 /** mirrors pkg/contracts/delegate.go DelegateState. No "idle": a finished delegate is finished. */
 export type DelegateState = "running" | "completed" | "failed" | "stopped" | "orphaned";
 
@@ -695,7 +709,12 @@ export interface Delegate {
   runs: number;
   started_at: string;
   ended_at?: string;
+  /** The delegate's own durable transcript, found in the harness's store at run time. */
   transcript_path?: string;
+  /** The separate worktree the harness ran it in, if any. */
+  worktree_path?: string;
+  /** Matrix defaults corrected by run-time evidence; absent until resolved. */
+  capabilities?: DelegateCapabilities;
   total_tokens?: number;
   tool_uses?: number;
   duration_ms?: number;
