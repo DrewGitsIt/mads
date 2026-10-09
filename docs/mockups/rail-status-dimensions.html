@@ -1,0 +1,483 @@
+<!doctype html>
+<!--
+  Session rail, pass 5 (2026-10-08). Self-contained: open in any browser.
+  Follows rail-status-and-detail.html (pass 4), whose Option A is settled
+  here with one change: a warning triangle for "needs you".
+
+  This pass answers "I have lots of things I WANT the status indicator to
+  do but idk if we can handle all of this info" — three wants:
+
+    (a) what the session is actively doing        [covered today]
+    (b) KV-cache warmth: cheap to resume, or not  [NEW]
+    (c) how much the user still cares about it    [NEW]
+
+  The structural claim: these are three different KINDS of fact, and they
+  belong to three different parts of the rail. Stacking all three on the
+  status mark is what would fail. Distributing them by kind does not.
+
+  Cache facts are from the Anthropic prompt-caching reference, and every
+  claim about what mads records was checked against this tree — file and
+  line cited at each one. Nothing here is recalled.
+
+  Live surfaces this mocks:
+    ui/src/features/sessions/rail/railGroups.ts   (statusOf, isEarlier)
+    ui/src/features/sessions/rail/SessionRail.tsx (the card, the fold)
+    ui/src/features/sessions/rail/railUnseen.ts   (the per-user-state precedent)
+    pkg/contracts/transcript.go:81                (Usage, with cache fields)
+    pkg/contracts/conversation.go:137             (AgentState.Since)
+    services/data/internal/store/sessions.go:246  (LastTurnAt + LastUsage)
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — rail status: activity, cache warmth, attention</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15);
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:90ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); flex-wrap:wrap; }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block > h2 .tag.rec { color:var(--ok-fg); background:var(--ok-soft); }
+  .block > h2 .tag.bug { color:var(--bad-fg); background:var(--bad-soft); }
+  .block > h2 .tag.new { color:var(--info-fg); background:var(--info-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); }
+  .block .body { padding:var(--space-5); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:96ch; }
+  .note + .note { margin-top:var(--space-2); }
+  .note b { color:var(--text2); }
+  .lead { color:var(--text2); margin-bottom:var(--space-4); max-width:96ch; }
+  .rowlabel { font:600 var(--fs-chip) var(--sans); letter-spacing:.07em; text-transform:uppercase; color:var(--text3); margin-bottom:var(--space-2); display:flex; align-items:baseline; gap:var(--space-2); flex-wrap:wrap; }
+  .rowlabel.good { color:var(--ok-fg); } .rowlabel.bad { color:var(--bad-fg); }
+  .rowlabel .m { font-weight:500; letter-spacing:0; text-transform:none; color:var(--text3); font-family:var(--mono); }
+
+  .cols { display:flex; gap:var(--space-5); flex-wrap:wrap; align-items:flex-start; }
+  .col { flex:1 1 300px; min-width:290px; }
+
+  table { border-collapse:collapse; width:100%; font-size:var(--fs-sm); }
+  th, td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  th { color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.06em; text-transform:uppercase; }
+  td { color:var(--text2); } td b { color:var(--text); font-weight:600; }
+  .ok { color:var(--ok-fg); } .warnc { color:var(--warn-fg); } .badc { color:var(--bad-fg); } .infoc { color:var(--info-fg); }
+  td.mark { text-align:center; width:46px; }
+
+  .railcol { width:312px; padding:var(--space-3); border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); }
+
+  /* ── verbatim from SessionRail.module.css ──────────────────────────────── */
+  .row { position:relative; display:flex; flex-direction:column; gap:var(--space-1); width:100%; padding:var(--space-2) var(--space-3); margin-bottom:2px; background:var(--bg1); border:1px solid var(--line-soft); border-radius:var(--r-sm); color:var(--text); font:500 var(--fs-sm) var(--sans); text-align:left; cursor:pointer; }
+  .row:hover { background:var(--bg2); }
+  .rowTop { display:flex; align-items:flex-start; gap:var(--space-2); }
+  .name { flex:1; min-width:0; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.35; }
+  .when { flex:none; margin-left:auto; padding-left:var(--space-2); color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; line-height:1.35; }
+  .status { display:flex; align-items:center; gap:6px; min-width:0; min-height:15px; color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .status .lbl { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .status .el { flex:none; color:var(--text3); font:500 var(--fs-chip) var(--mono); font-variant-numeric:tabular-nums; opacity:.85; }
+  .status.working, .status.working .lbl { color:var(--accent); }
+  .status.needs,   .status.needs .lbl   { color:var(--warn-fg); }
+  .status.bad,     .status.bad .lbl     { color:var(--bad-fg); }
+  .status.done,    .status.done .lbl    { color:var(--ok-fg); }
+  .status.idle,    .status.idle .lbl    { color:var(--text3); }
+  .context { display:flex; align-items:center; gap:5px; min-width:0; color:var(--text3); font:500 var(--fs-chip) var(--sans); white-space:nowrap; overflow:hidden; }
+  .context .branch, .context .dir { font-family:var(--mono); color:var(--text2); }
+  .hx { flex:none; width:14px; height:14px; margin-top:3px; border-radius:4px; background:var(--bg3); color:var(--text3); font:700 8px/1 var(--sans); display:inline-flex; align-items:center; justify-content:center; }
+
+  /* ── the settled mark system: 10px box, 1.6px stroke, SVG ─────────────── */
+  .m10 { flex:none; width:10px; height:10px; display:block; overflow:visible; }
+  .m10 .track { stroke:currentColor; opacity:.26; }
+  .m10.spin .arc { animation:sp .8s linear infinite; transform-origin:5px 5px; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  @media (prefers-reduced-motion:reduce) { .m10.spin .arc { animation:none; } }
+
+  /* ══ (b) CACHE WARMTH — the stamp's drain ══════════════════════════════
+     Not a new glyph and not a new row. The title row's `when` stamp is
+     already the card's time field, in the mono face; warmth is purely a
+     function of time, so it is drawn as a rule under the number it belongs
+     to. --warm is 1 at the moment the turn ends and 0 at expiry. */
+  .when.warm { position:relative; }
+  .when.warm::after { content:""; position:absolute; left:var(--space-2); right:0; bottom:-2px; height:2px; border-radius:1px;
+                      background:linear-gradient(to right, var(--w-col) max(5px, calc(var(--warm) * 100%)), transparent 0); }
+  /* max(5px,…): below about 4px a drained rule stops reading as a rule and reads as
+     a speck. The last sliver of a TTL is exactly when the rule matters most, so it
+     keeps a floor — the colour shift to warn carries the urgency from there. */
+  .when.warm { --w-col:var(--ok-fg); }
+  .when.warm.cool { --w-col:var(--warn-fg); }
+  .cold { opacity:.75; }
+
+  .scale { display:flex; align-items:flex-end; gap:var(--space-4); flex-wrap:wrap; margin-top:var(--space-2); }
+  .scale .s { text-align:center; }
+  .scale .s .sw { width:56px; margin:0 auto 5px; }
+  .scale .s .cap { color:var(--text3); font:500 var(--fs-chip) var(--sans); }
+  .scale .s .bar { height:3px; border-radius:2px; background:var(--bg3); overflow:hidden; }
+  .scale .s .bar i { display:block; height:100%; background:var(--ok-fg); }
+
+  /* ══ (c) SET ASIDE ═════════════════════════════════════════════════════ */
+  .fold { display:flex; align-items:center; gap:5px; width:100%; padding:5px var(--space-2); margin:var(--space-3) 0 var(--space-1);
+          background:none; border:none; color:var(--text3); font:600 var(--fs-chip) var(--sans); letter-spacing:.05em; text-transform:uppercase; cursor:pointer; }
+  .fold:hover { color:var(--text2); }
+  .fold .n { letter-spacing:0; text-transform:none; opacity:.8; }
+  .row.aside { opacity:.72; }
+  .row.aside .name { color:var(--text2); }
+
+  .btn { flex:none; width:24px; height:24px; display:inline-flex; align-items:center; justify-content:center; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text2); cursor:pointer; font-size:12px; line-height:1; }
+  .btn:hover { color:var(--text); background:var(--bg4); }
+  .btn.danger:hover { color:var(--bad-fg); background:var(--bad-soft); border-color:var(--bad); }
+  .cluster { display:inline-flex; align-items:center; gap:2px; padding:3px 4px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:var(--r-sm); box-shadow:var(--shadow); }
+
+  .axis { border:1px solid var(--line-soft); border-radius:var(--r-sm); background:var(--bg0); padding:var(--space-3); height:100%; }
+  .axis h4 { font-size:var(--fs-sm); font-weight:650; margin-bottom:var(--space-1); display:flex; align-items:center; gap:var(--space-2); }
+  .axis h4 .pill { font:700 var(--fs-chip) var(--sans); border-radius:999px; padding:1px 8px; background:var(--bg3); color:var(--text3); letter-spacing:.04em; }
+  .axis h4 .pill.a { background:var(--accent-soft); color:var(--accent); }
+  .axis h4 .pill.b { background:var(--info-soft); color:var(--info-fg); }
+  .axis h4 .pill.c { background:var(--ok-soft); color:var(--ok-fg); }
+
+  .evid { border-left:2px solid var(--line); padding-left:var(--space-3); margin:var(--space-3) 0; }
+  .evid .src { color:var(--text3); font:500 var(--fs-chip) var(--mono); }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="intro">
+  <h1>Session rail — pass 5: three dimensions, three homes</h1>
+  <p>Pass 4's Option A is settled below with one change (a warning triangle for &ldquo;needs
+    you&rdquo;). The rest of this page answers the harder question: three things you want the
+    indicator to carry, and whether it can. <b>It can — but not all in the same place.</b> They
+    are three different kinds of fact, and the design works by sorting them by kind rather than
+    stacking them on one glyph.</p>
+</header>
+
+<!-- ═══ THE STRUCTURAL CLAIM ═══════════════════════════════════════════════ -->
+<section class="block">
+  <h2>The shape of the problem <span class="tag">read this first</span>
+      <span class="sub">three wants · three kinds of fact · three homes</span></h2>
+  <div class="body">
+    <div class="cols">
+      <div class="col"><div class="axis">
+        <h4><span class="pill a">a</span> What it's doing</h4>
+        <p class="note" style="margin-top:var(--space-2)">A <b>state machine</b> — mutually
+          exclusive, changes on events, demands action or doesn't.</p>
+        <p class="note" style="margin-top:var(--space-2)"><b>Home: the mark and the label.</b>
+          Already correct. Nothing in this pass changes it except the triangle.</p>
+      </div></div>
+      <div class="col"><div class="axis">
+        <h4><span class="pill b">b</span> Cache warmth</h4>
+        <p class="note" style="margin-top:var(--space-2)">A <b>decaying number</b> — continuous,
+          driven by the clock alone, and only legible once the session is at rest. It never
+          demands action; it prices one.</p>
+        <p class="note" style="margin-top:var(--space-2)"><b>Home: the time stamp.</b> Warmth is
+          a function of time and nothing else, so it is drawn on the field that already means
+          &ldquo;when&rdquo;, not on the one that means &ldquo;what&rdquo;.</p>
+      </div></div>
+      <div class="col"><div class="axis">
+        <h4><span class="pill c">c</span> Whether you care</h4>
+        <p class="note" style="margin-top:var(--space-2)">A <b>decision you make</b> — not an
+          observation about the session at all. The only one of the three the session itself
+          cannot answer.</p>
+        <p class="note" style="margin-top:var(--space-2)"><b>Home: list membership.</b> It
+          belongs to the fold, not the card: &ldquo;where is this in my list&rdquo;, not
+          &ldquo;what is this doing&rdquo;.</p>
+      </div></div>
+    </div>
+    <p class="note" style="margin-top:var(--space-4)"><b>Why this is the whole answer.</b> Your
+      worry — can one indicator hold all of it — is well founded, and it would not. A 10px mark
+      can carry one categorical fact legibly, two with difficulty, three never. But only (a) is
+      actually competing for that slot. (b) wants a <i>ramp</i>, which a glyph is bad at and a
+      rule under a number is good at. (c) wants to move a card, which no glyph can do. Each one
+      lands where its own shape already fits, and none of them crowds the others.</p>
+  </div>
+</section>
+
+<!-- ═══ (a) THE SETTLED MARK SET ═══════════════════════════════════════════ -->
+<section class="block">
+  <h2>(a) The mark set, settled <span class="tag rec">approved + triangle</span>
+      <span class="sub">10px box · 1.6px stroke · one drawing system</span></h2>
+  <div class="body">
+    <div class="cols">
+      <div class="col" style="flex:0 1 330px">
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">refactor the runner</span><span class="hx">C</span><span class="when">2m</span></div>
+            <div class="status working"><svg class="m10 spin" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle class="arc" cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17"/></svg><span class="lbl">Running bash · make check</span><span class="el">1m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">audit the SSE bus</span><span class="hx">C</span><span class="when">23h</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle class="track" cx="5" cy="5" r="3.6" stroke-width="1.6"/><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-dasharray="6 17" transform="rotate(-100 5 5)"/></svg><span class="lbl">Stalled · no agent activity</span><span class="el">23h</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">goose smoke run</span><span class="hx">G</span><span class="when">9m</span></div>
+            <div class="status bad"><svg class="m10" viewBox="0 0 10 10" fill="none"><path d="M2.1 2.1 L7.9 7.9 M7.9 2.1 L2.1 7.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><span class="lbl">Crashed · reopen to restart</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when">12m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5.3 L3.9 7.7 L8.5 2.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when">31m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+      <div class="col">
+        <p class="note"><b>The triangle, and the flash.</b> Your tweak also fixes an
+          inconsistency I had left in: pass 4's three channels say <i>only the working state
+          moves, because it is the only thing that is moving</i> — and then breathed the
+          &ldquo;needs you&rdquo; mark anyway, inherited from today's <code>.statusBell</code>.
+          A triangle in warn is unmistakable standing still, so it is drawn <b>still</b> here
+          and the rule holds without exception. One line to put the breathe back if the rail
+          feels too quiet in use.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>Shape vs family.</b> The triangle
+          leaves the circle family, which is fine — the family is the <i>box and the stroke
+          weight</i>, not the silhouette, which is what lets ✓ and ✕ belong too. It is drawn
+          filled with a 1.3px round-joined stroke so its corners carry the same optical weight
+          as a 1.6px ring rather than going needle-sharp at 10px.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>One label change, explained in
+          §(b):</b> &ldquo;Ready&rdquo; and &ldquo;Sleeping&rdquo; have collapsed into
+          <b>Idle</b>. Both of them named the process axis, and the process axis is the thing
+          your keyless-entry point retires.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ (b) CACHE WARMTH ═══════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>(b) Cache warmth <span class="tag new">new</span>
+      <span class="sub">the data is already in the tree — with one gap</span></h2>
+  <div class="body">
+
+    <div class="rowlabel good">What is actually available</div>
+    <div class="evid">
+      <p class="note"><b>mads already records the cache numbers, end to end.</b>
+        <code>Usage</code> carries <code>CacheCreationInputTokens</code> and
+        <code>CacheReadInputTokens</code> <span class="src">(pkg/contracts/transcript.go:84-85)</span>,
+        the claude-code provider fills them from the wire
+        <span class="src">(providers/claudecode/wire.go:104-105)</span>, they are persisted on
+        <code>Session.LastUsage</code> by the same write that stamps <code>LastTurnAt</code>
+        <span class="src">(services/data/internal/store/sessions.go:246-266)</span>, and the UI
+        type already exposes them <span class="src">(ui/src/router/types.ts:501-502)</span>.
+        <b>Nothing new has to be collected.</b></p>
+      <p class="note" style="margin-top:var(--space-2)"><b>But only for claude-code.</b> The ACP
+        path reports input and output tokens only
+        <span class="src">(providers/acprpc/session.go:511)</span>, and no cache fields exist on
+        the goose or kiro paths at all. So warmth must <b>degrade to silence</b> on those
+        harnesses — no rule under the stamp — and never to a false &ldquo;cold&rdquo;.</p>
+    </div>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">What the cache actually does <span class="m">Anthropic prompt-caching reference</span></div>
+    <table>
+      <tr><th>Fact</th><th>Consequence for this design</th></tr>
+      <tr><td>Default ephemeral TTL is <b>5 minutes</b>; <code>ttl: "1h"</code> is opt-in and doubles the write cost (2× vs 1.25×).</td>
+          <td>mads does not set this — the harness does. So the TTL has to be <b>observed</b>, not configured. See the inference table below.</td></tr>
+      <tr><td><b>A cache read refreshes the timer, free, on either TTL.</b></td>
+          <td class="ok">This is what makes the whole feature one subtraction: warmth is just time since the last turn. No bookkeeping, no state machine.</td></tr>
+      <tr><td><b>The lifetime is measured from the START of the request</b>, and generation time counts against it — a 4-minute turn leaves about 1 minute of a 5-minute entry.</td>
+          <td class="badc">The gap. See below.</td></tr>
+      <tr><td>Cache reads cost ~0.1× base input (0.05× on Opus 5.5); a miss re-reads the whole prefix at full price.</td>
+          <td>Sets the stakes: being wrong costs one pricier, slower turn. Nobody loses work — which is exactly what licenses a heuristic here.</td></tr>
+    </table>
+
+    <div class="rowlabel bad" style="margin-top:var(--space-5)">The one real gap <span class="m">a one-field server change</span></div>
+    <div class="evid">
+      <p class="note">The cache clock starts when the request starts. <b>mads only persists when
+        the turn ended</b> — <code>RecordSessionTurnEnd</code> stamps <code>LastTurnAt</code>
+        <span class="src">(pkg/dataclient/dataclient.go:274)</span>. The turn's <i>start</i> does
+        exist while the turn runs — <code>AgentState.Since</code> is documented as
+        <i>&ldquo;the turn's start for every working event in it&rdquo;</i> — but the very next
+        line says <i>&ldquo;Turn-end time on idle&rdquo;</i>
+        <span class="src">(pkg/contracts/conversation.go:148-153)</span>, so it is overwritten
+        the moment the turn finishes and the start instant is discarded.</p>
+      <p class="note" style="margin-top:var(--space-2)">On a 1-hour TTL the error is noise. On
+        the 5-minute default it is decisive: counting from the wrong end of a 4-minute turn is
+        the difference between &ldquo;warm&rdquo; and &ldquo;expired&rdquo;. The fix is one
+        persisted field — <code>last_turn_started_at</code>, written by the same call that
+        already writes the other two.</p>
+    </div>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">Inferring the TTL from turns we already have</div>
+    <p class="note">Every turn gives us a free measurement: the gap since the previous turn, and
+      whether this turn read from cache. We never have to ask the harness.</p>
+    <table style="margin-top:var(--space-3)">
+      <tr><th>Gap since previous turn</th><th><code>cache_read_input_tokens</code></th><th>What it proves</th></tr>
+      <tr><td>under 5 min</td><td>&gt; 0</td><td>Nothing — consistent with either TTL. The common case.</td></tr>
+      <tr><td>5 min – 1 hour</td><td>&gt; 0</td><td class="ok"><b>Proof of the 1-hour TTL.</b> The entry outlived 5 minutes, so the harness asked for the long one.</td></tr>
+      <tr><td>over 5 min</td><td>0</td><td class="warnc">Evidence of the 5-minute default. Not proof — the prefix may have changed for another reason.</td></tr>
+      <tr><td>any</td><td>field absent</td><td>Not a claude-code session. Show no warmth at all.</td></tr>
+    </table>
+    <p class="note" style="margin-top:var(--space-3)"><b>So: assume 5 minutes, and let one
+      long-gap cache hit upgrade the session to an hour.</b> The display becomes evidence-based
+      rather than configured, and it self-corrects for free if Claude Code ever changes its
+      policy — which, since mads does not control it, it eventually will.</p>
+
+    <div class="rowlabel" style="margin-top:var(--space-5)">How it draws</div>
+    <p class="note">Not a glyph and not a row. The title row's <code>when</code> stamp is already
+      the card's time field in the mono face, and warmth is a function of time and nothing else
+      — so it is a 2px rule under the number it belongs to, draining left to right.</p>
+    <div class="scale">
+      <div class="s"><div class="sw"><div class="bar"><i style="width:100%"></i></div></div><div class="cap">just replied</div></div>
+      <div class="s"><div class="sw"><div class="bar"><i style="width:62%"></i></div></div><div class="cap">warm</div></div>
+      <div class="s"><div class="sw"><div class="bar"><i style="width:22%; background:var(--warn-fg)"></i></div></div><div class="cap">cooling</div></div>
+      <div class="s"><div class="sw"><div class="bar"></div></div><div class="cap">cold</div></div>
+      <div class="s"><div class="sw" style="opacity:.4"><div class="bar" style="background:none"></div></div><div class="cap">not measurable</div></div>
+    </div>
+
+    <div class="cols" style="margin-top:var(--space-4)">
+      <div class="col" style="flex:0 1 330px">
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">rail link connectors</span><span class="hx">C</span><span class="when warm" style="--warm:.88">1m</span></div>
+            <div class="status done"><svg class="m10" viewBox="0 0 10 10" fill="none"><path d="M1.5 5.3 L3.9 7.7 L8.5 2.3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="lbl">Done · your turn</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when warm" style="--warm:.45">18m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle · warm</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when warm cool" style="--warm:.14">52m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle · cooling</span></div></div>
+          <div class="row cold"><div class="rowTop"><span class="name">pipeline notifications</span><span class="hx">C</span><span class="when">5h</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle · cold start</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">goose smoke run</span><span class="hx">G</span><span class="when">9m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle</span></div></div>
+        </div>
+      </div>
+      <div class="col">
+        <p class="note"><b>The goose card at the bottom is the point.</b> No rule, no clause —
+          not a cold one. We do not know, so we do not say.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>Where I'd push back on your
+          mapping.</b> You proposed warm/cold as <i>the difference between Done and
+          Sleeping</i>. I'd keep them separate, because <b>Done is about you and warmth is about
+          cost</b>, and they genuinely come apart: a session can have finished its turn while
+          you were away and gone cold (Done, cold — still your turn), or be warm from a turn you
+          already read (Idle, warm — nothing waiting). Folding them would make the card wrong in
+          both directions. So <code>done</code> keeps meaning what it means today — a turn ended
+          and you haven't looked — and warmth runs underneath as its own quiet channel.</p>
+        <p class="note" style="margin-top:var(--space-3)"><b>But your instinct kills
+          &ldquo;Sleeping&rdquo; anyway</b>, from the other side. &ldquo;Ready&rdquo; vs
+          &ldquo;Sleeping&rdquo; was the <i>process</i> axis — and that's the axis you just
+          described as unlocking a car door by hand. Both become <b>Idle</b>, and the question
+          they were badly answering (&ldquo;how expensive is it to pick this up again?&rdquo;)
+          is answered properly by the warmth clause instead. One word out, one real fact in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ (c) SET ASIDE ══════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>(c) Set aside <span class="tag new">new</span>
+      <span class="sub">the list as your task list · one fold, two doors</span></h2>
+  <div class="body">
+    <p class="lead">Today a card leaves your sight only by waiting a day
+      (<code>isEarlier()</code>, 24h). You want the other door: <i>I'm done with this, go
+      away.</i> That needs three decisions — where it goes, what brings it back, and how it
+      differs from Archive.</p>
+
+    <div class="cols">
+      <div class="col" style="flex:0 1 330px">
+        <div class="railcol">
+          <div class="row"><div class="rowTop"><span class="name">port the dock to macOS</span><span class="hx">C</span><span class="when warm" style="--warm:.7">4m</span></div>
+            <div class="status needs"><svg class="m10" viewBox="0 0 10 10"><path d="M5 1.1 L9.3 8.7 L0.7 8.7 Z" fill="currentColor" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="lbl">Needs approval · Bash</span><span class="el">3m</span></div></div>
+          <div class="row"><div class="rowTop"><span class="name">tokens sweep</span><span class="hx">C</span><span class="when warm" style="--warm:.45">18m</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6"/></svg><span class="lbl">Idle · warm</span></div>
+            <div class="cluster" style="position:absolute; right:6px; top:50%; transform:translateY(-50%)"><span class="btn" title="Set aside">⌄</span><span class="btn">ⓘ</span><span class="btn danger">🗑</span></div></div>
+          <button class="fold"><span>▾</span> Set aside <span class="n">· 6</span></button>
+          <div class="row aside"><div class="rowTop"><span class="name">retro: launchpad incident</span><span class="hx">C</span><span class="when">2h</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle · cold start</span></div></div>
+          <div class="row aside"><div class="rowTop"><span class="name">electron 44 upgrade</span><span class="hx">C</span><span class="when">6h</span></div>
+            <div class="status idle"><svg class="m10" viewBox="0 0 10 10" fill="none"><circle cx="5" cy="5" r="3.6" stroke="currentColor" stroke-width="1.6" opacity=".62"/></svg><span class="lbl">Idle · cold start</span></div></div>
+          <button class="fold"><span>▸</span> Earlier <span class="n">· 14</span></button>
+        </div>
+      </div>
+      <div class="col">
+        <div class="rowlabel">Where it goes</div>
+        <p class="note"><b>Its own fold, above Earlier.</b> I went back and forth and landed
+          here: one fold with two doors would be tidier, but the two tails mean different things
+          to you — <i>I decided this</i> versus <i>time decided this</i> — and only one of them
+          is a list you'd ever scan deliberately. Both collapsed, so the cost is one 22px row.</p>
+
+        <div class="rowlabel" style="margin-top:var(--space-4)">What brings it back</div>
+        <p class="note"><b>It comes back on its own the moment it needs you</b> — a parked
+          approval, a crash, a stall. You said &ldquo;until I need it again&rdquo;; implementing
+          that as <i>until it needs you</i> is both closer to what you want and the thing that
+          makes the gesture safe to use. If setting aside could ever hide an alert, you'd stop
+          trusting it within a week, and then it would be worse than not having it.</p>
+        <p class="note" style="margin-top:var(--space-2)">Everything else keeps it folded:
+          finishing a turn does not un-set-aside a session. That's the difference between a
+          notification and a task list.</p>
+
+        <div class="rowlabel" style="margin-top:var(--space-4)">Versus Archive</div>
+        <table>
+          <tr><th>&nbsp;</th><th>Set aside <code>⌄</code></th><th>Archive <code>🗑</code></th></tr>
+          <tr><td><b>Means</b></td><td>I'm done for now</td><td>I'm done, full stop</td></tr>
+          <tr><td><b>Rail</b></td><td>folded, one click away</td><td>gone</td></tr>
+          <tr><td><b>Returns</b></td><td class="ok">automatically, when it needs you</td><td>never on its own</td></tr>
+          <tr><td><b>Reversible</b></td><td>trivially</td><td>a confirm dialog</td></tr>
+        </table>
+        <p class="note" style="margin-top:var(--space-3)"><b>On the icon:</b> <code>✓</code> is
+          the obvious task-list gesture and I did not use it — <code>✓</code> already means
+          &ldquo;the agent finished&rdquo; two lines below, and one rail cannot have a checkmark
+          meaning both <i>it</i> is done and <i>I</i> am done. <code>⌄</code> reads as
+          &ldquo;tuck this down there&rdquo; and points at the fold it lands in. Open to
+          alternatives — it's the weakest part of this page.</p>
+
+        <div class="rowlabel" style="margin-top:var(--space-4)">Where the flag lives</div>
+        <p class="note">Server-side, not localStorage. <code>railUnseen.ts</code> keeps the
+          unseen set in the browser, which is right for a <i>view</i> preference — but your task
+          list should survive a browser, a machine and a reload. <code>Session.tags</code>
+          already carries this kind of fact (<code>retro</code>, <code>imported</code>), so a
+          tag is the cheapest honest home.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-5); border-top:1px solid var(--line-soft); padding-top:var(--space-4)">
+      <div class="rowlabel good">Where (b) and (c) pay for each other</div>
+      <p class="note">Your keyless-entry point asked what becomes of <code>⏸</code>. Here is the
+        answer: <b>setting a session aside is the gesture that frees its process</b> — you don't
+        lock the car, you walk away and it locks itself. That retires the control by folding it
+        into something that means something to you, rather than by deleting it and hoping.</p>
+      <p class="note" style="margin-top:var(--space-2)"><b>With one caveat that needs checking
+        before building it.</b> Killing the harness may cost the cache: a restart replays the
+        conversation, and whether the server-side entry still hits depends on the replayed
+        prefix matching byte-for-byte. If it doesn't, sleeping a <i>warm</i> session actively
+        burns money. So the rule is <b>set aside sleeps the process once the session is
+        cold</b>, never while it's warm — at which point there is nothing left to lose and the
+        sleep is free. I have not verified the prefix behaviour on a claude-code resume; that's
+        a measurement to run, not an assumption to ship.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═══ PHASING ════════════════════════════════════════════════════════════ -->
+<section class="block">
+  <h2>Phasing <span class="sub">front-loaded: everything cheap ships before anything that touches a service</span></h2>
+  <div class="body">
+    <table>
+      <tr><th>#</th><th>Change</th><th>Where</th><th>Cost</th></tr>
+      <tr><td>1</td><td><b>(a)</b> The mark set, with the triangle</td><td>new <code>StatusMark.tsx</code>; <code>SessionRail.tsx</code>; the <code>.statusGlyph/.statusStalled/.statusSpinner</code> rules</td><td class="ok">Low · UI only · settled, buildable now</td></tr>
+      <tr><td>2</td><td>Ready + Sleeping → <b>Idle</b>; Sleep now / Wake now wording; drop <code>▶</code></td><td><code>railGroups.ts</code> <code>statusOf</code>; <code>SessionRail.tsx</code>; <code>SessionActionsMenu.tsx</code></td><td class="ok">Low · UI only · your keyless-entry call makes this a deletion, not a rename</td></tr>
+      <tr><td>3</td><td><b>(c)</b> Set aside: tag, fold, auto-return on attention</td><td>a tag write through the Router; <code>railGroups.ts</code>; <code>SessionRail.tsx</code></td><td class="warnc">Medium · a tag round-trip, no new contract</td></tr>
+      <tr><td>4</td><td><b>(b)</b> Warmth from <code>last_turn_at</code> + <code>last_usage</code>, 5-min assumption</td><td>new <code>cacheWarmth.ts</code>; the stamp rule; the <code>· warm/cooling/cold start</code> clause</td><td class="warnc">Medium · UI only, and <i>wrong at the margin</i> until #5</td></tr>
+      <tr><td>5</td><td>Persist <code>last_turn_started_at</code> — the gap above</td><td><code>pkg/contracts</code>, <code>RecordSessionTurnEnd</code>, the store write</td><td class="warnc">Small but crosses three services. The one server change on this page.</td></tr>
+      <tr><td>6</td><td>TTL inference from observed gap + cache-read evidence</td><td><code>cacheWarmth.ts</code>, fed by the turn history</td><td>Defer. #4 is useful at the 5-minute default alone; this only sharpens it.</td></tr>
+      <tr><td>7</td><td>Set aside sleeps the process once cold</td><td>—</td><td class="badc">Blocked on measuring whether a claude-code resume still hits cache.</td></tr>
+    </table>
+    <p class="note" style="margin-top:var(--space-4)"><b>If you only want one thing from this
+      page:</b> rows 1–3 are all UI, all settled, and together they deliver (a) and (c) — the
+      two wants that don't depend on a single fact we can't already see. (b) is real and the
+      data is genuinely there, but it is the one that earns a caveat: until row 5, a long turn
+      on the 5-minute default will show warm when it isn't.</p>
+  </div>
+</section>
+
+</div>
+</body>
+</html>
