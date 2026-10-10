@@ -1,5 +1,8 @@
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveCwd } from "./ptyHost";
+import { ensureSpawnHelperExecutable, resolveCwd } from "./ptyHost";
 
 /**
  * Importing ptyHost.ts here does not pull in node-pty: the module's only
@@ -32,5 +35,45 @@ describe("resolveCwd", () => {
 
   it("falls back to HOME when no cwd is given", () => {
     expect(resolveCwd(undefined)).toBe("/home/drew");
+  });
+});
+
+describe("ensureSpawnHelperExecutable", () => {
+  let ptyDir: string;
+  const helper = (...parts: string[]) => join(ptyDir, ...parts, "spawn-helper");
+  const place = (path: string, mode: number) => {
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "");
+    chmodSync(path, mode);
+  };
+  const modeOf = (path: string) => statSync(path).mode & 0o777;
+
+  beforeEach(() => {
+    ptyDir = mkdtempSync(join(tmpdir(), "node-pty-"));
+  });
+
+  afterEach(() => {
+    rmSync(ptyDir, { recursive: true, force: true });
+  });
+
+  it("makes the platform's prebuilt helper executable (node-pty 1.1.0 ships it 0644)", () => {
+    const prebuilt = helper("prebuilds", `${process.platform}-${process.arch}`);
+    place(prebuilt, 0o644);
+    ensureSpawnHelperExecutable(ptyDir);
+    expect(modeOf(prebuilt)).toBe(0o755);
+  });
+
+  it("fixes a source build's helper too, and leaves an executable one alone", () => {
+    const built = helper("build", "Release");
+    const prebuilt = helper("prebuilds", `${process.platform}-${process.arch}`);
+    place(built, 0o600);
+    place(prebuilt, 0o750);
+    ensureSpawnHelperExecutable(ptyDir);
+    expect(modeOf(built)).toBe(0o755);
+    expect(modeOf(prebuilt)).toBe(0o750);
+  });
+
+  it("does nothing when there is no helper", () => {
+    expect(() => ensureSpawnHelperExecutable(ptyDir)).not.toThrow();
   });
 });

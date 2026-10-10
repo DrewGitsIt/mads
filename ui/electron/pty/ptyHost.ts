@@ -1,4 +1,5 @@
-import { isAbsolute } from "node:path";
+import { chmodSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import os from "node:os";
 
 /**
@@ -42,9 +43,40 @@ export interface NodePtyModule {
 
 let nodePtyPromise: Promise<NodePtyModule | undefined> | undefined;
 
+/**
+ * Gives node-pty's spawn-helper back its execute bit. node-pty 1.1.0 (the
+ * latest stable) publishes its prebuilt macOS spawn-helper as a plain 0644
+ * file, and every spawn on macOS execs it, so each one fails with
+ * "posix_spawnp failed". Linux builds from source and never uses the helper,
+ * but fixing the mode there too costs nothing. Best effort: a read-only
+ * install keeps whatever mode it has.
+ */
+export function ensureSpawnHelperExecutable(ptyDir: string): void {
+  const candidates = [
+    join(ptyDir, "build", "Release", "spawn-helper"),
+    join(ptyDir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"),
+  ];
+  for (const helper of candidates) {
+    try {
+      const { mode } = statSync(helper);
+      if ((mode & 0o100) === 0) chmodSync(helper, mode | 0o755);
+    } catch {
+      // Missing (no such build) or not ours to change.
+    }
+  }
+}
+
 /** Loads node-pty once, memoized; resolves to undefined if unavailable. */
 export function loadNodePty(): Promise<NodePtyModule | undefined> {
   if (!nodePtyPromise) {
+    if (process.platform !== "win32") {
+      try {
+        // lib/index.js → the package root.
+        ensureSpawnHelperExecutable(dirname(dirname(require.resolve("node-pty"))));
+      } catch {
+        // Not resolvable here; the import below says so.
+      }
+    }
     nodePtyPromise = import("node-pty")
       .then((mod) => mod as unknown as NodePtyModule)
       .catch(() => undefined);
