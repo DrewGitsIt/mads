@@ -6,7 +6,8 @@ import {
   enqueueText,
   enqueueTool,
   hasPending,
-  pendingChars,
+  pendingWordsAtLeast,
+  revealedToMessages,
   step,
 } from "./streamPacer";
 import type { StreamItem } from "../ChatRenderer/ChatRenderer";
@@ -19,32 +20,84 @@ function text(items: StreamItem[]): string {
 }
 
 describe("streamPacer", () => {
-  it("reveals text a bounded number of characters per step", () => {
-    let s = enqueueText(emptyPacer(), "Hello, world");
+  it("reveals a bounded number of words per step, punctuation glued to its word", () => {
+    let s = enqueueText(emptyPacer(), "Hello, big wide world. ");
+    s = step(s, 1);
+    expect(text(s.items)).toBe("Hello,");
+    s = step(s, 2);
+    expect(text(s.items)).toBe("Hello, big wide");
     s = step(s, 5);
-    expect(text(s.items)).toBe("Hello");
-    s = step(s, 5);
-    expect(text(s.items)).toBe("Hello, wor");
-    s = step(s, 5);
-    expect(text(s.items)).toBe("Hello, world");
-    expect(hasPending(s)).toBe(false);
+    expect(text(s.items)).toBe("Hello, big wide world.");
   });
 
-  it("accumulates fractional budget across ticks for sub-1-char rates", () => {
-    let s = enqueueText(emptyPacer(), "abcd");
+  it("accumulates fractional budget across ticks for sub-1-word rates", () => {
+    let s = enqueueText(emptyPacer(), "one two three ");
     s = step(s, 0.5); // 0.5 → floor 0, carry 0.5
     expect(text(s.items)).toBe("");
     s = step(s, 0.5); // 0.5 + 0.5 = 1.0 → reveal 1
-    expect(text(s.items)).toBe("a");
+    expect(text(s.items)).toBe("one");
+  });
+
+  it("holds a word touching the end of the buffer until more text or the turn's end", () => {
+    let s = enqueueText(emptyPacer(), "streaming tok");
+    s = step(s, 10);
+    // "tok" may be the front half of "tokens" — never flash a fragment.
+    expect(text(s.items)).toBe("streaming");
+    s = enqueueText(s, "ens arrive");
+    s = step(s, 10);
+    expect(text(s.items)).toBe("streaming tokens");
+    s = step(s, 10, true); // turn finished: the last word is whole
+    expect(text(s.items)).toBe("streaming tokens arrive");
+    expect(hasPending(s)).toBe(false);
   });
 
   it("keeps tokens in one growing run and never resets it", () => {
     let s = emptyPacer();
     s = enqueueText(s, "Hel");
     s = enqueueText(s, "lo");
-    s = step(s, 100);
+    s = step(s, 100, true);
     expect(s.items).toHaveLength(1);
     expect(text(s.items)).toBe("Hello");
+  });
+
+  it("reveals a fenced code block whole, as one word, once its closing fence arrives", () => {
+    let s = enqueueText(emptyPacer(), "Run this:\n```sh\nmake check\ngo test ./...\n");
+    s = step(s, 10);
+    expect(text(s.items)).toBe("Run this:\n"); // the block waits for its fence
+    s = enqueueText(s, "```\nThen ship it.");
+    s = step(s, 1);
+    expect(text(s.items)).toBe("Run this:\n```sh\nmake check\ngo test ./...\n```\n");
+    s = step(s, 10, true);
+    expect(text(s.items)).toContain("Then ship it.");
+  });
+
+  it("reveals an unclosed code block whole at the turn's end", () => {
+    let s = enqueueText(emptyPacer(), "```\nhalf a block");
+    s = step(s, 1, true);
+    expect(text(s.items)).toBe("```\nhalf a block");
+  });
+
+  it("counts words in scripts without spaces (Japanese)", () => {
+    let s = enqueueText(emptyPacer(), "東京は日本の首都です。");
+    s = step(s, 1);
+    const first = text(s.items);
+    expect(first.length).toBeGreaterThan(0);
+    expect(first.length).toBeLessThan("東京は日本の首都です。".length);
+  });
+
+  it("paces a whole-answer burst over many steps instead of at once", () => {
+    // The Opus 5.5 shape: ~2,200 characters landing within 0.7s.
+    const burst = Array.from({ length: 25 }, (_, i) => `Line ${i} explains one more part of the idea here.`).join("\n");
+    let s = enqueueText(emptyPacer(), burst);
+    const wordsPerFrame = 500 / 60 / 60; // 500 wpm at 60fps
+    let frames = 0;
+    while (hasPending(s) && frames < 1_000_000) {
+      s = step(s, wordsPerFrame, true);
+      frames++;
+    }
+    expect(text(s.items)).toBe(burst);
+    // ~225 words at 500 wpm ≈ 27s — nowhere near the burst's 0.7s.
+    expect(frames / 60).toBeGreaterThan(20);
   });
 
   it("pops a tool card in order, splitting the text around it", () => {
@@ -52,18 +105,18 @@ describe("streamPacer", () => {
     s = enqueueText(s, "before");
     s = enqueueTool(s, { id: "t1", name: "Read" });
     s = enqueueText(s, "after");
-    s = step(s, 1000);
+    s = step(s, 1000, true);
     expect(s.items.map((i) => i.kind)).toEqual(["text", "tool", "text"]);
     expect(text(s.items)).toBe("beforeafter");
   });
 
   it("does not reveal a tool before the text ahead of it has drained", () => {
     let s = emptyPacer();
-    s = enqueueText(s, "abcdef");
+    s = enqueueText(s, "abc def");
     s = enqueueTool(s, { id: "t1", name: "Read" });
-    s = step(s, 3); // only "abc" fits — tool must wait
+    s = step(s, 1); // only "abc" fits — tool must wait
     expect(s.items.map((i) => i.kind)).toEqual(["text"]);
-    s = step(s, 3); // "def" drains, then the tool pops for free
+    s = step(s, 1); // "def" drains, then the tool pops for free
     expect(s.items.map((i) => i.kind)).toEqual(["text", "tool"]);
   });
 
@@ -105,11 +158,12 @@ describe("streamPacer", () => {
     expect(hasPending(s)).toBe(false);
   });
 
-  it("reports pending characters for backlog-bounded pacing", () => {
-    let s = enqueueText(emptyPacer(), "abcde");
+  it("reports whether at least n words wait, across text runs", () => {
+    let s = enqueueText(emptyPacer(), "one two");
     s = enqueueTool(s, { id: "t1", name: "Read" });
-    s = enqueueText(s, "fg");
-    expect(pendingChars(s)).toBe(7); // tools don't count
+    s = enqueueText(s, "three");
+    expect(pendingWordsAtLeast(s, 3)).toBe(true); // tools don't count
+    expect(pendingWordsAtLeast(s, 4)).toBe(false);
   });
 
   // Regression for the 2026-07-27 renderer freeze: an invalid stream_speed
@@ -135,7 +189,7 @@ describe("streamPacer", () => {
       let s = enqueueText(emptyPacer(), "hello");
       s = enqueueTool(s, { id: "t1", name: "Read" });
       s = enqueueText(s, "world");
-      s = step(s, Infinity);
+      s = step(s, Infinity, true);
       expect(text(s.items)).toBe("helloworld");
       expect(hasPending(s)).toBe(false);
     });
@@ -143,9 +197,28 @@ describe("streamPacer", () => {
     it("a NaN step does not poison carry for a later, legitimate step", () => {
       let s = enqueueText(emptyPacer(), "hello");
       s = step(s, NaN);
-      s = step(s, 5);
+      s = step(s, 5, true);
       expect(text(s.items)).toBe("hello");
       expect(hasPending(s)).toBe(false);
     });
+  });
+
+  it("revealedToMessages hands revealed text and tools to the history, in order", () => {
+    expect(
+      revealedToMessages([
+        { kind: "text", text: "Looking." },
+        { kind: "tool", tool: { id: "t1", name: "Read", result: { text: "ok" } }, timestamp: "2026-10-09T10:00:00Z" },
+        { kind: "thinking", text: "hmm" },
+        { kind: "text", text: "Done." },
+      ]),
+    ).toEqual([
+      { role: "agent", text: "Looking." },
+      {
+        role: "tool",
+        tool: { id: "t1", name: "Read", result: { text: "ok" } },
+        timestamp: "2026-10-09T10:00:00Z",
+      },
+      { role: "agent", text: "Done." },
+    ]);
   });
 });

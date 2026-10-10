@@ -283,3 +283,32 @@ func TestValidateConfigDelegateFade(t *testing.T) {
 		t.Error("delegate_fade 2m accepted")
 	}
 }
+
+func TestValidateConfigStreamSpeed(t *testing.T) {
+	c := DefaultConfig()
+	// "medium" is retired but stays valid: an old row holding it must save.
+	for _, s := range append([]StreamSpeed{""}, StreamSpeeds...) {
+		c.StreamSpeed = s
+		if verr := ValidateConfig(&c); !verr.Empty() {
+			t.Errorf("stream_speed %q rejected: %+v", s, verr.Errors)
+		}
+	}
+	c.StreamSpeed = "ludicrous"
+	if verr := ValidateConfig(&c); verr.Empty() {
+		t.Error("stream_speed ludicrous accepted")
+	}
+
+	c.StreamSpeed = StreamSpeedCustom
+	for _, wpm := range []int{0, MinStreamWPM, 350, MaxStreamWPM} {
+		c.StreamWPM = wpm
+		if verr := ValidateConfig(&c); !verr.Empty() {
+			t.Errorf("stream_wpm %d rejected: %+v", wpm, verr.Errors)
+		}
+	}
+	for _, wpm := range []int{-1, MinStreamWPM - 1, MaxStreamWPM + 1} {
+		c.StreamWPM = wpm
+		if verr := ValidateConfig(&c); verr.Empty() {
+			t.Errorf("stream_wpm %d accepted", wpm)
+		}
+	}
+}

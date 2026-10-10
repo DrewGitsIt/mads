@@ -1,6 +1,9 @@
 package contracts
 
-import "net/url"
+import (
+	"fmt"
+	"net/url"
+)
 
 // AgentSelectionMode controls how a session picks its agent (HANDOFF §2.1 /
 // docs/REBUILD-SPEC.md §10): light does minimal agent-matching, full runs
@@ -99,20 +102,33 @@ func (m ThemeMode) Valid() bool {
 	return false
 }
 
-// StreamSpeed caps how fast the conversation renders streamed text, decoupled
-// from the model's raw delivery rate (a "typewriter" smoothing). "off" renders
-// as tokens arrive; slow/medium/fast target ~10/20/30 tok/s.
+// StreamSpeed sets how fast the conversation reveals streamed text, decoupled
+// from the model's raw delivery rate. "off" (Native) renders as tokens
+// arrive; the rest are a reading pace in words per minute — slow and fast
+// are presets, custom reads StreamWPM — held even when the agent finished
+// long before the reveal does.
 type StreamSpeed string
 
 const (
 	StreamSpeedOff    StreamSpeed = "off"
 	StreamSpeedSlow   StreamSpeed = "slow"
-	StreamSpeedMedium StreamSpeed = "medium"
 	StreamSpeedFast   StreamSpeed = "fast"
+	StreamSpeedCustom StreamSpeed = "custom"
+	// StreamSpeedMedium is retired (the characters-per-second pacer's middle
+	// preset). Still valid so a config row that holds it keeps saving; the
+	// UI reads it as fast.
+	StreamSpeedMedium StreamSpeed = "medium"
 )
 
 // StreamSpeeds is the full registry, for validation and enumeration.
-var StreamSpeeds = []StreamSpeed{StreamSpeedOff, StreamSpeedSlow, StreamSpeedMedium, StreamSpeedFast}
+var StreamSpeeds = []StreamSpeed{StreamSpeedOff, StreamSpeedSlow, StreamSpeedFast, StreamSpeedCustom, StreamSpeedMedium}
+
+// StreamWPM bounds for StreamSpeedCustom. Zero means "unset" (the UI's
+// default pace).
+const (
+	MinStreamWPM = 60
+	MaxStreamWPM = 2000
+)
 
 // Valid reports whether s is a registered stream speed.
 func (s StreamSpeed) Valid() bool {
@@ -278,6 +294,7 @@ type Config struct {
 	Theme         ThemeMode   `json:"theme"`
 	Palette       string      `json:"palette"`
 	StreamSpeed   StreamSpeed `json:"stream_speed"`
+	StreamWPM     int         `json:"stream_wpm,omitempty"` // custom StreamSpeed's words per minute
 	EditorCommand string      `json:"editor_command,omitempty"`
 
 	// Operational limits (§3.7 General panel, restart-required).
@@ -410,7 +427,10 @@ func ValidateConfig(c *Config) *ValidationError {
 		v.Add("theme", "must be one of: dark, light, system")
 	}
 	if c.StreamSpeed != "" && !c.StreamSpeed.Valid() {
-		v.Add("stream_speed", "must be one of: off, slow, medium, fast")
+		v.Add("stream_speed", "must be one of: off, slow, fast, custom")
+	}
+	if c.StreamWPM != 0 && (c.StreamWPM < MinStreamWPM || c.StreamWPM > MaxStreamWPM) {
+		v.Add("stream_wpm", fmt.Sprintf("must be between %d and %d", MinStreamWPM, MaxStreamWPM))
 	}
 	if c.Palette != "" && !ValidPalette(c.Palette) {
 		v.Add("palette", "must be one of: clay, space, glacier")

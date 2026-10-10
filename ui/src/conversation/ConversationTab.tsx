@@ -60,8 +60,10 @@ import {
   type TaskModel,
 } from "./activity/conversationItems";
 import { formatTokens, toolTitle } from "./activity/toolDisplay";
+import { Chip } from "../components/Chip/Chip";
 import { useStreamPacer } from "./streaming/useStreamPacer";
-import { streamSpeedToCharsPerSec, useStreamSpeed } from "./streaming/streamSpeed";
+import { revealedToMessages } from "./streaming/streamPacer";
+import { streamPaceToWpm, useStreamSpeed } from "./streaming/streamSpeed";
 import { PermissionCard } from "./ChatRenderer/PermissionCard";
 import { TerminalView, type TerminalViewHandle } from "./TerminalRenderer/TerminalView";
 import { formatBracketedPaste } from "./TerminalRenderer/bracketedPaste";
@@ -153,7 +155,10 @@ type TransportState =
 // to make streamed text rubber-band. The ordered items live in a stream pacer
 // (useStreamPacer) so the reveal rate can be decoupled from token arrival;
 // ConversationTab keeps only the turn's phase + a `blocked` reason here.
-type TurnPhase = "idle" | "live";
+// "revealing" is a turn the agent has finished whose paced reveal is still
+// playing: the composer and working indicator are already idle (the agent
+// is), while the live items stay on screen until the reveal drains.
+type TurnPhase = "idle" | "live" | "revealing";
 
 /**
  * Top-level Conversation tab (MADS-UX §3.3 / W6.3). Composes the history (or
@@ -205,17 +210,22 @@ export function ConversationTab({
   const sessionWorkspace = useWorkspaceForRef(routerClient, session?.workspace);
   const agents = useAgentIndex(routerClient);
   const checkoutBranch = useCheckoutBranch(routerClient, session);
-  // Paces the live turn's reveal (typewriter smoothing, off by default). Owns
-  // the ordered items; enqueue/finish/reset are stable across renders.
-  const pacer = useStreamPacer(streamSpeedToCharsPerSec(useStreamSpeed(routerClient)));
+  // Paces the live turn's reveal (a reading pace in words per minute; Native
+  // by default). Owns the ordered items; its callbacks are stable across
+  // renders.
+  const pacer = useStreamPacer(streamPaceToWpm(useStreamSpeed(routerClient)));
   const {
     enqueueText: pacerEnqueueText,
     enqueueTool: pacerEnqueueTool,
     enqueueThinking: pacerEnqueueThinking,
     applyToolResult: pacerApplyToolResult,
     finish: pacerFinish,
+    flush: pacerFlush,
     reset: pacerReset,
   } = pacer;
+  // Bumped by each send: a reveal's end-of-turn reconcile that resolves
+  // after the next turn started must leave that turn alone.
+  const turnGenRef = useRef(0);
   // Last completed turn's usage, for the dock's context rim and the + menu's
   // context row. Populated from the stream's turn_end frame (the only place
   // usage is reported), seeded from session.last_usage at mount.
@@ -504,7 +514,7 @@ export function ConversationTab({
   // over, so the next send doesn't count from the previous turn's start
   // until its own session.agent_state arrives.
   useEffect(() => {
-    if (turnPhase === "idle") setAgentSince(undefined);
+    if (turnPhase !== "live") setAgentSince(undefined);
   }, [turnPhase]);
 
   const refetchSession = useCallback(() => {
@@ -760,11 +770,12 @@ export function ConversationTab({
   // frame says the turn is over. One fetch, one retry 300ms later if the
   // transcript hasn't caught up yet (or the fetch throws) — never an
   // unbounded poll; the frozen streamed bubble is the fallback if both fail.
-  const refetchAfterTurn = useCallback(async () => {
+  const refetchAfterTurn = useCallback(async (stillCurrent: () => boolean = () => true) => {
     const baseline = messagesRef.current.length;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const fresh = await routerClient.getTranscript(sessionId);
+        if (!stillCurrent()) return;
         if (fresh.length > baseline || attempt === 1) {
           setMessages(fresh);
           return;
@@ -775,6 +786,44 @@ export function ConversationTab({
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }, [routerClient, sessionId]);
+
+  // Ends the live turn. The agent is done, so the composer and indicator go
+  // idle now; a paced reveal keeps playing ("revealing") and, once drained,
+  // reconciles once with the persisted transcript and drops the live items —
+  // frozen-visible throughout, so there's never a flash to empty. A send in
+  // the meantime takes the reveal over (handleSendStart), and the reconcile
+  // then stands down.
+  const endTurn = useCallback(() => {
+    // The ref too, not just state: a second end-of-turn signal (the stream's
+    // turn_end and the agent going idle both arrive) mustn't see "live".
+    if (turnPhaseRef.current === "live") turnPhaseRef.current = "revealing";
+    setTurnPhase((p) => (p === "live" ? "revealing" : p));
+    pacerFinish(() => {
+      const gen = turnGenRef.current;
+      const stillCurrent = () => turnGenRef.current === gen;
+      void refetchAfterTurn(stillCurrent).finally(() => {
+        if (!stillCurrent()) return;
+        setTurnPhase((p) => (p === "revealing" ? "idle" : p));
+        pacerReset();
+      });
+    });
+  }, [pacerFinish, refetchAfterTurn, pacerReset]);
+
+  // A turn starts — the user's send, a queued message going out, or one
+  // this pane only hears about from the agent state. If the last reply is
+  // still revealing, show the rest of it at once and hand it to the history
+  // as plain transcript rows, so the new user message lands after it. The
+  // next turn's own end reconciles the whole thing with the persisted
+  // transcript.
+  const beginTurn = useCallback(() => {
+    turnGenRef.current++;
+    if (turnPhaseRef.current === "revealing") {
+      const revealed = pacerFlush();
+      setMessages((m) => [...m, ...revealedToMessages(revealed)]);
+    }
+    turnPhaseRef.current = "live"; // ahead of the render, for the next signal
+    setTurnPhase("live");
+  }, [pacerFlush]);
 
   // The chat-mode "Stop" button — the ⌘/Ctrl-C of the terminal. Interrupts the
   // in-flight turn, then finalizes locally exactly as onTurnEnd does rather
@@ -791,13 +840,8 @@ export function ConversationTab({
     }
     setCurrentActivity(undefined);
     setTasks((m) => finishRunningTasks(m));
-    pacerFinish(() => {
-      void refetchAfterTurn().finally(() => {
-        setTurnPhase("idle");
-        pacerReset();
-      });
-    });
-  }, [routerClient, sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
+    endTurn();
+  }, [routerClient, sessionId, endTurn]);
 
   // Durable turn-completion reconciliation: /output is ephemeral and can
   // shed frames under an end-of-turn burst (the hub closes overflowing
@@ -829,7 +873,11 @@ export function ConversationTab({
       if (envelope.type === "session.agent_state") {
         const state = envelope.payload as Partial<AgentState> | undefined;
         if (state?.state === "working") {
-          setTurnPhase("live");
+          // Only from idle. The control plane can deliver a turn's
+          // "working" after the stream already ended that turn, so while a
+          // reply is revealing it is no proof of a new turn — the stream's
+          // own next frame is (onText/onTool/onThinking), being ordered.
+          if (turnPhaseRef.current === "idle") beginTurn();
           setAgentSince(state.since || envelope.timestamp);
           // The stream's own tool/thinking frames keep the ticker current;
           // the server label only fills it when none has arrived yet.
@@ -838,20 +886,16 @@ export function ConversationTab({
         }
         if (state?.state !== "idle") return;
       }
-      if (turnPhaseRef.current !== "idle") {
+      if (turnPhaseRef.current === "live") {
         setCurrentActivity(undefined);
         setTasks((m) => finishRunningTasks(m));
-        pacerFinish(() => {
-          void refetchAfterTurn().finally(() => {
-            setTurnPhase("idle");
-            pacerReset();
-          });
-        });
-      } else {
+        endTurn();
+      } else if (turnPhaseRef.current === "idle") {
         void refetchAfterTurn();
       }
+      // "revealing": the turn already ended here; its reveal reconciles.
     });
-  }, [sessionId, pacerFinish, refetchAfterTurn, pacerReset]);
+  }, [sessionId, beginTurn, endTurn, refetchAfterTurn]);
 
   // A queued message going out is the start of a turn this pane didn't
   // send, so it gets the user bubble a direct send gets from onSent. The
@@ -863,14 +907,14 @@ export function ConversationTab({
       setQueuedMessages(change.queued ?? []);
       if (change.delivered) {
         const text = change.delivered.text;
+        if (turnPhaseRef.current !== "live") beginTurn();
         setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-        setTurnPhase((p) => (p === "idle" ? "live" : p));
       }
       if (change.failed) {
         setSendError(`Couldn't send your queued message: ${change.error ?? "unknown error"}`);
       }
     });
-  }, [sessionId]);
+  }, [sessionId, beginTurn]);
 
   // Queued messages live in the session process, so a session that stops
   // has none, whatever the last event said.
@@ -921,7 +965,7 @@ export function ConversationTab({
       // Only the main agent's own output is a turn: a backgrounded
       // subagent keeps streaming after its parent's turn ended, and nothing
       // would ever close a phase it opened.
-      setTurnPhase("live");
+      if (turnPhaseRef.current !== "live") beginTurn();
       pacerEnqueueText(parsed.text);
     };
     const onTool = (ev: MessageEvent<string>) => {
@@ -931,7 +975,7 @@ export function ConversationTab({
         appendSubagent(parsed.parent_tool_use_id, { kind: "tool_use", tool: parsed.tool });
         return;
       }
-      setTurnPhase("live");
+      if (turnPhaseRef.current !== "live") beginTurn();
       pacerEnqueueTool(parsed.tool, new Date().toISOString());
       setCurrentActivity(toolTitle(parsed.tool));
     };
@@ -972,7 +1016,7 @@ export function ConversationTab({
       // A whole block is the main agent's. A bare token tick may not be:
       // claude-code streams a subagent's thinking_tokens untagged, so a tick
       // only feeds a turn already live (session.agent_state opens turns).
-      if (parsed.text) setTurnPhase("live");
+      if (parsed.text && turnPhaseRef.current !== "live") beginTurn();
       // A whole block joins the live stream as a think row; a bare
       // thinking_tokens count is just the indicator's ticker.
       if (parsed.text) pacerEnqueueThinking(parsed.text);
@@ -1020,15 +1064,7 @@ export function ConversationTab({
       // A turn ending with no task_notification means those subagents never
       // finished — interrupted-shape, never a spinner that ticks forever.
       setTasks((m) => finishRunningTasks(m));
-      // Drain whatever the pacer still has buffered (so a paced turn finishes
-      // typing smoothly), then reconcile once with the persisted transcript and
-      // go idle — frozen-visible throughout, so there's never a flash to empty.
-      pacerFinish(() => {
-        void refetchAfterTurn().finally(() => {
-          setTurnPhase("idle");
-          pacerReset();
-        });
-      });
+      endTurn();
     };
     const onError = (ev: MessageEvent<string>) => {
       // A native transport-level failure (e.g. the initial GET /output 404
@@ -1076,7 +1112,8 @@ export function ConversationTab({
     pacerEnqueueTool,
     pacerEnqueueThinking,
     pacerApplyToolResult,
-    pacerFinish,
+    beginTurn,
+    endTurn,
     pacerReset,
   ]);
 
@@ -1103,7 +1140,9 @@ export function ConversationTab({
   useEffect(() => {
     if (!eventSource) return;
     const onOpen = () => {
-      if (turnPhaseRef.current === "idle") return;
+      // Only a live turn: a revealing one already has its whole reply, and
+      // the full transcript under its live items would show it twice.
+      if (turnPhaseRef.current !== "live") return;
       void routerClient.getTranscript(sessionId).then(setMessages);
       refetchSession();
     };
@@ -1130,6 +1169,10 @@ export function ConversationTab({
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState !== "visible" || !turnWasLiveRef.current) return;
+      // A revealing turn already ended and has its whole reply — the full
+      // transcript under its live items would show it twice. Its own
+      // reconcile follows the reveal.
+      if (turnPhaseRef.current === "revealing") return;
       turnWasLiveRef.current = turnPhaseRef.current !== "idle";
       void routerClient.getTranscript(sessionId).then(setMessages);
       refetchSession();
@@ -1298,7 +1341,8 @@ export function ConversationTab({
   // view via SessionTerminalBridge on the same stream. The paced items are the
   // live turn's content.
   const inChatTurn = activeMode === "chat" && turnPhase === "live";
-  const liveItems = inChatTurn ? pacer.items : [];
+  // A revealing turn keeps its live items on screen until the reveal drains.
+  const liveItems = inChatTurn || (activeMode === "chat" && turnPhase === "revealing") ? pacer.items : [];
   const lastLiveItem = liveItems[liveItems.length - 1];
   // Trailing "working" affordance — truthy for the ENTIRE live turn, never
   // just while the tail happens to look busy. It used to go false whenever
@@ -1498,7 +1542,7 @@ export function ConversationTab({
                   <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
                 </div>
               )}
-              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
+              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn && liveItems.length === 0 ? (
                 <>
                   <div className={styles.emptyTranscript}>No conversation yet</div>
                   {/* No rows to anchor to — every card is a fallback one. */}
@@ -1626,6 +1670,15 @@ export function ConversationTab({
                   onCancel={handleCancelQueued}
                   className={styles.queuedAbove}
                 />
+                {pacer.behind && (
+                  // The paced reveal trails the agent by more than a couple of
+                  // seconds' reading — offer to skip to the end of it.
+                  <div className={styles.revealAll}>
+                    <Chip tone="info" onClick={pacer.revealAll}>
+                      Show all
+                    </Chip>
+                  </div>
+                )}
               </div>
             </div>
             <SessionDock {...dockProps} mode="chat">
@@ -1647,7 +1700,7 @@ export function ConversationTab({
                 autoSendInitial={Boolean(pendingFirstMessage)}
                 onSendStart={() => {
                   if (session.activity !== "active") setWaking(true);
-                  setTurnPhase((p) => (p === "idle" ? "live" : p));
+                  if (turnPhaseRef.current !== "live") beginTurn();
                 }}
                 onSendError={(msg) => {
                   setWaking(false);

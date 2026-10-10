@@ -1318,8 +1318,9 @@ export type SynthesisMode = "off" | "light" | "full";
 export type AgentSelectionMode = "light" | "full";
 export type ModelTier = "cheapest" | "balanced" | "best";
 export type ThemeMode = "dark" | "light" | "system";
-// mirrors contracts.StreamSpeed — caps the conversation's render rate.
-export type StreamSpeed = "off" | "slow" | "medium" | "fast";
+// mirrors contracts.StreamSpeed — the conversation's reveal pace. "medium"
+// is retired: still accepted from an old config row, read as "fast".
+export type StreamSpeed = "off" | "slow" | "fast" | "custom" | "medium";
 export type PaletteName = "clay" | "space" | "glacier";
 // FastModelMode mirrors pkg/contracts/session.go: provider uses the default
 // provider's hermetic Completer capability (zero-config), endpoint uses the
@@ -1387,6 +1388,8 @@ export interface Config {
   theme: ThemeMode;
   palette: PaletteName;
   stream_speed: StreamSpeed;
+  /** Words per minute for stream_speed "custom" (contracts.MinStreamWPM–MaxStreamWPM); absent → the default pace. */
+  stream_wpm?: number;
   editor_command?: string;
 
   concurrency_limit: number;

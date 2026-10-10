@@ -9,15 +9,14 @@ import {
   enqueueThinking as enqueueThinkingPure,
   enqueueTool as enqueueToolPure,
   hasPending,
-  pendingChars,
+  pendingWordsAtLeast,
   step,
   type PacerState,
 } from "./streamPacer";
 
-// The reveal never lags the model by more than this — beyond it, the rate is
-// bumped so a long fast response doesn't keep "typing" for tens of seconds
-// after the model already finished.
-const MAX_LAG_SECONDS = 1;
+// "Behind" — worth offering Show all — once this many seconds of reading
+// wait in the queue. Below it the reveal is keeping up with the model.
+const BEHIND_SECONDS = 2;
 // Clamp per-frame dt so a stalled/backgrounded rAF doesn't dump a huge chunk on
 // the next frame.
 const MAX_FRAME_SECONDS = 0.1;
@@ -32,30 +31,48 @@ export interface StreamPacer {
     id: string | undefined,
     result: { text?: string; is_error?: boolean; timestamp?: string },
   ) => void;
+  /** More than a couple of seconds of reading still queued — the reveal trails the agent. */
+  behind: boolean;
   /** Keep draining what's queued, then invoke `onDrained` (used at turn_end). */
   finish: (onDrained: () => void) => void;
+  /** Reveal everything queued now (Show all); a pending `finish` fires. */
+  revealAll: () => void;
+  /**
+   * Reveal everything, return the items and clear — without firing a
+   * pending `finish`. For handing a still-revealing turn over to the
+   * history when the user sends their next message mid-reveal.
+   */
+  flush: () => StreamItem[];
   /** Clear everything (session switch, turn reset). */
   reset: () => void;
 }
 
 /**
- * Drives a {@link PacerState} at `charsPerSecond` off requestAnimationFrame,
+ * Drives a {@link PacerState} at `wordsPerMinute` off requestAnimationFrame,
  * decoupling render speed from token arrival. `null` = passthrough (reveal
- * immediately, today's behavior). Reveals are batched once per frame, which
- * also removes the per-token re-render thrash of updating on every delta.
+ * immediately — Native). There is deliberately no catch-up: a reading pace
+ * the user chose holds even when the agent finished long ago, so a burst
+ * plays out at that pace rather than flushing. Reveals are batched once per
+ * frame, which also removes the per-token re-render thrash of updating on
+ * every delta.
  */
-export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
+export function useStreamPacer(wordsPerMinute: number | null): StreamPacer {
   const [items, setItems] = useState<StreamItem[]>([]);
+  const [behind, setBehind] = useState(false);
   const stateRef = useRef<PacerState>(emptyPacer());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const finishingRef = useRef<(() => void) | null>(null);
-  const rateRef = useRef(charsPerSecond);
-  rateRef.current = charsPerSecond;
+  const rateRef = useRef(wordsPerMinute);
+  rateRef.current = wordsPerMinute;
 
   const commit = useCallback((next: PacerState) => {
     stateRef.current = next;
     setItems(next.items);
+    const rate = rateRef.current;
+    setBehind(
+      rate != null && Number.isFinite(rate) && pendingWordsAtLeast(next, Math.max(1, (rate / 60) * BEHIND_SECONDS)),
+    );
   }, []);
 
   const maybeFinish = useCallback(() => {
@@ -79,9 +96,7 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
       const last = lastTsRef.current ?? ts;
       const dt = Math.min(MAX_FRAME_SECONDS, (ts - last) / 1000);
       lastTsRef.current = ts;
-      const backlogRate = pendingChars(stateRef.current) / MAX_LAG_SECONDS;
-      const chars = Math.max(rate, backlogRate) * dt;
-      commit(step(stateRef.current, chars));
+      commit(step(stateRef.current, (rate / 60) * dt, finishingRef.current !== null));
       if (hasPending(stateRef.current)) {
         rafRef.current = requestAnimationFrame(frame);
       } else {
@@ -155,14 +170,31 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
     [ensureLoop],
   );
 
-  const reset = useCallback(() => {
+  const stopLoop = useCallback(() => {
     if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
     lastTsRef.current = null;
+  }, []);
+
+  const revealAll = useCallback(() => {
+    stopLoop();
+    commit(drainAll(stateRef.current));
+    maybeFinish();
+  }, [stopLoop, commit, maybeFinish]);
+
+  const reset = useCallback(() => {
+    stopLoop();
     finishingRef.current = null;
     stateRef.current = emptyPacer();
     setItems([]);
-  }, []);
+    setBehind(false);
+  }, [stopLoop]);
+
+  const flush = useCallback(() => {
+    const revealed = drainAll(stateRef.current).items;
+    reset();
+    return revealed;
+  }, [reset]);
 
   useEffect(() => {
     return () => {
@@ -170,5 +202,16 @@ export function useStreamPacer(charsPerSecond: number | null): StreamPacer {
     };
   }, []);
 
-  return { items, enqueueText, enqueueTool, enqueueThinking, applyToolResult, finish, reset };
+  return {
+    items,
+    behind,
+    enqueueText,
+    enqueueTool,
+    enqueueThinking,
+    applyToolResult,
+    finish,
+    revealAll,
+    flush,
+    reset,
+  };
 }

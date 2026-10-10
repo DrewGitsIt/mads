@@ -1,16 +1,18 @@
-import type { ToolUse } from "../../router/types";
+import type { ToolUse, TranscriptMessage } from "../../router/types";
 import type { StreamItem } from "../ChatRenderer/ChatRenderer";
 
 /**
  * Pure state machine for pacing a live turn's render, decoupled from how fast
- * tokens actually arrive off the wire (the "typewriter" pattern every polished
- * chat UI uses — see docs research, Vercel AI SDK smoothStream et al.).
+ * tokens actually arrive off the wire.
  *
- * Stream events are enqueued in order; `step` reveals a bounded number of
- * characters per tick into `items` (the trailing text run grows char-by-char;
- * a tool card pops for free when the text before it has drained). This keeps
- * the reveal smooth and, because reveals are batched per animation frame rather
- * than per token, also avoids a React re-render on every delta.
+ * Stream events are enqueued in order; `step` reveals a number of *words* per
+ * tick into `items` — a reading pace, so a burst (a model that thinks, then
+ * delivers its whole answer in half a second) plays out at the speed the
+ * user chose instead of exploding onto the screen. The trailing text run
+ * grows word by word; a fenced code block reveals whole, as one word, since
+ * nobody reads code at prose pace; a tool card pops for free once the text
+ * before it has drained. Reveals are batched per animation frame rather than
+ * per token, which also avoids a React re-render on every delta.
  *
  * All functions are pure — the timing/rAF lives in useStreamPacer.
  */
@@ -25,7 +27,7 @@ export interface PacerState {
   items: StreamItem[];
   /** Pending, ordered — not yet revealed. */
   queue: QueueEntry[];
-  /** Fractional character budget carried across ticks (rates below 1 char/frame). */
+  /** Fractional word budget carried across ticks (rates below 1 word/frame). */
   carry: number;
 }
 
@@ -79,25 +81,157 @@ export function applyToolResult(
   return { ...s, items: s.items.map(patchItem), queue: s.queue.map(patch) };
 }
 
-/** Total un-revealed text characters still queued — drives backlog-bounded pacing. */
-export function pendingChars(s: PacerState): number {
-  let n = 0;
-  for (const e of s.queue) if (e.kind === "text") n += e.text.length;
-  return n;
-}
-
 export function hasPending(s: PacerState): boolean {
   return s.queue.length > 0;
 }
 
+// Word segmentation: Intl.Segmenter knows where words end in scripts that
+// don't separate them with spaces (Chinese, Japanese, Thai); without it,
+// whitespace-separated runs stand in.
+const segmenter =
+  typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "word" }) : null;
+
+// How far ahead of the reveal point one word lookup scans. A word longer
+// than this (a URL, a hash) reveals in window-sized pieces.
+const WINDOW = 256;
+
 /**
- * Reveal up to `chars` characters this tick (plus any carried fraction). Tool
- * entries pop for free the moment the text ahead of them has drained, so
- * ordering is preserved without a tool consuming the character budget.
+ * End offset of the next word unit in `text` from `pos`: any leading
+ * whitespace/punctuation, the word itself, and punctuation glued to its end
+ * ("word," not "word" then ", next"). undefined when no word starts inside
+ * the window.
  */
-export function step(s: PacerState, chars: number): PacerState {
+function nextWordEnd(text: string, pos: number): number | undefined {
+  const chunk = text.slice(pos, pos + WINDOW);
+  let end: number | undefined;
+  if (segmenter) {
+    for (const seg of segmenter.segment(chunk)) {
+      if (end === undefined) {
+        if (seg.isWordLike) end = seg.index + seg.segment.length;
+        continue;
+      }
+      // Glue trailing punctuation, but stop at whitespace.
+      if (seg.isWordLike || /^\s/.test(seg.segment)) break;
+      end = seg.index + seg.segment.length;
+    }
+  } else {
+    const m = /^\s*\S+/.exec(chunk);
+    if (m) end = m[0].length;
+  }
+  return end === undefined ? undefined : pos + end;
+}
+
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})[^\n]*(\n|$)/;
+
+/**
+ * If a fenced code block opens at `pos` (a line start), the end offset of
+ * the whole block through its closing fence line — or undefined when the
+ * closing fence hasn't arrived yet. Not a block at all → null.
+ */
+function fenceEnd(text: string, pos: number): number | undefined | null {
+  const open = FENCE_OPEN.exec(text.slice(pos));
+  if (!open) return null;
+  const marker = open[1];
+  if (!open[2]) return undefined; // the opening line itself is still arriving
+  let from = pos + open[0].length;
+  for (;;) {
+    const nl = text.indexOf("\n", from);
+    const line = text.slice(from, nl === -1 ? text.length : nl);
+    const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+    if (close && close[1][0] === marker[0] && close[1].length >= marker.length) {
+      // A closing line still arriving could yet grow past a bare fence.
+      if (nl === -1) return undefined;
+      return nl + 1;
+    }
+    if (nl === -1) return undefined;
+    from = nl + 1;
+  }
+}
+
+/**
+ * How much of `text` to reveal for up to `words` word units. `atLineStart`
+ * says whether `text` begins a line (what precedes it was empty or ended in
+ * a newline). `final` means no more text will join this run — the turn is
+ * finishing, or a tool card follows — so a word touching the end of the
+ * buffer is whole; otherwise it may be half of a word still streaming in,
+ * and is held back.
+ */
+function takeWords(
+  text: string,
+  words: number,
+  atLineStart: boolean,
+  final: boolean,
+): { end: number; used: number } {
+  let pos = 0;
+  let used = 0;
+  while (used < words && pos < text.length) {
+    const lineStart = pos === 0 ? atLineStart : text[pos - 1] === "\n";
+    // Blank-line remainders are free: they carry no words, and consuming
+    // them puts the next fence check at a real line start.
+    const blank = /^[ \t]*\n/.exec(text.slice(pos));
+    if (blank) {
+      pos += blank[0].length;
+      continue;
+    }
+    if (lineStart) {
+      const fence = fenceEnd(text, pos);
+      if (fence !== null) {
+        if (fence === undefined) {
+          if (final) return { end: text.length, used: used + 1 };
+          break; // wait for the closing fence
+        }
+        pos = fence;
+        used++;
+        continue;
+      }
+    }
+    const end = nextWordEnd(text, pos);
+    if (end === undefined) {
+      if (pos + WINDOW < text.length) {
+        pos += WINDOW; // a long run with no word in it: reveal a window
+        used++;
+        continue;
+      }
+      if (final) pos = text.length;
+      break;
+    }
+    if (end >= text.length && !final) break;
+    pos = end;
+    used++;
+  }
+  return { end: pos, used };
+}
+
+/** Whether `items` currently ends at a line start (nothing yet, or a newline). */
+function endsAtLineStart(items: StreamItem[]): boolean {
+  const last = items[items.length - 1];
+  return !last || last.kind !== "text" || last.text === "" || last.text.endsWith("\n");
+}
+
+/**
+ * Whether at least `n` words are queued but not yet revealed — how the UI
+ * tells "behind the agent" from "keeping up". Bounded: stops counting at n.
+ */
+export function pendingWordsAtLeast(s: PacerState, n: number): boolean {
+  let count = 0;
+  for (const e of s.queue) {
+    if (e.kind !== "text") continue;
+    count += takeWords(e.text, n - count, false, true).used;
+    if (count >= n) return true;
+  }
+  return false;
+}
+
+/**
+ * Reveal up to `words` words this tick (plus any carried fraction). Tool
+ * entries pop for free the moment the text ahead of them has drained, so
+ * ordering is preserved without a tool consuming the budget. `final` marks
+ * the stream finished (turn end): the last queued word is whole, not a
+ * fragment awaiting its next delta.
+ */
+export function step(s: PacerState, words: number, final = false): PacerState {
   if (s.queue.length === 0) return s;
-  let budget = chars + s.carry;
+  let budget = words + s.carry;
   let items = s.items;
   let queue = s.queue;
 
@@ -110,21 +244,25 @@ export function step(s: PacerState, chars: number): PacerState {
     }
     const take = Math.floor(budget);
     if (!(take > 0)) break;
-    if (head.text.length <= take) {
-      items = reveal(items, head.text);
-      budget -= head.text.length;
+    const whole = final || queue.length > 1;
+    const { end, used } = takeWords(head.text, take, endsAtLineStart(items), whole);
+    if (end > 0) items = reveal(items, head.text.slice(0, end));
+    budget -= used;
+    if (end >= head.text.length) {
       queue = queue.slice(1);
-    } else {
-      items = reveal(items, head.text.slice(0, take));
-      queue = [{ kind: "text", text: head.text.slice(take) }, ...queue.slice(1)];
-      budget -= take;
+      continue;
     }
+    queue = [{ kind: "text", text: head.text.slice(end) }, ...queue.slice(1)];
+    break; // out of budget, or holding a fragment / an unclosed fence
   }
 
   // Keep the sub-1 fraction only while text still waits; drop it once drained.
+  // Whole words left over because the reveal stopped early (holding a
+  // fragment, awaiting a fence) are dropped too, or they'd burst out later.
   // A non-finite budget (bad rate upstream) must not poison carry for later,
   // legitimate calls — fall back to 0 rather than propagating NaN/Infinity.
-  const carry = queue.some((e) => e.kind === "text") && Number.isFinite(budget) ? Math.max(0, budget) : 0;
+  const carry =
+    queue.some((e) => e.kind === "text") && Number.isFinite(budget) ? Math.max(0, budget - Math.floor(budget)) : 0;
   return { items, queue, carry };
 }
 
@@ -136,4 +274,22 @@ export function drainAll(s: PacerState): PacerState {
     items = e.kind === "text" ? reveal(items, e.text) : [...items, e];
   }
   return { items, queue: [], carry: 0 };
+}
+
+/**
+ * Revealed live items as transcript rows — how a still-revealing turn joins
+ * the history when the next turn starts before its reveal finishes. Thinking
+ * rows are dropped: history thinking comes from the session's own thinking
+ * log, merged by timestamp, and the turn-end reconcile restores the rest.
+ */
+export function revealedToMessages(items: StreamItem[]): TranscriptMessage[] {
+  const out: TranscriptMessage[] = [];
+  for (const it of items) {
+    if (it.kind === "text") {
+      if (it.text) out.push({ role: "agent", text: it.text });
+    } else if (it.kind === "tool") {
+      out.push({ role: "tool", tool: it.tool, timestamp: it.timestamp });
+    }
+  }
+  return out;
 }
