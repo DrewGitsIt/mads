@@ -92,6 +92,7 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		controlWaiters:   map[string]chan controlReply{},
 		asker:            opts.Permissions,
 		asks:             map[string]context.CancelFunc{},
+		hasAgentFile:     p.hasDelegateFile,
 	}
 	s.askCtx, s.askStop = context.WithCancel(context.Background())
 	for _, srv := range opts.MCPServers {
@@ -144,12 +145,17 @@ type streamSession struct {
 	unprompted bool
 	reqSeq     int
 	closed     bool
-	// otherTasks holds the task_ids of background tasks that aren't
-	// subagents (wire.go isAgentTask). Only their task_started line says so,
-	// so the later phases are dropped by id. Never pruned: one entry per
-	// backgrounded command, gone with the process.
-	otherTasks map[string]bool
-	refFired   bool // guards announced against a double-send
+	// agentTasks records, per background task_id, whether it is a subagent
+	// (wire.go isAgentTask). Only a task_started line says so, so the later
+	// phases are kept or dropped by id. Never pruned: one entry per
+	// background task, gone with the process.
+	agentTasks map[string]bool
+	// hasAgentFile answers for a task this process never saw start — one
+	// an earlier process started, reported after a restart. A subagent
+	// leaves its own transcript file; a background shell never does. nil
+	// keeps such tasks (tests that build a bare streamSession).
+	hasAgentFile func(ref, taskID string) bool
+	refFired     bool // guards announced against a double-send
 
 	// launchMCP names the servers this process was started with
 	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
@@ -282,20 +288,33 @@ func (s *streamSession) handleLine(raw []byte) {
 }
 
 // isOtherTask reports whether l is a task-lifecycle line for a background
-// task that isn't a subagent — a run_in_background Bash call — learning the
-// task_id from its task_started line. Those lines never become EventTask:
-// downstream every task is a subagent. Caller holds s.mu.
+// task that isn't a subagent — a run_in_background Bash call, a Monitor —
+// learning the task_id's kind from its task_started line. Those lines never
+// become EventTask: downstream every task is a subagent. A task with no
+// task_started in this process was started by an earlier one: after a
+// restart claude-code reports the background tasks it left behind
+// ("Orphaned by a previous Claude Code process exit"), by id alone, so its
+// subagent file decides. Caller holds s.mu.
 func (s *streamSession) isOtherTask(l *wireLine) bool {
 	if !l.isTaskLine() {
 		return false
 	}
-	if l.Subtype == "task_started" && !l.isAgentTask() {
-		if s.otherTasks == nil {
-			s.otherTasks = map[string]bool{}
-		}
-		s.otherTasks[l.TaskID] = true
+	agent, seen := s.agentTasks[l.TaskID]
+	switch {
+	case l.Subtype == "task_started":
+		agent = l.isAgentTask()
+	case seen:
+		return !agent
+	case s.hasAgentFile == nil:
+		return false
+	default:
+		agent = s.hasAgentFile(s.ref, l.TaskID)
 	}
-	return s.otherTasks[l.TaskID]
+	if s.agentTasks == nil {
+		s.agentTasks = map[string]bool{}
+	}
+	s.agentTasks[l.TaskID] = agent
+	return !agent
 }
 
 func (s *streamSession) Ref() string {

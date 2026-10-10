@@ -119,6 +119,12 @@ agent_state-style retry), in `runner/delegates.go`:
   delegates.
 - **Runner start** loads stored records (so resumed delegates keep their
   identity) and marks any still `running` as `orphaned` (`runner_restart`).
+- **An ending with no start is not yet a delegate.** After a restart Claude
+  Code reports, by id alone, every background task an earlier process left
+  behind: Monitor and Bash calls as well as subagents. The provider passes
+  such an id through only if it has a subagent file, and the tracker holds
+  the ending until the runner's inspection finds the delegate in the
+  harness's store.
 - **Tool status:** the turn-end sweep (`toolstatus.TurnEndExcept`) leaves a
   live delegate's in-flight calls alone. They close out (`EndParent`) when
   the delegate ends. This fixes the stuck-⊘ bug.

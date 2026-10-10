@@ -63,6 +63,12 @@ type Tracker struct {
 	sessionID string
 	grace     time.Duration
 	byID      map[string]*entry
+	// unseen holds the ending a harness reported for a task the tracker
+	// never saw start, until Inspect finds the delegate in the harness's
+	// store. A harness reports every background task it leaves behind
+	// across a restart, shell commands included; only one with a store
+	// entry is a delegate.
+	unseen map[string]contracts.SubagentTask
 	// defaults is the harness's capability set from its provider matrix
 	// (SetDefaults).
 	defaults CapabilityDefaults
@@ -120,14 +126,22 @@ func (t *Tracker) SetDefaults(d CapabilityDefaults) {
 
 // Inspect folds a run-time observation into the delegate's record — its
 // transcript, worktree, and what the store adds to its identity — and
-// re-resolves its capabilities. Returns the record if it changed; an unknown
-// delegate is ignored.
+// re-resolves its capabilities. Returns the record if it changed. An unknown
+// delegate is ignored unless its ending was held back (unseen): finding it
+// in the store is what makes it one.
 func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	e, ok := t.byID[harnessID]
-	if !ok {
-		return nil
+	e, known := t.byID[harnessID]
+	if !known {
+		r, held := t.unseen[harnessID]
+		if !held {
+			return nil
+		}
+		delete(t.unseen, harnessID)
+		now := time.Now()
+		e = t.createLocked(r, now)
+		t.endingLocked(e, r, now)
 	}
 	before := e.d
 	if o.TranscriptPath != "" {
@@ -146,7 +160,7 @@ func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate 
 		e.d.Backgrounded = true
 	}
 	e.d.Capabilities = t.resolveLocked(e.d)
-	if sameRecord(before, e.d) {
+	if known && sameRecord(before, e.d) {
 		return nil
 	}
 	return []contracts.Delegate{e.d}
@@ -211,7 +225,7 @@ func New(sessionID string, grace time.Duration) *Tracker {
 	if grace <= 0 {
 		grace = Grace
 	}
-	return &Tracker{sessionID: sessionID, grace: grace, byID: map[string]*entry{}}
+	return &Tracker{sessionID: sessionID, grace: grace, byID: map[string]*entry{}, unseen: map[string]contracts.SubagentTask{}}
 }
 
 // Seed loads the session's stored records — so a delegate resumed by a
@@ -281,19 +295,14 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 			return nil // a patch without a status transition
 		}
 		if !known {
-			e = t.createLocked(r, now)
-		}
-		if r.Phase == "notification" {
-			if r.TotalTokens != 0 || r.ToolUses != 0 || r.DurationMS != 0 {
-				e.d.TotalTokens, e.d.ToolUses, e.d.DurationMS = r.TotalTokens, r.ToolUses, r.DurationMS
+			// Held until Inspect finds it in the harness's store (unseen).
+			if r.ToolUseID == "" {
+				r.ToolUseID = t.unseen[r.TaskID].ToolUseID
 			}
+			t.unseen[r.TaskID] = r
+			return nil
 		}
-		// An evidenced ending already stands; only an inferred one (or a
-		// running delegate) takes this report's state.
-		if e.d.State == contracts.DelegateRunning || e.d.Inferred {
-			state, reason := settle(r.Status)
-			t.endLocked(e, state, reason, false, now)
-		}
+		t.endingLocked(e, r, now)
 	default:
 		return nil
 	}
@@ -440,6 +449,21 @@ func (t *Tracker) fillLocked(e *entry, r contracts.SubagentTask) {
 	}
 	if e.d.Depth == 0 {
 		e.d.Depth = r.SpawnDepth
+	}
+}
+
+// endingLocked folds an updated/notification report into the record.
+func (t *Tracker) endingLocked(e *entry, r contracts.SubagentTask, now time.Time) {
+	if r.Phase == "notification" {
+		if r.TotalTokens != 0 || r.ToolUses != 0 || r.DurationMS != 0 {
+			e.d.TotalTokens, e.d.ToolUses, e.d.DurationMS = r.TotalTokens, r.ToolUses, r.DurationMS
+		}
+	}
+	// An evidenced ending already stands; only an inferred one (or a
+	// running delegate) takes this report's state.
+	if e.d.State == contracts.DelegateRunning || e.d.Inferred {
+		state, reason := settle(r.Status)
+		t.endLocked(e, state, reason, false, now)
 	}
 }
 

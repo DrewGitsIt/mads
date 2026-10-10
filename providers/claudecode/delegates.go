@@ -52,6 +52,12 @@ func (p *Provider) delegateFile(ref, harnessID string) (string, error) {
 	return matches[0], nil
 }
 
+// hasDelegateFile reports whether the subagent has a transcript yet.
+func (p *Provider) hasDelegateFile(ref, harnessID string) bool {
+	path, err := p.delegateFile(ref, harnessID)
+	return err == nil && path != ""
+}
+
 // InspectDelegate implements provider.DelegateInspector: the subagent's
 // transcript path and the .meta.json beside it. Nothing there yet is
 // ok=false, not an error.

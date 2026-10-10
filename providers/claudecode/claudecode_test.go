@@ -1307,6 +1307,52 @@ func TestStreamSessionSubagentTaskKept(t *testing.T) {
 	}
 }
 
+// After a restart claude-code reports the background tasks an earlier
+// process left behind, by id alone — no task_started in this process says
+// which are subagents. The subagent file decides: an orphaned Monitor or
+// Bash call has none and stays out, a subagent has one and comes through.
+// A task this process saw start never needs the file (it can trail the
+// first line).
+func TestStreamSessionOrphanedTasksNeedAgentFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "-proj", "ses-ref-1", "subagents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-a01b0c447099882d2.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := New(Config{TranscriptDir: root})
+	checks := map[string]int{}
+	s := &streamSession{
+		events: make(chan provider.Event, 256), announced: make(chan string, 1), ref: "ses-ref-1",
+		hasAgentFile: func(ref, id string) bool { checks[id]++; return p.hasDelegateFile(ref, id) },
+	}
+	for _, ln := range []string{
+		`{"type":"system","subtype":"task_notification","task_id":"b28lo19d8","tool_use_id":"toolu_1","status":"stopped","summary":"Orphaned by a previous Claude Code process exit"}`,
+		`{"type":"system","subtype":"task_updated","task_id":"b28lo19d8","patch":{"status":"stopped"}}`,
+		`{"type":"system","subtype":"task_progress","task_id":"a01b0c447099882d2","tool_use_id":"toolu_2","description":"Running tests"}`,
+		`{"type":"system","subtype":"task_notification","task_id":"a01b0c447099882d2","tool_use_id":"toolu_2","status":"stopped"}`,
+		`{"type":"system","subtype":"task_started","task_id":"a9","tool_use_id":"toolu_3","task_type":"local_agent","description":"new"}`,
+		`{"type":"system","subtype":"task_progress","task_id":"a9","tool_use_id":"toolu_3","description":"step"}`,
+	} {
+		s.handleLine([]byte(ln))
+	}
+	var got []string
+	for len(s.events) > 0 {
+		if ev := <-s.events; ev.Kind == provider.EventTask {
+			got = append(got, ev.Task.TaskID+":"+ev.Task.Phase)
+		}
+	}
+	want := "a01b0c447099882d2:progress,a01b0c447099882d2:notification,a9:started,a9:progress"
+	if g := strings.Join(got, ","); g != want {
+		t.Errorf("tasks = %s\nwant %s", g, want)
+	}
+	if checks["b28lo19d8"] != 1 || checks["a01b0c447099882d2"] != 1 || checks["a9"] != 0 {
+		t.Errorf("file checks = %v, want one per unfamiliar id and none for a9", checks)
+	}
+}
+
 // background_tasks_changed comes through as the subagent-only roster, in
 // stream order and never nil — the emptied roster is the evidence. Its
 // position matters to consumers: it drops the task BEFORE task_updated and

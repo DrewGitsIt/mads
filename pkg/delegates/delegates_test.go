@@ -203,6 +203,29 @@ func TestProgressWithoutStartCreates(t *testing.T) {
 	}
 }
 
+// An ending for a task the tracker never saw start — a harness reporting
+// what an earlier process left behind — makes no record by itself: shell
+// commands are reported too. Only Inspect finding it in the harness's store
+// does, and then it carries the held ending and anchor.
+func TestEndingWithoutStartWaitsForStore(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	none(t, tr.Task(contracts.SubagentTask{Phase: "notification", TaskID: "b28lo19d8", ToolUseID: "toolu_m", Status: "stopped"}, at(0)))
+	none(t, tr.Task(contracts.SubagentTask{Phase: "updated", TaskID: "a1", Status: "stopped"}, at(1)))
+	none(t, tr.Task(contracts.SubagentTask{Phase: "notification", TaskID: "a1", ToolUseID: "toolu_a", Status: "completed", TotalTokens: 42}, at(2)))
+
+	d := one(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/x/agent-a1.jsonl"}))
+	if d.State != contracts.DelegateCompleted || d.ToolUseID != "toolu_a" || d.TotalTokens != 42 || d.TranscriptPath == "" {
+		t.Errorf("inspected = %+v", d)
+	}
+	none(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/x/agent-a1.jsonl"}))
+
+	// Found with nothing more to say, the held ending alone is the record.
+	none(t, tr.Task(contracts.SubagentTask{Phase: "notification", TaskID: "a2", Status: "failed"}, at(3)))
+	if d := one(t, tr.Inspect("a2", delegates.Observation{})); d.State != contracts.DelegateFailed {
+		t.Errorf("a2 = %+v", d)
+	}
+}
+
 // Capabilities start from the harness's matrix defaults, and a transcript —
 // and with it continuing as a forked session — only on evidence.
 func TestCapabilitiesFromDefaultsThenEvidence(t *testing.T) {
