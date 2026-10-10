@@ -403,6 +403,17 @@ Where the build differs from the decisions above, and why:
   refused, with a plain sentence. Delete keeps a folder another session is
   working in, and keeps one a running pipeline is merging into. The dialog says
   so.
+- **Starting in another session's worktree (added 2026-10-09).** Any folder can
+  be picked, including `session-worktrees/<id>`. In place, the new session
+  commits on that session's branch and that session lands it. With a new
+  worktree, its base is `mads/session/<id>` and its Land merges into that
+  folder. The Router reads the owner off the folder's branch
+  (`sessionwt.SessionOfBranch`): `GET /sessions/defaults` returns
+  `dir_owner_session` so the Launchpad can say so before Start, and
+  `GET /sessions/{id}/worktree` returns `owner_session` for an in-place session
+  there, with its `not_isolated` detail reworded (it said "your checkout"). The
+  ⎇ popover fetches that status on opening, for in-place sessions only, to say
+  why there's no Land and which session lands the work.
 - **The uncommitted count includes untracked files** the session created, not
   only modified tracked files.
 - **A folder on the wrong branch is reused, not moved aside.** If it's still a

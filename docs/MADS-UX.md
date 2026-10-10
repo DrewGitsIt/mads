@@ -74,6 +74,8 @@ Replaces #1's empty state. Centered hero composer — greeting copy (approved): 
 
 **Between Start and the live session** (~1–3s, fully observable): the pane morphs optimistically — the typed message becomes the first user bubble, the composer docks, and the sidebar gains a row with a provisional name (first line of the message; the Fast Model refines it asynchronously). Above the message, a **setup strip** streams provisioning steps as their control-plane events land: worktree created → post-commit hook installed (§5) → agent process starting (provider) → MCP servers up (§12.5) → message delivered — then tokens stream and the strip collapses. A failed step surfaces inline with a retry action. No spinner-only limbo, no black box (§18). Emits `session.provisioning` events.
 
+**A folder that is another session's worktree** (its branch is `mads/session/<id>`) gets a note under the pills naming that session, linked: in place, "You'll share its branch; changes land from *name*"; with a new worktree, "A new worktree will branch from its branch, and Land goes back into *name*'s worktree" (`dir_owner_session` on `GET /sessions/defaults`).
+
 - **Reads:** `GET /workspaces`, `GET /agents` (picker + quadrant suggestions §9), `GET /providers` + `GET /providers/:id/models` (grouped model popover), `GET /sessions?attention=true` + `GET /tasks?status=ready` (suggestion chips), `GET /mentionables` (@ index), `GET /capabilities?type=skill` (/ menu)
 - **Actions:** `POST /sessions` (first message creates), pill edits are staged client-side until creation
 
@@ -92,7 +94,7 @@ Chat renderer (markdown + collapsible tool cards) or terminal renderer (xterm.js
 2. **Attachment chips** (chat).
 3. **Input row** (chat only): **+** · an auto-growing textarea · Stop while a turn runs · **Send**, or **Queue** while busy.
 4. **Expanded editor** (⌘E): grows in place, no modal (#7). Monaco with a line-number gutter and word wrap, then an action bar with **+**, the send/collapse hint, and Stop / Send / Queue.
-5. **Status line** (one 30px line): persona ▾, model ▾ and trust ▾ (dot coloured by level) on the left; on the right `⎇ workspace / branch → base` and the **Commit / Land** control. Each segment opens its picker upward. The ⎇ popover says where the session works (folder, worktree, branch, status) and offers **Commit…** and **Land into base**. Land outcomes and refusals answer in that popover, at the button, as well as on the card in the conversation (SESSION-WORKTREES-DESIGN.md D4–D6).
+5. **Status line** (one 30px line): persona ▾, model ▾ and trust ▾ (dot coloured by level) on the left; on the right `⎇ workspace / branch → base` and the **Commit / Land** control. Each segment opens its picker upward. The ⎇ popover says where the session works (folder, worktree, branch, status) and offers **Commit…** and **Land into base**. Land outcomes and refusals answer in that popover, at the button, as well as on the card in the conversation (SESSION-WORKTREES-DESIGN.md D4–D6). A session working in place has no Land; on opening, its popover says why (the Router's `land_blocked` detail), and when its folder is another session's worktree, "Changes here land from *name*" with **Open *name***.
 
 The **+ menu** holds everything about input and display: Attach files…, Mention, Commands, Expand editor, Keyboard shortcuts; **View: Chat | Terminal**; a context row with a bar, and Compact now.
 
