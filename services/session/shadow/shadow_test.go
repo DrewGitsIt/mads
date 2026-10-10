@@ -3,6 +3,7 @@ package shadow
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -352,6 +353,67 @@ func TestCommitTurnSkipsUnbaselinedRoot(t *testing.T) {
 	}
 	if err := exec.Command("git", "--git-dir="+rs.gitDir, "rev-parse", "--verify", "HEAD").Run(); err == nil {
 		t.Error("un-baselined root has a HEAD commit — turn commit should have skipped it")
+	}
+}
+
+// TestCommitTurnSkipsRemovedRoot: a root whose folder was deleted (a linked
+// worktree removed mid-session) is dropped at the next turn with one log
+// line, not retried — and failed — on every turn after. A root still on disk
+// keeps committing.
+func TestCommitTurnSkipsRemovedRoot(t *testing.T) {
+	gone := newRepo(t, map[string]string{"a.txt": "v1\n"})
+	kept := newRepo(t, map[string]string{"b.txt": "v1\n"})
+	s := New(t.TempDir(), "ses_test")
+	t.Cleanup(s.Wait)
+	for _, root := range []string{gone, kept} {
+		s.Baseline(root)
+	}
+	s.Capture("toolu_a", filepath.Join(gone, "a.txt"))
+	s.Capture("toolu_b", filepath.Join(kept, "b.txt"))
+	s.Wait()
+
+	var logged []string
+	orig := logf
+	logf = func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	t.Cleanup(func() { logf = orig })
+
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(kept, "b.txt"), "v2\n")
+	s.commitTurn()
+	s.commitTurn()
+
+	if len(logged) != 1 || !strings.Contains(logged[0], gone) || !strings.Contains(logged[0], "no longer a folder") {
+		t.Errorf("logs over two turns = %q, want one line naming the removed root", logged)
+	}
+	s.mu.Lock()
+	_, stillKnown := s.roots[gone]
+	_, keptKnown := s.roots[kept]
+	for dir, dr := range s.rootByDir {
+		if dr.root == gone {
+			t.Errorf("rootByDir still maps %s to the removed root", dir)
+		}
+	}
+	s.mu.Unlock()
+	if stillKnown || !keptKnown {
+		t.Errorf("known roots: removed=%v kept=%v, want false/true", stillKnown, keptKnown)
+	}
+	recs, err := ReadIndex(s.Dir())
+	if err != nil {
+		t.Fatalf("ReadIndex: %v", err)
+	}
+	var commits int
+	for _, rec := range recs {
+		if rec.Kind == RecordTurnCommit {
+			commits++
+			if rec.Root != kept {
+				t.Errorf("turn commit recorded for %s, want only %s", rec.Root, kept)
+			}
+		}
+	}
+	if commits != 1 {
+		t.Errorf("turn commits = %d, want 1 (the surviving root's edit)", commits)
 	}
 }
 

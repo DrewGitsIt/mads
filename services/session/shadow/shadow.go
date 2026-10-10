@@ -341,6 +341,16 @@ func (s *Store) commitTurn() {
 	s.mu.Unlock()
 
 	for _, rs := range roots {
+		if !isWorkTree(rs.path) {
+			// The folder is gone (a removed linked worktree, a deleted
+			// checkout): `add -A` against it fails with "must be run in a
+			// work tree" on every turn. Forget the root instead, saying so
+			// once — if it comes back, the next capture re-registers it and
+			// finds its shadow dir and baseline already there.
+			s.forgetRoot(rs.path)
+			logf("shadow: %s is no longer a folder; skipping its turn commits", rs.path)
+			continue
+		}
 		rs.mu.Lock()
 		if !rs.repo || !rs.baselined {
 			// Non-repo roots are never baselined, so they land here too:
@@ -374,6 +384,27 @@ func (s *Store) commitTurn() {
 		}
 		if err := s.git(gitTimeout, rs.gitDir, "", "gc", "--auto", "--quiet"); err != nil {
 			logf("shadow: gc --auto in %s: %v", rs.gitDir, err)
+		}
+	}
+}
+
+// isWorkTree reports whether root is still a directory a turn commit can
+// scan. Only the stat: a root that is a directory but no longer a repo is
+// left to fail in git, which logs it.
+func isWorkTree(root string) bool {
+	info, err := os.Stat(root)
+	return err == nil && info.IsDir()
+}
+
+// forgetRoot drops root from the known roots, and every cached directory
+// lookup that resolved to it, so later turns stop visiting it.
+func (s *Store) forgetRoot(root string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.roots, root)
+	for dir, dr := range s.rootByDir {
+		if dr.root == root {
+			delete(s.rootByDir, dir)
 		}
 	}
 }
@@ -563,6 +594,7 @@ func (s *Store) gitOutput(timeout time.Duration, gitDir, workTree string, args .
 	return string(out), nil
 }
 
-func logf(format string, args ...any) {
+// logf is a var so tests can count what a turn says.
+var logf = func(format string, args ...any) {
 	log.Printf(format, args...)
 }
