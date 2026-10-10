@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -301,6 +302,78 @@ func TestDeleteSessionKeepsFolderAJoinedSessionUses(t *testing.T) {
 	}
 	if out := wtGit(t, repo, "branch", "--list", owner.WorktreeBranch); out == "" {
 		t.Error("branch deleted under the joined session")
+	}
+}
+
+// A session working in place in another session's worktree learns whose it
+// is: status names the owner and words the not_isolated refusal for it.
+// The owner's own status doesn't name itself.
+func TestWorktreeStatusNamesInPlaceOwner(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	owner, _ := isolatedRecord(t, data, "owner")
+	guest := contracts.Session{Name: "guest", Provider: "fake", Dir: owner.WorktreeDir, Isolation: contracts.IsolationCurrentDir}
+	if err := data.CreateSession(context.Background(), &guest); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(srv.URL + "/sessions/" + guest.ID + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := decodeJSON[contracts.WorktreeStatus](t, resp)
+	if st.Isolated || st.OwnerSession == nil || *st.OwnerSession != (contracts.WorktreeTenant{ID: owner.ID, Name: "owner"}) {
+		t.Errorf("guest status isolated=%v owner=%+v, want in place, owned by %s", st.Isolated, st.OwnerSession, owner.ID)
+	}
+	if st.LandBlocked == nil || st.LandBlocked.Reason != contracts.LandNotIsolated ||
+		!strings.Contains(st.LandBlocked.Detail, "another session's worktree") {
+		t.Errorf("guest land_blocked = %+v, want not_isolated naming the other session's worktree", st.LandBlocked)
+	}
+
+	resp, err = http.Get(srv.URL + "/sessions/" + owner.ID + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := decodeJSON[contracts.WorktreeStatus](t, resp); st.OwnerSession != nil {
+		t.Errorf("owner status owner_session = %+v, want none", st.OwnerSession)
+	}
+
+	// An ordinary in-place session, in a checkout no session owns.
+	plain := contracts.Session{Name: "plain", Provider: "fake", Dir: wtRepo(t), Isolation: contracts.IsolationCurrentDir}
+	if err := data.CreateSession(context.Background(), &plain); err != nil {
+		t.Fatal(err)
+	}
+	resp, err = http.Get(srv.URL + "/sessions/" + plain.ID + "/worktree")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := decodeJSON[contracts.WorktreeStatus](t, resp); st.OwnerSession != nil ||
+		st.LandBlocked == nil || !strings.Contains(st.LandBlocked.Detail, "your checkout") {
+		t.Errorf("plain status owner=%+v land_blocked=%+v, want no owner and the checkout wording", st.OwnerSession, st.LandBlocked)
+	}
+}
+
+// The Launchpad's preview names the session whose worktree a folder is —
+// from the folder or anywhere below it — and nothing for a plain checkout
+// or a session branch whose session is gone.
+func TestSessionDefaultsDirOwnerSession(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	owner, repo := isolatedRecord(t, data, "owner")
+	sub := filepath.Join(owner.WorktreeDir, "sub")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := contracts.WorktreeTenant{ID: owner.ID, Name: "owner"}
+	for _, dir := range []string{owner.WorktreeDir, sub} {
+		if got := getDefaults(t, srv.URL, url.Values{"dir": {dir}}); got.DirOwnerSession == nil || *got.DirOwnerSession != want {
+			t.Errorf("dir_owner_session(%s) = %+v, want %+v", dir, got.DirOwnerSession, want)
+		}
+	}
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {repo}}); got.DirOwnerSession != nil {
+		t.Errorf("dir_owner_session for the primary checkout = %+v, want none", got.DirOwnerSession)
+	}
+	wtGit(t, repo, "checkout", "-q", "-b", sessionwt.Branch("ses_gone"))
+	if got := getDefaults(t, srv.URL, url.Values{"dir": {repo}}); got.DirOwnerSession != nil {
+		t.Errorf("dir_owner_session for a deleted session's branch = %+v, want none", got.DirOwnerSession)
 	}
 }
 

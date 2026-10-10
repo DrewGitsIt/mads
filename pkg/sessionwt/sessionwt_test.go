@@ -85,6 +85,23 @@ func newSpec(t *testing.T) Spec {
 
 // Both gone: the branch starts from the base passed in, not from whatever
 // the primary has checked out now.
+// SessionOfBranch reads back only what Branch writes: not the pipeline's
+// task branches beside it, nor anything below a session's name.
+func TestSessionOfBranch(t *testing.T) {
+	for branch, want := range map[string]string{
+		Branch("ses_abc"):        "ses_abc",
+		BranchPrefix:             "",
+		"mads/task/tsk_1":        "",
+		"main":                   "",
+		BranchPrefix + "ses_a/x": "",
+		"x/" + Branch("ses_abc"): "",
+	} {
+		if got := SessionOfBranch(branch); got != want {
+			t.Errorf("SessionOfBranch(%q) = %q, want %q", branch, got, want)
+		}
+	}
+}
+
 func TestEnsureCreatesFromExplicitBase(t *testing.T) {
 	s := newSpec(t)
 	mainHead := head(t, s.Primary, "main")

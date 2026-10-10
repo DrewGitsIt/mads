@@ -37,6 +37,16 @@ const BranchPrefix = "mads/session/"
 // Branch is the deterministic branch name for a session.
 func Branch(sessionID string) string { return BranchPrefix + sessionID }
 
+// SessionOfBranch is Branch's inverse: the session a branch belongs to, or
+// "" for any branch that isn't a session's.
+func SessionOfBranch(branch string) string {
+	id, ok := strings.CutPrefix(branch, BranchPrefix)
+	if !ok || id == "" || strings.Contains(id, "/") {
+		return ""
+	}
+	return id
+}
+
 // Path is the deterministic folder for a session under root.
 func Path(root, sessionID string) string { return filepath.Join(root, sessionID) }
 

@@ -46,6 +46,12 @@ type SessionDefaults struct {
 	// record carries no branch of its own (only isolated sessions have
 	// worktree_branch).
 	DirBranch string `json:"dir_branch,omitempty"`
+	// DirOwnerSession is the session whose worktree Dir is — DirBranch is
+	// that session's branch (mads/session/<id>) and the session still
+	// exists. A session started there in place shares that branch, and one
+	// isolated there branches from it and lands back into it; the Launchpad
+	// says so. Nil for any other folder.
+	DirOwnerSession *WorktreeTenant `json:"dir_owner_session,omitempty"`
 	// Workspace is the workspace whose Defaults were consulted (explicit
 	// ?workspace= query param, or Config.DefaultWorkspace) — empty if none
 	// resolved (bad/missing key, or no workspace involved at all).

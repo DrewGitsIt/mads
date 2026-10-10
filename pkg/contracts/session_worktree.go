@@ -56,9 +56,15 @@ type WorktreeStatus struct {
 	// Router's to set; the delete dialog says so.
 	SharedWith      []WorktreeTenant `json:"shared_with,omitempty"`
 	PipelineRunning bool             `json:"pipeline_running,omitempty"`
+	// OwnerSession is, for a session working in place, the session whose
+	// worktree that place is (SharedWith seen from the other side): this
+	// session commits onto the owner's branch, and the owner lands it. The
+	// Router's to set.
+	OwnerSession *WorktreeTenant `json:"owner_session,omitempty"`
 }
 
-// WorktreeTenant names another session working in a session's folder.
+// WorktreeTenant names another session working in a session's folder, or
+// the session whose folder it is.
 type WorktreeTenant struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`

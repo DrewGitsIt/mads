@@ -122,17 +122,23 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
 }
 
+// inPlaceOwnerDetail replaces the not_isolated refusal's "your checkout"
+// wording for a session working in another session's worktree.
+const inPlaceOwnerDetail = "This session works in another session's worktree, on that session's branch, so it has nothing of its own to land. Commit is all it needs."
+
 // withFolderKeepers adds shared_with and pipeline_running to a worktree
-// status body. Added into the body as sent, so nothing the child said is
-// lost in a round trip through the Router's types; a body it can't read
-// goes out unchanged.
+// status body, and for a session working in another session's worktree its
+// owner_session (with the not_isolated refusal reworded to match). Added
+// into the body as sent, so nothing the child said is lost in a round trip
+// through the Router's types; a body it can't read goes out unchanged.
 func (s *server) withFolderKeepers(ctx context.Context, id string, raw []byte) []byte {
 	sess, err := s.data.Session(ctx, id)
 	if err != nil {
 		return raw
 	}
 	tenants, pipeline := s.folderKeepers(ctx, sess)
-	if len(tenants) == 0 && !pipeline {
+	owner := s.inPlaceOwner(ctx, sess)
+	if len(tenants) == 0 && !pipeline && owner == nil {
 		return raw
 	}
 	var body map[string]json.RawMessage
@@ -144,6 +150,14 @@ func (s *server) withFolderKeepers(ctx context.Context, id string, raw []byte) [
 	}
 	if pipeline {
 		body["pipeline_running"] = json.RawMessage("true")
+	}
+	if owner != nil {
+		body["owner_session"], _ = json.Marshal(owner)
+		var refusal contracts.LandRefusal
+		if json.Unmarshal(body["land_blocked"], &refusal) == nil && refusal.Reason == contracts.LandNotIsolated {
+			refusal.Detail = inPlaceOwnerDetail
+			body["land_blocked"], _ = json.Marshal(refusal)
+		}
 	}
 	out, err := json.Marshal(body)
 	if err != nil {
@@ -177,6 +191,20 @@ func (s *server) folderKeepers(ctx context.Context, sess contracts.Session) (ten
 		}
 	}
 	return tenants, pipeline
+}
+
+// inPlaceOwner is the session whose worktree sess works in, for a session
+// working in place (no worktree of its own): read off the branch its folder
+// has checked out, so it holds whichever way the folder was chosen.
+func (s *server) inPlaceOwner(ctx context.Context, sess contracts.Session) *contracts.WorktreeTenant {
+	if sess.WorktreeBranch != "" || sess.Dir == "" || !filepath.IsAbs(sess.Dir) {
+		return nil
+	}
+	branch, err := sessionwt.CurrentBranch(ctx, sess.Dir)
+	if err != nil {
+		return nil
+	}
+	return s.branchOwner(ctx, branch, sess.ID)
 }
 
 // within reports whether p is root or below it.

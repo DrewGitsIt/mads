@@ -248,6 +248,7 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	var status contracts.DirStatus
 	var branch string
+	var owner *contracts.WorktreeTenant
 	if dir.Value != "" {
 		status = dirStatus(r.Context(), dir.Value)
 	}
@@ -255,16 +256,34 @@ func (s *server) handleSessionDefaults(w http.ResponseWriter, r *http.Request) {
 		// Best-effort: a detached HEAD (or any git hiccup) just leaves the
 		// branch unsaid rather than failing the whole preview.
 		branch, _ = sessionwt.CurrentBranch(r.Context(), dir.Value)
+		owner = s.branchOwner(r.Context(), branch, "")
 	}
 	writeJSON(w, http.StatusOK, contracts.SessionDefaults{
-		Provider:  contracts.ResolvedSessionField{Value: sess.Provider, Source: src.Provider},
-		Model:     contracts.ResolvedSessionField{Value: sess.Model, Source: src.Model},
-		Agent:     contracts.ResolvedSessionField{Value: sess.Agent, Source: src.Agent},
-		Isolation: contracts.ResolvedSessionField{Value: sess.Isolation, Source: src.Isolation},
-		Trust:     contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
-		Dir:       dir,
-		DirStatus: status,
-		DirBranch: branch,
-		Workspace: src.Workspace,
+		Provider:        contracts.ResolvedSessionField{Value: sess.Provider, Source: src.Provider},
+		Model:           contracts.ResolvedSessionField{Value: sess.Model, Source: src.Model},
+		Agent:           contracts.ResolvedSessionField{Value: sess.Agent, Source: src.Agent},
+		Isolation:       contracts.ResolvedSessionField{Value: sess.Isolation, Source: src.Isolation},
+		Trust:           contracts.ResolvedSessionField{Value: string(sess.Trust), Source: src.Trust},
+		Dir:             dir,
+		DirStatus:       status,
+		DirBranch:       branch,
+		DirOwnerSession: owner,
+		Workspace:       src.Workspace,
 	})
+}
+
+// branchOwner is the session whose branch this is (sessionwt.SessionOfBranch)
+// — so whose worktree a folder with it checked out is — when that session
+// still exists and isn't self. Nil otherwise, including when the lookup
+// fails: callers only add a note with it.
+func (s *server) branchOwner(ctx context.Context, branch, self string) *contracts.WorktreeTenant {
+	id := sessionwt.SessionOfBranch(branch)
+	if id == "" || id == self {
+		return nil
+	}
+	o, err := s.data.Session(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return &contracts.WorktreeTenant{ID: o.ID, Name: o.Name}
 }
