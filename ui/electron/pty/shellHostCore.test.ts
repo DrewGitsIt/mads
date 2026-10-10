@@ -8,6 +8,7 @@ import {
   ShellHostCore,
   type ShellActivity,
   type ShellEvent,
+  type ShellInfo,
 } from "./shellHostCore";
 import type { ProcessInfo, ProcessSource } from "./processTable";
 import { createHeadlessMirror, type ShellMirror } from "./shellMirror";
@@ -80,6 +81,8 @@ let parents: Map<number, number | undefined>;
 let signals: Array<[number, string]>;
 let signalErrors: Map<number, string>;
 let mirrorHook: ((data: string) => void) | undefined;
+// Folders the fake disk lacks; every other path is a directory.
+let missingDirs: Set<string>;
 
 /** Fires every scheduled batch flush that wasn't cancelled. */
 function tick(): void {
@@ -129,6 +132,7 @@ beforeEach(() => {
   ids = 0;
   timers = [];
   mirrorHook = undefined;
+  missingDirs = new Set();
   processTable = new Map();
   parents = new Map();
   signals = [];
@@ -147,6 +151,7 @@ beforeEach(() => {
     now: () => 4242,
     newId: () => `shell-${++ids}`,
     createMirror: hookedMirror,
+    isDirectory: (path) => !missingDirs.has(path),
     processSource: () => fakeSource,
     signal: (pid, sig) => {
       const code = signalErrors.get(pid);
@@ -201,6 +206,36 @@ describe("ShellHostCore", () => {
     connectWindow(1);
     await open(1, "ses_a", { cwd: "." });
     expect(spawned[0].options.cwd).toBe(process.env.HOME);
+  });
+
+  it("starts in HOME, and says so, when the cwd doesn't exist here", async () => {
+    missingDirs.add("/gone/worktree");
+    const events = connectWindow(1);
+    const { shellId } = await open(1, "ses_a", { cwd: "/gone/worktree" });
+    expect(spawned[0].options.cwd).toBe(process.env.HOME);
+    spawned[0].emitData("$ ");
+    tick();
+    const shown = events.map((e) => (e.event === "data" ? e.data : "")).join("");
+    expect(shown).toMatch(/^\x1b\[2m\[\/gone\/worktree doesn't exist here; started in .*\]\x1b\[0m\r\n\$ $/);
+    expect(events.every((e) => e.event === "data" && e.shellId === shellId)).toBe(true);
+    expect((await core.handle(1, { type: "list" })) as ShellInfo[]).toMatchObject([{ cwd: process.env.HOME }]);
+  });
+
+  it("keeps the missing-folder note in the snapshot a reattach gets", async () => {
+    missingDirs.add("/gone/worktree");
+    connectWindow(1);
+    const { shellId } = await open(1, "ses_a", { cwd: "/gone/worktree", cols: 80, rows: 10 });
+    await core.handle(1, { type: "detach", shellId });
+    const again = await open(1, "ses_a", { cols: 80, rows: 10 });
+    expect(await screenText(again.snapshot ?? "", 80, 10)).toContain("/gone/worktree doesn't exist here");
+  });
+
+  it("uses an existing cwd as given, with no note", async () => {
+    const events = connectWindow(1);
+    await open(1, "ses_a", { cwd: "/work" });
+    tick();
+    expect(spawned[0].options.cwd).toBe("/work");
+    expect(events).toEqual([]);
   });
 
   it("rejects open when node-pty is unavailable", async () => {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 import { defaultShell, resolveCwd, type NodePtyModule, type PtyProcess } from "./ptyHost";
 import { shellEnv } from "./shellEnv";
@@ -125,6 +126,8 @@ export interface ShellHostDeps {
   signal: (pid: number, signal: NodeJS.Signals) => void;
   /** A process source for one request (createProcessSource in the real host). No default; see `signal`. */
   processSource: () => ProcessSource;
+  /** Whether a path is a directory on this machine; defaults to a stat. */
+  isDirectory?: (path: string) => boolean;
   /** Runs `fn` after `ms` and returns a canceller; defaults to setTimeout. */
   schedule?: (fn: () => void, ms: number) => () => void;
 }
@@ -330,7 +333,15 @@ export class ShellHostCore {
     const existing = this.bySession.get(request.sessionId);
     if (existing) return this.openExisting(windowId, existing, request);
 
-    const cwd = resolveCwd(request.cwd);
+    // A session's folder isn't always here: a landed worktree is removed
+    // until the agent's next turn re-creates it, and a window on another
+    // machine than the Router gets the Router's paths. node-pty can't start
+    // in a missing folder (Linux: "chdir(2) failed", macOS: "posix_spawnp
+    // failed"), so start in HOME and say why.
+    const wanted = resolveCwd(request.cwd);
+    const isDirectory = this.deps.isDirectory ?? isDirectoryOnDisk;
+    const home = resolveCwd(undefined);
+    const cwd = wanted === undefined || isDirectory(wanted) ? wanted : home;
     const cols = request.cols ?? 80;
     const rows = request.rows ?? 24;
     const shellFile = (this.deps.shell ?? defaultShell)();
@@ -360,6 +371,14 @@ export class ShellHostCore {
     this.bySession.set(entry.sessionId, entry);
     this.byId.set(entry.shellId, entry);
     this.broadcastShellsChanged();
+
+    if (cwd !== wanted) {
+      // Ahead of the shell's first prompt, in the mirror as well as the live stream.
+      const note = `\x1b[2m[${wanted} doesn't exist here; started in ${cwd ?? "the default folder"}]\x1b[0m\r\n`;
+      entry.mirror.write(note);
+      entry.pending.push(note);
+      this.scheduleFlush(entry);
+    }
 
     proc.onData((data) => {
       // The mirror sees every byte; the window only what arrives while it is attached.
@@ -588,5 +607,13 @@ export class ShellHostCore {
   private sendToAttached(entry: ShellEntry, event: ShellEvent): void {
     if (entry.attachedTo === undefined) return;
     this.windows.get(entry.attachedTo)?.(event);
+  }
+}
+
+function isDirectoryOnDisk(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
   }
 }
