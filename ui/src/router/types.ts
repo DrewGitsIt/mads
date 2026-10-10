@@ -1391,6 +1391,8 @@ export interface Config {
   /** Words per minute for stream_speed "custom" (contracts.MinStreamWPM–MaxStreamWPM); absent → the default pace. */
   stream_wpm?: number;
   editor_command?: string;
+  /** Animation off in the UI regardless of the OS; absent/false follows prefers-reduced-motion. Never changes stream_speed. */
+  reduce_motion?: boolean;
 
   concurrency_limit: number;
   synthesis_debounce_ms: number;

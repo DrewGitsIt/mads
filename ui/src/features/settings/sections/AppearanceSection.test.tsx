@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppearanceSection } from "./AppearanceSection";
@@ -24,6 +24,35 @@ describe("AppearanceSection", () => {
   beforeEach(() => {
     delete document.documentElement.dataset.theme;
     delete document.documentElement.dataset.palette;
+    delete document.documentElement.dataset.motion;
+  });
+
+  it("turns reduce motion on live, persists it, and leaves streaming speed alone", () => {
+    const config = makeConfig({ draft: { ...fixtureConfig, stream_speed: "slow" } });
+    render(<AppearanceSection config={config} />);
+    const group = screen.getByRole("group", { name: "Reduce motion" });
+    expect(within(group).getByText("system").getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(within(group).getByText("on"));
+
+    expect(document.documentElement.dataset.motion).toBe("reduce");
+    expect(config.save).toHaveBeenCalledWith(
+      expect.objectContaining({ reduce_motion: true, stream_speed: "slow" }),
+    );
+  });
+
+  it("back to system clears the override, and a failed save reverts it", async () => {
+    const config = makeConfig({
+      saved: { ...fixtureConfig, reduce_motion: true },
+      draft: { ...fixtureConfig, reduce_motion: true },
+      save: vi.fn().mockResolvedValue(false),
+    });
+    document.documentElement.dataset.motion = "reduce";
+    render(<AppearanceSection config={config} />);
+
+    fireEvent.click(within(screen.getByRole("group", { name: "Reduce motion" })).getByText("system"));
+    expect(document.documentElement.dataset.motion).toBeUndefined();
+    await waitFor(() => expect(document.documentElement.dataset.motion).toBe("reduce"));
   });
 
   it("switches palette live and persists it via save()", () => {

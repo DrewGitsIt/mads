@@ -297,6 +297,11 @@ type Config struct {
 	StreamWPM     int         `json:"stream_wpm,omitempty"` // custom StreamSpeed's words per minute
 	EditorCommand string      `json:"editor_command,omitempty"`
 
+	// ReduceMotion turns animation off in the UI regardless of the OS
+	// setting; false follows the OS's prefers-reduced-motion. It never
+	// touches StreamSpeed — pacing is how fast words arrive, not motion.
+	ReduceMotion bool `json:"reduce_motion,omitempty"`
+
 	// Operational limits (§3.7 General panel, restart-required).
 	ConcurrencyLimit    int          `json:"concurrency_limit"`
 	SynthesisDebounceMS int          `json:"synthesis_debounce_ms"`

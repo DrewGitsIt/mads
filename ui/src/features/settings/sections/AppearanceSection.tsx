@@ -9,6 +9,7 @@ import {
   normalizeStreamSpeed,
 } from "../../../conversation/streaming/streamSpeed";
 import type { UseConfig } from "../state/useConfig";
+import { applyMotion } from "../theme/applyMotion";
 import { applyTheme } from "../theme/applyTheme";
 import type { PaletteName, StreamSpeed, ThemeMode } from "../../../router/types";
 import styles from "./AppearanceSection.module.css";
@@ -68,6 +69,14 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
     if (!ok) applyTheme(saved.theme, saved.palette);
   };
 
+  const chooseReduceMotion = async (reduce_motion: boolean) => {
+    const next = { ...draft, reduce_motion };
+    setDraft(next);
+    applyMotion(reduce_motion);
+    const ok = await save(next);
+    if (!ok) applyMotion(saved.reduce_motion);
+  };
+
   const chooseStreamSpeed = async (stream_speed: StreamSpeed) => {
     const next = { ...draft, stream_speed };
     setDraft(next);
@@ -114,6 +123,33 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
             </Chip>
           ))}
         </div>
+      </section>
+      <section>
+        <h3 className={styles.heading}>Reduce motion</h3>
+        <div className={styles.options} role="group" aria-label="Reduce motion">
+          {[
+            { reduce: false, label: "system" },
+            { reduce: true, label: "on" },
+          ].map(({ reduce, label }) => {
+            const chosen = Boolean(draft.reduce_motion) === reduce;
+            return (
+              <Chip
+                key={label}
+                tone={chosen ? "info" : "neutral"}
+                pressed={chosen}
+                onClick={() => void chooseReduceMotion(reduce)}
+              >
+                {label}
+              </Chip>
+            );
+          })}
+        </div>
+        <p className={styles.hint}>
+          {draft.reduce_motion
+            ? "Animations are off: things appear and close instantly."
+            : "Follows your system's reduce-motion setting."}{" "}
+          Doesn't change streaming speed.
+        </p>
       </section>
       <section>
         <h3 className={styles.heading}>Streaming speed</h3>

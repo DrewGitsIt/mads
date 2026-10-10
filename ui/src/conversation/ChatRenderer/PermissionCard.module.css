@@ -82,3 +82,7 @@
     box-shadow: 0 0 0 2px var(--warn, var(--accent));
   }
 }
+:root[data-motion="reduce"] .anchor[data-flash] .card {
+  animation: none;
+  box-shadow: 0 0 0 2px var(--warn, var(--accent));
+}

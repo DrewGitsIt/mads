@@ -79,6 +79,9 @@ kbd {
   font-family: var(--mono);
 }
 
+/* Reduced motion — the OS's setting, or the app's own (Settings →
+   Appearance → Reduce motion, applyMotion's [data-motion="reduce"]). A
+   component rule that swaps motion for a static cue matches both too. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -86,4 +89,10 @@ kbd {
     transition: none !important;
     animation: none !important;
   }
+}
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  transition: none !important;
+  animation: none !important;
 }

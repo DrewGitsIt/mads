@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { usePrefersReducedMotion } from "./usePrefersReducedMotion";
 
 describe("usePrefersReducedMotion", () => {
@@ -49,5 +49,21 @@ describe("usePrefersReducedMotion", () => {
     act(() => changeListener?.());
 
     expect(result.current).toBe(true);
+  });
+
+  it("is also true under the app's own setting, and follows it live", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const { result } = renderHook(() => usePrefersReducedMotion());
+    expect(result.current).toBe(false);
+    // MutationObserver delivers asynchronously.
+    document.documentElement.dataset.motion = "reduce";
+    await waitFor(() => expect(result.current).toBe(true));
+    delete document.documentElement.dataset.motion;
+    await waitFor(() => expect(result.current).toBe(false));
   });
 });

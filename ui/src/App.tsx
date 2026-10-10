@@ -11,6 +11,7 @@ import { RetroSurface } from "./features/retro/RetroSurface";
 import { SessionsSurface } from "./features/sessions/SessionsSurface";
 import { SettingsSurface } from "./features/settings/SettingsSurface";
 import { applyTheme } from "./features/settings/theme/applyTheme";
+import { applyMotion } from "./features/settings/theme/applyMotion";
 import { FirstRunWizard } from "./onboarding/FirstRunWizard";
 import { setFlags } from "./featureFlags";
 import { router } from "./router/client";
@@ -54,6 +55,7 @@ export function App() {
       .getConfig()
       .then((c) => {
         applyTheme(c.theme, c.palette);
+        applyMotion(c.reduce_motion);
         setPlatform(c.platform);
         setFlags({
           multiRepo: c.feature_flags.multi_repo,

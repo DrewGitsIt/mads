@@ -72,6 +72,9 @@
     border-color: var(--accent);
   }
 }
+:root[data-motion="reduce"] .spinner {
+  border-color: var(--accent);
+}
 
 /* Indented to clear the head's dot/spinner, so the lines read as one block. */
 .stateLine {
