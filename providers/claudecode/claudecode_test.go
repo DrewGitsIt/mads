@@ -1353,6 +1353,52 @@ func TestStreamSessionOrphanedTasksNeedAgentFile(t *testing.T) {
 	}
 }
 
+// Background processes that aren't subagents come through as the running
+// list, live: a Monitor watch and a run_in_background Bash both report
+// task_type "local_bash" (testdata/stream-task-monitor.jsonl, claude-code
+// 2.1.285). Each enters with its starting call and leaves when the roster
+// drops it, keeping its first-seen clock across the change between.
+func TestStreamSessionBackgroundList(t *testing.T) {
+	var got []string
+	var monitorStart time.Time
+	for _, ev := range streamFixtureEvents(t, "stream-task-monitor.jsonl") {
+		if ev.Kind != provider.EventBackground {
+			continue
+		}
+		var ids []string
+		for _, b := range ev.Background {
+			if b.StartedAt.IsZero() {
+				t.Errorf("%s has no start time", b.TaskID)
+			}
+			if b.TaskID == "bisir4ftf" {
+				if monitorStart.IsZero() {
+					monitorStart = b.StartedAt
+				} else if !b.StartedAt.Equal(monitorStart) {
+					t.Errorf("monitor clock restarted: %v then %v", monitorStart, b.StartedAt)
+				}
+			}
+			ids = append(ids, b.TaskID+"@"+b.ToolUseID)
+		}
+		got = append(got, "["+strings.Join(ids, " ")+"]")
+	}
+	want := "[bisir4ftf@]," +
+		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp]," +
+		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp bratvqqsq@]," +
+		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp bratvqqsq@toolu_01SiRgsByfdBLjWndxgHUAdS]," +
+		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp]," +
+		"[]"
+	if g := strings.Join(got, ","); g != want {
+		t.Errorf("background lists =\n%s\nwant\n%s", g, want)
+	}
+
+	// A subagent is never a background process.
+	for _, ev := range streamFixtureEvents(t, taskFixture) {
+		if ev.Kind == provider.EventBackground {
+			t.Errorf("subagent capture produced a background list: %+v", ev.Background)
+		}
+	}
+}
+
 // background_tasks_changed comes through as the subagent-only roster, in
 // stream order and never nil — the emptied roster is the evidence. Its
 // position matters to consumers: it drops the task BEFORE task_updated and

@@ -806,7 +806,20 @@ export type StreamEvent = SubagentTag &
     // thinking_tokens alone = a live estimated-token progress tick for the
     // "Thinking…" indicator title.
     | { kind: "thinking"; text?: string; thinking_tokens?: number }
+    // The running background processes that aren't subagents, whole, on
+    // every change and first on connect; absent means none. Live-only.
+    | { kind: "background"; background?: BackgroundTask[] }
   );
+
+// mirrors providers/provider/event.go BackgroundTask: one running background
+// process (a run_in_background Bash call, a Monitor watch).
+export interface BackgroundTask {
+  task_id: string;
+  // The call that started it; absent until the harness says.
+  tool_use_id?: string;
+  description?: string;
+  started_at: string;
+}
 
 // mirrors pkg/contracts/conversation.go SubagentEvent — the payload of a
 // persisted "session.subagent_event" Envelope: one conversation event a

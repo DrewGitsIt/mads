@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"sync"
 	"time"
 
@@ -155,7 +156,14 @@ type streamSession struct {
 	// leaves its own transcript file; a background shell never does. nil
 	// keeps such tasks (tests that build a bare streamSession).
 	hasAgentFile func(ref, taskID string) bool
-	refFired     bool // guards announced against a double-send
+	// background is the running background processes that aren't
+	// subagents, as EventBackground reports them: membership from the
+	// roster, the starting call from task_started (bgCalls, which can
+	// arrive on either side of the roster that names the task; never
+	// pruned, like agentTasks).
+	background []provider.BackgroundTask
+	bgCalls    map[string]string
+	refFired   bool // guards announced against a double-send
 
 	// launchMCP names the servers this process was started with
 	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
@@ -262,6 +270,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.unprompted = true
 	}
 	dropTask := s.isOtherTask(&l)
+	background, bgChanged := s.noteBackground(&l, time.Now())
 	s.mu.Unlock()
 
 	evs := l.events(interrupted, true)
@@ -285,6 +294,51 @@ func (s *streamSession) handleLine(raw []byte) {
 		}
 		s.events <- ev
 	}
+	if bgChanged {
+		s.events <- provider.Event{Kind: provider.EventBackground, Background: background}
+	}
+}
+
+// noteBackground folds a roster or task_started line into the running
+// background processes, returning a copy of the list when it changed. A
+// process's clock starts when the roster first names it. Caller holds s.mu.
+func (s *streamSession) noteBackground(l *wireLine, now time.Time) ([]provider.BackgroundTask, bool) {
+	changed := false
+	switch {
+	case l.Type == "system" && l.Subtype == "background_tasks_changed":
+		var next []provider.BackgroundTask
+		for _, t := range l.Tasks {
+			if t.TaskID == "" || t.isAgent() {
+				continue
+			}
+			i := slices.IndexFunc(s.background, func(b provider.BackgroundTask) bool { return b.TaskID == t.TaskID })
+			if i >= 0 {
+				next = append(next, s.background[i])
+				continue
+			}
+			next = append(next, provider.BackgroundTask{
+				TaskID: t.TaskID, ToolUseID: s.bgCalls[t.TaskID], Description: t.Description, StartedAt: now,
+			})
+			changed = true
+		}
+		changed = changed || len(next) != len(s.background)
+		s.background = next
+	case l.Subtype == "task_started" && !l.isAgentTask() && l.ToolUseID != "":
+		if s.bgCalls == nil {
+			s.bgCalls = map[string]string{}
+		}
+		s.bgCalls[l.TaskID] = l.ToolUseID
+		for i := range s.background {
+			if s.background[i].TaskID == l.TaskID && s.background[i].ToolUseID == "" {
+				s.background[i].ToolUseID = l.ToolUseID
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	return slices.Clone(s.background), true
 }
 
 // isOtherTask reports whether l is a task-lifecycle line for a background

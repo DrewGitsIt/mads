@@ -214,12 +214,15 @@ export function formatMs(ms: number): string {
 
 /**
  * A live elapsed counter: whole seconds, so a 1s tick moves it by exactly
- * one and never flickers tenths ("31s", "6m 02s").
+ * one and never flickers tenths ("31s", "6m 02s"). From an hour on the
+ * seconds drop ("1h 03m"): an hours-long process needs its scale, not its
+ * last digit.
  */
 export function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   if (total < 60) return `${total}s`;
-  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
+  if (total < 3600) return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, "0")}s`;
+  return `${Math.floor(total / 3600)}h ${String(Math.floor(total / 60) % 60).padStart(2, "0")}m`;
 }
 
 export function formatTokens(n: number): string {

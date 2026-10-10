@@ -14,6 +14,7 @@ import {
 import type {
   Delegate,
   AgentState,
+  BackgroundTask,
   CommitError,
   QueueChanged,
   QueuedMessage,
@@ -40,6 +41,7 @@ import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
 import { ApprovalJump } from "./ApprovalJump/ApprovalJump";
 import type { PermissionReveal } from "./ApprovalJump/permissionReveal";
 import { ActivityDock, type DockView } from "./activity/ActivityDock";
+import { BackgroundStrip } from "./activity/Background";
 import { Substrip, type SubstripEntry } from "./activity/Substrip";
 import {
   appendSubagentItem,
@@ -283,6 +285,11 @@ export function ConversationTab({
   // Task subagent lifecycles by task_id (live "task" stream frames +
   // replayed session.subagent_task envelopes).
   const [tasks, setTasks] = useState<Map<string, TaskModel>>(new Map());
+  // Running background processes that aren't subagents (a run_in_background
+  // Bash call, a Monitor watch): the live "background" frame, whole on each
+  // change and first on connect. Never persisted — a fresh stream starts
+  // from what it's told.
+  const [background, setBackground] = useState<BackgroundTask[]>([]);
   // The server's delegate records for this session (docs/DELEGATES-DESIGN.md),
   // by harness id — laid over `tasks` at render (mergeDelegates) as the one
   // authority on whether each subagent is running and how it ended.
@@ -662,6 +669,7 @@ export function ConversationTab({
   useEffect(() => {
     const source = routerClient.streamSession(sessionId);
     setEventSource(source);
+    setBackground([]);
     setStreamBroken(false);
     return () => {
       source.close();
@@ -980,6 +988,11 @@ export function ConversationTab({
       // Not a turn signal: lifecycle lines arrive between turns too.
       setTasks((m) => applyTaskEvent(m, parsed.task, true));
     };
+    const onBackground = (ev: MessageEvent<string>) => {
+      const parsed = JSON.parse(ev.data) as StreamEvent;
+      if (parsed.kind !== "background") return;
+      setBackground(parsed.background ?? []);
+    };
     const onPermissionRequest = (ev: MessageEvent<string>) => {
       const parsed = JSON.parse(ev.data) as StreamEvent;
       if (parsed.kind !== "permission_request") return;
@@ -1037,6 +1050,7 @@ export function ConversationTab({
     eventSource.addEventListener("tool_result", onToolResult);
     eventSource.addEventListener("thinking", onThinking);
     eventSource.addEventListener("task", onTask);
+    eventSource.addEventListener("background", onBackground);
     eventSource.addEventListener("permission_request", onPermissionRequest);
     eventSource.addEventListener("turn_end", onTurnEnd);
     eventSource.addEventListener("compact", onCompact);
@@ -1047,6 +1061,7 @@ export function ConversationTab({
       eventSource.removeEventListener("tool_result", onToolResult);
       eventSource.removeEventListener("thinking", onThinking);
       eventSource.removeEventListener("task", onTask);
+      eventSource.removeEventListener("background", onBackground);
       eventSource.removeEventListener("permission_request", onPermissionRequest);
       eventSource.removeEventListener("turn_end", onTurnEnd);
       eventSource.removeEventListener("compact", onCompact);
@@ -1140,6 +1155,15 @@ export function ConversationTab({
     selector: "[data-task-id]",
     idAttribute: "data-task-id",
   });
+  // ...and which background processes' rows are.
+  const visibleBackgroundRows = useVisibleCards(tabRef, streamRef, pinnedRef, {
+    selector: "[data-background-id]",
+    idAttribute: "data-background-id",
+  });
+  const backgroundByTool = useMemo(
+    () => new Map(background.filter((b) => b.tool_use_id).map((b) => [b.tool_use_id!, b])),
+    [background],
+  );
   const revealPermission = useCallback((id: string) => {
     // Jumping up the history is the user leaving the tail — don't let the
     // next streamed frame snap back before the smooth scroll's first event.
@@ -1324,6 +1348,9 @@ export function ConversationTab({
             : (model.currentStep ?? model.lastToolName);
       return { model, op };
     });
+  const offscreenBackground = background.filter(
+    (b) => !b.tool_use_id || !visibleBackgroundRows.has(b.tool_use_id),
+  );
   const openTool = (tool: ToolUse) => {
     setShellDockState(sessionId, { open: false }); // never both bottom surfaces at once (hides; the shell keeps running)
     setDockTarget({ type: "tool", toolId: tool.id, tool });
@@ -1473,6 +1500,7 @@ export function ConversationTab({
                 turnActive={inChatTurn}
                 thinkingHistory={thinkingHistory}
                 toolStatuses={toolStatuses}
+                background={backgroundByTool}
                 tasks={tasksByToolUseMap}
                 selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
                 onOpenTool={openTool}
@@ -1567,6 +1595,7 @@ export function ConversationTab({
                     openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
                   }
                 />
+                <BackgroundStrip entries={offscreenBackground} />
                 {working && (
                   <WorkingIndicator
                     tool={working.tool}

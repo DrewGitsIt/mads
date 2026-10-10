@@ -56,3 +56,12 @@
   align-items: center;
   flex-shrink: 0;
 }
+
+/* A background process's row: informational, no click. */
+.passive {
+  cursor: default;
+  border-color: var(--line);
+}
+.passive:hover {
+  background: var(--bg1);
+}

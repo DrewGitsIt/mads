@@ -114,3 +114,48 @@ func TestHubPTYOverflowKeepsSubscriber(t *testing.T) {
 	default: // empty but open — fine
 	}
 }
+
+// The background list is live-only, so a viewer connecting mid-run gets the
+// latest one first, on either feed — and once the process exits, an empty
+// list both reaches the viewers already connected and is what a new one
+// gets. Clearing is a no-op when nothing was running.
+func TestHubBackgroundPrimesNewSubscribers(t *testing.T) {
+	h := newHub()
+	_, early, unsubEarly := h.subscribeWithPTYReplay()
+	defer unsubEarly()
+	h.clearBackground()
+	if len(early) != 0 {
+		t.Fatalf("clearing with nothing running sent %+v", <-early)
+	}
+
+	running := []provider.BackgroundTask{{TaskID: "b1", ToolUseID: "toolu_1"}}
+	h.broadcast(provider.Event{Kind: provider.EventBackground, Background: running})
+	h.broadcast(provider.Event{Kind: provider.EventText, Text: "after"})
+	<-early
+	<-early
+
+	chat, unsubChat := h.subscribe()
+	defer unsubChat()
+	_, term, unsubTerm := h.subscribeWithPTYReplay()
+	defer unsubTerm()
+	for name, ch := range map[string]<-chan provider.Event{"chat": chat, "terminal": term} {
+		select {
+		case ev := <-ch:
+			if ev.Kind != provider.EventBackground || len(ev.Background) != 1 || ev.Background[0].TaskID != "b1" {
+				t.Errorf("%s feed opened with %+v", name, ev)
+			}
+		default:
+			t.Errorf("%s feed got no background list on connect", name)
+		}
+	}
+
+	h.clearBackground()
+	if ev := <-early; ev.Kind != provider.EventBackground || len(ev.Background) != 0 {
+		t.Errorf("connected viewer got %+v, want an empty list", ev)
+	}
+	late, unsubLate := h.subscribe()
+	defer unsubLate()
+	if ev := <-late; ev.Kind != provider.EventBackground || len(ev.Background) != 0 {
+		t.Errorf("late viewer opened with %+v, want an empty list", ev)
+	}
+}

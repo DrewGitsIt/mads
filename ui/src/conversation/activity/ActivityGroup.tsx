@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Chip } from "../../components/Chip/Chip";
-import type { PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
+import type { BackgroundTask, PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
+import { BackgroundElapsed } from "./Background";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
 import { Diffstat, KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
@@ -33,6 +34,8 @@ export interface ActivityGroupProps {
   live?: boolean;
   /** Out-of-band status overrides (session.tool_status_changed), by tool_use id. */
   statuses?: ReadonlyMap<string, ToolStatus>;
+  /** Calls still running as background processes, by tool_use id: they spin with a running clock. */
+  background?: ReadonlyMap<string, BackgroundTask>;
   /** Row whose detail is open in the dock — suppresses that row's hover-peek. */
   selectedToolId?: string;
   /** Row click → open/retarget the dock. Absent = rows are inert (subagent dock view). */
@@ -50,8 +53,15 @@ const PEEK_TEXT_CAP = 400;
 const PEEK_DIFF_LINES = 8;
 const noResolve = async () => {};
 
-function entryStatus(entry: ActivityEntry, statuses?: ReadonlyMap<string, ToolStatus>, live?: boolean): ToolStatus | undefined {
+function entryStatus(
+  entry: ActivityEntry,
+  statuses?: ReadonlyMap<string, ToolStatus>,
+  live?: boolean,
+  background?: ReadonlyMap<string, BackgroundTask>,
+): ToolStatus | undefined {
   if (entry.type !== "tool") return undefined;
+  // Its result came back at launch; the process it launched hasn't ended.
+  if (entry.tool.id && background?.has(entry.tool.id)) return "in_progress";
   const override = entry.tool.id ? statuses?.get(entry.tool.id) : undefined;
   return statusOf(entry.tool, override, live && entry.live);
 }
@@ -65,9 +75,14 @@ function entryStatus(entry: ActivityEntry, statuses?: ReadonlyMap<string, ToolSt
  * (the working indicator covers the turn); spinning on `live` alone kept
  * every finished group of a long turn spinning until its end.
  */
-function aggregateStatus(entries: ActivityEntry[], statuses?: ReadonlyMap<string, ToolStatus>, live?: boolean): ToolStatus {
+function aggregateStatus(
+  entries: ActivityEntry[],
+  statuses?: ReadonlyMap<string, ToolStatus>,
+  live?: boolean,
+  background?: ReadonlyMap<string, BackgroundTask>,
+): ToolStatus {
   const all = entries
-    .map((e) => entryStatus(e, statuses, live))
+    .map((e) => entryStatus(e, statuses, live, background))
     .filter((s): s is ToolStatus => s !== undefined);
   if (all.includes("in_progress")) return "in_progress";
   if (all.includes("failed")) return "failed";
@@ -122,6 +137,7 @@ export function ActivityGroup({
   entries,
   live = false,
   statuses,
+  background,
   selectedToolId,
   onOpenTool,
   defaultOpen = false,
@@ -160,7 +176,7 @@ export function ActivityGroup({
 
   const { kinds, label } = kindCounts(entries);
   const duration = useMemo(() => groupDuration(entries), [entries]);
-  const agg = aggregateStatus(entries, statuses, live);
+  const agg = aggregateStatus(entries, statuses, live, background);
   const stat = useMemo(() => {
     const totals = { adds: 0, dels: 0 };
     for (const e of entries) {
@@ -207,7 +223,10 @@ export function ActivityGroup({
               <Fragment key={entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`}>
                 <ActivityRow
                   entry={entry}
-                  status={entryStatus(entry, statuses, live)}
+                  status={entryStatus(entry, statuses, live, background)}
+                  background={
+                    entry.type === "tool" && entry.tool.id ? background?.get(entry.tool.id) : undefined
+                  }
                   selected={
                     entry.type === "tool" &&
                     entry.tool.id !== undefined &&
@@ -237,11 +256,14 @@ function firstLine(text: string, cap = 100): string {
 export function ActivityRow({
   entry,
   status,
+  background,
   selected,
   onOpen,
 }: {
   entry: ActivityEntry;
   status?: ToolStatus;
+  /** Still running as a background process: a running clock in place of the call's duration. */
+  background?: BackgroundTask;
   selected?: boolean;
   onOpen?: (tool: ToolUse) => void;
 }) {
@@ -275,7 +297,11 @@ export function ActivityRow({
       )}
       <span className={styles.rowMeta}>
         {stat && <Diffstat adds={stat.adds} dels={stat.dels} />}
-        {duration && <span>{duration}</span>}
+        {background ? (
+          <BackgroundElapsed since={background.started_at} />
+        ) : (
+          duration && <span>{duration}</span>
+        )}
         {status &&
           (status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />)}
       </span>
@@ -295,6 +321,7 @@ export function ActivityRow({
       ref={rowRef}
       className={rowCls}
       data-sel={selected || undefined}
+      data-background-id={background ? tool?.id : undefined}
       data-testid="activity-row"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}

@@ -36,6 +36,11 @@ type hub struct {
 	ptyBuf      []byte
 	ptyBufStart int
 	ptyBufSize  int
+
+	// background is the latest EventBackground, sent first to every new
+	// subscriber: the list is live-only, so a viewer that connects while a
+	// process runs has no other way to learn of it. nil until one arrives.
+	background *provider.Event
 }
 
 func newHub() *hub {
@@ -84,6 +89,7 @@ func (h *hub) subscribe() (<-chan provider.Event, func()) {
 		close(ch)
 		return ch, func() {}
 	}
+	h.primeLocked(ch)
 	h.subs[ch] = struct{}{}
 	h.mu.Unlock()
 
@@ -113,6 +119,7 @@ func (h *hub) subscribeWithPTYReplay() (replay []byte, ch <-chan provider.Event,
 		return nil, c, func() {}
 	}
 	replay = h.ptySnapshot()
+	h.primeLocked(c)
 	h.subs[c] = struct{}{}
 	h.mu.Unlock()
 
@@ -126,11 +133,34 @@ func (h *hub) subscribeWithPTYReplay() (replay []byte, ch <-chan provider.Event,
 	}
 }
 
+// primeLocked queues the latest background list on a new subscriber's
+// channel, under the lock that registers it — so no newer list can slip in
+// ahead of it. Callers must hold h.mu.
+func (h *hub) primeLocked(ch chan provider.Event) {
+	if h.background != nil {
+		ch <- *h.background
+	}
+}
+
+// clearBackground announces that no background process is running, when
+// the harness process that ran them has exited. A no-op when none was.
+func (h *hub) clearBackground() {
+	h.mu.Lock()
+	running := h.background != nil && len(h.background.Background) > 0
+	h.mu.Unlock()
+	if running {
+		h.broadcast(provider.Event{Kind: provider.EventBackground})
+	}
+}
+
 func (h *hub) broadcast(ev provider.Event) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if ev.Kind == provider.EventPTYOutput {
+	switch ev.Kind {
+	case provider.EventPTYOutput:
 		h.writePTY([]byte(ev.Text))
+	case provider.EventBackground:
+		h.background = &ev
 	}
 	for ch := range h.subs {
 		select {

@@ -134,8 +134,14 @@ func (l *wireLine) notificationTurnEnd() []provider.Event {
 
 // wireRosterTask is one entry of a "background_tasks_changed" roster.
 type wireRosterTask struct {
-	TaskID   string `json:"task_id"`
-	TaskType string `json:"task_type"`
+	TaskID      string `json:"task_id"`
+	TaskType    string `json:"task_type"`
+	Description string `json:"description"`
+}
+
+// isAgent mirrors wireLine.isAgentTask for a roster entry.
+func (t wireRosterTask) isAgent() bool {
+	return t.TaskType == "" || t.TaskType == "local_agent"
 }
 
 // wireTaskPatch is a task_updated line's patch object. end_time also rides
@@ -477,7 +483,7 @@ func (l *wireLine) isTaskLine() bool {
 func (l *wireLine) agentRoster() []string {
 	ids := []string{}
 	for _, t := range l.Tasks {
-		if t.TaskID != "" && (t.TaskType == "" || t.TaskType == "local_agent") {
+		if t.TaskID != "" && t.isAgent() {
 			ids = append(ids, t.TaskID)
 		}
 	}

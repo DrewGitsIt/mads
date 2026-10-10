@@ -241,3 +241,27 @@ func TestDelegateCapabilitiesFromMatrixThenInspection(t *testing.T) {
 		t.Fatalf("after inspection = %+v caps %+v", d, d.Capabilities)
 	}
 }
+
+// Background processes die with the harness process: when its stream ends,
+// connected viewers learn none are running.
+func TestBackgroundClearsWhenProcessEnds(t *testing.T) {
+	r, _, _ := newDelegateRunner(t)
+	sess := &gsSession{events: make(chan provider.Event, 4)}
+	r.mu.Lock()
+	r.sess = sess
+	r.mu.Unlock()
+	viewer, unsubscribe := r.Subscribe()
+	defer unsubscribe()
+
+	sess.events <- provider.Event{Kind: provider.EventBackground, Background: []provider.BackgroundTask{{TaskID: "b1"}}}
+	close(sess.events)
+	r.pump(sess)
+
+	var last provider.Event
+	for len(viewer) > 0 {
+		last = <-viewer
+	}
+	if last.Kind != provider.EventBackground || len(last.Background) != 0 {
+		t.Fatalf("last event after exit = %+v, want an empty background list", last)
+	}
+}

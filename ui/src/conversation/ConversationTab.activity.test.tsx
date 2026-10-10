@@ -11,6 +11,7 @@ import { render, screen, fireEvent, waitFor, act, within } from "@testing-librar
 import { ConversationTab } from "./ConversationTab";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
+import { STREAM_REATTACH_EVENT } from "./streamReattachSignal";
 import type { Delegate, Envelope } from "../router/types";
 
 vi.mock("@monaco-editor/react", () => ({
@@ -813,6 +814,80 @@ describe("ConversationTab — permission cards on their calls", () => {
 
 // jsdom has no IntersectionObserver; this one only reports what a test says
 // is on screen, so "off screen" is every card's starting state.
+describe("ConversationTab — background processes", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const hourAgo = () => new Date(Date.now() - 65 * 60_000).toISOString();
+
+  it("spins a backgrounded call's row with a running clock, pins it once scrolled away, and lets it go when it ends", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "bg1", name: "Bash", kind: "execute", title: "python long_run.py", input: { command: "python long_run.py" } },
+      });
+      // The call returns at launch; the process it launched runs on.
+      source.emit({ kind: "tool_result", tool: { id: "bg1", name: "" }, text: "Command running in background with ID: b1." });
+      source.emit({
+        kind: "background",
+        background: [{ task_id: "b1", tool_use_id: "bg1", description: "python long_run.py", started_at: hourAgo() }],
+      });
+    });
+
+    const row = document.querySelector('[data-background-id="bg1"]')!;
+    expect(row).toBeTruthy();
+    expect(row.textContent).toContain("running · 1h 05m");
+    expect(within(row as HTMLElement).getByLabelText("in progress")).toBeTruthy();
+
+    setTaskCardOnScreen(row, true);
+    expect(screen.queryByTestId("background-strip")).toBeNull();
+    setTaskCardOnScreen(row, false);
+    const strip = screen.getByTestId("background-strip");
+    expect(strip.textContent).toContain("python long_run.py");
+    expect(strip.textContent).toContain("running · 1h 05m");
+
+    // Ended: the list drops it (an empty list is sent bare).
+    act(() => {
+      source.emit({ kind: "background" });
+    });
+    expect(screen.queryByTestId("background-strip")).toBeNull();
+    expect(document.querySelector("[data-background-id]")).toBeNull();
+    const ended = screen.getAllByTestId("activity-row").find((r) => r.textContent?.includes("python long_run.py"))!;
+    expect(ended.textContent).not.toContain("running ·");
+    expect(within(ended).queryByLabelText("in progress")).toBeNull();
+  });
+
+  it("pins a process whose call isn't on the page at all, and starts each stream from what it's told", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({
+        kind: "background",
+        background: [{ task_id: "b2", tool_use_id: "elsewhere", description: "watching results.jsonl", started_at: hourAgo() }],
+      });
+    });
+    expect(screen.getByTestId("background-strip").textContent).toContain("watching results.jsonl");
+
+    // A reconnect is a new stream: nothing carries over until it says so.
+    act(() => {
+      window.dispatchEvent(new CustomEvent(STREAM_REATTACH_EVENT, { detail: { sessionId: "session-active" } }));
+    });
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(1));
+    expect(screen.queryByTestId("background-strip")).toBeNull();
+  });
+});
+
 class FakeIntersectionObserver {
   static instances: FakeIntersectionObserver[] = [];
   readonly targets = new Set<Element>();

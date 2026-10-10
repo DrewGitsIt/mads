@@ -2,6 +2,7 @@ import { Chip } from "../../components/Chip/Chip";
 import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
 import type {
+  BackgroundTask,
   Link,
   PermissionRequest,
   ToolStatus,
@@ -60,6 +61,8 @@ export interface ChatRendererProps {
   thinkingHistory?: { text: string; timestamp?: string }[];
   /** Out-of-band status changes (session.tool_status_changed + replay), by tool_use id. */
   toolStatuses?: ReadonlyMap<string, ToolStatus>;
+  /** Calls still running as background processes, by tool_use id (the live "background" frame). */
+  background?: ReadonlyMap<string, BackgroundTask>;
   /** Task subagent lifecycles keyed by the spawning tool_use id — drives Task cards. */
   tasks?: ReadonlyMap<string, TaskModel>;
   /** Tool whose detail is open in the dock — highlights its row and suppresses its peek. */
@@ -124,6 +127,7 @@ export function ChatRenderer({
   turnActive = false,
   thinkingHistory = [],
   toolStatuses,
+  background,
   tasks,
   selectedToolId,
   onOpenTool,
@@ -201,6 +205,7 @@ export function ChatRenderer({
               entries={item.entries}
               live={Boolean(item.live && turnActive)}
               statuses={toolStatuses}
+              background={background}
               selectedToolId={selectedToolId}
               onOpenTool={onOpenTool}
               permissions={permissions.anchored}

@@ -1325,8 +1325,10 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 	}
 	// The old process's delegates died with it. Concluded here rather than
 	// by the old pump's wind-down, which can run after the new process has
-	// started delegates of its own (see pump).
+	// started delegates of its own (see pump). Its background processes
+	// went the same way.
 	r.endDelegatesForProcessExit()
+	r.hub.clearBackground()
 
 	opts.Mode = mode
 	opts.Resume = resumeRef
@@ -1755,6 +1757,7 @@ func (r *Runner) pump(sess provider.Session) {
 	r.mu.Unlock()
 	if current {
 		r.endDelegatesForProcessExit()
+		r.hub.clearBackground()
 	}
 	r.flushTurnState()
 

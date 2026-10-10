@@ -139,6 +139,8 @@ describe("TaskCard — live elapsed and delegate states", () => {
     expect(taskCounters(model, Date.parse("2026-10-08T10:00:30Z"))).toBe("1m 30s");
     expect(formatElapsed(59_999)).toBe("59s");
     expect(formatElapsed(119_600)).toBe("1m 59s");
+    expect(formatElapsed(3_599_000)).toBe("59m 59s");
+    expect(formatElapsed(3_780_000)).toBe("1h 03m");
   });
 
   it.each([

@@ -84,6 +84,13 @@ const (
 	// providers/claudecode/testdata), so absence alone means "ending", and
 	// only the lifecycle line says how.
 	EventTaskRoster EventKind = "task_roster"
+	// EventBackground — the harness's complete list of its running
+	// background processes that aren't subagents (a run_in_background Bash
+	// call, a Monitor watch), sent whenever it changes; empty means none.
+	// Live-only: never persisted. The runner keeps the latest for a viewer
+	// that connects mid-run and sends an empty one when the process exits,
+	// which takes its background processes with it.
+	EventBackground EventKind = "background"
 	// EventThinking — the model's extended-thinking output, distinct from
 	// EventText so chat-mode consumers that render only the reply never
 	// interleave reasoning into it. Two facets share the kind, mirroring
@@ -119,6 +126,9 @@ type Event struct {
 	// TaskRoster for EventTaskRoster: the running background subagents'
 	// task ids, in the harness's order.
 	TaskRoster []string `json:"task_roster,omitempty"`
+	// Background for EventBackground: the running background processes, in
+	// the harness's order. Empty (omitted) means none.
+	Background []BackgroundTask `json:"background,omitempty"`
 	// ThinkingTokens for EventThinking with no Text: the estimated token
 	// count so far while the model thinks (see EventThinking).
 	ThinkingTokens int `json:"thinking_tokens,omitempty"`
@@ -135,6 +145,16 @@ type Event struct {
 	// TaskDescription is the spawning tool call's short description on a
 	// parent-tagged event.
 	TaskDescription string `json:"task_description,omitempty"`
+}
+
+// BackgroundTask is one running background process in EventBackground.
+type BackgroundTask struct {
+	TaskID string `json:"task_id"`
+	// ToolUseID is the call that started it; empty until the harness says.
+	ToolUseID   string `json:"tool_use_id,omitempty"`
+	Description string `json:"description,omitempty"`
+	// StartedAt is when the provider first saw it running.
+	StartedAt time.Time `json:"started_at"`
 }
 
 // TaskStatus carries EventTask's detail: one lifecycle update for a spawned
