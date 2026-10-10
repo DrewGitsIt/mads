@@ -119,6 +119,50 @@
   font-family: var(--sans);
 }
 
+/* Folder / Worktree: the path (selectable, ellipsized) and its Copy button. */
+.kv dd.path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pathText {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  cursor: text;
+}
+
+.kv dd.path[data-workdir] .pathText {
+  color: var(--text);
+}
+
+.copy {
+  flex: none;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text3);
+  font: 600 10.5px var(--sans);
+  cursor: pointer;
+}
+
+.copy:hover {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.copied,
+.copied:hover {
+  color: var(--ok-fg);
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+
 .acts {
   display: flex;
   gap: 6px;

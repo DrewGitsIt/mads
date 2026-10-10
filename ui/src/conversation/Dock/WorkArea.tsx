@@ -3,6 +3,7 @@ import { requestOpenSession } from "../../appNavigation";
 import { Popover } from "../../components/Popover/Popover";
 import type { Session, WorktreeTenant } from "../../router/types";
 import { sessionLocation } from "../../router/sessionLocation";
+import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
 import type { LandCardModel } from "../Worktree/worktreeCards";
 import {
   autoResolvedCopy,
@@ -183,6 +184,10 @@ export function WorkArea({
     outside > 0 && `${plural(outside, "file")} changed outside this session`,
   ].filter(Boolean);
 
+  // Where the agent actually runs: an isolated session's own worktree, else
+  // the folder it works in place.
+  const workDir = where.worktree ?? where.folder;
+
   return (
     <div className={styles.area}>
       <Popover open={open} onClose={close} anchor={anchor} style={UPWARD_RIGHT}>
@@ -192,13 +197,13 @@ export function WorkArea({
             {where.folder && (
               <>
                 <dt>Folder</dt>
-                <dd title={where.folder}>{where.folder}</dd>
+                <PathRow path={where.folder} what="folder" workDir={where.folder === workDir} />
               </>
             )}
             {where.worktree && (
               <>
                 <dt>Worktree</dt>
-                <dd title={where.worktree}>{where.worktree}</dd>
+                <PathRow path={where.worktree} what="worktree" workDir={where.worktree === workDir} />
               </>
             )}
             {branchText && (
@@ -289,6 +294,56 @@ export function WorkArea({
         </div>
       </Popover>
     </div>
+  );
+}
+
+/** How long "Copied" stays on a copy button — the same beat as Settings' Copy and the session-id copy. */
+const COPIED_MS = 1500;
+
+/**
+ * One path in the ⎇ popover: the full absolute path (selectable, ellipsized
+ * from the right, whole in the tooltip) and a Copy button beside it. The row
+ * the agent runs in is marked `data-workdir`.
+ */
+function PathRow({ path, what, workDir }: { path: string; what: "folder" | "worktree"; workDir: boolean }) {
+  const clipboard = useElectronClipboardBridge();
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  // TerminalView's split: Electron's clipboard bridge (navigator.clipboard
+  // is unreliable in a BrowserWindow), else navigator.clipboard.
+  function copy() {
+    const write = clipboard
+      ? clipboard.writeText(path)
+      : navigator.clipboard?.writeText
+        ? navigator.clipboard.writeText(path)
+        : undefined;
+    write?.then(
+      () => setCopied(true),
+      () => {},
+    );
+  }
+
+  return (
+    <dd className={styles.path} data-workdir={workDir || undefined} data-testid={`work-path-${what}`}>
+      <span className={styles.pathText} title={workDir ? `${path}\nThe agent works here.` : path}>
+        {path}
+      </span>
+      <button
+        type="button"
+        className={cx(styles.copy, copied && styles.copied)}
+        aria-label={copied ? `Copied ${what} path` : `Copy ${what} path`}
+        title={copied ? undefined : `Copy the full ${what} path`}
+        onClick={copy}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </dd>
   );
 }
 
