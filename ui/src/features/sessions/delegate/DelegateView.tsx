@@ -1,20 +1,23 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
-import type { Delegate, DelegateCapabilities, DelegateTranscript, Envelope } from "../../../router/types";
+import { getAllEvents } from "../../../router/eventPages";
+import type { Delegate, DelegateCapabilities, Envelope, ToolUse } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
-import { SubagentStream } from "../../../conversation/activity/ActivityDock";
+import { ActivityDock, SubagentStream } from "../../../conversation/activity/ActivityDock";
+import { WorkingIndicator } from "../../../conversation/ChatRenderer/WorkingIndicator";
 import {
   foldHistoryEvents,
   mergeDelegates,
   transcriptSubStream,
 } from "../../../conversation/activity/conversationItems";
 import { KindIcon } from "../../../conversation/activity/primitives";
+import { useDelegateFile } from "../../../conversation/activity/useDelegateFile";
 import { TaskCounters, TaskStatusGlyph } from "../../../conversation/activity/TaskCard";
 import styles from "./DelegateView.module.css";
 
 /**
- * What a delegate's view reads from the event log: its own stream, the
+ * What a delegate's view follows live on the event log: its own stream, the
  * lifecycle lines its live counters come from, and out-of-band tool status
  * changes. All on the shared control-plane connection — no per-view socket.
  */
@@ -25,13 +28,12 @@ export const DELEGATE_EVENT_TYPES = [
 ];
 
 /**
- * How long the view waits after the last sign of activity before re-reading
- * the delegate's transcript file. The harness writes the file as the delegate
- * runs, but nothing announces a write: a live event for the delegate (or a
- * change to its record) is the cue, and this batches a burst of them into one
- * read.
+ * What it reads back from the log on open — all of it, in pages. Not the
+ * stream itself: that comes from the delegate's own file, and only falls back
+ * to the log (every subagent's, the bulk of a long session's log) when there
+ * is no file.
  */
-export const DELEGATE_FILE_REFRESH_MS = 1000;
+const DELEGATE_REPLAY_TYPES = ["session.subagent_task", "session.tool_status_changed"];
 
 export interface DelegateViewProps {
   sessionId: string;
@@ -54,46 +56,34 @@ export interface DelegateViewProps {
  * keeps one (GET .../delegates/{harnessId}/transcript): whole, with its
  * prompt, its own text and the harness's timestamps. Where it doesn't — or
  * not yet — it comes from what mads recorded live (session.subagent_event),
- * which has the tool calls but none of the delegate's text, and is subject
- * to GET /events' cap on very long streams.
+ * which has the tool calls but none of the delegate's text, read back in
+ * full only then.
  */
 export function DelegateView({ sessionId, harnessId, parentName, routerClient, onBack }: DelegateViewProps) {
   const [record, setRecord] = useState<Delegate>();
   const [missing, setMissing] = useState(false);
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
-  const [file, setFile] = useState<DelegateTranscript>();
-  // Only the newest read may land: a slow early read must not replace a
-  // later, longer one.
-  const fileRead = useRef(0);
-  const readFile = useMemo(
-    () => () => {
-      const n = ++fileRead.current;
-      routerClient
-        .getDelegateTranscript(sessionId, harnessId)
-        .then((t) => {
-          if (n === fileRead.current) setFile(t);
-        })
-        .catch(() => {});
-    },
-    [routerClient, sessionId, harnessId],
-  );
+  // Live and replayed envelopes meet here, deduped by seq, in log order.
+  const addEnvelopes = useCallback((incoming: Envelope[]) => {
+    setEnvelopes((cur) => {
+      const seen = new Set(cur.map((e) => e.seq));
+      const fresh = incoming.filter((e) => !seen.has(e.seq));
+      return fresh.length === 0 ? cur : [...cur, ...fresh].sort((a, b) => a.seq - b.seq);
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     setRecord(undefined);
     setMissing(false);
     setEnvelopes([]);
-    setFile(undefined);
-    readFile();
     // Subscribed before the reads, so nothing falls in the gap; the reads
     // merge under anything live (dedupe by seq; newest record wins).
     const unsubRecord = subscribeToEvents({ sessionId, types: ["session.delegate_changed"] }, (env) => {
       const d = env.payload as Delegate | undefined;
       if (d?.harness_id === harnessId) setRecord(d);
     });
-    const unsubStream = subscribeToEvents({ sessionId, types: DELEGATE_EVENT_TYPES }, (env) => {
-      setEnvelopes((cur) => (cur.some((e) => e.seq === env.seq) ? cur : [...cur, env]));
-    });
+    const unsubStream = subscribeToEvents({ sessionId, types: DELEGATE_EVENT_TYPES }, (env) => addEnvelopes([env]));
     routerClient
       .getSessionDelegates(sessionId)
       .then((list) => {
@@ -105,34 +95,38 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
       .catch(() => {
         if (!cancelled) setMissing(true);
       });
-    routerClient
-      .getEvents({ sessionId, types: DELEGATE_EVENT_TYPES })
+    getAllEvents(routerClient, { sessionId, types: DELEGATE_REPLAY_TYPES })
       .then((history) => {
-        if (cancelled) return;
-        setEnvelopes((live) => {
-          const seen = new Set(live.map((e) => e.seq));
-          return [...history.filter((e) => !seen.has(e.seq)), ...live];
-        });
+        if (!cancelled) addEnvelopes(history);
       })
       .catch(() => {});
-    const reads = fileRead;
     return () => {
       cancelled = true;
-      reads.current++; // an in-flight file read for this delegate must not land
       unsubRecord();
       unsubStream();
     };
-  }, [routerClient, sessionId, harnessId, readFile]);
+  }, [routerClient, sessionId, harnessId, addEnvelopes]);
 
-  // Re-read the file once activity settles: new events while it runs, and
-  // the record's last change when it ends (its final lines land then).
+  // Its own file, re-read once activity settles: new events while it runs,
+  // and the record's last change when it ends (its final lines land then).
   const lastChange = `${envelopes.length}/${record?.state ?? ""}/${record?.updated_at ?? ""}`;
-  const firstChange = useRef(lastChange);
+  const file = useDelegateFile(routerClient, sessionId, harnessId, lastChange);
+
+  // No file: the stream falls back to what mads recorded live, read back in
+  // full only now.
+  const noFile = file?.available === false;
   useEffect(() => {
-    if (lastChange === firstChange.current) return;
-    const t = setTimeout(readFile, DELEGATE_FILE_REFRESH_MS);
-    return () => clearTimeout(t);
-  }, [lastChange, readFile]);
+    if (!noFile) return;
+    let cancelled = false;
+    getAllEvents(routerClient, { sessionId, types: ["session.subagent_event"] })
+      .then((stream) => {
+        if (!cancelled) addEnvelopes(stream);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [noFile, routerClient, sessionId, addEnvelopes]);
 
   const history = useMemo(() => foldHistoryEvents(envelopes), [envelopes]);
   const model = useMemo(() => {
@@ -141,9 +135,51 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
   }, [history.tasks, record, harnessId]);
   const anchor = record?.tool_use_id ?? model?.toolUseId;
   const fromFile = useMemo(() => (file?.available ? transcriptSubStream(file.messages) : undefined), [file]);
-  const items = fromFile ?? ((anchor && history.subagentStreams.get(anchor)) || []);
+  const items = useMemo(
+    () => fromFile ?? ((anchor && history.subagentStreams.get(anchor)) || []),
+    [fromFile, anchor, history.subagentStreams],
+  );
   const title = record?.description || model?.description || record?.type || "Subagent";
   const type = record?.type ?? model?.subagentType;
+  const running = model?.running ?? false;
+
+  // One call's full detail in the bottom dock, as in the main conversation.
+  // Held by id and resolved from the stream each render, so an open call
+  // picks up its result when the next read brings it.
+  const [openTool, setOpenTool] = useState<{ id?: string; tool: ToolUse }>();
+  const closeTool = useCallback(() => setOpenTool(undefined), []);
+  const dockEntry = useMemo(() => {
+    if (!openTool) return undefined;
+    const found = openTool.id
+      ? items.find((i) => i.type === "tool" && i.tool.id === openTool.id)
+      : undefined;
+    return found?.type === "tool" ? found : { type: "tool" as const, tool: openTool.tool, timestamp: undefined };
+  }, [openTool, items]);
+
+  // The working indicator's ticker: the newest call still in flight.
+  const inFlight = useMemo(() => {
+    if (!running) return undefined;
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      if (it.type === "tool" && !it.tool.result) return it.tool;
+    }
+    return undefined;
+  }, [items, running]);
+
+  // Scroll: open at the tail and follow it while the subagent runs, but let
+  // go the moment the user scrolls up — the conversation pane's rule
+  // (ConversationTab's stickToBottom).
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const stickToBottom = useRef(true);
+  const handleScroll = useCallback(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }, []);
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
+  }, [items, running, missing]);
 
   return (
     <section className={styles.view} aria-label={`Subagent: ${title}`} data-testid="delegate-view">
@@ -172,20 +208,36 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
         )}
         {record?.capabilities && <Capabilities caps={record.capabilities} worktree={record.worktree_path} />}
       </header>
-      <div className={styles.body}>
+      <div className={styles.body} ref={bodyRef} onScroll={handleScroll} data-testid="delegate-stream">
         <ContentColumn>
           {missing && !record ? (
             <div className={styles.note}>This subagent's record isn't available any more.</div>
           ) : (
             <SubagentStream
               items={items}
-              running={model?.running ?? false}
+              running={running}
               summary={model?.summary}
               statuses={history.statuses}
+              selectedToolId={openTool?.id}
+              onOpenTool={(tool) => setOpenTool({ id: tool.id, tool })}
             />
           )}
         </ContentColumn>
+        {running && (
+          <div className={styles.pinned}>
+            <WorkingIndicator tool={inFlight} since={model?.startedAt ?? record?.started_at} />
+          </div>
+        )}
       </div>
+      {dockEntry && (
+        <ActivityDock
+          view={{ type: "tool", tool: dockEntry.tool, timestamp: dockEntry.timestamp }}
+          sessionId={sessionId}
+          client={routerClient}
+          statuses={history.statuses}
+          onClose={closeTool}
+        />
+      )}
     </section>
   );
 }

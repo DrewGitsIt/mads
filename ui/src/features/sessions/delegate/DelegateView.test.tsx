@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { DelegateView } from "./DelegateView";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
-import type { Delegate, Envelope } from "../../../router/types";
+import type { Delegate, DelegateTranscript, Envelope } from "../../../router/types";
 
 const record: Delegate = {
   id: "dlg_1",
@@ -19,6 +19,11 @@ const record: Delegate = {
   created_at: "2026-10-08T10:00:00Z",
   updated_at: "2026-10-08T10:00:00Z",
 };
+
+/** The stream row titled `title` — the working indicator's ticker repeats an in-flight one's title. */
+function row(title: string): HTMLElement | undefined {
+  return screen.queryAllByTestId("activity-row").find((r) => r.textContent?.includes(title));
+}
 
 function env(seq: number, type: string, payload: unknown): Envelope {
   return { seq, timestamp: "2026-10-08T10:00:01Z", type, actor: "runner", session_id: "s1", payload } as Envelope;
@@ -48,7 +53,7 @@ describe("DelegateView", () => {
 
     expect(await screen.findByRole("heading", { name: "Audit error handling" })).toBeTruthy();
     expect(screen.getByText("Explore")).toBeTruthy();
-    await waitFor(() => expect(screen.getByText("swallowed errors")).toBeTruthy());
+    await waitFor(() => expect(row("swallowed errors")).toBeTruthy());
     expect(screen.queryByText("not mine")).toBeNull();
     expect(screen.getByTestId("delegate-view").querySelector('[data-status="in_progress"]')).toBeTruthy();
 
@@ -148,7 +153,7 @@ describe("DelegateView — the delegate's own transcript", () => {
     expect(prompt.textContent).toContain("Prompt");
     expect(prompt.textContent).toContain("Audit the error handling in api/");
     expect(screen.getByText("Three handlers drop the error.")).toBeTruthy();
-    expect(screen.getByText("swallowed errors")).toBeTruthy();
+    expect(row("swallowed errors")).toBeTruthy();
     expect(screen.queryByText("only in the event log")).toBeNull();
     expect(screen.getByText(/From its own transcript/)).toBeTruthy();
   });
@@ -164,7 +169,7 @@ describe("DelegateView — the delegate's own transcript", () => {
       }),
     ]);
     render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
-    await waitFor(() => expect(screen.getByText("swallowed errors")).toBeTruthy());
+    await waitFor(() => expect(row("swallowed errors")).toBeTruthy());
     expect(await screen.findByText(/As mads recorded it live/)).toBeTruthy();
   });
 
@@ -191,5 +196,139 @@ describe("DelegateView — the delegate's own transcript", () => {
     });
     expect(await screen.findByText("Written since the first read.", undefined, { timeout: 3000 })).toBeTruthy();
     expect(read.mock.calls.length).toBe(before + 1);
+  });
+});
+
+describe("DelegateView — following it as it runs", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const inFlight = {
+    available: true,
+    messages: [
+      { role: "user", text: "Find the swallowed errors." },
+      { role: "tool", tool: { id: "t1", name: "Grep", kind: "search", title: "done already" } },
+      { role: "tool_result", tool: { id: "t1", name: "Grep" }, text: "3 matches" },
+      { role: "tool", tool: { id: "t2", name: "Bash", kind: "execute", title: "still going" } },
+    ],
+  } as DelegateTranscript;
+
+  function mount() {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    vi.spyOn(client, "getEvents").mockResolvedValue([]);
+    client.delegateTranscripts.set("s1/a1", inFlight);
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    return client;
+  }
+
+  function end() {
+    const control = FakeEventSource.instances.find((s) => s.url.includes("session.delegate_changed"));
+    act(() => {
+      control!.emit(
+        "session.delegate_changed",
+        JSON.stringify(env(9, "session.delegate_changed", { ...record, state: "completed", reason: "completed" })),
+      );
+    });
+  }
+
+  function rowStatus(title: string) {
+    return row(title)?.querySelector("[data-status]")?.getAttribute("data-status");
+  }
+
+  // The group's own status — a group collapses once when it stops being live, as in the main stream.
+  function groupStatus() {
+    const groups = screen.getAllByTestId("activity-group");
+    return groups[groups.length - 1].querySelector("button [data-status]")?.getAttribute("data-status");
+  }
+
+  it("spins a call still in flight and names it in the working indicator, until the delegate ends", async () => {
+    mount();
+    await waitFor(() => expect(row("still going")).toBeTruthy());
+    expect(rowStatus("done already")).toBe("completed");
+    expect(rowStatus("still going")).toBe("in_progress");
+    expect(groupStatus()).toBe("in_progress");
+    const indicator = screen.getByRole("status", { name: "Using Bash…" });
+    expect(indicator.textContent).toContain("still going");
+
+    // Ended with no result: that call was cut off, and nothing is working.
+    end();
+    await waitFor(() => expect(screen.queryByRole("status", { name: /Using|Working/ })).toBeNull());
+    expect(groupStatus()).toBe("interrupted");
+  });
+
+  it("opens a call's full detail in the dock, and closes it on Escape", async () => {
+    mount();
+    fireEvent.click(await screen.findByText("done already"));
+    const dock = screen.getByRole("dialog", { name: "Activity detail" });
+    expect(dock.textContent).toContain("3 matches");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Activity detail" })).toBeNull();
+  });
+
+  it("opens at the tail and follows it, but lets go once the user scrolls up", async () => {
+    mount();
+    const stream = screen.getByTestId("delegate-stream");
+    let top = 0;
+    Object.defineProperty(stream, "scrollHeight", { configurable: true, get: () => 2000 });
+    Object.defineProperty(stream, "clientHeight", { configurable: true, get: () => 500 });
+    Object.defineProperty(stream, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => (top = v),
+    });
+    await waitFor(() => expect(row("still going")).toBeTruthy());
+    expect(top).toBe(2000);
+
+    top = 200;
+    fireEvent.scroll(stream);
+    end();
+    await waitFor(() => expect(groupStatus()).toBe("interrupted"));
+    expect(top).toBe(200);
+  });
+});
+
+describe("DelegateView — a long session's log", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("reads its lifecycle and, with no file, its stream from past the log's first page", async () => {
+    const client = new FakeRouterClient();
+    client.delegates.push(record);
+    // Other subagents' streams fill the first pages.
+    for (let seq = 1; seq <= 1200; seq++) {
+      client.seedEvent(
+        env(seq, "session.subagent_event", {
+          parent_tool_use_id: "toolu_other",
+          kind: "tool_use",
+          tool: { id: `o${seq}`, name: "Read", kind: "read", title: `other ${seq}` },
+        }),
+      );
+    }
+    client.seedEvent(
+      env(1201, "session.subagent_task", {
+        phase: "progress",
+        task_id: "a1",
+        tool_use_id: "toolu_spawn",
+        total_tokens: 4200,
+        tool_uses: 7,
+      }),
+    );
+    client.seedEvent(
+      env(1202, "session.subagent_event", {
+        parent_tool_use_id: "toolu_spawn",
+        kind: "tool_use",
+        tool: { id: "t1", name: "Grep", kind: "search", title: "late in the log" },
+      }),
+    );
+    render(<DelegateView sessionId="s1" harnessId="a1" routerClient={client} onBack={() => {}} />);
+    await waitFor(() => expect(row("late in the log")).toBeTruthy());
+    expect(screen.getByTestId("delegate-counters").textContent).toContain("7 tools");
   });
 });

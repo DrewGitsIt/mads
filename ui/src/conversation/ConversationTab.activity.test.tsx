@@ -348,6 +348,92 @@ describe("ConversationTab — history parity (T17)", () => {
     expect(dock.textContent).toContain("Recreate swept file");
   });
 
+  // A long session's log runs past GET /events' 500-envelope page: the replay
+  // must read on, not stop at the oldest page.
+  const longSession = (client: FakeRouterClient) => {
+    vi.spyOn(client, "getTranscript").mockResolvedValue([
+      {
+        role: "tool",
+        tool: { id: "t1", name: "Bash", kind: "execute", title: "go test ./ui/...", result: { text: "…" } },
+        timestamp: "2026-09-09T10:00:01Z",
+      },
+      {
+        role: "tool",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "Audit sweep idempotency" } },
+        timestamp: "2026-09-09T10:00:02Z",
+      },
+    ]);
+    // Another subagent's whole stream fills the first pages.
+    for (let seq = 1; seq <= 1200; seq++) {
+      client.seedEvent(
+        env(seq, "session.subagent_event", {
+          parent_tool_use_id: "tu_other",
+          kind: "tool_use",
+          tool: { id: `o${seq}`, name: "Read", kind: "read", title: `other ${seq}` },
+        }),
+      );
+    }
+    // And status changes for calls not on screen fill the replay's own first page.
+    for (let seq = 1201; seq <= 1800; seq++) {
+      client.seedEvent(env(seq, "session.tool_status_changed", { tool_use_id: `x${seq}`, status: "completed" }));
+    }
+    client.seedEvent(env(1801, "session.tool_status_changed", { tool_use_id: "t1", status: "failed" }));
+    client.seedEvent(
+      env(1802, "session.subagent_task", {
+        phase: "started",
+        task_id: "tk1",
+        tool_use_id: "tu1",
+        description: "Audit sweep idempotency",
+        subagent_type: "general-purpose",
+      }),
+    );
+    client.seedEvent(
+      env(1803, "session.subagent_event", {
+        parent_tool_use_id: "tu1",
+        kind: "tool_use",
+        tool: { id: "s1", name: "Bash", kind: "execute", title: "Recreate swept file" },
+      }),
+    );
+  };
+
+  it("replays a long session's log past its first page, without reading every subagent's stream", async () => {
+    const client = new FakeRouterClient();
+    longSession(client);
+    client.delegateTranscripts.set("session-active/tk1", {
+      available: true,
+      messages: [
+        { role: "user", text: "Check the sweep is idempotent.", timestamp: "2026-09-09T10:00:03Z" },
+        { role: "agent", text: "From its own file.", timestamp: "2026-09-09T10:00:09Z" },
+      ],
+    });
+    const getEvents = vi.spyOn(client, "getEvents");
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    // Status and lifecycle from past the first 500 envelopes both landed.
+    await waitFor(() =>
+      expect(screen.getAllByTestId("activity-group")[0].querySelector('[data-status="failed"]')).toBeTruthy(),
+    );
+    const card = await screen.findByTestId("task-card");
+    expect(card.textContent).toContain("Audit sweep idempotency");
+
+    // The dock reads the subagent's own file, named by its task id.
+    fireEvent.click(card.querySelector("button")!);
+    const dock = await screen.findByRole("dialog", { name: "Activity detail" });
+    await waitFor(() => expect(dock.textContent).toContain("From its own file."));
+    expect(dock.textContent).toContain("Check the sweep is idempotent.");
+    expect(getEvents.mock.calls.some(([f]) => f.types?.includes("session.subagent_event"))).toBe(false);
+  });
+
+  it("with no file, reads every subagent stream back in full — once, when a dock needs it", async () => {
+    const client = new FakeRouterClient();
+    longSession(client);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    const card = await screen.findByTestId("task-card");
+    fireEvent.click(card.querySelector("button")!);
+    const dock = await screen.findByRole("dialog", { name: "Activity detail" });
+    await waitFor(() => expect(dock.textContent).toContain("Recreate swept file"));
+  });
+
   it("applies a live session.tool_status_changed envelope to the rendered row", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getTranscript").mockResolvedValue([

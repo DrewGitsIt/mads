@@ -8,6 +8,9 @@
   display: flex;
   flex-direction: column;
   background: var(--bg0);
+  /* Positioning context for the activity dock, which sizes itself as a
+     percentage of the pane (as in ConversationTab's .tab). */
+  position: relative;
 }
 
 .head {
@@ -80,6 +83,16 @@
   padding: 16px 0 28px;
   font: var(--fs-body) var(--mono);
   color: var(--text2);
+}
+
+/* The working indicator, stuck to the bottom of the scrolling stream while
+   the delegate runs — the conversation pane's pinned cluster (.pinned /
+   .above in ConversationTab.module.css), with only the indicator in it. */
+.pinned {
+  position: sticky;
+  bottom: 0;
+  z-index: 40;
+  padding: var(--space-3) var(--space-4) 0;
 }
 
 .note {

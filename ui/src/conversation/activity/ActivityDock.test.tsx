@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ToolDiff, ToolUse } from "../../router/types";
-import { ActivityDock, type DockView } from "./ActivityDock";
+import { ActivityDock, SubagentStream, type DockView } from "./ActivityDock";
 
 function toolView(tool: ToolUse): DockView {
   return { type: "tool", tool };
@@ -174,6 +174,25 @@ describe("ActivityDock — historical diff (T13/T10)", () => {
     render(<ActivityDock view={toolView(editTool)} sessionId="s1" client={client} onClose={() => {}} />);
     await waitFor(() => expect(screen.getByTestId("diff-too-large")).toBeTruthy());
     expect(screen.getByText(/before-image exceeded the capture limit/)).toBeTruthy();
+  });
+});
+
+describe("SubagentStream — the subagent's words", () => {
+  it("renders its text as markdown, with the time it was written revealed on hover", () => {
+    const at = "2026-10-09T10:00:03Z";
+    const { container } = render(
+      <SubagentStream
+        items={[
+          { type: "message", text: "Audit api/", timestamp: "2026-10-09T10:00:00Z" },
+          { type: "text", text: "Three handlers **drop** the error:\n\n- `a.go`", timestamp: at },
+        ]}
+        running={false}
+      />,
+    );
+    expect(container.querySelector("strong")?.textContent).toBe("drop");
+    expect(container.querySelector("li code")?.textContent).toBe("a.go");
+    const stamps = [...container.querySelectorAll("time")].map((t) => t.getAttribute("datetime"));
+    expect(stamps).toEqual(["2026-10-09T10:00:00.000Z", "2026-10-09T10:00:03.000Z"]);
   });
 });
 

@@ -348,7 +348,7 @@ describe("transcriptSubStream", () => {
       { role: "user", text: "Map the transcript code", timestamp: "2026-10-09T10:00:00Z" },
       { role: "tool", tool: { id: "t1", name: "Grep", status: "completed" }, timestamp: "2026-10-09T10:00:01Z" },
       { role: "tool_result", text: "transcript.go", tool: { id: "t1", name: "" }, timestamp: "2026-10-09T10:00:02Z" },
-      { role: "agent", text: "Here's the map." },
+      { role: "agent", text: "Here's the map.", timestamp: "2026-10-09T10:00:03Z" },
       { role: "agent", text: "Second paragraph." },
       { role: "user", text: "Also check imports", timestamp: "2026-10-09T10:05:00Z" },
     ];
@@ -362,6 +362,14 @@ describe("transcriptSubStream", () => {
       tool: { id: "t1", result: { text: "transcript.go", timestamp: "2026-10-09T10:00:02Z" } },
     });
     // Whole messages stay separate paragraphs, unlike live deltas.
-    expect(items[2]).toEqual({ type: "text", text: "Here's the map." });
+    expect(items[2]).toEqual({ type: "text", text: "Here's the map.", timestamp: "2026-10-09T10:00:03Z" });
+  });
+});
+
+describe("appendSubagentItem — text times", () => {
+  it("stamps a paragraph with its first delta's time, which later deltas keep", () => {
+    let streams = appendSubagentItem(new Map(), "tu1", { kind: "text", text: "Found ", timestamp: "2026-10-09T10:00:00Z" });
+    streams = appendSubagentItem(streams, "tu1", { kind: "text", text: "three.", timestamp: "2026-10-09T10:00:04Z" });
+    expect(streams.get("tu1")).toEqual([{ type: "text", text: "Found three.", timestamp: "2026-10-09T10:00:00Z" }]);
   });
 });

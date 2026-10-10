@@ -1,4 +1,5 @@
 import type { RouterClient, SessionEventSource } from "./client";
+import { EVENTS_BATCH_LIMIT } from "./eventPages";
 import { CommitRefusedError, RouterValidationError } from "./client";
 import type {
   Attachment,
@@ -1306,12 +1307,16 @@ export class FakeRouterClient implements RouterClient {
     since?: number;
     types?: string[];
   }): Promise<Envelope[]> {
-    return this.eventLog.filter(
-      (e) =>
-        (!filter.sessionId || e.session_id === filter.sessionId) &&
-        (filter.since === undefined || e.seq > filter.since) &&
-        (!filter.types?.length || filter.types.includes(e.type)),
-    );
+    // The real service's cap: at most one page, oldest first (getAllEvents pages).
+    return this.eventLog
+      .filter(
+        (e) =>
+          (!filter.sessionId || e.session_id === filter.sessionId) &&
+          (filter.since === undefined || e.seq > filter.since) &&
+          (!filter.types?.length || filter.types.includes(e.type)),
+      )
+      .sort((a, b) => a.seq - b.seq)
+      .slice(0, EVENTS_BATCH_LIMIT);
   }
 
   /** Seeded tool-diff captures by tool_use_id — absent means the real route's 404 ("keep the input-derived diff"). */

@@ -444,7 +444,9 @@ export function tasksByToolUse(tasks: ReadonlyMap<string, TaskModel>): Map<strin
 // session.subagent_event envelopes fold into the same shape.
 
 export type SubStreamItem =
-  | { type: "text"; text: string }
+  /** The subagent's own words; `timestamp` is when they began (the file's
+   * line, or the first delta's arrival/persistence time). */
+  | { type: "text"; text: string; timestamp?: string }
   /** Input the subagent was given — its prompt, or a message relayed through
    * its parent. Only the subagent's own transcript has these: the live
    * stream never carries them. */
@@ -467,9 +469,9 @@ export function appendSubagentItem(
       if (event.text) {
         const last = items[items.length - 1];
         if (last && last.type === "text") {
-          items[items.length - 1] = { type: "text", text: last.text + event.text };
+          items[items.length - 1] = { ...last, text: last.text + event.text };
         } else {
-          items.push({ type: "text", text: event.text });
+          items.push({ type: "text", text: event.text, timestamp: event.timestamp });
         }
       }
       break;
@@ -514,13 +516,22 @@ export function appendSubagentItem(
 // History replay (T17): fold the control-plane event log into the same
 // state shapes the live stream feeds.
 
+/**
+ * What a conversation reads back from the log when it opens — every one, in
+ * pages (getAllEvents). Not the subagents' own streams
+ * (session.subagent_event): those are the bulk of a long session's log, and
+ * a subagent's dock reads its own transcript file instead, falling back to
+ * the log only when there's no file (SUBAGENT_STREAM_EVENT_TYPES).
+ */
 export const CONVERSATION_EVENT_TYPES = [
-  "session.subagent_event",
   "session.subagent_task",
   "session.thinking",
   "session.tool_status_changed",
   "session.compact",
 ];
+
+/** The subagents' own streams, read back only for a dock with no file to read. */
+export const SUBAGENT_STREAM_EVENT_TYPES = ["session.subagent_event"];
 
 export interface ConversationHistory {
   statuses: Map<string, ToolStatus>;
@@ -595,7 +606,7 @@ export function transcriptSubStream(messages: readonly TranscriptMessage[]): Sub
       case "agent":
         // A paragraph per message: the file's text blocks are whole, unlike
         // the live stream's deltas, so they don't run together.
-        if (m.text) push({ type: "text", text: m.text });
+        if (m.text) push({ type: "text", text: m.text, timestamp: m.timestamp });
         break;
       case "tool":
         streams = appendSubagentItem(streams, KEY, { kind: "tool_use", tool: m.tool, timestamp: m.timestamp });

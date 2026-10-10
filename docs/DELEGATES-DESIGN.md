@@ -164,12 +164,23 @@ copies it (REBUILD-SPEC §1.9). For Claude Code that means
   | Its prompt, and messages relayed to it | no | yes |
   | Thinking | text (83 events) | **signature only, no text** (495 blocks) |
   | Timestamps | arrival time | the harness's, per line |
-  | Bound | `GET /events` cap (500) | none |
+  | Bound | none, read in pages (below) | none |
 
   So the file view drops thinking text the live stream had. Not merged:
   rare, and the order of the two can only be matched by timestamp.
-- **Not yet:** the in-conversation card and dock still read the event log
-  (Drew to test the gap first).
+- **The conversation's dock** reads the file too *(2026-10-09)*: the
+  subagent's task id is its file's name, so this works for subagents that
+  ran before delegate records existed. No file: the event log, read back
+  only then.
+- **The event log is read in pages** *(2026-10-09)*. `GET /events` answers
+  500 envelopes per call, oldest first, and the conversation, the delegate
+  view and the worktree cards each read one page and stopped: in a session
+  with 5,600 replayable events, everything after the first 9% was missing on
+  reopen (empty docks, card counters and statuses, thinking, tool status
+  changes). All three now page (`getAllEvents`). The conversation's replay
+  leaves out `session.subagent_event`, two-thirds of that session's events
+  and nearly all of its 11 MB, since the dock reads the file instead; it's
+  read back in full only for a dock with no file.
 
 ### Imported sessions *(built 2026-10-09)*
 
@@ -405,8 +416,7 @@ Defaults chosen without a ruling (all one-line changes):
 
 Not done: a nested subject's trunk runs past its delegates block; the
 delegate view doesn't surface the delegate's permission asks (the parent's
-conversation does); very long delegate streams hit `GET /events`' cap. The
-durable fix for that cap is reading the harness transcript (C1, #3).
+conversation does).
 
 ## Phasing (proposal)
 

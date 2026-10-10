@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RouterClient } from "../../router/client";
 import { subscribeToEvents } from "../../router/events";
 import { WORKTREE_CARD_EVENT_TYPES } from "../../router/sessionEventTypes";
+import { getAllEvents } from "../../router/eventPages";
 import type { CommitResult, Envelope, LandResult, UndoCommitResult } from "../../router/types";
 import {
   foldWorktreeEvents,
@@ -58,8 +59,7 @@ export function useWorktreeCards(client: RouterClient, sessionId: string): Workt
       // Replay and live overlap at the seam; the fold drops repeated seqs.
       setEnvelopes((cur) => [...cur, ...incoming]);
     };
-    void client
-      .getEvents({ sessionId, types: WORKTREE_CARD_EVENT_TYPES })
+    void getAllEvents(client, { sessionId, types: WORKTREE_CARD_EVENT_TYPES })
       .then((envs) => {
         if (!cancelled) add(envs);
       })

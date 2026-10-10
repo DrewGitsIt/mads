@@ -3,6 +3,8 @@ import type { PermissionRequest, ToolDiff, ToolStatus, ToolUse } from "../../rou
 import { ActivityGroup } from "./ActivityGroup";
 import type { ActivityEntry, SubStreamItem, TaskModel } from "./conversationItems";
 import { DiffView } from "./DiffView";
+import { Markdown } from "../ChatRenderer/markdown";
+import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import { KindIcon, McpBadge, Spinner, StatusGlyph } from "./primitives";
 import { TaskCounters, TaskStatusGlyph } from "./TaskCard";
 import {
@@ -343,6 +345,8 @@ export function SubagentStream({
   statuses,
   permissions,
   onResolvePermission,
+  selectedToolId,
+  onOpenTool,
 }: {
   items: SubStreamItem[];
   running: boolean;
@@ -350,26 +354,37 @@ export function SubagentStream({
   statuses?: ReadonlyMap<string, ToolStatus>;
   permissions?: ReadonlyMap<string, PermissionRequest[]>;
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
+  /** The row whose detail is open, so its peek stays away (as in the main stream). */
+  selectedToolId?: string;
+  /** Opens one call's full detail; absent leaves the rows to their peek. */
+  onOpenTool?: (tool: ToolUse) => void;
 }) {
   // Same grouping components as the main stream: fold contiguous
-  // tool/thinking items into groups between text paragraphs.
+  // tool/thinking items into groups between text paragraphs. While the
+  // subagent runs, a call with no result yet is in flight, not cut off: its
+  // entry is marked live so it spins rather than showing ⊘ (subagent items
+  // never carry the main stream's live flag of their own).
   const blocks = useMemo(() => {
     const out: (
-      | { type: "text"; text: string }
-      | { type: "message"; text: string }
-      | { type: "group"; entries: ActivityEntry[] }
+      | { type: "text"; text: string; timestamp?: string }
+      | { type: "message"; text: string; timestamp?: string }
+      | { type: "group"; entries: ActivityEntry[]; inFlight: boolean }
     )[] = [];
     for (const item of items) {
       if (item.type === "text" || item.type === "message") {
         out.push(item);
         continue;
       }
+      const inFlight = running && item.type === "tool" && !item.tool.result;
+      const entry = inFlight ? { ...item, live: true } : item;
       const last = out[out.length - 1];
-      if (last && last.type === "group") last.entries.push(item);
-      else out.push({ type: "group", entries: [item] });
+      if (last && last.type === "group") {
+        last.entries.push(entry);
+        last.inFlight ||= inFlight;
+      } else out.push({ type: "group", entries: [entry], inFlight });
     }
     return out;
-  }, [items]);
+  }, [items, running]);
 
   return (
     <>
@@ -377,27 +392,48 @@ export function SubagentStream({
       {blocks.map((b, i) =>
         b.type === "message" ? (
           <div key={i} className={styles.subMessage} data-testid="subagent-message">
-            <div className={styles.subMessageLabel}>{i === 0 ? "Prompt" : "From the parent"}</div>
+            <div className={styles.subMessageLabel}>
+              {i === 0 ? "Prompt" : "From the parent"}
+              <SubStamp timestamp={b.timestamp} />
+            </div>
             {b.text}
           </div>
         ) : b.type === "text" ? (
           <div key={i} className={styles.subText}>
-            {b.text}
+            <Markdown className={styles.subProse} text={b.text} />
+            <SubStamp timestamp={b.timestamp} />
           </div>
         ) : (
           <div key={i} className={styles.subGroup}>
             <ActivityGroup
               entries={b.entries}
               defaultOpen
-              live={running && i === blocks.length - 1}
+              live={running && (b.inFlight || i === blocks.length - 1)}
               statuses={statuses}
               permissions={permissions}
               onResolvePermission={onResolvePermission}
+              selectedToolId={selectedToolId}
+              onOpenTool={onOpenTool}
             />
           </div>
         ),
       )}
-      {summary && <div className={styles.subText}>{summary}</div>}
+      {summary && (
+        <div className={styles.subText}>
+          <Markdown className={styles.subProse} text={summary} />
+        </div>
+      )}
     </>
+  );
+}
+
+/** When a stream block was written, revealed on hover — the main stream's per-message stamp (ChatRenderer). */
+function SubStamp({ timestamp }: { timestamp?: string }) {
+  const at = parseMessageTime(timestamp);
+  if (!at) return null;
+  return (
+    <time className={styles.subStamp} dateTime={at.toISOString()} title={at.toLocaleString()}>
+      {formatMessageTime(at)}
+    </time>
   );
 }

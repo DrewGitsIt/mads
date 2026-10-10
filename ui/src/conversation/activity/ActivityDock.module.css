@@ -108,10 +108,66 @@
 }
 
 .subText {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
   font: 13.5px var(--sans);
   color: var(--text2);
-  max-width: 84ch;
   margin-bottom: var(--space-3);
+}
+
+/* The subagent's own words, as markdown — the main stream's .prose
+   (ChatRenderer.module.css) at the stream's denser size. */
+.subProse {
+  max-width: 84ch;
+  min-width: 0;
+  overflow-wrap: break-word;
+  line-height: 1.55;
+}
+
+.subProse > :first-child {
+  margin-top: 0;
+}
+
+.subProse > :last-child {
+  margin-bottom: 0;
+}
+
+.subProse :global(pre) {
+  font: var(--fs-chat-code) var(--mono);
+  background: var(--bg2);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-3);
+  overflow-x: auto;
+}
+
+.subProse :global(code) {
+  font: var(--fs-chat-code) var(--mono);
+  background: var(--bg2);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+
+/* Per-block time, shown only while the block is hovered — reserved space,
+   so revealing it never reflows (ChatRenderer's .stamp). */
+.subStamp {
+  flex: none;
+  padding-bottom: 2px;
+  font: var(--fs-chip) var(--mono);
+  color: var(--text3);
+  white-space: nowrap;
+  /* Not the Prompt label's small caps, when it sits beside one. */
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.subText:hover .subStamp,
+.subMessage:hover .subStamp {
+  opacity: 1;
 }
 
 .subGroup {
@@ -132,6 +188,9 @@
 }
 
 .subMessageLabel {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
   margin-bottom: 2px;
   color: var(--text3);
   font: 11px var(--sans);

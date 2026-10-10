@@ -5,6 +5,7 @@ import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
+import { getAllEvents } from "../router/eventPages";
 import { contextWindowForModel } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
@@ -44,8 +45,10 @@ import {
   appendSubagentItem,
   applyTaskEvent,
   CONVERSATION_EVENT_TYPES,
+  SUBAGENT_STREAM_EVENT_TYPES,
   finishRunningTasks,
   foldHistoryEvents,
+  transcriptSubStream,
   mergeDelegates,
   replayedCompactStatus,
   resumeRunningTasks,
@@ -74,6 +77,7 @@ import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useVisibleCards } from "./useVisibleCards";
+import { useDelegateFile } from "./activity/useDelegateFile";
 import styles from "./ConversationTab.module.css";
 
 // When the user last dismissed this session's compaction banner — lets a
@@ -436,8 +440,7 @@ export function ConversationTab({
     // thinking, and out-of-band status changes — the provider transcript
     // omits all four. Merge live-wins: anything the stream delivered while
     // this fetch was in flight is fresher than the replay.
-    void routerClient
-      .getEvents({ sessionId, types: CONVERSATION_EVENT_TYPES })
+    void getAllEvents(routerClient, { sessionId, types: CONVERSATION_EVENT_TYPES })
       .then((envelopes) => {
         if (cancelled) return;
         const h = foldHistoryEvents(envelopes);
@@ -1181,6 +1184,45 @@ export function ConversationTab({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // The subagent dock's stream: the subagent's own transcript file, read on
+  // open and again as it runs (its task id is its harness id — the file's
+  // name). Live frames for it are the cue to re-read.
+  const dockParent = dockTarget?.type === "subagent" ? dockTarget.parentToolUseId : undefined;
+  const dockModel = dockParent
+    ? [...mergeDelegates(tasks, delegates).values()].find((t) => t.toolUseId === dockParent)
+    : undefined;
+  const dockLive = dockParent ? subagentStreams.get(dockParent) : undefined;
+  const dockFile = useDelegateFile(
+    routerClient,
+    sessionId,
+    dockModel?.taskId,
+    `${dockLive?.length ?? 0}/${dockModel?.state ?? ""}/${dockModel?.running ?? ""}/${dockModel?.toolUses ?? ""}`,
+  );
+  const dockFileItems = useMemo(
+    () => (dockFile?.available ? transcriptSubStream(dockFile.messages) : undefined),
+    [dockFile],
+  );
+  // No file for it: read back what mads recorded live — every subagent's
+  // stream, so only now, once per conversation. Live frames win for any
+  // subagent they've already reached (as at open).
+  const needStreamReplay = dockFile?.available === false;
+  const streamReplayedFor = useRef<string>(undefined);
+  useEffect(() => {
+    if (!needStreamReplay || streamReplayedFor.current === sessionId) return;
+    let cancelled = false;
+    getAllEvents(routerClient, { sessionId, types: SUBAGENT_STREAM_EVENT_TYPES })
+      .then((envelopes) => {
+        if (cancelled) return;
+        streamReplayedFor.current = sessionId;
+        const h = foldHistoryEvents(envelopes);
+        setSubagentStreams((live) => new Map([...h.subagentStreams, ...live]));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [needStreamReplay, routerClient, sessionId]);
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -1309,14 +1351,13 @@ export function ConversationTab({
     }
     dockView = { type: "tool", tool, timestamp: toolTimestamp };
   } else if (dockTarget?.type === "subagent") {
-    const model = [...effectiveTasks.values()].find((t) => t.toolUseId === dockTarget.parentToolUseId);
     dockView = {
       type: "subagent",
       parentToolUseId: dockTarget.parentToolUseId,
-      title: model?.description ?? dockTarget.title,
-      subtype: dockTarget.subtype ?? model?.subagentType,
-      items: subagentStreams.get(dockTarget.parentToolUseId) ?? [],
-      task: model,
+      title: dockModel?.description ?? dockTarget.title,
+      subtype: dockTarget.subtype ?? dockModel?.subagentType,
+      items: dockFileItems ?? subagentStreams.get(dockTarget.parentToolUseId) ?? [],
+      task: dockModel,
     };
   }
 
