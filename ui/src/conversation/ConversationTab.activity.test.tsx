@@ -245,7 +245,7 @@ describe("ConversationTab — V2 working indicator (T16)", () => {
     expect(screen.getByTestId("working-ticker").textContent).toBe("Thinking · 1.2k tokens");
   });
 
-  it("keeps substrip + indicator + composer together in the pinned bottom cluster", async () => {
+  it("pins substrip + indicator inside the stream, with the composer below it", async () => {
     const client = new FakeRouterClient();
     const source = await mountActive(client);
 
@@ -257,10 +257,15 @@ describe("ConversationTab — V2 working indicator (T16)", () => {
       });
     });
 
+    const stream = screen.getByTestId("conversation-stream");
     const pinned = screen.getByTestId("pinned-cluster");
+    expect(stream.contains(pinned)).toBe(true);
     expect(pinned.querySelector('[data-testid="substrip"]')).toBeTruthy();
     expect(pinned.querySelector('[role="status"]')).toBeTruthy();
-    expect(pinned.querySelector("textarea")).toBeTruthy();
+    // The dock is the stream's sibling, so the scrollbar stops at its top.
+    const textarea = screen.getByRole("textbox");
+    expect(stream.contains(textarea)).toBe(false);
+    expect(stream.parentElement?.contains(textarea)).toBe(true);
   });
 
   it("a whole thinking block renders as a think row in the live group", async () => {

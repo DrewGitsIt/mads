@@ -93,11 +93,13 @@
   white-space: nowrap;
 }
 
-/* Pinned bottom cluster (T16; mockup E's .pinned): the approval jump,
-   substrip, working indicator and queued messages, then the session dock,
-   stick to the bottom of the scrollable stream — they can never scroll off
-   screen. No surface or border of its own: the dock is the one edge-to-edge
-   band, and its rim is the only top edge. */
+/* Pinned strip (T16; mockup E's .above): the approval jump, substrip,
+   working indicator and queued messages stick to the bottom of the
+   scrollable stream, floating over it just above the session dock — they
+   can never scroll off screen. The dock itself is the stream's sibling, not
+   its child, so it spans the full pane and the scrollbar stops at its top
+   edge. Each child keeps its own surface; the strip itself is transparent
+   over the stream. */
 .pinned {
   position: sticky;
   bottom: 0;
@@ -105,23 +107,16 @@
   margin-top: auto;
   display: flex;
   flex-direction: column;
-}
-
-/* What sits just above the dock (mockup E's .above). Each child keeps its
-   own surface; the strip itself is transparent over the stream. */
-.above {
-  display: flex;
-  flex-direction: column;
   gap: var(--space-2);
   padding: 0 var(--space-4) var(--space-3);
 }
 
-.above:empty {
+.pinned:empty {
   display: none;
 }
 
 /* The queue's own inset is for inside the composer; above the dock the
    strip's padding already places it. */
-.above .queuedAbove {
+.pinned .queuedAbove {
   padding: 0;
 }

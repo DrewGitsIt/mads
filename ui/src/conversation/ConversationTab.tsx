@@ -1142,10 +1142,26 @@ export function ConversationTab({
   // control the instant the user scrolls up — re-engaging only once they're
   // back at the bottom. stickToBottom is a ref (not state) so updating it from
   // the scroll handler never itself triggers a render.
-  const streamRef = useRef<HTMLDivElement>(null);
+  const streamRef = useRef<HTMLDivElement | null>(null);
   const stickToBottom = useRef(true);
+  // The dock sits below the stream, not inside it, so a composer growing a
+  // line (or the dock's status line wrapping) shrinks the stream's viewport
+  // without moving its scrollTop or firing a scroll — re-pin the tail when
+  // the viewport resizes, unless the user has scrolled up. A callback ref
+  // because the chat stream mounts and unmounts with the transport.
+  const streamResize = useRef<ResizeObserver | null>(null);
+  const chatStreamRef = useCallback((el: HTMLDivElement | null) => {
+    streamRef.current = el;
+    streamResize.current?.disconnect();
+    streamResize.current = null;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    streamResize.current = new ResizeObserver(() => {
+      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+    });
+    streamResize.current.observe(el);
+  }, []);
   // The approval jump's reach: the whole tab (stream + dock) for finding
-  // cards, the pinned cluster for what the composer covers. The reveal is
+  // cards, the pinned strip for what covers the stream's bottom edge. The reveal is
   // its latest click, published to collapsed groups (permissionReveal.ts).
   const tabRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef<HTMLDivElement>(null);
@@ -1184,6 +1200,7 @@ export function ConversationTab({
     const el = streamRef.current;
     if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
   }, [messages, pacer.items, turnPhase, worktree.cards]);
+
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
@@ -1474,111 +1491,112 @@ export function ConversationTab({
 
       <div className={styles.body}>
         {showHistory ? (
-          <div className={styles.stream} ref={streamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
-            {provisioning && (
-              <div className={styles.provisioningWrap}>
-                <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
-              </div>
-            )}
-            {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
-              <>
-                <div className={styles.emptyTranscript}>No conversation yet</div>
-                {/* No rows to anchor to — every card is a fallback one. */}
-                {livePermissionRequests.map((req) => (
-                  <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
-                ))}
-              </>
-            ) : (
-              <ChatRenderer
-                messages={messages}
-                links={links}
-                viewedSessionId={sessionId}
-                attachmentUrl={(id, variant) =>
-                  routerClient.attachmentUrl({ session: sessionId }, id, variant)
-                }
-                liveItems={liveItems}
-                turnActive={inChatTurn}
-                thinkingHistory={thinkingHistory}
-                toolStatuses={toolStatuses}
-                background={backgroundByTool}
-                tasks={tasksByToolUseMap}
-                selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
-                onOpenTool={openTool}
-                onOpenTask={(toolUseId, tool) =>
-                  openSubagent(
-                    toolUseId,
-                    tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
-                    tasksByToolUseMap.get(toolUseId)?.subagentType,
-                  )
-                }
-                worktreeCards={worktree.cards}
-                worktreeActions={worktreeActions}
-                permissionRequests={livePermissionRequests}
-                onResolvePermission={resolvePermission}
-                permissionReveal={permissionReveal}
+          <>
+            <div className={styles.stream} ref={chatStreamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
+              {provisioning && (
+                <div className={styles.provisioningWrap}>
+                  <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />
+                </div>
+              )}
+              {messages.length === 0 && worktree.cards.length === 0 && !inChatTurn ? (
+                <>
+                  <div className={styles.emptyTranscript}>No conversation yet</div>
+                  {/* No rows to anchor to — every card is a fallback one. */}
+                  {livePermissionRequests.map((req) => (
+                    <PermissionCard key={req.id} request={req} onResolve={resolvePermission} />
+                  ))}
+                </>
+              ) : (
+                <ChatRenderer
+                  messages={messages}
+                  links={links}
+                  viewedSessionId={sessionId}
+                  attachmentUrl={(id, variant) =>
+                    routerClient.attachmentUrl({ session: sessionId }, id, variant)
+                  }
+                  liveItems={liveItems}
+                  turnActive={inChatTurn}
+                  thinkingHistory={thinkingHistory}
+                  toolStatuses={toolStatuses}
+                  background={backgroundByTool}
+                  tasks={tasksByToolUseMap}
+                  selectedToolId={dockTarget?.type === "tool" ? dockTarget.toolId : undefined}
+                  onOpenTool={openTool}
+                  onOpenTask={(toolUseId, tool) =>
+                    openSubagent(
+                      toolUseId,
+                      tasksByToolUseMap.get(toolUseId)?.description ?? toolTitle(tool),
+                      tasksByToolUseMap.get(toolUseId)?.subagentType,
+                    )
+                  }
+                  worktreeCards={worktree.cards}
+                  worktreeActions={worktreeActions}
+                  permissionRequests={livePermissionRequests}
+                  onResolvePermission={resolvePermission}
+                  permissionReveal={permissionReveal}
+                />
+              )}
+              {transport.status !== "idle" && (
+                <div className={styles.transportBanner}>
+                  {transport.status === "switching" ? (
+                    <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
+                  ) : (
+                    <>
+                      <span>
+                        {transport.code === "busy"
+                          ? "Can't switch — a turn is in flight."
+                          : "Couldn't switch transport."}
+                      </span>
+                      <div className={styles.transportActions}>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void handleToggle(transport.attemptedMode)}
+                        >
+                          Retry
+                        </Button>
+                        {transport.code === "busy" && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
+                          >
+                            Interrupt and switch
+                          </Button>
+                        )}
+                        {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => void handleToggle("chat")}
+                          >
+                            Return to chat
+                          </Button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {waking && (
+                <div className={styles.transportBanner}>
+                  <span>Waking the agent…</span>
+                </div>
+              )}
+              <CompactionStatus
+                status={compactStatus}
+                onDismiss={() => {
+                  writeCompactDismissedAt(sessionId);
+                  setCompactStatus(undefined);
+                }}
               />
-            )}
-            {transport.status !== "idle" && (
-              <div className={styles.transportBanner}>
-                {transport.status === "switching" ? (
-                  <span>Switching to {transport.to === "terminal" ? "terminal" : "chat"}…</span>
-                ) : (
-                  <>
-                    <span>
-                      {transport.code === "busy"
-                        ? "Can't switch — a turn is in flight."
-                        : "Couldn't switch transport."}
-                    </span>
-                    <div className={styles.transportActions}>
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => void handleToggle(transport.attemptedMode)}
-                      >
-                        Retry
-                      </Button>
-                      {transport.code === "busy" && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void handleInterruptAndSwitch(transport.attemptedMode)}
-                        >
-                          Interrupt and switch
-                        </Button>
-                      )}
-                      {transport.code !== "busy" && transport.attemptedMode === "terminal" && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => void handleToggle("chat")}
-                        >
-                          Return to chat
-                        </Button>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            {waking && (
-              <div className={styles.transportBanner}>
-                <span>Waking the agent…</span>
-              </div>
-            )}
-            <CompactionStatus
-              status={compactStatus}
-              onDismiss={() => {
-                writeCompactDismissedAt(sessionId);
-                setCompactStatus(undefined);
-              }}
-            />
-            {/* Pinned bottom cluster (T16): the approval jump, running-subagent
-                substrip, turn-long working indicator and queued messages sit
-                just above the session dock, and all of it sticks to the
-                bottom of the scrollable stream — none can scroll off screen
-                while the conversation is on screen. */}
-            <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
-              <div className={styles.above}>
+              {/* Pinned strip (T16): the approval jump, running-subagent
+                  substrip, turn-long working indicator and queued messages
+                  float over the bottom of the scrollable stream, just above
+                  the session dock — none can scroll off screen while the
+                  conversation is on screen. The dock itself sits below the
+                  stream, outside it, so the scrollbar ends at its top edge. */}
+              <div className={styles.pinned} data-testid="pinned-cluster" ref={pinnedRef}>
                 <ApprovalJump
                   pending={pendingPermissions}
                   subagentName={subagentName}
@@ -1609,59 +1627,59 @@ export function ConversationTab({
                   className={styles.queuedAbove}
                 />
               </div>
-              <SessionDock {...dockProps} mode="chat">
-                <Composer
-                  routerClient={routerClient}
-                  sessionId={sessionId}
-                  agentId={session.agent}
-                  provider={session.provider}
-                  usage={lastUsage}
-                  contextWindow={dockProps.contextWindow}
-                  mode={activeMode}
-                  onModeChange={dockProps.onModeChange}
-                  onCompact={dockProps.onCompact}
-                  disabled={transport.status !== "idle" || waking}
-                  busy={inChatTurn}
-                  onStop={() => void handleInterrupt()}
-                  initialValue={pendingFirstMessage}
-                  prefill={composerPrefill}
-                  autoSendInitial={Boolean(pendingFirstMessage)}
-                  onSendStart={() => {
-                    if (session.activity !== "active") setWaking(true);
-                    setTurnPhase((p) => (p === "idle" ? "live" : p));
-                  }}
-                  onSendError={(msg) => {
-                    setWaking(false);
-                    setSendError(msg);
-                  }}
-                  onAutoSendStart={onPendingFirstMessageHandled}
-                  onUpdateSession={handleUpdateSession}
-                  onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
-                  onCommandError={(message) => setCommandToast({ tone: "bad", message })}
-                  onQueued={(q) => {
-                    setWaking(false);
-                    setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
-                  }}
-                  onSent={(text) => {
-                    // A send against a dormant session wakes it (Router:
-                    // handleSessionMessages) synchronously within the POST's
-                    // own request/response cycle — for a fast reply, the whole
-                    // turn (including turn_end) can complete before this
-                    // mount's /output stream (opened before the child existed,
-                    // permanently dead per the WHATWG EventSource spec — see
-                    // streamBroken above) ever reconnects. Piggyback the same
-                    // bounded refetch turn_end normally triggers, rather than
-                    // depending on a stream that's known-unreliable for this
-                    // specific turn.
-                    const wasDormant = session.activity !== "active";
-                    setWaking(false);
-                    setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-                    if (wasDormant) void refetchAfterTurn();
-                  }}
-                />
-              </SessionDock>
             </div>
-          </div>
+            <SessionDock {...dockProps} mode="chat">
+              <Composer
+                routerClient={routerClient}
+                sessionId={sessionId}
+                agentId={session.agent}
+                provider={session.provider}
+                usage={lastUsage}
+                contextWindow={dockProps.contextWindow}
+                mode={activeMode}
+                onModeChange={dockProps.onModeChange}
+                onCompact={dockProps.onCompact}
+                disabled={transport.status !== "idle" || waking}
+                busy={inChatTurn}
+                onStop={() => void handleInterrupt()}
+                initialValue={pendingFirstMessage}
+                prefill={composerPrefill}
+                autoSendInitial={Boolean(pendingFirstMessage)}
+                onSendStart={() => {
+                  if (session.activity !== "active") setWaking(true);
+                  setTurnPhase((p) => (p === "idle" ? "live" : p));
+                }}
+                onSendError={(msg) => {
+                  setWaking(false);
+                  setSendError(msg);
+                }}
+                onAutoSendStart={onPendingFirstMessageHandled}
+                onUpdateSession={handleUpdateSession}
+                onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
+                onCommandError={(message) => setCommandToast({ tone: "bad", message })}
+                onQueued={(q) => {
+                  setWaking(false);
+                  setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
+                }}
+                onSent={(text) => {
+                  // A send against a dormant session wakes it (Router:
+                  // handleSessionMessages) synchronously within the POST's
+                  // own request/response cycle — for a fast reply, the whole
+                  // turn (including turn_end) can complete before this
+                  // mount's /output stream (opened before the child existed,
+                  // permanently dead per the WHATWG EventSource spec — see
+                  // streamBroken above) ever reconnects. Piggyback the same
+                  // bounded refetch turn_end normally triggers, rather than
+                  // depending on a stream that's known-unreliable for this
+                  // specific turn.
+                  const wasDormant = session.activity !== "active";
+                  setWaking(false);
+                  setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
+                  if (wasDormant) void refetchAfterTurn();
+                }}
+              />
+            </SessionDock>
+          </>
         ) : (
           <>
             <div className={styles.stream} ref={streamRef} data-testid="conversation-stream">

@@ -11,9 +11,9 @@ export interface VisibleCardsOptions {
 
 /**
  * Which cards are on screen right now, by id. Main-stream copies are watched
- * against the stream's viewport minus the pinned bottom cluster (a card under
- * the composer isn't visible); copies elsewhere in scope (the dock) against
- * the window. Re-scans for card elements every render — cards come and go
+ * against the stream's viewport minus the pinned strip floating over its
+ * bottom edge (a card under the strip isn't visible); copies elsewhere in
+ * scope (the dock) against the window. Re-scans for card elements every render — cards come and go
  * with groups collapsing, the dock opening and statuses flipping, none of
  * which the caller would otherwise hear about. Without IntersectionObserver
  * nothing counts as visible.
