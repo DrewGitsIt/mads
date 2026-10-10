@@ -42,6 +42,9 @@ type sessionDefaultSources struct {
 // otherwise a session created with no explicit pill selection inherits the
 // default's other fields but persists workspace=null itself, with nothing
 // on the record to say which workspace it was actually resolved against.
+// The default applies only when neither workspace nor dir was given: an
+// explicit dir stands alone, so a session in ~/repo/twinctl isn't recorded
+// (and labelled) as belonging to the default workspace.
 func (s *server) resolveSessionDefaults(ctx context.Context, sess *contracts.Session) error {
 	_, err := s.resolveSessionDefaultsSourced(ctx, sess)
 	return err
@@ -60,10 +63,15 @@ func (s *server) resolveSessionDefaultsSourced(ctx context.Context, sess *contra
 
 	var wsDefaults contracts.WorkspaceDefaults
 	var wsDir string
-	if wsKey := sess.Workspace; wsKey != "" || cfg.DefaultWorkspace != "" {
-		if wsKey == "" {
-			wsKey = cfg.DefaultWorkspace
-		}
+	wsKey := sess.Workspace
+	// A folder the caller chose with no workspace beside it means "this
+	// folder, not the default workspace": the Launchpad's folder and
+	// workspace are one pill. Falling back to Config.DefaultWorkspace here
+	// would stamp the session with a workspace its folder isn't part of.
+	if wsKey == "" && sess.Dir == "" {
+		wsKey = cfg.DefaultWorkspace
+	}
+	if wsKey != "" {
 		ws, err := s.data.Workspace(ctx, wsKey)
 		switch {
 		case err == nil:

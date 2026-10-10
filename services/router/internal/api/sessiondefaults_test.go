@@ -338,3 +338,31 @@ func TestCreateSessionDir(t *testing.T) {
 		t.Errorf("recorded dir = %q, want %q", created.Session.Dir, dir)
 	}
 }
+
+// A folder picked with no workspace stands alone: the default workspace is
+// neither consulted nor stamped onto the session.
+func TestSessionDefaultsExplicitDirSkipsDefaultWorkspace(t *testing.T) {
+	srv := newTestServer(t)
+	repo, picked := t.TempDir(), t.TempDir()
+	wsResp := postJSON(t, srv.URL+"/workspaces", contracts.Workspace{
+		Name:  "ws",
+		Repos: []contracts.WorkspaceRepo{{Path: repo, Primary: true}},
+	})
+	if wsResp.StatusCode != http.StatusCreated {
+		t.Fatalf("create workspace status = %d", wsResp.StatusCode)
+	}
+	ws := decodeJSON[contracts.Workspace](t, wsResp)
+	updateConfig(t, srv.URL, func(c *contracts.Config) {
+		c.DefaultProvider = "fake"
+		c.DefaultWorkspace = ws.ID
+	})
+
+	got := getDefaults(t, srv.URL, url.Values{"dir": {picked}})
+	if got.Workspace != "" {
+		t.Errorf("workspace = %q, want none for an explicit folder", got.Workspace)
+	}
+	got = getDefaults(t, srv.URL, url.Values{})
+	if got.Workspace != "ws" {
+		t.Errorf("workspace = %q, want the default when nothing was chosen", got.Workspace)
+	}
+}
