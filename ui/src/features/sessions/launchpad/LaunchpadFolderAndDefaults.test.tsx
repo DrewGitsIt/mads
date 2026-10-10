@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Launchpad, differsFromSaved, recentDirs, withStagedDefaults } from "./Launchpad";
+import { OPEN_SESSION_EVENT } from "../../../appNavigation";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { fixtureConfig as DEFAULT_CONFIG } from "../../../router/fixtures";
 import type { Config, Session, SessionDefaults, Workspace } from "../../../router/types";
@@ -141,6 +142,48 @@ describe("Launchpad folder + defaults", () => {
     typeFolder("/nope");
     await waitFor(() => expect(screen.getByText(/\/nope doesn't exist/)).toBeTruthy());
     expect(screen.queryByText("Save as my defaults")).toBeNull();
+  });
+
+  it("says whose worktree a folder is, and what each isolation does there", async () => {
+    const wt = "/home/me/.mads/session-worktrees/ses_owner";
+    stubRouter(
+      (dir) =>
+        dir === wt
+          ? defaults({
+              dir: { value: dir },
+              dir_branch: "mads/session/ses_owner",
+              dir_owner_session: { id: "ses_owner", name: "Dock redesign" },
+            })
+          : defaults(),
+      { ...DEFAULT_CONFIG },
+    );
+    const opened = vi.fn();
+    const onOpen = (e: Event) => opened((e as CustomEvent<{ sessionId: string }>).detail.sessionId);
+    window.addEventListener(OPEN_SESSION_EVENT, onOpen);
+    try {
+      render(<Launchpad createSession={vi.fn()} onSessionCreated={vi.fn()} />);
+      await waitFor(() => expect(screen.getByText(/mads \(default\)/)).toBeTruthy());
+      expect(screen.queryByTestId("dir-owner-note")).toBeNull();
+
+      typeFolder(wt);
+      const note = await screen.findByTestId("dir-owner-note");
+      expect(note.textContent).toBe(
+        "This is Dock redesign’s worktree. A new worktree will branch from its branch, and Land goes back into Dock redesign’s worktree.",
+      );
+
+      fireEvent.click(screen.getByText(/New worktree \(default\)/));
+      fireEvent.click(screen.getByText("Current directory"));
+      await waitFor(() =>
+        expect(screen.getByTestId("dir-owner-note").textContent).toBe(
+          "This is Dock redesign’s worktree. You’ll share its branch; changes land from Dock redesign.",
+        ),
+      );
+
+      fireEvent.click(screen.getAllByRole("button", { name: "Dock redesign" })[0]);
+      expect(opened).toHaveBeenCalledWith("ses_owner");
+    } finally {
+      window.removeEventListener(OPEN_SESSION_EVENT, onOpen);
+    }
   });
 
   it("saves every staged pill as the defaults in one PUT, then shows them as defaults", async () => {

@@ -199,6 +199,19 @@
   overflow-wrap: anywhere;
 }
 
+/* A session named in a folder note: opens it, in the note's own color. */
+.noteLink {
+  padding: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 /* quiet, link-weight: an offer, not a step in starting a session */
 .saveDefaults {
   align-self: center;

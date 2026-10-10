@@ -175,6 +175,8 @@ export interface SessionDefaults {
   dir_status?: DirStatus;
   /** The branch the checkout at `dir` has open — only for a git dir on a branch (absent when detached). */
   dir_branch?: string;
+  /** The session whose worktree `dir` is (its branch is mads/session/<id>) — only while that session exists. */
+  dir_owner_session?: WorktreeTenant;
   workspace?: string;
 }
 
@@ -1040,6 +1042,8 @@ export interface WorktreeStatus {
   shared_with?: WorktreeTenant[];
   /** Router-added: a pipeline run for this session is active. Delete keeps the folder then too. */
   pipeline_running?: boolean;
+  /** Router-added, in-place sessions only: the session whose worktree this session works in. That session lands what's committed here. */
+  owner_session?: WorktreeTenant;
 }
 
 export interface WorktreeTenant {

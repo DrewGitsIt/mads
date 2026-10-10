@@ -3,6 +3,7 @@ import { Button } from "../../../components/Button/Button";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { Popover } from "../../../components/Popover/Popover";
 import { Toast } from "../../../components/Toast/Toast";
+import { requestOpenSession } from "../../../appNavigation";
 import { FLAGS } from "../../../featureFlags";
 import { router, type RouterClient } from "../../../router/client";
 import type {
@@ -14,6 +15,7 @@ import type {
   Session,
   SessionDefaults,
   Workspace,
+  WorktreeTenant,
 } from "../../../router/types";
 import { LinkChooserDialog } from "../rail/LinkChooserDialog";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
@@ -43,6 +45,36 @@ import styles from "./Launchpad.module.css";
  */
 export function deriveSessionName(text: string): string {
   return text.trim().split("\n")[0];
+}
+
+/** A session named in a Launchpad note, opening it on click. */
+function SessionLink({ session }: { session: WorktreeTenant }) {
+  return (
+    <button type="button" className={styles.noteLink} onClick={() => requestOpenSession(session.id)}>
+      {session.name || session.id}
+    </button>
+  );
+}
+
+/**
+ * What starting in another session's worktree means, by isolation: in place
+ * shares the owner's branch (the owner lands it); a worktree branches from
+ * the owner's branch, and its Land merges back into the owner's worktree.
+ */
+function OwnerNote({ owner, isolation }: { owner: WorktreeTenant; isolation?: string }) {
+  const name = <SessionLink session={owner} />;
+  return (
+    <p className={styles.dirWarning} role="status" data-testid="dir-owner-note">
+      This is {name}&rsquo;s worktree.{" "}
+      {isolation === "current_dir" ? (
+        <>You&rsquo;ll share its branch; changes land from {name}.</>
+      ) : (
+        <>
+          A new worktree will branch from its branch, and Land goes back into {name}&rsquo;s worktree.
+        </>
+      )}
+    </p>
+  );
 }
 
 /** Folders past sessions started in, newest first, each once. */
@@ -276,6 +308,7 @@ export function Launchpad({
   } else if (resolved?.dir_status === "plain" && effectiveIsolation === "worktree") {
     dirWarning = `${dirShown} isn't a git repository, so there's no worktree to isolate this session — it will work in the folder directly.`;
   }
+  const dirOwner = resolved?.dir_status === "git" ? resolved.dir_owner_session : undefined;
   // Never offer to save a folder that isn't there: every later Start would fail.
   const canSaveDefaults =
     !!savedConfig &&
@@ -486,6 +519,7 @@ export function Launchpad({
             {dirWarning}
           </p>
         )}
+        {!dirWarning && dirOwner && <OwnerNote owner={dirOwner} isolation={effectiveIsolation} />}
 
         {defaultsSaved ? (
           <p className={styles.defaultsSaved} role="status">
