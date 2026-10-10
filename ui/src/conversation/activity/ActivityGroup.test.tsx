@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { ActivityGroup, placePeek } from "./ActivityGroup";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { FOLD_MS } from "../../components/Motion";
+import { ActivityGroup, LINGER_MS, placePeek } from "./ActivityGroup";
 import type { PermissionRequest } from "../../router/types";
 import type { ActivityEntry } from "./conversationItems";
 
@@ -103,13 +104,72 @@ describe("ActivityGroup", () => {
     expect(screen.getByText("runner.go")).toBeTruthy();
   });
 
-  it("a live group renders open, and collapses when the turn ends (live → false)", () => {
-    const liveEntries = entries.map((e) => ({ ...e, live: true }));
-    const { rerender } = render(<ActivityGroup entries={liveEntries} live />);
-    expect(screen.getAllByTestId("activity-row")).toHaveLength(2);
+  it("a live group renders open, and folds closed shortly after the turn ends (live → false)", () => {
+    vi.useFakeTimers();
+    try {
+      const liveEntries = entries.map((e) => ({ ...e, live: true }));
+      const { rerender } = render(<ActivityGroup entries={liveEntries} live />);
+      const header = screen.getByRole("button", { name: /2 actions/ });
+      expect(screen.getAllByTestId("activity-row")).toHaveLength(2);
 
-    rerender(<ActivityGroup entries={entries} live={false} />);
-    expect(screen.queryAllByTestId("activity-row")).toHaveLength(0);
+      // It lingers open long enough to see the last ✓ land…
+      rerender(<ActivityGroup entries={entries} live={false} />);
+      act(() => vi.advanceTimersByTime(LINGER_MS - 1));
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+      // …then folds, and its rows unmount once the fold has closed.
+      act(() => vi.advanceTimersByTime(1));
+      expect(header.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.getAllByTestId("activity-row")).toHaveLength(2);
+      act(() => vi.advanceTimersByTime(FOLD_MS));
+      expect(screen.queryAllByTestId("activity-row")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a click during the linger wins over the automatic fold", () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(<ActivityGroup entries={entries} live />);
+      const header = screen.getByRole("button", { name: /2 actions/ });
+      rerender(<ActivityGroup entries={entries} live={false} />);
+      fireEvent.click(header); // close it themselves…
+      fireEvent.click(header); // …and reopen it
+      act(() => vi.advanceTimersByTime(LINGER_MS + FOLD_MS));
+      expect(header.getAttribute("aria-expanded")).toBe("true");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("folds in only what arrives live — never history, never a row reshown on reopen", () => {
+    // Each row sits in its own fold (row → fold inner → fold).
+    const appearing = () =>
+      screen.getAllByTestId("activity-row").map((r) => r.parentElement!.parentElement!.hasAttribute("data-appear"));
+    const [first, second] = entries;
+    // A group from history: nothing folds in.
+    const { unmount } = render(<ActivityGroup entries={entries} defaultOpen />);
+    expect(screen.getByTestId("activity-group").closest("[data-appear]")).toBeNull();
+    expect(appearing()).toEqual([false, false]);
+    unmount();
+
+    // A live group folds in as a whole; a row joining it later folds in on its own.
+    const { rerender } = render(<ActivityGroup entries={[first]} live />);
+    expect(screen.getByTestId("activity-group").closest("[data-appear]")).not.toBeNull();
+    rerender(<ActivityGroup entries={[first, second]} live />);
+    expect(appearing()).toEqual([false, true]);
+
+    // Collapsed and reopened: the rows are shown again, not arriving.
+    const header = screen.getByRole("button", { name: /2 actions/ });
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(header);
+      act(() => vi.advanceTimersByTime(FOLD_MS));
+      fireEvent.click(header);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(appearing()).toEqual([false, false]);
   });
 
   it("a live group's header spins only while a call in it is unresolved", () => {

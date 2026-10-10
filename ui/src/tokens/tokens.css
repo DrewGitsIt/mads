@@ -256,6 +256,15 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* motion (conversation motion study): fades of small things, entrances,
+     and folds — anything whose height changes. Arriving things ease out;
+     resizing things ease in and out. */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 240ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-io: cubic-bezier(0.4, 0, 0.2, 1);
+
   /* prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose) */
   --measure-prose: 92ch;
 

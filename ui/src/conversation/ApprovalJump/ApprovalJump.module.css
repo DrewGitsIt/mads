@@ -25,7 +25,16 @@
   font: 500 var(--fs-sm) var(--sans);
   color: var(--text);
   cursor: pointer;
-  animation: jump-in 0.2s ease-out;
+  animation: jump-in var(--dur) var(--ease-out);
+  transition:
+    opacity var(--dur-fast) linear,
+    transform var(--dur-fast) linear;
+}
+/* Rises in, fades out (with a slight drop) — the same pair as Show all. */
+.jump[data-leaving] {
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
 }
 .jump:hover {
   background: var(--bg2);

@@ -126,24 +126,10 @@ button.rowLine:hover {
   font-style: italic;
 }
 
-/* Live rows ease in instead of blipping — same discipline as ToolCard's
-   cardEnter; global.css's prefers-reduced-motion rule disables wholesale. */
-/* No fill mode: the animation ends at the row's natural state, and a filled
-   (`both`/`forwards`) opacity/transform animation stays applied forever —
-   leaving every live row a permanent stacking context that traps its hover
-   peek's z-index beneath later siblings' text. */
-.rowEnter {
-  animation: row-in 0.18s ease-out;
-}
-@keyframes row-in {
-  from {
-    opacity: 0;
-    transform: translateY(3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+/* A row's (or permission card's) fold — the body is a flex column in the
+   subagent dock, where an unshrinkable row must stay unshrinkable. */
+.rowFold {
+  flex-shrink: 0;
 }
 
 /* A permission card anchored under its call's row, indented to the row's

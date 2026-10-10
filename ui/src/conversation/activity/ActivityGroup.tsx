@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { Chip } from "../../components/Chip/Chip";
+import { Fold, useArrivals } from "../../components/Motion";
 import type { BackgroundTask, PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
@@ -26,10 +27,11 @@ import styles from "./ActivityGroup.module.css";
 export interface ActivityGroupProps {
   entries: ActivityEntry[];
   /**
-   * This group belongs to the in-flight turn: it renders open, grows in
-   * place, and its new rows ease in. When the turn ends (live flips false)
-   * the group collapses itself — the replay/transcript re-render never
-   * animates (same contract ToolCard's `live` prop kept).
+   * This group belongs to the in-flight turn: it folds in when it first
+   * appears, renders open, and its new rows and permission cards fold in.
+   * When the turn ends (live flips false) the group lingers open for
+   * LINGER_MS, then folds itself closed — the replay/transcript re-render
+   * never animates (same contract ToolCard's `live` prop kept).
    */
   live?: boolean;
   /** Out-of-band status overrides (session.tool_status_changed), by tool_use id. */
@@ -50,6 +52,8 @@ export interface ActivityGroupProps {
 }
 
 const PEEK_TEXT_CAP = 400;
+/** How long a finished live group stays open, so the last ✓ is seen landing, before it folds away. */
+export const LINGER_MS = 600;
 const PEEK_DIFF_LINES = 8;
 const noResolve = async () => {};
 
@@ -146,14 +150,28 @@ export function ActivityGroup({
   reveal,
 }: ActivityGroupProps) {
   const [open, setOpen] = useState(live || defaultOpen);
-  // Collapse exactly once when the live turn ends — never re-collapse a
-  // group the user has since reopened.
+  // A group that mounts mid-turn has just arrived; one from history hasn't.
+  const [arrivedLive] = useState(live);
+  // Collapse exactly once when the live turn ends, after a short linger —
+  // never re-collapse a group the user has since reopened (or touched
+  // during the linger: their click clears it).
   const wasLive = useRef(live);
+  const linger = useRef<number | undefined>(undefined);
   useEffect(() => {
-    if (wasLive.current && !live) setOpen(false);
-    if (live) setOpen(true);
+    if (wasLive.current && !live) {
+      linger.current = window.setTimeout(() => setOpen(false), LINGER_MS);
+    }
+    if (live) {
+      window.clearTimeout(linger.current);
+      setOpen(true);
+    }
     wasLive.current = live;
   }, [live]);
+  useEffect(() => () => window.clearTimeout(linger.current), []);
+  const toggle = () => {
+    window.clearTimeout(linger.current);
+    setOpen((o) => !o);
+  };
 
   // A pending request must never hide inside a collapsed group: each newly
   // pending one opens the group, and if the user collapses it again anyway
@@ -174,6 +192,14 @@ export function ActivityGroup({
     if (awaiting.split(",").includes(reveal.id)) setOpen(true);
   }
 
+  // Rows and permission cards that join after mount fold in; what was
+  // already here (history, or a group remounted) never does.
+  const keys = entries.map(entryKey);
+  const permissionKeys = entries.flatMap((e) =>
+    e.type === "tool" && e.tool.id ? (permissions?.get(e.tool.id) ?? []).map((r) => `p:${r.id}`) : [],
+  );
+  const arrived = useArrivals([...keys, ...permissionKeys], live);
+
   const { kinds, label } = kindCounts(entries);
   const duration = useMemo(() => groupDuration(entries), [entries]);
   const agg = aggregateStatus(entries, statuses, live, background);
@@ -191,61 +217,77 @@ export function ActivityGroup({
   }, [entries]);
 
   return (
-    <div className={styles.group} data-open={open || undefined} data-testid="activity-group">
-      <button
-        type="button"
-        className={styles.head}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className={styles.chevron} aria-hidden="true">
-          ▶
-        </span>
-        <span className={styles.kinds}>
-          {kinds.map((k) => (
-            <KindIcon key={k} kind={k} />
-          ))}
-        </span>
-        <span>{label}</span>
-        <span className={styles.meta}>
-          {!open && awaiting && <Chip tone="warn">needs your approval</Chip>}
-          <Diffstat adds={stat.adds} dels={stat.dels} />
-          {duration && <span>{duration}</span>}
-          {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
-        </span>
-      </button>
-      {open && (
-        <div className={styles.body}>
-          {entries.map((entry, i) => {
-            const requests =
-              entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
-            return (
-              <Fragment key={entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`}>
-                <ActivityRow
-                  entry={entry}
-                  status={entryStatus(entry, statuses, live, background)}
-                  background={
-                    entry.type === "tool" && entry.tool.id ? background?.get(entry.tool.id) : undefined
-                  }
-                  selected={
-                    entry.type === "tool" &&
-                    entry.tool.id !== undefined &&
-                    entry.tool.id === selectedToolId
-                  }
-                  onOpen={onOpenTool}
-                />
-                {requests?.map((req) => (
-                  <div key={req.id} className={styles.permission}>
-                    <PermissionCard request={req} onResolve={onResolvePermission ?? noResolve} />
-                  </div>
-                ))}
-              </Fragment>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <Fold appear={arrivedLive} fade>
+      <div className={styles.group} data-open={open || undefined} data-testid="activity-group">
+        <button
+          type="button"
+          className={styles.head}
+          aria-expanded={open}
+          onClick={toggle}
+        >
+          <span className={styles.chevron} aria-hidden="true">
+            ▶
+          </span>
+          <span className={styles.kinds}>
+            {kinds.map((k) => (
+              <KindIcon key={k} kind={k} />
+            ))}
+          </span>
+          <span>{label}</span>
+          <span className={styles.meta}>
+            {!open && awaiting && <Chip tone="warn">needs your approval</Chip>}
+            <Diffstat adds={stat.adds} dels={stat.dels} />
+            {duration && <span>{duration}</span>}
+            {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
+          </span>
+        </button>
+        <Fold open={open}>
+          <div className={styles.body}>
+            {entries.map((entry, i) => {
+              const requests =
+                entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
+              return (
+                <Fold key={keys[i]} appear={arrived(keys[i])} fade className={styles.rowFold}>
+                  <ActivityRow
+                    entry={entry}
+                    status={entryStatus(entry, statuses, live, background)}
+                    background={
+                      entry.type === "tool" && entry.tool.id ? background?.get(entry.tool.id) : undefined
+                    }
+                    selected={
+                      entry.type === "tool" &&
+                      entry.tool.id !== undefined &&
+                      entry.tool.id === selectedToolId
+                    }
+                    onOpen={onOpenTool}
+                  />
+                  {/* Under its row, in the row's own fold: the card belongs to that call. */}
+                  {requests?.map((req) => {
+                    const fresh = arrived(`p:${req.id}`);
+                    return (
+                      <Fold key={req.id} appear={fresh} fade>
+                        <div className={styles.permission}>
+                          <PermissionCard
+                            request={req}
+                            onResolve={onResolvePermission ?? noResolve}
+                            ring={fresh}
+                          />
+                        </div>
+                      </Fold>
+                    );
+                  })}
+                </Fold>
+              );
+            })}
+          </div>
+        </Fold>
+      </div>
+    </Fold>
   );
+}
+
+function entryKey(entry: ActivityEntry, i: number): string {
+  return entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`;
 }
 
 function firstLine(text: string, cap = 100): string {
@@ -308,13 +350,7 @@ export function ActivityRow({
     </>
   );
 
-  const rowCls = [
-    styles.row,
-    entry.type === "thinking" ? styles.think : "",
-    entry.live ? styles.rowEnter : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const rowCls = [styles.row, entry.type === "thinking" ? styles.think : ""].filter(Boolean).join(" ");
 
   return (
     <div

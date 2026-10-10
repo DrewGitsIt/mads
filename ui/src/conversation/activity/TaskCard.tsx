@@ -1,4 +1,5 @@
 import type { PermissionRequest, ToolStatus, ToolUse } from "../../router/types";
+import { Fold, useArrivals } from "../../components/Motion";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
 import type { TaskModel } from "./conversationItems";
 import { KindIcon, Spinner, StatusGlyph } from "./primitives";
@@ -102,6 +103,8 @@ export function TaskCard({
   onResolvePermission,
   onOpen,
 }: TaskCardProps) {
+  // A pending approval that lands after mount folds in and rings once.
+  const arrived = useArrivals(permissions?.map((r) => r.id) ?? []);
   const description =
     model?.description ?? tool.title ?? inputField(tool, "description") ?? "Subagent task";
   const subtype = model?.subagentType ?? inputField(tool, "subagent_type");
@@ -125,9 +128,7 @@ export function TaskCard({
           {subtype && <span className={styles.sub}> · {subtype}</span>}
         </span>
         {running && model?.currentStep && (
-          <span className={styles.step} key={model.currentStep}>
-            {model.currentStep}
-          </span>
+          <span className={styles.step}>{model.currentStep}</span>
         )}
         <span className={styles.meta} title={stateTitle(model)}>
           {counters && (
@@ -149,11 +150,16 @@ export function TaskCard({
         </span>
       </button>
       {summary && <div className={styles.summary}>{summary}</div>}
-      {permissions?.map((req) => (
-        <div key={req.id} className={styles.permission}>
-          <PermissionCard request={req} onResolve={onResolvePermission ?? noResolve} />
-        </div>
-      ))}
+      {permissions?.map((req) => {
+        const fresh = arrived(req.id);
+        return (
+          <Fold key={req.id} appear={fresh} fade>
+            <div className={styles.permission}>
+              <PermissionCard request={req} onResolve={onResolvePermission ?? noResolve} ring={fresh} />
+            </div>
+          </Fold>
+        );
+      })}
     </div>
   );
 }

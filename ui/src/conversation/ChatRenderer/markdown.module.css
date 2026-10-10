@@ -15,3 +15,19 @@
 .markdown a:visited {
   color: var(--info-fg);
 }
+
+/* Each top-level block is its own element (so a streaming reply only
+   rebuilds the block still growing) but lays out as if it weren't: margins
+   collapse between blocks exactly as they did in one innerHTML. */
+.block {
+  display: contents;
+}
+
+/* A code block folding in mid-reply: the fold is a grid, whose children's
+   margins don't collapse through it — the fold carries the pre's margin. */
+.codeFold {
+  margin: 1em 0;
+}
+.codeFold pre {
+  margin: 0;
+}

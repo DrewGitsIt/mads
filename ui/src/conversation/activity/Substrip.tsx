@@ -36,11 +36,7 @@ export function Substrip({
         >
           <KindIcon kind="agent" />
           <span className={styles.name}>{model.description ?? model.subagentType ?? "Subagent"}</span>
-          {op && (
-            <span className={styles.op} key={op}>
-              {op}
-            </span>
-          )}
+          {op && <span className={styles.op}>{op}</span>}
           <span className={styles.counters}>
             <span>
               <TaskCounters model={model} />

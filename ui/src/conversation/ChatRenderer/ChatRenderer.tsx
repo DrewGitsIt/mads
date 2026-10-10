@@ -1,4 +1,5 @@
 import { Chip } from "../../components/Chip/Chip";
+import { Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
 import { foldToolResults } from "../../router/toolPairing";
 import type {
@@ -57,6 +58,8 @@ export interface ChatRendererProps {
   liveItems?: StreamItem[];
   /** A turn is in flight — the trailing live activity group renders open and grows in place, collapsing on turn end. */
   turnActive?: boolean;
+  /** Live text is paced (lands a code block whole): a code block arriving in it folds in. */
+  foldNewCode?: boolean;
   /** Historical main-agent thinking blocks (session.thinking envelopes), merged into the stream by timestamp. */
   thinkingHistory?: { text: string; timestamp?: string }[];
   /** Out-of-band status changes (session.tool_status_changed + replay), by tool_use id. */
@@ -125,6 +128,7 @@ export function ChatRenderer({
   attachmentUrl,
   liveItems = [],
   turnActive = false,
+  foldNewCode = false,
   thinkingHistory = [],
   toolStatuses,
   background,
@@ -154,6 +158,8 @@ export function ChatRenderer({
   const cardsById = new Map(worktreeCards.map((c) => [c.id, c]));
   const items = buildItems(interleaveCards(entries, worktreeCards));
   const permissions = anchorPermissions(items, permissionRequests);
+  // A fallback (unanchored) approval that lands after mount folds in and rings once.
+  const arrivedPermission = useArrivals(permissions.unanchored.map((r) => r.id));
 
   // Collapse digest→NOOP pairs into quiet-check chips before rendering. A
   // completed (non-live) agent reply of exactly NOOP directly after a digest
@@ -332,15 +338,20 @@ export function ChatRenderer({
                 {body && <Markdown className={styles.prose} text={body} />}
               </div>
             ) : (
-              <Markdown className={styles.prose} text={body} />
+              <Markdown className={styles.prose} text={body} foldNewCode={foldNewCode && Boolean(item.live)} />
             )}
             {!isUser && stamp}
           </div>
         );
       })}
-      {permissions.unanchored.map((req) => (
-        <PermissionCard key={req.id} request={req} onResolve={onResolvePermission} />
-      ))}
+      {permissions.unanchored.map((req) => {
+        const fresh = arrivedPermission(req.id);
+        return (
+          <Fold key={req.id} appear={fresh} fade>
+            <PermissionCard request={req} onResolve={onResolvePermission} ring={fresh} />
+          </Fold>
+        );
+      })}
     </div>
   );
 }

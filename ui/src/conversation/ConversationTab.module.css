@@ -126,4 +126,20 @@
 .revealAll {
   display: flex;
   justify-content: flex-end;
+  animation: reveal-all-in var(--dur) var(--ease-out);
+  transition:
+    opacity var(--dur-fast) linear,
+    transform var(--dur-fast) linear;
+}
+/* Rises in, fades out — the same pair as the approval pill. */
+.revealAll[data-leaving] {
+  opacity: 0;
+  transform: translateY(3px);
+  pointer-events: none;
+}
+@keyframes reveal-all-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }

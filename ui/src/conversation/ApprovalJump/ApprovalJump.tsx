@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from "react";
+import { FADE_OUT_MS, usePresence } from "../../components/Motion";
 import type { PermissionRequest } from "../../router/types";
 import { basename, summarize } from "../activity/toolDisplay";
 import { useVisibleCards } from "../useVisibleCards";
@@ -139,15 +140,28 @@ export function ApprovalJump({
   // Announced on what's pending, not on what's visible — scrolling a card in
   // and out of view shouldn't make a screen reader repeat itself.
   const announcement = pending.length > 0 ? approvalLabel(pending, subagentName) : "";
-  const label = approvalLabel(offscreen, subagentName);
+  // The pill fades out rather than vanishing; while it does, it keeps the
+  // last thing it said rather than "0 approvals waiting".
+  const { present, leaving } = usePresence(offscreen.length > 0, FADE_OUT_MS);
+  const lastLabel = useRef("");
+  if (offscreen.length > 0) lastLabel.current = approvalLabel(offscreen, subagentName);
+  const label = lastLabel.current;
 
   return (
     <div className={styles.region} data-permission-jump>
       <span className={styles.srOnly} aria-live="polite" aria-atomic="true">
         {announcement}
       </span>
-      {offscreen.length > 0 && (
-        <button type="button" className={styles.jump} title={label} onClick={jump}>
+      {present && (
+        <button
+          type="button"
+          className={styles.jump}
+          title={label}
+          onClick={jump}
+          data-leaving={leaving || undefined}
+          aria-hidden={leaving || undefined}
+          tabIndex={leaving ? -1 : undefined}
+        >
           <span className={styles.dot} aria-hidden="true" />
           <span className={styles.label}>{label}</span>
         </button>

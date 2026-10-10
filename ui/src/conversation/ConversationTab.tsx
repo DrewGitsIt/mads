@@ -61,6 +61,7 @@ import {
 } from "./activity/conversationItems";
 import { formatTokens, toolTitle } from "./activity/toolDisplay";
 import { Chip } from "../components/Chip/Chip";
+import { FADE_OUT_MS, usePresence } from "../components/Motion";
 import { useStreamPacer } from "./streaming/useStreamPacer";
 import { revealedToMessages } from "./streaming/streamPacer";
 import { streamPaceToWpm, useStreamSpeed } from "./streaming/streamSpeed";
@@ -213,7 +214,9 @@ export function ConversationTab({
   // Paces the live turn's reveal (a reading pace in words per minute; Native
   // by default). Owns the ordered items; its callbacks are stable across
   // renders.
-  const pacer = useStreamPacer(streamPaceToWpm(useStreamSpeed(routerClient)));
+  const wordsPerMinute = streamPaceToWpm(useStreamSpeed(routerClient));
+  const pacer = useStreamPacer(wordsPerMinute);
+  const showAll = usePresence(pacer.behind, FADE_OUT_MS);
   const {
     enqueueText: pacerEnqueueText,
     enqueueTool: pacerEnqueueTool,
@@ -1560,6 +1563,7 @@ export function ConversationTab({
                   }
                   liveItems={liveItems}
                   turnActive={inChatTurn}
+                  foldNewCode={wordsPerMinute !== null}
                   thinkingHistory={thinkingHistory}
                   toolStatuses={toolStatuses}
                   background={backgroundByTool}
@@ -1670,10 +1674,10 @@ export function ConversationTab({
                   onCancel={handleCancelQueued}
                   className={styles.queuedAbove}
                 />
-                {pacer.behind && (
+                {showAll.present && (
                   // The paced reveal trails the agent by more than a couple of
                   // seconds' reading — offer to skip to the end of it.
-                  <div className={styles.revealAll}>
+                  <div className={styles.revealAll} data-leaving={showAll.leaving || undefined}>
                     <Chip tone="info" onClick={pacer.revealAll}>
                       Show all
                     </Chip>

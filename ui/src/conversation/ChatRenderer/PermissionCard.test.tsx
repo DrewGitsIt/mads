@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { FOLD_MS } from "../../components/Motion";
 import { PermissionCard } from "./PermissionCard";
 import type { PermissionRequest } from "../../router/types";
 
@@ -78,5 +79,25 @@ describe("PermissionCard", () => {
       />,
     );
     expect(screen.getByText("Path is outside allowed working directories")).toBeTruthy();
+  });
+
+  it("rings once when it arrives pending, and drops the ring once played", () => {
+    vi.useFakeTimers();
+    try {
+      const { container } = render(<PermissionCard request={pending} onResolve={vi.fn()} ring />);
+      const anchor = container.querySelector("[data-permission-id]")!;
+      expect(anchor.hasAttribute("data-ring")).toBe(true);
+      act(() => vi.advanceTimersByTime(FOLD_MS + 900));
+      expect(anchor.hasAttribute("data-ring")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("doesn't ring a card that's already decided", () => {
+    const { container } = render(
+      <PermissionCard request={{ ...pending, status: "allowed" }} onResolve={vi.fn()} ring />,
+    );
+    expect(container.querySelector("[data-ring]")).toBeNull();
   });
 });

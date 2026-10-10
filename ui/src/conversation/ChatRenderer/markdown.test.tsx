@@ -53,4 +53,44 @@ describe("Markdown", () => {
     const css = readFileSync("src/conversation/ChatRenderer/markdown.module.css", "utf8");
     expect(css).toMatch(/\.markdown a \{[^}]*color: var\(--info-fg\)/);
   });
+
+  // Rendered block by block: a streaming reply only rebuilds the block still
+  // growing, so a code block that lands mid-reply can fold in once.
+  it("keeps finished blocks' DOM as the text grows", () => {
+    const { container, rerender } = render(<Markdown text={"First paragraph.\n\nSecond"} />);
+    const first = container.querySelector("p")!;
+    rerender(<Markdown text={"First paragraph.\n\nSecond paragraph, growing"} />);
+    expect(container.querySelector("p")).toBe(first);
+    expect(container.querySelectorAll("p")[1].textContent).toBe("Second paragraph, growing");
+  });
+
+  it("resolves a reference link defined in a later block", () => {
+    const { container } = render(<Markdown text={"See [the docs][d].\n\n[d]: https://example.com"} />);
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+  });
+
+  const foldOf = (pre: Element) => pre.closest("[data-open]")!;
+
+  it("folds in a code block that arrives after mount when asked — never one already there", () => {
+    const before = "Run this:\n\n```sh\nmake check\n```";
+    const { container, rerender } = render(<Markdown text={before} foldNewCode />);
+    expect(foldOf(container.querySelector("pre")!).hasAttribute("data-appear")).toBe(false);
+
+    rerender(<Markdown text={`${before}\n\nThen:\n\n\`\`\`sh\nmake ship\n\`\`\``} foldNewCode />);
+    const [, arrived] = container.querySelectorAll("pre");
+    expect(foldOf(arrived).hasAttribute("data-appear")).toBe(true);
+  });
+
+  it("never folds code in when not asked (unpaced text grows its own blocks)", () => {
+    const { container, rerender } = render(<Markdown text="Run this:" />);
+    rerender(<Markdown text={"Run this:\n\n```sh\nmake check\n```"} />);
+    expect(foldOf(container.querySelector("pre")!).hasAttribute("data-appear")).toBe(false);
+  });
+
+  it("lays blocks out as if they were one element (wrappers are display: contents)", () => {
+    const { container } = render(<Markdown text={"a\n\nb"} />);
+    expect(container.querySelector("p")!.parentElement!.classList.contains(styles.block)).toBe(true);
+    const css = readFileSync("src/conversation/ChatRenderer/markdown.module.css", "utf8");
+    expect(css).toMatch(/\.block \{[^}]*display: contents/);
+  });
 });

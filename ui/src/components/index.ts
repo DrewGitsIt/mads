@@ -14,3 +14,4 @@ export * from "./Combobox/Combobox";
 export * from "./ChipListField/ChipListField";
 export * from "./CapabilityPickerField/CapabilityPickerField";
 export * from "./PathField/PathField";
+export * from "./Motion";

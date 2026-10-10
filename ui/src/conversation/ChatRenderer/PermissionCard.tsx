@@ -1,14 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Card } from "../../components/Card/Card";
 import { Chip, type ChipTone } from "../../components/Chip/Chip";
+import { FOLD_MS } from "../../components/Motion";
 import type { PermissionRequest } from "../../router/types";
 import styles from "./PermissionCard.module.css";
 
 export interface PermissionCardProps {
   request: PermissionRequest;
   onResolve: (id: string, decision: "allow" | "deny") => Promise<void>;
+  /**
+   * The card just arrived while the user was watching: once it has folded
+   * in, a single soft ring says "this needs you". Read at mount; only a
+   * pending card rings.
+   */
+  ring?: boolean;
 }
+
+// The ring waits out the fold (the fold clips until it settles), then runs once.
+const RING_MS = 900;
 
 const STATUS_LABEL: Record<PermissionRequest["status"], string> = {
   pending: "awaiting your decision",
@@ -49,9 +59,17 @@ function summarizeInput(input: unknown): string | undefined {
  * jump find every copy of a card (main stream, dock) without threading refs,
  * and count as "inside" for the dock's outside-click close.
  */
-export function PermissionCard({ request, onResolve }: PermissionCardProps) {
+export function PermissionCard({ request, onResolve, ring = false }: PermissionCardProps) {
   const [resolving, setResolving] = useState<"allow" | "deny">();
   const pending = request.status === "pending";
+  // Dropped once played, so a later approval-jump flash ending can't
+  // hand the animation back to the ring and replay it.
+  const [ringing, setRinging] = useState(ring && pending);
+  useEffect(() => {
+    if (!ringing) return;
+    const t = window.setTimeout(() => setRinging(false), FOLD_MS + RING_MS);
+    return () => window.clearTimeout(t);
+  }, [ringing]);
   const summary = summarizeInput(request.input);
 
   const handle = async (decision: "allow" | "deny") => {
@@ -68,6 +86,7 @@ export function PermissionCard({ request, onResolve }: PermissionCardProps) {
       className={styles.anchor}
       data-permission-id={request.id}
       data-permission-status={request.status}
+      data-ring={ringing || undefined}
     >
       {/* A status class, not data-status: Card doesn't forward data-* attributes. */}
       <Card className={`${styles.card} ${styles[request.status] ?? ""}`}>

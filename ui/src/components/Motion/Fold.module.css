@@ -1,0 +1,35 @@
+/* Fold: height 0 → natural without measuring (grid rows 0fr → 1fr). The
+   inner box clips while the fold moves and stops clipping once it has
+   settled open, so a ring or focus outline on the content isn't cut off.
+   global.css's prefers-reduced-motion rule makes every change instant. */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition:
+    grid-template-rows var(--dur-slow) var(--ease-io),
+    opacity var(--dur-slow) var(--ease-io);
+}
+.fold[data-open] {
+  grid-template-rows: 1fr;
+}
+.fold[data-fade]:not([data-open]) {
+  opacity: 0;
+}
+
+/* Mounted already open: fold out from nothing, once. */
+@starting-style {
+  .fold[data-appear][data-open] {
+    grid-template-rows: 0fr;
+  }
+  .fold[data-appear][data-fade][data-open] {
+    opacity: 0;
+  }
+}
+
+.inner {
+  min-height: 0;
+  overflow: hidden;
+}
+.fold[data-settled] > .inner {
+  overflow: visible;
+}

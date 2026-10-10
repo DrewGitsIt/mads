@@ -46,6 +46,20 @@
   margin-top: var(--space-3);
 }
 
+/* One soft ring when a card arrives live, after its fold has opened. */
+.anchor[data-ring] .card {
+  animation: permission-ring 900ms var(--ease-out) var(--dur-slow) 1;
+}
+
+@keyframes permission-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+}
+
 /* A brief flash when the approval jump lands on this card — the eye finds
    it even mid-scroll. */
 .anchor[data-flash] .card {

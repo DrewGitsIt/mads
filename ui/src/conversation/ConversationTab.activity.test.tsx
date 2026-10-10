@@ -215,6 +215,44 @@ describe("ConversationTab — subagent presence (T15)", () => {
   });
 });
 
+describe("ConversationTab — live group motion", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a live group folds in, survives the hand-over to the transcript, lingers open, then folds closed", async () => {
+    const client = new FakeRouterClient();
+    const tool = { id: "t1", name: "Grep", kind: "search" as const, title: "sweep call sites" };
+    const getTranscript = vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({ kind: "tool_use", tool });
+    });
+    const group = screen.getByTestId("activity-group");
+    const header = within(group).getByRole("button", { name: /1 action/ });
+    // Arrived live: the group folds in (group → fold inner → fold).
+    expect(group.parentElement!.parentElement!.hasAttribute("data-appear")).toBe(true);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+
+    getTranscript.mockResolvedValue([{ role: "tool", tool }]);
+    await act(async () => {
+      source.emit({ kind: "turn_end" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(getTranscript).toHaveBeenCalledTimes(2));
+    // The same group (same element — no remount at hand-over), still open…
+    expect(screen.getByTestId("activity-group")).toBe(group);
+    expect(header.getAttribute("aria-expanded")).toBe("true");
+    // …until the linger runs out.
+    await waitFor(() => expect(header.getAttribute("aria-expanded")).toBe("false"), { timeout: 2000 });
+  });
+});
+
 describe("ConversationTab — V2 working indicator (T16)", () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
