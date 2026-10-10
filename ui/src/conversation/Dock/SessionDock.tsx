@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { AgentIndex } from "../../router/agentRef";
-import type { Session, SessionTrust, Usage } from "../../router/types";
+import type { Session, SessionTrust, Usage, WorktreeStatus } from "../../router/types";
 import type { LandCardModel } from "../Worktree/worktreeCards";
 import { ContextRim } from "./ContextRim";
 import { StatusLine } from "./StatusLine";
@@ -18,6 +18,13 @@ export interface DockWork {
   landing?: boolean;
   /** A one-click Commit is in flight (useWorktreeCards().committing). */
   committing?: boolean;
+  /**
+   * GET /sessions/{id}/worktree. Runs git, so the ⎇ popover calls it only on
+   * opening, and only for a session working in place — to say why there's no
+   * Land, and whose worktree it is when it's another session's. Keep it
+   * stable (useCallback): the popover refetches when it changes.
+   */
+  loadStatus?: () => Promise<WorktreeStatus>;
 }
 
 /**

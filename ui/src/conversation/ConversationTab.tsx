@@ -261,6 +261,7 @@ export function ConversationTab({
   // dock's Commit/Land control reads its state off the session record's counts.
   const worktree = useWorktreeCards(routerClient, sessionId);
   const { commitAll, land } = worktree;
+  const loadWorktreeStatus = useCallback(() => routerClient.getWorktreeStatus(sessionId), [routerClient, sessionId]);
   const commitSettings = useCommitSettings(routerClient);
   // The Commit dialog, optionally opened on a one-click Commit's refusal
   // (no Fast Model after all, a failing hook) so the user can see why and
@@ -1348,6 +1349,7 @@ export function ConversationTab({
       onAskAgent: !showHistory && terminalBridge ? askInCompose : worktreeActions.onAskAgent,
       landing: worktree.landing,
       committing: worktree.committing,
+      loadStatus: loadWorktreeStatus,
     },
     landOutcome: latestLandOutcome(worktree.cards),
   };

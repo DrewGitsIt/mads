@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { requestOpenSession } from "../../appNavigation";
 import { Popover } from "../../components/Popover/Popover";
-import type { Session } from "../../router/types";
+import type { Session, WorktreeTenant } from "../../router/types";
 import { sessionLocation } from "../../router/sessionLocation";
 import type { LandCardModel } from "../Worktree/worktreeCards";
 import {
@@ -38,6 +39,13 @@ function outsideWhy(files: number): string {
   return outsideControlTitle(files).replace(/\s*Click to ask the agent to tidy up\.$/, "");
 }
 
+/** Why an in-place session has no Land, from its worktree status. */
+interface NoLandNote {
+  sessionId: string;
+  detail?: string;
+  owner?: WorktreeTenant;
+}
+
 /**
  * The status line's right end: the `⎇ {workspace} / {branch} → {base}`
  * segment, then the Commit/Land control, sharing one upward popover that
@@ -66,6 +74,32 @@ export function WorkArea({
   const base = isolated ? session.worktree_base : undefined;
   const state = workState(session);
   const landing = Boolean(work?.landing);
+
+  // An in-place session never offers Land; on opening, the popover asks the
+  // Router why (land_blocked) and whose worktree this is, if another
+  // session's (owner_session). Not before: the status runs git.
+  const [noLand, setNoLand] = useState<NoLandNote>();
+  const loadStatus = work?.loadStatus;
+  useEffect(() => {
+    if (!open || isolated || !loadStatus) return;
+    let cancelled = false;
+    loadStatus().then(
+      (st) =>
+        !cancelled &&
+        setNoLand({
+          sessionId: session.id,
+          detail: st.land_blocked?.reason === "not_isolated" ? st.land_blocked.detail : undefined,
+          owner: st.owner_session,
+        }),
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isolated, loadStatus, session.id]);
+  const note = !isolated && noLand?.sessionId === session.id ? noLand : undefined;
+  const owner = note?.owner;
+  const ownerName = owner && (owner.name || owner.id);
 
   // The old ConversationHeader subline's text, exactly: "mads / branch → main".
   const branchText = branch && (base ? `${branch} → ${base}` : branch);
@@ -201,6 +235,25 @@ export function WorkArea({
                 >
                   {landing ? "Landing…" : `Land into ${base}`}
                 </button>
+              )}
+            </div>
+          )}
+          {note && (note.detail || owner) && (
+            <div className={cx(styles.outcome, styles.tone_quiet)} data-testid="no-land-note">
+              {owner && <b>Changes here land from {ownerName}.</b>} {note.detail}
+              {owner && (
+                <div className={styles.outcomeActs}>
+                  <button
+                    type="button"
+                    className={line.btn}
+                    onClick={() => {
+                      close();
+                      requestOpenSession(owner.id);
+                    }}
+                  >
+                    Open {ownerName}
+                  </button>
+                </div>
               )}
             </div>
           )}

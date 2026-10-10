@@ -4,7 +4,8 @@ import { SessionDock, type DockWork } from "./SessionDock";
 import { fixtureIsolatedSession, fixtureSessions } from "../../router/fixtures";
 import { resetProviderModelCache } from "../../router/useProviderModels";
 import { resetProviderInfoCache } from "../../router/useProviderInfos";
-import type { Session } from "../../router/types";
+import { OPEN_SESSION_EVENT } from "../../appNavigation";
+import type { Session, WorktreeStatus } from "../../router/types";
 import type { LandCardModel } from "../Worktree/worktreeCards";
 
 function dock(session: Session, work: Partial<DockWork> = {}, landOutcome?: LandCardModel) {
@@ -28,6 +29,21 @@ function renderDock(session: Session, work: Partial<DockWork> = {}, landOutcome?
 }
 
 const control = () => document.querySelector("[data-work-state]") as HTMLButtonElement | null;
+
+const NOT_ISOLATED =
+  "This session works directly in your checkout, so there is nothing to land. Commit is all it needs.";
+
+function inPlaceStatus(overrides: Partial<WorktreeStatus> = {}): WorktreeStatus {
+  return {
+    isolated: false,
+    folder: "/home/user/repo/mads",
+    files: [],
+    uncommitted_count: 1,
+    unlanded_count: 0,
+    land_blocked: { reason: "not_isolated", detail: NOT_ISOLATED },
+    ...overrides,
+  };
+}
 const clean = { ...fixtureIsolatedSession, uncommitted_count: 0, unlanded_count: 1 };
 
 const refusedOutside: LandCardModel = {
@@ -205,6 +221,50 @@ describe("dock ⎇ popover", () => {
     const pop = screen.getByTestId("work-popover");
     expect(within(pop).queryByRole("button", { name: /Land/ })).toBeNull();
     expect(pop.textContent).not.toContain("Worktree");
+  });
+
+  it("says why a session working in place has no Land, asking only once the popover opens", async () => {
+    const loadStatus = vi.fn().mockResolvedValue(inPlaceStatus());
+    renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 1 }, { loadStatus });
+    expect(loadStatus).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("dock-location"));
+    const note = await screen.findByTestId("no-land-note");
+    expect(note.textContent?.trim()).toBe(NOT_ISOLATED);
+    expect(within(note).queryByRole("button")).toBeNull();
+    expect(loadStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the session whose worktree it works in, and opens it", async () => {
+    const opened = vi.fn();
+    const onOpen = (e: Event) => opened((e as CustomEvent<{ sessionId: string }>).detail.sessionId);
+    window.addEventListener(OPEN_SESSION_EVENT, onOpen);
+    try {
+      const loadStatus = vi.fn().mockResolvedValue(
+        inPlaceStatus({
+          owner_session: { id: "ses_owner", name: "Dock redesign" },
+          land_blocked: { reason: "not_isolated", detail: "This session works in another session's worktree." },
+        }),
+      );
+      renderDock({ ...fixtureSessions["session-active"], uncommitted_count: 1 }, { loadStatus });
+      fireEvent.click(screen.getByTestId("dock-location"));
+      const note = await screen.findByTestId("no-land-note");
+      expect(note.textContent).toContain(
+        "Changes here land from Dock redesign. This session works in another session's worktree.",
+      );
+      fireEvent.click(within(note).getByRole("button", { name: "Open Dock redesign" }));
+      expect(opened).toHaveBeenCalledWith("ses_owner");
+      expect(screen.queryByTestId("work-popover")).toBeNull();
+    } finally {
+      window.removeEventListener(OPEN_SESSION_EVENT, onOpen);
+    }
+  });
+
+  it("doesn't ask an isolated session's status — its Land explains itself", () => {
+    const loadStatus = vi.fn().mockResolvedValue(inPlaceStatus());
+    renderDock(fixtureIsolatedSession, { loadStatus });
+    fireEvent.click(screen.getByTestId("dock-location"));
+    expect(loadStatus).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("no-land-note")).toBeNull();
   });
 
   it("opens on a status-line Land click and shows that Land's refusal there, with Ask the agent", () => {
