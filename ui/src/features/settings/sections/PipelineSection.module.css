@@ -4,52 +4,31 @@
   gap: var(--space-4);
 }
 
-.row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  max-width: 320px;
-}
-
-.fastModel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.heading {
-  font: 600 var(--fs-body) var(--sans);
+/* Text inputs sized to the row's control column (mockup .text). */
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
   color: var(--text);
+  font: 400 var(--fs-body) / 1.5 var(--mono);
 }
 
-.label {
-  font: 500 var(--fs-sm) var(--sans);
+.input::placeholder {
+  color: var(--text3);
+}
+
+/* The Fast Model's live status, under its rows. */
+.status {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line-soft);
   color: var(--text2);
+  font: 400 var(--fs-sm) var(--sans);
 }
 
-.toggleLabel {
+.actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font: 500 var(--fs-ui) var(--sans);
-  color: var(--text);
-}
-
-.input {
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  background: var(--bg1);
-  color: var(--text);
-  font: 400 var(--fs-body) var(--sans);
-}
-
-.hint {
-  color: var(--text3);
-  font: 400 var(--fs-sm) var(--sans);
-}
-
-.error {
-  color: var(--bad-fg);
-  font: 400 var(--fs-sm) var(--sans);
 }

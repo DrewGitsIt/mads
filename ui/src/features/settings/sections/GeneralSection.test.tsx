@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GeneralSection } from "./GeneralSection";
 import { fixtureConfig, fixturePreflightChecks } from "../../../router/fixtures";
@@ -87,25 +87,33 @@ describe("GeneralSection", () => {
 
   it("renders default_workspace/default_provider empty when unset", () => {
     render(<GeneralSection config={makeConfig()} />);
-    expect((screen.getByLabelText(/default workspace/i) as HTMLSelectElement).value).toBe("");
+    expect(screen.getByLabelText(/default workspace/i).textContent).toContain("— none —");
     expect((screen.getByLabelText(/default folder/i) as HTMLInputElement).value).toBe("");
-    expect((screen.getByLabelText(/default provider/i) as HTMLSelectElement).value).toBe("");
+    expect(screen.getByLabelText(/default provider/i).textContent).toContain("— none —");
   });
 
   it("picks the default workspace from a list, by id, instead of free text", async () => {
     const config = makeConfig();
     render(<GeneralSection config={config} />);
-    expect((screen.getByLabelText(/default workspace/i) as HTMLElement).tagName).toBe("SELECT");
+    const trigger = screen.getByLabelText(/default workspace/i);
+    expect(trigger.getAttribute("aria-haspopup")).toBe("listbox");
+    fireEvent.click(trigger);
     await waitFor(() => expect(screen.getByRole("option", { name: "core" })).toBeTruthy());
-    fireEvent.change(screen.getByLabelText(/default workspace/i), { target: { value: "ws-1" } });
+    fireEvent.click(screen.getByRole("option", { name: "core" }));
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_workspace: "ws-1" }));
   });
 
   it("keeps a saved workspace name selected rather than blanking it", async () => {
     const config = makeConfig({ draft: { ...fixtureConfig, default_workspace: "core" } });
     render(<GeneralSection config={config} />);
-    await waitFor(() => expect(screen.getAllByRole("option", { name: "core" }).length).toBeGreaterThan(0));
-    expect((screen.getByLabelText(/default workspace/i) as HTMLSelectElement).value).toBe("core");
+    // The workspace list resolves to the id "ws-1"; the saved name still shows.
+    await waitFor(() => expect(screen.getByLabelText(/default workspace/i).textContent).toContain("core"));
+    fireEvent.click(screen.getByLabelText(/default workspace/i));
+    await waitFor(() =>
+      expect(screen.getAllByRole("option", { name: "core" }).some((o) => o.getAttribute("aria-selected") === "true")).toBe(
+        true,
+      ),
+    );
   });
 
   it("edits the default folder", () => {
@@ -119,23 +127,30 @@ describe("GeneralSection", () => {
     const config = makeConfig();
     render(<GeneralSection config={config} />);
     // The option only exists once the provider list resolves.
+    fireEvent.click(screen.getByLabelText(/default provider/i));
     await waitFor(() => expect(screen.getByRole("option", { name: "claude-code" })).toBeTruthy());
-    fireEvent.change(screen.getByLabelText(/default provider/i), { target: { value: "claude-code" } });
+    fireEvent.click(screen.getByRole("option", { name: "claude-code" }));
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ default_provider: "claude-code" }));
   });
 
-  it("display mode and keybindings are dropdowns, not free text", () => {
+  it("display mode and keybindings are closed choices with readable labels, not free text", () => {
     render(<GeneralSection config={makeConfig()} />);
-    expect((screen.getByLabelText(/display mode/i) as HTMLElement).tagName).toBe("SELECT");
-    expect((screen.getByLabelText(/keybindings/i) as HTMLElement).tagName).toBe("SELECT");
-    fireEvent.change(screen.getByLabelText(/display mode/i), { target: { value: "compact" } });
-    // setDraft is mocked so the value is whatever the fixture had; assert the call shape.
+    const display = screen.getByRole("radiogroup", { name: /display mode/i });
+    expect(within(display).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Comfortable", "Compact"]);
+    const keys = screen.getByRole("radiogroup", { name: /keybindings/i });
+    expect(within(keys).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Default", "Vim", "Emacs"]);
   });
 
-  it("selecting a display mode calls setDraft with the new value", () => {
-    const config = makeConfig();
+  it("keeps an unrecognized persisted display mode visible", () => {
+    render(<GeneralSection config={makeConfig({ draft: { ...fixtureConfig, display_mode: "dense" } })} />);
+    const display = screen.getByRole("radiogroup", { name: /display mode/i });
+    expect(within(display).getByRole("radio", { name: "dense" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("selecting a display mode calls setDraft with the stored value", () => {
+    const config = makeConfig({ draft: { ...fixtureConfig, display_mode: "comfortable" } });
     render(<GeneralSection config={config} />);
-    fireEvent.change(screen.getByLabelText(/display mode/i), { target: { value: "compact" } });
+    fireEvent.click(screen.getByRole("radio", { name: "Compact" }));
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ display_mode: "compact" }));
   });
 
@@ -172,20 +187,30 @@ describe("GeneralSection", () => {
   it("shows subagents in the session list by default, and unticking stores the hide flag", () => {
     const setDraft = vi.fn();
     render(<GeneralSection config={makeConfig({ setDraft })} />);
-    const box = screen.getByLabelText("Expose subagents in session list") as HTMLInputElement;
-    expect(box.checked).toBe(true);
-    fireEvent.click(box);
+    const toggle = screen.getByRole("switch", { name: "Expose subagents in session list" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
     expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ hide_delegates_in_session_list: true }));
   });
 
   it("fades subagent cards after 10 min by default, and stores the choice", () => {
     const setDraft = vi.fn();
     render(<GeneralSection config={makeConfig({ setDraft })} />);
-    const select = screen.getByLabelText("Fade out subagent cards after inactivity") as HTMLSelectElement;
-    expect(select.value).toBe("10m");
-    expect([...select.options].map((o) => o.text)).toEqual(["0 min", "10 min", "Never"]);
-    fireEvent.change(select, { target: { value: "never" } });
+    const group = screen.getByRole("radiogroup", { name: "Fade out subagent cards after inactivity" });
+    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Right away", "10 min", "Never"]);
+    expect(within(group).getByRole("radio", { name: "10 min" }).getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(within(group).getByRole("radio", { name: "Never" }));
     expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ delegate_fade: "never" }));
+  });
+
+  it("disables the fade choice while subagents are hidden from the list", () => {
+    const draft = { ...fixtureConfig, hide_delegates_in_session_list: true };
+    render(<GeneralSection config={makeConfig({ draft })} />);
+    expect(screen.getByRole("switch", { name: "Expose subagents in session list" }).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    const group = screen.getByRole("radiogroup", { name: "Fade out subagent cards after inactivity" });
+    for (const r of within(group).getAllByRole("radio")) expect((r as HTMLButtonElement).disabled).toBe(true);
   });
 
   describe("Write commit messages for me", () => {
@@ -210,7 +235,7 @@ describe("GeneralSection", () => {
       stubFastModel(true);
       const setDraft = vi.fn();
       render(<GeneralSection config={makeConfig({ setDraft })} />);
-      const box = screen.getByLabelText("Write commit messages for me") as HTMLInputElement;
+      const box = screen.getByRole("switch", { name: "Write commit messages for me" }) as HTMLButtonElement;
       await waitFor(() => expect(box.disabled).toBe(false));
       expect(screen.getByText(/skips the dialog: the Fast Model writes the message/)).toBeTruthy();
       fireEvent.click(box);
@@ -223,7 +248,7 @@ describe("GeneralSection", () => {
       await waitFor(() =>
         expect(screen.getByTestId("auto-commit-unavailable").textContent).toMatch(/No Fast Model is set up/),
       );
-      expect((screen.getByLabelText("Write commit messages for me") as HTMLInputElement).disabled).toBe(true);
+      expect((screen.getByRole("switch", { name: "Write commit messages for me" }) as HTMLButtonElement).disabled).toBe(true);
     });
 
     it("can still be turned off when it was saved on and the Fast Model went away", async () => {
@@ -231,7 +256,7 @@ describe("GeneralSection", () => {
       const setDraft = vi.fn();
       const draft = { ...fixtureConfig, auto_commit_messages: true };
       render(<GeneralSection config={makeConfig({ draft, setDraft })} />);
-      const box = screen.getByLabelText("Write commit messages for me") as HTMLInputElement;
+      const box = screen.getByRole("switch", { name: "Write commit messages for me" }) as HTMLButtonElement;
       expect(box.disabled).toBe(false);
       fireEvent.click(box);
       expect(setDraft).toHaveBeenCalledWith(expect.objectContaining({ auto_commit_messages: false }));

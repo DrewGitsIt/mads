@@ -1,0 +1,106 @@
+.row {
+  display: grid;
+  grid-template-columns: 1fr minmax(240px, 300px);
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-3) var(--space-4);
+}
+
+.row + .row {
+  border-top: 1px solid var(--line-soft);
+}
+
+.stacked {
+  grid-template-columns: 1fr;
+  gap: var(--space-2);
+}
+
+/* Dependent controls hang off their parent with a rail; no divider between
+   them and the row they depend on. */
+.nested {
+  margin-left: var(--space-4);
+  padding-left: calc(var(--space-4) - 2px);
+  border-left: 2px solid var(--line);
+}
+
+.row + .nested {
+  border-top: none;
+}
+
+.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.text {
+  min-width: 0;
+}
+
+.labelLine {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.label {
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.help {
+  margin-top: 2px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.help + .help {
+  margin-top: var(--space-1);
+}
+
+.error {
+  margin-top: var(--space-1);
+  color: var(--bad-fg);
+  font: 400 var(--fs-sm) var(--sans);
+}
+
+.control {
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+/* The shared Select's trigger, matched to the row's text and number inputs
+   (mockup .select): same height, same well. */
+.control :global([aria-haspopup="listbox"]) {
+  padding: 7px 10px;
+  background: var(--bg0);
+  border-color: var(--line);
+}
+
+.stacked .control {
+  justify-content: flex-start;
+}
+
+.tag {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font: 600 var(--fs-chip) var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.warn {
+  background: var(--warn-soft);
+  color: var(--warn-fg);
+}
+
+.info {
+  background: var(--info-soft);
+  color: var(--info-fg);
+}
+
+.muted {
+  background: var(--bg3);
+  color: var(--text3);
+}

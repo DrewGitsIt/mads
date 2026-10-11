@@ -1,0 +1,15 @@
+.card {
+  max-width: 760px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  background: var(--bg1);
+}
+
+.title {
+  margin: 0;
+  padding: var(--space-3) var(--space-4) 0;
+  font: 650 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

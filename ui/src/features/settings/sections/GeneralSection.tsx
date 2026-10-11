@@ -1,12 +1,19 @@
 import { useEffect, useState } from "react";
 import { Button } from "../../../components/Button/Button";
+import { NumberField } from "../../../components/NumberField/NumberField";
 import { PathField } from "../../../components/PathField/PathField";
+import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
+import { Select } from "../../../components/Select/Select";
+import { Switch } from "../../../components/Switch/Switch";
 import { router } from "../../../router/client";
 import { fastModelAvailable } from "../../../router/fastModel";
-import type { DelegateFade, Workspace } from "../../../router/types";
+import type { Config, DelegateFade, Workspace } from "../../../router/types";
 import { ConversationImport } from "../ConversationImport";
 import { PreflightChecks } from "../PreflightChecks";
 import { RestartBadge } from "../RestartBadge";
+import { RESTART_REQUIRED_FIELDS } from "../restartRequired";
+import { SettingRow, SettingTag } from "../SettingRow";
+import { SettingsCard } from "../SettingsCard";
 import { usePreflight } from "../state/usePreflight";
 import { useProviderMatrix } from "../state/useProviderMatrix";
 import { useFastModelStatus } from "../state/useFastModelStatus";
@@ -21,15 +28,37 @@ export interface GeneralSectionProps {
 // no Valid() (pkg/contracts/config.go), so the option sets live here — the UI
 // is the source of truth for the choices, and DEFAULT_CONFIG's values must be
 // members. Density affects list/card spacing; keybindings selects the editor
-// keymap. An option list including the current value (see selectWith) keeps an
-// unrecognized persisted value visible instead of silently rewriting it.
-const DISPLAY_MODES = ["comfortable", "compact"];
-const KEYBINDINGS = ["default", "vim", "emacs"];
+// keymap. An option list including the current value (see optionsWith) keeps
+// an unrecognized persisted value visible instead of silently rewriting it.
+// Labels are display-only; the stored values are the lowercase ones.
+const DISPLAY_MODES: SegmentedOption[] = [
+  { value: "comfortable", label: "Comfortable" },
+  { value: "compact", label: "Compact" },
+];
+const KEYBINDINGS: SegmentedOption[] = [
+  { value: "default", label: "Default" },
+  { value: "vim", label: "Vim" },
+  { value: "emacs", label: "Emacs" },
+];
+const DELEGATE_FADES: SegmentedOption<DelegateFade>[] = [
+  { value: "0m", label: "Right away" },
+  { value: "10m", label: "10 min" },
+  { value: "never", label: "Never" },
+];
 
 /** Option list that always contains `current`, even if it's not a known choice. */
-function selectWith(known: string[], current: string): string[] {
-  return current && !known.includes(current) ? [current, ...known] : known;
+function optionsWith(
+  known: SegmentedOption[],
+  current: string,
+  label: (value: string) => string = (v) => v,
+): SegmentedOption[] {
+  return current && !known.some((o) => o.value === current)
+    ? [{ value: current, label: label(current) }, ...known]
+    : known;
 }
+
+const restartTag = (field: keyof Config) =>
+  RESTART_REQUIRED_FIELDS.has(field) ? <SettingTag tone="warn">Restart</SettingTag> : undefined;
 
 /** Data dir (§0 non-goal — see HANDOFF; not a Config wire field), concurrency limit, log retention, synthesis debounce, editor command, display mode, keybindings, plus the "run preflight" affordance shared with the wizard's PreflightStep. */
 export function GeneralSection({ config }: GeneralSectionProps) {
@@ -65,218 +94,179 @@ export function GeneralSection({ config }: GeneralSectionProps) {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="concurrency-limit">
-          Concurrency limit
-        </label>
-        <input
-          id="concurrency-limit"
-          type="number"
-          className={styles.input}
-          value={draft.concurrency_limit}
-          onChange={(e) => setDraft({ ...draft, concurrency_limit: Number(e.target.value) })}
-        />
-        {fieldErrors.concurrency_limit && (
-          <div className={styles.error}>{fieldErrors.concurrency_limit}</div>
-        )}
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="log-retention-days">
-          Log retention (days)
-        </label>
-        <input
-          id="log-retention-days"
-          type="number"
-          className={styles.input}
-          value={draft.log_retention_days}
-          onChange={(e) => setDraft({ ...draft, log_retention_days: Number(e.target.value) })}
-        />
-        {fieldErrors.log_retention_days && (
-          <div className={styles.error}>{fieldErrors.log_retention_days}</div>
-        )}
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="synthesis-debounce-ms">
-          Synthesis debounce (ms)
-        </label>
-        <input
-          id="synthesis-debounce-ms"
-          type="number"
-          className={styles.input}
-          value={draft.synthesis_debounce_ms}
-          onChange={(e) => setDraft({ ...draft, synthesis_debounce_ms: Number(e.target.value) })}
-        />
-        {fieldErrors.synthesis_debounce_ms && (
-          <div className={styles.error}>{fieldErrors.synthesis_debounce_ms}</div>
-        )}
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="editor-command">
-          Editor command
-        </label>
-        <input
-          id="editor-command"
-          type="text"
-          className={styles.input}
-          value={draft.editor_command ?? ""}
-          onChange={(e) => setDraft({ ...draft, editor_command: e.target.value })}
-        />
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="display-mode">
-          Display mode
-        </label>
-        <select
-          id="display-mode"
-          className={styles.input}
-          value={draft.display_mode}
-          onChange={(e) => setDraft({ ...draft, display_mode: e.target.value })}
+      <SettingsCard>
+        <SettingRow
+          label="Concurrency limit"
+          htmlFor="concurrency-limit"
+          tag={restartTag("concurrency_limit")}
+          error={fieldErrors.concurrency_limit}
         >
-          {selectWith(DISPLAY_MODES, draft.display_mode).map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="keybindings">
-          Keybindings
-        </label>
-        <select
-          id="keybindings"
-          className={styles.input}
-          value={draft.keybindings}
-          onChange={(e) => setDraft({ ...draft, keybindings: e.target.value })}
+          <NumberField
+            id="concurrency-limit"
+            min={1}
+            value={draft.concurrency_limit}
+            onChange={(n) => setDraft({ ...draft, concurrency_limit: n })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Log retention"
+          htmlFor="log-retention-days"
+          tag={restartTag("log_retention_days")}
+          error={fieldErrors.log_retention_days}
         >
-          {selectWith(KEYBINDINGS, draft.keybindings).map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="default-workspace">
-          Default workspace
-        </label>
-        <select
-          id="default-workspace"
-          className={styles.input}
-          value={draft.default_workspace ?? ""}
-          onChange={(e) => setDraft({ ...draft, default_workspace: e.target.value })}
+          <NumberField
+            id="log-retention-days"
+            min={1}
+            unit="days"
+            value={draft.log_retention_days}
+            onChange={(n) => setDraft({ ...draft, log_retention_days: n })}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Synthesis debounce"
+          htmlFor="synthesis-debounce-ms"
+          tag={restartTag("synthesis_debounce_ms")}
+          error={fieldErrors.synthesis_debounce_ms}
         >
-          <option value="">— none —</option>
-          {selectWith(
-            workspaces.map((w) => w.id),
-            draft.default_workspace ?? "",
-          )
-            .filter(Boolean)
-            .map((ref) => (
-              <option key={ref} value={ref}>
-                {workspaceLabel(ref)}
-              </option>
-            ))}
-        </select>
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="default-dir">
-          Default folder
-        </label>
+          <NumberField
+            id="synthesis-debounce-ms"
+            min={0}
+            step={250}
+            unit="ms"
+            value={draft.synthesis_debounce_ms}
+            onChange={(n) => setDraft({ ...draft, synthesis_debounce_ms: n })}
+          />
+        </SettingRow>
+        <SettingRow label="Editor command" htmlFor="editor-command">
+          <input
+            id="editor-command"
+            type="text"
+            spellCheck={false}
+            className={`${styles.input} ${styles.mono}`}
+            value={draft.editor_command ?? ""}
+            onChange={(e) => setDraft({ ...draft, editor_command: e.target.value })}
+          />
+        </SettingRow>
+        <SettingRow label="Display mode" labelId="display-mode-label">
+          <SegmentedControl
+            id="display-mode"
+            aria-labelledby="display-mode-label"
+            value={draft.display_mode}
+            options={optionsWith(DISPLAY_MODES, draft.display_mode)}
+            onChange={(display_mode) => setDraft({ ...draft, display_mode })}
+          />
+        </SettingRow>
+        <SettingRow label="Keybindings" labelId="keybindings-label">
+          <SegmentedControl
+            id="keybindings"
+            aria-labelledby="keybindings-label"
+            value={draft.keybindings}
+            options={optionsWith(KEYBINDINGS, draft.keybindings)}
+            onChange={(keybindings) => setDraft({ ...draft, keybindings })}
+          />
+        </SettingRow>
+        <SettingRow label="Default workspace" htmlFor="default-workspace">
+          <Select
+            id="default-workspace"
+            value={draft.default_workspace ?? ""}
+            options={[
+              { value: "", label: "— none —" },
+              ...optionsWith(
+                workspaces.map((w) => ({ value: w.id, label: w.name })),
+                draft.default_workspace ?? "",
+                workspaceLabel,
+              ).filter((o) => o.value),
+            ]}
+            onChange={(ref) => setDraft({ ...draft, default_workspace: ref })}
+          />
+        </SettingRow>
         {/* Where sessions start when neither the Launchpad nor a workspace
             names a folder — a default workspace's primary repo wins. */}
-        <PathField
-          id="default-dir"
-          className={styles.input}
-          dialogTitle="Where should sessions start?"
-          placeholder="Where the Router runs"
-          value={draft.default_dir ?? ""}
-          onChange={(dir) => setDraft({ ...draft, default_dir: dir })}
-        />
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="default-provider">
-          Default provider
-        </label>
-        <select
-          id="default-provider"
-          className={styles.input}
-          value={draft.default_provider ?? ""}
-          onChange={(e) => setDraft({ ...draft, default_provider: e.target.value })}
-        >
-          <option value="">— none —</option>
-          {selectWith(
-            providers.map((p) => p.name),
-            draft.default_provider ?? "",
-          )
-            .filter(Boolean)
-            .map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-        </select>
-      </div>
-      {/* Delegates (docs/DELEGATES-DESIGN.md): a session's harness-run
-          subagents as nested rows in the session list. Bound to the negation
-          of the stored field, so a config predating it shows them. */}
-      <div className={styles.row}>
-        <label className={styles.toggleLabel}>
-          <input
-            type="checkbox"
-            checked={draft.hide_delegates_in_session_list !== true}
-            onChange={(e) => setDraft({ ...draft, hide_delegates_in_session_list: !e.target.checked })}
+        <SettingRow label="Default folder" htmlFor="default-dir">
+          <div className={styles.fill}>
+            <PathField
+              id="default-dir"
+              className={`${styles.input} ${styles.mono}`}
+              dialogTitle="Where should sessions start?"
+              placeholder="Where the Router runs"
+              value={draft.default_dir ?? ""}
+              onChange={(dir) => setDraft({ ...draft, default_dir: dir })}
+            />
+          </div>
+        </SettingRow>
+        <SettingRow label="Default provider" htmlFor="default-provider">
+          <Select
+            id="default-provider"
+            value={draft.default_provider ?? ""}
+            options={[
+              { value: "", label: "— none —" },
+              ...optionsWith(
+                providers.map((p) => ({ value: p.name, label: p.name })),
+                draft.default_provider ?? "",
+              ).filter((o) => o.value),
+            ]}
+            onChange={(name) => setDraft({ ...draft, default_provider: name })}
           />
-          Expose subagents in session list
-        </label>
-        <div className={styles.hint}>
-          Subagents a session's agent runs appear under it in the session list while they work, and for a while after they
-          finish. Turn off to keep the list to sessions only — the conversation still shows every subagent.
-        </div>
-      </div>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="delegate-fade">
-          Fade out subagent cards after inactivity
-        </label>
-        <select
-          id="delegate-fade"
-          className={styles.input}
-          value={draft.delegate_fade ?? "10m"}
-          disabled={draft.hide_delegates_in_session_list === true}
-          onChange={(e) => setDraft({ ...draft, delegate_fade: e.target.value as DelegateFade })}
+        </SettingRow>
+        {/* Delegates (docs/DELEGATES-DESIGN.md): a session's harness-run
+            subagents as nested rows in the session list. Bound to the negation
+            of the stored field, so a config predating it shows them. */}
+        <SettingRow
+          label="Expose subagents in session list"
+          htmlFor="expose-delegates"
+          help="Subagents a session's agent runs appear under it in the session list while they work, and for a while after they finish. Turn off to keep the list to sessions only — the conversation still shows every subagent."
         >
-          <option value="0m">0 min</option>
-          <option value="10m">10 min</option>
-          <option value="never">Never</option>
-        </select>
-        <div className={styles.hint}>Counted from when a subagent finishes. A running one never fades.</div>
-      </div>
-      {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): Commit… in
-          the session dock's status line (and in its ⎇ popover) skips the
-          dialog. Off and disabled without a Fast Model to write the
-          messages — a saved "on" then just falls back to the dialog. */}
-      <div className={styles.row}>
-        <label className={styles.toggleLabel}>
-          <input
-            type="checkbox"
+          <Switch
+            id="expose-delegates"
+            checked={draft.hide_delegates_in_session_list !== true}
+            onChange={(on) => setDraft({ ...draft, hide_delegates_in_session_list: !on })}
+          />
+        </SettingRow>
+        <SettingRow
+          nested
+          disabled={draft.hide_delegates_in_session_list === true}
+          label="Fade out subagent cards after inactivity"
+          labelId="delegate-fade-label"
+          help="Counted from when a subagent finishes. A running one never fades."
+        >
+          <SegmentedControl
+            id="delegate-fade"
+            aria-labelledby="delegate-fade-label"
+            value={draft.delegate_fade ?? "10m"}
+            options={DELEGATE_FADES}
+            disabled={draft.hide_delegates_in_session_list === true}
+            onChange={(delegate_fade) => setDraft({ ...draft, delegate_fade })}
+          />
+        </SettingRow>
+        {/* One-click Commit (docs/SESSION-WORKTREES-DESIGN.md D5): Commit… in
+            the session dock's status line (and in its ⎇ popover) skips the
+            dialog. Off and disabled without a Fast Model to write the
+            messages — a saved "on" then just falls back to the dialog. */}
+        <SettingRow
+          label="Write commit messages for me"
+          htmlFor="auto-commit-messages"
+          help={
+            <>
+              Commit in the session's status line skips the dialog: the Fast Model writes the message and commits
+              all of this session's files. You can undo from the result. Needs a Fast Model.
+              {!commitDraftsAvailable && (
+                <div className={styles.unavailable} data-testid="auto-commit-unavailable">
+                  {fastModelStatus.loading
+                    ? "Checking for a Fast Model…"
+                    : "No Fast Model is set up — turn one on under Pipeline & synthesis to use this."}
+                </div>
+              )}
+            </>
+          }
+        >
+          <Switch
+            id="auto-commit-messages"
             checked={draft.auto_commit_messages === true}
             disabled={!commitDraftsAvailable && draft.auto_commit_messages !== true}
-            onChange={(e) => setDraft({ ...draft, auto_commit_messages: e.target.checked })}
+            onChange={(on) => setDraft({ ...draft, auto_commit_messages: on })}
           />
-          Write commit messages for me
-        </label>
-        <div className={styles.hint}>
-          Commit in the session's status line skips the dialog: the Fast Model writes the message and commits all of
-          this session's files. You can undo from the result. Needs a Fast Model.
-        </div>
-        {!commitDraftsAvailable && (
-          <div className={styles.hint} data-testid="auto-commit-unavailable">
-            {fastModelStatus.loading
-              ? "Checking for a Fast Model…"
-              : "No Fast Model is set up — turn one on under Pipeline & synthesis to use this."}
-          </div>
-        )}
-      </div>
+        </SettingRow>
+      </SettingsCard>
       <div className={styles.actions}>
         <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
           Save

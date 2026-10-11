@@ -1,5 +1,8 @@
 import { useState } from "react";
+import { Switch } from "../../../components/Switch/Switch";
 import { setFlags } from "../../../featureFlags";
+import { SettingRow } from "../SettingRow";
+import { SettingsCard } from "../SettingsCard";
 import type { UseConfig } from "../state/useConfig";
 import type { FeatureFlags } from "../../../router/types";
 import styles from "./AdvancedSection.module.css";
@@ -56,20 +59,23 @@ export function AdvancedSection({ config }: AdvancedSectionProps) {
 
   return (
     <div className={styles.panel}>
-      {TOGGLES.map((item) => (
-        <div key={item.key} className={styles.row}>
-          <label className={styles.toggleLabel}>
-            <input
-              type="checkbox"
+      <SettingsCard>
+        {TOGGLES.map((item) => (
+          <SettingRow
+            key={item.key}
+            label={item.label}
+            htmlFor={`feature-flag-${item.key}`}
+            help={item.description}
+          >
+            <Switch
+              id={`feature-flag-${item.key}`}
               checked={draft.feature_flags[item.key]}
               disabled={saving === item.key}
               onChange={() => void toggle(item.key)}
             />
-            {item.label}
-          </label>
-          <div className={styles.description}>{item.description}</div>
-        </div>
-      ))}
+          </SettingRow>
+        ))}
+      </SettingsCard>
     </div>
   );
 }

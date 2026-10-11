@@ -30,10 +30,10 @@ describe("AppearanceSection", () => {
   it("turns reduce motion on live, persists it, and leaves streaming speed alone", () => {
     const config = makeConfig({ draft: { ...fixtureConfig, stream_speed: "slow" } });
     render(<AppearanceSection config={config} />);
-    const group = screen.getByRole("group", { name: "Reduce motion" });
-    expect(within(group).getByText("system").getAttribute("aria-pressed")).toBe("true");
+    const group = screen.getByRole("radiogroup", { name: "Reduce motion" });
+    expect(within(group).getByRole("radio", { name: "System" }).getAttribute("aria-checked")).toBe("true");
 
-    fireEvent.click(within(group).getByText("on"));
+    fireEvent.click(within(group).getByRole("radio", { name: "On" }));
 
     expect(document.documentElement.dataset.motion).toBe("reduce");
     expect(config.save).toHaveBeenCalledWith(
@@ -50,7 +50,7 @@ describe("AppearanceSection", () => {
     document.documentElement.dataset.motion = "reduce";
     render(<AppearanceSection config={config} />);
 
-    fireEvent.click(within(screen.getByRole("group", { name: "Reduce motion" })).getByText("system"));
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Reduce motion" })).getByRole("radio", { name: "System" }));
     expect(document.documentElement.dataset.motion).toBeUndefined();
     await waitFor(() => expect(document.documentElement.dataset.motion).toBe("reduce"));
   });
@@ -59,7 +59,7 @@ describe("AppearanceSection", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
 
-    fireEvent.click(screen.getByText("space"));
+    fireEvent.click(screen.getByRole("radio", { name: "Space" }));
 
     expect(document.documentElement.dataset.palette).toBe("space");
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ palette: "space" }));
@@ -70,7 +70,7 @@ describe("AppearanceSection", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
 
-    fireEvent.click(screen.getByText("light"));
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
 
     expect(document.documentElement.dataset.theme).toBe("light");
     expect(config.save).toHaveBeenCalledWith(expect.objectContaining({ theme: "light" }));
@@ -80,22 +80,22 @@ describe("AppearanceSection", () => {
     const config = makeConfig({ save: vi.fn().mockResolvedValue(false) });
     render(<AppearanceSection config={config} />);
 
-    fireEvent.click(screen.getByText("light"));
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
     expect(document.documentElement.dataset.theme).toBe("light");
 
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe(fixtureConfig.theme));
   });
 
-  it("offers native, slow, fast and custom, and reads the retired medium as fast", () => {
+  it("offers as sent, slow, fast and custom, and reads the retired medium as fast", () => {
     render(<AppearanceSection config={makeConfig({ draft: { ...fixtureConfig, stream_speed: "medium" } })} />);
-    const group = screen.getByRole("group", { name: "Streaming speed" });
-    expect([...group.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
-      "native",
-      "slow",
-      "fast",
-      "custom",
+    const group = screen.getByRole("radiogroup", { name: "Streaming speed" });
+    expect(within(group).getAllByRole("radio").map((b) => b.textContent)).toEqual([
+      "As sent",
+      "Slow",
+      "Fast",
+      "Custom",
     ]);
-    expect(screen.getByText("fast").closest("button")?.getAttribute("aria-pressed")).toBe("true");
+    expect(within(group).getByRole("radio", { name: "Fast" }).getAttribute("aria-checked")).toBe("true");
     expect(screen.queryByLabelText("Words per minute")).toBeNull();
   });
 

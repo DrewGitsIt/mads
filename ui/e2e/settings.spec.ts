@@ -7,16 +7,16 @@ test("settings journey: appearance persists, preflight reports live data service
   await page.goto(routerURL);
   await page.getByRole("button", { name: "Settings" }).click();
 
-  const palette = page.getByRole("group", { name: "Palette" });
-  const theme = page.getByRole("group", { name: "Theme" });
+  const palette = page.getByRole("radiogroup", { name: "Palette" });
+  const theme = page.getByRole("radiogroup", { name: "Theme" });
 
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith("/config")),
-    palette.getByRole("button", { name: "space" }).click(),
+    palette.getByRole("radio", { name: "Space" }).click(),
   ]);
   await Promise.all([
     page.waitForResponse((r) => r.request().method() === "PUT" && r.url().endsWith("/config")),
-    theme.getByRole("button", { name: "light" }).click(),
+    theme.getByRole("radio", { name: "Light" }).click(),
   ]);
 
   const html = page.locator("html");

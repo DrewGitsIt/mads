@@ -36,7 +36,7 @@ describe("AdvancedSection", () => {
     const config = makeConfig();
     render(<AdvancedSection config={config} />);
 
-    fireEvent.click(screen.getByLabelText("Multi-repo workspaces"));
+    fireEvent.click(screen.getByRole("switch", { name: "Multi-repo workspaces" }));
 
     expect(config.setDraft).toHaveBeenCalledWith(
       expect.objectContaining({ feature_flags: expect.objectContaining({ multi_repo: true }) }),

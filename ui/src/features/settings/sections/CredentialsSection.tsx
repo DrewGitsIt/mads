@@ -2,14 +2,21 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Chip } from "../../../components/Chip/Chip";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
+import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
 import { EnvLookedFor } from "../EnvLookedFor";
+import { SettingRow } from "../SettingRow";
+import { SettingsCard } from "../SettingsCard";
 import { useCredentials } from "../state/useCredentials";
 import type { UseConfig } from "../state/useConfig";
 import type { EnvMode, Profile } from "../../../router/types";
 import { isCredentialActive } from "../profileDiff";
 import styles from "./CredentialsSection.module.css";
 
-const ENV_MODES: EnvMode[] = ["inherit", "isolated"];
+// Option labels are display-only; the stored values are the lowercase enums.
+const ENV_MODES: SegmentedOption<EnvMode>[] = [
+  { value: "inherit", label: "Inherit" },
+  { value: "isolated", label: "Isolated" },
+];
 
 /** Plain-language summary of what env_mode + counts mean for a spawned agent. */
 function envSummary(mode: EnvMode, credentialCount: number, passthrough: string[]): string {
@@ -158,61 +165,61 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
 
       <section>
         <h3 className={styles.heading}>Environment</h3>
-        <div className={styles.options} role="group" aria-label="Environment mode">
-          {ENV_MODES.map((m) => (
-            <Chip
-              key={m}
-              tone={envMode === m ? "info" : "neutral"}
-              pressed={envMode === m}
-              onClick={() => chooseEnvMode(m)}
-            >
-              {m}
-            </Chip>
-          ))}
-        </div>
-        <p className={styles.summary}>{envSummary(envMode, activeCredentialCount, envPassthrough)}</p>
-        {envMode === "isolated" && (
-          <div className={styles.passthrough}>
-            <label className={styles.label} htmlFor="env-passthrough-input">
-              Passthrough env vars
-            </label>
-            <div className={styles.passthroughChips}>
-              {envPassthrough.map((n) => (
-                <Chip key={n} tone="neutral" className={styles.chip}>
-                  {n}
-                  <button
-                    type="button"
-                    className={styles.remove}
-                    aria-label={`Remove ${n}`}
-                    onClick={() => removePassthrough(n)}
+        <SettingsCard>
+          <SettingRow
+            label="Environment mode"
+            labelId="env-mode-label"
+            help={envSummary(envMode, activeCredentialCount, envPassthrough)}
+          >
+            <SegmentedControl
+              aria-labelledby="env-mode-label"
+              value={envMode}
+              options={ENV_MODES}
+              onChange={chooseEnvMode}
+            />
+          </SettingRow>
+          {envMode === "isolated" && (
+            <SettingRow nested label="Passthrough env vars" htmlFor="env-passthrough-input">
+              <div className={styles.passthrough}>
+                <div className={styles.passthroughChips}>
+                  {envPassthrough.map((n) => (
+                    <Chip key={n} tone="neutral" className={styles.chip}>
+                      {n}
+                      <button
+                        type="button"
+                        className={styles.remove}
+                        aria-label={`Remove ${n}`}
+                        onClick={() => removePassthrough(n)}
+                      >
+                        ✕
+                      </button>
+                    </Chip>
+                  ))}
+                  {envPassthrough.length === 0 && <span className={styles.empty}>No passthrough vars.</span>}
+                </div>
+                <div className={styles.passthroughAdd}>
+                  <input
+                    id="env-passthrough-input"
+                    className={styles.input}
+                    value={passthroughInput}
+                    onChange={(e) => setPassthroughInput(e.target.value)}
+                    onKeyDown={handlePassthroughKeyDown}
+                    placeholder="AWS_PROFILE"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={addPassthrough}
+                    disabled={!passthroughInput.trim()}
+                    aria-label="Add passthrough variable"
                   >
-                    ✕
-                  </button>
-                </Chip>
-              ))}
-              {envPassthrough.length === 0 && <span className={styles.empty}>No passthrough vars.</span>}
-            </div>
-            <div className={styles.passthroughAdd}>
-              <input
-                id="env-passthrough-input"
-                className={styles.input}
-                value={passthroughInput}
-                onChange={(e) => setPassthroughInput(e.target.value)}
-                onKeyDown={handlePassthroughKeyDown}
-                placeholder="AWS_PROFILE"
-              />
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={addPassthrough}
-                disabled={!passthroughInput.trim()}
-                aria-label="Add passthrough variable"
-              >
-                Add
-              </Button>
-            </div>
-          </div>
-        )}
+                    Add
+                  </Button>
+                </div>
+              </div>
+            </SettingRow>
+          )}
+        </SettingsCard>
       </section>
 
       <form className={styles.addForm} onSubmit={handleAdd}>

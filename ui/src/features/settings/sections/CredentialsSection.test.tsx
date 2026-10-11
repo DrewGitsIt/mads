@@ -232,7 +232,7 @@ describe("CredentialsSection", () => {
     expect(screen.getByText("AWS_PROFILE")).toBeTruthy();
   });
 
-  it("clicking the isolated chip edits draft.env_mode", async () => {
+  it("choosing Isolated edits draft.env_mode", async () => {
     vi.stubGlobal(
       "fetch",
       routedFetch({
@@ -244,7 +244,7 @@ describe("CredentialsSection", () => {
     render(<CredentialsSection config={config} profiles={[]} />);
     await waitFor(() => expect(screen.getByText(/no credentials stored/i)).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: "isolated" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Isolated" }));
 
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ env_mode: "isolated" }));
   });

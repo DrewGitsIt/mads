@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PipelineSection } from "./PipelineSection";
 import { fixtureConfig } from "../../../router/fixtures";
@@ -55,7 +55,10 @@ describe("PipelineSection", () => {
     stubCredentials([]);
     const config = makeConfig();
     render(<PipelineSection config={config} />);
-    fireEvent.change(screen.getByLabelText(/synthesis mode/i), { target: { value: "full" } });
+    const group = screen.getByRole("radiogroup", { name: /synthesis mode/i });
+    // Labels are humanized; the stored values stay off/light/full.
+    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Off", "Summary", "Summary + DPA"]);
+    fireEvent.click(within(group).getByRole("radio", { name: "Summary + DPA" }));
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ synthesis_mode: "full" }));
   });
 
@@ -72,8 +75,8 @@ describe("PipelineSection", () => {
   it("checks prevent-sleep when allow_sleep_during_pipelines is false", () => {
     stubCredentials([]);
     render(<PipelineSection config={makeConfig()} />);
-    const box = screen.getByLabelText(/prevent system sleep while a pipeline is running/i) as HTMLInputElement;
-    expect(box.checked).toBe(true);
+    const toggle = screen.getByRole("switch", { name: /prevent system sleep while a pipeline is running/i });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(screen.getByText("Changes apply to runs started afterward.")).toBeTruthy();
   });
 
@@ -81,8 +84,8 @@ describe("PipelineSection", () => {
     stubCredentials([]);
     const draft = { ...fixtureConfig, allow_sleep_during_pipelines: true };
     render(<PipelineSection config={makeConfig({ draft })} />);
-    const box = screen.getByLabelText(/prevent system sleep/i) as HTMLInputElement;
-    expect(box.checked).toBe(false);
+    const toggle = screen.getByRole("switch", { name: /prevent system sleep/i });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
   });
 
   it("unchecking prevent-sleep writes allow_sleep_during_pipelines: true", () => {
@@ -172,7 +175,8 @@ describe("PipelineSection", () => {
   it("defaults to provider mode and reports active when the provider supports Completer", async () => {
     stubCredentials([], { mode: "provider", provider_name: "claude-code", provider_completer: true });
     render(<PipelineSection config={makeConfig()} />);
-    expect((screen.getByLabelText(/backend/i) as HTMLSelectElement).value).toBe("provider");
+    const backend = screen.getByRole("radiogroup", { name: /backend/i });
+    expect(within(backend).getByRole("radio", { name: "My provider" }).getAttribute("aria-checked")).toBe("true");
     await waitFor(() => expect(screen.getByText(/running via claude-code/i)).toBeTruthy());
   });
 
@@ -198,7 +202,7 @@ describe("PipelineSection", () => {
     stubCredentials([]);
     const config = makeConfig();
     render(<PipelineSection config={config} />);
-    fireEvent.change(screen.getByLabelText(/backend/i), { target: { value: "off" } });
+    fireEvent.click(within(screen.getByRole("radiogroup", { name: /backend/i })).getByRole("radio", { name: "Off" }));
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ fast_model_mode: "off" }));
   });
 
@@ -206,8 +210,19 @@ describe("PipelineSection", () => {
     stubCredentials(["OPENAI_API_KEY"]);
     const config = makeConfig({ draft: { ...fixtureConfig, fast_model_mode: "endpoint" } });
     render(<PipelineSection config={config} />);
+    fireEvent.click(screen.getByLabelText(/credential/i));
     await waitFor(() =>
       expect(screen.getByRole("option", { name: "OPENAI_API_KEY" })).toBeTruthy(),
     );
+  });
+
+  it("shows the cost alert in dollars and stores cents", () => {
+    stubCredentials([]);
+    const config = makeConfig({ draft: { ...fixtureConfig, cost_alert_cents: 250 } });
+    render(<PipelineSection config={config} />);
+    const input = screen.getByLabelText(/cost alert/i) as HTMLInputElement;
+    expect(input.value).toBe("2.5");
+    fireEvent.change(input, { target: { value: "1.75" } });
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ cost_alert_cents: 175 }));
   });
 });

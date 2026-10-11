@@ -23,8 +23,9 @@
   color: var(--text);
 }
 
+/* Colour and background only: a weight change would resize the label and
+   jitter the rail's width as the scroll spy moves. */
 .item[aria-current="page"] {
   background: var(--accent-soft);
   color: var(--accent);
-  font-weight: 650;
 }

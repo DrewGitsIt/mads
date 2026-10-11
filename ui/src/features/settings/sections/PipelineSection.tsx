@@ -1,5 +1,11 @@
 import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
+import { NumberField } from "../../../components/NumberField/NumberField";
+import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
+import { Select, type SelectOption } from "../../../components/Select/Select";
+import { Switch } from "../../../components/Switch/Switch";
+import { SettingRow } from "../SettingRow";
+import { SettingsCard } from "../SettingsCard";
 import { useCredentials } from "../state/useCredentials";
 import { useFastModelStatus } from "../state/useFastModelStatus";
 import { effectiveFastModelMode } from "../../../router/fastModel";
@@ -14,28 +20,46 @@ import type {
 } from "../../../router/types";
 import styles from "./PipelineSection.module.css";
 
-const SYNTHESIS_MODES: SynthesisMode[] = ["off", "light", "full"];
+// Option labels are display-only; the stored values are the lowercase enums.
+const SYNTHESIS_MODES: SegmentedOption<SynthesisMode>[] = [
+  { value: "off", label: "Off" },
+  { value: "light", label: "Summary" },
+  { value: "full", label: "Summary + DPA" },
+];
 const SYNTHESIS_COST_HINTS: Record<SynthesisMode, string> = {
   off: "No synthesis cost.",
   light: "~$0.01 per session — summary only.",
   full: "~$0.05 per session — summary + DPA generation.",
 };
 
-const AGENT_SELECTION_MODES: AgentSelectionMode[] = ["light", "full"];
-const MODEL_TIERS: ModelTier[] = ["cheapest", "balanced", "best"];
+const AGENT_SELECTION_MODES: SegmentedOption<AgentSelectionMode>[] = [
+  { value: "light", label: "Light" },
+  { value: "full", label: "Full" },
+];
+const MODEL_TIERS: SegmentedOption<ModelTier>[] = [
+  { value: "cheapest", label: "Cheapest" },
+  { value: "balanced", label: "Balanced" },
+  { value: "best", label: "Best" },
+];
 const MODEL_TIER_COST_HINTS: Record<ModelTier, string> = {
   cheapest: "Lowest cost, fastest turnaround.",
   balanced: "Balanced cost and quality — default.",
   best: "Highest cost, best for complex synthesis.",
 };
 
-const FAST_MODEL_MODES: { value: FastModelMode; label: string }[] = [
-  { value: "provider", label: "Use my provider (default)" },
+const FAST_MODEL_MODES: SegmentedOption<FastModelMode>[] = [
+  { value: "provider", label: "My provider" },
   { value: "endpoint", label: "API endpoint" },
   { value: "off", label: "Off" },
 ];
 
-// SLEEP_CAVEATS is the per-OS helper line under the prevent-sleep checkbox,
+/** Stored credential names, plus the configured one even if it's since been deleted. */
+function credentialOptions(names: string[], current: string): SelectOption[] {
+  const known = current && !names.includes(current) ? [current, ...names] : names;
+  return [{ value: "", label: "None" }, ...known.map((n) => ({ value: n, label: n }))];
+}
+
+// SLEEP_CAVEATS is the per-OS helper line under the prevent-sleep switch,
 // keyed by the Router host's runtime.GOOS (Config.platform). Other OSes get
 // no caveat.
 const SLEEP_CAVEATS: Record<string, string> = {
@@ -91,217 +115,165 @@ export function PipelineSection({ config }: PipelineSectionProps) {
 
   return (
     <div className={styles.panel}>
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="synthesis-mode">
-          Synthesis mode
-        </label>
-        <select
-          id="synthesis-mode"
-          className={styles.input}
-          value={draft.synthesis_mode}
-          onChange={(e) => setDraft({ ...draft, synthesis_mode: e.target.value as SynthesisMode })}
+      <SettingsCard>
+        <SettingRow
+          label="Synthesis mode"
+          labelId="synthesis-mode-label"
+          help={SYNTHESIS_COST_HINTS[draft.synthesis_mode]}
+          error={fieldErrors.synthesis_mode}
         >
-          {SYNTHESIS_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-        <div className={styles.hint}>{SYNTHESIS_COST_HINTS[draft.synthesis_mode]}</div>
-        {fieldErrors.synthesis_mode && <div className={styles.error}>{fieldErrors.synthesis_mode}</div>}
-      </div>
+          <SegmentedControl
+            id="synthesis-mode"
+            aria-labelledby="synthesis-mode-label"
+            value={draft.synthesis_mode}
+            options={SYNTHESIS_MODES}
+            onChange={(synthesis_mode) => setDraft({ ...draft, synthesis_mode })}
+          />
+        </SettingRow>
 
-      <div className={styles.row}>
-        <label className={styles.toggleLabel}>
-          <input
-            type="checkbox"
+        <SettingRow
+          label="Auto-approve synthesis"
+          htmlFor="synthesis-auto-approve"
+          help="Apply synthesized proposals immediately instead of leaving them pending for review."
+        >
+          <Switch
+            id="synthesis-auto-approve"
             checked={draft.synthesis_auto_approve}
-            onChange={(e) => setDraft({ ...draft, synthesis_auto_approve: e.target.checked })}
+            onChange={(on) => setDraft({ ...draft, synthesis_auto_approve: on })}
           />
-          Auto-approve synthesis
-        </label>
-        <div className={styles.hint}>
-          Apply synthesized proposals immediately instead of leaving them pending for review.
-        </div>
-      </div>
+        </SettingRow>
 
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="agent-selection-mode">
-          Agent selection mode
-        </label>
-        <select
-          id="agent-selection-mode"
-          className={styles.input}
-          value={draft.agent_selection_mode}
-          onChange={(e) =>
-            setDraft({ ...draft, agent_selection_mode: e.target.value as AgentSelectionMode })
+        <SettingRow
+          label="Agent selection mode"
+          labelId="agent-selection-mode-label"
+          error={fieldErrors.agent_selection_mode}
+        >
+          <SegmentedControl
+            id="agent-selection-mode"
+            aria-labelledby="agent-selection-mode-label"
+            value={draft.agent_selection_mode}
+            options={AGENT_SELECTION_MODES}
+            onChange={(agent_selection_mode) => setDraft({ ...draft, agent_selection_mode })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Default model tier"
+          labelId="default-model-tier-label"
+          help={MODEL_TIER_COST_HINTS[draft.default_model_tier]}
+          error={fieldErrors.default_model_tier}
+        >
+          <SegmentedControl
+            id="default-model-tier"
+            aria-labelledby="default-model-tier-label"
+            value={draft.default_model_tier}
+            options={MODEL_TIERS}
+            onChange={(default_model_tier) => setDraft({ ...draft, default_model_tier })}
+          />
+        </SettingRow>
+
+        {/* Stored in cents; shown in dollars. */}
+        <SettingRow label="Cost alert threshold" htmlFor="cost-alert-cents" error={fieldErrors.cost_alert_cents}>
+          <NumberField
+            id="cost-alert-cents"
+            prefix="$"
+            min={0}
+            step={0.25}
+            value={(draft.cost_alert_cents ?? 0) / 100}
+            onChange={(dollars) => setDraft({ ...draft, cost_alert_cents: Math.round(dollars * 100) })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Stage timeout"
+          htmlFor="pipeline-stage-timeout-minutes"
+          help="How long a single pipeline stage (one agent invocation) may run before it's killed as stuck. Applies to both UI-launched and CLI runs."
+          error={fieldErrors.pipeline_stage_timeout_minutes}
+        >
+          <NumberField
+            id="pipeline-stage-timeout-minutes"
+            min={0}
+            unit="min"
+            value={draft.pipeline_stage_timeout_minutes}
+            onChange={(n) => setDraft({ ...draft, pipeline_stage_timeout_minutes: n })}
+          />
+        </SettingRow>
+
+        <SettingRow
+          label="Prevent system sleep while a pipeline is running"
+          htmlFor="prevent-sleep"
+          help={
+            <>
+              <div>Changes apply to runs started afterward.</div>
+              {draft.platform && SLEEP_CAVEATS[draft.platform] && <div>{SLEEP_CAVEATS[draft.platform]}</div>}
+            </>
           }
         >
-          {AGENT_SELECTION_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
-        {fieldErrors.agent_selection_mode && (
-          <div className={styles.error}>{fieldErrors.agent_selection_mode}</div>
-        )}
-      </div>
-
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="default-model-tier">
-          Default model tier
-        </label>
-        <select
-          id="default-model-tier"
-          className={styles.input}
-          value={draft.default_model_tier}
-          onChange={(e) => setDraft({ ...draft, default_model_tier: e.target.value as ModelTier })}
-        >
-          {MODEL_TIERS.map((tier) => (
-            <option key={tier} value={tier}>
-              {tier}
-            </option>
-          ))}
-        </select>
-        <div className={styles.hint}>{MODEL_TIER_COST_HINTS[draft.default_model_tier]}</div>
-        {fieldErrors.default_model_tier && (
-          <div className={styles.error}>{fieldErrors.default_model_tier}</div>
-        )}
-      </div>
-
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="cost-alert-cents">
-          Cost alert threshold (cents)
-        </label>
-        <input
-          id="cost-alert-cents"
-          type="number"
-          className={styles.input}
-          value={draft.cost_alert_cents ?? 0}
-          onChange={(e) => setDraft({ ...draft, cost_alert_cents: Number(e.target.value) })}
-        />
-        {fieldErrors.cost_alert_cents && <div className={styles.error}>{fieldErrors.cost_alert_cents}</div>}
-      </div>
-
-      <div className={styles.row}>
-        <label className={styles.label} htmlFor="pipeline-stage-timeout-minutes">
-          Stage timeout (minutes)
-        </label>
-        <input
-          id="pipeline-stage-timeout-minutes"
-          type="number"
-          className={styles.input}
-          value={draft.pipeline_stage_timeout_minutes}
-          onChange={(e) =>
-            setDraft({ ...draft, pipeline_stage_timeout_minutes: Number(e.target.value) })
-          }
-        />
-        <div className={styles.hint}>
-          How long a single pipeline stage (one agent invocation) may run before it's killed as
-          stuck. Applies to both UI-launched and CLI runs.
-        </div>
-        {fieldErrors.pipeline_stage_timeout_minutes && (
-          <div className={styles.error}>{fieldErrors.pipeline_stage_timeout_minutes}</div>
-        )}
-      </div>
-
-      <div className={styles.row}>
-        <label className={styles.toggleLabel}>
-          <input
-            type="checkbox"
+          <Switch
+            id="prevent-sleep"
             checked={!draft.allow_sleep_during_pipelines}
-            onChange={(e) => setDraft({ ...draft, allow_sleep_during_pipelines: !e.target.checked })}
+            onChange={(on) => setDraft({ ...draft, allow_sleep_during_pipelines: !on })}
           />
-          Prevent system sleep while a pipeline is running
-        </label>
-        <div className={styles.hint}>Changes apply to runs started afterward.</div>
-        {draft.platform && SLEEP_CAVEATS[draft.platform] && (
-          <div className={styles.hint}>{SLEEP_CAVEATS[draft.platform]}</div>
-        )}
-      </div>
+        </SettingRow>
+      </SettingsCard>
 
-      <section className={styles.fastModel}>
-        <h3 className={styles.heading}>Fast Model</h3>
-        <div className={styles.row}>
-          <label className={styles.label} htmlFor="fast-model-mode">
-            Backend
-          </label>
-          <select
+      <SettingsCard title="Fast Model">
+        <SettingRow label="Backend" labelId="fast-model-mode-label">
+          <SegmentedControl
             id="fast-model-mode"
-            className={styles.input}
+            aria-labelledby="fast-model-mode-label"
             value={fastModelMode}
-            onChange={(e) => setDraft({ ...draft, fast_model_mode: e.target.value as FastModelMode })}
-          >
-            {FAST_MODEL_MODES.map(({ value, label }) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
+            options={FAST_MODEL_MODES}
+            onChange={(fast_model_mode) => setDraft({ ...draft, fast_model_mode })}
+          />
+        </SettingRow>
 
         {fastModelMode === "endpoint" && (
           <>
-            <div className={styles.row}>
-              <label className={styles.label} htmlFor="fast-model-base-url">
-                Endpoint
-              </label>
+            <SettingRow nested label="Endpoint" htmlFor="fast-model-base-url" error={fieldErrors.fast_model_base_url}>
               <input
                 id="fast-model-base-url"
                 type="text"
+                spellCheck={false}
                 className={styles.input}
                 placeholder="https://api.example.com/v1"
                 value={draft.fast_model_base_url ?? ""}
                 onChange={(e) => setDraft({ ...draft, fast_model_base_url: e.target.value })}
               />
-              {fieldErrors.fast_model_base_url && (
-                <div className={styles.error}>{fieldErrors.fast_model_base_url}</div>
-              )}
-            </div>
+            </SettingRow>
 
-            <div className={styles.row}>
-              <label className={styles.label} htmlFor="fast-model">
-                Model
-              </label>
+            <SettingRow nested label="Model" htmlFor="fast-model">
               <input
                 id="fast-model"
                 type="text"
+                spellCheck={false}
                 className={styles.input}
                 value={draft.fast_model ?? ""}
                 onChange={(e) => setDraft({ ...draft, fast_model: e.target.value })}
               />
-            </div>
+            </SettingRow>
 
-            <div className={styles.row}>
-              <label className={styles.label} htmlFor="fast-model-api-key-env">
-                Credential
-              </label>
-              <select
+            <SettingRow nested label="Credential" htmlFor="fast-model-api-key-env">
+              <Select
                 id="fast-model-api-key-env"
-                className={styles.input}
                 value={draft.fast_model_api_key_env ?? ""}
-                onChange={(e) => setDraft({ ...draft, fast_model_api_key_env: e.target.value })}
-              >
-                <option value="">None</option>
-                {credentials.names.map((n) => (
-                  <option key={n} value={n}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </div>
+                options={credentialOptions(credentials.names, draft.fast_model_api_key_env ?? "")}
+                onChange={(name) => setDraft({ ...draft, fast_model_api_key_env: name })}
+              />
+            </SettingRow>
           </>
         )}
 
-        <div className={styles.hint}>
+        <div className={styles.status}>
           {fastModelStatusText(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading)}
         </div>
-      </section>
+      </SettingsCard>
 
-      <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
-        Save
-      </Button>
+      <div className={styles.actions}>
+        <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
+          Save
+        </Button>
+      </div>
     </div>
   );
 }

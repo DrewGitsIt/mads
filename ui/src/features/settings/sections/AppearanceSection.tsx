@@ -1,26 +1,41 @@
-import { useEffect, useState } from "react";
-import { Chip } from "../../../components/Chip/Chip";
+import { NumberField } from "../../../components/NumberField/NumberField";
+import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
 import {
-  DEFAULT_CUSTOM_WPM,
   MAX_STREAM_WPM,
   MIN_STREAM_WPM,
   STREAM_WPM_PRESETS,
   clampWpm,
   normalizeStreamSpeed,
 } from "../../../conversation/streaming/streamSpeed";
+import { SettingRow } from "../SettingRow";
+import { SettingsCard } from "../SettingsCard";
 import type { UseConfig } from "../state/useConfig";
 import { applyMotion } from "../theme/applyMotion";
 import { applyTheme } from "../theme/applyTheme";
 import type { PaletteName, StreamSpeed, ThemeMode } from "../../../router/types";
 import styles from "./AppearanceSection.module.css";
 
-const PALETTES: PaletteName[] = ["clay", "space", "glacier"];
-const THEMES: ThemeMode[] = ["dark", "light", "system"];
-const STREAM_SPEEDS: { value: StreamSpeed; label: string }[] = [
-  { value: "off", label: "native" },
-  { value: "slow", label: "slow" },
-  { value: "fast", label: "fast" },
-  { value: "custom", label: "custom" },
+// Option labels are display-only; the stored values are the lowercase enums.
+const PALETTES: SegmentedOption<PaletteName>[] = [
+  { value: "clay", label: "Clay" },
+  { value: "space", label: "Space" },
+  { value: "glacier", label: "Glacier" },
+];
+const THEMES: SegmentedOption<ThemeMode>[] = [
+  { value: "dark", label: "Dark" },
+  { value: "light", label: "Light" },
+  { value: "system", label: "System" },
+];
+// reduce_motion is a boolean; "system" (false) defers to the OS setting.
+const REDUCE_MOTION: SegmentedOption<"system" | "on">[] = [
+  { value: "system", label: "System" },
+  { value: "on", label: "On" },
+];
+const STREAM_SPEEDS: SegmentedOption<StreamSpeed>[] = [
+  { value: "off", label: "As sent" },
+  { value: "slow", label: "Slow" },
+  { value: "fast", label: "Fast" },
+  { value: "custom", label: "Custom" },
 ];
 
 function streamSpeedHint(speed: StreamSpeed, wpm: number): string {
@@ -43,13 +58,6 @@ export interface AppearanceSectionProps {
 /** Palette + dark/light/system picker — applies live on click, persists via PUT /config (HANDOFF §5). */
 export function AppearanceSection({ config }: AppearanceSectionProps) {
   const { draft, saved, setDraft, save } = config;
-  // The custom pace as typed, committed on blur/Enter — saving every
-  // keystroke would clamp "3" to the minimum before "350" is finished.
-  const [wpmText, setWpmText] = useState("");
-  const savedWpm = draft?.stream_wpm;
-  useEffect(() => {
-    setWpmText(String(clampWpm(savedWpm)));
-  }, [savedWpm]);
   if (!draft || !saved) return null;
   const speed = normalizeStreamSpeed(draft.stream_speed);
 
@@ -83,10 +91,9 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
     await save(next);
   };
 
-  const commitWpm = async () => {
-    const stream_wpm = clampWpm(Number(wpmText));
-    setWpmText(String(stream_wpm));
-    if (stream_wpm === draft.stream_wpm) return;
+  // NumberField commits on blur/Enter only (live={false}) — saving every
+  // keystroke would clamp "3" to the minimum before "350" is finished.
+  const commitWpm = async (stream_wpm: number) => {
     const next = { ...draft, stream_wpm };
     setDraft(next);
     await save(next);
@@ -94,103 +101,75 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
 
   return (
     <div className={styles.panel}>
-      <section>
-        <h3 className={styles.heading}>Palette</h3>
-        <div className={styles.options} role="group" aria-label="Palette">
-          {PALETTES.map((p) => (
-            <Chip
-              key={p}
-              tone={draft.palette === p ? "info" : "neutral"}
-              pressed={draft.palette === p}
-              onClick={() => void choosePalette(p)}
-            >
-              {p}
-            </Chip>
-          ))}
-        </div>
-      </section>
-      <section>
-        <h3 className={styles.heading}>Theme</h3>
-        <div className={styles.options} role="group" aria-label="Theme">
-          {THEMES.map((t) => (
-            <Chip
-              key={t}
-              tone={draft.theme === t ? "info" : "neutral"}
-              pressed={draft.theme === t}
-              onClick={() => void chooseTheme(t)}
-            >
-              {t}
-            </Chip>
-          ))}
-        </div>
-      </section>
-      <section>
-        <h3 className={styles.heading}>Reduce motion</h3>
-        <div className={styles.options} role="group" aria-label="Reduce motion">
-          {[
-            { reduce: false, label: "system" },
-            { reduce: true, label: "on" },
-          ].map(({ reduce, label }) => {
-            const chosen = Boolean(draft.reduce_motion) === reduce;
-            return (
-              <Chip
-                key={label}
-                tone={chosen ? "info" : "neutral"}
-                pressed={chosen}
-                onClick={() => void chooseReduceMotion(reduce)}
-              >
-                {label}
-              </Chip>
-            );
-          })}
-        </div>
-        <p className={styles.hint}>
-          {draft.reduce_motion
-            ? "Animations are off: things appear and close instantly."
-            : "Follows your system's reduce-motion setting."}{" "}
-          Doesn't change streaming speed.
-        </p>
-      </section>
-      <section>
-        <h3 className={styles.heading}>Streaming speed</h3>
-        <div className={styles.options} role="group" aria-label="Streaming speed">
-          {STREAM_SPEEDS.map((s) => (
-            <Chip
-              key={s.value}
-              tone={speed === s.value ? "info" : "neutral"}
-              pressed={speed === s.value}
-              onClick={() => void chooseStreamSpeed(s.value)}
-            >
-              {s.label}
-            </Chip>
-          ))}
-        </div>
+      <SettingsCard>
+        <SettingRow label="Palette" labelId="palette-label">
+          <SegmentedControl
+            aria-labelledby="palette-label"
+            value={draft.palette}
+            options={PALETTES}
+            onChange={(p) => void choosePalette(p)}
+          />
+        </SettingRow>
+        <SettingRow label="Theme" labelId="theme-label">
+          <SegmentedControl
+            aria-labelledby="theme-label"
+            value={draft.theme}
+            options={THEMES}
+            onChange={(t) => void chooseTheme(t)}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Reduce motion"
+          labelId="reduce-motion-label"
+          help={
+            <>
+              {draft.reduce_motion
+                ? "Animations are off: things appear and close instantly."
+                : "Follows your system's reduce-motion setting."}{" "}
+              Doesn't change streaming speed.
+            </>
+          }
+        >
+          <SegmentedControl
+            aria-labelledby="reduce-motion-label"
+            value={draft.reduce_motion ? "on" : "system"}
+            options={REDUCE_MOTION}
+            onChange={(v) => void chooseReduceMotion(v === "on")}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Streaming speed"
+          labelId="stream-speed-label"
+          help={
+            <>
+              {streamSpeedHint(speed, clampWpm(draft.stream_wpm))}
+              {speed !== "off" &&
+                " A long reply can keep revealing after the agent finishes; Show all skips ahead."}
+            </>
+          }
+        >
+          <SegmentedControl
+            aria-labelledby="stream-speed-label"
+            value={speed}
+            options={STREAM_SPEEDS}
+            onChange={(v) => void chooseStreamSpeed(v)}
+          />
+        </SettingRow>
         {speed === "custom" && (
-          <label className={styles.wpm}>
-            <input
-              type="number"
-              className={styles.wpmInput}
-              aria-label="Words per minute"
+          <SettingRow nested label="Words per minute" htmlFor="stream-wpm">
+            <NumberField
+              id="stream-wpm"
+              live={false}
               min={MIN_STREAM_WPM}
               max={MAX_STREAM_WPM}
               step={25}
-              placeholder={String(DEFAULT_CUSTOM_WPM)}
-              value={wpmText}
-              onChange={(e) => setWpmText(e.target.value)}
-              onBlur={() => void commitWpm()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void commitWpm();
-              }}
+              unit="wpm"
+              value={clampWpm(draft.stream_wpm)}
+              onChange={(n) => void commitWpm(n)}
             />
-            words per minute
-          </label>
+          </SettingRow>
         )}
-        <p className={styles.hint}>
-          {streamSpeedHint(speed, clampWpm(draft.stream_wpm))}
-          {speed !== "off" &&
-            " A long reply can keep revealing after the agent finishes; Show all skips ahead."}
-        </p>
-      </section>
+      </SettingsCard>
     </div>
   );
 }
