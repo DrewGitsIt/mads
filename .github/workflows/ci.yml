@@ -18,6 +18,12 @@ jobs:
         with:
           version: latest
 
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make check-migrations
+
   test:
     runs-on: ubuntu-latest
     steps:

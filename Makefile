@@ -3,7 +3,7 @@
 GOBIN := $(CURDIR)/bin
 LINT  := $(GOBIN)/golangci-lint
 
-.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate
+.PHONY: build test lint check tidy ui-deps app e2e-smoke ui-smoke release-gate check-migrations
 .PHONY: services ui mads data router session pipeline
 
 build: ui-deps
@@ -136,3 +136,8 @@ ui-smoke: ui-deps
 release-gate:
 	sh scripts/release-gate.sh
 	go test -tags release_gate -count=1 -v ./scripts/releasegate/...
+
+# Data-store migrations must number above latest main's and never share a
+# version — see scripts/check-migrations.sh.
+check-migrations:
+	sh scripts/check-migrations.sh
