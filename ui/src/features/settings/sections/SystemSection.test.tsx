@@ -38,7 +38,7 @@ describe("SystemSection", () => {
 
   it("renders the health check, and Run again re-runs it", async () => {
     render(<SystemSection config={makeConfig()} />);
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
     const before = preflightCalls();
     fireEvent.click(screen.getByRole("button", { name: "Run again" }));

@@ -15,7 +15,7 @@ describe("PreflightStep", () => {
     );
     const onNext = vi.fn();
     render(<PreflightStep onNext={onNext} onBack={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
     expect(onNext).toHaveBeenCalledTimes(1);
   });
@@ -27,7 +27,7 @@ describe("PreflightStep", () => {
     );
     const onBack = vi.fn();
     render(<PreflightStep onNext={vi.fn()} onBack={onBack} />);
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     fireEvent.click(screen.getByText("Back"));
     expect(onBack).toHaveBeenCalledTimes(1);
   });
@@ -39,7 +39,7 @@ describe("PreflightStep", () => {
     );
     const onNext = vi.fn();
     render(<PreflightStep onNext={onNext} onBack={vi.fn()} />);
-    await waitFor(() => expect(screen.getByText("provider:goose")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("goose")).toBeTruthy());
     expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
     fireEvent.click(screen.getByText("Continue"));
     expect(onNext).toHaveBeenCalledTimes(1);

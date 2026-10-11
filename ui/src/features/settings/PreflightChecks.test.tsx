@@ -7,15 +7,15 @@ import type { PreflightCheck } from "../../router/types";
 describe("PreflightChecks", () => {
   it("hides providers that aren't installed but keeps installed-and-broken ones", () => {
     render(<PreflightChecks checks={fixturePreflightChecks} loading={false} onRerun={vi.fn()} />);
-    expect(screen.getByText("provider:claude-code")).toBeTruthy();
-    expect(screen.getByText("provider:goose")).toBeTruthy();
-    expect(screen.queryByText("provider:kiro-cli")).toBeNull();
+    expect(screen.getByText("Claude Code")).toBeTruthy();
+    expect(screen.getByText("goose")).toBeTruthy();
+    expect(screen.queryByText("kiro-cli")).toBeNull();
   });
 
   it("marks an unproven-version provider with a warning, not a failure", () => {
     render(<PreflightChecks checks={fixturePreflightChecks} loading={false} onRerun={vi.fn()} />);
-    expect(screen.getByText("provider:goose").textContent).toContain("⚠");
-    expect(screen.getByText("provider:goose").textContent).not.toContain("✗");
+    expect(screen.getByText("goose").textContent).toContain("⚠");
+    expect(screen.getByText("goose").textContent).not.toContain("✗");
   });
 
   it("lists every probed provider, detected or not, behind the (i) button", () => {
@@ -65,6 +65,27 @@ describe("PreflightChecks", () => {
   it("shows no install options once any provider is detected", () => {
     render(<PreflightChecks checks={fixturePreflightChecks} loading={false} onRerun={vi.fn()} />);
     expect(screen.queryByRole("region", { name: "No agent harness detected" })).toBeNull();
+  });
+
+  it("names checks for people and keeps the raw id on the row", () => {
+    const checks: PreflightCheck[] = [
+      { name: "git", healthy: true },
+      { name: "disk_space", healthy: true },
+      { name: "data_service", healthy: true },
+      { name: "provider:claude-code", healthy: true },
+      { name: "provider:goose", healthy: true },
+      { name: "mystery_check", healthy: true },
+    ];
+    render(<PreflightChecks checks={checks} loading={false} onRerun={vi.fn()} />);
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("li[data-preflight-check]"));
+    expect(rows.map((r) => [r.dataset.preflightCheck, r.textContent])).toEqual([
+      ["git", "✓Git"],
+      ["disk_space", "✓Disk space"],
+      ["data_service", "✓Data service"],
+      ["provider:claude-code", "✓Claude Code"],
+      ["provider:goose", "✓goose"],
+      ["mystery_check", "✓mystery_check"],
+    ]);
   });
 
   it("omits the (i) button when no provider was probed", () => {

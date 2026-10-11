@@ -48,7 +48,7 @@ describe("FirstRunWizard", () => {
     fireEvent.click(screen.getByText("Get started"));
 
     // 2. Provider preflight — StubChecker reports healthy, Continue always enabled
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
     // 3. Conversation import — nothing found, so a plain Continue
@@ -96,7 +96,7 @@ describe("FirstRunWizard", () => {
     await waitFor(() => expect(screen.getByText("Get started")).toBeTruthy());
     fireEvent.click(screen.getByText("Get started"));
 
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     fireEvent.click(screen.getByText("Continue"));
 
     await waitFor(() => expect(screen.getByText(/nothing to import — mads didn.t find any existing/i)).toBeTruthy());
@@ -132,7 +132,7 @@ describe("FirstRunWizard", () => {
     render(<FirstRunWizard onComplete={vi.fn()} />);
 
     fireEvent.click(screen.getByText("Get started"));
-    await waitFor(() => expect(screen.getByText("git")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     fireEvent.click(screen.getByText("Back"));
 
     await waitFor(() => expect(screen.getByText("Get started")).toBeTruthy());

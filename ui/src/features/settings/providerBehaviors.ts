@@ -1,5 +1,16 @@
 import type { BehaviorInfo, ProviderInfo, ProviderSupport } from "../../router/types";
 
+// Product names for provider ids where the id isn't already how people
+// say it (goose, kiro-cli read fine as they are).
+const PROVIDER_LABELS: Record<string, string> = {
+  "claude-code": "Claude Code",
+};
+
+/** A provider's display name: its product name if it has one, else its id. */
+export function providerLabel(name: string): string {
+  return PROVIDER_LABELS[name] ?? name;
+}
+
 // Readable names for the capability matrix's behaviour keys
 // (providers/provider/matrix.go). A key the Router adds later falls back to
 // its humanized form rather than showing raw snake_case.

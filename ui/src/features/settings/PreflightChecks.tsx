@@ -2,9 +2,24 @@ import { useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Popover } from "../../components/Popover/Popover";
 import type { PreflightCheck } from "../../router/types";
+import { providerLabel } from "./providerBehaviors";
 import styles from "./PreflightChecks.module.css";
 
 const PROVIDER_PREFIX = "provider:";
+
+// Readable names for the built-in check ids (internal/preflight). An id this
+// doesn't know (mergiraf, a check added later) shows as it is.
+const CHECK_LABELS: Record<string, string> = {
+  git: "Git",
+  disk_space: "Disk space",
+  data_service: "Data service",
+};
+
+/** A check's display name; the raw id stays on its row as data-preflight-check. */
+export function checkLabel(name: string): string {
+  if (name.startsWith(PROVIDER_PREFIX)) return providerLabel(name.slice(PROVIDER_PREFIX.length));
+  return CHECK_LABELS[name] ?? name;
+}
 
 export interface PreflightChecksProps {
   checks: PreflightCheck[];
@@ -37,9 +52,9 @@ export function PreflightChecks({ checks, loading, onRerun }: PreflightChecksPro
             check.optional ? (
               <OptionalTool key={check.name} check={check} />
             ) : (
-              <li key={check.name} className={styles.check}>
+              <li key={check.name} className={styles.check} data-preflight-check={check.name}>
                 <StatusIcon check={check} />
-                {check.name}
+                {checkLabel(check.name)}
                 {!check.healthy && check.fix_hint && <span className={styles.hint}>{check.fix_hint}</span>}
               </li>
             ),

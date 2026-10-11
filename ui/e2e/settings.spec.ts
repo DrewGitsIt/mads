@@ -35,8 +35,8 @@ test("settings journey: appearance persists, preflight reports live data service
 
   // The Router wires the real preflight.New checker (not StubChecker —
   // services/router/main.go), so GET /preflight genuinely checks the live
-  // Data Service. Field name is "data_service" (underscore).
-  const dataServiceRow = page.locator("li", { hasText: "data_service" });
+  // Data Service. Its check id is "data_service"; the row reads "Data service".
+  const dataServiceRow = page.locator('li[data-preflight-check="data_service"]');
   await expect(dataServiceRow).toBeVisible();
   await expect(dataServiceRow).toContainText("✓");
 });

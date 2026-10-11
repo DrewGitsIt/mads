@@ -1,12 +1,5 @@
 import type { ConversationImportScan } from "../../router/types";
-
-const PROVIDER_LABELS: Record<string, string> = {
-  "claude-code": "Claude Code",
-};
-
-function providerLabel(name: string): string {
-  return PROVIDER_LABELS[name] ?? name;
-}
+import { providerLabel } from "./providerBehaviors";
 
 function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
