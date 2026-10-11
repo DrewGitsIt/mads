@@ -1,0 +1,681 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<title>mads — Settings regroup mockup</title>
+<!-- Static review mockup for the Settings UX audit. Reads the app's real
+     tokens so palette/theme switching matches the product. Not shipped. -->
+<link rel="stylesheet" href="../ui/src/tokens/tokens.css" />
+<style>
+  /* Native controls follow the theme (the global fix the audit proposes). */
+  [data-theme="dark"] { color-scheme: dark; }
+  [data-theme="light"] { color-scheme: light; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg0); color: var(--text); font: 400 var(--fs-body) var(--sans); accent-color: var(--accent); }
+
+  /* Reviewer chrome, not part of the design */
+  .review { position: fixed; top: 10px; right: 14px; z-index: 50; display: flex; gap: 6px; align-items: center;
+    padding: 6px 8px; border: 1px dashed var(--line); border-radius: var(--r); background: var(--bg1); color: var(--text3); font-size: var(--fs-sm); }
+  .review button { font: inherit; padding: 2px 8px; border: 1px solid var(--line); background: var(--bg2); color: var(--text2); border-radius: var(--r-sm); cursor: pointer; }
+
+  .app { display: flex; height: 100vh; }
+  .iconrail { width: 44px; background: var(--bg1); border-right: 1px solid var(--line-soft); }
+  .nav { width: 216px; flex: none; padding: var(--space-4) var(--space-3); border-right: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 2px; }
+  .nav a { display: block; padding: 7px 12px; border-radius: var(--r-sm); color: var(--text2); text-decoration: none; font: 500 var(--fs-ui) var(--sans); }
+  /* Active state by colour + background only: no weight change, so no rail jitter. */
+  .nav a.on { background: var(--accent-soft); color: var(--accent); }
+  .nav .sep { height: 1px; background: var(--line-soft); margin: var(--space-2) 12px; }
+
+  .body { flex: 1; overflow-y: auto; padding: var(--space-5) var(--space-5) 120px; }
+  .col { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-6); }
+
+  h2 { font: 700 18px var(--sans); margin: 0 0 4px; }
+  .lede { color: var(--text3); font-size: var(--fs-sm); margin: 0 0 var(--space-3); display: flex; gap: 8px; align-items: center; }
+  .card { border: 1px solid var(--line-soft); border-radius: var(--r); background: var(--bg1); }
+  .card + .card { margin-top: var(--space-3); }
+  .group-title { font: 650 var(--fs-sm) var(--sans); color: var(--text2); text-transform: uppercase; letter-spacing: .04em; padding: var(--space-3) var(--space-4) 0; }
+
+  /* Setting row: label + help on the left, control on the right. */
+  .row { display: grid; grid-template-columns: 1fr minmax(240px, 300px); gap: var(--space-4); align-items: center; padding: var(--space-3) var(--space-4); }
+  .row + .row { border-top: 1px solid var(--line-soft); }
+  .row.stack { grid-template-columns: 1fr; }
+  .row .lbl { font: 500 var(--fs-ui) var(--sans); display: flex; gap: 8px; align-items: center; }
+  .row .help { color: var(--text3); font-size: var(--fs-sm); margin-top: 2px; line-height: 1.45; }
+  .row .ctl { display: flex; justify-content: flex-end; }
+  /* Dependent controls hang off their parent with a rail. */
+  .child { margin-left: var(--space-4); border-left: 2px solid var(--line); border-top: none !important; padding-left: calc(var(--space-4) - 2px); }
+  .child.off { opacity: .45; pointer-events: none; }
+
+  .tag { font: 600 var(--fs-chip) var(--sans); text-transform: uppercase; letter-spacing: .05em; padding: 2px 6px; border-radius: 4px; }
+  .tag.warn { background: var(--warn-soft); color: var(--warn-fg); }
+  .tag.info { background: var(--info-soft); color: var(--info-fg); }
+  .tag.ok { background: var(--ok-soft); color: var(--ok-fg); }
+  .tag.bad { background: var(--bad-soft); color: var(--bad-fg); }
+  .tag.muted { background: var(--bg3); color: var(--text3); }
+
+  /* Controls */
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); padding: 2px; gap: 2px; }
+  .seg button { font: 500 var(--fs-sm) var(--sans); color: var(--text2); background: none; border: 0; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+  .seg button.on { background: var(--bg3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+
+  .select { width: 100%; display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border: 1px solid var(--line);
+    border-radius: var(--r-sm); background: var(--bg0); color: var(--text); font: 400 var(--fs-body) var(--sans); cursor: pointer; }
+  .select::after { content: ""; width: 7px; height: 7px; border-right: 1.5px solid var(--text3); border-bottom: 1.5px solid var(--text3); transform: rotate(45deg) translateY(-2px); }
+
+  .text { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); color: var(--text); font: 400 var(--fs-body) var(--sans); }
+  .text.mono { font-family: var(--mono); }
+  .text::placeholder { color: var(--text3); }
+  .text:focus, .num:focus-within { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+  .path { display: flex; gap: 6px; width: 100%; }
+  .btn { font: 500 var(--fs-sm) var(--sans); padding: 6px 12px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--bg2); color: var(--text); cursor: pointer; white-space: nowrap; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.ghost { background: none; border-color: transparent; color: var(--text2); }
+  .btn.danger { color: var(--bad-fg); }
+  .link { color: var(--accent); text-decoration: none; cursor: pointer; }
+
+  /* Themed number field: steppers + unit suffix */
+  .num { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg0); overflow: hidden; }
+  .num input { width: 72px; border: 0; background: none; color: var(--text); font: 400 var(--fs-body) var(--mono); padding: 7px 8px; text-align: right; -moz-appearance: textfield; }
+  .num input::-webkit-inner-spin-button { display: none; }
+  .num .unit { align-self: center; padding-right: 8px; color: var(--text3); font-size: var(--fs-sm); }
+  .num .steps { display: flex; flex-direction: column; border-left: 1px solid var(--line); }
+  .num .steps button { flex: 1; width: 22px; border: 0; background: var(--bg2); color: var(--text2); font-size: 8px; line-height: 1; cursor: pointer; padding: 0; }
+  .num .steps button + button { border-top: 1px solid var(--line); }
+  .num .steps button:hover { background: var(--bg3); color: var(--text); }
+  .num .pre { align-self: center; padding-left: 8px; color: var(--text3); }
+
+  .switch { position: relative; width: 34px; height: 20px; border-radius: 10px; background: var(--bg4); border: 0; cursor: pointer; flex: none; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px; border-radius: 50%; background: var(--text2); transition: left .12s; }
+  .switch.on { background: var(--accent); }
+  .switch.on::after { left: 17px; background: var(--accent-ink); }
+
+  .status { display: flex; gap: 8px; align-items: flex-start; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-soft); font-size: var(--fs-sm); color: var(--text2); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; flex: none; }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+
+  .caps { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+
+  /* Profiles strip */
+  .profiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+  .pcard { border: 1px solid var(--line-soft); border-radius: var(--r); padding: var(--space-3); background: var(--bg1); display: flex; flex-direction: column; gap: 6px; }
+  .pcard.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-soft); }
+  .pcard.new { border-style: dashed; align-items: center; justify-content: center; color: var(--text2); cursor: pointer; }
+  .pcard .h { display: flex; gap: 6px; align-items: center; font: 600 var(--fs-ui) var(--sans); }
+  .pcard p { margin: 0; color: var(--text3); font-size: var(--fs-sm); }
+
+  /* Lists */
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { display: flex; align-items: center; gap: var(--space-3); padding: 9px var(--space-4); border-top: 1px solid var(--line-soft); }
+  .list li:first-child { border-top: 0; }
+  .list .name { font-family: var(--mono); flex: 1; }
+  .list .mask { color: var(--text3); letter-spacing: 2px; }
+  .list li.dim .name { color: var(--text3); }
+  .addrow { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line-soft); background: var(--bg0); border-radius: 0 0 var(--r) var(--r); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip { font: 500 var(--fs-sm) var(--mono); padding: 3px 4px 3px 8px; border-radius: 4px; background: var(--bg3); display: inline-flex; gap: 4px; align-items: center; }
+  .chip button { border: 0; background: none; color: var(--text3); cursor: pointer; }
+
+  .check { display: flex; gap: 10px; align-items: baseline; padding: 8px var(--space-4); border-top: 1px solid var(--line-soft); }
+  .check:first-child { border-top: 0; }
+  .check .i { width: 14px; text-align: center; }
+  .check .t { flex: 1; }
+  .check .sub { color: var(--text3); font-size: var(--fs-sm); }
+  .check code { font: 400 var(--fs-sm) var(--mono); background: var(--bg0); border: 1px solid var(--line-soft); padding: 2px 6px; border-radius: 4px; }
+
+  details.disclosure > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 10px; padding: var(--space-3) var(--space-4); }
+  details.disclosure > summary::before { content: "▸"; color: var(--text3); width: 10px; }
+  details.disclosure[open] > summary::before { content: "▾"; }
+  details.disclosure > summary .lbl { font: 500 var(--fs-ui) var(--sans); flex: 1; }
+  table.matrix { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); }
+  table.matrix th, table.matrix td { padding: 6px var(--space-4); border-top: 1px solid var(--line-soft); text-align: left; }
+  table.matrix thead th { color: var(--text3); font-weight: 500; }
+  table.matrix tbody th { font-weight: 500; }
+  table.matrix .lvl { color: var(--text3); font: 400 var(--fs-chip) var(--sans); text-transform: uppercase; margin-left: 6px; }
+  .filters { display: flex; gap: 8px; align-items: center; padding: 0 var(--space-4) var(--space-3); color: var(--text3); font-size: var(--fs-sm); }
+
+  /* ---- palette preview options ---- */
+  [data-scope] { color: var(--text); }
+  .pv-opt { border-top: 1px dashed var(--line) !important; }
+  .pv-label { font: 600 var(--fs-sm) var(--sans); color: var(--info-fg); }
+  .pv-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-3); }
+  .pv-a, .pv-d { all: unset; box-sizing: border-box; cursor: pointer; border: 1px solid var(--line); border-radius: var(--r); background: var(--bg1); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+  .pv-a { position: relative; overflow: hidden; transition: transform .14s ease, box-shadow .14s ease, background .14s ease; }
+  .pv-a.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Hover: a soft sheen and a 2px lift, no border change. */
+  .pv-a::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .14s ease;
+    background: linear-gradient(135deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,.03) 45%, transparent 70%); }
+  .pv-a:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.28); }
+  .pv-a:hover::after { opacity: 1; }
+  .pv-a:active { transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) { .pv-a, .pv-a:hover { transition: none; transform: none; } }
+  .pv-name { font: 600 var(--fs-ui) var(--sans); margin-top: 4px; }
+  .pv-desc { font-size: var(--fs-sm); color: var(--text3); }
+  .mini { display: flex; height: 92px; border-radius: 6px; overflow: hidden; background: var(--bg0); border: 1px solid var(--line-soft); }
+  .m-rail { width: 12px; background: var(--bg1); display: flex; flex-direction: column; gap: 4px; padding: 5px 3px; }
+  .m-rail i { height: 6px; border-radius: 2px; background: var(--bg3); } .m-rail i.on { background: var(--accent); }
+  .m-side { width: 46px; background: var(--bg1); border-left: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft); padding: 6px 4px; display: flex; flex-direction: column; gap: 4px; }
+  .m-side b { height: 5px; border-radius: 2px; background: var(--bg3); } .m-side b.on { background: var(--accent-soft); outline: 1px solid var(--accent); }
+  .m-main { flex: 1; padding: 7px; display: flex; flex-direction: column; gap: 6px; }
+  .m-title { height: 6px; width: 40%; border-radius: 2px; background: var(--text); }
+  .m-card { flex: 1; background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 6px; display: flex; flex-direction: column; gap: 4px; }
+  .m-l { height: 4px; border-radius: 2px; background: var(--text3); }
+  .m-row { display: flex; gap: 3px; margin-top: auto; align-items: center; }
+  .m-btn { width: 22px; height: 8px; border-radius: 2px; background: var(--accent); }
+  .m-chip { width: 12px; height: 6px; border-radius: 2px; } .m-chip.ok { background: var(--ok); } .m-chip.warn { background: var(--warn); } .m-chip.bad { background: var(--bad); }
+  .pv-b { display: grid; grid-template-columns: 80px 1fr 1fr; gap: 6px; align-items: center; }
+  .pv-b-h { font-size: var(--fs-sm); color: var(--text3); text-align: center; }
+  .pv-b-r { font: 600 var(--fs-ui) var(--sans); }
+  .pv-b-cell { all: unset; box-sizing: border-box; cursor: pointer; display: flex; gap: 3px; align-items: center; padding: 8px; border-radius: var(--r-sm); background: var(--bg1); border: 1px solid var(--line); }
+  .pv-b-cell.on { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pv-b-cell .sw { width: 14px; height: 22px; border-radius: 3px; border: 1px solid var(--line-soft); }
+  .pv-b-cell .sw.big { width: 34px; }
+  .pv-b-sys { display: flex; gap: 8px; align-items: center; color: var(--text2); font-size: var(--fs-sm); margin-top: 8px; }
+  .pv-c button { display: inline-flex; gap: 6px; align-items: center; background: var(--bg1) !important; color: var(--text) !important; }
+  .pv-c button.on { box-shadow: inset 0 0 0 1px var(--accent) !important; }
+  .dots { display: inline-flex; } .dots i { width: 10px; height: 10px; border-radius: 50%; margin-left: -3px; border: 1px solid var(--bg1); } .dots i:first-child { margin-left: 0; }
+  .chat { background: var(--bg0); border: 1px solid var(--line-soft); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; line-height: 1.4; }
+  .chat .u { align-self: flex-end; background: var(--accent-soft); color: var(--text); padding: 4px 8px; border-radius: 8px 8px 2px 8px; }
+  .chat .a { color: var(--text2); } .chat code { font-family: var(--mono); color: var(--text); background: var(--bg2); padding: 0 3px; border-radius: 3px; }
+  .chat .st { display: flex; gap: 4px; align-items: center; } .chat .lk { margin-left: auto; color: var(--accent); }
+  /* Sticky save bar */
+  .savebar { position: fixed; left: 260px; right: 0; bottom: 0; display: flex; justify-content: center; pointer-events: none; padding: var(--space-4); transform: translateY(110%); transition: transform .16s; }
+  .savebar.show { transform: none; }
+  .savebar .inner { pointer-events: auto; display: flex; gap: var(--space-3); align-items: center; padding: 10px 12px 10px 16px; border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--bg2); box-shadow: var(--shadow); min-width: 520px; }
+  .savebar .msg { flex: 1; font: 500 var(--fs-ui) var(--sans); }
+  .savebar .msg span { color: var(--text3); font-weight: 400; font-size: var(--fs-sm); margin-left: 6px; }
+
+  code.inline { font: 400 var(--fs-sm) var(--mono); background: var(--bg0); border: 1px solid var(--line-soft); padding: 1px 5px; border-radius: 4px; color: var(--text); }
+  .placeholder { padding: var(--space-4); border-style: dashed; }
+  .ph-title { font: 600 var(--fs-ui) var(--sans); color: var(--text2); margin-bottom: 8px; }
+  .ph-line { height: 9px; border-radius: 4px; background: var(--bg3); margin: 6px 0; }
+  .menu { position: absolute; top: 36px; left: 0; right: 0; z-index: 10; list-style: none; margin: 0; padding: 4px; border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--bg2); box-shadow: var(--shadow); }
+  .menu li { padding: 6px 10px; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; }
+  .menu li:hover { background: var(--bg3); }
+  .menu li.on::after { content: "✓"; color: var(--accent); }
+  .tag.dead { background: var(--bad-soft); color: var(--bad-fg); border: 1px dashed var(--bad); }
+  .note { border: 1px dashed var(--info); color: var(--info-fg); background: var(--info-soft); border-radius: var(--r-sm); padding: 8px 12px; font-size: var(--fs-sm); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+  .two .card { margin: 0 !important; padding: var(--space-3) var(--space-4); }
+  .two h4 { margin: 0 0 6px; font: 600 var(--fs-ui) var(--sans); }
+  .two p { margin: 0 0 10px; color: var(--text3); font-size: var(--fs-sm); }
+</style>
+</head>
+<body>
+<div class="review">
+  Mockup ·
+  <button onclick="setTheme()">theme</button>
+  <button onclick="setPalette()">palette</button>
+  <button onclick="dirty(3, true)">show save bar</button>
+</div>
+
+<div class="app">
+  <div class="iconrail"></div>
+  <nav class="nav">
+    <a href="#profiles">Profiles</a>
+    <div class="sep"></div>
+    <a href="#sessions" class="on">New sessions</a>
+    <a href="#models">Agents &amp; models</a>
+    <a href="#workspaces">Workspaces</a>
+    <div class="sep"></div>
+    <a href="#pipelines">Pipelines</a>
+    <a href="#synthesis">Synthesis</a>
+    <div class="sep"></div>
+    <a href="#appearance">Appearance</a>
+    <a href="#editor">Editor</a>
+    <a href="#credentials">Credentials &amp; environment</a>
+    <div class="sep"></div>
+    <a href="#experimental">Experimental</a>
+    <a href="#system">System</a>
+    <a href="#about">About mads</a>
+  </nav>
+
+  <main class="body">
+    <div class="col">
+
+      <div class="note">Mockup notes are in dashed blue boxes like this. Every control is clickable; editing any field brings up the save bar at the bottom.</div>
+
+      <!-- PROFILES -->
+      <section id="profiles">
+        <h2>Profiles</h2>
+        <p class="lede">A profile is a saved snapshot of everything on this page.</p>
+        <div class="profiles">
+          <div class="pcard active"><div class="h">Default <span class="tag ok">Active</span><span class="tag muted">Built-in</span></div><p>What mads ships with.</p></div>
+          <div class="pcard"><div class="h">Spark local</div><p>Ollama on the Spark box, isolated env.</p><div><button class="btn">Switch</button> <button class="btn ghost">Rename</button></div></div>
+          <div class="pcard new">＋ New profile from current settings</div>
+        </div>
+      </section>
+
+      <!-- NEW SESSIONS -->
+      <section id="sessions">
+        <h2>New sessions</h2>
+        <p class="lede">What a session starts with when the Launchpad doesn't say otherwise.</p>
+
+        <div class="card">
+          <div class="group-title">Where sessions start</div>
+          <div class="row">
+            <div><div class="lbl">Start in</div><div class="help">A workspace starts in its primary repo. Choosing one clears the other, the same way the Launchpad does.</div></div>
+            <div class="ctl"><div class="seg" data-seg="startin" data-dirty><button class="on" data-v="ws">Workspace</button><button data-v="dir">Folder</button><button data-v="none">mads default</button></div></div>
+          </div>
+          <div class="row child" data-show="startin=ws">
+            <div><div class="lbl">Workspace</div></div>
+            <div class="ctl"><div class="select" data-dirty>e2e workspace</div></div>
+          </div>
+          <div class="row child" data-show="startin=dir" hidden>
+            <div><div class="lbl">Folder</div></div>
+            <div class="ctl"><div class="path"><input class="text mono" value="~/repo/mads" data-dirty /><button class="btn">Browse…</button></div></div>
+          </div>
+          <div class="row child stack" data-show="startin=none" hidden>
+            <div class="help" style="font-size:var(--fs-body);color:var(--text2)">Sessions start in <code class="inline">~/repo/mads</code>, the folder mads was launched from. Choose <b>Folder</b> to pin a different one. The Launchpad can always pick a folder for a single session.</div>
+          </div>
+        </div>
+
+
+        <div class="card">
+          <div class="group-title">Subagents</div>
+          <div class="row">
+            <div><div class="lbl">Show subagents in the session list</div><div class="help">They appear under their session while they work. The conversation always shows them.</div></div>
+            <div class="ctl"><button class="switch on" data-toggle="subagents" data-dirty></button></div>
+          </div>
+          <div class="row child" data-enabled-by="subagents">
+            <div><div class="lbl">Hide finished ones after</div><div class="help">Counted from when a subagent finishes. A running one never fades.</div></div>
+            <div class="ctl"><div class="seg" data-dirty><button>Right away</button><button class="on">10 min</button><button>Never</button></div></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="group-title">Commits</div>
+          <div class="row">
+            <div><div class="lbl">Write commit messages for me</div><div class="help">Commit in the session's status line skips the dialog: the Fast Model writes the message and commits all of this session's files. You can undo from the result.</div></div>
+            <div class="ctl"><button class="switch" disabled style="opacity:.5"></button></div>
+          </div>
+          <div class="status"><span class="dot warn"></span><span>Needs a Fast Model, and none is working right now. <a class="link" href="#models">Set one up →</a></span></div>
+        </div>
+      </section>
+
+      <!-- AGENTS & MODELS -->
+      <section id="models">
+        <h2>Agents &amp; models</h2>
+        <p class="lede">The harness your sessions run in, and the cheap model mads uses for background work.</p>
+        <div class="card">
+          <div class="group-title">Sessions</div>
+          <div class="row">
+            <div>
+              <div class="lbl">Default provider</div>
+              <div class="help">Model, persona, trust and isolation are set from the Launchpad's <span class="link">Save as my defaults</span>.</div>
+            </div>
+            <div class="ctl" style="flex-direction:column;align-items:stretch;position:relative">
+              <button class="select" id="provider-trigger" type="button">goose</button>
+              <ul class="menu" id="provider-menu" hidden></ul>
+              <div class="caps" id="caps"></div>
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:8px">Under the provider picker: only what the chosen provider <em>doesn't</em> do natively (matrix option A). The picker is a real dropdown now.</div>
+        <div class="group-title" style="padding:var(--space-4) 0 var(--space-2)">Fast Model</div>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl">Runs on</div></div>
+            <div class="ctl"><div class="seg" data-seg="fm" data-dirty><button class="on" data-v="provider">My provider</button><button data-v="endpoint">API endpoint</button><button data-v="off">Off</button></div></div>
+          </div>
+          <div class="row child" data-show="fm=endpoint" hidden>
+            <div><div class="lbl">Endpoint</div></div>
+            <div class="ctl"><input class="text mono" placeholder="https://api.example.com/v1" data-dirty /></div>
+          </div>
+          <div class="row child" data-show="fm=endpoint" hidden>
+            <div><div class="lbl">Model</div></div>
+            <div class="ctl"><input class="text mono" placeholder="gpt-4o-mini" data-dirty /></div>
+          </div>
+          <div class="row child" data-show="fm=endpoint" hidden>
+            <div><div class="lbl">Credential</div></div>
+            <div class="ctl"><div class="select" data-dirty>None</div></div>
+          </div>
+          <div class="status" id="fm-status"><span class="dot bad"></span><span>goose can't do background completions. Use an API endpoint or switch provider. Until then, these are skipped: titles, summaries, digests, retros, commit messages.</span></div>
+        </div>
+
+        <div class="card">
+          <details class="disclosure" id="matrix">
+            <summary><span class="lbl">Provider capabilities</span><span class="tag muted">4 providers · 22 behaviours</span></summary>
+            <div class="filters">Show: <div class="seg"><button class="on">Differences only</button><button>All</button></div></div>
+            <table class="matrix">
+              <thead><tr><th>Behaviour</th><th>claude-code</th><th>fake</th><th>goose</th><th>kiro-cli</th></tr></thead>
+              <tbody>
+                <tr><th>Branching<span class="lvl">optional</span></th><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td><td><span class="tag bad">No</span></td><td><span class="tag bad">No</span></td></tr>
+                <tr><th>Subagent cards<span class="lvl">optional</span></th><td><span class="tag ok">Native</span></td><td><span class="tag bad">No</span></td><td><span class="tag bad">No</span></td><td><span class="tag bad">No</span></td></tr>
+                <tr><th>Interrupt<span class="lvl">required</span></th><td><span class="tag warn">Emulated</span></td><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td></tr>
+                <tr><th>Read-only trust<span class="lvl">expected</span></th><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td><td><span class="tag warn">Emulated</span></td><td><span class="tag warn">Emulated</span></td></tr>
+                <tr><th>MCP servers<span class="lvl">optional</span></th><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td><td><span class="tag ok">Native</span></td><td><span class="tag bad">No</span></td></tr>
+                <tr><td colspan="5" style="color:var(--text3)">…</td></tr>
+              </tbody>
+            </table>
+          </details>
+        </div>
+        <div class="note" style="margin-top:8px">Matrix option B: collapsed by default, readable behaviour names, and "Differences only" hides rows where every provider is native.</div>
+
+      </section>
+
+      <!-- WORKSPACES -->
+      <section id="workspaces">
+        <h2>Workspaces</h2>
+        <p class="lede">Placeholder for a later pass.</p>
+        <div class="card placeholder">
+          <div class="ph-title">What a workspace is</div>
+          <div class="ph-line" style="width:82%"></div><div class="ph-line" style="width:64%"></div>
+          <div class="ph-title" style="margin-top:14px">Your workspaces</div>
+          <div class="ph-line" style="width:48%"></div><div class="ph-line" style="width:52%"></div>
+          <div style="margin-top:12px"><button class="btn" disabled>New workspace…</button> <span class="link" style="font-size:var(--fs-sm);margin-left:8px">Open in Library →</span></div>
+        </div>
+        <div class="note" style="margin-top:8px">Structure only. To fill in later: explain workspaces (repos, primary repo, defaults that override these), list them, and link to the Library editor. "Start in → Workspace" above would link here.</div>
+      </section>
+
+      <div class="note">Settings tagged <span class="tag dead">Not wired</span> are saved but nothing in mads reads them today. Decision needed: remove, hide, or implement. See the chat.</div>
+
+      <!-- PIPELINES -->
+      <section id="pipelines">
+        <h2>Pipelines</h2>
+        <p class="lede">How multi-stage runs behave.</p>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl">Concurrency limit <span class="tag warn">Restart</span></div><div class="help">How many agents can run at once.</div></div>
+            <div class="ctl"><div class="num"><input type="number" value="3" min="1" max="32" data-dirty /><div class="steps"><button>▲</button><button>▼</button></div></div></div>
+          </div>
+          <div class="row">
+            <div><div class="lbl">Stage timeout</div><div class="help">A stage that runs longer than this is stopped as stuck. Applies to UI and CLI runs.</div></div>
+            <div class="ctl"><div class="num"><input type="number" value="30" min="1" data-dirty /><span class="unit">min</span><div class="steps"><button>▲</button><button>▼</button></div></div></div>
+          </div>
+          <div class="row">
+            <div><div class="lbl">Cost alert <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div><div class="help">Warn when one run spends more than this. 0 turns it off.</div></div>
+            <div class="ctl"><div class="num"><span class="pre">$</span><input type="number" value="0.00" step="0.25" min="0" data-dirty /><div class="steps"><button>▲</button><button>▼</button></div></div></div>
+          </div>
+          <div class="row">
+            <div><div class="lbl">Keep the computer awake during runs</div><div class="help">Closing the lid on battery still sleeps your Mac; the run pauses and recovers when it wakes. Applies to runs started afterward.</div></div>
+            <div class="ctl"><button class="switch on" data-dirty></button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SYNTHESIS -->
+      <section id="synthesis">
+        <h2>Synthesis</h2>
+        <p class="lede">Summaries and retros mads writes after a session.</p>
+        <div class="card">
+          <div class="row">
+            <div><div class="lbl">Synthesis</div><div class="help" id="synth-hint">About $0.01 per session: summary only.</div></div>
+            <div class="ctl"><div class="seg" data-seg="synth" data-dirty><button data-v="off">Off</button><button class="on" data-v="light">Summary</button><button data-v="full">Summary + DPA</button></div></div>
+          </div>
+          <div class="row child" data-show="synth!=off">
+            <div><div class="lbl">Apply proposals automatically</div><div class="help">Otherwise they wait for your review.</div></div>
+            <div class="ctl"><button class="switch" data-dirty></button></div>
+          </div>
+          <div class="row child" data-show="synth!=off">
+            <div><div class="lbl">Model tier <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div><div class="help">Balanced cost and quality.</div></div>
+            <div class="ctl"><div class="seg" data-dirty><button>Cheapest</button><button class="on">Balanced</button><button>Best</button></div></div>
+          </div>
+          <div class="row child" data-show="synth!=off">
+            <div><div class="lbl">Agent selection <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div><div class="help">How hard mads looks for the best-matched agent for follow-up work.</div></div>
+            <div class="ctl"><div class="seg" data-dirty><button class="on">Light</button><button>Full</button></div></div>
+          </div>
+          <div class="row child" data-show="synth!=off">
+            <div><div class="lbl">Wait before synthesizing <span class="tag warn">Restart</span></div><div class="help">Lets a burst of activity settle first.</div></div>
+            <div class="ctl"><div class="num"><input type="number" value="2000" step="250" data-dirty /><span class="unit">ms</span><div class="steps"><button>▲</button><button>▼</button></div></div></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- APPEARANCE -->
+      <section id="appearance">
+        <h2>Appearance</h2>
+        <p class="lede">Changes here apply instantly. <span class="tag info">Live</span></p>
+        <div class="card">
+          <div class="row"><div><div class="lbl">Theme</div></div><div class="ctl"><div class="seg" data-live><button class="on">Dark</button><button>Light</button><button>System</button></div></div></div>
+          <div class="row stack">
+            <div><div class="lbl">Palette</div><div class="help">Hover a palette to preview it across the whole app; click to keep it.</div></div>
+          </div>
+          <div class="row stack" style="border-top:0;padding-top:0">
+            <div class="pv-grid"><button class="pv-a" data-pal="clay" data-scope data-palette="clay">
+  <div class="mini">
+    <div class="m-rail"><i></i><i class="on"></i><i></i></div>
+    <div class="m-side"><b></b><b class="on"></b><b></b><b></b></div>
+    <div class="m-main">
+      <div class="m-title"></div>
+      <div class="m-card"><div class="m-l" style="width:70%"></div><div class="m-l" style="width:45%"></div>
+        <div class="m-row"><span class="m-btn"></span><span class="m-chip ok"></span><span class="m-chip warn"></span><span class="m-chip bad"></span></div></div>
+    </div>
+  </div>
+  <div class="pv-name">Clay</div><div class="pv-desc">Warm umber with a terracotta accent. Paper and ink.</div>
+</button><button class="pv-a" data-pal="space" data-scope data-palette="space">
+  <div class="mini">
+    <div class="m-rail"><i></i><i class="on"></i><i></i></div>
+    <div class="m-side"><b></b><b class="on"></b><b></b><b></b></div>
+    <div class="m-main">
+      <div class="m-title"></div>
+      <div class="m-card"><div class="m-l" style="width:70%"></div><div class="m-l" style="width:45%"></div>
+        <div class="m-row"><span class="m-btn"></span><span class="m-chip ok"></span><span class="m-chip warn"></span><span class="m-chip bad"></span></div></div>
+    </div>
+  </div>
+  <div class="pv-name">Space</div><div class="pv-desc">Deep indigo-black with a violet accent. Night shift.</div>
+</button><button class="pv-a" data-pal="glacier" data-scope data-palette="glacier">
+  <div class="mini">
+    <div class="m-rail"><i></i><i class="on"></i><i></i></div>
+    <div class="m-side"><b></b><b class="on"></b><b></b><b></b></div>
+    <div class="m-main">
+      <div class="m-title"></div>
+      <div class="m-card"><div class="m-l" style="width:70%"></div><div class="m-l" style="width:45%"></div>
+        <div class="m-row"><span class="m-btn"></span><span class="m-chip ok"></span><span class="m-chip warn"></span><span class="m-chip bad"></span></div></div>
+    </div>
+  </div>
+  <div class="pv-name">Glacier</div><div class="pv-desc">Cool slate with an icy blue accent. Crisp and quiet.</div>
+</button></div>
+          </div>
+          <div class="row"><div><div class="lbl">Density <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div></div><div class="ctl"><div class="seg" data-live><button class="on">Comfortable</button><button>Compact</button></div></div></div>
+          <div class="row"><div><div class="lbl">Reduce motion</div><div class="help">Follows your system setting unless turned on. Doesn't change streaming speed.</div></div><div class="ctl"><div class="seg" data-live><button class="on">System</button><button>On</button></div></div></div>
+          <div class="row"><div><div class="lbl">Reply streaming</div><div class="help">Shows replies as fast as the agent sends them.</div></div><div class="ctl"><div class="seg" data-live data-seg="wpm"><button class="on" data-v="native">As sent</button><button data-v="slow">Slow</button><button data-v="fast">Fast</button><button data-v="custom">Custom</button></div></div></div>
+          <div class="row child" data-show="wpm=custom" hidden><div><div class="lbl">Words per minute</div></div><div class="ctl"><div class="num"><input type="number" value="350" step="25" /><span class="unit">wpm</span><div class="steps"><button>▲</button><button>▼</button></div></div></div></div>
+        </div>
+      </section>
+
+      <!-- EDITOR -->
+      <section id="editor">
+        <h2>Editor</h2>
+        <div class="card">
+          <div class="row"><div><div class="lbl">Open files with <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div><div class="help">The command mads runs to open a file. Leave empty to use $EDITOR.</div></div><div class="ctl"><input class="text mono" placeholder="code -g" data-dirty /></div></div>
+          <div class="row"><div><div class="lbl">Keybindings <span class="tag dead" title="Saved but nothing reads it">Not wired</span></div></div><div class="ctl"><div class="seg" data-dirty><button class="on">Default</button><button>Vim</button><button>Emacs</button></div></div></div>
+        </div>
+      </section>
+
+      <!-- CREDENTIALS -->
+      <section id="credentials">
+        <h2>Credentials &amp; environment</h2>
+        <p class="lede">Secrets mads stores, and what environment agents get.</p>
+        <div class="card">
+          <div class="group-title" style="padding-bottom:var(--space-2)">Stored credentials</div>
+          <ul class="list">
+            <li><span class="name">ANTHROPIC_API_KEY</span><span class="mask">••••••••</span><button class="switch on" title="Used by this profile" data-dirty></button><button class="btn ghost danger">Delete</button></li>
+            <li class="dim"><span class="name">OPENAI_API_KEY</span><span class="tag muted">Not in this profile</span><span class="mask">••••••••</span><button class="switch" data-dirty></button><button class="btn ghost danger">Delete</button></li>
+          </ul>
+          <form class="addrow" onsubmit="return false"><input class="text mono" placeholder="NAME" /><input class="text" type="password" placeholder="Value" /><button class="btn">Add</button></form>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;color:var(--text3);font-size:var(--fs-sm)">
+          <span>The switch sets whether this profile passes the credential to agents.</span>
+          <button class="btn">Import from environment…</button>
+        </div>
+
+        <div class="card" style="margin-top:var(--space-3)">
+          <div class="group-title">Agent environment</div>
+          <div class="row">
+            <div><div class="lbl">Environment</div><div class="help" id="env-hint">Agents get your shell's environment plus 1 credential.</div></div>
+            <div class="ctl"><div class="seg" data-seg="env" data-dirty><button class="on" data-v="inherit">Inherit</button><button data-v="isolated">Isolated</button></div></div>
+          </div>
+          <div class="row child" data-show="env=isolated" hidden>
+            <div><div class="lbl">Also pass through</div><div class="help">Variables from your shell that isolated agents still get.</div></div>
+            <div class="ctl" style="flex-direction:column;gap:6px;align-items:stretch">
+              <div class="chips"><span class="chip">AWS_PROFILE <button>✕</button></span><span class="chip">SSH_AUTH_SOCK <button>✕</button></span></div>
+              <div class="path"><input class="text mono" placeholder="VAR_NAME" /><button class="btn">Add</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- EXPERIMENTAL -->
+      <section id="experimental">
+        <h2>Experimental</h2>
+        <p class="lede">Features still in progress. Changes apply instantly. <span class="tag info">Live</span></p>
+        <div class="card">
+          <div class="row"><div><div class="lbl">Multi-repo workspaces</div><div class="help">A workspace can span more than one repository.</div></div><div class="ctl"><button class="switch" data-live></button></div></div>
+          <div class="row"><div><div class="lbl">Linked sessions</div><div class="help">Link sessions as leader and monitor: multi-select in the rail, link chooser, attributed digests.</div></div><div class="ctl"><button class="switch" data-live></button></div></div>
+          <div class="row"><div><div class="lbl">Remote registry</div><div class="help">Browse and install agents, capabilities and templates from a remote registry.</div></div><div class="ctl"><button class="switch" data-live></button></div></div>
+        </div>
+      </section>
+
+      <!-- SYSTEM -->
+      <section id="system">
+        <h2>System</h2>
+        <p class="lede">Health checks, background processes and housekeeping.</p>
+
+        <div class="card">
+          <div style="display:flex;align-items:center;padding:var(--space-3) var(--space-4) 0"><div class="group-title" style="padding:0;flex:1">Health check</div><button class="btn ghost">Run again</button></div>
+          <div style="padding-top:6px">
+            <div class="check"><span class="i" style="color:var(--ok)">✓</span><span class="t">Git</span></div>
+            <div class="check"><span class="i" style="color:var(--ok)">✓</span><span class="t">Disk space</span></div>
+            <div class="check"><span class="i" style="color:var(--ok)">✓</span><span class="t">Data service</span></div>
+            <div class="check"><span class="i" style="color:var(--ok)">✓</span><span class="t">Claude Code</span></div>
+            <div class="check"><span class="i" style="color:var(--warn)">⚠</span><span class="t">goose <span class="sub">— v1.50.1 is newer than the tested range (&lt; 1.49.0). Check its release notes.</span></span></div>
+            <div class="check"><span class="i" style="color:var(--warn)">⚠</span><span class="t">mergiraf <span class="tag muted">Optional</span><div class="sub">Lets Land and pipelines merge edits to the same file automatically. Without it, plain git stops on overlapping lines.</div><div style="margin-top:6px"><code>brew install mergiraf</code> <button class="btn ghost">Copy</button></div></span></div>
+          </div>
+        </div>
+
+
+        <div class="card">
+          <div class="row"><div><div class="lbl">Shells</div><div class="help">Terminals in session docks. They keep running when the dock is hidden.</div></div><div class="ctl" style="gap:8px;align-items:center"><span style="color:var(--text3)">2 running · 1 idle</span><button class="btn">Manage…</button></div></div>
+          <div class="row"><div><div class="lbl">Keep logs for <span class="tag warn">Restart</span></div></div><div class="ctl"><div class="num"><input type="number" value="30" min="1" data-dirty /><span class="unit">days</span><div class="steps"><button>▲</button><button>▼</button></div></div></div></div>
+          <div class="row"><div><div class="lbl">Import conversations</div><div class="help">Pick up conversations you've had in your agent harnesses. Files are read where they are; nothing is uploaded or copied.</div></div><div class="ctl"><button class="btn">Scan for conversations…</button></div></div>
+        </div>
+        <div class="note" style="margin-top:8px">Shells collapses to a one-line summary. "Manage…" opens the existing shells table in a side sheet, so a full table no longer sits in the page.</div>
+
+      </section>
+      <!-- ABOUT -->
+      <section id="about">
+        <h2>About mads</h2>
+        <p class="lede">Placeholder for a later pass.</p>
+        <div class="card">
+          <div class="row"><div><div class="lbl">Version</div><div class="help">dev · You're on the latest build.</div></div><div class="ctl"><button class="btn">Check for updates</button></div></div>
+        </div>
+        <div class="card placeholder">
+          <div class="ph-title">What mads does</div>
+          <div class="ph-line" style="width:90%"></div><div class="ph-line" style="width:76%"></div><div class="ph-line" style="width:58%"></div>
+          <div class="ph-title" style="margin-top:14px">How it fits together</div>
+          <div class="ph-line" style="width:70%"></div><div class="ph-line" style="width:66%"></div>
+          <div class="ph-title" style="margin-top:14px">Links</div>
+          <div class="ph-line" style="width:30%"></div><div class="ph-line" style="width:34%"></div>
+        </div>
+        <div class="note" style="margin-top:8px">Structure only. To fill in later: what mads is, the sessions → pipelines → synthesis loop, docs/changelog/issue links, licences, where data lives on disk.</div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<div class="savebar" id="savebar">
+  <div class="inner">
+    <div class="msg" id="savemsg">Unsaved changes</div>
+    <span class="tag warn" id="restarttag" hidden>Restart needed</span>
+    <button class="btn ghost" onclick="dirty(0)">Discard</button>
+    <button class="btn primary" onclick="dirty(0)">Save</button>
+  </div>
+</div>
+<div class="note" style="position:fixed;left:50%;transform:translateX(calc(-50% + 130px));bottom:78px;width:520px;display:none;background:var(--bg1)" id="savenote">Save model A: one bar for the whole page. Live controls (Appearance, Experimental) save only their own field and never show this bar. Leaving Settings with unsaved changes asks first.</div>
+
+<script>
+  // ---- mockup-only behaviour ----
+  let count = 0;
+  function dirty(n, restart) {
+    count = n === undefined ? count + 1 : n;
+    document.getElementById("savebar").classList.toggle("show", count > 0);
+    document.getElementById("savenote").style.display = count > 0 ? "block" : "none";
+    document.getElementById("savemsg").innerHTML = `Unsaved changes<span>${count} setting${count === 1 ? "" : "s"}</span>`;
+    if (restart !== undefined || n === 0) document.getElementById("restarttag").hidden = !restart;
+  }
+  const segState = { startin: "ws", synth: "light", fm: "provider", env: "inherit", wpm: "native" };
+  function applyShows() {
+    document.querySelectorAll("[data-show]").forEach((el) => {
+      const [, key, op, val] = el.dataset.show.match(/(\w+)(!?=)(\w+)/);
+      el.hidden = op === "=" ? segState[key] !== val : segState[key] === val;
+    });
+    document.getElementById("synth-hint").textContent = {
+      off: "No synthesis cost.", light: "About $0.01 per session: summary only.", full: "About $0.05 per session: summary plus DPA generation.",
+    }[segState.synth];
+    document.getElementById("env-hint").textContent = segState.env === "inherit"
+      ? "Agents get your shell's environment plus 1 credential."
+      : "Agents get a clean base environment, 1 credential and 2 passthrough variables.";
+  }
+  document.querySelectorAll(".seg").forEach((seg) => seg.addEventListener("click", (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    seg.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    if (seg.dataset.seg) { segState[seg.dataset.seg] = b.dataset.v; applyShows(); }
+    if (seg.hasAttribute("data-dirty")) dirty();
+  }));
+  document.querySelectorAll(".switch").forEach((sw) => sw.addEventListener("click", () => {
+    if (sw.disabled) return;
+    sw.classList.toggle("on");
+    if (sw.dataset.toggle) document.querySelectorAll(`[data-enabled-by="${sw.dataset.toggle}"]`).forEach((c) => c.classList.toggle("off", !sw.classList.contains("on")));
+    if (sw.hasAttribute("data-dirty")) dirty();
+  }));
+  document.querySelectorAll("input[data-dirty]").forEach((i) => i.addEventListener("input", () => {
+    const restart = i.closest(".row")?.querySelector(".tag.warn") ? true : undefined;
+    dirty(undefined, restart || (document.getElementById("restarttag").hidden ? undefined : true));
+  }));
+  document.querySelectorAll(".num").forEach((n) => {
+    const input = n.querySelector("input"); const [up, down] = n.querySelectorAll(".steps button");
+    const step = Number(input.step) || 1;
+    up.onclick = () => { input.value = +(Number(input.value) + step).toFixed(2); input.dispatchEvent(new Event("input")); };
+    down.onclick = () => { input.value = +Math.max(Number(input.min || 0), Number(input.value) - step).toFixed(2); input.dispatchEvent(new Event("input")); };
+  });
+  const CAPS = {
+    goose: [["bad", "No branching"], ["bad", "No subagent cards"], ["warn", "Trust emulated"], ["warn", "One-shot emulated"]],
+    "claude-code": [["warn", "Interrupt emulated"], ["bad", "No folder reroot"]],
+    "kiro-cli": [["bad", "No branching"], ["bad", "No MCP servers"], ["bad", "No subagent cards"], ["warn", "Trust emulated"]],
+    fake: [["bad", "No subagent cards"]],
+  };
+  const order = Object.keys(CAPS);
+  function renderCaps(p) {
+    document.getElementById("caps").innerHTML = CAPS[p].map(([t, s]) => `<span class="tag ${t}">${s}</span>`).join("") +
+      ` <a class="link" style="font-size:var(--fs-sm);margin-left:4px" href="#system" onclick="document.getElementById('matrix').open=true">All capabilities →</a>`;
+  }
+  const trig = document.getElementById("provider-trigger"), menu = document.getElementById("provider-menu");
+  function renderMenu() { menu.innerHTML = order.map((p) => `<li data-p="${p}" class="${p === trig.textContent ? "on" : ""}">${p}</li>`).join(""); }
+  trig.onclick = (e) => { e.stopPropagation(); renderMenu(); menu.hidden = !menu.hidden; };
+  menu.onclick = (e) => { const li = e.target.closest("li"); if (!li) return; trig.textContent = li.dataset.p; renderCaps(li.dataset.p); menu.hidden = true; dirty(); };
+  document.addEventListener("click", () => { menu.hidden = true; });
+  renderCaps("goose");
+  function setTheme() { const h = document.documentElement; h.dataset.theme = h.dataset.theme === "dark" ? "light" : "dark"; syncScopes(); markPal(); }
+  function setPalette() { const h = document.documentElement, p = ["clay", "space", "glacier"]; committed = h.dataset.palette = p[(p.indexOf(h.dataset.palette) + 1) % 3]; markPal(); }
+  // ---- palette options ----
+  const root = document.documentElement;
+  // Scoped previews follow the page theme unless they pin their own (option B).
+  function syncScopes() { document.querySelectorAll("[data-scope]:not([data-th])").forEach((el) => (el.dataset.theme = root.dataset.theme)); }
+  function markPal() {
+    document.querySelectorAll(".pv-a").forEach((el) => el.classList.toggle("on", el.dataset.pal === committed));
+  }
+  let committed = root.dataset.palette;
+  document.querySelectorAll(".pv-a").forEach((el) => {
+    el.addEventListener("mouseenter", () => { root.dataset.palette = el.dataset.pal; markPal(); });
+    el.addEventListener("mouseleave", () => { root.dataset.palette = committed; markPal(); });
+  });
+  document.querySelectorAll("[data-pal]").forEach((el) => el.addEventListener("click", () => {
+    committed = root.dataset.palette = el.dataset.pal;
+    if (el.dataset.th) { root.dataset.theme = el.dataset.th; syncScopes(); }
+    markPal();
+  }));
+  syncScopes(); markPal();
+  // Scroll-spy for the mockup nav
+  const body = document.querySelector(".body");
+  body.addEventListener("scroll", () => {
+    let cur = "profiles";
+    document.querySelectorAll("main section[id]").forEach((s) => { if (s.offsetTop - body.offsetTop - 80 <= body.scrollTop) cur = s.id; });
+    document.querySelectorAll(".nav a").forEach((a) => a.classList.toggle("on", a.getAttribute("href") === "#" + cur));
+  });
+</script>
+</body>
+</html>
