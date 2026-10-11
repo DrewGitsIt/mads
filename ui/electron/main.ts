@@ -13,6 +13,7 @@ import {
   type WebContents,
 } from "electron";
 import { join } from "node:path";
+import { classifyNavigation } from "./externalLinks";
 import { ShellRegistryCache } from "./pty/shellRegistryCache";
 import type { ShellActivity, ShellInfo } from "./pty/shellHostCore";
 import { HostRequests } from "./pty/hostRequests";
@@ -281,11 +282,25 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
+  // A plain <a href> (agent markdown strips target) navigates this window
+  // itself, and there is no back button. Off-origin http(s) opens in the
+  // user's browser instead; the window never leaves the app. will-redirect
+  // covers a same-origin URL that bounces elsewhere.
+  const appUrl = DEV_SERVER_URL ?? ROUTER_BASE_URL;
+  const keepInBrowser = (event: { preventDefault(): void }, url: string) => {
+    const verdict = classifyNavigation(url, appUrl);
+    if (verdict === "allow") return;
+    event.preventDefault();
+    if (verdict === "external") void shell.openExternal(url);
+  };
+  win.webContents.on("will-navigate", (event, url) => keepInBrowser(event, url));
+  win.webContents.on("will-redirect", (event, url) => keepInBrowser(event, url));
+
   // The Router serves the built UI same-origin (scripts/app.sh guarantees
   // it's already up before Electron launches), so this is always an http(s)
   // origin — never file://, which would send Origin: null and fail the
   // Router's localhost-only CORS policy.
-  win.loadURL(DEV_SERVER_URL ?? ROUTER_BASE_URL);
+  win.loadURL(appUrl);
 }
 
 app.whenReady().then(() => {
