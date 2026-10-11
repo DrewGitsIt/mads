@@ -155,6 +155,19 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusCreated, fc)
 	})
 
+	mux.HandleFunc("POST /sessions/{id}/files/shell", func(w http.ResponseWriter, r *http.Request) {
+		var body contracts.ShellFileChanges
+		if !decode(w, r, &body) {
+			return
+		}
+		res, err := s.RecordShellFileChanges(r.Context(), r.PathValue("id"), body.Changes, actor(r))
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, res)
+	})
+
 	mux.HandleFunc("GET /sessions/{id}/files", func(w http.ResponseWriter, r *http.Request) {
 		list, err := s.FileChanges(r.Context(), r.PathValue("id"))
 		if err != nil {

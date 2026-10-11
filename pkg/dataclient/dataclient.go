@@ -378,6 +378,16 @@ func (c *Client) RecordFileChange(ctx context.Context, fc *contracts.FileChange)
 	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(fc.SessionID)+"/files", fc, fc)
 }
 
+// RecordShellFileChanges reports the files one scan found the session's
+// shell commands changed, in one request; the Data Service skips any another
+// session's tools already claimed in the same window.
+func (c *Client) RecordShellFileChanges(ctx context.Context, sessionID string, changes []contracts.ShellFileChange) (contracts.ShellFileChangesResult, error) {
+	var out contracts.ShellFileChangesResult
+	err := c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(sessionID)+"/files/shell",
+		contracts.ShellFileChanges{Changes: changes}, &out)
+	return out, err
+}
+
 // FileChanges lists every file change recorded for sessionID.
 func (c *Client) FileChanges(ctx context.Context, sessionID string) ([]contracts.FileChange, error) {
 	var list []contracts.FileChange

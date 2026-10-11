@@ -534,30 +534,113 @@ func (s *Sessions) RecordFileChange(ctx context.Context, fc *contracts.FileChang
 		if err != nil {
 			return err
 		}
-		fc.Attributed = contracts.AttributedChange(sess.Isolation, fc.Origin)
-		if fc.Timestamp.IsZero() {
-			fc.Timestamp = time.Now().UTC()
+		return insertFileChange(tx, sess, fc, actor)
+	})
+}
+
+// insertFileChange writes one ledger row, attributed by the §5 rule against
+// sess's isolation, and emits file.changed.
+func insertFileChange(tx *Tx, sess *contracts.Session, fc *contracts.FileChange, actor string) error {
+	fc.Attributed = contracts.AttributedChange(sess.Isolation, fc.Origin)
+	if fc.Timestamp.IsZero() {
+		fc.Timestamp = time.Now().UTC()
+	}
+	res, err := tx.Exec(
+		`INSERT INTO file_changes (session_id, task_id, repo, path, change, origin, attributed, actor, timestamp)
+		 VALUES (?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?)`,
+		fc.SessionID, fc.TaskID, fc.Repo, fc.Path, fc.Change, string(fc.Origin),
+		boolToInt(fc.Attributed), fc.Actor, fc.Timestamp.Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return err
+	}
+	if fc.ID, err = res.LastInsertId(); err != nil {
+		return err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"path": fc.Path, "change": fc.Change, "attributed": fc.Attributed,
+	})
+	return tx.Append(&contracts.Envelope{
+		Type: contracts.FileChanged, SessionID: fc.SessionID, TaskID: fc.TaskID,
+		Actor: actor, Payload: payload,
+	})
+}
+
+// RecordShellFileChanges stores what one scan of a session's folder found
+// its shell commands changed, as tool use, in one transaction. A change is
+// skipped as contested when another session's tools recorded the same path
+// between its Since and Until: in a shared checkout that edit is more likely
+// theirs. Timestamps are compared parsed, not as stored strings, since rows
+// carry whatever offset their writer used.
+func (s *Sessions) RecordShellFileChanges(ctx context.Context, sessionID string, changes []contracts.ShellFileChange, actor string) (contracts.ShellFileChangesResult, error) {
+	res := contracts.ShellFileChangesResult{Recorded: []contracts.FileChange{}, Contested: []string{}}
+	var v contracts.ValidationError
+	for i, c := range changes {
+		if c.Path == "" {
+			v.Add(fmt.Sprintf("changes[%d].path", i), "required")
 		}
-		res, err := tx.Exec(
-			`INSERT INTO file_changes (session_id, task_id, repo, path, change, origin, attributed, actor, timestamp)
-			 VALUES (?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?)`,
-			fc.SessionID, fc.TaskID, fc.Repo, fc.Path, fc.Change, string(fc.Origin),
-			boolToInt(fc.Attributed), fc.Actor, fc.Timestamp.Format(time.RFC3339Nano),
-		)
+		switch c.Change {
+		case "added", "modified", "deleted":
+		default:
+			v.Add(fmt.Sprintf("changes[%d].change", i), fmt.Sprintf("must be added, modified, or deleted; got %q", c.Change))
+		}
+	}
+	if !v.Empty() {
+		return res, &v
+	}
+	err := s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, sessionID)
 		if err != nil {
 			return err
 		}
-		if fc.ID, err = res.LastInsertId(); err != nil {
-			return err
+		for _, c := range changes {
+			contested, err := claimedByOthers(tx, sessionID, c)
+			if err != nil {
+				return err
+			}
+			if contested {
+				res.Contested = append(res.Contested, c.Path)
+				continue
+			}
+			fc := contracts.FileChange{
+				SessionID: sessionID, Repo: c.Repo, Path: c.Path, Change: c.Change,
+				Origin: contracts.OriginToolUse, Actor: actor, Timestamp: c.Timestamp,
+			}
+			if err := insertFileChange(tx, sess, &fc, actor); err != nil {
+				return err
+			}
+			res.Recorded = append(res.Recorded, fc)
 		}
-		payload, _ := json.Marshal(map[string]any{
-			"path": fc.Path, "change": fc.Change, "attributed": fc.Attributed,
-		})
-		return tx.Append(&contracts.Envelope{
-			Type: contracts.FileChanged, SessionID: fc.SessionID, TaskID: fc.TaskID,
-			Actor: actor, Payload: payload,
-		})
+		return nil
 	})
+	if err != nil {
+		return contracts.ShellFileChangesResult{}, err
+	}
+	return res, nil
+}
+
+// claimedByOthers reports whether a session other than sessionID recorded
+// c's path as tool use between c.Since and c.Until.
+func claimedByOthers(tx *Tx, sessionID string, c contracts.ShellFileChange) (bool, error) {
+	rows, err := tx.Query(
+		`SELECT timestamp FROM file_changes
+		 WHERE path = ? AND session_id != ? AND origin = ? AND task_id IS NULL`,
+		c.Path, sessionID, string(contracts.OriginToolUse))
+	if err != nil {
+		return false, err
+	}
+	claimed := false
+	for !claimed && rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		if at, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+			claimed = !at.Before(c.Since) && !at.After(c.Until)
+		}
+	}
+	return claimed, errors.Join(rows.Err(), rows.Close())
 }
 
 // FileChanges returns a session's changes in record order.

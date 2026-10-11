@@ -142,6 +142,29 @@ agent**, which drafts an editable message asking the agent to commit or revert t
 files. A `dirty` refusal names them too, in the refusal's `outside` field (carried on
 `merge.refused`), and its card offers the same action.
 
+**Shell edits in place** (added 2026-10-11). A session working in place shares the
+user's checkout, so it has no Outside count, and its Commit count missed every file
+its agent wrote through a shell (`sed -i`, formatters, scripts). Now each shell call
+the agent makes is a window, from its tool use to its result. Afterwards, one
+background `git status` credits the session with every changed file whose
+modification time falls inside that window, as tool use
+(`services/session/internal/shellwatch`). It also credits deletions and moved-in
+files that are new since the previous look. Performance comes first:
+- The pump only stamps a time.
+- A read-only gate (`shellwatch.ReadOnly`, ~1 µs) skips commands it can vouch for.
+- One look runs at a time per session, and calls that end during a look share the
+  next one.
+- When a look takes over 1.5 s, the session looks once per turn instead.
+- Attribution goes by modification time, so a late look still credits the right
+  command.
+
+In a shared checkout, the Data Service skips a path that another session's tools
+recorded inside the same window (`POST /sessions/{id}/files/shell`, indexed by
+path). Known gaps:
+- A backgrounded command's writes after its result.
+- Copies that keep old times onto paths that were already dirty.
+- An edit by the user made during the command itself.
+
 **Where the control lives** (2026-10-07). The conversation header is retired. The
 control is the right end of the session dock's status line, after the
 `⎇ workspace / branch → base` segment (`ui/src/conversation/Dock/WorkArea.tsx`).

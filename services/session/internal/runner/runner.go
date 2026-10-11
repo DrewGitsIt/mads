@@ -32,6 +32,7 @@ import (
 	"github.com/drewkidwell/mads/pkg/vault"
 	"github.com/drewkidwell/mads/providers/fastmodel"
 	"github.com/drewkidwell/mads/providers/provider"
+	"github.com/drewkidwell/mads/services/session/internal/shellwatch"
 	"github.com/drewkidwell/mads/services/session/internal/synth"
 	"github.com/drewkidwell/mads/services/session/shadow"
 )
@@ -156,6 +157,11 @@ type Runner struct {
 	// nil-safe, so the pump hooks call it unconditionally; every operation
 	// inside is best-effort and can never block or fail the agent's turn.
 	shadowStore *shadow.Store
+
+	// shell finds the files the session's shell commands write, for a
+	// session working in place (shellfiles.go); nil otherwise. Set in Start
+	// before the pump runs and never after.
+	shell *shellwatch.Tracker
 
 	synthEngine *synth.Engine // built in Start from sess.SynthesisMode; nil-safe no-op if off
 
@@ -336,6 +342,11 @@ type Runner struct {
 	// "modified" — except after a recorded "deleted", which resets
 	// classification so a recreated path reads as created again.
 	touched map[string]string
+
+	// toolTouchedAt is when a file tool last announced a write to each path,
+	// by absolute path: a shell look skips a file the session's own tool
+	// already recorded inside the same window (recordShellChanges).
+	toolTouchedAt map[string]time.Time
 }
 
 // pendingInjection is one queued Inject or SendOrQueue call, waiting for
@@ -362,6 +373,7 @@ func New(sessionID string, data *dataclient.Client, providers *provider.Registry
 		Died:             make(chan struct{}),
 		hub:              newHub(),
 		touched:          make(map[string]string),
+		toolTouchedAt:    make(map[string]time.Time),
 		turnAttributions: make(map[int]contracts.Attribution),
 		shutdownCh:       make(chan struct{}),
 		permPending:      make(map[string]*pendingPermission),
@@ -578,6 +590,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	// the folder into git objects, so those get per-capture pre-images only.
 	go r.shadowStore.Baseline(cwd)
 
+	r.startShellWatch()
 	go r.pump(provSess)
 	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
 	// Counted in the background: `git status` on a large checkout takes
@@ -1674,6 +1687,12 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	if sess != nil {
 		closeErr = sess.Close()
 	}
+	// A last look for shell calls still open, recorded before the recount
+	// below closes (bounded by ctx, like the Land wait).
+	if r.shell != nil {
+		r.shell.ProcessEnded(time.Now())
+		r.shell.Stop(ctx)
+	}
 	// shutdownCh (closed above) cancels a recount in flight; let it finish
 	// unwinding before the record is marked inactive, and start no more.
 	r.countsMu.Lock()
@@ -1722,6 +1741,7 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 // session.crashed), which fires independently when this OS process exits.
 func (r *Runner) pump(sess provider.Session) {
 	for ev := range sess.Events() {
+		r.observeShell(ev, time.Now())
 		if ev.Kind == provider.EventTurnEnd {
 			// Before onTurnEnd: it can start a queued next turn, whose
 			// tools must not blur which turn deleted a touched file.
@@ -1756,6 +1776,11 @@ func (r *Runner) pump(sess provider.Session) {
 	// the process end with it — unless this is an intentional transport
 	// swap (r.sess no longer this session), which concludes them itself
 	// before starting the new process.
+	// Shell calls the process took with it get looked at as they stand.
+	if r.shell != nil {
+		r.shell.ProcessEnded(time.Now())
+	}
+
 	r.mu.Lock()
 	current := r.sess == sess
 	r.mu.Unlock()
@@ -1909,6 +1934,7 @@ func (r *Runner) recordFileChange(path string) {
 
 	r.mu.Lock()
 	r.touched[path] = change
+	r.toolTouchedAt[touchAbs(base, path)] = time.Now()
 	r.mu.Unlock()
 
 	r.appendFileChange(path, change, base)

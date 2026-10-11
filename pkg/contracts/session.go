@@ -394,6 +394,35 @@ type FileChange struct {
 	Timestamp  time.Time    `json:"timestamp"`
 }
 
+// ShellFileChange is one file a session's shell command changed, found by
+// comparing the folder before and after the command rather than reported by
+// a file tool (POST /sessions/{id}/files/shell). It is recorded as tool use:
+// the agent's own command wrote it. Since..Until is when the change could
+// have happened; if another session's tools recorded the same path inside
+// it, the change is skipped as contested, so two agents sharing a checkout
+// don't both claim one edit.
+type ShellFileChange struct {
+	Repo      string    `json:"repo,omitempty"`
+	Path      string    `json:"path"`
+	Change    string    `json:"change"` // added | modified | deleted
+	Timestamp time.Time `json:"timestamp"`
+	Since     time.Time `json:"since"`
+	Until     time.Time `json:"until"`
+}
+
+// ShellFileChanges is POST /sessions/{id}/files/shell's body: one scan's
+// findings, recorded in a single transaction.
+type ShellFileChanges struct {
+	Changes []ShellFileChange `json:"changes"`
+}
+
+// ShellFileChangesResult is what POST /sessions/{id}/files/shell recorded,
+// and the paths it skipped because another session claimed them.
+type ShellFileChangesResult struct {
+	Recorded  []FileChange `json:"recorded"`
+	Contested []string     `json:"contested"`
+}
+
 // How a commit got linked to a task — the §3/§5 resolution chain, in order.
 const (
 	LinkedViaTrailer        = "trailer"         // explicit Task: <id> trailer
