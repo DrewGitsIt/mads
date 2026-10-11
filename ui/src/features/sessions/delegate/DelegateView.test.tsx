@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DelegateView } from "./DelegateView";
-import { FakeRouterClient } from "../../../router/fixtures";
+import { FakeRouterClient, fixtureSessions } from "../../../router/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import type { Delegate, DelegateTranscript, Envelope } from "../../../router/types";
 
@@ -49,10 +49,12 @@ describe("DelegateView", () => {
       env(2, "session.subagent_event", { parent_tool_use_id: "toolu_other", kind: "text", text: "not mine" }),
     ]);
     const onBack = vi.fn();
-    render(<DelegateView sessionId="s1" harnessId="a1" parentName="Parent" routerClient={client} onBack={onBack} />);
+    render(<DelegateView sessionId="s1" harnessId="a1" parent={{ ...fixtureSessions["session-active"], name: "Parent" }} routerClient={client} onBack={onBack} />);
 
     expect(await screen.findByRole("heading", { name: "Audit error handling" })).toBeTruthy();
-    expect(screen.getByText("Explore")).toBeTruthy();
+    expect(within(screen.getByTestId("delegate-view").querySelector("header")!).getByText("Explore")).toBeTruthy();
+    // Its dock: the record's type where a session shows its persona.
+    expect(within(screen.getByTestId("delegate-dock")).getByLabelText("Explore")).toBeTruthy();
     await waitFor(() => expect(row("swallowed errors")).toBeTruthy());
     expect(screen.queryByText("not mine")).toBeNull();
     expect(screen.getByTestId("delegate-view").querySelector('[data-status="in_progress"]')).toBeTruthy();

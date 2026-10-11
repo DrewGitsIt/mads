@@ -195,7 +195,7 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
             key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
             sessionId={openDelegate.sessionId}
             harnessId={openDelegate.harnessId}
-            parentName={sessions.find((s) => s.id === openDelegate.sessionId)?.name}
+            parent={sessions.find((s) => s.id === openDelegate.sessionId)}
             routerClient={router}
             onBack={() => {
               setSelectedId(openDelegate.sessionId);

@@ -2,9 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { getAllEvents } from "../../../router/eventPages";
-import type { Delegate, DelegateCapabilities, Envelope, ToolUse } from "../../../router/types";
+import type { Delegate, DelegateCapabilities, Envelope, Session, ToolUse } from "../../../router/types";
 import { ContentColumn } from "../../../components/ContentColumn/ContentColumn";
 import { ActivityDock, SubagentStream } from "../../../conversation/activity/ActivityDock";
+import { DelegateDock } from "../../../conversation/Dock";
+import { useCheckoutBranch } from "../../../conversation/Dock/useCheckoutBranch";
+import { useWorkspaceForRef } from "../../../tasks/useSessionWorkspace";
 import { WorkingIndicator } from "../../../conversation/ChatRenderer/WorkingIndicator";
 import {
   foldHistoryEvents,
@@ -39,8 +42,8 @@ const DELEGATE_REPLAY_TYPES = ["session.subagent_task", "session.tool_status_cha
 export interface DelegateViewProps {
   sessionId: string;
   harnessId: string;
-  /** The parent session's name, for the breadcrumb. */
-  parentName?: string;
+  /** The parent session: its name for the breadcrumb, its workspace and branch for the dock. */
+  parent?: Session;
   routerClient: RouterClient;
   /** Back to the parent session's conversation. */
   onBack: () => void;
@@ -60,7 +63,7 @@ export interface DelegateViewProps {
  * which has the tool calls but none of the delegate's text, read back in
  * full only then.
  */
-export function DelegateView({ sessionId, harnessId, parentName, routerClient, onBack }: DelegateViewProps) {
+export function DelegateView({ sessionId, harnessId, parent, routerClient, onBack }: DelegateViewProps) {
   const [record, setRecord] = useState<Delegate>();
   const [missing, setMissing] = useState(false);
   const [envelopes, setEnvelopes] = useState<Envelope[]>([]);
@@ -172,11 +175,16 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
   // (useStickToBottom).
   const stick = useStickToBottom();
 
+  // The parent's workspace and branch: where the delegate works unless it
+  // has a worktree (or a branch) of its own.
+  const parentWorkspace = useWorkspaceForRef(routerClient, parent?.workspace);
+  const checkoutBranch = useCheckoutBranch(routerClient, parent);
+
   return (
     <section className={styles.view} aria-label={`Subagent: ${title}`} data-testid="delegate-view">
       <header className={styles.head}>
         <button type="button" className={styles.back} onClick={onBack}>
-          ← {parentName || "Parent session"}
+          ← {parent?.name || "Parent session"}
         </button>
         <div className={styles.titleRow}>
           <KindIcon kind="agent" />
@@ -220,6 +228,14 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
           </div>
         )}
       </div>
+      {record && (
+        <DelegateDock
+          delegate={record}
+          parent={parent}
+          workspaceName={parentWorkspace?.name ?? undefined}
+          checkoutBranch={checkoutBranch}
+        />
+      )}
       {dockEntry && (
         <ActivityDock
           view={{ type: "tool", tool: dockEntry.tool, timestamp: dockEntry.timestamp }}

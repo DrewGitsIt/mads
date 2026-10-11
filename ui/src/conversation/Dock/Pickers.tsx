@@ -115,8 +115,8 @@ export function PersonaSegment({
 
 /**
  * Model: a dropdown of the session provider's own models — not a free-text
- * field. With no discovered models (provider Models() empty/failed) it is a
- * static segment rather than an empty menu.
+ * field. With no discovered models (provider Models() empty/failed), or no
+ * `onSelect`, it is a static segment rather than an empty menu.
  */
 export function ModelSegment({
   provider,
@@ -126,7 +126,7 @@ export function ModelSegment({
   onOpen,
   onClose,
   onSelect,
-}: SegmentPickerProps & { provider?: string; model: string; models: Model[]; onSelect: (id: string) => void }) {
+}: SegmentPickerProps & { provider?: string; model: string; models: Model[]; onSelect?: (id: string) => void }) {
   const label = modelDisplayName(model, models) ?? model;
   const title = `Model: ${model}${provider ? ` (${provider})` : ""}`;
   const face = (
@@ -136,7 +136,7 @@ export function ModelSegment({
     </>
   );
 
-  if (models.length === 0) {
+  if (models.length === 0 || !onSelect) {
     return (
       <span className={cx(styles.seg, styles.segStatic)} title={title} aria-label={label} data-segment="model">
         {face}

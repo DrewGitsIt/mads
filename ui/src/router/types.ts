@@ -729,6 +729,12 @@ export interface Delegate {
   transcript_path?: string;
   /** The separate worktree the harness ran it in, if any. */
   worktree_path?: string;
+  /** The model its latest API call ran on — not necessarily the parent's. */
+  model?: string;
+  /** The git branch it worked on, as its harness recorded it. */
+  branch?: string;
+  /** Its latest API call's accounting: its context occupancy (context_tokens), and window when reported. */
+  usage?: Usage;
   /** Matrix defaults corrected by run-time evidence; absent until resolved. */
   capabilities?: DelegateCapabilities;
   total_tokens?: number;
