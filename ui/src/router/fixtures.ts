@@ -1754,6 +1754,7 @@ export const fixtureConfig: Config = {
   feature_flags: { multi_repo: false, linked_sessions: false, remote_registry: false },
   onboarding_complete: true,
   platform: "linux",
+  fallback_dir: "/home/dev/src/mads",
 };
 
 export const fixtureFastModelStatus: FastModelStatus = {

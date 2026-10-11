@@ -2,13 +2,19 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"runtime"
 	"testing"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/pkg/dataclient"
+	"github.com/drewkidwell/mads/services/data/datatest"
+	"github.com/drewkidwell/mads/services/router/internal/api"
+	"github.com/drewkidwell/mads/services/router/internal/supervisor"
 )
 
 func TestConfigRoutesProxied(t *testing.T) {
@@ -53,6 +59,71 @@ func TestConfigResponsesCarryPlatform(t *testing.T) {
 	updated := decodeJSON[map[string]any](t, putResp)
 	if updated["platform"] != runtime.GOOS {
 		t.Fatalf("PUT /config platform = %v, want %q", updated["platform"], runtime.GOOS)
+	}
+}
+
+// GET, PUT and profile-activate /config stamp the folder a session with no
+// Dir starts in — the Router's cwd (Options.Root) — without persisting it:
+// an echoed PUT is accepted and the Data Service's own copy never has it.
+func TestConfigResponsesCarryFallbackDir(t *testing.T) {
+	base := datatest.Start(t)
+	data := dataclient.New(base, "router")
+	sup := supervisor.New(data, []string{testChildBin}, []string{testChildBin}, nil)
+	t.Cleanup(func() { sup.Shutdown(context.Background()) })
+	opts := testOptions(t, data, sup)
+	opts.Root = "/src/checkout"
+	srv := httptest.NewServer(api.New(opts))
+	t.Cleanup(srv.Close)
+
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeJSON[map[string]any](t, getResp)
+	if got["fallback_dir"] != "/src/checkout" {
+		t.Fatalf("GET /config fallback_dir = %v, want /src/checkout", got["fallback_dir"])
+	}
+
+	// Echo it back with a different value, as a stale UI might: dropped.
+	got["fallback_dir"] = "/somewhere/else"
+	putResp := putJSON(t, srv.URL+"/config", got)
+	if putResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /config with fallback_dir echoed: status %d", putResp.StatusCode)
+	}
+	updated := decodeJSON[map[string]any](t, putResp)
+	if updated["fallback_dir"] != "/src/checkout" {
+		t.Fatalf("PUT /config fallback_dir = %v, want /src/checkout", updated["fallback_dir"])
+	}
+
+	stored, err := http.Get(base + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := decodeJSON[map[string]any](t, stored)
+	if _, ok := raw["concurrency_limit"]; !ok {
+		t.Fatalf("Data Service GET /config returned no Config: %v", raw)
+	}
+	if _, ok := raw["fallback_dir"]; ok {
+		t.Fatalf("Data Service config persisted fallback_dir: %v", raw)
+	}
+
+	resp := postJSON(t, srv.URL+"/profiles", contracts.Profile{Name: "p", Snapshot: contracts.ProfileSnapshot{}})
+	created := decodeJSON[contracts.Profile](t, resp)
+	activated := decodeJSON[map[string]any](t, postJSON(t, srv.URL+"/profiles/"+created.ID+"/activate", nil))
+	if activated["fallback_dir"] != "/src/checkout" {
+		t.Fatalf("activate fallback_dir = %v, want /src/checkout", activated["fallback_dir"])
+	}
+}
+
+// No cwd known (Root unset): the field is absent rather than "".
+func TestConfigResponseOmitsUnknownFallbackDir(t *testing.T) {
+	srv := newTestServer(t)
+	getResp, err := http.Get(srv.URL + "/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decodeJSON[map[string]any](t, getResp); got["fallback_dir"] != nil {
+		t.Fatalf("GET /config fallback_dir = %v, want absent", got["fallback_dir"])
 	}
 }
 

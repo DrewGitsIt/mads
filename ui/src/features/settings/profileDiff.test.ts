@@ -38,6 +38,14 @@ describe("computeProfileDiff", () => {
     const entries = computeProfileDiff(fixtureConfig, { synthesis_mode: fixtureConfig.synthesis_mode });
     expect(entries).toEqual([]);
   });
+
+  it("ignores the Router's response-only host fields an older snapshot captured", () => {
+    const entries = computeProfileDiff(fixtureConfig, {
+      platform: "darwin",
+      fallback_dir: "/Users/someone/elsewhere",
+    });
+    expect(entries).toEqual([]);
+  });
 });
 
 describe("groupBySection / orderedDiffSections", () => {

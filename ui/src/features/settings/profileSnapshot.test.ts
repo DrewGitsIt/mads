@@ -11,6 +11,12 @@ describe("snapshotFromConfig", () => {
     expect(snapshot).not.toHaveProperty("update_feed_url");
     expect(snapshot).not.toHaveProperty("active_profile_id");
   });
+
+  it("leaves out the Router's response-only host fields", () => {
+    const snapshot = snapshotFromConfig(fixtureConfig);
+    expect(snapshot).not.toHaveProperty("platform");
+    expect(snapshot).not.toHaveProperty("fallback_dir");
+  });
 });
 
 describe("applySnapshot", () => {
@@ -28,8 +34,10 @@ describe("applySnapshot", () => {
     const merged = applySnapshot(fixtureConfig, {
       onboarding_complete: false,
       active_profile_id: "prf_other",
+      fallback_dir: "/Users/someone/elsewhere",
     } as never);
     expect(merged.onboarding_complete).toBe(fixtureConfig.onboarding_complete);
     expect(merged.active_profile_id).toBe(fixtureConfig.active_profile_id);
+    expect(merged.fallback_dir).toBe(fixtureConfig.fallback_dir);
   });
 });

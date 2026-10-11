@@ -9,18 +9,27 @@ import (
 )
 
 // configResponse is every Config the Router hands the UI (GET/PUT /config,
-// profile activate), stamped with the Router host's runtime.GOOS. Platform
-// is response-only — never stored: PUT /config decodes into
-// contracts.Config, which drops it — and it's the Router's host that
-// matters (it spawns the pipeline that holds the sleep inhibitor), so the
-// Settings screen reads the OS from here rather than sniffing navigator.
+// profile activate), stamped with two facts about the Router's host. Both
+// are response-only — never stored: PUT /config decodes into
+// contracts.Config, which drops them.
+//
+// Platform is the host's runtime.GOOS. It's the Router's host that matters
+// (it spawns the pipeline that holds the sleep inhibitor), so the Settings
+// screen reads the OS from here rather than sniffing navigator.
+//
+// FallbackDir is the folder a session with no Dir of its own, no workspace
+// primary repo and no Config.DefaultDir starts in. The Router spawns the
+// Session Service with neither -cwd nor a cmd.Dir, so that child — and the
+// provider child after it — inherit the Router's own cwd, which is s.root.
+// Omitted when the Router couldn't read its cwd.
 type configResponse struct {
 	contracts.Config
-	Platform string `json:"platform"`
+	Platform    string `json:"platform"`
+	FallbackDir string `json:"fallback_dir,omitempty"`
 }
 
-func withPlatform(cfg contracts.Config) configResponse {
-	return configResponse{Config: cfg, Platform: runtime.GOOS}
+func (s *server) configResponse(cfg contracts.Config) configResponse {
+	return configResponse{Config: cfg, Platform: runtime.GOOS, FallbackDir: s.root}
 }
 
 func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
@@ -29,7 +38,7 @@ func (s *server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, withPlatform(cfg))
+	writeJSON(w, http.StatusOK, s.configResponse(cfg))
 }
 
 // fastModelStatusResponse is the Settings Fast Model panel's live status: the
@@ -80,7 +89,7 @@ func (s *server) handleUpdateConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, withPlatform(cfg))
+	writeJSON(w, http.StatusOK, s.configResponse(cfg))
 }
 
 func (s *server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
@@ -131,5 +140,5 @@ func (s *server) handleActivateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, withPlatform(cfg))
+	writeJSON(w, http.StatusOK, s.configResponse(cfg))
 }

@@ -1425,6 +1425,13 @@ export interface Config {
   // stored (PUT /config drops it). The host is what matters (it runs the
   // pipeline), so never substitute the renderer's navigator.
   platform?: string;
+
+  // fallback_dir is the absolute folder a session starts in when nothing
+  // picked one (no session dir, no workspace primary repo, no default_dir):
+  // the Router's own launch cwd, which every Session Service child inherits.
+  // Response-only like platform — PUT /config drops it, and profile
+  // snapshots exclude it. Absent when the Router couldn't read its cwd.
+  fallback_dir?: string;
 }
 
 export type EnvMode = "inherit" | "isolated";

@@ -102,7 +102,9 @@ type Options struct {
 	// one left running by another — which would serve that checkout's UI
 	// and backend without saying so. Root is the absolute cwd the Router
 	// was launched from, UIDist the absolute path it serves the UI from.
-	// Zero values are omitted from the response.
+	// Zero values are omitted from the response. Root is also every Config
+	// response's fallback_dir: Session Service children inherit this cwd,
+	// so it's where a session with no Dir starts.
 	Root      string
 	UIDist    string
 	StartedAt time.Time

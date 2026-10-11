@@ -10,6 +10,11 @@ export const PROFILE_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
   "onboarding_complete",
   "update_feed_url",
   "active_profile_id",
+  // Response-only facts about the Router's host (services/router's
+  // configResponse), not Config fields — Go never sees them in a Config, but
+  // the draft snapshotted here is a GET /config response that carries them.
+  "platform",
+  "fallback_dir",
 ]);
 
 /** Mirrors profile.go SnapshotConfig — captures every non-excluded field. */
