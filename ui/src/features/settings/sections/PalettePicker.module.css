@@ -202,4 +202,5 @@
 .description {
   color: var(--text3);
   font-size: var(--fs-sm);
+  line-height: 1.3;
 }
