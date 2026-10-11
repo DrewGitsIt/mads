@@ -86,6 +86,13 @@ describe("DelegateRows", () => {
     expect(screen.getByText("Show fewer")).toBeTruthy();
   });
 
+  it("keeps the open delegate's row when it would otherwise fold behind '+N more'", () => {
+    const ids = ["a", "b", "c", "e", "f"];
+    render(<DelegateRows delegates={ids.map((id) => d(id))} selectedHarnessId="f" />);
+    expect(screen.getAllByText(/^task /).map((el) => el.textContent)).toEqual(["task a", "task b", "task c", "task f"]);
+    expect(screen.getByText("+1 more")).toBeTruthy();
+  });
+
   it("opens the delegate it names, and marks the open one selected", () => {
     const onOpen = vi.fn();
     render(<DelegateRows delegates={[d("a"), d("b")]} selectedHarnessId="b" onOpen={onOpen} />);

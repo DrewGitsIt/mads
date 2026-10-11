@@ -671,9 +671,16 @@
 
 /* Only a subject with another below it carries the line past its own head,
    so the chain terminates exactly at the last connection — a holder with
-   one subject gets an elbow and nothing dangling underneath it. x matches
-   the connector's trunk (SVG x 6, in a box that starts 30px out). */
-.subjects .row:not(:last-child)::after {
+   one subject gets an elbow and nothing dangling underneath it. Drawn on
+   the .subject box, not the card: the card is followed by its own
+   delegates, so ":not(:last-child)" on the card was true for every
+   subject that had any, and the line ran on into nothing. x matches the
+   connector's trunk (SVG x 6, in a box that starts 30px out). */
+.subject {
+  position: relative;
+}
+
+.subject:not(:last-child)::after {
   content: "";
   position: absolute;
   left: -25px;

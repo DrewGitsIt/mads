@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { TaskCard, taskCounters } from "./TaskCard";
-import { formatElapsed } from "./toolDisplay";
+import { formatElapsed, formatMs } from "./toolDisplay";
 import type { TaskModel } from "./conversationItems";
 
 const spawnTool = {
@@ -158,5 +158,12 @@ describe("TaskCard — live elapsed and delegate states", () => {
     const model: TaskModel = { taskId: "a1", running: false, completed: false, state: "stopped", status: "roster", inferred: true };
     render(<TaskCard tool={spawnTool} model={model} />);
     expect(screen.getByTestId("task-card").querySelector("[title]")?.getAttribute("title")).toMatch(/concluded by mads/);
+  });
+});
+
+describe("formatMs", () => {
+  it("drops to hours and minutes from an hour on, like formatElapsed", () => {
+    expect(formatMs(9 * 60_000 + 43_000)).toBe("9m 43s");
+    expect(formatMs(106 * 60_000 + 12_000)).toBe("1h 46m");
   });
 });

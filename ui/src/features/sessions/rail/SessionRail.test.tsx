@@ -473,10 +473,11 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.queryByText("LEADER")).toBeNull();
     expect(screen.queryByText("LINKED")).toBeNull();
     const subject = screen.getByText("payments refactor").closest('[role="button"]')!;
-    expect(subject.parentElement?.className).toMatch(/subjects/);
+    const trunk = subject.closest('[class*="subjects"]');
+    expect(trunk).toBeTruthy();
     // A holder with one subject has nothing to count, so the trunk carries no
     // numeral — "LEADER · 2" only ever earned a count above one.
-    expect(subject.parentElement?.querySelector('[class*="linkFan"]')).toBeNull();
+    expect(trunk?.querySelector('[class*="linkFan"]')).toBeNull();
     expect(screen.getByRole("button", { name: "Linked sessions held by investigator" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
   });
@@ -694,8 +695,39 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(headOf("under watch").getAttribute("fill")).toBeNull();
     expect(headOf("under watch").getAttribute("stroke")).toBe("currentColor");
     // Two subjects now, so the trunk carries the count the pill used to.
-    const trunk = screen.getByText("payments refactor").closest('[role="button"]')!.parentElement!;
+    const trunk = screen.getByText("payments refactor").closest('[class*="subjects"]')!;
     expect(trunk.querySelector('[class*="linkFan"]')?.textContent).toBe("2");
+  });
+
+  it("runs a holder's link trunk past its own delegates, and gives each subject one box with its delegates", () => {
+    FLAGS.linkedSessions = true;
+    const dlg = (sessionId: string, id: string) => ({
+      id: `dlg_${id}`,
+      session_id: sessionId,
+      harness_id: id,
+      description: `work ${id}`,
+      state: "running" as const,
+      runs: 1,
+      started_at: inFlight(),
+      created_at: inFlight(),
+      updated_at: inFlight(),
+    });
+    const state = {
+      [lead.id]: { subagents: 1, subagentsSince: inFlight(), delegates: [dlg(lead.id, "h1")] },
+      [a.id]: { subagents: 1, subagentsSince: inFlight(), delegates: [dlg(a.id, "s1")] },
+    };
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} agentStates={state} />);
+    const [holderRows, subjectRows] = screen.getAllByTestId("delegate-rows");
+    // The holder's delegates sit between it and its subject, so the trunk
+    // has to pass them; the subject's own delegates hang below it and don't.
+    expect(holderRows.hasAttribute("data-link-trunk")).toBe(true);
+    expect(subjectRows.hasAttribute("data-link-trunk")).toBe(false);
+    // A lone subject is the last box under the trunk even with delegates
+    // after its card — the continuation is drawn per box, so nothing dangles.
+    const card = screen.getByText("payments refactor").closest('[role="button"]')!;
+    const box = card.parentElement!;
+    expect(box.contains(subjectRows)).toBe(true);
+    expect(box.parentElement?.lastElementChild).toBe(box);
   });
 
   it("names every subject separately, so a holder of several is never ambiguous", () => {

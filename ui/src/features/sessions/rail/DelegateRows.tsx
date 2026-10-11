@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { Delegate, DelegateFade } from "../../../router/types";
-import { KindIcon, Spinner, StatusGlyph } from "../../../conversation/activity/primitives";
+import { Spinner, StatusGlyph } from "../../../conversation/activity/primitives";
 import { formatElapsed, formatMs } from "../../../conversation/activity/toolDisplay";
 import { useElapsedNow, useRelativeNow } from "../../../utils/relativeTime";
 import styles from "./DelegateRows.module.css";
@@ -51,10 +51,21 @@ export function visibleDelegates(delegates: Delegate[], now: number, fadeMs = DE
 }
 
 /**
+ * The rows to draw: the first `DELEGATE_ROWS_SHOWN` of `visible`, plus the
+ * open one if it would otherwise fold away — what is in the main pane keeps
+ * its row, so the rail always says where you are.
+ */
+export function shownDelegates(visible: Delegate[], selectedHarnessId?: string): Delegate[] {
+  const head = visible.slice(0, DELEGATE_ROWS_SHOWN);
+  const open = visible.find((d) => d.harness_id === selectedHarnessId);
+  return open && !head.includes(open) ? [...head, open] : head;
+}
+
+/**
  * A session's delegates — harness-run subagents (docs/DELEGATES-DESIGN.md) —
- * nested under its card. Deliberately not a linked-session row: the dashed
- * trunk and plain rows say "this session's own work, run by its agent", where
- * a link's solid curve and arrowhead say "another session mads connected".
+ * nested under its card. Deliberately not a linked-session row: a hairline
+ * and plain rows say "this session's own work, run by its agent", where a
+ * link's heavy curve and arrowhead say "another session mads connected".
  * Clicking one opens it in the main pane.
  */
 export function DelegateRows({
@@ -62,21 +73,25 @@ export function DelegateRows({
   selectedHarnessId,
   onOpen,
   fadeMs = DEFAULT_DELEGATE_FADE_MS,
+  linkTrunk = false,
 }: {
   delegates: Delegate[];
   selectedHarnessId?: string;
   onOpen?: (d: Delegate) => void;
   /** How long a finished delegate keeps its row (delegateFadeMs). */
   fadeMs?: number;
+  /** Draw the holder's link trunk past these rows: they sit between it and
+   *  its linked subjects. */
+  linkTrunk?: boolean;
 }) {
   const now = useRelativeNow();
   const [expanded, setExpanded] = useState(false);
   const visible = visibleDelegates(delegates, now, fadeMs);
   if (visible.length === 0) return null;
-  const shown = expanded ? visible : visible.slice(0, DELEGATE_ROWS_SHOWN);
+  const shown = expanded ? visible : shownDelegates(visible, selectedHarnessId);
   const hidden = visible.length - shown.length;
   return (
-    <div className={styles.delegates} data-testid="delegate-rows">
+    <div className={styles.delegates} data-testid="delegate-rows" data-link-trunk={linkTrunk || undefined}>
       {shown.map((d) => (
         <button
           key={d.harness_id}
@@ -87,15 +102,16 @@ export function DelegateRows({
           title={rowTitle(d)}
           onClick={() => onOpen?.(d)}
         >
-          <KindIcon kind="agent" size="sm" />
+          <span className={styles.glyph}>
+            {d.state === "running" ? <Spinner /> : <StatusGlyph status={glyphFor(d)} />}
+          </span>
           <span className={styles.name}>{d.description || d.type || "Subagent"}</span>
           <span className={styles.meta}>
             {d.state === "running" ? <LiveElapsed since={d.started_at} /> : <Duration d={d} />}
-            {d.state === "running" ? <Spinner /> : <StatusGlyph status={glyphFor(d)} />}
           </span>
         </button>
       ))}
-      {visible.length > DELEGATE_ROWS_SHOWN && (
+      {(expanded ? visible.length > DELEGATE_ROWS_SHOWN : hidden > 0) && (
         <button type="button" className={styles.more} onClick={() => setExpanded((e) => !e)}>
           {expanded ? "Show fewer" : `+${hidden} more`}
         </button>

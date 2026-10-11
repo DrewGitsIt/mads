@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { formatShortcut } from "../../../platform/shortcut";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
@@ -672,7 +672,7 @@ function RailRowGroup({
   const isAnchor = linkMode?.anchorId === row.session.id;
   // A session's delegates nest right under its own card — before any linked
   // subjects, which are other sessions.
-  const delegatesOf = (sessionId: string) => {
+  const delegatesOf = (sessionId: string, linkTrunk = false) => {
     const list = showDelegates ? agentStates[sessionId]?.delegates : undefined;
     if (!list || list.length === 0) return null;
     return (
@@ -681,6 +681,7 @@ function RailRowGroup({
         selectedHarnessId={selectedDelegate?.sessionId === sessionId ? selectedDelegate.harnessId : undefined}
         onOpen={onOpenDelegate}
         fadeMs={delegateFadeMs}
+        linkTrunk={linkTrunk}
       />
     );
   };
@@ -715,7 +716,7 @@ function RailRowGroup({
         onStartLinkMode={() => onStartLinkMode(row.session.id)}
         onToggleLinkSelection={() => onToggleLinkSelection(row.session.id)}
       />
-      {delegatesOf(row.session.id)}
+      {delegatesOf(row.session.id, subjects.length > 0)}
       {/* The subjects share one container so the trunk can be drawn by rules
           that only ever measure their own box — see .subjects in the CSS. A
           holder of several subjects gets one numeral on the trunk rather than
@@ -727,8 +728,11 @@ function RailRowGroup({
               {subjects.length}
             </span>
           )}
+          {/* Each subject and its own delegates share a box, so the trunk's
+              continuation (.subject:not(:last-child)) runs past those
+              delegates to the next subject, and stops at the last one. */}
           {subjects.map((sub) => (
-            <Fragment key={sub.session.id}>
+            <div key={sub.session.id} className={styles.subject}>
               <SessionRow
                 session={sub.session}
                 openTaskBreakdown={openTaskCounts[sub.session.id] ?? EMPTY_OPEN_TASK_BREAKDOWN}
@@ -763,7 +767,7 @@ function RailRowGroup({
                 routerClient={routerClient}
               />
               {delegatesOf(sub.session.id)}
-            </Fragment>
+            </div>
           ))}
         </div>
       )}

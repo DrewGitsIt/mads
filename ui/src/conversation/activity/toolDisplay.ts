@@ -209,6 +209,8 @@ export function formatMs(ms: number): string {
   if (ms < 1000) return `${Math.round(ms)}ms`;
   const s = ms / 1000;
   if (s < 60) return `${s.toFixed(1)}s`;
+  // From an hour on, the same shape as formatElapsed ("1h 46m", not "106m 12s").
+  if (s >= 3600) return formatElapsed(ms);
   return `${Math.floor(s / 60)}m ${String(Math.round(s % 60)).padStart(2, "0")}s`;
 }
 

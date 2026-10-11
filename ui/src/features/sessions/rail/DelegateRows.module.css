@@ -1,28 +1,48 @@
 /* A session's delegates (docs/DELEGATES-DESIGN.md), nested under its card.
    Kept visibly apart from linked-session subjects (.subjects in
-   SessionRail.module.css): a thin dashed trunk with plain elbows and no
-   arrowhead, and compact one-line rows rather than full cards — these are
-   the session's own work, not other sessions. */
+   SessionRail.module.css): one hairline down the left of the list, no
+   elbows and no arrowhead, and compact one-line rows rather than full
+   cards — these are the session's own work, not other sessions. The heavy
+   line with the curve is the only thing in the rail that means "link". */
 
 .delegates {
   position: relative;
   margin: 2px 0 6px 26px;
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
+/* A holder's own delegates sit between it and its subjects, so the link
+   trunk has to run past them or it would start in mid-air below the list.
+   Same x and weight as the connector's trunk (SessionRail.module.css
+   .linkConnector: a box 30px out from a 26px indent, trunk 6px into it —
+   so 1px in from the card's left edge, i.e. -25px from here). It starts
+   under the holder card's bottom border (4px of margin above this box, plus
+   2 to tuck under it) and runs into the 6px margin below, where the
+   subject's connector picks it up 7px above its card. */
+.delegates[data-link-trunk]::before {
+  content: "";
+  position: absolute;
+  left: -25px;
+  top: -6px;
+  bottom: -6px;
+  border-left: 2.6px solid var(--text3);
+  pointer-events: none;
+}
+
 .row {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 7px;
   width: 100%;
-  min-height: 26px;
-  padding: 3px 8px;
+  min-height: 24px;
+  padding: 2px 6px;
   background: none;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: 6px;
   color: var(--text2);
   font: var(--fs-sm) var(--sans);
   text-align: left;
@@ -39,29 +59,14 @@
   color: var(--text);
 }
 
-/* The elbow: dashed, from the trunk into the row. */
-.row::before {
-  content: "";
-  position: absolute;
-  left: -19px;
-  top: -2px;
-  width: 14px;
-  height: 15px;
-  border-left: 1.5px dashed var(--text3);
-  border-bottom: 1.5px dashed var(--text3);
-  border-bottom-left-radius: 6px;
-  pointer-events: none;
-}
-
-/* The trunk continues past every row but the last. */
-.row:not(:last-of-type)::after {
-  content: "";
-  position: absolute;
-  left: -19px;
-  top: 13px;
-  bottom: -3px;
-  border-left: 1.5px dashed var(--text3);
-  pointer-events: none;
+/* Status leads the row, where the accent agent tile used to be: the tile
+   was the same on every row and spent the "working" colour saying
+   "subagent", which the indent already says. */
+.glyph {
+  display: inline-flex;
+  justify-content: center;
+  width: 12px;
+  flex: none;
 }
 
 .name {
@@ -78,8 +83,9 @@
   gap: 6px;
   margin-left: auto;
   color: var(--text3);
-  font: 11px var(--mono);
+  font: 11px var(--sans);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .row[data-state="failed"] .name {
@@ -88,8 +94,7 @@
 
 .more {
   align-self: flex-start;
-  margin-left: 8px;
-  padding: 1px 4px;
+  padding: 1px 6px;
   background: none;
   border: 0;
   color: var(--text3);
