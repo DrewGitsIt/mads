@@ -173,4 +173,72 @@ describe("ProfilesSection", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(activate).not.toHaveBeenCalled();
   });
+
+  describe("new profile card", () => {
+    it("is the grid's last card, and the only one when there are no profiles", () => {
+      render(
+        <ProfilesSection
+          config={makeConfig()}
+          profiles={makeProfiles({ profiles: [] })}
+          credentialNames={[]}
+          onSwitched={vi.fn()}
+        />,
+      );
+      expect(screen.getByRole("button", { name: /New profile from current settings/ })).toBeTruthy();
+      expect(screen.queryByText("No profiles yet.")).toBeNull();
+    });
+
+    it("names and creates a profile from the saved settings, then switches to it like Save as new profile", async () => {
+      const created: Profile = { ...fixtureProfile, id: "prf_new", name: "Night shift" };
+      const create = vi.fn().mockResolvedValue(created);
+      const activate = vi.fn().mockResolvedValue(fixtureConfig);
+      const saved = { ...fixtureConfig, theme: "light" as const };
+      const config = makeConfig({ saved, draft: saved });
+      render(
+        <ProfilesSection
+          config={config}
+          profiles={makeProfiles({ create, activate })}
+          credentialNames={[]}
+          onSwitched={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /New profile from current settings/ }));
+      fireEvent.change(screen.getByLabelText("New profile name"), { target: { value: "  Night shift " } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      await waitFor(() => expect(config.refetch).toHaveBeenCalled());
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Night shift", snapshot: expect.objectContaining({ theme: "light" }) }),
+      );
+      expect(activate).toHaveBeenCalledWith("prf_new");
+      // Back to the plain card.
+      await waitFor(() => expect(screen.queryByLabelText("New profile name")).toBeNull());
+    });
+
+    it("Cancel puts the card back without creating anything", () => {
+      const create = vi.fn();
+      render(
+        <ProfilesSection config={makeConfig()} profiles={makeProfiles({ create })} credentialNames={[]} onSwitched={vi.fn()} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: /New profile from current settings/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.getByRole("button", { name: /New profile from current settings/ })).toBeTruthy();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it("waits while there are unsaved changes", () => {
+      render(
+        <ProfilesSection
+          config={makeConfig({ dirtyFields: ["theme"] })}
+          profiles={makeProfiles()}
+          credentialNames={[]}
+          onSwitched={vi.fn()}
+        />,
+      );
+      const card = screen.getByRole("button", { name: /New profile from current settings/ }) as HTMLButtonElement;
+      expect(card.disabled).toBe(true);
+      expect(within(card).getByText("Save or discard your changes first.")).toBeTruthy();
+    });
+  });
 });

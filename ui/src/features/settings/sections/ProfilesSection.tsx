@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "../../../components/Button/Button";
 import { Chip } from "../../../components/Chip/Chip";
 import { ProfileSwitchDialog } from "../ProfileSwitchDialog";
+import { useDrift } from "../state/useDrift";
 import type { UseConfig } from "../state/useConfig";
 import type { UseProfiles } from "../state/useProfiles";
 import type { Config, Profile } from "../../../router/types";
@@ -31,6 +32,9 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Only for saveAsNewProfile, so the new-profile card does exactly what
+  // DriftBar's "Save as new profile" does.
+  const drift = useDrift(config, profiles, credentialNames);
 
   if (!config.saved) return null;
 
@@ -183,7 +187,7 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
             </div>
           );
         })}
-        {profiles.profiles.length === 0 && <p className={styles.empty}>No profiles yet.</p>}
+        <NewProfileCard blocked={switchBlocked} create={drift.saveAsNewProfile} />
       </div>
 
       {switchTarget && previousConfig && (
@@ -201,5 +205,89 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
         />
       )}
     </div>
+  );
+}
+
+interface NewProfileCardProps {
+  /** Unsaved edits pending: the snapshot is of saved settings, so it waits for the save bar. */
+  blocked: boolean;
+  create: (name: string) => Promise<boolean>;
+}
+
+/**
+ * The grid's last card: "New profile from current settings". Click turns it
+ * into a name field; Save snapshots the *saved* config into a new profile and
+ * switches to it, as DriftBar's "Save as new profile" does.
+ */
+function NewProfileCard({ blocked, create }: NewProfileCardProps) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const cancel = () => {
+    setNaming(false);
+    setName("");
+    setError(null);
+  };
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed || blocked) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (await create(trimmed)) cancel();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!naming) {
+    return (
+      <button
+        type="button"
+        className={`${styles.card} ${styles.newCard}`}
+        disabled={blocked}
+        onClick={() => setNaming(true)}
+      >
+        <span>＋ New profile from current settings</span>
+        {blocked && <span className={styles.hint}>Save or discard your changes first.</span>}
+      </button>
+    );
+  }
+
+  return (
+    <form
+      className={`${styles.card} ${styles.newCardForm}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+    >
+      <input
+        className={styles.editInput}
+        aria-label="New profile name"
+        placeholder="New profile name"
+        value={name}
+        autoFocus
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") cancel();
+        }}
+      />
+      {blocked && <span className={styles.hint}>Save or discard your changes first.</span>}
+      {error && <p className={styles.error}>{error}</p>}
+      <div className={styles.cardActions}>
+        <Button type="submit" variant="primary" size="sm" disabled={busy || blocked || !name.trim()}>
+          Save
+        </Button>
+        <Button variant="ghost" size="sm" disabled={busy} onClick={cancel}>
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }

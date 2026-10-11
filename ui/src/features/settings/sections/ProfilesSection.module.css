@@ -43,13 +43,37 @@
   font: 400 var(--fs-sm) var(--sans);
 }
 
-.empty {
-  color: var(--text3);
-  font: 400 var(--fs-sm) var(--sans);
-}
-
 .cardHeader {
   flex-wrap: wrap;
+}
+
+/* The grid's last card: create a profile from the saved settings. */
+.newCard {
+  align-items: center;
+  justify-content: center;
+  min-height: 88px;
+  border-style: dashed;
+  border-color: var(--line);
+  background: none;
+  color: var(--text2);
+  font: 400 var(--fs-body) var(--sans);
+  text-align: center;
+  cursor: pointer;
+}
+
+.newCard:hover:not(:disabled) {
+  background: var(--bg1);
+  color: var(--text);
+}
+
+.newCard:disabled {
+  cursor: default;
+  color: var(--text3);
+}
+
+.newCardForm {
+  border-style: dashed;
+  border-color: var(--line);
 }
 
 .cardActions {
