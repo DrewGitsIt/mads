@@ -236,10 +236,20 @@ if mads_electron_needs_no_sandbox; then
   echo "app.sh: no usable renderer sandbox on this host — ELECTRON_DISABLE_SANDBOX=1" >&2
   export ELECTRON_DISABLE_SANDBOX=1
 fi
+# On macOS, launch the copy of Electron.app branded as mads (Dock label,
+# menu bar, icon); a failure there is cosmetic, so fall back to the stock one.
+app_bin="$(mads_app_bin)"
+if ! mads_brand_app; then
+  echo "app.sh: launching the stock Electron.app instead" >&2
+  app_bin="$(mads_electron_bin)"
+fi
 
 # The Electron window loads the Router's own address; keep it on ROUTER_ADDR
 # so MADS_ROUTER_ADDR moves the whole app, not just the backend. Exported
-# before `npm start` so it reaches both `vite build` and `electron .`.
+# before the build so it reaches both `vite build` and Electron.
 export VITE_ROUTER_URL="${VITE_ROUTER_URL:-http://$ROUTER_ADDR}"
 
-npm --prefix ui start
+# What `npm --prefix ui start` does (build, then `electron .` from ui/), but
+# with the binary chosen above rather than the one in electron's path.txt.
+npm --prefix ui run build
+(cd ui && "$app_bin" .)

@@ -24,6 +24,19 @@ const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 // so a single override points both processes at a non-default Router.
 const ROUTER_BASE_URL = process.env.VITE_ROUTER_URL ?? "http://localhost:17373";
 
+// The window/taskbar icon on Linux, and the macOS Dock icon when launched
+// through the stock Electron.app (`npm --prefix ui start`) rather than
+// app.sh's branded mads.app. Regenerate with scripts/make-icon.mjs.
+const ICON_PNG = join(__dirname, "..", "assets", "icon", "mads.png");
+
+// "mads" in the app menu (About/Hide/Quit mads) and Linux's WM_CLASS. The
+// Dock label and menu-bar title come from the bundle, not from here — see
+// mads_brand_app in scripts/ensure-electron.sh. Renaming would also move the
+// data directory, so pin it where package.json's "name" has always put it:
+// localStorage (shell dock state, graph positions, unseen markers) lives there.
+app.setPath("userData", join(app.getPath("appData"), "mads-ui"));
+app.setName("mads");
+
 // Trimmed replacement for Electron's stock File/Edit/View/Window/Help menu,
 // which is out of theme and mostly dead weight for this app. We still need a
 // real Menu template (not Menu.setApplicationMenu(null)) because the edit
@@ -263,6 +276,7 @@ function createWindow(): void {
     width: 1280,
     height: 800,
     backgroundColor: "#1A1713",
+    icon: ICON_PNG, // ignored on macOS, where the bundle (or the Dock) owns it
     // The menu bar itself is chrome we don't want visible; Alt still reveals
     // it as an escape hatch. macOS has no equivalent bar to hide.
     autoHideMenuBar: process.platform !== "darwin",
@@ -304,6 +318,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  if (process.execPath.includes("/Electron.app/")) app.dock?.setIcon(ICON_PNG);
   registerAppHandlers();
   createWindow();
 });

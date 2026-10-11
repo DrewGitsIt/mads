@@ -55,10 +55,14 @@ func newElectronFixture(t *testing.T, osName string, installJSFails bool) *elect
 esac
 `)
 	// ditto -x -k <zip> <dest>: lay down the bundle a real extraction would.
-	stub("ditto", `mkdir -p "$4/Electron.app/Contents/MacOS"
+	// ditto <src> <dst> (mads_brand_app's copy): copy the tree.
+	stub("ditto", `if [ "$1" != -x ]; then cp -R "$1" "$2"; exit; fi
+mkdir -p "$4/Electron.app/Contents/MacOS"
 touch "$4/Electron.app/Contents/MacOS/Electron"
 echo v`+fakeElectronVersion+` > "$4/version"
 `)
+	stub("plutil", "exit 0\n")
+	stub("codesign", `exit "${FAKE_CODESIGN_EXIT:-0}"`+"\n")
 	f.env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return f
 }
@@ -173,5 +177,91 @@ func TestEnsureElectronDarwinExtractsWithDitto(t *testing.T) {
 	pathTxt, err := os.ReadFile(filepath.Join(f.pkg, "path.txt"))
 	if err != nil || string(pathTxt) != "Electron.app/Contents/MacOS/Electron" {
 		t.Errorf("path.txt = %q (%v)", pathTxt, err)
+	}
+}
+
+// brandFixture is a healthy darwin install plus what mads_brand_app reads: the
+// committed icon and one helper app inside Electron.app.
+func brandFixture(t *testing.T) (f *electronFixture, app, stamp, icns string) {
+	t.Helper()
+	f = newElectronFixture(t, "Darwin", false)
+	f.installDarwinTree(t)
+	helper := filepath.Join(f.pkg, "dist", "Electron.app", "Contents", "Frameworks",
+		"Electron Helper (Renderer).app", "Contents", "Info.plist")
+	writeFile(t, helper, "", 0o644)
+	writeFile(t, filepath.Join(f.pkg, "dist", "Electron.app", "Contents", "Resources", "electron.icns"), "stock", 0o644)
+	icns = filepath.Join(f.root, "ui", "assets", "icon", "mads.icns")
+	writeFile(t, icns, "copper m", 0o644)
+	return f, filepath.Join(f.pkg, "dist", "mads.app"), filepath.Join(f.pkg, "dist", "mads.app.stamp"), icns
+}
+
+func TestEnsureElectronBrandsDarwinBundle(t *testing.T) {
+	f, app, stamp, icns := brandFixture(t)
+
+	if out, code := f.source(t, "mads_brand_app"); code != 0 {
+		t.Fatalf("mads_brand_app: exit %d\n%s", code, out)
+	}
+	calls := f.calls(t)
+	plist := filepath.Join(app, "Contents", "Info.plist")
+	for _, want := range []string{
+		"ditto " + filepath.Join(f.pkg, "dist", "Electron.app") + " " + app,
+		"plutil -replace CFBundleName -string mads " + plist,
+		"plutil -replace CFBundleDisplayName -string mads " + plist,
+		"plutil -replace CFBundleIdentifier -string dev.mads.app " + plist,
+		"plutil -replace CFBundleIdentifier -string dev.mads.app.helper " +
+			filepath.Join(app, "Contents", "Frameworks", "Electron Helper (Renderer).app", "Contents", "Info.plist"),
+		"codesign --force --deep --sign - " + app,
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("want %q in calls:\n%s", want, calls)
+		}
+	}
+	if b, _ := os.ReadFile(filepath.Join(app, "Contents", "Resources", "electron.icns")); string(b) != "copper m" {
+		t.Errorf("mads.app icon = %q, want the committed mads.icns", b)
+	}
+	if out, _ := f.source(t, "mads_app_bin"); strings.TrimSpace(out) != filepath.Join(app, "Contents", "MacOS", "Electron") {
+		t.Errorf("mads_app_bin = %q", out)
+	}
+	if _, err := os.Stat(stamp); err != nil {
+		t.Fatalf("no stamp after a successful build: %v", err)
+	}
+
+	// Up to date: no copy, no signing.
+	before := f.calls(t)
+	out, code := f.source(t, "mads_brand_app")
+	if again := f.calls(t)[len(before):]; code != 0 || strings.Contains(again, "ditto") || strings.Contains(again, "codesign") {
+		t.Fatalf("second mads_brand_app rebuilt (exit %d)\n%s\ncalls:\n%s", code, out, again)
+	}
+	before = f.calls(t)
+
+	// A new icon (or Electron version) makes the stamp stale: rebuild.
+	writeFile(t, icns, "a new m", 0o644)
+	if out, code := f.source(t, "mads_brand_app"); code != 0 || !strings.Contains(f.calls(t)[len(before):], "codesign") {
+		t.Fatalf("mads_brand_app after an icon change did not rebuild (exit %d)\n%s", code, out)
+	}
+}
+
+func TestEnsureElectronBrandSigningFailureLeavesNoBundle(t *testing.T) {
+	f, app, stamp, _ := brandFixture(t)
+	f.env = append(f.env, "FAKE_CODESIGN_EXIT=1")
+
+	if out, code := f.source(t, "mads_brand_app"); code == 0 {
+		t.Fatalf("mads_brand_app with codesign failing: exit 0, want failure\n%s", out)
+	}
+	for _, p := range []string{app, stamp} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s left behind after a failed build (%v)", p, err)
+		}
+	}
+}
+
+func TestEnsureElectronBrandIsNoOpOnLinux(t *testing.T) {
+	f := newElectronFixture(t, "Linux", false)
+	out, code := f.source(t, "mads_brand_app && mads_app_bin")
+	if want := filepath.Join(f.pkg, "dist", "electron"); code != 0 || strings.TrimSpace(out) != want {
+		t.Errorf("linux: mads_brand_app && mads_app_bin = %q (exit %d), want %q", out, code, want)
+	}
+	if calls := f.calls(t); strings.Contains(calls, "ditto") || strings.Contains(calls, "codesign") {
+		t.Errorf("linux branding touched a bundle:\n%s", calls)
 	}
 }
