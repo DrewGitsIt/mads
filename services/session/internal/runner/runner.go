@@ -1478,7 +1478,7 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 }
 
 // persistTurnEnd stamps the session record at the end of one turn:
-// LastTurnAt always, and LastUsage whenever the provider reported any —
+// LastTurnAt always, and LastUsage whenever the provider counted any tokens —
 // the context meter's data source at wake time (ui/src/conversation/Header/
 // ContextMeter.tsx, before this process has seen a turn_end of its own) and
 // the resume-compaction trigger's input (compact.go's shouldCompactOnResume).
@@ -1499,7 +1499,11 @@ func (r *Runner) watchRefAnnounce(ctx context.Context, sess provider.Session) {
 // the caller.
 func (r *Runner) persistTurnEnd(ctx context.Context, usage *provider.Usage) {
 	var last *contracts.Usage
-	if usage != nil {
+	// A usage that counts no tokens (claude-code's /compact turn, when the
+	// CLI didn't report what the compaction left) says nothing about the
+	// context, and saving it would read as an empty one.
+	if usage != nil && usage.ContextTokens+usage.InputTokens+usage.OutputTokens+
+		usage.CacheCreationInputTokens+usage.CacheReadInputTokens > 0 {
 		last = &contracts.Usage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,

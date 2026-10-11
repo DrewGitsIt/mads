@@ -19,6 +19,13 @@ describe("ContextRim", () => {
     expect(container.querySelector('[data-rim="empty"]')).toBeTruthy();
   });
 
+  it("is a plain hairline for a usage that counts no tokens, not 0 of the window", () => {
+    // What a /compact turn saved before its turn end carried the compaction's figure.
+    const { container } = render(<ContextRim usage={{ input_tokens: 0, output_tokens: 0, context_window: 1_000_000 }} />);
+    expect(screen.queryByTestId("context-meter")).toBeNull();
+    expect(container.querySelector('[data-rim="empty"]')).toBeTruthy();
+  });
+
   it("labels tokens / window · % context, preferring the provider's window", () => {
     render(<ContextRim usage={at(106_496, 128_000)} contextWindow={200_000} />);
     expect(screen.getByTestId("context-label").textContent).toBe("106.5k / 128k · 83% context");

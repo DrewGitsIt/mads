@@ -6,7 +6,7 @@ import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
 import { subscribeToEvents } from "../router/events";
 import { getAllEvents } from "../router/eventPages";
-import { contextWindowForModel } from "../router/modelDisplay";
+import { contextWindowForModel, countsTokens } from "../router/modelDisplay";
 import {
   SESSION_SHELL_REFETCH_EVENT_TYPES,
   WORKSPACE_SESSION_EVENT_TYPES,
@@ -1060,11 +1060,12 @@ export function ConversationTab({
     };
     const onTurnEnd = (ev: MessageEvent<string>) => {
       // turn_end carries this turn's usage — the only place it's reported, so
-      // it feeds the dock's context rim.
+      // it feeds the dock's context rim. One that counts no tokens (a /compact
+      // turn the CLI gave no figure for) leaves the rim where it was.
       if (typeof ev.data === "string") {
         try {
           const parsed = JSON.parse(ev.data) as StreamEvent;
-          if (parsed.kind === "turn_end" && parsed.usage) {
+          if (parsed.kind === "turn_end" && parsed.usage && countsTokens(parsed.usage)) {
             setLastUsage(parsed.usage);
           }
         } catch {

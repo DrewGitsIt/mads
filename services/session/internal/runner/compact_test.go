@@ -236,3 +236,28 @@ func TestStartSkipsCompactionWithoutUsage(t *testing.T) {
 		t.Fatalf("CompactCalls() = %v, want none", calls)
 	}
 }
+
+// A turn end whose usage counts no tokens (claude-code's /compact turn, when
+// the CLI gave no post-compaction figure) must not overwrite LastUsage: saved,
+// it reads as an empty context to the rim, the rail and the resume trigger.
+func TestPersistTurnEndKeepsLastUsageOverAnEmptyCount(t *testing.T) {
+	ctx := context.Background()
+	base := datatest.Start(t)
+	sess := newSession(t, base)
+	data := dataclient.New(base, sess.ID)
+	r := New(sess.ID, data, provider.NewRegistry())
+
+	r.persistTurnEnd(ctx, &provider.Usage{InputTokens: 3, ContextTokens: 140_000, ContextWindow: 1_000_000})
+	r.persistTurnEnd(ctx, &provider.Usage{ContextWindow: 1_000_000, CostUSD: 0.4})
+
+	cur, err := data.Session(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("load session: %v", err)
+	}
+	if cur.LastUsage == nil || cur.LastUsage.ContextTokens != 140_000 {
+		t.Errorf("LastUsage = %+v, want the last counted turn's (140000)", cur.LastUsage)
+	}
+	if cur.LastTurnAt == nil {
+		t.Error("LastTurnAt not stamped")
+	}
+}

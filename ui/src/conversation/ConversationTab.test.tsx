@@ -888,6 +888,25 @@ describe("ConversationTab", () => {
     ).toBeTruthy();
   });
 
+  it("leaves the context meter where it was on a turn_end that counts no tokens", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(client.sessionEventSources.length).toBeGreaterThan(0));
+    const source = client.sessionEventSources.at(-1)!;
+
+    act(() => {
+      source.emit({ kind: "turn_end", usage: { input_tokens: 10, output_tokens: 5, context_tokens: 100_000 } });
+    });
+    await waitFor(() => expect(rimPct()).toBe("50"));
+
+    // A /compact turn the CLI gave no post-compaction figure for.
+    act(() => {
+      source.emit({ kind: "turn_end", usage: { input_tokens: 0, output_tokens: 0, context_window: 200_000 } });
+    });
+    expect(rimPct()).toBe("50");
+  });
+
   it("names the tool in the working indicator, then clears it once text starts streaming", async () => {
     const client = new FakeRouterClient();
     render(<ConversationTab sessionId="session-active" routerClient={client} />);

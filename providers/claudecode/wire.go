@@ -34,12 +34,16 @@ type wireLine struct {
 	// 2.1.220). Status carries "compacting" on the start-of-compaction line;
 	// the completion line instead carries CompactResult ("success"/"failed")
 	// with Status empty, and CompactError set on failure (e.g. "Not enough
-	// messages to compact."). CompactBoundary's richer token-count metadata
-	// on the success case is not surfaced today (see systemEvents) — the
-	// completion status line alone is enough for the UI's status item.
-	Status        string `json:"status"`
-	CompactResult string `json:"compact_result"`
-	CompactError  string `json:"compact_error"`
+	// messages to compact."). The completion status line alone is enough for
+	// the UI's status item; the "compact_boundary" line after it carries
+	// CompactMetadata, whose post_tokens is the only occupancy the /compact
+	// turn reports — its result line's usage is all zeros (streamSession.
+	// handleLine; verified against claude-code 2.1.285, testdata/
+	// stream-compact.jsonl).
+	Status          string               `json:"status"`
+	CompactResult   string               `json:"compact_result"`
+	CompactError    string               `json:"compact_error"`
+	CompactMetadata *wireCompactMetadata `json:"compact_metadata"`
 
 	// task-lifecycle system-line fields (subtypes "task_started",
 	// "task_progress", "task_updated", "task_notification" — claude-code 2.x,
@@ -221,6 +225,20 @@ func (u *wireUsage) contextTokens() int {
 	}
 	last := u.Iterations[len(u.Iterations)-1]
 	return last.InputTokens + last.CacheReadInputTokens + last.CacheCreationInputTokens
+}
+
+// countsNoTokens reports whether a result line's usage counted nothing at
+// all: the shape of a turn that made no model call, like /compact's.
+func (u *wireUsage) countsNoTokens() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0 && u.CacheCreationInputTokens == 0 &&
+		u.CacheReadInputTokens == 0 && u.contextTokens() == 0
+}
+
+// wireCompactMetadata is a compact_boundary line's compact_metadata. Only
+// PostTokens is read: the context the compacted conversation now carries
+// (absent from older CLIs, where it decodes to zero).
+type wireCompactMetadata struct {
+	PostTokens int `json:"post_tokens"`
 }
 
 // wireModelUsage is one modelUsage entry on a result line. Only the runtime-

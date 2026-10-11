@@ -1482,3 +1482,46 @@ func TestNormalizeTranscriptReadsAnOversizedImageLine(t *testing.T) {
 		t.Fatalf("got %q, want %q", texts, want)
 	}
 }
+
+// A /compact turn (testdata/stream-compact.jsonl: claude-code 2.1.285, haiku,
+// two short turns then /compact) closes with a result whose usage counts no
+// tokens. Its turn end must carry what the compaction left behind — the
+// compact_boundary's post_tokens — or the dock's rim reads 0 tokens used.
+func TestStreamSessionCompactTurnReportsPostTokens(t *testing.T) {
+	var ends []provider.Event
+	for _, ev := range streamFixtureEvents(t, "stream-compact.jsonl") {
+		if ev.Kind == provider.EventTurnEnd {
+			ends = append(ends, ev)
+		}
+	}
+	if len(ends) != 3 {
+		t.Fatalf("turn ends = %d, want 3", len(ends))
+	}
+	if u := ends[1].Usage; u == nil || u.ContextTokens != 22486 {
+		t.Errorf("ordinary turn's usage = %+v, want its own last-call occupancy 22486", u)
+	}
+	u := ends[2].Usage
+	if u == nil || u.ContextTokens != 2214 || u.ContextWindow != 200000 {
+		t.Fatalf("compact turn's usage = %+v, want context 2214 of 200000", u)
+	}
+}
+
+// A compaction inside a working turn (auto-compaction) is followed by more
+// model calls; the turn's own last-call figure stands, and the boundary's
+// figure doesn't leak into a later turn.
+func TestStreamSessionCompactionMidTurnKeepsTurnUsage(t *testing.T) {
+	s := &streamSession{events: make(chan provider.Event, 16), announced: make(chan string, 1)}
+	s.handleLine([]byte(`{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","post_tokens":9000}}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","usage":{"input_tokens":5,"iterations":[{"input_tokens":5,"cache_read_input_tokens":12000}]}}`))
+	s.handleLine([]byte(`{"type":"result","subtype":"success","usage":{"input_tokens":0,"iterations":[]}}`))
+	ends := drainTurnEnds(s)
+	if len(ends) != 2 {
+		t.Fatalf("turn ends = %d, want 2", len(ends))
+	}
+	if got := ends[0].Usage.ContextTokens; got != 12005 {
+		t.Errorf("mid-turn compaction: context = %d, want the turn's own 12005", got)
+	}
+	if got := ends[1].Usage.ContextTokens; got != 0 {
+		t.Errorf("later empty turn: context = %d, want 0 (no compaction of its own)", got)
+	}
+}

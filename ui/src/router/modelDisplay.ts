@@ -26,6 +26,17 @@ export function contextWindowForModel(modelId: string | undefined): number {
   return DEFAULT_CONTEXT_WINDOW;
 }
 
+/** Whether a usage record measures any context at all (see contextOccupancy). */
+export function countsTokens(usage: Usage): boolean {
+  return (
+    (usage.context_tokens ?? 0) +
+      usage.input_tokens +
+      (usage.cache_read_input_tokens ?? 0) +
+      (usage.cache_creation_input_tokens ?? 0) >
+    0
+  );
+}
+
 export interface ContextOccupancy {
   /** Prompt-side tokens the next request will carry. */
   used: number;
@@ -44,14 +55,17 @@ export interface ContextOccupancy {
  *
  * Shared so the places that show occupancy — the session dock's context rim
  * (and its + menu's context row) and the session rail's tooltip — cannot
- * disagree. Undefined when there is no usage or no window to judge it against.
+ * disagree. Undefined when there is no usage or no window to judge it against,
+ * and when the usage counts nothing: no conversation occupies zero tokens, so
+ * that is a turn that made no model call (claude-code's /compact, saved before
+ * its turn end carried the compaction's figure), not an empty context.
  */
 export function contextOccupancy(
   usage: Usage | undefined,
   fallbackWindow: number | undefined,
 ): ContextOccupancy | undefined {
   const window = usage?.context_window || fallbackWindow;
-  if (usage === undefined || window === undefined || window <= 0) return undefined;
+  if (usage === undefined || !countsTokens(usage) || window === undefined || window <= 0) return undefined;
   const used =
     usage.context_tokens ||
     usage.input_tokens + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0);

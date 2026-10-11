@@ -144,8 +144,12 @@ type streamSession struct {
 	// on "Working…" with a climbing counter, 2026-09-30.
 	turnOpen   bool
 	unprompted bool
-	reqSeq     int
-	closed     bool
+	// compactedTo is the post_tokens of a compaction this turn ran, held
+	// for the turn's result line: /compact's result counts no tokens, so
+	// without it the turn end would report the conversation as empty.
+	compactedTo int
+	reqSeq      int
+	closed      bool
 	// agentTasks records, per background task_id, whether it is a subagent
 	// (wire.go isAgentTask). Only a task_started line says so, so the later
 	// phases are kept or dropped by id. Never pruned: one entry per
@@ -253,7 +257,10 @@ func (s *streamSession) handleLine(raw []byte) {
 	model := s.model
 	interrupted := s.interrupted
 	closesUnprompted := false
+	compactedTo := 0
 	switch {
+	case l.Type == "system" && l.Subtype == "compact_boundary" && l.CompactMetadata != nil:
+		s.compactedTo = l.CompactMetadata.PostTokens
 	case l.isTaskNotificationResult():
 		// Only an end for output this stream actually saw after the turn
 		// closed. A continuation that produced nothing past the turn's end
@@ -266,6 +273,7 @@ func (s *streamSession) handleLine(raw []byte) {
 		s.interrupted = false
 		s.turnOpen = false
 		s.unprompted = false
+		compactedTo, s.compactedTo = s.compactedTo, 0
 	case l.Type == "assistant" && l.ParentToolUseID == "" && !s.turnOpen:
 		s.unprompted = true
 	}
@@ -282,6 +290,12 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	for _, ev := range evs {
 		if ev.Usage != nil {
+			// A compaction's turn end: what it left behind is the occupancy.
+			// A compaction inside a working turn is followed by more model
+			// calls, whose own figure stands.
+			if ev.Kind == provider.EventTurnEnd && compactedTo > 0 && l.Usage.countsNoTokens() {
+				ev.Usage.ContextTokens = compactedTo
+			}
 			if ev.Usage.Model == "" {
 				ev.Usage.Model = model // learned from the init line
 			}
