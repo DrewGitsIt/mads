@@ -66,6 +66,63 @@ describe("AppearanceSection", () => {
     expect(config.setDraft).not.toHaveBeenCalled();
   });
 
+  it("draws a preview card per palette, ringed on the saved one", () => {
+    document.documentElement.dataset.theme = "light";
+    render(<AppearanceSection config={makeConfig()} />);
+    const group = screen.getByRole("radiogroup", { name: "Palette" });
+    const cards = within(group).getAllByRole("radio");
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Clay", "Space", "Glacier"]);
+    expect(cards.map((c) => c.getAttribute("data-palette"))).toEqual(["clay", "space", "glacier"]);
+    // Scoped to the applied theme, so each card reads as this app in that palette.
+    expect(cards.every((c) => c.getAttribute("data-theme") === "light")).toBe(true);
+    expect(within(group).getByRole("radio", { name: "Clay" }).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("tries a palette on while hovered, keeps the ring on the saved one, and reverts on leave", () => {
+    const config = makeConfig();
+    render(<AppearanceSection config={config} />);
+    const space = screen.getByRole("radio", { name: "Space" });
+
+    fireEvent.mouseEnter(space);
+    expect(document.documentElement.dataset.palette).toBe("space");
+    expect(space.getAttribute("aria-checked")).toBe("false");
+    expect(screen.getByRole("radio", { name: "Clay" }).getAttribute("aria-checked")).toBe("true");
+    expect(config.saveFields).not.toHaveBeenCalled();
+
+    fireEvent.mouseLeave(space);
+    expect(document.documentElement.dataset.palette).toBe("clay");
+  });
+
+  it("reverts a try-on if Settings unmounts mid-hover", () => {
+    const { unmount } = render(<AppearanceSection config={makeConfig()} />);
+    fireEvent.mouseEnter(screen.getByRole("radio", { name: "Glacier" }));
+    expect(document.documentElement.dataset.palette).toBe("glacier");
+    unmount();
+    expect(document.documentElement.dataset.palette).toBe("clay");
+  });
+
+  it("doesn't try a palette on from keyboard focus; arrow keys choose and save", () => {
+    const config = makeConfig();
+    render(<AppearanceSection config={config} />);
+    const clay = screen.getByRole("radio", { name: "Clay" });
+    document.documentElement.dataset.palette = "clay";
+
+    fireEvent.focus(screen.getByRole("radio", { name: "Space" }));
+    expect(document.documentElement.dataset.palette).toBe("clay");
+
+    fireEvent.keyDown(clay, { key: "ArrowRight" });
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Space" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ palette: "space" });
+  });
+
+  it("reverts a clicked palette whose save fails", async () => {
+    const config = makeConfig({ saveFields: vi.fn().mockResolvedValue(false) });
+    render(<AppearanceSection config={config} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Glacier" }));
+    expect(document.documentElement.dataset.palette).toBe("glacier");
+    await waitFor(() => expect(document.documentElement.dataset.palette).toBe("clay"));
+  });
+
   it("switches theme live and persists only that field", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);

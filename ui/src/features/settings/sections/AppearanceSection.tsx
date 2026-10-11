@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { NumberField } from "../../../components/NumberField/NumberField";
 import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
 import {
@@ -10,6 +11,7 @@ import {
 import { optionsWith } from "../settingHelpers";
 import { SettingRow } from "../SettingRow";
 import { SettingsCard } from "../SettingsCard";
+import { PalettePicker } from "./PalettePicker";
 import type { UseConfig } from "../state/useConfig";
 import { applyMotion } from "../theme/applyMotion";
 import { applyTheme } from "../theme/applyTheme";
@@ -17,11 +19,6 @@ import type { PaletteName, StreamSpeed, ThemeMode } from "../../../router/types"
 import styles from "./AppearanceSection.module.css";
 
 // Option labels are display-only; the stored values are the lowercase enums.
-const PALETTES: SegmentedOption<PaletteName>[] = [
-  { value: "clay", label: "Clay" },
-  { value: "space", label: "Space" },
-  { value: "glacier", label: "Glacier" },
-];
 const THEMES: SegmentedOption<ThemeMode>[] = [
   { value: "dark", label: "Dark" },
   { value: "light", label: "Light" },
@@ -65,6 +62,10 @@ export interface AppearanceSectionProps {
 /** Theme, palette, density, motion and streaming — each applies live on click and persists only its own field (HANDOFF §5). */
 export function AppearanceSection({ config }: AppearanceSectionProps) {
   const { draft, saved, saveFields } = config;
+  // The hover try-on reverts to whatever is saved when the pointer leaves —
+  // including a palette clicked a moment ago (saveFields is optimistic).
+  const savedRef = useRef(saved);
+  savedRef.current = saved;
   if (!draft || !saved) return null;
   const speed = normalizeStreamSpeed(draft.stream_speed);
 
@@ -74,6 +75,11 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
     applyTheme(draft.theme, palette);
     const ok = await saveFields({ palette });
     if (!ok) applyTheme(saved.theme, saved.palette);
+  };
+
+  const previewPalette = (palette: PaletteName | null) => {
+    const current = savedRef.current;
+    if (current) applyTheme(current.theme, palette ?? current.palette);
   };
 
   const chooseTheme = async (theme: ThemeMode) => {
@@ -108,13 +114,17 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
             onChange={(t) => void chooseTheme(t)}
           />
         </SettingRow>
-        <SettingRow label="Palette" labelId="palette-label">
-          <SegmentedControl
-            id="palette"
+        <SettingRow
+          stacked
+          label="Palette"
+          labelId="palette-label"
+          help="Hover a palette to preview it across the whole app; click to keep it."
+        >
+          <PalettePicker
             aria-labelledby="palette-label"
-            value={draft.palette}
-            options={PALETTES}
-            onChange={(p) => void choosePalette(p)}
+            value={saved.palette}
+            onChoose={(p) => void choosePalette(p)}
+            onPreview={previewPalette}
           />
         </SettingRow>
         <SettingRow label="Density" labelId="display-mode-label">

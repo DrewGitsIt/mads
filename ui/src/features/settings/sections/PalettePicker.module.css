@@ -1,0 +1,205 @@
+.grid {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+/* Each card carries its own [data-palette]/[data-theme], so every var()
+   below resolves to that card's palette, ring included. */
+.card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg1);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease;
+}
+
+.card[aria-checked="true"] {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.card:focus-visible:not([aria-checked="true"]) {
+  outline-style: dashed;
+}
+
+/* Hover: a soft sheen and a 2px lift, no border change. */
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.03) 45%,
+    transparent 70%
+  );
+  transition: opacity 0.14s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+
+.card:hover::after {
+  opacity: 1;
+}
+
+.card:active {
+  transform: translateY(0);
+}
+
+/* global.css already drops the transitions; the lift itself goes too. */
+@media (prefers-reduced-motion: reduce) {
+  .card:hover {
+    transform: none;
+  }
+}
+
+:root[data-motion="reduce"] .card:hover {
+  transform: none;
+}
+
+.mini {
+  display: flex;
+  height: 92px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--bg0);
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 12px;
+  padding: 5px 3px;
+  background: var(--bg1);
+}
+
+.rail i {
+  height: 6px;
+  border-radius: 2px;
+  background: var(--bg3);
+}
+
+.rail i.on {
+  background: var(--accent);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 46px;
+  padding: 6px 4px;
+  border-right: 1px solid var(--line-soft);
+  border-left: 1px solid var(--line-soft);
+  background: var(--bg1);
+}
+
+.side b {
+  height: 5px;
+  border-radius: 2px;
+  background: var(--bg3);
+}
+
+.side b.on {
+  outline: 1px solid var(--accent);
+  background: var(--accent-soft);
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+}
+
+.title {
+  width: 40%;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--text);
+}
+
+.panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--bg2);
+}
+
+.line {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--text3);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: auto;
+}
+
+.button {
+  width: 22px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.chip {
+  width: 12px;
+  height: 6px;
+  border-radius: 2px;
+}
+
+.ok {
+  background: var(--ok);
+}
+
+.warn {
+  background: var(--warn);
+}
+
+.bad {
+  background: var(--bad);
+}
+
+.name {
+  margin-top: 4px;
+  font: 600 var(--fs-ui) var(--sans);
+}
+
+.description {
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
