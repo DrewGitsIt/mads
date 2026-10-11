@@ -15,6 +15,7 @@ export interface PalettePickerProps {
   onChoose: (palette: PaletteName) => void;
   /** Try a palette on (pointer hover), or null to go back to the saved one. */
   onPreview: (palette: PaletteName | null) => void;
+  id?: string;
   "aria-labelledby"?: string;
 }
 
@@ -25,7 +26,7 @@ export interface PalettePickerProps {
  * app; keyboard focus doesn't, so tabbing past never flashes the page.
  * Radio-group keys as in SegmentedControl: arrows move focus and choose.
  */
-export function PalettePicker({ value, onChoose, onPreview, ...aria }: PalettePickerProps) {
+export function PalettePicker({ value, onChoose, onPreview, id, ...aria }: PalettePickerProps) {
   const theme = useAppliedTheme();
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
   const selectedIndex = PALETTES.findIndex((p) => p.value === value);
@@ -67,7 +68,7 @@ export function PalettePicker({ value, onChoose, onPreview, ...aria }: PalettePi
   }
 
   return (
-    <div role="radiogroup" className={styles.grid} {...aria}>
+    <div id={id} role="radiogroup" className={styles.grid} {...aria}>
       {PALETTES.map((p, index) => (
         <button
           key={p.value}

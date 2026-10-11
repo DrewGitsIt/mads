@@ -121,6 +121,7 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
           help="Hover a palette to preview it across the whole app; click to keep it."
         >
           <PalettePicker
+            id="palette"
             aria-labelledby="palette-label"
             value={saved.palette}
             onChoose={(p) => void choosePalette(p)}

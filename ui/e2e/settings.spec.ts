@@ -39,6 +39,7 @@ test("settings journey: appearance persists, preflight reports live data service
   const dataServiceRow = page.locator('li[data-preflight-check="data_service"]');
   await expect(dataServiceRow).toBeVisible();
   await expect(dataServiceRow).toContainText("✓");
+  await expect(dataServiceRow).toContainText("Data service");
 });
 
 // One save bar for the page: draft edits wait for it, while live controls
