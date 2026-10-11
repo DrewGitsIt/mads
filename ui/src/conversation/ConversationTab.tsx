@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
 import { Toast } from "../components/Toast/Toast";
@@ -81,6 +81,7 @@ import { useCommitSettings } from "./Worktree/useCommitSettings";
 import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
+import { useStickToBottom } from "./useStickToBottom";
 import { useVisibleCards } from "./useVisibleCards";
 import { useDelegateFile } from "./activity/useDelegateFile";
 import styles from "./ConversationTab.module.css";
@@ -604,6 +605,13 @@ export function ConversationTab({
     [routerClient, sessionId],
   );
 
+  // Conversation scroll: auto-follow the tail as the agent streams, but yield
+  // control the instant the user scrolls up — re-engaging only once they're
+  // back at the bottom (useStickToBottom). The chat stream mounts and
+  // unmounts with the transport, so its ref is the hook's callback ref; the
+  // terminal stream just takes the element ref.
+  const stick = useStickToBottom();
+
   // The dock's Commit…: one click with "Write commit messages for me" on and a
   // Fast Model to write them, else the dialog.
   const handleCommit = useCallback(() => {
@@ -612,8 +620,8 @@ export function ConversationTab({
       return;
     }
     // The result is a card at the tail; follow it there (see the scroll
-    // effect below), as a sent message does.
-    stickToBottom.current = true;
+    // lock above), as a sent message does.
+    stick.follow();
     commitAll().catch((err: unknown) => {
       if (err instanceof CommitRefusedError) setCommitDialog({ initialError: err.body });
       else
@@ -622,21 +630,21 @@ export function ConversationTab({
           message: err instanceof Error ? err.message : "Couldn't commit.",
         });
     });
-  }, [commitSettings, commitAll]);
+  }, [commitSettings, commitAll, stick]);
 
   // The dock's Land / a card's "Land again". The outcome is a card either
   // way (and the dock's ⎇ popover shows it at the button); only an unexpected
   // failure (no card coming) is a toast. The user asked for this outcome, so
   // the tail follows it into view even if they had scrolled up.
   const handleLand = useCallback(() => {
-    stickToBottom.current = true;
+    stick.follow();
     land().catch((err: unknown) => {
       setCommandToast({
         tone: "bad",
         message: err instanceof Error ? err.message : "Couldn't land.",
       });
     });
-  }, [land]);
+  }, [land, stick]);
 
   const worktreeActions = useMemo(
     () => ({
@@ -1184,28 +1192,8 @@ export function ConversationTab({
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [routerClient, sessionId, refetchSession]);
 
-  // Conversation scroll: auto-follow the tail as the agent streams, but yield
-  // control the instant the user scrolls up — re-engaging only once they're
-  // back at the bottom. stickToBottom is a ref (not state) so updating it from
-  // the scroll handler never itself triggers a render.
-  const streamRef = useRef<HTMLDivElement | null>(null);
-  const stickToBottom = useRef(true);
-  // The dock sits below the stream, not inside it, so a composer growing a
-  // line (or the dock's status line wrapping) shrinks the stream's viewport
-  // without moving its scrollTop or firing a scroll — re-pin the tail when
-  // the viewport resizes, unless the user has scrolled up. A callback ref
-  // because the chat stream mounts and unmounts with the transport.
-  const streamResize = useRef<ResizeObserver | null>(null);
-  const chatStreamRef = useCallback((el: HTMLDivElement | null) => {
-    streamRef.current = el;
-    streamResize.current?.disconnect();
-    streamResize.current = null;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    streamResize.current = new ResizeObserver(() => {
-      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
-    });
-    streamResize.current.observe(el);
-  }, []);
+  // The conversation stream's element (see the scroll lock above).
+  const streamRef = stick.element;
   // The approval jump's reach: the whole tab (stream + dock) for finding
   // cards, the pinned strip for what covers the stream's bottom edge. The reveal is
   // its latest click, published to collapsed groups (permissionReveal.ts).
@@ -1229,24 +1217,9 @@ export function ConversationTab({
   const revealPermission = useCallback((id: string) => {
     // Jumping up the history is the user leaving the tail — don't let the
     // next streamed frame snap back before the smooth scroll's first event.
-    stickToBottom.current = false;
+    stick.release();
     setPermissionReveal((cur) => ({ id, nonce: (cur?.nonce ?? 0) + 1 }));
-  }, []);
-
-  const handleStreamScroll = useCallback(() => {
-    const el = streamRef.current;
-    if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottom.current = distanceFromBottom < 48;
-  }, []);
-
-  // Commit/Land cards join the tail too (interleaveCards), so a new or
-  // updated one follows the same pinning as a streamed message.
-  useLayoutEffect(() => {
-    const el = streamRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [messages, pacer.items, turnPhase, worktree.cards]);
-
+  }, [stick]);
 
   // Ctrl/Cmd+↑/↓ hops between the user's own messages — anchored on the
   // [data-user-msg] elements ChatRenderer stamps on each user bubble.
@@ -1265,11 +1238,14 @@ export function ConversationTab({
         e.key === "ArrowUp"
           ? ([...offsets].reverse().find((o) => o < cur - 4) ?? 0)
           : (offsets.find((o) => o > cur + 4) ?? el.scrollHeight);
+      // Hopping up leaves the tail — as the approval jump does, let go now
+      // rather than at the smooth scroll's first event.
+      if (e.key === "ArrowUp") stick.release();
       el.scrollTo({ top: target, behavior: "smooth" });
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [stick, streamRef]);
 
   // The subagent dock's stream: the subagent's own transcript file, read on
   // open and again as it runs (its task id is its harness id — the file's
@@ -1539,7 +1515,7 @@ export function ConversationTab({
       <div className={styles.body}>
         {showHistory ? (
           <>
-            <div className={styles.stream} ref={chatStreamRef} onScroll={handleStreamScroll} data-testid="conversation-stream">
+            <div className={styles.stream} ref={stick.ref} onScroll={stick.onScroll} data-testid="conversation-stream">
               {provisioning && (
                 <div className={styles.provisioningWrap}>
                   <ProvisioningStrip sessionId={sessionId} onDone={onProvisioningDone} />

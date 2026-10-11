@@ -189,7 +189,7 @@ describe("ConversationTab — Commit and Land", () => {
     client.landOutcome = () => Promise.resolve(refusal);
     await mount(client);
     const stream = screen.getByTestId("conversation-stream");
-    let top = 0;
+    let top = 1500;
     Object.defineProperty(stream, "scrollHeight", { configurable: true, get: () => 2000 });
     Object.defineProperty(stream, "clientHeight", { configurable: true, get: () => 500 });
     Object.defineProperty(stream, "scrollTop", {
@@ -197,6 +197,7 @@ describe("ConversationTab — Commit and Land", () => {
       get: () => top,
       set: (v: number) => (top = v),
     });
+    fireEvent.scroll(stream); // opens at the tail
     // The user scrolls up to read: a new card alone wouldn't move them...
     top = 200;
     fireEvent.scroll(stream);

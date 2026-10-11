@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RouterClient } from "../../../router/client";
 import { subscribeToEvents } from "../../../router/events";
 import { getAllEvents } from "../../../router/eventPages";
@@ -13,6 +13,7 @@ import {
 } from "../../../conversation/activity/conversationItems";
 import { KindIcon } from "../../../conversation/activity/primitives";
 import { useDelegateFile } from "../../../conversation/activity/useDelegateFile";
+import { useStickToBottom } from "../../../conversation/useStickToBottom";
 import { TaskCounters, TaskStatusGlyph } from "../../../conversation/activity/TaskCard";
 import styles from "./DelegateView.module.css";
 
@@ -168,18 +169,8 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
 
   // Scroll: open at the tail and follow it while the subagent runs, but let
   // go the moment the user scrolls up — the conversation pane's rule
-  // (ConversationTab's stickToBottom).
-  const bodyRef = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
-  const handleScroll = useCallback(() => {
-    const el = bodyRef.current;
-    if (!el) return;
-    stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
-  }, []);
-  useLayoutEffect(() => {
-    const el = bodyRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [items, running, missing]);
+  // (useStickToBottom).
+  const stick = useStickToBottom();
 
   return (
     <section className={styles.view} aria-label={`Subagent: ${title}`} data-testid="delegate-view">
@@ -208,7 +199,7 @@ export function DelegateView({ sessionId, harnessId, parentName, routerClient, o
         )}
         {record?.capabilities && <Capabilities caps={record.capabilities} worktree={record.worktree_path} />}
       </header>
-      <div className={styles.body} ref={bodyRef} onScroll={handleScroll} data-testid="delegate-stream">
+      <div className={styles.body} ref={stick.ref} onScroll={stick.onScroll} data-testid="delegate-stream">
         <ContentColumn>
           {missing && !record ? (
             <div className={styles.note}>This subagent's record isn't available any more.</div>

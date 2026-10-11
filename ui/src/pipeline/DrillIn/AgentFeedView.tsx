@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ToolCard } from "../../conversation/ChatRenderer/ToolCard";
+import { useStickToBottom } from "../../conversation/useStickToBottom";
 import type { Task, TranscriptMessage } from "../../router/types";
 import type { StageAttempt } from "../state/usePipelineRun";
 import { buildFeedRows, elapsedSeconds, formatClock, type FeedRow as FeedRowData } from "./feedFormat";
@@ -11,10 +12,6 @@ export interface AgentFeedViewProps {
   turns: TranscriptMessage[];
 }
 
-// How close to the bottom (px) still counts as "following" — the
-// scroll-lock-on-scrollback threshold (DESIGN point 4).
-const FOLLOW_THRESHOLD_PX = 24;
-
 /**
  * Transparency-first drill-in feed: normalized provider turns rendered as
  * prose rows (agent/user) visually distinct from compact tool rows (tool
@@ -23,21 +20,9 @@ const FOLLOW_THRESHOLD_PX = 24;
  * that disengages once the viewer scrolls back through history.
  */
 export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const followRef = useRef(true);
+  // Auto-follow that lets go on scrollback (DESIGN point 4).
+  const stick = useStickToBottom();
   const rows = useMemo(() => buildFeedRows(turns), [turns]);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el || !followRef.current) return;
-    el.scrollTop = el.scrollHeight;
-  }, [turns]);
-
-  function handleScroll() {
-    const el = containerRef.current;
-    if (!el) return;
-    followRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < FOLLOW_THRESHOLD_PX;
-  }
 
   const currentAttempt = attempts[attempts.length - 1];
   const started = turns[0]?.timestamp;
@@ -53,7 +38,7 @@ export function AgentFeedView({ task, attempts, turns }: AgentFeedViewProps) {
         )}
         {started && <span className={styles.metaStarted}>started {formatClock(started)}</span>}
       </div>
-      <div className={styles.rows} ref={containerRef} onScroll={handleScroll} data-testid="feed-rows">
+      <div className={styles.rows} ref={stick.ref} onScroll={stick.onScroll} data-testid="feed-rows">
         {rows.map((row, i) => (
           <FeedRow key={i} row={row} />
         ))}
