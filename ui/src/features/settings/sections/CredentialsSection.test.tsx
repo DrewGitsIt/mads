@@ -83,13 +83,17 @@ describe("CredentialsSection", () => {
     render(<CredentialsSection config={makeConfig()} profiles={[]} />);
     await waitFor(() => expect(screen.getByText(/no credentials stored/i)).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: /scan environment/i }));
-    await waitFor(() => expect(screen.getByText("ANTHROPIC_API_KEY")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Import from environment…" }));
+    const sheet = screen.getByRole("complementary", { name: "Import from environment" });
+    await waitFor(() => expect(within(sheet).getByText("ANTHROPIC_API_KEY")).toBeTruthy());
+    expect(within(sheet).getByText("What does mads look for?")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: /import selected/i }));
+    fireEvent.click(within(sheet).getByRole("checkbox"));
+    fireEvent.click(within(sheet).getByRole("button", { name: /import selected/i }));
 
-    await waitFor(() => expect(screen.getAllByText("ANTHROPIC_API_KEY")).toHaveLength(1));
+    // Imported: the sheet closes onto the stored list, which now holds the name.
+    await waitFor(() => expect(screen.queryByRole("complementary")).toBeNull());
+    expect(screen.getAllByText("ANTHROPIC_API_KEY")).toHaveLength(1);
   });
 
   it("deletes a stored credential after confirmation", async () => {
@@ -172,7 +176,9 @@ describe("CredentialsSection", () => {
     await waitFor(() => expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy());
 
     expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy();
-    expect(screen.getByText("Inactive")).toBeTruthy();
+    expect(screen.getByText("Not in this profile")).toBeTruthy();
+    expect(screen.getByRole("switch", { name: "Use OPENAI_API_KEY in this profile" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("switch", { name: "Use GITHUB_TOKEN in this profile" }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("toggling a credential edits draft.credential_bindings instead of calling the vault", async () => {
@@ -189,11 +195,38 @@ describe("CredentialsSection", () => {
     render(<CredentialsSection config={config} profiles={[]} />);
     await waitFor(() => expect(screen.getByText("GITHUB_TOKEN")).toBeTruthy());
 
-    fireEvent.click(screen.getByRole("button", { name: /use in this profile/i }));
+    fireEvent.click(screen.getByRole("switch", { name: "Use GITHUB_TOKEN in this profile" }));
 
     expect(config.setDraft).toHaveBeenCalledWith(
       expect.objectContaining({ credential_bindings: ["OPENAI_API_KEY", "GITHUB_TOKEN"] }),
     );
+  });
+
+  it("switching an active credential off drops it from the draft's bindings, leaving the rest bound", async () => {
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        "GET /credentials": () => jsonResponse(["GITHUB_TOKEN", "OPENAI_API_KEY"]),
+      }),
+    );
+    // No bindings yet means every stored credential is in use.
+    const config = makeConfig({ draft: { ...fixtureConfig, credential_bindings: undefined } });
+
+    render(<CredentialsSection config={config} profiles={[]} />);
+    const toggle = await screen.findByRole("switch", { name: "Use OPENAI_API_KEY in this profile" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+
+    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ credential_bindings: ["GITHUB_TOKEN"] }));
+    expect(config.save).not.toHaveBeenCalled();
+    expect(config.saveFields).not.toHaveBeenCalled();
+  });
+
+  it("has no vault-sources placeholder", async () => {
+    vi.stubGlobal("fetch", routedFetch({ "GET /credentials": () => jsonResponse([]) }));
+    render(<CredentialsSection config={makeConfig()} profiles={[]} />);
+    await waitFor(() => expect(screen.getByText(/no credentials stored/i)).toBeTruthy());
+    expect(screen.queryByText(/vault sources/i)).toBeNull();
   });
 
   it("defaults to inherit mode with an accurate credential-count summary, and hides passthrough chips", async () => {

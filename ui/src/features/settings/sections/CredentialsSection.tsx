@@ -1,15 +1,17 @@
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../../components/Button/Button";
-import { Chip } from "../../../components/Chip/Chip";
 import { ConfirmDialog } from "../../../components/ConfirmDialog/ConfirmDialog";
 import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
+import { Switch } from "../../../components/Switch/Switch";
 import { EnvLookedFor } from "../EnvLookedFor";
-import { SettingRow } from "../SettingRow";
+import { SettingRow, SettingTag } from "../SettingRow";
 import { SettingsCard } from "../SettingsCard";
+import { SettingsSheet } from "../SettingsSheet";
 import { useCredentials } from "../state/useCredentials";
 import type { UseConfig } from "../state/useConfig";
 import type { EnvMode, Profile } from "../../../router/types";
 import { isCredentialActive } from "../profileDiff";
+import input from "../settingInput.module.css";
 import styles from "./CredentialsSection.module.css";
 
 // Option labels are display-only; the stored values are the lowercase enums.
@@ -41,13 +43,13 @@ function boundProfiles(name: string, profiles: Profile[]): Profile[] {
 }
 
 /**
- * Masked credential list + add/delete form + env-import picker (HANDOFF §8,
- * the security acceptance criterion). The value input is cleared
- * synchronously in this component's own submit handler, before add()'s
- * network call is awaited — never in a .then(). Every stored credential is
- * always listed; ones not bound to the live draft's credential_bindings are
- * dimmed with a toggle — toggling edits draft.credential_bindings (drift),
- * not the vault.
+ * Masked credential list + inline add row + env-import picker in a side
+ * sheet (HANDOFF §8, the security acceptance criterion). The value input is
+ * cleared synchronously in this component's own submit handler, before
+ * add()'s network call is awaited — never in a .then(). Every stored
+ * credential is always listed; ones not bound to the live draft's
+ * credential_bindings are dimmed, and each row's switch edits
+ * draft.credential_bindings (drift, the save bar), not the vault.
  */
 export function CredentialsSection({ config, profiles }: CredentialsSectionProps) {
   const credentials = useCredentials();
@@ -75,9 +77,11 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
     );
   };
 
+  // Done once something landed: the sheet closes onto the list that now holds it.
   const handleImport = async () => {
-    await credentials.importFromEnv(selectedCandidates);
+    const imported = await credentials.importFromEnv(selectedCandidates);
     setSelectedCandidates([]);
+    if (imported.length > 0) setShowEnvImport(false);
   };
 
   const openEnvImport = async () => {
@@ -135,57 +139,85 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
 
   return (
     <div className={styles.panel}>
-      <section>
-        <h3 className={styles.heading}>Stored credentials</h3>
-        <ul className={styles.list}>
-          {credentials.names.map((n) => {
-            const active = isCredentialActive(n, draft?.credential_bindings);
-            return (
-              <li key={n} className={active ? styles.row : `${styles.row} ${styles.inactive}`}>
-                <span className={styles.name}>{n}</span>
-                {!active && <Chip tone="neutral">Inactive</Chip>}
-                <span className={styles.masked} aria-hidden="true">
-                  ••••••••
-                </span>
-                <Button size="sm" variant="ghost" onClick={() => toggleActive(n)}>
-                  {active ? "Deactivate" : "Use in this profile"}
-                </Button>
-                <Button size="sm" variant="ghost" onClick={() => setPendingDelete(n)}>
-                  Delete
-                </Button>
-              </li>
-            );
-          })}
-          {credentials.names.length === 0 && <li className={styles.empty}>No credentials stored.</li>}
-        </ul>
-      </section>
-
-      <section>
-        <SettingsCard title="Agent environment">
-          <SettingRow
-            label="Environment"
-            labelId="env-mode-label"
-            help={envSummary(envMode, activeCredentialCount, envPassthrough)}
-          >
-            <SegmentedControl
-              id="env-mode"
-              aria-labelledby="env-mode-label"
-              value={envMode}
-              options={ENV_MODES}
-              onChange={chooseEnvMode}
+      <div>
+        <SettingsCard title="Stored credentials">
+          <ul className={styles.list}>
+            {credentials.names.map((n) => {
+              const active = isCredentialActive(n, draft?.credential_bindings);
+              return (
+                <li key={n} className={active ? styles.row : `${styles.row} ${styles.inactive}`}>
+                  <span className={styles.name}>{n}</span>
+                  {!active && <SettingTag>Not in this profile</SettingTag>}
+                  <span className={styles.masked} aria-hidden="true">
+                    ••••••••
+                  </span>
+                  <Switch checked={active} aria-label={`Use ${n} in this profile`} onChange={() => toggleActive(n)} />
+                  <Button size="sm" variant="ghost" className={styles.danger} onClick={() => setPendingDelete(n)}>
+                    Delete
+                  </Button>
+                </li>
+              );
+            })}
+            {credentials.names.length === 0 && <li className={styles.empty}>No credentials stored.</li>}
+          </ul>
+          <form className={styles.addRow} onSubmit={handleAdd} aria-label="Add a credential">
+            <input
+              aria-label="Name"
+              className={`${input.input} ${input.mono}`}
+              value={name}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(e) => setName(e.target.value)}
+              placeholder="NAME"
             />
-          </SettingRow>
-          {envMode === "isolated" && (
-            <SettingRow
-              nested
-              label="Also pass through"
-              htmlFor="env-passthrough-input"
-              help="Variables from your shell that isolated agents still get."
-            >
-              <div className={styles.passthrough}>
+            <input
+              aria-label="Value"
+              type="password"
+              className={input.input}
+              value={value}
+              autoComplete="off"
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="Value"
+            />
+            <Button type="submit" size="sm" disabled={!name.trim() || !value}>
+              Add
+            </Button>
+          </form>
+        </SettingsCard>
+        <div className={styles.note}>
+          <span>The switch sets whether this profile passes the credential to agents.</span>
+          <Button size="sm" onClick={() => void openEnvImport()}>
+            Import from environment…
+          </Button>
+        </div>
+      </div>
+
+      <SettingsCard title="Agent environment">
+        <SettingRow
+          label="Environment"
+          labelId="env-mode-label"
+          help={envSummary(envMode, activeCredentialCount, envPassthrough)}
+        >
+          <SegmentedControl
+            id="env-mode"
+            aria-labelledby="env-mode-label"
+            value={envMode}
+            options={ENV_MODES}
+            onChange={chooseEnvMode}
+          />
+        </SettingRow>
+        {envMode === "isolated" && (
+          <SettingRow
+            nested
+            label="Also pass through"
+            htmlFor="env-passthrough-input"
+            help="Variables from your shell that isolated agents still get."
+          >
+            <div className={styles.passthrough}>
+              {envPassthrough.length > 0 && (
                 <div className={styles.passthroughChips}>
                   {envPassthrough.map((n) => (
-                    <Chip key={n} tone="neutral" className={styles.chip}>
+                    <span key={n} className={styles.chip}>
                       {n}
                       <button
                         type="button"
@@ -195,79 +227,64 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
                       >
                         ✕
                       </button>
-                    </Chip>
+                    </span>
                   ))}
-                  {envPassthrough.length === 0 && <span className={styles.empty}>No passthrough vars.</span>}
                 </div>
-                <div className={styles.passthroughAdd}>
-                  <input
-                    id="env-passthrough-input"
-                    className={styles.input}
-                    value={passthroughInput}
-                    onChange={(e) => setPassthroughInput(e.target.value)}
-                    onKeyDown={handlePassthroughKeyDown}
-                    placeholder="AWS_PROFILE"
-                  />
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={addPassthrough}
-                    disabled={!passthroughInput.trim()}
-                    aria-label="Add passthrough variable"
-                  >
-                    Add
-                  </Button>
-                </div>
+              )}
+              <div className={styles.passthroughAdd}>
+                <input
+                  id="env-passthrough-input"
+                  className={`${input.input} ${input.mono}`}
+                  value={passthroughInput}
+                  spellCheck={false}
+                  onChange={(e) => setPassthroughInput(e.target.value)}
+                  onKeyDown={handlePassthroughKeyDown}
+                  placeholder="VAR_NAME"
+                />
+                <Button
+                  size="sm"
+                  onClick={addPassthrough}
+                  disabled={!passthroughInput.trim()}
+                  aria-label="Add passthrough variable"
+                >
+                  Add
+                </Button>
               </div>
-            </SettingRow>
-          )}
-        </SettingsCard>
-      </section>
+            </div>
+          </SettingRow>
+        )}
+      </SettingsCard>
 
-      <form className={styles.addForm} onSubmit={handleAdd}>
-        <label className={styles.label} htmlFor="cred-name">
-          Name
-        </label>
-        <input
-          id="cred-name"
-          className={styles.input}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="OPENAI_API_KEY"
-        />
-        <label className={styles.label} htmlFor="cred-value">
-          Value
-        </label>
-        <input
-          id="cred-value"
-          type="password"
-          className={styles.input}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-        />
-        <Button type="submit" variant="primary" disabled={!name.trim() || !value}>
-          Add
-        </Button>
-      </form>
-
-      <section>
-        <h3 className={styles.heading}>Import from environment</h3>
-        {!showEnvImport ? (
-          <Button variant="secondary" onClick={() => void openEnvImport()}>
-            Scan environment
-          </Button>
-        ) : (
+      {showEnvImport && (
+        <SettingsSheet
+          title="Import from environment"
+          width={440}
+          onClose={() => setShowEnvImport(false)}
+          footer={
+            <Button
+              variant="primary"
+              onClick={() => void handleImport()}
+              disabled={selectedCandidates.length === 0}
+            >
+              Import selected
+            </Button>
+          }
+        >
           <div className={styles.envImport}>
-            <ul className={styles.list}>
+            <p className={styles.sheetLede}>
+              Variables set in the environment mads was started from. Only names come back here; values go straight
+              from the Router to the vault.
+            </p>
+            <ul className={styles.candidates}>
               {credentials.envCandidates.map((n) => (
                 <li key={n}>
-                  <label>
+                  <label className={styles.candidate}>
                     <input
                       type="checkbox"
                       checked={selectedCandidates.includes(n)}
                       onChange={() => toggleCandidate(n)}
                     />
-                    {n}
+                    <span className={styles.name}>{n}</span>
                   </label>
                 </li>
               ))}
@@ -279,23 +296,9 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
               )}
             </ul>
             <EnvLookedFor names={credentials.envLookedFor} />
-            <Button
-              variant="primary"
-              onClick={() => void handleImport()}
-              disabled={selectedCandidates.length === 0}
-            >
-              Import selected
-            </Button>
           </div>
-        )}
-      </section>
-
-      <section>
-        <h3 className={styles.heading}>Vault sources</h3>
-        <div className={styles.empty}>
-          No vault configured. Real vault integrations (1Password, AWS Secrets Manager) are a future release.
-        </div>
-      </section>
+        </SettingsSheet>
+      )}
 
       <ConfirmDialog
         open={pendingDelete !== null}
