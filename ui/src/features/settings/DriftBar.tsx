@@ -8,13 +8,16 @@ export interface DriftBarProps {
   drift: UseDrift;
 }
 
-/** MODIFIED bar: shown whenever the live draft diverges from the active profile's snapshot. */
+/** MODIFIED bar: shown whenever saved settings diverge from the active profile's snapshot. */
 export function DriftBar({ drift }: DriftBarProps) {
   const [savingAsNew, setSavingAsNew] = useState(false);
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
 
   if (!drift.isDrifted) return null;
+  // Its actions work on saved config; with unsaved edits pending they'd drop
+  // or skip them, so they wait for the save bar.
+  const held = busy || drift.blocked;
 
   const handleUpdate = async () => {
     setBusy(true);
@@ -44,6 +47,7 @@ export function DriftBar({ drift }: DriftBarProps) {
       <Chip tone="warn">Modified</Chip>
       <span className={styles.text}>
         Settings no longer match “{drift.activeProfile?.name}”.
+        {drift.blocked && <span className={styles.hint}> Save or discard your changes first.</span>}
       </span>
       {savingAsNew ? (
         <div className={styles.newProfileForm}>
@@ -55,7 +59,7 @@ export function DriftBar({ drift }: DriftBarProps) {
             onChange={(e) => setNewName(e.target.value)}
             autoFocus
           />
-          <Button variant="primary" size="sm" onClick={handleSaveAsNew} disabled={busy || !newName.trim()}>
+          <Button variant="primary" size="sm" onClick={handleSaveAsNew} disabled={held || !newName.trim()}>
             Save
           </Button>
           <Button
@@ -72,13 +76,13 @@ export function DriftBar({ drift }: DriftBarProps) {
         </div>
       ) : (
         <div className={styles.actions}>
-          <Button variant="primary" size="sm" onClick={handleUpdate} disabled={busy}>
+          <Button variant="primary" size="sm" onClick={handleUpdate} disabled={held}>
             Update profile
           </Button>
-          <Button variant="secondary" size="sm" onClick={() => setSavingAsNew(true)} disabled={busy}>
+          <Button variant="secondary" size="sm" onClick={() => setSavingAsNew(true)} disabled={held}>
             Save as new profile
           </Button>
-          <Button variant="ghost" size="sm" onClick={handleRevert} disabled={busy}>
+          <Button variant="ghost" size="sm" onClick={handleRevert} disabled={held}>
             Revert
           </Button>
         </div>

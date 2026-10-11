@@ -13,8 +13,10 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
     loading: false,
     fieldErrors: {},
     dirtyRestartFields: [],
+    dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
+    saveFields: vi.fn().mockResolvedValue(true),
     refetch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -32,16 +34,27 @@ describe("AdvancedSection", () => {
     expect(screen.getByText("Remote registry")).toBeTruthy();
   });
 
-  it("toggling saves the draft and applies FLAGS live on success", async () => {
+  it("toggling saves only feature_flags and applies FLAGS live on success", async () => {
     const config = makeConfig();
     render(<AdvancedSection config={config} />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Multi-repo workspaces" }));
 
-    expect(config.setDraft).toHaveBeenCalledWith(
-      expect.objectContaining({ feature_flags: expect.objectContaining({ multi_repo: true }) }),
-    );
+    expect(config.saveFields).toHaveBeenCalledWith({
+      feature_flags: expect.objectContaining({ multi_repo: true }),
+    });
+    expect(config.save).not.toHaveBeenCalled();
     await waitFor(() => expect(FLAGS.multiRepo).toBe(true));
+  });
+
+  it("leaves FLAGS alone when the save fails", async () => {
+    const saveFields = vi.fn().mockResolvedValue(false);
+    render(<AdvancedSection config={makeConfig({ saveFields })} />);
+
+    fireEvent.click(screen.getByRole("switch", { name: "Multi-repo workspaces" }));
+
+    await waitFor(() => expect(saveFields).toHaveBeenCalled());
+    expect(FLAGS.multiRepo).toBe(false);
   });
 
   it("does not show a restart badge — feature_flags applies live", () => {

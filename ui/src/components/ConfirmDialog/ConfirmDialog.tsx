@@ -14,6 +14,9 @@ export interface ConfirmDialogProps {
   confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** An optional third choice, between cancel and confirm (e.g. "Discard" beside "Save"). */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   /**
    * Escape and a backdrop click. Defaults to onCancel; set it when the cancel
    * button is itself a choice ("Keep for later") that dismissing mustn't make.
@@ -31,6 +34,8 @@ export function ConfirmDialog({
   confirmDisabled,
   onConfirm,
   onCancel,
+  secondaryLabel,
+  onSecondary,
   onDismiss,
 }: ConfirmDialogProps) {
   const dismiss = onDismiss ?? onCancel;
@@ -62,6 +67,11 @@ export function ConfirmDialog({
           <Button variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>
+          {secondaryLabel && onSecondary && (
+            <Button variant="secondary" onClick={onSecondary}>
+              {secondaryLabel}
+            </Button>
+          )}
           <Button
             variant="primary"
             className={confirmTone === "danger" ? styles.confirmDanger : undefined}

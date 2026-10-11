@@ -95,3 +95,9 @@
   color: var(--bad-fg);
   font: 400 var(--fs-sm) var(--sans);
 }
+
+.hint {
+  margin: 0;
+  color: var(--text3);
+  font: 400 var(--fs-sm) var(--sans);
+}

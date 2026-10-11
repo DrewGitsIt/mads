@@ -1,5 +1,3 @@
-import { useState } from "react";
-import { Button } from "../../../components/Button/Button";
 import { NumberField } from "../../../components/NumberField/NumberField";
 import { SegmentedControl, type SegmentedOption } from "../../../components/SegmentedControl/SegmentedControl";
 import { Select, type SelectOption } from "../../../components/Select/Select";
@@ -98,20 +96,13 @@ export interface PipelineSectionProps {
 
 /** Synthesis mode + static cost hints, agent selection mode, model tier, cost alert threshold, fast model (HANDOFF §3). */
 export function PipelineSection({ config }: PipelineSectionProps) {
-  const { draft, fieldErrors, setDraft, save } = config;
-  const [saving, setSaving] = useState(false);
+  const { draft, fieldErrors, setDraft } = config;
   const credentials = useCredentials();
   const fastModelStatus = useFastModelStatus();
 
   if (!draft) return null;
 
   const fastModelMode = effectiveFastModelMode(draft);
-
-  const handleSave = async () => {
-    setSaving(true);
-    await save();
-    setSaving(false);
-  };
 
   return (
     <div className={styles.panel}>
@@ -268,12 +259,6 @@ export function PipelineSection({ config }: PipelineSectionProps) {
           {fastModelStatusText(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading)}
         </div>
       </SettingsCard>
-
-      <div className={styles.actions}>
-        <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
-          Save
-        </Button>
-      </div>
     </div>
   );
 }

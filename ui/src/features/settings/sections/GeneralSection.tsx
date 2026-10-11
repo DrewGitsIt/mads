@@ -10,7 +10,6 @@ import { fastModelAvailable } from "../../../router/fastModel";
 import type { Config, DelegateFade, Workspace } from "../../../router/types";
 import { ConversationImport } from "../ConversationImport";
 import { PreflightChecks } from "../PreflightChecks";
-import { RestartBadge } from "../RestartBadge";
 import { RESTART_REQUIRED_FIELDS } from "../restartRequired";
 import { SettingRow, SettingTag } from "../SettingRow";
 import { SettingsCard } from "../SettingsCard";
@@ -62,11 +61,10 @@ const restartTag = (field: keyof Config) =>
 
 /** Data dir (§0 non-goal — see HANDOFF; not a Config wire field), concurrency limit, log retention, synthesis debounce, editor command, display mode, keybindings, plus the "run preflight" affordance shared with the wizard's PreflightStep. */
 export function GeneralSection({ config }: GeneralSectionProps) {
-  const { draft, fieldErrors, dirtyRestartFields, setDraft, save } = config;
+  const { draft, fieldErrors, setDraft } = config;
   const preflight = usePreflight();
   const { providers } = useProviderMatrix();
   const fastModelStatus = useFastModelStatus();
-  const [saving, setSaving] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
   useEffect(() => {
@@ -83,14 +81,7 @@ export function GeneralSection({ config }: GeneralSectionProps) {
   const workspaceLabel = (ref: string) =>
     workspaces.find((w) => w.id === ref || w.name === ref)?.name ?? ref;
 
-  const restartVisible = dirtyRestartFields.length > 0;
   const commitDraftsAvailable = fastModelAvailable(draft, fastModelStatus.status);
-
-  const handleSave = async () => {
-    setSaving(true);
-    await save();
-    setSaving(false);
-  };
 
   return (
     <div className={styles.panel}>
@@ -267,12 +258,6 @@ export function GeneralSection({ config }: GeneralSectionProps) {
           />
         </SettingRow>
       </SettingsCard>
-      <div className={styles.actions}>
-        <Button variant="primary" onClick={() => void handleSave()} disabled={saving}>
-          Save
-        </Button>
-        <RestartBadge visible={restartVisible} />
-      </div>
       <section className={styles.preflight}>
         <h3 className={styles.heading}>Preflight</h3>
         <div className={styles.checks}>

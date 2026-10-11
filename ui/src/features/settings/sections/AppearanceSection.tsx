@@ -57,47 +57,35 @@ export interface AppearanceSectionProps {
 
 /** Palette + dark/light/system picker — applies live on click, persists via PUT /config (HANDOFF §5). */
 export function AppearanceSection({ config }: AppearanceSectionProps) {
-  const { draft, saved, setDraft, save } = config;
+  const { draft, saved, saveFields } = config;
   if (!draft || !saved) return null;
   const speed = normalizeStreamSpeed(draft.stream_speed);
 
+  // Each picker persists only its own field (saveFields), so a theme click
+  // never commits someone's half-finished General edits along with it.
   const choosePalette = async (palette: PaletteName) => {
-    const next = { ...draft, palette };
-    setDraft(next);
-    applyTheme(next.theme, next.palette);
-    const ok = await save(next);
+    applyTheme(draft.theme, palette);
+    const ok = await saveFields({ palette });
     if (!ok) applyTheme(saved.theme, saved.palette);
   };
 
   const chooseTheme = async (theme: ThemeMode) => {
-    const next = { ...draft, theme };
-    setDraft(next);
-    applyTheme(next.theme, next.palette);
-    const ok = await save(next);
+    applyTheme(theme, draft.palette);
+    const ok = await saveFields({ theme });
     if (!ok) applyTheme(saved.theme, saved.palette);
   };
 
   const chooseReduceMotion = async (reduce_motion: boolean) => {
-    const next = { ...draft, reduce_motion };
-    setDraft(next);
     applyMotion(reduce_motion);
-    const ok = await save(next);
+    const ok = await saveFields({ reduce_motion });
     if (!ok) applyMotion(saved.reduce_motion);
   };
 
-  const chooseStreamSpeed = async (stream_speed: StreamSpeed) => {
-    const next = { ...draft, stream_speed };
-    setDraft(next);
-    await save(next);
-  };
+  const chooseStreamSpeed = (stream_speed: StreamSpeed) => saveFields({ stream_speed });
 
   // NumberField commits on blur/Enter only (live={false}) — saving every
   // keystroke would clamp "3" to the minimum before "350" is finished.
-  const commitWpm = async (stream_wpm: number) => {
-    const next = { ...draft, stream_wpm };
-    setDraft(next);
-    await save(next);
-  };
+  const commitWpm = (stream_wpm: number) => saveFields({ stream_wpm });
 
   return (
     <div className={styles.panel}>

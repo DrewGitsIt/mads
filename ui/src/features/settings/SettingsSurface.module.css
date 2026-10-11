@@ -6,11 +6,25 @@
   min-height: 0;
 }
 
+/* The content column: the scroll body plus the save bar pinned under it. */
+.main {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
 .body {
   flex: 1;
   min-width: 0;
   overflow-y: auto;
   padding: var(--space-5);
+}
+
+/* Room under the last section so the save bar never covers its controls. */
+.withSaveBar {
+  padding-bottom: 96px;
 }
 
 .section {

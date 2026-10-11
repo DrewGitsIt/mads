@@ -57,7 +57,11 @@ export function SettingRow({
           {tag}
         </div>
         {help && <div className={styles.help}>{help}</div>}
-        {error && <div className={styles.error}>{error}</div>}
+        {error && (
+          <div className={styles.error} data-setting-error>
+            {error}
+          </div>
+        )}
       </div>
       {children && <div className={styles.control}>{children}</div>}
     </div>

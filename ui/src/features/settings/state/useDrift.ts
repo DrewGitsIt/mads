@@ -13,76 +13,76 @@ import type { UseProfiles } from "./useProfiles";
 export interface UseDrift {
   /** The profile bound by config.saved.active_profile_id, if any. */
   activeProfile: Profile | undefined;
-  /** True when the active profile's snapshot no longer matches the live draft. */
+  /** True when the active profile's snapshot no longer matches the saved config. */
   isDrifted: boolean;
   fieldDiff: DiffEntry[];
   credentialDiff: CredentialDiffEntry[];
-  /** Discards the drift: resets draft to what the active profile prescribes and persists it. */
+  /**
+   * The draft has unsaved edits. The actions below work on saved config, so
+   * DriftBar holds them until the save bar is resolved — otherwise those edits
+   * would be silently dropped (Revert) or silently left out (Update profile).
+   */
+  blocked: boolean;
+  /** Discards the drift: overlays what the active profile prescribes onto saved config and persists it. */
   revert: () => Promise<boolean>;
-  /** Recaptures the current draft into the active profile's snapshot. */
+  /** Recaptures the saved config into the active profile's snapshot. */
   updateProfile: () => Promise<boolean>;
-  /** Creates a new profile from the current draft and activates it. */
+  /** Creates a new profile from the saved config and activates it. */
   saveAsNewProfile: (name: string, description?: string) => Promise<boolean>;
 }
 
 /**
- * Drift = the live draft diverging from the active profile's own snapshot —
- * not from `saved` (that's just "unsaved edits," a different question).
- * Computed straight off `draft` so an in-progress, not-yet-saved field edit
- * shows drift immediately, per the task's "any field edit ... shows a
- * MODIFIED bar" requirement.
+ * Drift = the *saved* config diverging from the active profile's own
+ * snapshot. Unsaved edits are the save bar's question, not this one — diffing
+ * the draft would raise both bars on every keystroke. So the Modified bar
+ * appears once an edit is saved (or a live control like theme persists).
  */
 export function useDrift(
   config: UseConfig,
   profiles: UseProfiles,
   credentialNames: string[],
 ): UseDrift {
+  const { saved } = config;
   const activeProfile = useMemo(
-    () => profiles.profiles.find((p) => p.id === config.saved?.active_profile_id),
-    [profiles.profiles, config.saved?.active_profile_id],
+    () => profiles.profiles.find((p) => p.id === saved?.active_profile_id),
+    [profiles.profiles, saved?.active_profile_id],
   );
 
   const fieldDiff = useMemo(() => {
-    if (!activeProfile || !config.draft) return [];
-    return computeProfileDiff(config.draft, activeProfile.snapshot);
-  }, [activeProfile, config.draft]);
+    if (!activeProfile || !saved) return [];
+    return computeProfileDiff(saved, activeProfile.snapshot);
+  }, [activeProfile, saved]);
 
   const credentialDiff = useMemo(() => {
-    if (!activeProfile || !config.draft) return [];
+    if (!activeProfile || !saved) return [];
     const targetBindings = activeProfile.snapshot.credential_bindings as string[] | undefined;
-    return computeCredentialDiff(credentialNames, config.draft.credential_bindings, targetBindings);
-  }, [activeProfile, config.draft, credentialNames]);
+    return computeCredentialDiff(credentialNames, saved.credential_bindings, targetBindings);
+  }, [activeProfile, saved, credentialNames]);
 
   const isDrifted = !!activeProfile && (fieldDiff.length > 0 || credentialDiff.length > 0);
+  const blocked = config.dirtyFields.length > 0;
 
   const revert = useCallback(async () => {
-    if (!activeProfile || !config.draft) return false;
-    const reverted = applySnapshot(config.draft, activeProfile.snapshot);
-    return config.save(reverted);
-  }, [activeProfile, config]);
+    if (!activeProfile || !saved || blocked) return false;
+    return config.save(applySnapshot(saved, activeProfile.snapshot));
+  }, [activeProfile, saved, blocked, config]);
 
   const updateProfile = useCallback(async () => {
-    if (!activeProfile || !config.draft) return false;
-    const ok = await config.save(config.draft);
-    if (!ok) return false;
-    const snapshot = snapshotFromConfig(config.draft);
-    await profiles.update({ ...activeProfile, snapshot });
+    if (!activeProfile || !saved || blocked) return false;
+    await profiles.update({ ...activeProfile, snapshot: snapshotFromConfig(saved) });
     return true;
-  }, [activeProfile, config, profiles]);
+  }, [activeProfile, saved, blocked, profiles]);
 
   const saveAsNewProfile = useCallback(
     async (name: string, description?: string) => {
-      if (!config.draft) return false;
-      const ok = await config.save(config.draft);
-      if (!ok) return false;
-      const snapshot = snapshotFromConfig(config.draft);
-      const created = await profiles.create({ name, description, snapshot });
+      if (!saved || blocked) return false;
+      const created = await profiles.create({ name, description, snapshot: snapshotFromConfig(saved) });
       await profiles.activate(created.id);
       await config.refetch();
       return true;
     },
-    [config, profiles],
+    [saved, blocked, config, profiles],
   );
 
-  return { activeProfile, isDrifted, fieldDiff, credentialDiff, revert, updateProfile, saveAsNewProfile };
+  return { activeProfile, isDrifted, fieldDiff, credentialDiff, blocked, revert, updateProfile, saveAsNewProfile };
 }

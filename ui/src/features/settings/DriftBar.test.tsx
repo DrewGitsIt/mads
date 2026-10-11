@@ -10,6 +10,7 @@ function makeDrift(overrides: Partial<UseDrift> = {}): UseDrift {
     isDrifted: true,
     fieldDiff: [],
     credentialDiff: [],
+    blocked: false,
     revert: vi.fn().mockResolvedValue(true),
     updateProfile: vi.fn().mockResolvedValue(true),
     saveAsNewProfile: vi.fn().mockResolvedValue(true),
@@ -50,5 +51,16 @@ describe("DriftBar", () => {
     fireEvent.change(screen.getByLabelText("New profile name"), { target: { value: "weekend-mode" } });
     fireEvent.click(screen.getByText("Save"));
     expect(drift.saveAsNewProfile).toHaveBeenCalledWith("weekend-mode");
+  });
+
+  it("holds every action, with a hint, while the draft has unsaved edits", () => {
+    const drift = makeDrift({ blocked: true });
+    render(<DriftBar drift={drift} />);
+    expect(screen.getByText(/Save or discard your changes first/)).toBeTruthy();
+    for (const label of ["Update profile", "Save as new profile", "Revert"]) {
+      expect((screen.getByRole("button", { name: label }) as HTMLButtonElement).disabled).toBe(true);
+    }
+    fireEvent.click(screen.getByText("Revert"));
+    expect(drift.revert).not.toHaveBeenCalled();
   });
 });

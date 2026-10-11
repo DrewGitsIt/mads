@@ -34,6 +34,10 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
 
   if (!config.saved) return null;
 
+  // Switching re-fetches config, which would wipe the draft — so with unsaved
+  // edits pending it waits until they're saved or discarded.
+  const switchBlocked = config.dirtyFields.length > 0;
+
   const closeDialog = () => {
     setSwitchTarget(null);
     setPreviousConfig(null);
@@ -85,6 +89,9 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
   return (
     <div className={styles.panel}>
       {error && <p className={styles.error}>{error}</p>}
+      {switchBlocked && profiles.profiles.some((p) => p.id !== config.saved?.active_profile_id) && (
+        <p className={styles.hint}>Save or discard your changes first to switch profiles.</p>
+      )}
       <div className={styles.grid}>
         {profiles.profiles.map((profile) => {
           const active = profile.id === config.saved?.active_profile_id;
@@ -127,7 +134,7 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
                   {profile.description && <p className={styles.description}>{profile.description}</p>}
                   <div className={styles.cardActions}>
                     {!active && (
-                      <Button variant="secondary" onClick={() => openSwitch(profile)}>
+                      <Button variant="secondary" disabled={switchBlocked} onClick={() => openSwitch(profile)}>
                         Switch to this profile
                       </Button>
                     )}

@@ -18,3 +18,26 @@ export function requestOpenSettings(section: string): void {
 export function requestOpenSession(sessionId: string): void {
   window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { sessionId } }));
 }
+
+/**
+ * A surface with something to lose (Settings' unsaved draft) registers one of
+ * these while mounted. Return true to hold the leave — and later call
+ * `proceed` if the user decides to go after all — or false to let it through.
+ */
+export type LeaveGuard = (proceed: () => void) => boolean;
+
+let leaveGuard: LeaveGuard | null = null;
+
+/** Installs `guard`; the returned function removes it (if it's still the one installed). */
+export function registerLeaveGuard(guard: LeaveGuard): () => void {
+  leaveGuard = guard;
+  return () => {
+    if (leaveGuard === guard) leaveGuard = null;
+  };
+}
+
+/** Runs `proceed` — App's surface switch — unless the current surface's guard holds it. */
+export function guardLeave(proceed: () => void): void {
+  if (leaveGuard?.(proceed)) return;
+  proceed();
+}

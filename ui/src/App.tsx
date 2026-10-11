@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { ErrorBoundary } from "./components/ErrorBoundary/ErrorBoundary";
 import { Toast } from "./components/Toast/Toast";
 import { IconRail, type IconRailItem } from "./components/IconRail/IconRail";
@@ -22,7 +22,7 @@ import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
 import { requestShellToggle } from "./conversation/shellToggleSignal";
-import { OPEN_SESSION_EVENT, OPEN_SETTINGS_EVENT } from "./appNavigation";
+import { guardLeave, OPEN_SESSION_EVENT, OPEN_SETTINGS_EVENT } from "./appNavigation";
 import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
 
@@ -45,7 +45,21 @@ const SURFACES: Partial<Record<string, ComponentType>> = {
 };
 
 export function App() {
-  const [activeId, setActiveId] = useState("sessions");
+  const [activeId, setActiveIdState] = useState("sessions");
+  // Every surface switch goes through here: leaving the current surface asks
+  // its leave guard first (Settings holds it while it has unsaved edits), and
+  // `then` — the jump's own state — only runs once the leave goes ahead. A ref
+  // so the window-event listeners below, bound once, see the live surface.
+  const activeIdRef = useRef(activeId);
+  const setActiveId = useCallback((id: string, then?: () => void) => {
+    const go = () => {
+      activeIdRef.current = id;
+      setActiveIdState(id);
+      then?.();
+    };
+    if (id === activeIdRef.current) go();
+    else guardLeave(go);
+  }, []);
   const [config, setConfig] = useState<Config | null>(null);
   const [configError, setConfigError] = useState(false);
 
@@ -105,9 +119,10 @@ export function App() {
     const openSettings = () => setActiveId("settings");
     const openSession = (e: Event) => {
       const { sessionId } = (e as CustomEvent<{ sessionId: string }>).detail;
-      setActiveId("sessions");
-      setJumpToSessionId(sessionId);
-      setJumpToTab(undefined);
+      setActiveId("sessions", () => {
+        setJumpToSessionId(sessionId);
+        setJumpToTab(undefined);
+      });
     };
     window.addEventListener(OPEN_SETTINGS_EVENT, openSettings);
     window.addEventListener(OPEN_SESSION_EVENT, openSession);
@@ -115,7 +130,7 @@ export function App() {
       window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings);
       window.removeEventListener(OPEN_SESSION_EVENT, openSession);
     };
-  }, []);
+  }, [setActiveId]);
 
   const commands = useMemo(() => buildCommands(sessions, tasks), [sessions, tasks]);
 
@@ -146,18 +161,20 @@ export function App() {
       });
       return;
     }
-    setActiveId("sessions");
-    setJumpToSessionId(sessionId);
-    setJumpToTab("pipeline");
+    setActiveId("sessions", () => {
+      setJumpToSessionId(sessionId);
+      setJumpToTab("pipeline");
+    });
   }
 
   function handleDispatch(command: Command) {
     switch (command.kind) {
       case "jump-session":
       case "open-task":
-        setActiveId("sessions");
-        setJumpToSessionId(command.sessionId);
-        setJumpToTab(undefined);
+        setActiveId("sessions", () => {
+          setJumpToSessionId(command.sessionId);
+          setJumpToTab(undefined);
+        });
         break;
       case "start-pipeline":
         if (command.sessionId) void startPipelineFromPalette(command.sessionId, command.label);
@@ -179,7 +196,7 @@ export function App() {
 
   return (
     <div className={styles.shell}>
-      <IconRail items={RAIL_ITEMS} activeId={activeId} onSelect={setActiveId} />
+      <IconRail items={RAIL_ITEMS} activeId={activeId} onSelect={(id) => setActiveId(id)} />
       <ErrorBoundary key={activeId}>
         {(() => {
           if (activeId === "sessions") {

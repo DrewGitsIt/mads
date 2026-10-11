@@ -13,8 +13,10 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
     loading: false,
     fieldErrors: {},
     dirtyRestartFields: [],
+    dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
+    saveFields: vi.fn().mockResolvedValue(true),
     refetch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -36,16 +38,14 @@ describe("AppearanceSection", () => {
     fireEvent.click(within(group).getByRole("radio", { name: "On" }));
 
     expect(document.documentElement.dataset.motion).toBe("reduce");
-    expect(config.save).toHaveBeenCalledWith(
-      expect.objectContaining({ reduce_motion: true, stream_speed: "slow" }),
-    );
+    expect(config.saveFields).toHaveBeenCalledWith({ reduce_motion: true });
   });
 
   it("back to system clears the override, and a failed save reverts it", async () => {
     const config = makeConfig({
       saved: { ...fixtureConfig, reduce_motion: true },
       draft: { ...fixtureConfig, reduce_motion: true },
-      save: vi.fn().mockResolvedValue(false),
+      saveFields: vi.fn().mockResolvedValue(false),
     });
     document.documentElement.dataset.motion = "reduce";
     render(<AppearanceSection config={config} />);
@@ -55,29 +55,32 @@ describe("AppearanceSection", () => {
     await waitFor(() => expect(document.documentElement.dataset.motion).toBe("reduce"));
   });
 
-  it("switches palette live and persists it via save()", () => {
+  it("switches palette live and persists only that field", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
 
     fireEvent.click(screen.getByRole("radio", { name: "Space" }));
 
     expect(document.documentElement.dataset.palette).toBe("space");
-    expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ palette: "space" }));
-    expect(config.save).toHaveBeenCalledWith(expect.objectContaining({ palette: "space" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ palette: "space" });
+    // Never the whole draft: that would commit unrelated unsaved edits.
+    expect(config.save).not.toHaveBeenCalled();
+    expect(config.setDraft).not.toHaveBeenCalled();
   });
 
-  it("switches theme live and persists it via save()", () => {
+  it("switches theme live and persists only that field", () => {
     const config = makeConfig();
     render(<AppearanceSection config={config} />);
 
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
 
     expect(document.documentElement.dataset.theme).toBe("light");
-    expect(config.save).toHaveBeenCalledWith(expect.objectContaining({ theme: "light" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ theme: "light" });
+    expect(config.save).not.toHaveBeenCalled();
   });
 
-  it("reverts the live theme if save() fails", async () => {
-    const config = makeConfig({ save: vi.fn().mockResolvedValue(false) });
+  it("reverts the live theme if the save fails", async () => {
+    const config = makeConfig({ saveFields: vi.fn().mockResolvedValue(false) });
     render(<AppearanceSection config={config} />);
 
     fireEvent.click(within(screen.getByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
@@ -108,7 +111,7 @@ describe("AppearanceSection", () => {
     fireEvent.change(input, { target: { value: "5000" } });
     fireEvent.blur(input);
     await waitFor(() =>
-      expect(config.save).toHaveBeenCalledWith(expect.objectContaining({ stream_wpm: 2000 })),
+      expect(config.saveFields).toHaveBeenCalledWith({ stream_wpm: 2000 }),
     );
     expect(input.value).toBe("2000");
   });

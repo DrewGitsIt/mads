@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { fixtureConfig, fixtureSessions } from "./router/fixtures";
@@ -76,6 +76,24 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
     fireEvent.click(screen.getByLabelText("Settings"));
     await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+  });
+
+  it("leaving Settings with unsaved edits asks first: Keep editing stays, Discard goes", async () => {
+    vi.stubGlobal("fetch", routedFetch({ "GET /config": fixtureConfig }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByLabelText("Settings")).toBeTruthy());
+    fireEvent.click(screen.getByLabelText("Settings"));
+    await waitFor(() => expect(screen.getByLabelText("Concurrency limit")).toBeTruthy());
+    fireEvent.change(screen.getByLabelText("Concurrency limit"), { target: { value: "7" } });
+
+    fireEvent.click(screen.getByLabelText("Retro"));
+    expect(screen.getByRole("alertdialog", { name: "Unsaved changes" })).toBeTruthy();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Keep editing" }));
+    expect(screen.getByLabelText("Concurrency limit")).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText("Retro"));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByLabelText("Concurrency limit")).toBeNull());
   });
 
   it("shows the failure screen when the config fetch rejects, and Retry refetches", async () => {

@@ -12,8 +12,10 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
     loading: false,
     fieldErrors: {},
     dirtyRestartFields: [],
+    dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
+    saveFields: vi.fn().mockResolvedValue(true),
     refetch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };

@@ -1,0 +1,48 @@
+/* Positioned against SettingsSurface's .main column, so it centres under the
+   content and never covers the scroll-spy nav. */
+.bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-4);
+  pointer-events: none;
+  z-index: 10;
+}
+
+.inner {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 520px;
+  max-width: 100%;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--bg2);
+  box-shadow: var(--shadow);
+  animation: slide-in 0.16s ease-out;
+}
+
+/* Reduced motion (OS or the app's own) drops the animation via global.css. */
+@keyframes slide-in {
+  from {
+    transform: translateY(110%);
+  }
+}
+
+.msg {
+  flex: 1;
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.count {
+  margin-left: 6px;
+  color: var(--text3);
+  font-weight: 400;
+  font-size: var(--fs-sm);
+}

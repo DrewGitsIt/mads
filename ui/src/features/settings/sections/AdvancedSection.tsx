@@ -36,17 +36,16 @@ export interface AdvancedSectionProps {
  * restart badge here.
  */
 export function AdvancedSection({ config }: AdvancedSectionProps) {
-  const { draft, setDraft, save } = config;
+  const { draft, saveFields } = config;
   const [saving, setSaving] = useState<keyof FeatureFlags | null>(null);
 
   if (!draft) return null;
 
   const toggle = async (key: keyof FeatureFlags) => {
     const nextFlags = { ...draft.feature_flags, [key]: !draft.feature_flags[key] };
-    const next = { ...draft, feature_flags: nextFlags };
-    setDraft(next);
     setSaving(key);
-    const ok = await save(next);
+    // Only feature_flags — not the rest of the draft, which may hold unsaved edits.
+    const ok = await saveFields({ feature_flags: nextFlags });
     if (ok) {
       setFlags({
         multiRepo: nextFlags.multi_repo,

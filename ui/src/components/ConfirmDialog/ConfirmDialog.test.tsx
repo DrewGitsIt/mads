@@ -151,4 +151,26 @@ describe("ConfirmDialog", () => {
     );
     expect((screen.getByText("Commit 0 files") as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("renders an optional third action between cancel and confirm", () => {
+    const onSecondary = vi.fn();
+    render(
+      <ConfirmDialog
+        open
+        title="Unsaved changes"
+        description="Save them?"
+        confirmLabel="Save"
+        confirmTone="primary"
+        cancelLabel="Keep editing"
+        secondaryLabel="Discard"
+        onSecondary={onSecondary}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    const labels = screen.getAllByRole("button").map((b) => b.textContent);
+    expect(labels).toEqual(["Keep editing", "Discard", "Save"]);
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    expect(onSecondary).toHaveBeenCalled();
+  });
 });

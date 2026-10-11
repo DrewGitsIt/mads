@@ -12,8 +12,10 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
     loading: false,
     fieldErrors: {},
     dirtyRestartFields: [],
+    dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
+    saveFields: vi.fn().mockResolvedValue(true),
     refetch: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
@@ -53,18 +55,6 @@ describe("GeneralSection", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
-  });
-
-  it("shows the restart-required badge when a restart field is dirty", () => {
-    const config = makeConfig({ dirtyRestartFields: ["concurrency_limit"] });
-    render(<GeneralSection config={config} />);
-    expect(screen.getByText(/restart required/i)).toBeTruthy();
-  });
-
-  it("does not show the restart badge when only a live field is dirty", () => {
-    const config = makeConfig({ dirtyRestartFields: [] });
-    render(<GeneralSection config={config} />);
-    expect(screen.queryByText(/restart required/i)).toBeNull();
   });
 
   it("renders every field error from one submit, not just the first", () => {
@@ -154,13 +144,9 @@ describe("GeneralSection", () => {
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ display_mode: "compact" }));
   });
 
-  it("clicking Save PUTs the updated default_workspace/default_provider", async () => {
-    const config = makeConfig({
-      draft: { ...fixtureConfig, default_workspace: "ws-1", default_provider: "claude-code" },
-    });
-    render(<GeneralSection config={config} />);
-    fireEvent.click(screen.getByText("Save"));
-    await waitFor(() => expect(config.save).toHaveBeenCalled());
+  it("has no Save button of its own — edits wait for the page's save bar", () => {
+    render(<GeneralSection config={makeConfig()} />);
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("renders synthesis_debounce_ms and edits call setDraft with the new value", () => {

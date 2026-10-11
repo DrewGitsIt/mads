@@ -16,6 +16,10 @@
   font: 400 var(--fs-body) var(--sans);
 }
 
+.hint {
+  color: var(--text3);
+}
+
 .actions,
 .newProfileForm {
   display: flex;
