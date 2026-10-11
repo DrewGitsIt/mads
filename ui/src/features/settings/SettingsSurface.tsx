@@ -225,7 +225,7 @@ export function SettingsSurface() {
     <div className={styles.surface}>
       <ScrollSpyNav activeId={activeId} onNavigate={handleNavigate} />
       <div className={styles.main}>
-        <div className={dirty.length > 0 ? `${styles.body} ${styles.withSaveBar}` : styles.body} ref={containerRef}>
+        <div className={styles.body} ref={containerRef}>
           <ContentColumn variant="wide">
             <DriftBar drift={drift} />
 
@@ -234,7 +234,12 @@ export function SettingsSurface() {
                 <h2 className={styles.heading}>{SECTION_LABELS[id]}</h2>
                 {SECTION_LEDES[id] && (
                   <p className={styles.lede}>
-                    {SECTION_LEDES[id]}
+                    {/* Unsaved edits hold back Switch and the new-profile card; say so in
+                        the lede's own line rather than adding one, so the page below
+                        doesn't shift as the save bar comes and goes. */}
+                    {id === "profiles" && dirty.length > 0
+                      ? "Save or discard your changes first to switch or create profiles."
+                      : SECTION_LEDES[id]}
                     {LIVE_SECTIONS.has(id) && <SettingTag tone="info">Live</SettingTag>}
                   </p>
                 )}

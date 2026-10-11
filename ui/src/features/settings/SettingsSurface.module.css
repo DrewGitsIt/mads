@@ -20,10 +20,9 @@
   min-width: 0;
   overflow-y: auto;
   padding: var(--space-5);
-}
-
-/* Room under the last section so the save bar never covers its controls. */
-.withSaveBar {
+  /* Room under the last section so the save bar never covers its controls.
+     Always reserved, not just while the bar shows: toggling it changed the
+     scroll height and made the page jump as the bar came and went. */
   padding-bottom: 96px;
 }
 

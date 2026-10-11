@@ -93,10 +93,6 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
   return (
     <div className={styles.panel}>
       {error && <p className={styles.error}>{error}</p>}
-      {/* One hint for both affordances it holds back: Switch and the new-profile card. */}
-      {switchBlocked && (
-        <p className={styles.hint}>Save or discard your changes first to switch or create profiles.</p>
-      )}
       <div className={styles.grid}>
         {profiles.profiles.map((profile) => {
           const active = profile.id === config.saved?.active_profile_id;

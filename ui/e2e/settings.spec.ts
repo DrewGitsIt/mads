@@ -87,3 +87,45 @@ test("settings journey: live theme change doesn't commit an unsaved Editor edit"
   await page.getByLabel("Open files with").fill("");
   await Promise.all([page.waitForResponse(isConfigPut), bar.getByRole("button", { name: "Save" }).click()]);
 });
+
+test("settings: the save bar coming and going doesn't move the page", async ({ page, routerURL }) => {
+  await page.goto(routerURL);
+  await page.getByRole("button", { name: "Settings" }).click();
+  const profiles = page.locator("section#profiles");
+  await profiles.waitFor();
+  // The Settings scroll column: the nearest scrolling ancestor of a section.
+  const measure = () =>
+    profiles.evaluate((el) => {
+      let n = el.parentElement;
+      while (n && getComputedStyle(n).overflowY !== "auto") n = n.parentElement;
+      return { top: Math.round(n!.scrollTop), height: n!.scrollHeight };
+    });
+  // Let late-loading sections (health check, providers) finish growing the
+  // page first, or the baseline is taken from a page still filling in.
+  let settled = await measure();
+  await expect
+    .poll(async () => {
+      const now = await measure();
+      const same = now.height === settled.height;
+      settled = now;
+      return same;
+    }, { intervals: [500] })
+    .toBe(true);
+  // Pinned to the bottom is the worst case: a page that shrinks clamps scrollTop.
+  await profiles.evaluate((el) => {
+    let n = el.parentElement;
+    while (n && getComputedStyle(n).overflowY !== "auto") n = n.parentElement;
+    n!.scrollTo(0, n!.scrollHeight);
+  });
+  const before = await measure();
+
+  await page.locator("#log-retention-days").focus({ preventScroll: true } as never);
+  await page.keyboard.press("ArrowUp");
+  const discard = page.getByRole("button", { name: "Discard" });
+  await expect(discard).toBeVisible();
+  expect(await measure()).toEqual(before);
+
+  await discard.click();
+  await expect(discard).toHaveCount(0);
+  expect(await measure()).toEqual(before);
+});
