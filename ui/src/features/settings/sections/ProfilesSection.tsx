@@ -93,8 +93,9 @@ export function ProfilesSection({ config, profiles, credentialNames, onSwitched 
   return (
     <div className={styles.panel}>
       {error && <p className={styles.error}>{error}</p>}
-      {switchBlocked && profiles.profiles.some((p) => p.id !== config.saved?.active_profile_id) && (
-        <p className={styles.hint}>Save or discard your changes first to switch profiles.</p>
+      {/* One hint for both affordances it holds back: Switch and the new-profile card. */}
+      {switchBlocked && (
+        <p className={styles.hint}>Save or discard your changes first to switch or create profiles.</p>
       )}
       <div className={styles.grid}>
         {profiles.profiles.map((profile) => {
@@ -254,7 +255,6 @@ function NewProfileCard({ blocked, create }: NewProfileCardProps) {
         onClick={() => setNaming(true)}
       >
         <span>＋ New profile from current settings</span>
-        {blocked && <span className={styles.hint}>Save or discard your changes first.</span>}
       </button>
     );
   }
@@ -278,7 +278,6 @@ function NewProfileCard({ blocked, create }: NewProfileCardProps) {
           if (e.key === "Escape") cancel();
         }}
       />
-      {blocked && <span className={styles.hint}>Save or discard your changes first.</span>}
       {error && <p className={styles.error}>{error}</p>}
       <div className={styles.cardActions}>
         <Button type="submit" variant="primary" size="sm" disabled={busy || blocked || !name.trim()}>

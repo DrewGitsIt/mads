@@ -275,7 +275,7 @@ describe("SettingsSurface", () => {
       await waitFor(() => expect(screen.getByRole("button", { name: "Switch to this profile" })).toBeTruthy());
       editConcurrency(7);
       expect((screen.getByRole("button", { name: "Switch to this profile" }) as HTMLButtonElement).disabled).toBe(true);
-      expect(screen.getByText("Save or discard your changes first to switch profiles.")).toBeTruthy();
+      expect(screen.getByText("Save or discard your changes first to switch or create profiles.")).toBeTruthy();
     });
   });
 

@@ -238,7 +238,7 @@ describe("ProfilesSection", () => {
       );
       const card = screen.getByRole("button", { name: /New profile from current settings/ }) as HTMLButtonElement;
       expect(card.disabled).toBe(true);
-      expect(within(card).getByText("Save or discard your changes first.")).toBeTruthy();
+      expect(screen.getByText("Save or discard your changes first to switch or create profiles.")).toBeTruthy();
     });
   });
 });
