@@ -470,3 +470,40 @@ func TestWorktreeRoutesDirectLandRefusesLocked(t *testing.T) {
 		t.Fatal("Land waited on the lock without bound")
 	}
 }
+
+// POST /worktree/refresh recounts the header from git, for work committed
+// outside mads that no turn end counted. 404 for an unknown session.
+func TestWorktreeRefreshRecountsHeader(t *testing.T) {
+	srv, data := newWorktreeServer(t)
+	sess, _ := isolatedRecord(t, data, "Committed by hand")
+	agentWrote(t, data, sess, "feature.txt", "f\n")
+	url := srv.URL + "/sessions/" + sess.ID + "/worktree/refresh"
+	counts := func() (int, int) {
+		t.Helper()
+		rec, err := data.Session(context.Background(), sess.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rec.UncommittedCount, rec.UnlandedCount
+	}
+
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	}
+	if u, l := counts(); u != 1 || l != 0 {
+		t.Fatalf("counts = %d/%d, want 1/0", u, l)
+	}
+
+	wtGit(t, sess.WorktreeDir, "add", "feature.txt")
+	wtGit(t, sess.WorktreeDir, "commit", "-q", "-m", "by hand")
+	if resp := postJSON(t, url, struct{}{}); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("refresh: status %d, want 204", resp.StatusCode)
+	}
+	if u, l := counts(); u != 0 || l != 1 {
+		t.Errorf("after a commit by hand: counts = %d/%d, want 0/1", u, l)
+	}
+
+	if resp := postJSON(t, srv.URL+"/sessions/ses_missing/worktree/refresh", struct{}{}); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown session: status %d, want 404", resp.StatusCode)
+	}
+}

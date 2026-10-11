@@ -23,6 +23,7 @@ import (
 // D3, D5, D6):
 //
 //	GET  /sessions/{id}/worktree      status: files, counts, Land's blocker
+//	POST /sessions/{id}/worktree/refresh  recount the header's counts
 //	POST /sessions/{id}/commit        commit session files
 //	POST /sessions/{id}/commit/undo   take the last Commit back
 //	POST /sessions/{id}/commit/draft  Fast Model commit message
@@ -120,6 +121,24 @@ func (s *server) handleSessionWorktree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeRaw(w, http.StatusOK, s.withFolderKeepers(r.Context(), id, raw))
+}
+
+// handleSessionWorktreeRefresh recounts the session's header counts (D4)
+// and publishes them, for a commit or merge made outside mads that no turn
+// end has counted yet. The Router runs it itself even with a live child:
+// it gates on nothing the child knows, and it is the same recount either
+// would run, read off the same record. No wake lock, like status.
+func (s *server) handleSessionWorktreeRefresh(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.data.Session(r.Context(), id); err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := s.worktreeOps().Recount(r.Context(), id); err != nil {
+		writeErrMsg(w, http.StatusInternalServerError, "worktree refresh: ", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // inPlaceOwnerDetail replaces the not_isolated refusal's "your checkout"

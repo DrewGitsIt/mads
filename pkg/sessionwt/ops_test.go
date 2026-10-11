@@ -924,3 +924,99 @@ func TestOpsLockWaitRefusesLocked(t *testing.T) {
 		t.Error("a locked Land touched the checkout")
 	}
 }
+
+// Work committed and merged outside mads reaches no turn end, so the header
+// kept offering Commit and Land. Recount (the UI's open/refocus trigger)
+// republishes what git now says at each step.
+func TestRecountSeesWorkCommittedAndMergedOutsideMads(t *testing.T) {
+	s := newIsolated(t)
+	ctx := context.Background()
+	s.work(t, map[string]string{"a.txt": "a\n"})
+	if err := s.ops.Recount(ctx, s.store.sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if u, l := s.store.lastCounts(t); u != 1 || l != 0 {
+		t.Fatalf("before: counts = %d, %d; want 1 uncommitted, 0 unlanded", u, l)
+	}
+
+	gitRun(t, s.folder, "add", "a.txt")
+	gitRun(t, s.folder, "commit", "-m", "by hand")
+	if err := s.ops.Recount(ctx, s.store.sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if u, l := s.store.lastCounts(t); u != 0 || l != 1 {
+		t.Fatalf("committed by hand: counts = %d, %d; want 0, 1", u, l)
+	}
+
+	gitRun(t, s.primary, "merge", "--no-ff", "-m", "merge by hand", s.store.sess.WorktreeBranch)
+	if err := s.ops.Recount(ctx, s.store.sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if u, l := s.store.lastCounts(t); u != 0 || l != 0 {
+		t.Fatalf("merged by hand: counts = %d, %d; want 0, 0", u, l)
+	}
+}
+
+// A session with no git folder has nothing to count, and that is no error.
+func TestRecountNoFolder(t *testing.T) {
+	st := &memStore{sess: contracts.Session{ID: "ses_none", Dir: t.TempDir()}}
+	if err := (Ops{Store: st}).Recount(context.Background(), "ses_none"); err != nil {
+		t.Fatalf("recount = %v, want nil", err)
+	}
+	if len(st.patches) != 0 {
+		t.Errorf("published %d patches, want none", len(st.patches))
+	}
+}
+
+// Status (a dialog opening) puts the counts it read back on the record when
+// the header's differ, and writes nothing when they agree.
+func TestStatusCorrectsStaleHeaderCounts(t *testing.T) {
+	s := newIsolated(t)
+	s.store.sess.UncommittedCount, s.store.sess.UnlandedCount = 2, 3
+	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, Gates{}); err != nil {
+		t.Fatal(err)
+	}
+	if u, l := s.store.lastCounts(t); u != 0 || l != 0 {
+		t.Fatalf("counts = %d, %d; want the 0, 0 git reports", u, l)
+	}
+
+	s.store.sess.UncommittedCount, s.store.sess.UnlandedCount = 0, 0
+	s.store.patches = nil
+	if _, err := s.ops.Status(context.Background(), s.store.sess.ID, Gates{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.store.patches) != 0 {
+		t.Errorf("published %d patches for unchanged counts, want none", len(s.store.patches))
+	}
+}
+
+// Clicking a stale Commit or Land finds nothing to do; the refusal recounts,
+// so the header stops offering it.
+func TestNothingToDoRefusalsRecount(t *testing.T) {
+	s := newIsolated(t)
+	ctx := context.Background()
+	s.work(t, map[string]string{"a.txt": "a\n"})
+	gitRun(t, s.folder, "add", "a.txt")
+	gitRun(t, s.folder, "commit", "-m", "by hand")
+
+	_, err := s.ops.Commit(ctx, s.store.sess.ID, contracts.CommitRequest{Message: "again"})
+	if got := refusal(t, err).Code; got != contracts.CommitNothingToCommit {
+		t.Fatalf("commit refusal = %q, want nothing_to_commit", got)
+	}
+	if u, l := s.store.lastCounts(t); u != 0 || l != 1 {
+		t.Errorf("after commit refusal: counts = %d, %d; want 0, 1", u, l)
+	}
+
+	gitRun(t, s.primary, "merge", "--no-ff", "-m", "merge by hand", s.store.sess.WorktreeBranch)
+	s.store.patches = nil
+	res, err := s.ops.Land(ctx, s.store.sess.ID, Gates{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Reason != contracts.LandNothingToLand {
+		t.Fatalf("land = %+v, want nothing_to_land", res)
+	}
+	if u, l := s.store.lastCounts(t); u != 0 || l != 0 {
+		t.Errorf("after land refusal: counts = %d, %d; want 0, 0", u, l)
+	}
+}

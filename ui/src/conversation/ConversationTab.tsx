@@ -1193,6 +1193,29 @@ export function ConversationTab({
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [routerClient, sessionId, refetchSession]);
 
+  // The dock's Commit/Land counts are only recounted at turn ends and by
+  // mads's own Commit/Land, so work committed or merged outside mads would
+  // leave them offering what the dialog then finds nothing for. Recount for
+  // this session — only the one on screen — when it opens and when the
+  // window regains focus; the new counts arrive as session.updated. One at
+  // a time: a focus while one runs has nothing newer to see.
+  useEffect(() => {
+    let running = false;
+    const recount = () => {
+      if (running) return;
+      running = true;
+      routerClient
+        .refreshWorktreeCounts(sessionId)
+        .catch(() => {}) // best-effort: the next turn end recounts anyway
+        .finally(() => {
+          running = false;
+        });
+    };
+    recount();
+    window.addEventListener("focus", recount);
+    return () => window.removeEventListener("focus", recount);
+  }, [routerClient, sessionId]);
+
   // The conversation stream's element (see the scroll lock above).
   const streamRef = stick.element;
   // The approval jump's reach: the whole tab (stream + dock) for finding

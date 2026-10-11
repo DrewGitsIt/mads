@@ -1261,6 +1261,11 @@ export class FakeRouterClient implements RouterClient {
     return structuredClone(this.worktreeStatus);
   }
 
+  readonly refreshWorktreeCountsCalls: string[] = [];
+  async refreshWorktreeCounts(sessionId: string): Promise<void> {
+    this.refreshWorktreeCountsCalls.push(sessionId);
+  }
+
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {
     this.commitCalls.push({ sessionId, req });
     const out = this.commitOutcome;

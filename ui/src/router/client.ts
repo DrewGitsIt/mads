@@ -202,6 +202,8 @@ export interface RouterClient {
   // Commit and Land (docs/SESSION-WORKTREES-DESIGN.md D5, D6).
   /** Runs git status server-side — call when a dialog opens or at confirm time, never per render. */
   getWorktreeStatus(sessionId: string): Promise<WorktreeStatus>;
+  /** Recounts the header's Commit/Land counts (cheap; they arrive on the session record). */
+  refreshWorktreeCounts(sessionId: string): Promise<void>;
   /** Throws CommitRefusedError for a structured refusal (invalid_paths, git_failed, …). */
   commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult>;
   /** Resolves for a refusal too (undone: false, with its reason) — only an unexpected failure throws. */
@@ -883,6 +885,10 @@ export class FetchRouterClient implements RouterClient {
 
   async getWorktreeStatus(sessionId: string): Promise<WorktreeStatus> {
     return routerGet(this.baseUrl, `/sessions/${sessionId}/worktree`);
+  }
+
+  async refreshWorktreeCounts(sessionId: string): Promise<void> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/worktree/refresh`);
   }
 
   async commitSession(sessionId: string, req: CommitRequest): Promise<CommitResult> {

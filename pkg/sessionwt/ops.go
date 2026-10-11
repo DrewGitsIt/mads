@@ -96,8 +96,13 @@ func (o Ops) load(ctx context.Context, sessionID string) (contracts.Session, Tar
 
 // Status is GET /sessions/{id}/worktree. A session with no git folder
 // reads as not isolated with nothing to commit, and Land blocked.
+//
+// The counts it reads go back onto the record when they differ from the
+// header's: work committed or merged outside mads otherwise left the header
+// offering a Commit or Land the dialog then found nothing for. No git work
+// beyond what Status already did.
 func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.WorktreeStatus, error) {
-	_, t, rows, err := o.load(ctx, sessionID)
+	sess, t, rows, err := o.load(ctx, sessionID)
 	if errors.Is(err, ErrNoFolder) {
 		return contracts.WorktreeStatus{
 			Files:       []contracts.WorktreeFile{},
@@ -107,7 +112,37 @@ func (o Ops) Status(ctx context.Context, sessionID string, g Gates) (contracts.W
 	if err != nil {
 		return contracts.WorktreeStatus{}, err
 	}
-	return Status(ctx, t, rows, g)
+	st, err := Status(ctx, t, rows, g)
+	if err != nil {
+		return st, err
+	}
+	if st.UncommittedCount != sess.UncommittedCount || st.UnlandedCount != sess.UnlandedCount {
+		if err := o.Store.SetSessionWorktree(context.WithoutCancel(ctx), sessionID, contracts.SessionWorktreePatch{
+			UncommittedCount: &st.UncommittedCount, UnlandedCount: &st.UnlandedCount,
+		}); err != nil {
+			log.Printf("sessionwt: correct counts for %s: %v", sessionID, err)
+		}
+	}
+	return st, nil
+}
+
+// Recount is POST /sessions/{id}/worktree/refresh: the header counts (D4)
+// recomputed and published, as at a turn end. The UI asks for it for the
+// session it is showing, when it opens and when the window regains focus,
+// since a commit or merge made outside mads reaches no other recount. A
+// session with no git folder has nothing to count.
+func (o Ops) Recount(ctx context.Context, sessionID string) error {
+	_, t, _, err := o.load(ctx, sessionID)
+	if errors.Is(err, ErrNoFolder) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if o.Refresh != nil {
+		return o.Refresh(ctx)
+	}
+	return RefreshCounts(ctx, o.Store, t)
 }
 
 // SelectForDraft resolves a draft request's paths exactly as Commit
@@ -163,6 +198,11 @@ func (o Ops) Commit(ctx context.Context, sessionID string, req contracts.CommitR
 		r := refuseCommit(contracts.CommitLocked, LockedDetail)
 		r.Body.Selection = req.Paths
 		return contracts.CommitResult{}, r
+	}
+	var refusal *CommitRefusal
+	if errors.As(err, &refusal) && refusal.Body.Code == contracts.CommitNothingToCommit {
+		// Committed outside mads, most likely: the header still counts it.
+		o.refresh(ctx, t)
 	}
 	if err != nil {
 		return contracts.CommitResult{}, err
@@ -264,6 +304,10 @@ func (o Ops) Land(ctx context.Context, sessionID string, g Gates) (contracts.Lan
 		return contracts.LandResult{}, err
 	}
 	if !attempted {
+		if res.Reason == contracts.LandNothingToLand {
+			// Merged outside mads, most likely: the header still counts it.
+			o.refresh(ctx, t)
+		}
 		return res, nil
 	}
 	switch res.Outcome {

@@ -1195,6 +1195,17 @@ describe("ConversationTab", () => {
   // The context meter's data source at wake time — before this mount has
   // seen a turn_end of its own — is the session record's own last_usage
   // (services/session/internal/runner's persistUsage).
+  it("recounts the dock's Commit/Land counts on open and when the window regains focus — for this session only", async () => {
+    const client = new FakeRouterClient();
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+    await waitFor(() => expect(client.refreshWorktreeCountsCalls).toEqual(["session-active"]));
+
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await waitFor(() => expect(client.refreshWorktreeCountsCalls).toEqual(["session-active", "session-active"]));
+  });
+
   it("seeds the context meter from session.last_usage on mount, before any turn_end", async () => {
     const client = new FakeRouterClient();
     vi.spyOn(client, "getSession").mockResolvedValueOnce({

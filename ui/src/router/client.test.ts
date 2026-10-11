@@ -162,6 +162,16 @@ describe("FetchRouterClient", () => {
     expect(st.unlanded_count).toBe(2);
   });
 
+  it("refreshWorktreeCounts POSTs /sessions/:id/worktree/refresh and resolves on 204", async () => {
+    const fetchMock = mockFetchOnce(undefined, true, 204);
+    const client = new FetchRouterClient("http://router.local");
+    await expect(client.refreshWorktreeCounts("s1")).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/worktree/refresh",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   it("commitSession POSTs paths and message to /sessions/:id/commit", async () => {
     const fetchMock = mockFetchOnce({ hash: "abc", message: "m", undoable: true, paths: [] });
     const client = new FetchRouterClient("http://router.local");

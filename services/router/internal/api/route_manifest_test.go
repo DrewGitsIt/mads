@@ -45,6 +45,7 @@ var routeManifest = []struct {
 	{"GET", "/sessions/abc/changes", "GET /sessions/{id}/changes"},
 	{"GET", "/sessions/abc/tool-diff", "GET /sessions/{id}/tool-diff"},
 	{"GET", "/sessions/abc/worktree", "GET /sessions/{id}/worktree"},
+	{"POST", "/sessions/abc/worktree/refresh", "POST /sessions/{id}/worktree/refresh"},
 	{"POST", "/sessions/abc/commit", "POST /sessions/{id}/commit"},
 	{"POST", "/sessions/abc/commit/undo", "POST /sessions/{id}/commit/undo"},
 	{"POST", "/sessions/abc/commit/draft", "POST /sessions/{id}/commit/draft"},
