@@ -1,0 +1,11 @@
+.caret {
+  flex: none;
+  width: 0.55em;
+  height: 0.55em;
+  margin: 0 0.15em;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  /* Rotated, the square's corner points down; lift it so the chevron sits
+     on the text's center line rather than below it. */
+  transform: translateY(-0.15em) rotate(45deg);
+}

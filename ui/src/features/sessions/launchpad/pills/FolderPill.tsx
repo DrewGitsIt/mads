@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Caret } from "../../../../components/Caret/Caret";
 import { Popover } from "../../../../components/Popover/Popover";
 import { PathField } from "../../../../components/PathField/PathField";
 import { router } from "../../../../router/client";
@@ -92,6 +93,7 @@ export function FolderPill({
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>folder</span> {label}
+          <Caret />
         </button>
       }
     >

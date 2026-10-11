@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { CSSProperties } from "react";
+import { Caret } from "../../components/Caret/Caret";
 import { Popover } from "../../components/Popover/Popover";
 import { modelDisplayName } from "../../router/modelDisplay";
 import type { Model, ProviderBehavior, ProviderSupport, SessionTrust } from "../../router/types";
@@ -83,9 +84,7 @@ export function PersonaSegment({
             {(label.trim()[0] ?? "?").toUpperCase()}
           </span>
           <Ladder full={label} short={shortPersona(label)} iconOnly />
-          <span className={styles.caret} aria-hidden="true">
-            ▾
-          </span>
+          <Caret />
         </button>
       }
     >
@@ -162,9 +161,7 @@ export function ModelSegment({
           onClick={() => (open ? onClose() : onOpen())}
         >
           {face}
-          <span className={styles.caret} aria-hidden="true">
-            ▾
-          </span>
+          <Caret />
         </button>
       }
     >
@@ -273,9 +270,7 @@ export function TrustSegment({
           onClick={() => (open ? onClose() : onOpen())}
         >
           {face}
-          <span className={styles.caret} aria-hidden="true">
-            ▾
-          </span>
+          <Caret />
         </button>
       }
     >

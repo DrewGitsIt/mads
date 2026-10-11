@@ -62,11 +62,6 @@
   text-overflow: ellipsis;
 }
 
-.caret {
-  opacity: 0.55;
-  font-size: 8px;
-}
-
 .dot {
   width: 7px;
   height: 7px;

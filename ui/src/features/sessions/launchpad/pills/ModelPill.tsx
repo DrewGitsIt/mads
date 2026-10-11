@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Caret } from "../../../../components/Caret/Caret";
 import { Popover } from "../../../../components/Popover/Popover";
 import { useProviderCatalogs } from "../../../../router/useProviderModels";
 import { modelDisplayName } from "../../../../router/modelDisplay";
@@ -64,6 +65,7 @@ export function ModelPill({
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>model</span> {label}
+          <Caret />
         </button>
       }
     >

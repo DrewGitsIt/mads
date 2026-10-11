@@ -9,6 +9,7 @@ export * from "./IconRail/IconRail";
 export * from "./Draft/Draft";
 export * from "./Popover/Popover";
 export * from "./ConfirmDialog/ConfirmDialog";
+export * from "./Caret/Caret";
 export * from "./Select/Select";
 export * from "./Combobox/Combobox";
 export * from "./ChipListField/ChipListField";

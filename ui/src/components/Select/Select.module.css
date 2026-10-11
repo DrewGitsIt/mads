@@ -43,13 +43,9 @@
   white-space: nowrap;
 }
 
+/* The caret keeps the placeholder's dimmer color next to the value. */
 .chevron {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-right: 1.5px solid var(--text3);
-  border-bottom: 1.5px solid var(--text3);
-  transform: rotate(45deg) translateY(-2px);
+  color: var(--text3);
 }
 
 .listbox {

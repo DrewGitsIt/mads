@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Caret } from "../../../../components/Caret/Caret";
 import { Popover } from "../../../../components/Popover/Popover";
 import { router } from "../../../../router/client";
 import type { Agent, ResolvedSessionField } from "../../../../router/types";
@@ -55,6 +56,7 @@ export function AgentPill({ value, resolved, onChange, onAuto }: AgentPillProps)
            * tracks the data model so the two pills (persona / model) read
            * as the two concepts they set. */}
           <span className={pillStyles.key}>persona</span> {triggerLabel}
+          <Caret />
         </button>
       }
     >

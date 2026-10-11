@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Caret } from "../../../../components/Caret/Caret";
 import { Popover } from "../../../../components/Popover/Popover";
 import type {
   AgentPermissions,
@@ -57,6 +58,7 @@ export function TrustPill({
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>trust</span> {triggerLabel}
+          <Caret />
         </button>
       }
     >

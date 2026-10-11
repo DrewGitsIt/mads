@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Caret } from "../../../../components/Caret/Caret";
 import { Popover } from "../../../../components/Popover/Popover";
 import { FLAGS } from "../../../../featureFlags";
 import type { ResolvedSessionField, WorkspaceRepo } from "../../../../router/types";
@@ -47,6 +48,7 @@ export function IsolationPill({
           onClick={() => setOpen((o) => !o)}
         >
           <span className={pillStyles.key}>isolation</span> {triggerLabel}
+          <Caret />
         </button>
       }
     >

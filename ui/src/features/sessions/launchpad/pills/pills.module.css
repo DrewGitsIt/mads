@@ -21,18 +21,6 @@
   color: var(--text);
 }
 
-/* A downward caret marks the pill as a menu the user can open */
-.trigger::after {
-  content: "";
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 4px solid currentColor;
-  opacity: 0.4;
-  margin-left: 2px;
-}
-
 /* A staged override — the one state a user is actually choosing, worth
    standing out next to the quiet defaults. */
 .modified {

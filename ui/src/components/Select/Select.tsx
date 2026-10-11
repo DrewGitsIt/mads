@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { Caret } from "../Caret/Caret";
 import styles from "./Select.module.css";
 
 export interface SelectOption {
@@ -87,7 +88,7 @@ export function Select({ value, options, onChange, placeholder = "—", id, disa
         <span className={selected ? styles.value : styles.placeholder}>
           {selected ? selected.label : placeholder}
         </span>
-        <span className={styles.chevron} aria-hidden="true" />
+        <Caret className={styles.chevron} />
       </button>
       {open && (
         <ul className={styles.listbox} role="listbox">
