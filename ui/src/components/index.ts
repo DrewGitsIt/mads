@@ -16,3 +16,6 @@ export * from "./ChipListField/ChipListField";
 export * from "./CapabilityPickerField/CapabilityPickerField";
 export * from "./PathField/PathField";
 export * from "./Motion";
+export * from "./NumberField/NumberField";
+export * from "./SegmentedControl/SegmentedControl";
+export * from "./Switch/Switch";

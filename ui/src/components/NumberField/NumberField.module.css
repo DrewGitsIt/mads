@@ -1,0 +1,78 @@
+.field {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  overflow: hidden;
+}
+
+.field:focus-within {
+  border-color: var(--accent);
+  outline: 2px solid var(--accent-soft);
+}
+
+.disabled {
+  opacity: 0.5;
+}
+
+.input {
+  width: 72px;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: 400 var(--fs-body) / 1.5 var(--mono);
+  padding: 7px 8px;
+  text-align: right;
+}
+
+/* The field draws the focus ring (focus-within) so the steppers sit inside it. */
+.input:focus-visible {
+  outline: none;
+}
+
+.prefix {
+  align-self: center;
+  padding-left: 8px;
+  color: var(--text3);
+}
+
+.unit {
+  align-self: center;
+  padding-right: 8px;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.steps {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+}
+
+.step {
+  flex: 1;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: 8px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.step + .step {
+  border-top: 1px solid var(--line);
+}
+
+.step:hover:not(:disabled) {
+  background: var(--bg3);
+  color: var(--text);
+}
+
+.step:disabled {
+  color: var(--text3);
+  cursor: default;
+}

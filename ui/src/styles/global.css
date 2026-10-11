@@ -18,7 +18,20 @@ body {
   height: 100%;
 }
 
+/* Native controls (scrollbars, date/number pickers, checkbox ticks, select
+   chevrons) follow the theme rather than the OS. applyTheme resolves
+   "system" before it lands here, so [data-theme] is only ever dark/light;
+   before it first runs, tokens.css's :root defaults are the dark ones. */
+:root:not([data-theme]),
+[data-theme="dark"] {
+  color-scheme: dark;
+}
+[data-theme="light"] {
+  color-scheme: light;
+}
+
 body {
+  accent-color: var(--accent);
   margin: 0;
   background: var(--bg0);
   color: var(--text);
