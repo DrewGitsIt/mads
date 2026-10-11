@@ -9,6 +9,7 @@ import {
   behaviorLabel,
   capabilityTags,
   differingBehaviors,
+  topCapabilityTags,
 } from "../providerBehaviors";
 import { optionsWith } from "../settingHelpers";
 import { SettingRow, SettingTag } from "../SettingRow";
@@ -86,7 +87,7 @@ export function ModelsSection({ config }: ModelsSectionProps) {
 
   const providerName = draft.default_provider ?? "";
   const provider = matrix.providers.find((p) => p.name === providerName);
-  const tags = provider ? capabilityTags(provider, matrix.behaviors) : [];
+  const tags = topCapabilityTags(provider ? capabilityTags(provider, matrix.behaviors) : []);
   const fastModelMode = effectiveFastModelMode(draft);
   const status = fastModelStatusLine(fastModelMode, draft, fastModelStatus.status, fastModelStatus.loading);
 
@@ -121,11 +122,16 @@ export function ModelsSection({ config }: ModelsSectionProps) {
             />
             {provider && (
               <div className={styles.caps} data-testid="provider-capability-tags">
-                {tags.map((tag) => (
+                {tags.shown.map((tag) => (
                   <SettingTag key={tag.behavior} tone={tag.tone}>
                     {tag.label}
                   </SettingTag>
                 ))}
+                {tags.hidden > 0 && (
+                  <button type="button" className={styles.more} onClick={showAllCapabilities}>
+                    +{tags.hidden} more
+                  </button>
+                )}
                 <InlineLink onClick={showAllCapabilities}>All capabilities →</InlineLink>
               </div>
             )}

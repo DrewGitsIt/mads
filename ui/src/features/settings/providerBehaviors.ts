@@ -76,6 +76,16 @@ export function capabilityTags(provider: ProviderInfo, behaviors: BehaviorInfo[]
   return tags;
 }
 
+/**
+ * The tags that fit under the provider picker: at most `limit`, "No …"
+ * before "… emulated" (a missing behaviour matters more than a stand-in),
+ * each kind in matrix order. `hidden` counts the rest, for a "+N more".
+ */
+export function topCapabilityTags(tags: CapabilityTag[], limit = 3): { shown: CapabilityTag[]; hidden: number } {
+  const ranked = [...tags.filter((t) => t.tone === "bad"), ...tags.filter((t) => t.tone !== "bad")];
+  return { shown: ranked.slice(0, limit), hidden: Math.max(ranked.length - limit, 0) };
+}
+
 /** Behaviours some provider doesn't do natively — the "Differences only" rows. */
 export function differingBehaviors(providers: ProviderInfo[], behaviors: BehaviorInfo[]): BehaviorInfo[] {
   return behaviors.filter((b) => providers.some((p) => p.matrix[b.behavior] !== "native"));

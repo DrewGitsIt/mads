@@ -116,6 +116,37 @@ describe("ModelsSection", () => {
       expect(within(tags).getByRole("button", { name: "All capabilities →" })).toBeTruthy();
     });
 
+    it("shows at most three tags, No … first, then a +N more that opens the matrix", async () => {
+      const patchy: ProviderInfo = {
+        name: "patchy",
+        matrix: {
+          interrupt: "emulated",
+          resume: "unsupported",
+          branching: "unsupported",
+          delegate_lifecycle: "emulated",
+          trust_read_only: "unsupported",
+        },
+      };
+      const fetchMock = vi.mocked(fetch);
+      const base = fetchMock.getMockImplementation()!;
+      fetchMock.mockImplementation((input) =>
+        input.toString().endsWith("/providers")
+          ? Promise.resolve(jsonResponse([...providers, patchy]))
+          : base(input),
+      );
+      render(<ModelsSection config={withProvider("patchy")} />);
+      const tags = await screen.findByTestId("provider-capability-tags");
+      expect(
+        within(tags)
+          .getAllByText(/./, { selector: "span" })
+          .map((t) => t.textContent),
+      ).toEqual(["No resume", "No branching", "No read-only trust"]);
+      const details = document.getElementById("provider-capabilities") as HTMLDetailsElement;
+      fireEvent.click(within(tags).getByRole("button", { name: "+2 more" }));
+      expect(details.open).toBe(true);
+      expect(within(tags).getByRole("button", { name: "All capabilities →" })).toBeTruthy();
+    });
+
     it("hides native behaviours: an all-native provider gets no tags, just the link", async () => {
       render(<ModelsSection config={withProvider("all-native")} />);
       const tags = await screen.findByTestId("provider-capability-tags");

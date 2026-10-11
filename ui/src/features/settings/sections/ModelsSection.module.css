@@ -36,6 +36,21 @@
   margin-left: 4px;
 }
 
+/* "+N more": quieter than the tags it stands in for; opens the matrix. */
+.caps > .more {
+  margin-left: 0;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--text3);
+  font: 500 var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.caps > .more:hover {
+  color: var(--text2);
+}
+
 .disclosure > .summary {
   display: flex;
   align-items: center;
