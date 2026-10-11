@@ -278,8 +278,11 @@ func TestFromHistory(t *testing.T) {
 	}
 	start, end := at(0), at(90)
 	d := delegates.FromHistory("ses_1", provider.DelegateRecord{
-		DelegateInfo: provider.DelegateInfo{TranscriptPath: "/p/agent-a1.jsonl", Type: "Explore", Depth: 1, Background: true},
-		HarnessID:    "a1", ToolUseID: "toolu_a1", Description: "Audit",
+		DelegateInfo: provider.DelegateInfo{
+			TranscriptPath: "/p/agent-a1.jsonl", Type: "Explore", Depth: 1, Background: true,
+			Model: "claude-haiku", Branch: "main", Usage: &provider.Usage{Model: "claude-haiku", ContextTokens: 42},
+		},
+		HarnessID: "a1", ToolUseID: "toolu_a1", Description: "Audit",
 		StartedAt: start, EndedAt: end, Status: "killed", Runs: 2, TotalTokens: 10, ToolUses: 3, DurationMS: 90000,
 	}, defaults)
 	if d.SessionID != "ses_1" || d.HarnessID != "a1" || d.ToolUseID != "toolu_a1" || d.Type != "Explore" || !d.Backgrounded ||
@@ -290,10 +293,71 @@ func TestFromHistory(t *testing.T) {
 	if c := d.Capabilities; c == nil || !c.Transcript || !c.Continuable || c.Steer != contracts.DelegateSteerRelay {
 		t.Fatalf("caps = %+v", d.Capabilities)
 	}
+	if d.Model != "claude-haiku" || d.Branch != "main" || d.Usage == nil || d.Usage.ContextTokens != 42 {
+		t.Fatalf("FromHistory model/branch/usage = %q %q %+v", d.Model, d.Branch, d.Usage)
+	}
 
 	u := delegates.FromHistory("ses_1", provider.DelegateRecord{HarnessID: "b2", StartedAt: start}, defaults)
 	if u.State != contracts.DelegateOrphaned || !u.Inferred || u.Reason != delegates.ReasonNoEnding || u.EndedAt != nil || u.Runs != 1 ||
 		u.Capabilities.Transcript || u.Capabilities.Continuable {
 		t.Fatalf("no ending = %+v caps %+v", u, u.Capabilities)
+	}
+}
+
+// A running delegate's API calls keep its model and context on the record,
+// at most every UsageEvery — the latest held, never dropped — and a call that
+// doesn't report its window keeps the one known for the same model.
+func TestUsageKeepsModelAndContext(t *testing.T) {
+	tr := delegates.New("ses_1", 0)
+	one(t, tr.Task(started("a1", "toolu_a1", true), at(0)))
+	call := func(model string, ctx, window int) *provider.Usage {
+		return &provider.Usage{InputTokens: 1, Model: model, ContextTokens: ctx, ContextWindow: window}
+	}
+
+	if got, held := tr.Usage("toolu_other", call("m", 10, 0), at(1)); got != nil || held {
+		t.Fatalf("unknown spawn: %+v held %v", got, held)
+	}
+	d := func(got []contracts.Delegate, held bool) contracts.Delegate {
+		t.Helper()
+		if held {
+			t.Fatal("held, want returned")
+		}
+		return one(t, got)
+	}(tr.Usage("toolu_a1", call("claude-haiku", 100, 200000), at(1)))
+	if d.Model != "claude-haiku" || d.Usage == nil || d.Usage.ContextTokens != 100 || d.Usage.ContextWindow != 200000 {
+		t.Fatalf("first call = %+v usage %+v", d, d.Usage)
+	}
+
+	if got, held := tr.Usage("toolu_a1", call("claude-haiku", 100, 200000), at(2)); got != nil || held {
+		t.Fatalf("repeat of the same call: %+v held %v", got, held)
+	}
+	if got, held := tr.Usage("toolu_a1", call("claude-haiku", 150, 0), at(2)); got != nil || !held {
+		t.Fatalf("within UsageEvery: %+v held %v, want held", got, held)
+	}
+	d = one(t, tr.FlushUsage(at(3)))
+	if d.Usage.ContextTokens != 150 || d.Usage.ContextWindow != 200000 {
+		t.Fatalf("flushed = %+v, want the held call with the known window", d.Usage)
+	}
+	none(t, tr.FlushUsage(at(4)))
+
+	// A model change doesn't wait, and doesn't borrow the old model's window.
+	got, held := tr.Usage("toolu_a1", call("claude-opus", 300, 0), at(4))
+	if d = one(t, got); held || d.Model != "claude-opus" || d.Usage.ContextWindow != 0 {
+		t.Fatalf("model change = %+v usage %+v held %v", d, d.Usage, held)
+	}
+	got, _ = tr.Usage("toolu_a1", call("claude-opus", 400, 0), at(4).Add(delegates.UsageEvery))
+	if one(t, got).Usage.ContextTokens != 400 {
+		t.Fatal("a call UsageEvery later must be returned")
+	}
+
+	// The file's usage only fills a record that has none: live is newer.
+	d = one(t, tr.Inspect("a1", delegates.Observation{TranscriptPath: "/p", Branch: "main", Usage: call("old", 1, 0)}))
+	if d.Branch != "main" || d.Model != "claude-opus" || d.Usage.ContextTokens != 400 {
+		t.Fatalf("inspect over live usage = %+v usage %+v", d, d.Usage)
+	}
+	one(t, tr.Task(started("b2", "toolu_b2", true), at(5)))
+	d = one(t, tr.Inspect("b2", delegates.Observation{Usage: call("claude-haiku", 7, 0)}))
+	if d.Model != "claude-haiku" || d.Usage.ContextTokens != 7 {
+		t.Fatalf("inspect with no live usage = %+v usage %+v", d, d.Usage)
 	}
 }

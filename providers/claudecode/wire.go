@@ -248,6 +248,15 @@ type wireModelUsage struct {
 	ContextWindow int `json:"contextWindow"`
 }
 
+// baseModel is a modelUsage key without its bracketed window suffix:
+// "claude-opus-5[1m]" → "claude-opus-5".
+func baseModel(key string) string {
+	if i := strings.LastIndex(key, "["); i > 0 && strings.HasSuffix(key, "]") {
+		return key[:i]
+	}
+	return key
+}
+
 // contextWindowFor resolves model's runtime-reported window from the line's
 // modelUsage map. The keys don't reliably equal the model id: a scaled-window
 // session suffixes it ("claude-opus-5[1m]"), and a turn that ran helper
@@ -262,7 +271,7 @@ func (l *wireLine) contextWindowFor(model string) int {
 	}
 	if model != "" {
 		for key, mu := range l.ModelUsage {
-			if i := strings.LastIndex(key, "["); i > 0 && key[:i] == model {
+			if baseModel(key) == model {
 				return mu.ContextWindow
 			}
 		}
@@ -379,6 +388,12 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 			case "tool_use":
 				evs = append(evs, provider.Event{Kind: provider.EventToolUse, Tool: newToolUse(b.ID, b.Name, b.Input)})
 			}
+		}
+		// A subagent's API call: its context and model live nowhere else on
+		// the stream. The CLI splits one call into a line per content block,
+		// each repeating the usage; the record dedupes.
+		if l.ParentToolUseID != "" && l.Message.callUsage() != nil {
+			evs = append(evs, provider.Event{Kind: provider.EventSubagentUsage, Usage: l.Message.callUsage()})
 		}
 		return l.tagged(evs)
 	case "result":

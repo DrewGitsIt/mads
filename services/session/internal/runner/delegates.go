@@ -32,6 +32,12 @@ type delegatePublisher struct {
 
 	expiryMu sync.Mutex
 	expiry   *time.Timer
+
+	// usageFlush sends the usage reports the tracker held back (Usage); one
+	// pending at a time. Guarded by expiryMu. usageFlushAfter overrides
+	// delegates.UsageEvery; zero means that. Tests set it.
+	usageFlush      *time.Timer
+	usageFlushAfter time.Duration
 }
 
 // seedDelegates loads the session's stored delegates into the tracker at
@@ -67,6 +73,12 @@ func (r *Runner) observeDelegates(ev provider.Event) {
 		case "notification":
 			r.inspectDelegateAfter(ev.Task.TaskID, 0)
 		}
+	case ev.Kind == provider.EventSubagentUsage:
+		ds, held := r.delegates.Usage(ev.ParentToolUseID, ev.Usage, now)
+		r.publishDelegates(ds)
+		if held {
+			r.armUsageFlush()
+		}
 	case ev.Kind == provider.EventTaskRoster:
 		r.delegates.Roster(ev.TaskRoster, now)
 		r.armDelegateExpiry()
@@ -99,6 +111,27 @@ func (r *Runner) armDelegateExpiry() {
 	p.expiry = time.AfterFunc(time.Until(next), func() {
 		r.publishDelegates(r.delegates.Expire(time.Now()))
 		r.armDelegateExpiry()
+	})
+}
+
+// armUsageFlush schedules the send of the usage reports the tracker is
+// holding, unless one is already scheduled.
+func (r *Runner) armUsageFlush() {
+	p := &r.delegatePub
+	p.expiryMu.Lock()
+	defer p.expiryMu.Unlock()
+	if p.usageFlush != nil {
+		return
+	}
+	after := p.usageFlushAfter
+	if after == 0 {
+		after = delegates.UsageEvery
+	}
+	p.usageFlush = time.AfterFunc(after, func() {
+		p.expiryMu.Lock()
+		p.usageFlush = nil
+		p.expiryMu.Unlock()
+		r.publishDelegates(r.delegates.FlushUsage(time.Now()))
 	})
 }
 
@@ -204,6 +237,9 @@ func (r *Runner) inspectDelegateAfter(harnessID string, delay time.Duration) {
 			Depth:          info.Depth,
 			WorktreePath:   info.WorktreePath,
 			Background:     info.Background,
+			Model:          info.Model,
+			Branch:         info.Branch,
+			Usage:          info.Usage,
 		}))
 	}
 	if delay <= 0 {

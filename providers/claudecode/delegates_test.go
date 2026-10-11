@@ -28,7 +28,11 @@ func TestInspectDelegateReadsSubagentStore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("agent-a1.jsonl", `{"type":"user","isSidechain":true,"agentId":"a1"}`+"\n")
+	write("agent-a1.jsonl", strings.Join([]string{
+		`{"type":"user","isSidechain":true,"agentId":"a1","gitBranch":"main"}`,
+		`{"type":"assistant","isSidechain":true,"gitBranch":"feature","message":{"role":"assistant","model":"claude-haiku","content":[],"usage":{"input_tokens":2,"cache_read_input_tokens":300,"cache_creation_input_tokens":40,"output_tokens":9}}}`,
+		`{"type":"assistant","isSidechain":true,"message":{"role":"assistant","model":"<synthetic>","content":[],"usage":{"input_tokens":0}}}`,
+	}, "\n")+"\n")
 	write("agent-a1.meta.json", `{"agentType":"Explore","toolUseId":"toolu_1","spawnDepth":1,"requestShape":"background","worktreePath":"/tmp/wt"}`)
 	write("agent-b2.jsonl", "{}\n") // no meta: the transcript alone still answers
 
@@ -39,8 +43,15 @@ func TestInspectDelegateReadsSubagentStore(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("a1: ok=%v err=%v", ok, err)
 	}
+	// The latest real API call: its model and context, and the branch the
+	// file last names. The "<synthetic>" line isn't a call.
+	if u := info.Usage; u == nil || u.Model != "claude-haiku" || u.ContextTokens != 342 || u.OutputTokens != 9 {
+		t.Errorf("a1 usage = %+v", info.Usage)
+	}
+	info.Usage = nil
 	want := provider.DelegateInfo{
 		TranscriptPath: filepath.Join(dir, "agent-a1.jsonl"), Type: "Explore", Depth: 1, WorktreePath: "/tmp/wt", Background: true,
+		Model: "claude-haiku", Branch: "feature",
 	}
 	if info != want {
 		t.Errorf("a1 = %+v\nwant %+v", info, want)

@@ -265,3 +265,33 @@ func TestBackgroundClearsWhenProcessEnds(t *testing.T) {
 		t.Fatalf("last event after exit = %+v, want an empty background list", last)
 	}
 }
+
+// A subagent's API calls reach its record: the model and context of the
+// first at once, a burst's latest when the held report is flushed.
+func TestSubagentUsageReachesTheRecord(t *testing.T) {
+	r, data, sid := newDelegateRunner(t)
+	r.delegatePub.usageFlushAfter = 20 * time.Millisecond
+	call := func(ctx int) provider.Event {
+		return provider.Event{Kind: provider.EventSubagentUsage, ParentToolUseID: "toolu_agent",
+			Usage: &provider.Usage{Model: "claude-haiku", ContextTokens: ctx, ContextWindow: 200000}}
+	}
+
+	r.observeConversation(taskEv("started", "a1", "toolu_agent", "", true))
+	r.observeConversation(call(100))
+	if d := storedDelegate(t, data, sid, "a1"); d.Model != "claude-haiku" || d.Usage == nil || d.Usage.ContextTokens != 100 {
+		t.Fatalf("after the first call = %+v usage %+v", d, d.Usage)
+	}
+	r.observeConversation(call(200))
+	r.observeConversation(call(300))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		d := storedDelegate(t, data, sid, "a1")
+		if d.Usage != nil && d.Usage.ContextTokens == 300 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("held usage never flushed: %+v", d.Usage)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

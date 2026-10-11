@@ -78,6 +78,15 @@ type Delegate struct {
 	TranscriptPath string `json:"transcript_path,omitempty"`
 	// WorktreePath is the separate worktree the harness ran it in, if any.
 	WorktreePath string `json:"worktree_path,omitempty"`
+	// Model is the model its latest API call ran on — not necessarily the
+	// parent's: a harness can run a subagent on a smaller one.
+	Model string `json:"model,omitempty"`
+	// Branch is the git branch it worked on, as its harness recorded it.
+	Branch string `json:"branch,omitempty"`
+	// Usage is its latest API call's accounting: ContextTokens is its
+	// context occupancy, ContextWindow the window when the harness reported
+	// one. Kept current while it runs, at most every few seconds.
+	Usage *Usage `json:"usage,omitempty"`
 	// Capabilities is what can be done with it — the provider matrix's
 	// defaults, corrected by what was observed about this one delegate.
 	// Nil until the runner has resolved them.

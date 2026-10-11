@@ -167,7 +167,11 @@ type streamSession struct {
 	// pruned, like agentTasks).
 	background []provider.BackgroundTask
 	bgCalls    map[string]string
-	refFired   bool // guards announced against a double-send
+	// windows is each model's context window as the latest result line's
+	// modelUsage reports it, keyed by model id with any "[1m]"-style suffix
+	// stripped: a subagent's own lines name its model but never its window.
+	windows  map[string]int
+	refFired bool // guards announced against a double-send
 
 	// launchMCP names the servers this process was started with
 	// (--mcp-config). mcp_set_servers manages a separate, "dynamic" set on
@@ -270,6 +274,14 @@ func (s *streamSession) handleLine(raw []byte) {
 		closesUnprompted = !s.turnOpen && s.unprompted
 		s.unprompted = false
 	case l.Type == "result":
+		for key, mu := range l.ModelUsage {
+			if mu.ContextWindow > 0 {
+				if s.windows == nil {
+					s.windows = map[string]int{}
+				}
+				s.windows[baseModel(key)] = mu.ContextWindow
+			}
+		}
 		s.interrupted = false
 		s.turnOpen = false
 		s.unprompted = false
@@ -279,6 +291,10 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 	dropTask := s.isOtherTask(&l)
 	background, bgChanged := s.noteBackground(&l, time.Now())
+	subagentWindow := 0
+	if u := l.Message.callUsage(); l.ParentToolUseID != "" && u != nil {
+		subagentWindow = s.windows[baseModel(u.Model)]
+	}
 	s.mu.Unlock()
 
 	evs := l.events(interrupted, true)
@@ -289,7 +305,9 @@ func (s *streamSession) handleLine(raw []byte) {
 		evs = nil
 	}
 	for _, ev := range evs {
-		if ev.Usage != nil {
+		if ev.Kind == provider.EventSubagentUsage {
+			ev.Usage.ContextWindow = subagentWindow
+		} else if ev.Usage != nil {
 			// A compaction's turn end: what it left behind is the occupancy.
 			// A compaction inside a working turn is followed by more model
 			// calls, whose own figure stands.

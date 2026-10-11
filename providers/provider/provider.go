@@ -340,6 +340,11 @@ type DelegateInfo struct {
 	WorktreePath string
 	// Background reports the harness ran it in the background.
 	Background bool
+	// Model and Branch are what its latest recorded line says it ran on;
+	// Usage that line's API call's accounting.
+	Model  string
+	Branch string
+	Usage  *Usage
 }
 
 // HistoryScanner is the optional capability of listing the conversations a

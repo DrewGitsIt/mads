@@ -67,7 +67,7 @@ func (p *Provider) InspectDelegate(_ context.Context, ref, harnessID string) (pr
 		return provider.DelegateInfo{}, false, err
 	}
 	info, _ := delegateInfo(path)
-	return info, true, nil
+	return withFileFacts(info, scanDelegateFile(path)), true, nil
 }
 
 // delegateInfo reads the .meta.json beside a subagent's transcript. A missing
@@ -133,14 +133,17 @@ func (p *Provider) DelegateHistory(_ context.Context, ref string) ([]provider.De
 			continue
 		}
 		info, meta := delegateInfo(path)
-		rec := provider.DelegateRecord{DelegateInfo: info, HarnessID: id, ToolUseID: meta.ToolUseID, Description: meta.Description, Runs: 1}
-		first, last := stampRange(path)
-		rec.StartedAt = first
+		facts := scanDelegateFile(path)
+		rec := provider.DelegateRecord{
+			DelegateInfo: withFileFacts(info, facts),
+			HarnessID:    id, ToolUseID: meta.ToolUseID, Description: meta.Description, Runs: 1,
+			StartedAt: facts.first,
+		}
 		if e, ok := endings[id]; ok {
 			rec.Status, rec.EndedAt, rec.Runs = e.status, e.at, e.runs
 			rec.DurationMS, rec.TotalTokens, rec.ToolUses = e.durationMS, e.tokens, e.toolUses
 			if rec.EndedAt.IsZero() {
-				rec.EndedAt = last
+				rec.EndedAt = facts.last
 			}
 		}
 		out = append(out, rec)
@@ -149,8 +152,18 @@ func (p *Provider) DelegateHistory(_ context.Context, ref string) ([]provider.De
 	return out, nil
 }
 
-// stampRange is the first and last line stamp in a transcript file.
-func stampRange(path string) (first, last time.Time) {
+// delegateFileFacts is what a subagent's own file says beyond its messages:
+// its first and last line stamps, and the model, branch and API call
+// accounting of its latest assistant line.
+type delegateFileFacts struct {
+	first, last time.Time
+	branch      string
+	usage       *provider.Usage
+}
+
+// scanDelegateFile reads a subagent's transcript for its delegateFileFacts.
+// Zero values where the file doesn't say (or can't be read).
+func scanDelegateFile(path string) (facts delegateFileFacts) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -159,21 +172,39 @@ func stampRange(path string) (first, last time.Time) {
 	sc := newLineReader(f)
 	for sc.Scan() {
 		var l struct {
-			Timestamp string `json:"timestamp"`
+			Type      string       `json:"type"`
+			Timestamp string       `json:"timestamp"`
+			GitBranch string       `json:"gitBranch"`
+			Message   *wireMessage `json:"message"`
 		}
-		if json.Unmarshal([]byte(sc.Text()), &l) != nil || l.Timestamp == "" {
+		if json.Unmarshal([]byte(sc.Text()), &l) != nil {
 			continue
+		}
+		if l.GitBranch != "" {
+			facts.branch = l.GitBranch
+		}
+		if u := l.Message.callUsage(); l.Type == "assistant" && u != nil {
+			facts.usage = u
 		}
 		t, err := time.Parse(time.RFC3339Nano, l.Timestamp)
 		if err != nil {
 			continue
 		}
-		if first.IsZero() {
-			first = t
+		if facts.first.IsZero() {
+			facts.first = t
 		}
-		last = t
+		facts.last = t
 	}
 	return
+}
+
+// withFileFacts is info with the model, branch and usage its file records.
+func withFileFacts(info provider.DelegateInfo, facts delegateFileFacts) provider.DelegateInfo {
+	info.Branch, info.Usage = facts.branch, facts.usage
+	if facts.usage != nil {
+		info.Model = facts.usage.Model
+	}
+	return info
 }
 
 type delegateEnding struct {

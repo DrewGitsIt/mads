@@ -86,6 +86,7 @@ cross-session cold read.
 | `state`, `reason`, `inferred` | the state, its evidence (the harness's status word or mads's inference), and whether mads concluded it |
 | `runs`, `started_at`, `ended_at` | the run count (re-entries increment it), and the latest run's start and end. Arrival time: Claude Code's system task lines carry no timestamp |
 | `transcript_path`, totals | from the notification |
+| `model`, `usage`, `branch` | the model and accounting of its latest API call (`usage.context_tokens` is its context), and the branch it worked on. Live from the stream's `subagent_usage` events, at most every 5s (`UsageEvery`; the latest is held, never dropped). Inspection fills a record with none from its own file, which also gives the branch. The window comes from the parent's result lines when they name the model; the delegate's own lines never do |
 
 Not in the record yet: nesting parent, cwd/worktree, capabilities (#3).
 
@@ -263,6 +264,12 @@ Drew's four, with two of them split, plus three more:
   transcript / reachable through its parent / stops with its parent / could
   continue as a session / worktree). There are no controls yet: relay, stop
   and continue-as-session are the next actions to build on these.
+- **Dock:** the delegate view ends in the session dock's rim and status
+  line, read-only (`DelegateDock`): its context, its type where a session
+  shows its persona, its model, and where it works (its own branch or
+  worktree, else the parent's). No trust (it runs under its parent's), no
+  Commit/Land, no composer. A call that didn't report its window borrows the
+  parent's when the models match, else the static table's.
 
 Not yet: C6 (permission routing) and C7 (nesting parent) aren't resolved; a
 delegate's `cwd` without a worktree isn't recorded; the ACP RFD's per-child

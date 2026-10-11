@@ -41,6 +41,12 @@ import (
 // outlast a busy pump, not a slow harness.
 const Grace = 5 * time.Second
 
+// UsageEvery is how often a running delegate's record takes its latest API
+// call's usage. A busy subagent makes a call every second or two, and each
+// record write is an event on the log; the latest is held, never dropped
+// (FlushUsage).
+const UsageEvery = 5 * time.Second
+
 // Inferred reasons, for Delegate.Reason when mads concluded the state.
 const (
 	ReasonRoster        = "roster"         // left the roster, no report within Grace
@@ -55,6 +61,10 @@ type entry struct {
 	// leftAt is when a backgrounded delegate dropped out of the roster while
 	// running; zero when it hasn't (or has come back).
 	leftAt time.Time
+	// usageAt is when the record last took a usage report; usageHeld that a
+	// later one is on the record but hasn't been returned yet.
+	usageAt   time.Time
+	usageHeld bool
 }
 
 // Tracker holds one session's delegates. Safe for concurrent use.
@@ -83,6 +93,10 @@ type Observation struct {
 	Depth          int
 	WorktreePath   string
 	Background     bool
+	// Model, Branch and Usage are what its latest recorded line says.
+	Model  string
+	Branch string
+	Usage  *provider.Usage
 }
 
 // CapabilityDefaults is a harness's delegate capabilities before any
@@ -159,6 +173,14 @@ func (t *Tracker) Inspect(harnessID string, o Observation) []contracts.Delegate 
 	if o.Background {
 		e.d.Backgrounded = true
 	}
+	if o.Branch != "" {
+		e.d.Branch = o.Branch
+	}
+	// The live stream's usage is newer than the file's until the delegate
+	// ends, when they agree: the file only fills a record that has none.
+	if e.d.Usage == nil && o.Usage != nil {
+		e.d.Model, e.d.Usage = o.Usage.Model, contractsUsage(o.Usage)
+	}
 	e.d.Capabilities = t.resolveLocked(e.d)
 	if known && sameRecord(before, e.d) {
 		return nil
@@ -203,6 +225,9 @@ func FromHistory(sessionID string, r provider.DelegateRecord, defaults Capabilit
 		StartedAt:      r.StartedAt.UTC(),
 		TranscriptPath: r.TranscriptPath,
 		WorktreePath:   r.WorktreePath,
+		Model:          r.Model,
+		Branch:         r.Branch,
+		Usage:          contractsUsage(r.Usage),
 		TotalTokens:    r.TotalTokens,
 		ToolUses:       r.ToolUses,
 		DurationMS:     r.DurationMS,
@@ -310,6 +335,60 @@ func (t *Tracker) Task(r contracts.SubagentTask, now time.Time) []contracts.Dele
 		return nil
 	}
 	return []contracts.Delegate{e.d}
+}
+
+// Usage folds one of a running delegate's API calls — found by its spawning
+// call, the id its own events are tagged with — into its record: the model
+// it ran on and its context. Returns the record when it is due (the first
+// report, a model change, or UsageEvery since the last); otherwise held is
+// true and FlushUsage returns it later. A window the call doesn't report
+// keeps the one already known for the same model.
+func (t *Tracker) Usage(spawnToolUseID string, u *provider.Usage, now time.Time) (out []contracts.Delegate, held bool) {
+	if spawnToolUseID == "" || u == nil {
+		return nil, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var e *entry
+	for _, c := range t.sortedLocked() {
+		if c.d.ToolUseID == spawnToolUseID && (e == nil || c.d.State == contracts.DelegateRunning) {
+			e = c
+		}
+	}
+	if e == nil {
+		return nil, false
+	}
+	next := contractsUsage(u)
+	prev := e.d.Usage
+	if next.ContextWindow == 0 && prev != nil && prev.Model == next.Model {
+		next.ContextWindow = prev.ContextWindow
+	}
+	if prev != nil && *prev == *next {
+		return nil, false
+	}
+	modelChanged := e.d.Model != next.Model
+	e.d.Model, e.d.Usage = next.Model, next
+	if !e.usageAt.IsZero() && !modelChanged && now.Sub(e.usageAt) < UsageEvery {
+		e.usageHeld = true
+		return nil, true
+	}
+	e.usageAt, e.usageHeld = now, false
+	return []contracts.Delegate{e.d}, false
+}
+
+// FlushUsage returns every record holding a usage report Usage didn't
+// return yet.
+func (t *Tracker) FlushUsage(now time.Time) []contracts.Delegate {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []contracts.Delegate
+	for _, e := range t.sortedLocked() {
+		if e.usageHeld {
+			e.usageAt, e.usageHeld = now, false
+			out = append(out, e.d)
+		}
+	}
+	return out
 }
 
 // Roster folds the harness's complete list of running background
@@ -509,18 +588,37 @@ func settle(status string) (contracts.DelegateState, string) {
 	}
 }
 
+// contractsUsage is the record's copy of one API call's accounting.
+func contractsUsage(u *provider.Usage) *contracts.Usage {
+	if u == nil {
+		return nil
+	}
+	return &contracts.Usage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+		Model:                    u.Model,
+		ContextTokens:            u.ContextTokens,
+		ContextWindow:            u.ContextWindow,
+	}
+}
+
 // sameRecord compares two records field for field — the times by instant,
-// the capabilities by value.
+// the capabilities and usage by value.
 func sameRecord(a, b contracts.Delegate) bool {
 	sameEnd := (a.EndedAt == nil && b.EndedAt == nil) ||
 		(a.EndedAt != nil && b.EndedAt != nil && a.EndedAt.Equal(*b.EndedAt))
 	sameCaps := (a.Capabilities == nil && b.Capabilities == nil) ||
 		(a.Capabilities != nil && b.Capabilities != nil && *a.Capabilities == *b.Capabilities)
-	if !sameEnd || !sameCaps || !a.StartedAt.Equal(b.StartedAt) {
+	sameUsage := (a.Usage == nil && b.Usage == nil) ||
+		(a.Usage != nil && b.Usage != nil && *a.Usage == *b.Usage)
+	if !sameEnd || !sameCaps || !sameUsage || !a.StartedAt.Equal(b.StartedAt) {
 		return false
 	}
 	a.EndedAt, b.EndedAt = nil, nil
 	a.Capabilities, b.Capabilities = nil, nil
+	a.Usage, b.Usage = nil, nil
 	a.StartedAt, b.StartedAt = time.Time{}, time.Time{}
 	return a == b
 }

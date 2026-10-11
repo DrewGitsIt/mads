@@ -91,6 +91,11 @@ const (
 	// that connects mid-run and sends an empty one when the process exits,
 	// which takes its background processes with it.
 	EventBackground EventKind = "background"
+	// EventSubagentUsage — one of a subagent's API calls, tagged with its
+	// ParentToolUseID: Usage is that call's accounting, Model included (a
+	// subagent can run on a different model from its parent). Live-only:
+	// the delegate's record keeps the latest (contracts.Delegate.Usage).
+	EventSubagentUsage EventKind = "subagent_usage"
 	// EventThinking — the model's extended-thinking output, distinct from
 	// EventText so chat-mode consumers that render only the reply never
 	// interleave reasoning into it. Two facets share the kind, mirroring
@@ -108,7 +113,8 @@ type Event struct {
 	Text string `json:"text,omitempty"`
 	// Tool for EventToolUse.
 	Tool *ToolUse `json:"tool,omitempty"`
-	// Usage for EventTurnEnd, when cost reporting works.
+	// Usage for EventTurnEnd, when cost reporting works, and for
+	// EventSubagentUsage.
 	Usage *Usage `json:"usage,omitempty"`
 	// Interrupted marks a turn ended by Interrupt rather than completion.
 	Interrupted bool `json:"interrupted,omitempty"`

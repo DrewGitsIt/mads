@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -1523,5 +1524,44 @@ func TestStreamSessionCompactionMidTurnKeepsTurnUsage(t *testing.T) {
 	}
 	if got := ends[1].Usage.ContextTokens; got != 0 {
 		t.Errorf("later empty turn: context = %d, want 0 (no compaction of its own)", got)
+	}
+}
+
+// Each of a subagent's API calls surfaces as EventSubagentUsage, tagged with
+// its spawning call: its own model (here not the parent's) and context. The
+// window comes from the latest result line's modelUsage — a subagent's own
+// lines never say — so the capture's first-turn calls have none.
+func TestStreamSessionSubagentUsage(t *testing.T) {
+	var got []string
+	for _, ev := range streamFixtureEvents(t, taskFixture) {
+		if ev.Kind != provider.EventSubagentUsage {
+			continue
+		}
+		if ev.ParentToolUseID == "" || ev.Usage == nil {
+			t.Fatalf("untagged or empty usage event: %+v", ev)
+		}
+		got = append(got, fmt.Sprintf("%s:%d/%d", ev.Usage.Model, ev.Usage.ContextTokens, ev.Usage.ContextWindow))
+	}
+	if len(got) == 0 || got[0] != "claude-haiku-4-5-20251001:10802/0" {
+		t.Fatalf("subagent usage = %v", got)
+	}
+
+	s := &streamSession{events: make(chan provider.Event, 16), announced: make(chan string, 1)}
+	s.handleLine([]byte(`{"type":"result","subtype":"success","usage":{"input_tokens":1},"modelUsage":{"claude-opus-5[1m]":{"contextWindow":1000000}}}`))
+	s.handleLine([]byte(`{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":5,"cache_read_input_tokens":270000}}}`))
+	s.handleLine([]byte(`{"type":"assistant","message":{"role":"assistant","model":"claude-opus-5","content":[{"type":"text","text":"main"}],"usage":{"input_tokens":5}}}`))
+	close(s.events)
+	n := 0
+	for ev := range s.events {
+		if ev.Kind != provider.EventSubagentUsage {
+			continue
+		}
+		n++
+		if ev.ParentToolUseID != "toolu_1" || ev.Usage.ContextTokens != 270005 || ev.Usage.ContextWindow != 1000000 {
+			t.Errorf("subagent usage after a result = %+v usage %+v", ev, ev.Usage)
+		}
+	}
+	if n != 1 {
+		t.Errorf("%d subagent usage events, want 1 (the main agent's call isn't one)", n)
 	}
 }

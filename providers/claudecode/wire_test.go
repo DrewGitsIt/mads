@@ -186,7 +186,16 @@ const (
 // as if the main agent produced it (the live bug P0 fixes).
 func TestFixtureSubagentEventsTagged(t *testing.T) {
 	var tagged, main []provider.Event
+	usage := 0
 	for _, ev := range fixtureEvents(t, taskFixture, false) {
+		if ev.Kind == provider.EventSubagentUsage {
+			// One per content-block line of the subagent's: its API calls.
+			if ev.ParentToolUseID != fixtureParentToolUse {
+				t.Errorf("usage event tagged %q", ev.ParentToolUseID)
+			}
+			usage++
+			continue
+		}
 		if ev.ParentToolUseID != "" {
 			tagged = append(tagged, ev)
 		} else {
@@ -194,6 +203,9 @@ func TestFixtureSubagentEventsTagged(t *testing.T) {
 		}
 	}
 
+	if usage != 4 {
+		t.Errorf("%d subagent usage events, want 4 (one per assistant line)", usage)
+	}
 	wantKinds := []provider.EventKind{provider.EventToolUse, provider.EventToolResult, provider.EventText}
 	if len(tagged) != len(wantKinds) {
 		t.Fatalf("want %d tagged events, got %+v", len(wantKinds), tagged)

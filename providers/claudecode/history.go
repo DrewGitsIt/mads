@@ -149,8 +149,8 @@ func scanConversation(path string) (conv provider.HistoryConversation, ok bool) 
 					if firstUser == "" && l.Type == "user" {
 						firstUser = realUserText(&l)
 					}
-					if l.Type == "assistant" && l.Message != nil && l.Message.Usage != nil && l.Message.Model != "<synthetic>" {
-						usage = historyUsage(l.Message)
+					if u := l.Message.callUsage(); l.Type == "assistant" && u != nil {
+						usage = u
 					}
 					if l.PermissionMode != "" {
 						mode = l.PermissionMode // the last one is the current mode
@@ -225,11 +225,15 @@ func realUserText(l *transcriptLine) string {
 	return strings.Join(texts, "\n")
 }
 
-// historyUsage maps one assistant line's accounting onto the provider-
-// independent shape. Each line is a single API call, so its prompt side
-// (input + both cache halves) is exactly the context the next turn carries —
-// the ContextTokens the resume-compaction trigger trusts.
-func historyUsage(m *wireMessage) *provider.Usage {
+// callUsage maps one assistant line's accounting onto the provider-
+// independent shape; nil when it carries none or isn't a real API call (the
+// CLI's "<synthetic>" messages). Each line is a single API call, so its
+// prompt side (input + both cache halves) is exactly the context the next
+// call carries — the ContextTokens the resume-compaction trigger trusts.
+func (m *wireMessage) callUsage() *provider.Usage {
+	if m == nil || m.Usage == nil || m.Model == "<synthetic>" {
+		return nil
+	}
 	u := m.Usage
 	return &provider.Usage{
 		InputTokens:              u.InputTokens,
