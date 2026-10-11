@@ -182,7 +182,9 @@ Links are directed edges; nothing is 1:1 by design:
     dialog keeps its holder-picker shape so new-session-as-subject is a
     later unlock, not a redesign.
 - Constraint: linked sessions must NOT operate in different worktrees of the
-  same repo (parallel-universe problem).
+  same repo (parallel-universe problem). That is the only placement rule:
+  links may cross workspaces and repos (a web-app leader directing an IaC
+  follower), since a link conveys messages and digests, never file access.
 - Leader→follower orientation only; no peer/bidirectional links (deadlock
   complexity, no proven use case).
 - Session deletion breaks links, never cascades.

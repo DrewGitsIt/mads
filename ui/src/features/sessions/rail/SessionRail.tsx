@@ -243,7 +243,6 @@ export function SessionRail({
     ? [...ranked].sort((a, b) => a.rank - b.rank || a.resting - b.resting).map((r) => r.row)
     : allRows;
   const suggestions = scopeSuggestions(sessions, query, wsIndex);
-  const anchorWorkspace = linkMode ? allSessionsById.get(linkMode.anchorId)?.workspace : undefined;
 
   function bucketOf(session: Session): RailFilterBucket {
     return filterBucketOf(
@@ -417,7 +416,6 @@ export function SessionRail({
     onUnlinkRequest: setUnlinkTarget,
     linkedSessionsEnabled,
     linkMode,
-    anchorWorkspace,
     onStartLinkMode: startLinkMode,
     onToggleLinkSelection: toggleLinkSelection,
     labelContext,
@@ -633,7 +631,6 @@ function RailRowGroup({
   onUnlinkRequest,
   linkedSessionsEnabled,
   linkMode,
-  anchorWorkspace,
   onStartLinkMode,
   onToggleLinkSelection,
   labelContext,
@@ -663,7 +660,6 @@ function RailRowGroup({
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
   linkMode?: LinkModeState;
-  anchorWorkspace?: string;
   onStartLinkMode: (id: string) => void;
   onToggleLinkSelection: (id: string) => void;
   labelContext: RailLabelContext;
@@ -688,7 +684,6 @@ function RailRowGroup({
       />
     );
   };
-  const isCrossWorkspace = Boolean(linkMode) && !isAnchor && row.session.workspace !== anchorWorkspace;
   const subjects = linkedSessionsEnabled ? row.subjects : [];
   return (
     <>
@@ -715,7 +710,6 @@ function RailRowGroup({
         linkedSessionsEnabled={linkedSessionsEnabled}
         linkModeActive={Boolean(linkMode)}
         isLinkAnchor={isAnchor}
-        isLinkCrossWorkspace={isCrossWorkspace}
         isLinkSelected={linkMode?.selectedIds.has(row.session.id) ?? false}
         labelContext={labelContext}
         onStartLinkMode={() => onStartLinkMode(row.session.id)}
@@ -758,7 +752,6 @@ function RailRowGroup({
                 linkedSessionsEnabled={linkedSessionsEnabled}
                 linkModeActive={false}
                 isLinkAnchor={false}
-                isLinkCrossWorkspace={false}
                 isLinkSelected={false}
                 onStartLinkMode={() => {}}
                 onToggleLinkSelection={() => {}}
@@ -822,7 +815,6 @@ function SessionRow({
   linkedSessionsEnabled,
   linkModeActive,
   isLinkAnchor,
-  isLinkCrossWorkspace,
   isLinkSelected,
   onStartLinkMode,
   onToggleLinkSelection,
@@ -865,7 +857,6 @@ function SessionRow({
   linkedSessionsEnabled: boolean;
   linkModeActive: boolean;
   isLinkAnchor: boolean;
-  isLinkCrossWorkspace: boolean;
   isLinkSelected: boolean;
   onStartLinkMode: () => void;
   onToggleLinkSelection: () => void;
@@ -1050,7 +1041,7 @@ function SessionRow({
 
   function activateOrToggle() {
     if (linkModeActive) {
-      if (isLinkAnchor || isLinkCrossWorkspace) return;
+      if (isLinkAnchor) return;
       onToggleLinkSelection();
       return;
     }
@@ -1068,8 +1059,7 @@ function SessionRow({
       // RailStatusKind), but the e2e journeys still need to see which one the
       // rail's list believes.
       data-activity={session.activity}
-      tabIndex={linkModeActive && isLinkCrossWorkspace ? -1 : 0}
-      aria-disabled={linkModeActive && isLinkCrossWorkspace ? true : undefined}
+      tabIndex={0}
       className={[
         styles.row,
         selected ? styles.selected : "",
@@ -1077,7 +1067,6 @@ function SessionRow({
         unseen ? styles.unseen : "",
         nested ? styles.nestedRow : "",
         linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
-        linkModeActive && isLinkCrossWorkspace ? styles.linkDimmed : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1189,7 +1178,7 @@ function SessionRow({
       {linkModeActive ? (
         <div className={styles.linkModeIndicator}>
           {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}
-          {!isLinkAnchor && !isLinkCrossWorkspace && (
+          {!isLinkAnchor && (
             <input
               type="checkbox"
               className={styles.linkCheckbox}
@@ -1201,7 +1190,6 @@ function SessionRow({
               }
             />
           )}
-          {isLinkCrossWorkspace && <span className={styles.linkDimmedTag}>different workspace</span>}
         </div>
       ) : (
         <div

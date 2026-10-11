@@ -560,27 +560,19 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(screen.getByText("1 selected")).toBeTruthy();
   });
 
-  it("dims cross-workspace cards during link mode so they cannot be added", () => {
+  it("lets link mode add sessions from any workspace — a link is only a message channel", () => {
     FLAGS.linkedSessions = true;
-    const sameWorkspace = makeSession({ id: "b", name: "gateway hardening", workspace: "repo-a" });
-    const otherWorkspace = makeSession({ id: "c", name: "unrelated repo work", workspace: "repo-b" });
+    const otherWorkspace = makeSession({ id: "c", name: "infra repo work", workspace: "repo-b" });
+    const noWorkspace = makeSession({ id: "d", name: "imported work" });
     const anchor = makeSession({ id: "lead2", name: "investigator two", workspace: "repo-a" });
-    render(
-      <SessionRail sessions={[anchor, sameWorkspace, otherWorkspace]} openTaskCounts={{}} />,
-    );
+    render(<SessionRail sessions={[anchor, otherWorkspace, noWorkspace]} openTaskCounts={{}} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Add investigator two to link selection" }));
 
-    expect(screen.getByText("different workspace")).toBeTruthy();
-    expect(
-      screen.queryByRole("checkbox", { name: "Add unrelated repo work to link selection" }),
-    ).toBeNull();
-
-    fireEvent.click(screen.getByText("unrelated repo work"));
-    expect(screen.getByText("1 selected")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("gateway hardening"));
+    fireEvent.click(screen.getByText("infra repo work"));
     expect(screen.getByText("2 selected")).toBeTruthy();
+    fireEvent.click(screen.getByText("imported work"));
+    expect(screen.getByText("3 selected")).toBeTruthy();
   });
 
   it("Cancel exits link mode and restores the normal per-row link action", () => {
