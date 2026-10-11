@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — rail: subagents + linked sessions</title>
+<link rel="stylesheet" href="../../ui/src/tokens/tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg0); color: var(--text); font: 14px/1.5 var(--sans); padding: 28px 24px 80px; }
+  .frame { max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--text3); margin: 0 0 6px; }
+  .lede { color: var(--text2); max-width: 80ch; margin: 0 0 22px; }
+  .toolbar { position: fixed; top: 14px; right: 16px; display: flex; gap: 6px; }
+  .toolbar button { background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: 12px var(--sans); }
+  .grid { display: grid; grid-template-columns: repeat(4, 300px); gap: 22px; align-items: start; }
+  .col .note { color: var(--text2); font-size: 12.5px; margin: 10px 2px 0; }
+  .col .note b { color: var(--text); }
+  .col .note ul { margin: 6px 0 0; padding-left: 18px; }
+  .col .note li { margin: 3px 0; }
+  .pick { color: var(--ok-fg); font-weight: 600; }
+
+  /* ── rail ─────────────────────────────────────────────── */
+  .rail { background: var(--bg0); border: 1px solid var(--line-soft); border-radius: 12px; padding: 10px 10px 14px; }
+  .card { position: relative; display: flex; gap: 8px; padding: 8px 12px; margin-bottom: 2px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: var(--r-sm); font: 500 var(--fs-sm) var(--sans); }
+  .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .card .name { font-size: 13px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .card .status { color: var(--text3); font-size: 12px; font-weight: 400; display: flex; align-items: center; gap: 5px; }
+  .card .folder { color: var(--text2); font-size: 12px; font-weight: 400; }
+  .card .side { display: flex; gap: 6px; align-items: flex-start; color: var(--text3); font: 11px var(--mono); white-space: nowrap; }
+  .hm { width: 16px; height: 16px; border-radius: 4px; background: var(--bg3); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: var(--text2); }
+  .spin { width: 10px; height: 10px; border: 1.5px solid var(--accent); border-right-color: transparent; border-radius: 50%; display: inline-block; flex: none; }
+  .ok { color: var(--ok-fg); }
+  .bad { color: var(--bad-fg, #dd7a66); }
+  .faint { opacity: .55; }
+
+  /* ── NOW: recreated from DelegateRows.module.css + .subjects ─── */
+  .now .dl { position: relative; margin: 2px 0 6px 26px; display: flex; flex-direction: column; gap: 1px; }
+  .now .dr { position: relative; display: flex; align-items: center; gap: 7px; min-height: 26px; padding: 3px 8px; border-radius: 7px; color: var(--text2); font-size: var(--fs-sm); border: 1px solid transparent; }
+  .now .dr.sel { background: var(--bg2); border-color: var(--line); }
+  .now .dr::before { content: ""; position: absolute; left: -19px; top: -2px; width: 14px; height: 15px; border-left: 1.5px dashed var(--text3); border-bottom: 1.5px dashed var(--text3); border-bottom-left-radius: 6px; }
+  .now .dr.cont::after { content: ""; position: absolute; left: -19px; top: 13px; bottom: -3px; border-left: 1.5px dashed var(--text3); }
+  .now .tile { width: 18px; height: 18px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex: none; }
+  .now .dn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .now .dm { color: var(--text3); font: 11px var(--mono); display: inline-flex; gap: 6px; }
+  .now .more { color: var(--text3); font-size: 11px; margin-left: 8px; }
+  .now .subjects { position: relative; margin-left: 26px; }
+  .now .conn { position: absolute; left: -30px; top: -7px; color: var(--text3); overflow: visible; }
+  .now .dangle { position: absolute; left: -25px; top: 3px; bottom: -6px; border-left: 2.6px solid var(--text3); }
+  .flag { position: absolute; z-index: 3; width: 17px; height: 17px; border-radius: 50%; background: #d2604a; color: #fff; font: 700 10px/17px var(--sans); text-align: center; box-shadow: 0 0 0 2px var(--bg0); }
+
+  /* ── A: inside the card ───────────────────────────────── */
+  .a .card { flex-wrap: wrap; }
+  .a .tray { flex-basis: 100%; margin: 2px -12px -8px; padding: 4px 6px 5px; border-top: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 0; }
+  .a .sum { display: flex; align-items: center; gap: 6px; padding: 3px 6px; color: var(--text3); font: 400 11.5px var(--sans); border-radius: 5px; cursor: pointer; }
+  .a .sum:hover { background: var(--bg2); color: var(--text2); }
+  .a .sum .chev { margin-left: auto; font-size: 10px; }
+  .a .sr { display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 5px; color: var(--text2); font: 400 12px var(--sans); cursor: pointer; }
+  .a .sr:hover { background: var(--bg2); }
+  .a .sr.sel { background: var(--bg3); color: var(--text); }
+  .a .sr .g { width: 12px; display: inline-flex; justify-content: center; flex: none; font-size: 11px; }
+  .a .sr .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .a .sr .t { color: var(--text3); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  /* the link — unchanged geometry, but now it leaves the holder directly */
+  .lk { position: relative; margin-left: 26px; }
+  .lk .conn { position: absolute; left: -30px; top: -7px; color: var(--text3); overflow: visible; }
+
+  /* ── B: one gutter ────────────────────────────────────── */
+  .b .grp { position: relative; }
+  .b .trunk { position: absolute; left: 1px; width: 2.6px; background: var(--text3); border-radius: 1px; }
+  .b .dl { margin: 3px 0 5px 26px; padding-left: 9px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+  .b .sr { display: flex; align-items: center; gap: 7px; padding: 2px 6px; border-radius: 5px; color: var(--text2); font: 400 12px var(--sans); }
+  .b .sr.sel { background: var(--bg2); color: var(--text); }
+  .b .sr .g { width: 12px; display: inline-flex; justify-content: center; flex: none; font-size: 11px; }
+  .b .sr .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .b .sr .t { color: var(--text3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .b .more { color: var(--text3); font-size: 11px; padding: 1px 6px; }
+
+  /* ── C: chip only ─────────────────────────────────────── */
+  .c .chip { display: inline-flex; align-items: center; gap: 5px; align-self: flex-start; margin-top: 2px; padding: 1px 7px 1px 6px; border-radius: 999px; border: 1px solid var(--line-soft); background: var(--bg2); color: var(--text2); font: 400 11px var(--sans); cursor: pointer; }
+  .c .chip:hover { border-color: var(--line); color: var(--text); }
+  .c .pop { margin: 4px 0 8px 12px; width: 270px; background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 28px rgba(0,0,0,.45); padding: 6px; }
+  .c .pop .h { color: var(--text3); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 6px 4px; }
+  .c .pop .sr { display: flex; align-items: center; gap: 7px; padding: 3px 6px; border-radius: 5px; color: var(--text2); font: 400 12px var(--sans); }
+  .c .pop .sr:hover { background: var(--bg3); }
+  .c .pop .g { width: 12px; display: inline-flex; justify-content: center; font-size: 11px; }
+  .c .pop .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .c .pop .t { color: var(--text3); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .c .pop .foot { border-top: 1px solid var(--line-soft); margin-top: 4px; padding: 5px 6px 2px; color: var(--accent); font-size: 11.5px; }
+
+  .common { margin-top: 30px; max-width: 90ch; color: var(--text2); }
+  .common li { margin: 4px 0; }
+  .common code { background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'">Toggle theme</button>
+</div>
+<div class="frame">
+  <h1>Rail: subagents + linked sessions</h1>
+  <p class="lede">The same data in every column: holder <i>Twin flaw detection methods</i> with one finished subagent, linked to
+  <i>Twin calibration uncertainty</i>, which has 38 subagents (fade = Never), one of them open in the main pane.
+  Column 1 recreates the current rail from the CSS; the red markers match the list beneath it.</p>
+
+  <div class="grid">
+
+    <!-- ─────────── NOW ─────────── -->
+    <div class="col now">
+      <h2>Now</h2>
+      <div class="rail">
+        <div class="card"><div class="body"><div class="name">Twin flaw detection methods</div><div class="status">◷ Idle</div><div class="folder">mads</div></div><div class="side"><span class="hm">✳</span>Sat 17:48</div></div>
+        <div class="dl">
+          <span class="flag" style="left:-34px;top:-4px">5</span>
+          <div class="dr"><span class="tile">⁂</span><span class="dn">Locate calibration flaw-detection code</span><span class="dm">1m 36s <span class="ok">✓</span></span></div>
+        </div>
+        <div class="subjects">
+          <span class="flag" style="left:-46px;top:-16px">1</span>
+          <svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none"><path d="M6 0 L6 10 Q6 23.5 21 23.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 23.5 L20.5 18.5 L20.5 28.5 Z" fill="currentColor"/></svg>
+          <div class="card" style="position:relative"><span class="dangle"></span><span class="flag" style="left:-46px;top:110px">2</span><div class="body"><div class="name">Twin calibration uncertainty quantification</div><div class="status">◷ Idle</div><div class="folder">twinctl</div></div><div class="side"><span class="hm">✳</span>Sat 15:07</div></div>
+          <div class="dl" style="position:relative">
+            <span class="flag" style="right:-8px;top:2px">6</span>
+            <div class="dr cont"><span class="tile">⁂</span><span class="dn">Launch E11 stress sweep</span><span class="dm">9m 43s <span class="ok">✓</span></span></div>
+            <div class="dr cont"><span class="tile">⁂</span><span class="dn">Write up E11 results</span><span class="dm">9m 27s <span class="ok">✓</span></span></div>
+            <div class="dr cont sel"><span class="tile">⁂</span><span class="dn">Build E11 harness</span><span class="dm">106m 12s <span class="ok">✓</span></span><span class="flag" style="right:40px;top:-10px">7</span></div>
+            <div class="more">+35 more <span class="flag" style="position:relative;display:inline-block;margin-left:4px">4</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <ol style="margin:0;padding-left:18px">
+          <li>The link trunk starts below the holder's subagent rows, so the solid line seems to begin in empty space rather than at the holder.</li>
+          <li><b>Bug:</b> a lone subject's trunk dangles down the whole card. <code>.subjects .row:not(:last-child)::after</code> fires because the subject's own <code>DelegateRows</code> comes after it.</li>
+          <li>Three line columns (x≈17, 26, 70), two stroke weights (1.5 dashed, 2.6 solid), and dashed vs solid all in about 300px.</li>
+          <li><b>Bug:</b> the dashed trunk runs past the last row toward "+N more". <code>:not(:last-of-type)</code> also counts the <code>.more</code> button.</li>
+          <li>The dashed elbow starts 2px below the card, so it doesn't touch the card it hangs from.</li>
+          <li>Each row has an accent-coloured tile. That's 3+ orange marks per session, and accent elsewhere means "working".</li>
+          <li><code>formatMs</code> has no hours ("106m 12s"). Mono durations take about 70px, so names truncate early.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- ─────────── A ─────────── -->
+    <div class="col a">
+      <h2>A · Inside the card <span class="pick">· recommended</span></h2>
+      <div class="rail">
+        <div class="card"><div class="body"><div class="name">Twin flaw detection methods</div><div class="status">◷ Idle</div><div class="folder">mads</div></div><div class="side"><span class="hm">✳</span>Sat 17:48</div>
+          <div class="tray"><div class="sum">⁂ 1 subagent · done<span class="chev">▸</span></div></div></div>
+        <div class="lk">
+          <svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none"><path d="M6 0 L6 10 Q6 23.5 21 23.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 23.5 L20.5 18.5 L20.5 28.5 Z" fill="currentColor"/></svg>
+          <div class="card"><div class="body"><div class="name">Twin calibration uncertainty quantification</div><div class="status"><span class="spin"></span> 1 subagent running</div><div class="folder">twinctl</div></div><div class="side"><span class="hm">✳</span>Sat 15:07</div>
+            <div class="tray">
+              <div class="sr"><span class="g"><span class="spin"></span></span><span class="n">Sweep E12 priors</span><span class="t">2:14</span></div>
+              <div class="sr sel"><span class="g ok">✓</span><span class="n">Build E11 harness</span><span class="t">1h 46m</span></div>
+              <div class="sr"><span class="g ok">✓</span><span class="n">Launch E11 stress sweep</span><span class="t">9m 43s</span></div>
+              <div class="sum">36 more finished<span class="chev">▸</span></div>
+            </div></div>
+        </div>
+      </div>
+      <div class="note">
+        Subagents move into a tray at the bottom of their session's card, behind a hairline. Lines in the rail then mean one thing only: a link.
+        <ul>
+          <li>Nothing running: the tray is one summary line, collapsed by default (top card).</li>
+          <li>Something running: running rows are always shown, then the open one, then "N more finished".</li>
+          <li>Status uses the existing glyphs (spinner, ✓, ✗) with no accent tile. Durations are sans tabular-nums, and hours are shown properly.</li>
+          <li>The link trunk leaves the holder card directly. Bugs 1, 2, 4 and 5 go away because the geometry they come from is gone.</li>
+        </ul>
+        Cost: cards get taller. The summary line is about 22px when collapsed.
+      </div>
+    </div>
+
+    <!-- ─────────── B ─────────── -->
+    <div class="col b">
+      <h2>B · One gutter</h2>
+      <div class="rail">
+        <div class="grp">
+                    <div class="card"><div class="body"><div class="name">Twin flaw detection methods</div><div class="status">◷ Idle</div><div class="folder">mads</div></div><div class="side"><span class="hm">✳</span>Sat 17:48</div></div>
+          <div style="position:relative">
+            <span class="trunk" style="top:-2px;bottom:-4px"></span>
+            <div class="dl">
+              <div class="sr"><span class="g ok">✓</span><span class="n">Locate calibration flaw-detection code</span><span class="t">1m 36s</span></div>
+            </div>
+          </div>
+          <div class="lk">
+            <svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none"><path d="M6 0 L6 10 Q6 23.5 21 23.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 23.5 L20.5 18.5 L20.5 28.5 Z" fill="currentColor"/></svg>
+            <div class="card"><div class="body"><div class="name">Twin calibration uncertainty quantification</div><div class="status"><span class="spin"></span> 1 subagent running</div><div class="folder">twinctl</div></div><div class="side"><span class="hm">✳</span>Sat 15:07</div></div>
+            <div class="dl">
+              <div class="sr"><span class="g"><span class="spin"></span></span><span class="n">Sweep E12 priors</span><span class="t">2:14</span></div>
+              <div class="sr sel"><span class="g ok">✓</span><span class="n">Build E11 harness</span><span class="t">1h 46m</span></div>
+              <div class="sr"><span class="g ok">✓</span><span class="n">Launch E11 stress sweep</span><span class="t">9m 43s</span></div>
+              <div class="more">36 more finished</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        Subagents stay outside the card, but the layout is regularised. They sit in an indented list with a plain 1px rule (no elbows, no dashes) that starts flush with the card. The link trunk runs straight down past the holder's subagents and turns into its subject, so it visibly starts at the holder.
+        <ul>
+          <li>Two line styles that no longer compete: a hairline for the session's own work, the heavy trunk for links.</li>
+          <li>Smallest change to the current DOM: same components with new CSS, and the trunk is moved to wrap holder + delegates.</li>
+        </ul>
+        Cost: the rail still has two kinds of rule, and a long subagent list pushes the subject a long way below its holder.
+      </div>
+    </div>
+
+    <!-- ─────────── C ─────────── -->
+    <div class="col c">
+      <h2>C · Chip + popover</h2>
+      <div class="rail">
+        <div class="card"><div class="body"><div class="name">Twin flaw detection methods</div><div class="status">◷ Idle</div><div class="folder">mads</div><span class="chip">⁂ 1</span></div><div class="side"><span class="hm">✳</span>Sat 17:48</div></div>
+        <div class="lk">
+          <svg class="conn" viewBox="0 0 32 34" width="32" height="34" fill="none"><path d="M6 0 L6 10 Q6 23.5 21 23.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M29.5 23.5 L20.5 18.5 L20.5 28.5 Z" fill="currentColor"/></svg>
+          <div class="card"><div class="body"><div class="name">Twin calibration uncertainty quantification</div><div class="status"><span class="spin"></span> 1 subagent running</div><div class="folder">twinctl</div><span class="chip"><span class="spin"></span> 1 · 38</span></div><div class="side"><span class="hm">✳</span>Sat 15:07</div></div>
+          <div class="pop">
+            <div class="h">Subagents · twinctl</div>
+            <div class="sr"><span class="g"><span class="spin"></span></span><span class="n">Sweep E12 priors</span><span class="t">2:14</span></div>
+            <div class="sr"><span class="g ok">✓</span><span class="n">Build E11 harness</span><span class="t">1h 46m</span></div>
+            <div class="sr"><span class="g ok">✓</span><span class="n">Launch E11 stress sweep</span><span class="t">9m 43s</span></div>
+            <div class="sr"><span class="g ok">✓</span><span class="n">Write up E11 results</span><span class="t">9m 27s</span></div>
+            <div class="foot">All 38 in the session view →</div>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        The rail only shows sessions. A card gets a count chip (running · total); clicking it opens a popover list or the session's subagent tab.
+        <ul>
+          <li>The calmest rail, and volume stops mattering.</li>
+          <li>Rail lines are links only.</li>
+        </ul>
+        Cost: subagents lose their always-visible rows. That goes against the earlier decision that they get sidebar presence, so this is only worth it if that decision is reopened.
+      </div>
+    </div>
+  </div>
+
+  <div class="common">
+    <h2 style="margin-top:0">Needed whichever option we pick</h2>
+    <ul>
+      <li><code>formatMs</code> should show hours (<code>1h 46m</code>, not <code>106m 12s</code>), the same as <code>formatElapsed</code>.</li>
+      <li>Drop the accent tile on subagent rows. A status glyph at the left says more and doesn't use the "working" colour.</li>
+      <li>Sort order stays as it is: running first, then most recently ended. Keep the open subagent visible even when it would otherwise fold into "more".</li>
+      <li>B only: fix the two trunk selectors (bugs 2 and 4). A and C delete that geometry instead.</li>
+    </ul>
+  </div>
+</div>
+</body>
+</html>
