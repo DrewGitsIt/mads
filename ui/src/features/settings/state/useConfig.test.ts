@@ -8,7 +8,7 @@ describe("useConfig", () => {
     vi.unstubAllGlobals();
   });
 
-  it("fetches config on mount and seeds saved/draft/initial", async () => {
+  it("fetches config on mount and seeds saved/draft", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(new Response(JSON.stringify(fixtureConfig), { status: 200 })),
@@ -18,28 +18,6 @@ describe("useConfig", () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.saved).toEqual(fixtureConfig);
     expect(result.current.draft).toEqual(fixtureConfig);
-    expect(result.current.initial).toEqual(fixtureConfig);
-  });
-
-  it("dirtyRestartFields reflects live edits to the draft, before any save", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(fixtureConfig), { status: 200 })),
-    );
-
-    const { result } = renderHook(() => useConfig());
-    await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.dirtyRestartFields).toEqual([]);
-
-    act(() => {
-      result.current.setDraft({ ...result.current.draft!, concurrency_limit: 9 });
-    });
-    expect(result.current.dirtyRestartFields).toContain("concurrency_limit");
-
-    act(() => {
-      result.current.setDraft({ ...result.current.draft!, default_provider: "fake" });
-    });
-    expect(result.current.dirtyRestartFields).not.toContain("default_provider");
   });
 
   it("save() PUTs the draft and updates saved on success", async () => {
@@ -157,8 +135,6 @@ describe("useConfig", () => {
     expect(result.current.draft?.theme).toBe("light");
     expect(result.current.draft?.concurrency_limit).toBe(9);
     expect(result.current.dirtyFields).toEqual(["concurrency_limit"]);
-    // The restart diff base is untouched by a live save.
-    expect(result.current.dirtyRestartFields).toEqual(["concurrency_limit"]);
   });
 
   it("saveFields() never reads as an unsaved edit, even mid-flight", async () => {

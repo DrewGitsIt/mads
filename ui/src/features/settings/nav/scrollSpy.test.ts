@@ -4,13 +4,13 @@ import type { SectionTop } from "./scrollSpy";
 
 const sections: SectionTop[] = [
   { id: "profiles", top: 0 },
-  { id: "general", top: 400 },
-  { id: "pipeline", top: 900 },
+  { id: "sessions", top: 400 },
+  { id: "pipelines", top: 900 },
   { id: "appearance", top: 1500 },
   { id: "credentials", top: 2100 },
-  { id: "advanced", top: 2700 },
-  { id: "providers", top: 3300 },
-  { id: "updates", top: 3400 }, // short trailing section, top near the end
+  { id: "experimental", top: 2700 },
+  { id: "system", top: 3300 },
+  { id: "about", top: 3400 }, // short trailing section, top near the end
 ];
 
 describe("isAtBottom", () => {
@@ -34,9 +34,9 @@ describe("computeActiveSection", () => {
   });
 
   it("picks the last section whose top has passed the 30%-viewport reading line", () => {
-    // reading line = 900 + 800*0.3 = 1140 -> pipeline (900) qualifies, appearance (1500) doesn't
+    // reading line = 900 + 800*0.3 = 1140 -> pipelines (900) qualifies, appearance (1500) doesn't
     const active = computeActiveSection({ scrollTop: 900, clientHeight: 800, scrollHeight: 3500 }, sections);
-    expect(active).toBe("pipeline");
+    expect(active).toBe("pipelines");
   });
 
   it("advances as the reading line passes each section top", () => {
@@ -47,9 +47,9 @@ describe("computeActiveSection", () => {
 
   it("regression: marks the last section active at page bottom, even though its top never reaches the reading line", () => {
     // scrolled to the very bottom; reading line = 2700 + 800*0.3 = 2940,
-    // which is past "advanced" (2700) but short of "updates" (3400) — the
-    // reading-line rule alone would pick "advanced", never reaching "updates".
+    // which is past "experimental" (2700) but short of "about" (3400) — the
+    // reading-line rule alone would pick "experimental", never reaching "about".
     const metrics = { scrollTop: 2700, clientHeight: 800, scrollHeight: 3500 };
-    expect(computeActiveSection(metrics, sections)).toBe("updates");
+    expect(computeActiveSection(metrics, sections)).toBe("about");
   });
 });

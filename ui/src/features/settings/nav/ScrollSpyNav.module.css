@@ -4,7 +4,9 @@
   gap: var(--space-1);
   padding: var(--space-3);
   border-right: 1px solid var(--line-soft);
-  min-width: 160px;
+  width: 216px;
+  flex: none;
+  overflow-y: auto;
 }
 
 .item {
@@ -28,4 +30,10 @@
 .item[aria-current="page"] {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.separator {
+  height: 1px;
+  margin: var(--space-2) var(--space-3);
+  background: var(--line-soft);
 }

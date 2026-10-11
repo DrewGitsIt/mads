@@ -22,7 +22,13 @@ import { pipelineClient } from "./pipeline/client/pipelineClient";
 import type { WorkspaceTabId } from "./features/sessions/workspace/tabRegistry";
 import { useEndDeletedSessionShells } from "./conversation/ShellDock/useEndDeletedSessionShells";
 import { requestShellToggle } from "./conversation/shellToggleSignal";
-import { guardLeave, OPEN_SESSION_EVENT, OPEN_SETTINGS_EVENT } from "./appNavigation";
+import {
+  guardLeave,
+  OPEN_LIBRARY_EVENT,
+  OPEN_SESSION_EVENT,
+  OPEN_SETTINGS_EVENT,
+  setRequestedLibraryShelf,
+} from "./appNavigation";
 import { setPlatform } from "./platform/shortcut";
 import styles from "./App.module.css";
 
@@ -114,7 +120,8 @@ export function App() {
   }, []);
 
   // Signals from deep inside a surface (the shell dock's "Manage", the Settings
-  // shell inventory's session link) to switch surface; see appNavigation.ts.
+  // shell inventory's session link, Settings' "Open in Library") to switch
+  // surface; see appNavigation.ts.
   useEffect(() => {
     const openSettings = () => setActiveId("settings");
     const openSession = (e: Event) => {
@@ -124,11 +131,17 @@ export function App() {
         setJumpToTab(undefined);
       });
     };
+    const openLibrary = (e: Event) => {
+      const { shelf } = (e as CustomEvent<{ shelf: string }>).detail;
+      setActiveId("library", () => setRequestedLibraryShelf(shelf));
+    };
     window.addEventListener(OPEN_SETTINGS_EVENT, openSettings);
     window.addEventListener(OPEN_SESSION_EVENT, openSession);
+    window.addEventListener(OPEN_LIBRARY_EVENT, openLibrary);
     return () => {
       window.removeEventListener(OPEN_SETTINGS_EVENT, openSettings);
       window.removeEventListener(OPEN_SESSION_EVENT, openSession);
+      window.removeEventListener(OPEN_LIBRARY_EVENT, openLibrary);
     };
   }, [setActiveId]);
 

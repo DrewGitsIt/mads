@@ -1,0 +1,114 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* A group title that sits over its card rather than inside it (mockup). */
+.groupTitle {
+  margin: var(--space-2) 0 calc(var(--space-2) - var(--space-3));
+  font: 650 var(--fs-sm) var(--sans);
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* The provider picker, with what that provider can't do natively under it. */
+.provider {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  min-width: 0;
+}
+
+.caps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: var(--fs-sm);
+}
+
+.caps > button {
+  margin-left: 4px;
+}
+
+.disclosure > .summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--space-3) var(--space-4);
+  list-style: none;
+  cursor: pointer;
+}
+
+.disclosure > .summary::-webkit-details-marker {
+  display: none;
+}
+
+.disclosure > .summary::before {
+  content: "▸";
+  width: 10px;
+  color: var(--text3);
+}
+
+.disclosure[open] > .summary::before {
+  content: "▾";
+}
+
+.summaryLabel {
+  flex: 1;
+  font: 500 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.filters {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-4) var(--space-3);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 var(--fs-sm) var(--sans);
+}
+
+.table th,
+.table td {
+  padding: 6px var(--space-4);
+  border-top: 1px solid var(--line-soft);
+  text-align: left;
+}
+
+.table thead th {
+  color: var(--text3);
+  font-weight: 500;
+}
+
+.table tbody th {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.level {
+  margin-left: 6px;
+  color: var(--text3);
+  font: 400 var(--fs-chip) var(--sans);
+  text-transform: uppercase;
+}
+
+.empty {
+  color: var(--text3);
+}
+
+.loading {
+  padding: 0 var(--space-4) var(--space-3);
+  color: var(--text2);
+}

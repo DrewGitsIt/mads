@@ -7,12 +7,10 @@ import type { UseConfig } from "../state/useConfig";
 
 function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   return {
-    initial: fixtureConfig,
     saved: fixtureConfig,
     draft: fixtureConfig,
     loading: false,
     fieldErrors: {},
-    dirtyRestartFields: [],
     dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
@@ -91,7 +89,7 @@ describe("AppearanceSection", () => {
 
   it("offers as sent, slow, fast and custom, and reads the retired medium as fast", () => {
     render(<AppearanceSection config={makeConfig({ draft: { ...fixtureConfig, stream_speed: "medium" } })} />);
-    const group = screen.getByRole("radiogroup", { name: "Streaming speed" });
+    const group = screen.getByRole("radiogroup", { name: "Reply streaming" });
     expect(within(group).getAllByRole("radio").map((b) => b.textContent)).toEqual([
       "As sent",
       "Slow",
@@ -114,5 +112,22 @@ describe("AppearanceSection", () => {
       expect(config.saveFields).toHaveBeenCalledWith({ stream_wpm: 2000 }),
     );
     expect(input.value).toBe("2000");
+  });
+
+  it("density is a live choice with readable labels that persists only display_mode", () => {
+    const config = makeConfig({ draft: { ...fixtureConfig, display_mode: "comfortable" } });
+    render(<AppearanceSection config={config} />);
+    const group = screen.getByRole("radiogroup", { name: "Density" });
+    expect(within(group).getAllByRole("radio").map((r) => r.textContent)).toEqual(["Comfortable", "Compact"]);
+    fireEvent.click(within(group).getByRole("radio", { name: "Compact" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ display_mode: "compact" });
+    expect(config.setDraft).not.toHaveBeenCalled();
+    expect(config.save).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unrecognized stored density visible", () => {
+    render(<AppearanceSection config={makeConfig({ draft: { ...fixtureConfig, display_mode: "dense" } })} />);
+    const group = screen.getByRole("radiogroup", { name: "Density" });
+    expect(within(group).getByRole("radio", { name: "dense" }).getAttribute("aria-checked")).toBe("true");
   });
 });

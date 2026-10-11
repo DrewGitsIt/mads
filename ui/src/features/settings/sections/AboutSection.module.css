@@ -1,0 +1,12 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.about {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  color: var(--text2);
+  font: 400 var(--fs-body) / 1.5 var(--sans);
+}

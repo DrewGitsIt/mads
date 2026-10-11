@@ -1,11 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ConfirmDialog } from "../../components/ConfirmDialog/ConfirmDialog";
 import { ContentColumn } from "../../components/ContentColumn/ContentColumn";
 import { Toast, type ToastTone } from "../../components/Toast/Toast";
 import { registerLeaveGuard } from "../../appNavigation";
 import { ScrollSpyNav } from "./nav/ScrollSpyNav";
 import { useScrollSpy } from "./nav/useScrollSpy";
-import { SECTION_IDS, SECTION_LABELS, type SectionId } from "./sections";
+import {
+  LIVE_SECTIONS,
+  SECTION_IDS,
+  SECTION_LABELS,
+  SECTION_LEDES,
+  resolveSectionHash,
+  type SectionId,
+  type SectionIntent,
+} from "./sections";
 import { useConfig } from "./state/useConfig";
 import { useProfiles } from "./state/useProfiles";
 import { useCredentials } from "./state/useCredentials";
@@ -13,21 +21,21 @@ import { useDrift } from "./state/useDrift";
 import { DriftBar } from "./DriftBar";
 import { SaveBar } from "./SaveBar";
 import { restartFieldsIn } from "./dirtyFields";
+import { SettingTag } from "./SettingRow";
 import { ProfilesSection } from "./sections/ProfilesSection";
-import { GeneralSection } from "./sections/GeneralSection";
-import { PipelineSection } from "./sections/PipelineSection";
+import { SessionsSection } from "./sections/SessionsSection";
+import { ModelsSection } from "./sections/ModelsSection";
+import { WorkspacesSection } from "./sections/WorkspacesSection";
+import { PipelinesSection } from "./sections/PipelinesSection";
+import { SynthesisSection } from "./sections/SynthesisSection";
 import { AppearanceSection } from "./sections/AppearanceSection";
+import { EditorSection } from "./sections/EditorSection";
 import { CredentialsSection } from "./sections/CredentialsSection";
-import { AdvancedSection } from "./sections/AdvancedSection";
-import { ShellsSection } from "./sections/ShellsSection";
-import { ProvidersSection } from "./sections/ProvidersSection";
-import { UpdatesAboutSection } from "./sections/UpdatesAboutSection";
+import { ExperimentalSection } from "./sections/ExperimentalSection";
+import { SystemSection, SHELLS_ANCHOR_ID } from "./sections/SystemSection";
+import { AboutSection } from "./sections/AboutSection";
 import type { Config } from "../../router/types";
 import styles from "./SettingsSurface.module.css";
-
-function isSectionId(value: string): value is SectionId {
-  return (SECTION_IDS as string[]).includes(value);
-}
 
 /**
  * The first control (in page order) with a field error. Inputs carry their
@@ -44,11 +52,22 @@ function firstErrorTarget(root: HTMLElement, fields: string[]): HTMLElement | nu
   );
 }
 
+/**
+ * What an aliased link asked for beyond its section. "shells" (the dock's
+ * Manage, old #shells links) brings the shell inventory itself into view.
+ */
+function revealIntent(intent: SectionIntent) {
+  if (intent === "shells") {
+    document.getElementById(SHELLS_ANCHOR_ID)?.scrollIntoView({ block: "center" });
+  }
+}
+
 interface ToastState {
   title: string;
   tone?: ToastTone;
   description?: string;
-  action?: { label: string; onClick: () => void };
+  /** The config a profile switch replaced — the toast offers Undo back to it. */
+  undoTo?: Config;
 }
 
 /** One continuously-scrolling page (HANDOFF §2) — no more tab-routed sub-panels. */
@@ -69,10 +88,12 @@ export function SettingsSurface() {
   useEffect(() => {
     if (scrolledToHash.current || config.loading || !config.draft) return;
     scrolledToHash.current = true;
-    const hash = window.location.hash.slice(1);
-    if (isSectionId(hash)) {
-      sectionRefs[hash].current?.scrollIntoView({ block: "start" });
-    }
+    const target = resolveSectionHash(window.location.hash.slice(1));
+    if (!target) return;
+    if (target.intent) revealIntent(target.intent);
+    else sectionRefs[target.section].current?.scrollIntoView({ block: "start" });
+    // Old ids land on the section that now holds their content.
+    if (window.location.hash.slice(1) !== target.section) history.replaceState(null, "", `#${target.section}`);
   }, [config.loading, config.draft, sectionRefs]);
 
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -81,6 +102,9 @@ export function SettingsSurface() {
   // flags — persist themselves via saveFields and never show up here).
   const [saving, setSaving] = useState(false);
   const [errorScroll, setErrorScroll] = useState(0);
+  // Bumped whenever the draft is reset to the saved config, so view state
+  // layered on it (Start in's picked-but-empty choice) resets too.
+  const [draftEpoch, setDraftEpoch] = useState(0);
   const dirty = config.dirtyFields;
 
   const saveDraft = async () => {
@@ -88,6 +112,7 @@ export function SettingsSurface() {
     setSaving(true);
     const ok = await config.save();
     setSaving(false);
+    if (ok) setDraftEpoch((n) => n + 1);
     if (ok && needsRestart) setToast({ title: "Saved. Some changes apply when mads restarts." });
     if (!ok) setErrorScroll((n) => n + 1);
     return ok;
@@ -95,6 +120,7 @@ export function SettingsSurface() {
 
   const discardDraft = () => {
     if (config.saved) config.setDraft(config.saved);
+    setDraftEpoch((n) => n + 1);
   };
 
   // After a failed save renders its field errors, bring the first into view.
@@ -146,22 +172,48 @@ export function SettingsSurface() {
   };
 
   const handleSwitched = (previousConfig: Config, restartRequired: boolean) => {
+    setDraftEpoch((n) => n + 1);
     setToast({
       title: "Profile switched",
       description: restartRequired ? "Some changes apply on mads restart." : undefined,
-      action: {
-        label: "Undo",
-        onClick: async () => {
-          await config.save(previousConfig);
-          setToast(null);
-        },
-      },
+      undoTo: previousConfig,
     });
+  };
+
+  // Undo saves the whole pre-switch config, which would overwrite any edit
+  // made since — so, like switching itself, it waits while edits are unsaved.
+  const undoBlocked = dirty.length > 0;
+  const undoSwitch = async (previousConfig: Config) => {
+    if (undoBlocked) return;
+    if (await config.save(previousConfig)) setDraftEpoch((n) => n + 1);
+    setToast(null);
   };
 
   if (config.loading || !config.draft) {
     return <div className={styles.loading}>Loading settings…</div>;
   }
+
+  const sectionContent: Record<SectionId, ReactNode> = {
+    profiles: (
+      <ProfilesSection
+        config={config}
+        profiles={profiles}
+        credentialNames={credentials.names}
+        onSwitched={handleSwitched}
+      />
+    ),
+    sessions: <SessionsSection config={config} onNavigate={handleNavigate} resetKey={draftEpoch} />,
+    models: <ModelsSection config={config} />,
+    workspaces: <WorkspacesSection />,
+    pipelines: <PipelinesSection config={config} />,
+    synthesis: <SynthesisSection config={config} />,
+    appearance: <AppearanceSection config={config} />,
+    editor: <EditorSection config={config} />,
+    credentials: <CredentialsSection config={config} profiles={profiles.profiles} />,
+    experimental: <ExperimentalSection config={config} />,
+    system: <SystemSection config={config} />,
+    about: <AboutSection />,
+  };
 
   return (
     <div className={styles.surface}>
@@ -171,54 +223,18 @@ export function SettingsSurface() {
           <ContentColumn variant="wide">
             <DriftBar drift={drift} />
 
-            <section id="profiles" ref={sectionRefs.profiles} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.profiles}</h2>
-              <ProfilesSection
-                config={config}
-                profiles={profiles}
-                credentialNames={credentials.names}
-                onSwitched={handleSwitched}
-              />
-            </section>
-
-            <section id="general" ref={sectionRefs.general} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.general}</h2>
-              <GeneralSection config={config} />
-            </section>
-
-            <section id="pipeline" ref={sectionRefs.pipeline} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.pipeline}</h2>
-              <PipelineSection config={config} />
-            </section>
-
-            <section id="appearance" ref={sectionRefs.appearance} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.appearance}</h2>
-              <AppearanceSection config={config} />
-            </section>
-
-            <section id="credentials" ref={sectionRefs.credentials} className={styles.section}>
-              <CredentialsSection config={config} profiles={profiles.profiles} />
-            </section>
-
-            <section id="advanced" ref={sectionRefs.advanced} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.advanced}</h2>
-              <AdvancedSection config={config} />
-            </section>
-
-            <section id="shells" ref={sectionRefs.shells} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.shells}</h2>
-              <ShellsSection />
-            </section>
-
-            <section id="providers" ref={sectionRefs.providers} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.providers}</h2>
-              <ProvidersSection />
-            </section>
-
-            <section id="updates" ref={sectionRefs.updates} className={styles.section}>
-              <h2 className={styles.heading}>{SECTION_LABELS.updates}</h2>
-              <UpdatesAboutSection />
-            </section>
+            {SECTION_IDS.map((id) => (
+              <section key={id} id={id} ref={sectionRefs[id]} className={styles.section}>
+                <h2 className={styles.heading}>{SECTION_LABELS[id]}</h2>
+                {SECTION_LEDES[id] && (
+                  <p className={styles.lede}>
+                    {SECTION_LEDES[id]}
+                    {LIVE_SECTIONS.has(id) && <SettingTag tone="info">Live</SettingTag>}
+                  </p>
+                )}
+                {sectionContent[id]}
+              </section>
+            ))}
           </ContentColumn>
         </div>
         <SaveBar
@@ -248,9 +264,19 @@ export function SettingsSurface() {
         <div className={styles.toastHost}>
           <Toast
             title={toast.title}
-            description={toast.description}
+            description={
+              toast.undoTo && undoBlocked
+                ? [toast.description, "Save or discard your changes to undo."].filter(Boolean).join(" ")
+                : toast.description
+            }
             tone={toast.tone ?? "ok"}
-            action={toast.action}
+            action={
+              toast.undoTo && {
+                label: "Undo",
+                disabled: undoBlocked,
+                onClick: () => void undoSwitch(toast.undoTo!),
+              }
+            }
             onDismiss={() => setToast(null)}
           />
         </div>

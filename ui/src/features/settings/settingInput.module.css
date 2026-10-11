@@ -1,0 +1,24 @@
+/* Text inputs sized to a SettingRow's control column (mockup .text). */
+.input {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  color: var(--text);
+  font: 400 var(--fs-body) / 1.5 var(--sans);
+}
+
+.input::placeholder {
+  color: var(--text3);
+}
+
+.mono {
+  font-family: var(--mono);
+}
+
+/* PathField's own wrapper sizes to content; this lets it take the column. */
+.fill {
+  flex: 1;
+  min-width: 0;
+}

@@ -1,4 +1,5 @@
-import { SECTION_IDS, SECTION_LABELS, type SectionId } from "../sections";
+import { Fragment } from "react";
+import { SECTION_GROUPS, SECTION_LABELS, type SectionId } from "../sections";
 import styles from "./ScrollSpyNav.module.css";
 
 export interface ScrollSpyNavProps {
@@ -10,16 +11,21 @@ export interface ScrollSpyNavProps {
 export function ScrollSpyNav({ activeId, onNavigate }: ScrollSpyNavProps) {
   return (
     <nav className={styles.nav} aria-label="Settings sections">
-      {SECTION_IDS.map((id) => (
-        <button
-          key={id}
-          type="button"
-          className={styles.item}
-          aria-current={id === activeId ? "page" : undefined}
-          onClick={() => onNavigate(id)}
-        >
-          {SECTION_LABELS[id]}
-        </button>
+      {SECTION_GROUPS.map((group, i) => (
+        <Fragment key={group[0]}>
+          {i > 0 && <div className={styles.separator} role="separator" />}
+          {group.map((id) => (
+            <button
+              key={id}
+              type="button"
+              className={styles.item}
+              aria-current={id === activeId ? "page" : undefined}
+              onClick={() => onNavigate(id)}
+            >
+              {SECTION_LABELS[id]}
+            </button>
+          ))}
+        </Fragment>
       ))}
     </nav>
   );

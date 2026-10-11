@@ -52,20 +52,33 @@ describe("groupBySection / orderedDiffSections", () => {
   it("groups diff entries by the section their field's input lives in", () => {
     const entries = computeProfileDiff(fixtureConfig, fixtureProfile.snapshot);
     const grouped = groupBySection(entries);
-    expect(grouped.general?.map((e) => e.field)).toEqual(["concurrency_limit"]);
-    expect(grouped.pipeline?.map((e) => e.field)).toEqual(["default_model_tier"]);
-    expect(orderedDiffSections(grouped)).toEqual(["general", "pipeline"]);
+    expect(grouped.pipelines?.map((e) => e.field)).toEqual(["concurrency_limit"]);
+    expect(grouped.synthesis?.map((e) => e.field)).toEqual(["default_model_tier"]);
+    expect(orderedDiffSections(grouped)).toEqual(["pipelines", "synthesis"]);
   });
 });
 
-describe("the Shells section (not a Config section)", () => {
-  it("owns no Config field, so no diff entry can group under it", () => {
-    expect(SECTION_IDS).toContain("shells");
-    expect(Object.values(FIELD_SECTION)).not.toContain("shells");
-    const entries = computeProfileDiff(fixtureConfig, fixtureProfile.snapshot);
-    expect(groupBySection(entries).shells).toBeUndefined();
-    expect(orderedDiffSections(groupBySection(entries))).not.toContain("shells");
+describe("sections that own no Config field", () => {
+  it("never collect a diff entry", () => {
+    for (const id of ["profiles", "workspaces", "about"] as const) {
+      expect(SECTION_IDS).toContain(id);
+      expect(Object.values(FIELD_SECTION)).not.toContain(id);
+    }
     expect(orderedDiffSections({})).toEqual([]);
+  });
+
+  it("puts the newly mapped fields where their inputs now live", () => {
+    const entries = computeProfileDiff(fixtureConfig, {
+      display_mode: "compact",
+      log_retention_days: 3,
+      synthesis_auto_approve: true,
+      pipeline_stage_timeout_minutes: 99,
+    });
+    const grouped = groupBySection(entries);
+    expect(grouped.appearance?.map((e) => e.field)).toEqual(["display_mode"]);
+    expect(grouped.system?.map((e) => e.field)).toEqual(["log_retention_days"]);
+    expect(grouped.synthesis?.map((e) => e.field)).toEqual(["synthesis_auto_approve"]);
+    expect(grouped.pipelines?.map((e) => e.field)).toEqual(["pipeline_stage_timeout_minutes"]);
   });
 
   it("every labelled field still maps to a section", () => {

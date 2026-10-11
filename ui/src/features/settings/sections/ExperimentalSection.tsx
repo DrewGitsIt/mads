@@ -5,27 +5,27 @@ import { SettingRow } from "../SettingRow";
 import { SettingsCard } from "../SettingsCard";
 import type { UseConfig } from "../state/useConfig";
 import type { FeatureFlags } from "../../../router/types";
-import styles from "./AdvancedSection.module.css";
+import styles from "./ExperimentalSection.module.css";
 
 const TOGGLES: Array<{ key: keyof FeatureFlags; label: string; description: string }> = [
   {
     key: "multi_repo",
     label: "Multi-repo workspaces",
-    description: "Allow a workspace to span more than one repository.",
+    description: "A workspace can span more than one repository.",
   },
   {
     key: "linked_sessions",
     label: "Linked sessions",
-    description: "Enable leader/monitor session linking: rail multi-select, link chooser, and attributed inject/digest rendering.",
+    description: "Link sessions as leader and monitor: multi-select in the rail, link chooser, attributed digests.",
   },
   {
     key: "remote_registry",
     label: "Remote registry",
-    description: "Browse and install agents/capabilities/templates from a remote mads registry.",
+    description: "Browse and install agents, capabilities and templates from a remote registry.",
   },
 ];
 
-export interface AdvancedSectionProps {
+export interface ExperimentalSectionProps {
   config: UseConfig;
 }
 
@@ -35,7 +35,7 @@ export interface AdvancedSectionProps {
  * RESTART_REQUIRED_FIELDS (pkg/contracts/config.go's canonical set), so no
  * restart badge here.
  */
-export function AdvancedSection({ config }: AdvancedSectionProps) {
+export function ExperimentalSection({ config }: ExperimentalSectionProps) {
   const { draft, saveFields } = config;
   const [saving, setSaving] = useState<keyof FeatureFlags | null>(null);
 

@@ -20,15 +20,12 @@ const ENV_MODES: SegmentedOption<EnvMode>[] = [
 
 /** Plain-language summary of what env_mode + counts mean for a spawned agent. */
 function envSummary(mode: EnvMode, credentialCount: number, passthrough: string[]): string {
-  const plural = credentialCount === 1 ? "" : "s";
+  const credentials = `${credentialCount} credential${credentialCount === 1 ? "" : "s"}`;
   if (mode === "isolated") {
-    let summary = `Isolated: base environment + ${credentialCount} credential${plural}`;
-    if (passthrough.length > 0) {
-      summary += ` + ${passthrough.length} passthrough (${passthrough.join(", ")})`;
-    }
-    return summary;
+    const vars = `${passthrough.length} passthrough variable${passthrough.length === 1 ? "" : "s"}`;
+    return `Agents get a clean base environment, ${credentials} and ${vars}.`;
   }
-  return `Inherited environment + ${credentialCount} mads credential${plural}`;
+  return `Agents get your shell's environment plus ${credentials}.`;
 }
 
 export interface CredentialsSectionProps {
@@ -139,7 +136,7 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
   return (
     <div className={styles.panel}>
       <section>
-        <h3 className={styles.heading}>Credentials</h3>
+        <h3 className={styles.heading}>Stored credentials</h3>
         <ul className={styles.list}>
           {credentials.names.map((n) => {
             const active = isCredentialActive(n, draft?.credential_bindings);
@@ -164,14 +161,14 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
       </section>
 
       <section>
-        <h3 className={styles.heading}>Environment</h3>
-        <SettingsCard>
+        <SettingsCard title="Agent environment">
           <SettingRow
-            label="Environment mode"
+            label="Environment"
             labelId="env-mode-label"
             help={envSummary(envMode, activeCredentialCount, envPassthrough)}
           >
             <SegmentedControl
+              id="env-mode"
               aria-labelledby="env-mode-label"
               value={envMode}
               options={ENV_MODES}
@@ -179,7 +176,12 @@ export function CredentialsSection({ config, profiles }: CredentialsSectionProps
             />
           </SettingRow>
           {envMode === "isolated" && (
-            <SettingRow nested label="Passthrough env vars" htmlFor="env-passthrough-input">
+            <SettingRow
+              nested
+              label="Also pass through"
+              htmlFor="env-passthrough-input"
+              help="Variables from your shell that isolated agents still get."
+            >
               <div className={styles.passthrough}>
                 <div className={styles.passthroughChips}>
                   {envPassthrough.map((n) => (

@@ -7,6 +7,7 @@ import {
   clampWpm,
   normalizeStreamSpeed,
 } from "../../../conversation/streaming/streamSpeed";
+import { optionsWith } from "../settingHelpers";
 import { SettingRow } from "../SettingRow";
 import { SettingsCard } from "../SettingsCard";
 import type { UseConfig } from "../state/useConfig";
@@ -25,6 +26,12 @@ const THEMES: SegmentedOption<ThemeMode>[] = [
   { value: "dark", label: "Dark" },
   { value: "light", label: "Light" },
   { value: "system", label: "System" },
+];
+// display_mode is a plain string in the Go contract (no Valid()), so the
+// choices live here; an unrecognized stored value stays visible (optionsWith).
+const DENSITIES: SegmentedOption[] = [
+  { value: "comfortable", label: "Comfortable" },
+  { value: "compact", label: "Compact" },
 ];
 // reduce_motion is a boolean; "system" (false) defers to the OS setting.
 const REDUCE_MOTION: SegmentedOption<"system" | "on">[] = [
@@ -55,7 +62,7 @@ export interface AppearanceSectionProps {
   config: UseConfig;
 }
 
-/** Palette + dark/light/system picker — applies live on click, persists via PUT /config (HANDOFF §5). */
+/** Theme, palette, density, motion and streaming — each applies live on click and persists only its own field (HANDOFF §5). */
 export function AppearanceSection({ config }: AppearanceSectionProps) {
   const { draft, saved, saveFields } = config;
   if (!draft || !saved) return null;
@@ -81,6 +88,8 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
     if (!ok) applyMotion(saved.reduce_motion);
   };
 
+  const chooseDensity = (display_mode: string) => saveFields({ display_mode });
+
   const chooseStreamSpeed = (stream_speed: StreamSpeed) => saveFields({ stream_speed });
 
   // NumberField commits on blur/Enter only (live={false}) — saving every
@@ -90,35 +99,40 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
   return (
     <div className={styles.panel}>
       <SettingsCard>
-        <SettingRow label="Palette" labelId="palette-label">
-          <SegmentedControl
-            aria-labelledby="palette-label"
-            value={draft.palette}
-            options={PALETTES}
-            onChange={(p) => void choosePalette(p)}
-          />
-        </SettingRow>
         <SettingRow label="Theme" labelId="theme-label">
           <SegmentedControl
+            id="theme"
             aria-labelledby="theme-label"
             value={draft.theme}
             options={THEMES}
             onChange={(t) => void chooseTheme(t)}
           />
         </SettingRow>
+        <SettingRow label="Palette" labelId="palette-label">
+          <SegmentedControl
+            id="palette"
+            aria-labelledby="palette-label"
+            value={draft.palette}
+            options={PALETTES}
+            onChange={(p) => void choosePalette(p)}
+          />
+        </SettingRow>
+        <SettingRow label="Density" labelId="display-mode-label">
+          <SegmentedControl
+            id="display-mode"
+            aria-labelledby="display-mode-label"
+            value={draft.display_mode}
+            options={optionsWith(DENSITIES, draft.display_mode)}
+            onChange={(v) => void chooseDensity(v)}
+          />
+        </SettingRow>
         <SettingRow
           label="Reduce motion"
           labelId="reduce-motion-label"
-          help={
-            <>
-              {draft.reduce_motion
-                ? "Animations are off: things appear and close instantly."
-                : "Follows your system's reduce-motion setting."}{" "}
-              Doesn't change streaming speed.
-            </>
-          }
+          help="Follows your system setting unless turned on. Doesn't change streaming speed."
         >
           <SegmentedControl
+            id="reduce-motion"
             aria-labelledby="reduce-motion-label"
             value={draft.reduce_motion ? "on" : "system"}
             options={REDUCE_MOTION}
@@ -126,7 +140,7 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
           />
         </SettingRow>
         <SettingRow
-          label="Streaming speed"
+          label="Reply streaming"
           labelId="stream-speed-label"
           help={
             <>
@@ -137,6 +151,7 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
           }
         >
           <SegmentedControl
+            id="stream-speed"
             aria-labelledby="stream-speed-label"
             value={speed}
             options={STREAM_SPEEDS}

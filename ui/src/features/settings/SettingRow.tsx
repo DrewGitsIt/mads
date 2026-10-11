@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import styles from "./SettingRow.module.css";
 
 export interface SettingRowProps {
-  label: ReactNode;
+  /** Omit for a nested row that only explains (a stacked note under its parent). */
+  label?: ReactNode;
   /** Renders the label as <label htmlFor> — for inputs, Select, Switch. */
   htmlFor?: string;
   /** Gives the label this id instead — for controls named by aria-labelledby (SegmentedControl). */
@@ -43,34 +44,38 @@ export function SettingRow({
     .join(" ");
   return (
     <div className={classes}>
-      <div className={styles.text}>
-        <div className={styles.labelLine}>
-          {htmlFor ? (
-            <label className={styles.label} htmlFor={htmlFor} id={labelId}>
-              {label}
-            </label>
-          ) : (
-            <span className={styles.label} id={labelId}>
-              {label}
-            </span>
+      {(label !== undefined || help || error) && (
+        <div className={styles.text}>
+          {label !== undefined && (
+            <div className={styles.labelLine}>
+              {htmlFor ? (
+                <label className={styles.label} htmlFor={htmlFor} id={labelId}>
+                  {label}
+                </label>
+              ) : (
+                <span className={styles.label} id={labelId}>
+                  {label}
+                </span>
+              )}
+              {tag}
+            </div>
           )}
-          {tag}
+          {help && <div className={styles.help}>{help}</div>}
+          {error && (
+            <div className={styles.error} data-setting-error>
+              {error}
+            </div>
+          )}
         </div>
-        {help && <div className={styles.help}>{help}</div>}
-        {error && (
-          <div className={styles.error} data-setting-error>
-            {error}
-          </div>
-        )}
-      </div>
+      )}
       {children && <div className={styles.control}>{children}</div>}
     </div>
   );
 }
 
-export type SettingTagTone = "warn" | "info" | "muted";
+export type SettingTagTone = "ok" | "warn" | "bad" | "info" | "muted";
 
-/** Small uppercase marker beside a setting's label, e.g. "Restart". */
+/** Small uppercase marker beside a setting's label, e.g. "Restart", or a capability verdict. */
 export function SettingTag({ tone = "muted", children }: { tone?: SettingTagTone; children: ReactNode }) {
   return <span className={[styles.tag, styles[tone]].join(" ")}>{children}</span>;
 }

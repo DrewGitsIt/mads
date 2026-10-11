@@ -16,11 +16,11 @@ describe("ProfileSwitchDialog", () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByText("General")).toBeTruthy();
-    expect(screen.getByText("Pipeline & synthesis")).toBeTruthy();
+    expect(screen.getByText("Pipelines")).toBeTruthy();
+    expect(screen.getByText("Synthesis")).toBeTruthy();
     expect(screen.getByText("Concurrency limit")).toBeTruthy();
     expect(screen.getByText("3 → 1")).toBeTruthy();
-    expect(screen.getByText("Default model tier")).toBeTruthy();
+    expect(screen.getByText("Model tier")).toBeTruthy();
     expect(screen.getByText("balanced → cheapest")).toBeTruthy();
     expect(screen.getAllByText("Restart")).toHaveLength(1);
     expect(screen.getByText("Some changes apply on mads restart")).toBeTruthy();

@@ -2,20 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { router, RouterValidationError } from "../../../router/client";
 import type { Config } from "../../../router/types";
 import { dirtyFields } from "../dirtyFields";
-import { dirtyRestartFields } from "../restartRequired";
 import { fieldErrorMap } from "../validation/fieldErrors";
 
 export interface UseConfig {
-  /** Config as fetched at mount — never mutated, the diff base for restart badges. */
-  initial: Config | null;
   /** Server truth as of the last successful save (or mount). */
   saved: Config | null;
   /** In-progress edits — panels read/write this. */
   draft: Config | null;
   loading: boolean;
   fieldErrors: Record<string, string>;
-  /** Restart-required fields changed since mount (initial vs draft). */
-  dirtyRestartFields: (keyof Config)[];
   /** Top-level fields with unsaved edits (saved vs draft) — the save bar's count. */
   dirtyFields: (keyof Config)[];
   setDraft: (next: Config) => void;
@@ -31,7 +26,7 @@ export interface UseConfig {
    * unsaved draft edit is left alone. On failure the patched fields roll back.
    */
   saveFields: (patch: Partial<Config>) => Promise<boolean>;
-  /** Re-fetches GET /config and resets initial/saved/draft to the result —
+  /** Re-fetches GET /config and resets saved/draft to the result —
    * used after a Profiles Activate call merges a new config server-side, so
    * ProfilesSection can share this instance instead of duplicating config
    * state (HANDOFF §4). */
@@ -47,7 +42,6 @@ export interface UseConfig {
  * is populated for inline display (HANDOFF §4/§7).
  */
 export function useConfig(): UseConfig {
-  const [initial, setInitial] = useState<Config | null>(null);
   const [saved, setSaved] = useState<Config | null>(null);
   const [draft, setDraftState] = useState<Config | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,7 +58,6 @@ export function useConfig(): UseConfig {
     const cfg = await router.getConfig();
     if (!mounted.current) return;
     confirmed.current = cfg;
-    setInitial(cfg);
     setSaved(cfg);
     setDraftState(cfg);
   }, []);
@@ -149,12 +142,10 @@ export function useConfig(): UseConfig {
   }, []);
 
   return {
-    initial,
     saved,
     draft,
     loading,
     fieldErrors,
-    dirtyRestartFields: initial && draft ? dirtyRestartFields(initial, draft) : [],
     dirtyFields: saved && draft ? dirtyFields(saved, draft) : [],
     setDraft,
     save,

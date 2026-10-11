@@ -4,6 +4,7 @@
 // shellToggleSignal — they fire a plain window Event that App listens for.
 export const OPEN_SETTINGS_EVENT = "mads:open-settings";
 export const OPEN_SESSION_EVENT = "mads:open-session";
+export const OPEN_LIBRARY_EVENT = "mads:open-library";
 
 /**
  * Show Settings scrolled to `section`. The section rides in the URL hash, which
@@ -12,6 +13,24 @@ export const OPEN_SESSION_EVENT = "mads:open-session";
 export function requestOpenSettings(section: string): void {
   window.history.replaceState(null, "", `#${section}`);
   window.dispatchEvent(new CustomEvent(OPEN_SETTINGS_EVENT, { detail: { section } }));
+}
+
+/** Show the Library on `shelf` (e.g. "workspaces"). */
+export function requestOpenLibrary(shelf: string): void {
+  window.dispatchEvent(new CustomEvent(OPEN_LIBRARY_EVENT, { detail: { shelf } }));
+}
+
+// The shelf the next Library mount should open on. App sets it only once the
+// leave has gone ahead (a held leave mustn't leave a stale request behind);
+// LibrarySurface reads it on mount and then clears it.
+let requestedLibraryShelf: string | null = null;
+
+export function setRequestedLibraryShelf(shelf: string | null): void {
+  requestedLibraryShelf = shelf;
+}
+
+export function requestedShelf(): string | null {
+  return requestedLibraryShelf;
 }
 
 /** Show the Sessions surface with `sessionId` selected. */

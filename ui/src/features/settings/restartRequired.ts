@@ -11,12 +11,3 @@ export const RESTART_REQUIRED_FIELDS: ReadonlySet<keyof Config> = new Set([
   "log_retention_days",
   "synthesis_debounce_ms",
 ]);
-
-/** Fields in RESTART_REQUIRED_FIELDS whose value differs between a and b. */
-export function dirtyRestartFields(a: Config, b: Config): (keyof Config)[] {
-  const dirty: (keyof Config)[] = [];
-  for (const field of RESTART_REQUIRED_FIELDS) {
-    if (JSON.stringify(a[field]) !== JSON.stringify(b[field])) dirty.push(field);
-  }
-  return dirty;
-}

@@ -1,0 +1,21 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* mads default's explanation stands in for a control, so it reads at body size. */
+.fallback {
+  margin: 0;
+  color: var(--text2);
+  font: 400 var(--fs-body) / 1.5 var(--sans);
+}
+
+.path {
+  padding: 1px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  background: var(--bg0);
+  color: var(--text);
+  font: 400 var(--fs-sm) var(--mono);
+}

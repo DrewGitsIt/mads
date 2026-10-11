@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LibrarySurface } from "./LibrarySurface";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { FLAGS } from "../featureFlags";
+import { requestedShelf, setRequestedLibraryShelf } from "../appNavigation";
 
 describe("LibrarySurface", () => {
   beforeEach(() => {
@@ -28,6 +29,16 @@ describe("LibrarySurface", () => {
 
     fireEvent.click(screen.getByText("Templates"));
     await waitFor(() => expect(screen.getByText("No templates yet.")).toBeTruthy());
+  });
+
+  it("opens on a shelf another surface asked for, once", async () => {
+    setRequestedLibraryShelf("workspaces");
+    const { unmount } = render(<LibrarySurface />);
+    await waitFor(() => expect(screen.getByText("No workspaces yet.")).toBeTruthy());
+    expect(requestedShelf()).toBeNull();
+    unmount();
+    render(<LibrarySurface />);
+    await waitFor(() => expect(screen.getByText("No agents yet.")).toBeTruthy());
   });
 
   it("hides the Registry nav button when the remote-registry flag is off", async () => {

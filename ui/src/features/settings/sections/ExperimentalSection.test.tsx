@@ -1,18 +1,16 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AdvancedSection } from "./AdvancedSection";
+import { ExperimentalSection } from "./ExperimentalSection";
 import { FLAGS, setFlags } from "../../../featureFlags";
 import { fixtureConfig } from "../../../router/fixtures";
 import type { UseConfig } from "../state/useConfig";
 
 function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   return {
-    initial: fixtureConfig,
     saved: fixtureConfig,
     draft: fixtureConfig,
     loading: false,
     fieldErrors: {},
-    dirtyRestartFields: [],
     dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
@@ -22,13 +20,13 @@ function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   };
 }
 
-describe("AdvancedSection", () => {
+describe("ExperimentalSection", () => {
   afterEach(() => {
     setFlags({ multiRepo: false, linkedSessions: false, remoteRegistry: false });
   });
 
   it("renders exactly the three flagged toggles", () => {
-    render(<AdvancedSection config={makeConfig()} />);
+    render(<ExperimentalSection config={makeConfig()} />);
     expect(screen.getByText("Multi-repo workspaces")).toBeTruthy();
     expect(screen.getByText("Linked sessions")).toBeTruthy();
     expect(screen.getByText("Remote registry")).toBeTruthy();
@@ -36,7 +34,7 @@ describe("AdvancedSection", () => {
 
   it("toggling saves only feature_flags and applies FLAGS live on success", async () => {
     const config = makeConfig();
-    render(<AdvancedSection config={config} />);
+    render(<ExperimentalSection config={config} />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Multi-repo workspaces" }));
 
@@ -49,7 +47,7 @@ describe("AdvancedSection", () => {
 
   it("leaves FLAGS alone when the save fails", async () => {
     const saveFields = vi.fn().mockResolvedValue(false);
-    render(<AdvancedSection config={makeConfig({ saveFields })} />);
+    render(<ExperimentalSection config={makeConfig({ saveFields })} />);
 
     fireEvent.click(screen.getByRole("switch", { name: "Multi-repo workspaces" }));
 
@@ -58,7 +56,7 @@ describe("AdvancedSection", () => {
   });
 
   it("does not show a restart badge — feature_flags applies live", () => {
-    render(<AdvancedSection config={makeConfig({ dirtyRestartFields: ["feature_flags"] })} />);
-    expect(screen.queryByText(/restart required/i)).toBeNull();
+    render(<ExperimentalSection config={makeConfig()} />);
+    expect(screen.queryByText(/restart/i)).toBeNull();
   });
 });

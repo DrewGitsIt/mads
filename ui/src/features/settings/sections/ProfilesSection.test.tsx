@@ -8,12 +8,10 @@ import type { Profile } from "../../../router/types";
 
 function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   return {
-    initial: fixtureConfig,
     saved: fixtureConfig,
     draft: fixtureConfig,
     loading: false,
     fieldErrors: {},
-    dirtyRestartFields: [],
     dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),

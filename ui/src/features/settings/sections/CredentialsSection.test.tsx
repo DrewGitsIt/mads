@@ -7,12 +7,10 @@ import type { Profile } from "../../../router/types";
 
 function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   return {
-    initial: fixtureConfig,
     saved: fixtureConfig,
     draft: fixtureConfig,
     loading: false,
     fieldErrors: {},
-    dirtyRestartFields: [],
     dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
@@ -210,8 +208,8 @@ describe("CredentialsSection", () => {
     render(<CredentialsSection config={config} profiles={[]} />);
     await waitFor(() => expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy());
 
-    expect(screen.getByText(/inherited environment \+ 1 mads credential/i)).toBeTruthy();
-    expect(screen.queryByLabelText(/passthrough env vars/i)).toBeNull();
+    expect(screen.getByText("Agents get your shell's environment plus 1 credential.")).toBeTruthy();
+    expect(screen.queryByLabelText("Also pass through")).toBeNull();
   });
 
   it("switching to isolated mode edits draft.env_mode and reveals the passthrough editor", async () => {
@@ -229,7 +227,7 @@ describe("CredentialsSection", () => {
     await waitFor(() => expect(screen.getByText("OPENAI_API_KEY")).toBeTruthy());
 
     expect(
-      screen.getByText(/isolated: base environment \+ 1 credential \+ 1 passthrough \(AWS_PROFILE\)/i),
+      screen.getByText("Agents get a clean base environment, 1 credential and 1 passthrough variable."),
     ).toBeTruthy();
     expect(screen.getByText("AWS_PROFILE")).toBeTruthy();
   });
@@ -263,15 +261,15 @@ describe("CredentialsSection", () => {
     });
 
     render(<CredentialsSection config={config} profiles={[]} />);
-    await waitFor(() => expect(screen.getByLabelText(/passthrough env vars/i)).toBeTruthy());
+    await waitFor(() => expect(screen.getByLabelText("Also pass through")).toBeTruthy());
 
-    fireEvent.change(screen.getByLabelText(/passthrough env vars/i), { target: { value: "AWS_PROFILE" } });
+    fireEvent.change(screen.getByLabelText("Also pass through"), { target: { value: "AWS_PROFILE" } });
     fireEvent.click(screen.getByRole("button", { name: /add passthrough/i }));
 
     expect(config.setDraft).toHaveBeenCalledWith(
       expect.objectContaining({ env_passthrough: ["AWS_PROFILE"] }),
     );
-    expect((screen.getByLabelText(/passthrough env vars/i) as HTMLInputElement).value).toBe("");
+    expect((screen.getByLabelText("Also pass through") as HTMLInputElement).value).toBe("");
   });
 
   it("removes a passthrough name via its chip's remove button", async () => {

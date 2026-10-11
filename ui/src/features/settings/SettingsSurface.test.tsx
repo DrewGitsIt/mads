@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsSurface } from "./SettingsSurface";
 import { guardLeave } from "../../appNavigation";
 import type { Config } from "../../router/types";
+import { FIELD_SECTION, SECTION_IDS, SECTION_LABELS, SECTION_LEDES, type SectionId } from "./sections";
 import {
   fixtureConfig,
   fixturePreflightChecks,
@@ -41,6 +42,10 @@ function stubRouter() {
         return Promise.resolve(jsonResponse({ candidates: [], looked_for: [] }));
       if (url.includes("/credentials")) return Promise.resolve(jsonResponse([]));
       if (url.includes("/preflight")) return Promise.resolve(jsonResponse(fixturePreflightChecks));
+      if (init?.method === "POST" && url.includes("/activate")) {
+        server.config = { ...server.config, ...fixtureProfiles[0].snapshot, active_profile_id: fixtureProfiles[0].id };
+        return Promise.resolve(jsonResponse(server.config));
+      }
       if (url.includes("/profiles")) return Promise.resolve(jsonResponse(fixtureProfiles));
       if (url.includes("/providers/behaviors")) return Promise.resolve(jsonResponse(fixtureProviderBehaviors));
       if (url.includes("/providers")) return Promise.resolve(jsonResponse(fixtureProviders));
@@ -68,8 +73,29 @@ describe("SettingsSurface", () => {
     await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
     expect(screen.getByText("Concurrency limit")).toBeTruthy();
     expect(screen.getByText(/no credentials stored/i)).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Providers" })).toBeTruthy();
-    await waitFor(() => expect(screen.getByText(/version/i)).toBeTruthy());
+    expect(screen.getByText("Provider capabilities")).toBeTruthy();
+    await waitFor(() => expect(screen.getByText("Version")).toBeTruthy());
+  });
+
+  it("renders the sections in nav order, each with its heading and lede", async () => {
+    stubRouter();
+    const { container } = render(<SettingsSurface />);
+    await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+    const sections = Array.from(container.querySelectorAll("section[id]")).filter((s) =>
+      (SECTION_IDS as string[]).includes(s.id),
+    );
+    expect(sections.map((s) => s.id)).toEqual(SECTION_IDS);
+    for (const section of sections) {
+      const id = section.id as SectionId;
+      expect(within(section as HTMLElement).getAllByRole("heading", { level: 2 })[0].textContent).toBe(
+        SECTION_LABELS[id],
+      );
+      if (SECTION_LEDES[id]) expect(section.textContent).toContain(SECTION_LEDES[id]);
+    }
+    // Live sections say so beside their lede.
+    expect(within(document.getElementById("appearance")!).getByText("Live")).toBeTruthy();
+    expect(within(document.getElementById("experimental")!).getByText("Live")).toBeTruthy();
+    expect(within(document.getElementById("pipelines")!).queryByText("Live")).toBeNull();
   });
 
   it("scrolls the section matching a deep-link hash into view on mount", async () => {
@@ -80,6 +106,73 @@ describe("SettingsSurface", () => {
     await waitFor(() => expect(screen.getByText(/no credentials stored/i)).toBeTruthy());
     const section = document.getElementById("credentials")!;
     expect(section.scrollIntoView).toHaveBeenCalled();
+  });
+
+  it.each([
+    ["general", "sessions"],
+    ["pipeline", "pipelines"],
+    ["advanced", "experimental"],
+    ["providers", "models"],
+    ["updates", "about"],
+  ])("follows an old #%s link to #%s", async (old, current) => {
+    window.location.hash = `#${old}`;
+    stubRouter();
+    render(<SettingsSurface />);
+    await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+    expect(document.getElementById(current)!.scrollIntoView).toHaveBeenCalled();
+    expect(window.location.hash).toBe(`#${current}`);
+  });
+
+  it("an old #shells link (the dock's Manage) lands on the shell inventory in System", async () => {
+    window.location.hash = "#shells";
+    stubRouter();
+    render(<SettingsSurface />);
+    await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+    expect(document.getElementById("system-shells")!.scrollIntoView).toHaveBeenCalled();
+    expect(window.location.hash).toBe("#system");
+  });
+
+  describe("field map", () => {
+    // Inputs whose id isn't their field's kebab-cased name (kept stable for
+    // tests and links), and fields with no input on this page.
+    const ID_ALIASES: Partial<Record<keyof Config, string[]>> = {
+      hide_delegates_in_session_list: ["expose-delegates"],
+      allow_sleep_during_pipelines: ["prevent-sleep"],
+      env_passthrough: ["env-passthrough-input"],
+      feature_flags: ["feature-flag-multi_repo", "feature-flag-linked_sessions", "feature-flag-remote_registry"],
+    };
+    const LAUNCHPAD_ONLY: (keyof Config)[] = ["default_model", "default_agent", "default_isolation"];
+    const idsFor = (field: keyof Config) => ID_ALIASES[field] ?? [field.replaceAll("_", "-")];
+
+    // Each draft reveals a different set of conditional rows.
+    const drafts: Partial<Config>[] = [
+      { default_workspace: "ws-1", fast_model_mode: "endpoint", stream_speed: "custom", env_mode: "isolated" },
+      { default_dir: "/repo" },
+    ];
+
+    it("every field's input sits in the section FIELD_SECTION names, and every mapped field has one", async () => {
+      const rendered = new Set<string>();
+      for (const patch of drafts) {
+        stubRouter();
+        server.config = { ...fixtureConfig, ...patch };
+        const { unmount } = render(<SettingsSurface />);
+        await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+        for (const field of Object.keys(fixtureConfig).concat(Object.keys(FIELD_SECTION)) as (keyof Config)[]) {
+          for (const id of idsFor(field)) {
+            const el = document.getElementById(id);
+            if (!el) continue;
+            rendered.add(field);
+            expect(FIELD_SECTION[field], `${field} has an input but no section`).toBeDefined();
+            expect(el.closest("section[id]")?.id, `${field}'s input`).toBe(FIELD_SECTION[field]);
+          }
+        }
+        unmount();
+      }
+      const missing = (Object.keys(FIELD_SECTION) as (keyof Config)[]).filter(
+        (f) => !rendered.has(f) && !LAUNCHPAD_ONLY.includes(f),
+      );
+      expect(missing).toEqual([]);
+    });
   });
 
   async function renderLoaded() {
@@ -98,7 +191,7 @@ describe("SettingsSurface", () => {
       expect(saveBar()).toBeNull();
 
       editConcurrency(7);
-      fireEvent.click(within(screen.getByRole("radiogroup", { name: "Display mode" })).getByRole("radio", { name: "Compact" }));
+      fireEvent.click(within(screen.getByRole("radiogroup", { name: "Keybindings" })).getByRole("radio", { name: "Vim" }));
       const bar = saveBar()!;
       expect(within(bar).getByText("2 settings")).toBeTruthy();
       expect(within(bar).getByText("Restart needed")).toBeTruthy();
@@ -113,7 +206,7 @@ describe("SettingsSurface", () => {
 
     it("has no restart tag when no restart-required field is dirty", async () => {
       await renderLoaded();
-      fireEvent.click(within(screen.getByRole("radiogroup", { name: "Display mode" })).getByRole("radio", { name: "Compact" }));
+      fireEvent.click(within(screen.getByRole("radiogroup", { name: "Keybindings" })).getByRole("radio", { name: "Vim" }));
       expect(within(saveBar()!).getByText("1 setting")).toBeTruthy();
       expect(within(saveBar()!).queryByText("Restart needed")).toBeNull();
     });
@@ -148,10 +241,12 @@ describe("SettingsSurface", () => {
       editConcurrency(7);
       fireEvent.click(within(screen.getByRole("radiogroup", { name: "Theme" })).getByRole("radio", { name: "Light" }));
       fireEvent.click(screen.getByRole("switch", { name: "Linked sessions" }));
+      fireEvent.click(within(screen.getByRole("radiogroup", { name: "Density" })).getByRole("radio", { name: "Compact" }));
 
-      await waitFor(() => expect(server.puts).toHaveLength(2));
+      await waitFor(() => expect(server.puts).toHaveLength(3));
       expect(server.config.theme).toBe("light");
       expect(server.config.feature_flags.linked_sessions).toBe(true);
+      expect(server.config.display_mode).toBe("compact");
       // The unsaved General edit went along with neither.
       expect(server.config.concurrency_limit).toBe(fixtureConfig.concurrency_limit);
       expect(within(saveBar()!).getByText("1 setting")).toBeTruthy();
@@ -160,7 +255,7 @@ describe("SettingsSurface", () => {
     it("picks up Credentials edits, which otherwise had no way to save", async () => {
       await renderLoaded();
       fireEvent.click(
-        within(screen.getByRole("radiogroup", { name: "Environment mode" })).getByRole("radio", { name: "Isolated" }),
+        within(screen.getByRole("radiogroup", { name: "Environment" })).getByRole("radio", { name: "Isolated" }),
       );
       expect(within(saveBar()!).getByText("1 setting")).toBeTruthy();
       fireEvent.click(within(saveBar()!).getByRole("button", { name: "Save" }));
@@ -173,6 +268,37 @@ describe("SettingsSurface", () => {
       editConcurrency(7);
       expect((screen.getByRole("button", { name: "Switch to this profile" }) as HTMLButtonElement).disabled).toBe(true);
       expect(screen.getByText(/Save or discard your changes first/)).toBeTruthy();
+    });
+  });
+
+  describe("profile switch undo", () => {
+    async function switchProfile() {
+      await renderLoaded();
+      fireEvent.click(await screen.findByRole("button", { name: "Switch to this profile" }));
+      fireEvent.click(screen.getByRole("button", { name: "Switch profile" }));
+      await screen.findByText("Profile switched");
+      await waitFor(() => expect(screen.getByLabelText("Concurrency limit")).toHaveProperty("value", "1"));
+    }
+    const undo = () => screen.getByRole("button", { name: "Undo" }) as HTMLButtonElement;
+
+    it("puts the previous config back", async () => {
+      await switchProfile();
+      expect(undo().disabled).toBe(false);
+      fireEvent.click(undo());
+      await waitFor(() => expect(server.config.concurrency_limit).toBe(fixtureConfig.concurrency_limit));
+      expect(server.puts.at(-1)?.default_model_tier).toBe(fixtureConfig.default_model_tier);
+    });
+
+    it("waits while there are unsaved edits, so it can't overwrite them", async () => {
+      await switchProfile();
+      editConcurrency(5);
+      expect(undo().disabled).toBe(true);
+      expect(screen.getByText(/Save or discard your changes to undo/)).toBeTruthy();
+      fireEvent.click(undo());
+      expect(server.puts).toHaveLength(0);
+
+      fireEvent.click(within(saveBar()!).getByRole("button", { name: "Discard" }));
+      expect(undo().disabled).toBe(false);
     });
   });
 

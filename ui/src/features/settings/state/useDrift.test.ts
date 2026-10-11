@@ -8,12 +8,10 @@ import { fixtureConfig, fixtureProfile } from "../../../router/fixtures";
 function makeConfig(overrides: Partial<UseConfig> = {}): UseConfig {
   const draft = { ...fixtureConfig, active_profile_id: fixtureProfile.id };
   return {
-    initial: draft,
     saved: draft,
     draft,
     loading: false,
     fieldErrors: {},
-    dirtyRestartFields: [],
     dirtyFields: [],
     setDraft: vi.fn(),
     save: vi.fn().mockResolvedValue(true),
@@ -38,7 +36,6 @@ function makeProfiles(overrides: Partial<UseProfiles> = {}): UseProfiles {
 describe("useDrift", () => {
   it("is not drifted when no profile is active", () => {
     const config = makeConfig({
-      initial: fixtureConfig,
       saved: fixtureConfig,
       draft: fixtureConfig,
     });

@@ -10,7 +10,7 @@ export interface ToastProps {
   className?: string;
   onDismiss?: () => void;
   /** Undo-style affordance (§7): rendered as a small Button below the description. */
-  action?: { label: string; onClick: () => void };
+  action?: { label: string; onClick: () => void; disabled?: boolean };
 }
 
 /** Presentational only — no queue/provider yet (later wave). */
@@ -33,7 +33,13 @@ export function Toast({
       <div className={styles.title}>{title}</div>
       {description && <div className={styles.description}>{description}</div>}
       {action && (
-        <Button variant="ghost" size="sm" className={styles.action} onClick={action.onClick}>
+        <Button
+          variant="ghost"
+          size="sm"
+          className={styles.action}
+          onClick={action.onClick}
+          disabled={action.disabled}
+        >
           {action.label}
         </Button>
       )}

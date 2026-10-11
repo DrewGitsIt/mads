@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { requestedShelf, setRequestedLibraryShelf } from "../appNavigation";
 import { Chip } from "../components/Chip/Chip";
 import { ContentColumn } from "../components/ContentColumn/ContentColumn";
 import { FLAGS } from "../featureFlags";
@@ -23,9 +24,19 @@ const SHELVES: { id: ShelfId; label: string }[] = [
   { id: "templates", label: "Templates" },
 ];
 
+// Only the always-present shelves can be asked for (Registry is flag-gated).
+function isShelfId(value: string | null): value is ShelfId {
+  return SHELVES.some((s) => s.id === value);
+}
+
 /** Top-level Library surface (registered in App.tsx) — owns shelf nav, MADS-UX §3.5. */
 export function LibrarySurface() {
-  const [activeShelf, setActiveShelf] = useState<ShelfId>("personas");
+  // Opens on the shelf another surface asked for (requestOpenLibrary), if any.
+  const [activeShelf, setActiveShelf] = useState<ShelfId>(() => {
+    const requested = requestedShelf();
+    return isShelfId(requested) ? requested : "personas";
+  });
+  useEffect(() => setRequestedLibraryShelf(null), []);
   const shelves = FLAGS.remoteRegistry
     ? [...SHELVES, { id: "registry" as ShelfId, label: "Registry" }]
     : SHELVES;

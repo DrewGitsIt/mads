@@ -28,21 +28,31 @@
 }
 
 .section {
-  padding-bottom: var(--space-6);
-  border-bottom: 1px solid var(--line-soft);
-  margin-bottom: var(--space-5);
+  margin-bottom: var(--space-6);
 }
 
 .section:last-child {
-  border-bottom: none;
   margin-bottom: 0;
-  padding-bottom: 0;
 }
 
 .heading {
-  font: 700 var(--fs-ui) var(--sans);
+  font: 700 18px var(--sans);
   color: var(--text);
-  margin: 0 0 var(--space-4);
+  margin: 0 0 4px;
+}
+
+/* The section's one-line explanation; a heading without one keeps the gap. */
+.lede {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.heading + :not(.lede) {
+  margin-top: var(--space-3);
 }
 
 .toastHost {
