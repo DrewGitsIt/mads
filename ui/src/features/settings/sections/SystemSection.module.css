@@ -22,8 +22,3 @@
 .checks {
   padding: var(--space-2) var(--space-4) var(--space-3);
 }
-
-.fill {
-  flex: 1;
-  min-width: 0;
-}

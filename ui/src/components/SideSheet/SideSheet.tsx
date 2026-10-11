@@ -5,12 +5,15 @@ export interface SideSheetProps {
   children: ReactNode;
   width?: number;
   className?: string;
+  /** Names the sheet's landmark, e.g. its header text. */
+  "aria-label"?: string;
 }
 
-export function SideSheet({ children, width = 420, className }: SideSheetProps) {
+export function SideSheet({ children, width = 420, className, "aria-label": ariaLabel }: SideSheetProps) {
   return (
     <div
       role="complementary"
+      aria-label={ariaLabel}
       className={[styles.sheet, className].filter(Boolean).join(" ")}
       style={{ width }}
     >

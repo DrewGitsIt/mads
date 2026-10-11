@@ -54,11 +54,13 @@ function firstErrorTarget(root: HTMLElement, fields: string[]): HTMLElement | nu
 
 /**
  * What an aliased link asked for beyond its section. "shells" (the dock's
- * Manage, old #shells links) brings the shell inventory itself into view.
+ * Manage, old #shells links) brings the Shells row into view and opens its
+ * inventory sheet.
  */
-function revealIntent(intent: SectionIntent) {
+function revealIntent(intent: SectionIntent, openShells: (open: boolean) => void) {
   if (intent === "shells") {
     document.getElementById(SHELLS_ANCHOR_ID)?.scrollIntoView({ block: "center" });
+    openShells(true);
   }
 }
 
@@ -84,13 +86,17 @@ export function SettingsSurface() {
   ).current;
   const activeId = useScrollSpy(containerRef, sectionRefs, !config.loading && !!config.draft);
 
+  // The shells inventory sheet (System → Shells → Manage…), lifted here so a
+  // #shells link can open it.
+  const [shellsOpen, setShellsOpen] = useState(false);
+
   const scrolledToHash = useRef(false);
   useEffect(() => {
     if (scrolledToHash.current || config.loading || !config.draft) return;
     scrolledToHash.current = true;
     const target = resolveSectionHash(window.location.hash.slice(1));
     if (!target) return;
-    if (target.intent) revealIntent(target.intent);
+    if (target.intent) revealIntent(target.intent, setShellsOpen);
     else sectionRefs[target.section].current?.scrollIntoView({ block: "start" });
     // Old ids land on the section that now holds their content.
     if (window.location.hash.slice(1) !== target.section) history.replaceState(null, "", `#${target.section}`);
@@ -211,7 +217,7 @@ export function SettingsSurface() {
     editor: <EditorSection config={config} />,
     credentials: <CredentialsSection config={config} profiles={profiles.profiles} />,
     experimental: <ExperimentalSection config={config} />,
-    system: <SystemSection config={config} />,
+    system: <SystemSection config={config} shellsOpen={shellsOpen} onShellsOpenChange={setShellsOpen} />,
     about: <AboutSection />,
   };
 

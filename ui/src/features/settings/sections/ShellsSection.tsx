@@ -8,10 +8,15 @@ import type { ShellActivity, ShellHostBridge, ShellInfo } from "../../../convers
 import { displayPath } from "../../../files/displayPath";
 import { formatAbsoluteStamp, formatRelativeStamp, useRelativeNow } from "../../../utils/relativeTime";
 import { useSessionsList } from "../../sessions/state/useSessionsList";
+import { SettingRow } from "../SettingRow";
+import { SettingsSheet } from "../SettingsSheet";
 import styles from "./ShellsSection.module.css";
 
-/** docs/SHELL-DOCK-DESIGN.md D5: the host is asked every 5 s, and only while this section shows. */
+/** docs/SHELL-DOCK-DESIGN.md D5: the host is asked every 5 s, and only while the shells row or sheet shows. */
 export const INSPECT_INTERVAL_MS = 5_000;
+
+/** Where the Shells row sits, for links that ask for it (#shells, see resolveSectionHash). */
+export const SHELLS_ANCHOR_ID = "system-shells";
 
 /**
  * Whether `ref`'s element is on screen. Settings scrolls an internal column, and
@@ -37,9 +42,10 @@ function useOnScreen(ref: RefObject<Element | null>): boolean {
 }
 
 /**
- * What runs in each shell, read from the shell host: once when the section
- * comes on screen (and whenever the set of shells changes), then every 5 s,
- * and not at all while hidden, unmounted or with no live shell. Unlike list(),
+ * What runs in each shell, read from the shell host: once when the Shells row
+ * comes on screen or its sheet opens (and whenever the set of shells
+ * changes), then every 5 s, and not at all while neither shows, unmounted or
+ * with no live shell. Unlike list(),
  * inspect connects to the host, so with nothing to ask about it is never called.
  */
 function useShellActivity(active: boolean, shellIds: string): Map<string, ShellActivity> {
@@ -132,28 +138,102 @@ function ShellRow({ shell, sessionName, activity, now, onEnd }: ShellRowProps) {
   );
 }
 
-/**
- * Settings → Shells (docs/SHELL-DOCK-DESIGN.md D8): every live dock shell, with
- * what runs in it, and the way to end one. It is not a Config section — no
- * fields, no profile diff, no restart badge. The shell list comes from main's
- * cache (useLiveShells), so merely having this page open never forks the host;
- * only inspect does, and only while shells exist and the section is on screen.
- */
-export function ShellsSection() {
-  const host = typeof window !== "undefined" ? window.mads?.shell : undefined;
-  // Split so a plain browser never opens the sessions fetch and event stream.
-  if (!host) return <p className={styles.empty}>Shells need the desktop app.</p>;
-  return <ShellInventory host={host} />;
+/** "None running", "2 running · 1 idle", "1 idle" — idle counts only once the host has said so. */
+export function shellsSummary(shells: ShellInfo[], activity: Map<string, ShellActivity>): string {
+  if (shells.length === 0) return "None running";
+  const idle = shells.filter((s) => activity.get(s.shellId)?.busy === false).length;
+  const running = shells.length - idle;
+  return [running > 0 && `${running} running`, idle > 0 && `${idle} idle`].filter(Boolean).join(" · ");
 }
 
-function ShellInventory({ host }: { host: ShellHostBridge }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const onScreen = useOnScreen(rootRef);
+export interface ShellsSectionProps {
+  /** Whether the inventory sheet is open (Manage…, or a #shells link). */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+const SHELLS_HELP = "Terminals in session docks. They keep running when the dock is hidden.";
+
+/**
+ * Settings → System → Shells (docs/SHELL-DOCK-DESIGN.md D8): a one-line count
+ * of the live dock shells, and Manage… for the inventory — every shell, what
+ * runs in it, and the way to end one — in a side sheet. It is not a Config
+ * field — no profile diff, no restart badge. The shell list comes from main's
+ * cache (useLiveShells), so merely having Settings open never forks the host;
+ * only inspect does, and only while shells exist and the row or the sheet is
+ * on screen.
+ */
+export function ShellsSection({ open, onOpenChange }: ShellsSectionProps) {
+  const host = typeof window !== "undefined" ? window.mads?.shell : undefined;
+  // Split so a plain browser never opens the shell cache or the host.
+  if (!host) {
+    return (
+      <>
+        <ShellsRow summary="Desktop app only" onManage={() => onOpenChange(true)} />
+        {open && (
+          <SettingsSheet title="Shells" onClose={() => onOpenChange(false)}>
+            <p className={styles.empty}>Shells need the desktop app.</p>
+          </SettingsSheet>
+        )}
+      </>
+    );
+  }
+  return <LiveShells host={host} open={open} onOpenChange={onOpenChange} />;
+}
+
+interface ShellsRowProps {
+  summary: string;
+  onManage: () => void;
+  anchorRef?: RefObject<HTMLDivElement>;
+}
+
+function ShellsRow({ summary, onManage, anchorRef }: ShellsRowProps) {
+  return (
+    <SettingRow label="Shells" help={SHELLS_HELP}>
+      <div ref={anchorRef} id={SHELLS_ANCHOR_ID} className={styles.summary}>
+        <span className={styles.count} data-testid="shells-summary">
+          {summary}
+        </span>
+        <Button size="sm" onClick={onManage}>
+          Manage…
+        </Button>
+      </div>
+    </SettingRow>
+  );
+}
+
+function LiveShells({ host, open, onOpenChange }: ShellsSectionProps & { host: ShellHostBridge }) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const onScreen = useOnScreen(rowRef);
   const shells = useLiveShells();
+  const shellIds = useMemo(() => shells.map((s) => s.shellId).join(","), [shells]);
+  // The summary's idle count needs activity too, so the row on screen polls
+  // as the open sheet does; off screen and closed, nothing is asked.
+  const activity = useShellActivity(onScreen || open, shellIds);
+
+  return (
+    <>
+      <ShellsRow summary={shellsSummary(shells, activity)} onManage={() => onOpenChange(true)} anchorRef={rowRef} />
+      {open && (
+        <SettingsSheet title="Shells" width={720} onClose={() => onOpenChange(false)}>
+          <ShellInventory host={host} shells={shells} activity={activity} />
+        </SettingsSheet>
+      )}
+    </>
+  );
+}
+
+interface ShellInventoryProps {
+  host: ShellHostBridge;
+  shells: ShellInfo[];
+  activity: Map<string, ShellActivity>;
+}
+
+function ShellInventory({ host, shells, activity }: ShellInventoryProps) {
+  // Mounted only while the sheet is open, so the sessions fetch and event
+  // stream behind the names open with it.
   const { sessions } = useSessionsList();
   const now = useRelativeNow();
-  const shellIds = useMemo(() => shells.map((s) => s.shellId).join(","), [shells]);
-  const activity = useShellActivity(onScreen, shellIds);
   // The busy shell whose End is waiting on the dialog.
   const [confirming, setConfirming] = useState<{ shell: ShellInfo; activity: ShellActivity }>();
 
@@ -181,7 +261,7 @@ function ShellInventory({ host }: { host: ShellHostBridge }) {
   };
 
   return (
-    <div ref={rootRef} className={styles.root}>
+    <div className={styles.root}>
       {shells.length === 0 ? (
         <p className={styles.empty}>No shells are running.</p>
       ) : (

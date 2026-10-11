@@ -10,18 +10,20 @@ import type { UseConfig } from "../state/useConfig";
 import { ShellsSection } from "./ShellsSection";
 import styles from "./SystemSection.module.css";
 
-/** Where the Shells block sits, for links that ask for it (#shells, see resolveSectionHash). */
-export const SHELLS_ANCHOR_ID = "system-shells";
+export { SHELLS_ANCHOR_ID } from "./ShellsSection";
 
 export interface SystemSectionProps {
   config: UseConfig;
+  /** The shells sheet, lifted so a #shells link can open it. */
+  shellsOpen: boolean;
+  onShellsOpenChange: (open: boolean) => void;
 }
 
 /**
  * Housekeeping: the preflight health check (shared with the wizard's
  * PreflightStep), the live dock shells, log retention and conversation import.
  */
-export function SystemSection({ config }: SystemSectionProps) {
+export function SystemSection({ config, shellsOpen, onShellsOpenChange }: SystemSectionProps) {
   const { draft, fieldErrors, setDraft } = config;
   const preflight = usePreflight();
   if (!draft) return null;
@@ -41,15 +43,7 @@ export function SystemSection({ config }: SystemSectionProps) {
       </SettingsCard>
 
       <SettingsCard>
-        <SettingRow
-          stacked
-          label="Shells"
-          help="Terminals in session docks. They keep running when the dock is hidden."
-        >
-          <div id={SHELLS_ANCHOR_ID} className={styles.fill}>
-            <ShellsSection />
-          </div>
-        </SettingRow>
+        <ShellsSection open={shellsOpen} onOpenChange={onShellsOpenChange} />
         <SettingRow
           label="Keep logs for"
           htmlFor="log-retention-days"

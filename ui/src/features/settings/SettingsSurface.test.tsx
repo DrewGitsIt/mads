@@ -123,13 +123,21 @@ describe("SettingsSurface", () => {
     expect(window.location.hash).toBe(`#${current}`);
   });
 
-  it("an old #shells link (the dock's Manage) lands on the shell inventory in System", async () => {
+  it("an old #shells link (the dock's Manage) scrolls to Shells in System and opens the inventory", async () => {
     window.location.hash = "#shells";
     stubRouter();
     render(<SettingsSurface />);
     await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
     expect(document.getElementById("system-shells")!.scrollIntoView).toHaveBeenCalled();
+    expect(screen.getByRole("complementary", { name: "Shells" })).toBeTruthy();
     expect(window.location.hash).toBe("#system");
+  });
+
+  it("opens no shells sheet without a #shells link", async () => {
+    stubRouter();
+    render(<SettingsSurface />);
+    await waitFor(() => expect(screen.getByText("Palette")).toBeTruthy());
+    expect(screen.queryByRole("complementary", { name: "Shells" })).toBeNull();
   });
 
   describe("field map", () => {

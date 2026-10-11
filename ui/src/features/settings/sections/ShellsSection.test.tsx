@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ShellsSection } from "./ShellsSection";
@@ -54,9 +55,15 @@ function setup(shells: ShellInfo[], acts: ShellActivity[]) {
   return fake;
 }
 
+/** The Shells row with its sheet state held as SettingsSurface holds it; open unless `closed`. */
+function Harness({ closed = false }: { closed?: boolean }) {
+  const [open, setOpen] = useState(!closed);
+  return <ShellsSection open={open} onOpenChange={setOpen} />;
+}
+
 /** Mounts the section and scrolls it on screen, as inspect only runs while it shows. */
 async function renderVisible() {
-  const utils = render(<ShellsSection />);
+  const utils = render(<Harness />);
   await act(async () => setVisible(true));
   return utils;
 }
@@ -78,13 +85,68 @@ describe("ShellsSection", () => {
   });
 
   it("outside Electron says it needs the desktop app", () => {
-    render(<ShellsSection />);
-    expect(screen.getByText("Shells need the desktop app.")).toBeTruthy();
+    render(<Harness closed />);
+    expect(screen.getByTestId("shells-summary").textContent).toBe("Desktop app only");
+    fireEvent.click(screen.getByRole("button", { name: "Manage…" }));
+    expect(
+      within(screen.getByRole("complementary", { name: "Shells" })).getByText("Shells need the desktop app."),
+    ).toBeTruthy();
+  });
+
+  describe("summary row", () => {
+    it("counts running and idle shells while on screen, without opening the inventory", async () => {
+      setup([shell(1), shell(2), shell(3)], [activity(1, []), activity(2, ["make watch"]), activity(3, [])]);
+      render(<Harness closed />);
+      // Off screen nothing is inspected, so no shell is known to be idle yet.
+      await waitFor(() => expect(screen.getByTestId("shells-summary").textContent).toBe("3 running"));
+      await act(async () => setVisible(true));
+      await waitFor(() => expect(screen.getByTestId("shells-summary").textContent).toBe("1 running · 2 idle"));
+      expect(screen.queryByRole("complementary")).toBeNull();
+    });
+
+    it("says None running with no shells", () => {
+      setup([], []);
+      render(<Harness closed />);
+      expect(screen.getByTestId("shells-summary").textContent).toBe("None running");
+    });
+
+    it("Manage… opens the inventory in a sheet; ✕ and Escape close it", async () => {
+      setup([shell(1)], [activity(1, [])]);
+      render(<Harness closed />);
+      fireEvent.click(screen.getByRole("button", { name: "Manage…" }));
+      const sheet = screen.getByRole("complementary", { name: "Shells" });
+      expect(await within(sheet).findByRole("button", { name: "End" })).toBeTruthy();
+
+      fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("complementary")).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Manage…" }));
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("complementary")).toBeNull();
+    });
+
+    it("polls while the sheet is open even with the row off screen", async () => {
+      vi.useFakeTimers();
+      const fake = setup([shell(1)], [activity(1, [])]);
+      render(<Harness />);
+      await act(async () => {});
+      expect(fake.host.inspect).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(fake.host.inspect).toHaveBeenCalledTimes(2);
+
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(fake.host.inspect).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("with no shells says so, and never asks the host", async () => {
     const fake = setup([], []);
-    render(<ShellsSection />);
+    render(<Harness />);
     expect(await screen.findByText("No shells are running.")).toBeTruthy();
     await act(async () => {});
     expect(fake.host.inspect).not.toHaveBeenCalled();
@@ -115,7 +177,7 @@ describe("ShellsSection", () => {
 
   it("the session link opens that session", async () => {
     setup([shell(2)], [activity(2, [])]);
-    render(<ShellsSection />);
+    render(<Harness />);
     const opened = vi.fn();
     window.addEventListener(OPEN_SESSION_EVENT, opened);
     fireEvent.click(await screen.findByRole("button", { name: "Docs" }));
@@ -127,7 +189,7 @@ describe("ShellsSection", () => {
     it("asks on becoming visible, then every 5 s, and stops when hidden", async () => {
       vi.useFakeTimers();
       const fake = setup([shell(1)], [activity(1, [])]);
-      render(<ShellsSection />);
+      render(<Harness closed />);
       await act(async () => {});
       expect(fake.host.inspect).not.toHaveBeenCalled(); // off screen
 
@@ -154,7 +216,7 @@ describe("ShellsSection", () => {
     it("stops when unmounted", async () => {
       vi.useFakeTimers();
       const fake = setup([shell(1)], [activity(1, [])]);
-      const { unmount } = render(<ShellsSection />);
+      const { unmount } = render(<Harness closed />);
       await act(async () => setVisible(true));
       expect(fake.host.inspect).toHaveBeenCalledTimes(1);
       unmount();
@@ -165,7 +227,7 @@ describe("ShellsSection", () => {
     it("never asks while no shell is live, and starts when one appears", async () => {
       vi.useFakeTimers();
       const fake = setup([], []);
-      render(<ShellsSection />);
+      render(<Harness closed />);
       await act(async () => setVisible(true));
       await act(async () => {
         await vi.advanceTimersByTimeAsync(20_000);
@@ -206,7 +268,7 @@ describe("ShellsSection", () => {
 
     it("the list follows the host's push after an end, with no refresh", async () => {
       const fake = setup([shell(1)], [activity(1, [])]);
-      render(<ShellsSection />);
+      render(<Harness />);
       await screen.findByRole("button", { name: "End" });
       act(() => fake.setShells([]));
       expect(await screen.findByText("No shells are running.")).toBeTruthy();

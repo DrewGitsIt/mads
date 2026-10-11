@@ -37,7 +37,7 @@ describe("SystemSection", () => {
   const preflightCalls = () => fetchMock.mock.calls.filter(([u]) => String(u).includes("/preflight")).length;
 
   it("renders the health check, and Run again re-runs it", async () => {
-    render(<SystemSection config={makeConfig()} />);
+    render(<SystemSection config={makeConfig()} shellsOpen={false} onShellsOpenChange={vi.fn()} />);
     await waitFor(() => expect(screen.getByText("Git")).toBeTruthy());
     expect(screen.getByText("mads has only been proven against < 1.49.0, detected 1.50.1")).toBeTruthy();
     const before = preflightCalls();
@@ -47,21 +47,29 @@ describe("SystemSection", () => {
 
   it("edits log retention, marked as needing a restart", () => {
     const config = makeConfig();
-    render(<SystemSection config={config} />);
+    render(<SystemSection config={config} shellsOpen={false} onShellsOpenChange={vi.fn()} />);
     expect(screen.getByText("Restart")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Keep logs for"), { target: { value: "14" } });
     expect(config.setDraft).toHaveBeenCalledWith(expect.objectContaining({ log_retention_days: 14 }));
   });
 
   it("shows the log retention field error", () => {
-    render(<SystemSection config={makeConfig({ fieldErrors: { log_retention_days: "must be at least 1" } })} />);
+    render(
+      <SystemSection
+        config={makeConfig({ fieldErrors: { log_retention_days: "must be at least 1" } })}
+        shellsOpen={false}
+        onShellsOpenChange={vi.fn()}
+      />,
+    );
     expect(screen.getByText("must be at least 1")).toBeTruthy();
   });
 
-  it("holds the shells inventory and conversation import", () => {
-    render(<SystemSection config={makeConfig()} />);
+  it("holds the shells row and conversation import", () => {
+    const onShellsOpenChange = vi.fn();
+    render(<SystemSection config={makeConfig()} shellsOpen={false} onShellsOpenChange={onShellsOpenChange} />);
     expect(screen.getByText("Shells")).toBeTruthy();
-    expect(screen.getByText("Shells need the desktop app.")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Manage…" }));
+    expect(onShellsOpenChange).toHaveBeenCalledWith(true);
     expect(screen.getByRole("button", { name: "Scan for conversations" })).toBeTruthy();
   });
 });

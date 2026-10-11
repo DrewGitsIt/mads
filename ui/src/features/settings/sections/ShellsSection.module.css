@@ -62,3 +62,15 @@
 .actions {
   display: flex;
 }
+
+/* The row's control: the count, then Manage…. */
+.summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.count {
+  color: var(--text3);
+  font: 400 var(--fs-body) var(--sans);
+}
