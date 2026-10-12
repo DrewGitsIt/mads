@@ -26,9 +26,11 @@ import type { WorktreeCardModel } from "../Worktree/worktreeCards";
 import { TaskCard } from "../activity/TaskCard";
 import { Markdown } from "./markdown";
 import { CompactionMarker } from "./CompactionMarker";
+import { collapseFailedSends } from "./failedSends";
 import { formatMessageTime, parseMessageTime } from "./messageTime";
 import { MessageAttachments } from "./MessageAttachments";
 import { PermissionCard } from "./PermissionCard";
+import { SendDelivery } from "./SendDelivery";
 import { splitAttachments } from "../attachmentRefs";
 import styles from "./ChatRenderer.module.css";
 
@@ -85,6 +87,12 @@ export interface ChatRendererProps {
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   /** The approval jump's latest reveal — a collapsed group holding that card opens. */
   permissionReveal?: PermissionReveal | null;
+  /**
+   * Resend a message the harness failed. Offered only on the latest user
+   * message, and only between turns; the resend collapses into it (see
+   * collapseFailedSends).
+   */
+  onRetry?: (text: string) => void;
 }
 
 const noResolve = async () => {};
@@ -141,9 +149,12 @@ export function ChatRenderer({
   permissionRequests = [],
   onResolvePermission = noResolve,
   permissionReveal,
+  onRetry,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
-  const folded = foldToolResults(messages);
+  const { messages: shown, delivery } = collapseFailedSends(messages);
+  const folded = foldToolResults(shown);
+  const latestSend = [...shown].reverse().find((m) => m.role === "user" && !m.attribution);
 
   const entries: SourceEntry[] = mergeTranscript(folded, thinkingHistory);
   for (const item of liveItems) {
@@ -323,22 +334,37 @@ export function ChatRenderer({
         const { body, attachments } = isUser
           ? splitAttachments(message.text ?? "")
           : { body: message.text ?? "", attachments: [] };
+        const content =
+          attachments.length > 0 ? (
+            <div className={styles.withAttachments}>
+              <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
+              {body && <Markdown className={styles.prose} text={body} />}
+            </div>
+          ) : (
+            <Markdown className={styles.prose} text={body} foldNewCode={foldNewCode && Boolean(item.live)} />
+          );
+        const sent = isUser ? delivery.get(message) : undefined;
+        const retry =
+          sent?.error && onRetry && !turnActive && message === latestSend
+            ? () => onRetry(message.text ?? "")
+            : undefined;
         return (
           <div
             key={item.key}
             className={styles[message.role] ?? styles.agent}
             // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
             data-user-msg={isUser ? "" : undefined}
+            data-undelivered={sent?.error ? "" : undefined}
           >
             {/* Revealed on hover (styles.stamp), on the bubble's open side. */}
             {isUser && stamp}
-            {attachments.length > 0 ? (
-              <div className={styles.withAttachments}>
-                <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
-                {body && <Markdown className={styles.prose} text={body} />}
+            {sent ? (
+              <div className={styles.sent}>
+                {content}
+                <SendDelivery delivery={sent} onRetry={retry} />
               </div>
             ) : (
-              <Markdown className={styles.prose} text={body} foldNewCode={foldNewCode && Boolean(item.live)} />
+              content
             )}
             {!isUser && stamp}
           </div>

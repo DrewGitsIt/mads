@@ -76,6 +76,22 @@
   padding: var(--space-2) var(--space-3);
 }
 
+/* A user message with a delivery note under it (failed, or retried). */
+.sent {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* A message the harness never delivered: the bubble stays, outlined in the
+   failure colour, so it reads as unsent rather than as asked-and-answered. */
+.user[data-undelivered] .prose {
+  outline: 1px dashed var(--bad);
+  outline-offset: -1px;
+}
+
 /* A user message that carried files: thumbnails above the typed text. */
 .withAttachments {
   display: flex;

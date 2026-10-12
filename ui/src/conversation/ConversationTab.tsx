@@ -1458,6 +1458,48 @@ export function ConversationTab({
     setComposeText(text);
     setComposeOpen(true);
   };
+  // A chat send's lifecycle, shared by the composer and Retry on a message
+  // the harness failed — a retry is an ordinary send of the same text.
+  const noteSendStart = () => {
+    if (session.activity !== "active") setWaking(true);
+    if (turnPhaseRef.current !== "live") beginTurn();
+  };
+  const noteSendError = (msg: string) => {
+    setWaking(false);
+    setSendError(msg);
+  };
+  const noteQueued = (q: QueuedMessage) => {
+    setWaking(false);
+    setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
+  };
+  const noteSent = (text: string) => {
+    // A send against a dormant session wakes it (Router:
+    // handleSessionMessages) synchronously within the POST's own
+    // request/response cycle — for a fast reply, the whole turn (including
+    // turn_end) can complete before this mount's /output stream (opened
+    // before the child existed, permanently dead per the WHATWG EventSource
+    // spec — see streamBroken above) ever reconnects. Piggyback the same
+    // bounded refetch turn_end normally triggers, rather than depending on a
+    // stream that's known-unreliable for this specific turn.
+    const wasDormant = session.activity !== "active";
+    setWaking(false);
+    setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
+    if (wasDormant) void refetchAfterTurn();
+  };
+  // Resends the transcript's text verbatim: any attachment paths the Router
+  // appended the first time are already in it, so the agent gets the same
+  // message, and the identical text is what folds the failed try away.
+  const retrySend = async (text: string) => {
+    setSendError(undefined);
+    noteSendStart();
+    try {
+      const result = await routerClient.sendMessage(sessionId, { text, mentions: [], queue: true });
+      if (result.status === "queued") noteQueued(result.queued);
+      else noteSent(text);
+    } catch (err) {
+      noteSendError(err instanceof Error ? err.message : String(err));
+    }
+  };
   // The session dock's props, shared by both views (chat mounts the composer
   // inside it; terminal adds the compose segment and sheet).
   const dockProps = {
@@ -1582,6 +1624,7 @@ export function ConversationTab({
                   permissionRequests={livePermissionRequests}
                   onResolvePermission={resolvePermission}
                   permissionReveal={permissionReveal}
+                  onRetry={(text) => void retrySend(text)}
                 />
               )}
               {transport.status !== "idle" && (
@@ -1702,38 +1745,14 @@ export function ConversationTab({
                 initialValue={pendingFirstMessage}
                 prefill={composerPrefill}
                 autoSendInitial={Boolean(pendingFirstMessage)}
-                onSendStart={() => {
-                  if (session.activity !== "active") setWaking(true);
-                  if (turnPhaseRef.current !== "live") beginTurn();
-                }}
-                onSendError={(msg) => {
-                  setWaking(false);
-                  setSendError(msg);
-                }}
+                onSendStart={noteSendStart}
+                onSendError={noteSendError}
                 onAutoSendStart={onPendingFirstMessageHandled}
                 onUpdateSession={handleUpdateSession}
                 onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
                 onCommandError={(message) => setCommandToast({ tone: "bad", message })}
-                onQueued={(q) => {
-                  setWaking(false);
-                  setQueuedMessages((cur) => (cur.some((m) => m.id === q.id) ? cur : [...cur, q]));
-                }}
-                onSent={(text) => {
-                  // A send against a dormant session wakes it (Router:
-                  // handleSessionMessages) synchronously within the POST's
-                  // own request/response cycle — for a fast reply, the whole
-                  // turn (including turn_end) can complete before this
-                  // mount's /output stream (opened before the child existed,
-                  // permanently dead per the WHATWG EventSource spec — see
-                  // streamBroken above) ever reconnects. Piggyback the same
-                  // bounded refetch turn_end normally triggers, rather than
-                  // depending on a stream that's known-unreliable for this
-                  // specific turn.
-                  const wasDormant = session.activity !== "active";
-                  setWaking(false);
-                  setMessages((m) => [...m, { role: "user", text, timestamp: new Date().toISOString() }]);
-                  if (wasDormant) void refetchAfterTurn();
-                }}
+                onQueued={noteQueued}
+                onSent={noteSent}
               />
             </SessionDock>
           </>

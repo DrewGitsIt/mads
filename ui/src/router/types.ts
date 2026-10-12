@@ -543,7 +543,8 @@ export interface TranscriptMessage {
   tool?: ToolUse;
   attribution?: Attribution;
   timestamp?: string; // RFC3339, when the provider recorded this entry
-  is_error?: boolean; // set on role "tool_result" when the tool call failed
+  /** On "tool_result": the call failed. On "agent": the harness reporting a failed turn in the agent's place (auth rejected, API unreachable, out of credits), not a reply. */
+  is_error?: boolean;
   compact?: CompactMarker; // set on role "compact": one compaction pass, where it happened
 }
 

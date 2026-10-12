@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { ChatRenderer } from "./ChatRenderer";
 import { FLAGS } from "../../featureFlags";
@@ -369,5 +369,48 @@ describe("ChatRenderer — permission card placement", () => {
     // All three trail the stream, after the last item (the task card).
     const trailing = [...stream.children].slice(-3);
     expect(trailing.every((el) => el.textContent?.includes("awaiting your decision"))).toBe(true);
+  });
+});
+
+describe("ChatRenderer — sends the harness failed", () => {
+  const failed: TranscriptMessage[] = [
+    { role: "user", text: "deploy it" },
+    { role: "agent", text: "Login expired · Please run /login", is_error: true },
+  ];
+
+  it("shows the message as not delivered, with the reason in place of the error reply", () => {
+    render(<ChatRenderer messages={failed} />);
+    const note = screen.getByRole("status");
+    expect(note.textContent).toContain("Not delivered");
+    expect(note.textContent).toContain("Login expired · Please run /login");
+    // The error is no longer an agent bubble of its own.
+    expect(screen.getAllByText("Login expired · Please run /login")).toHaveLength(1);
+  });
+
+  it("offers Retry on the latest message between turns, resending its text", () => {
+    const onRetry = vi.fn();
+    const { rerender } = render(<ChatRenderer messages={failed} onRetry={onRetry} />);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledWith("deploy it");
+
+    rerender(<ChatRenderer messages={failed} onRetry={onRetry} turnActive />);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+    rerender(<ChatRenderer messages={[...failed, { role: "user", text: "something else" }]} onRetry={onRetry} />);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("collapses a successful retry to one message with an expandable failed-attempt count", () => {
+    render(
+      <ChatRenderer
+        messages={[...failed, { role: "user", text: "deploy it" }, { role: "agent", text: "deployed" }]}
+      />,
+    );
+    expect(screen.getAllByText("deploy it")).toHaveLength(1);
+    expect(screen.queryByText("Not delivered")).toBeNull();
+    const count = screen.getByRole("button", { name: "1 failed attempt" });
+    expect(screen.queryByText("Login expired · Please run /login")).toBeNull();
+    fireEvent.click(count);
+    expect(screen.getByText("Login expired · Please run /login")).toBeTruthy();
   });
 });
