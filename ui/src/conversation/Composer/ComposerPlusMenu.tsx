@@ -33,6 +33,7 @@ const UPWARD = {
   left: 0,
   width: 260,
   padding: 4,
+  zIndex: "var(--z-dock-menu)",
 } as const;
 
 

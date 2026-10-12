@@ -9,13 +9,20 @@ import { shortModel, shortPersona, trustTone } from "./dockLabels";
 import styles from "./StatusLine.module.css";
 
 /** Popover's default placement is below its anchor; the dock's pickers open upward. */
-export const UPWARD_LEFT: CSSProperties = { top: "auto", bottom: "calc(100% + 6px)", left: 0, padding: 4 };
+export const UPWARD_LEFT: CSSProperties = {
+  top: "auto",
+  bottom: "calc(100% + 6px)",
+  left: 0,
+  padding: 4,
+  zIndex: "var(--z-dock-menu)",
+};
 export const UPWARD_RIGHT: CSSProperties = {
   top: "auto",
   bottom: "calc(100% + 6px)",
   left: "auto",
   right: 0,
   padding: 4,
+  zIndex: "var(--z-dock-menu)",
 };
 
 export function cx(...names: (string | false | undefined)[]): string {

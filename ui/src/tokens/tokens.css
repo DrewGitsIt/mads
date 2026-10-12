@@ -265,6 +265,13 @@
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
   --ease-io: cubic-bezier(0.4, 0, 0.2, 1);
 
+  /* stacking layer for the menus that open upward from the session dock
+     (the / and @ menu, +, status-line pickers). Nothing between them and the
+     root opens a stacking context, so they compete directly with the pinned
+     strip above the dock (working indicator, approval jump: 40) and must
+     clear it. Still under shell toasts (50) and the activity drawer (60). */
+  --z-dock-menu: 45;
+
   /* prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose) */
   --measure-prose: 92ch;
 
