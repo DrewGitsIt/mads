@@ -175,3 +175,8 @@
   font: 500 var(--fs-chip) var(--sans);
   color: var(--text3);
 }
+
+/* Marks a card searchable by find without adding a box to the stream. */
+.findable {
+  display: contents;
+}

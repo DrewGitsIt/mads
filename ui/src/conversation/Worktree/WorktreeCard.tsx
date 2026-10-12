@@ -80,7 +80,7 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
             Nothing was merged, and your checkout is untouched.
           </div>
           {actions.onAskAgent && (
-            <div className={styles.acts}>
+            <div className={styles.acts} data-find-skip>
               <Button
                 variant="primary"
                 size="sm"
@@ -102,7 +102,7 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
         <Shell tone="warn" title={copy.title} when={when} kind="auto-resolved">
           <div className={styles.body}>{copy.body}</div>
           {(actions.onAskAgent || canSee || canLand) && (
-            <div className={styles.acts}>
+            <div className={styles.acts} data-find-skip>
               {actions.onAskAgent && (
                 <Button
                   variant="primary"
@@ -141,7 +141,7 @@ export function WorktreeCard({ card, actions = {} }: { card: WorktreeCardModel; 
           <div className={styles.body}>{copy.body}</div>
           {showDetail && <pre className={styles.detail}>{card.detail}</pre>}
           {(canRetry || tidy) && (
-            <div className={styles.acts}>
+            <div className={styles.acts} data-find-skip>
               {tidy && (
                 <Button variant="primary" size="sm" onClick={() => actions.onAskAgent!(tidyOutsidePrompt(tidy))}>
                   Ask the agent to commit them
@@ -296,7 +296,7 @@ function CommittedCard({
       {card.undone && <div className={styles.body}>Undone — its files are uncommitted again.</div>}
       {undoError && <div className={styles.error}>{undoError}</div>}
       {canUndo && (
-        <div className={styles.acts}>
+        <div className={styles.acts} data-find-skip>
           <Button variant="ghost" size="sm" disabled={undoing} onClick={() => void undo()}>
             {undoing ? "Undoing…" : "Undo"}
           </Button>

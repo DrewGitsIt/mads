@@ -67,3 +67,18 @@
   max-height: 320px;
   overflow: auto;
 }
+
+/* Where find paints the summary's matches; adds no box. */
+.summaryBody {
+  display: contents;
+}
+
+/* Find's matches in the folded summary. */
+.findHits {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--find-current-fg);
+  background: var(--find-current);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+}

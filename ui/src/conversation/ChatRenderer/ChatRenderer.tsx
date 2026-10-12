@@ -1,3 +1,4 @@
+import { useMemo, useRef } from "react";
 import { Chip } from "../../components/Chip/Chip";
 import { Fold, useArrivals } from "../../components/Motion";
 import { FLAGS } from "../../featureFlags";
@@ -21,6 +22,8 @@ import {
   type TaskModel,
 } from "../activity/conversationItems";
 import { PlanWidget } from "../activity/PlanWidget";
+import { findAll, findPattern, searchEntries, type EntryMatch, type SearchCache } from "../Find/findText";
+import { useFind, type FindRequest, type FindStatus } from "../Find/useFind";
 import { WorktreeCard, type WorktreeCardActions } from "../Worktree/WorktreeCard";
 import type { WorktreeCardModel } from "../Worktree/worktreeCards";
 import { TaskCard } from "../activity/TaskCard";
@@ -93,6 +96,9 @@ export interface ChatRendererProps {
    * collapseFailedSends).
    */
   onRetry?: (text: string) => void;
+  /** Find in conversation (useFind): absent or an empty query is off. */
+  find?: FindRequest;
+  onFindStatus?: (status: FindStatus) => void;
 }
 
 const noResolve = async () => {};
@@ -150,6 +156,8 @@ export function ChatRenderer({
   onResolvePermission = noResolve,
   permissionReveal,
   onRetry,
+  find,
+  onFindStatus,
 }: ChatRendererProps) {
   const linksById = new Map(links.map((l) => [l.id, l]));
   const { messages: shown, delivery } = collapseFailedSends(messages);
@@ -202,8 +210,35 @@ export function ChatRenderer({
     rendered.push(item);
   }
 
+  // Find: activity rows and compaction summaries don't render their text, so
+  // their matches come from the transcript; everything else is searched as
+  // rendered (useFind).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const query = find?.query ?? "";
+  const matchCase = Boolean(find?.matchCase);
+  const skipTools = Boolean(find?.skipTools);
+  // The cache is per pattern: matches found for one query are no good for the next.
+  const { pattern, cache } = useMemo(
+    () => ({ pattern: findPattern({ query, matchCase }), cache: new Map() as SearchCache }),
+    [query, matchCase],
+  );
+  const groupMatches = new Map<string, EntryMatch[]>();
+  const summaryMatches = new Map<string, number>();
+  if (pattern) {
+    for (const item of rendered) {
+      if (item.type === "activity") {
+        const found = searchEntries(item.entries, pattern, skipTools, cache);
+        if (found.length > 0) groupMatches.set(item.key, found);
+      } else if (item.type === "message" && item.message.role === "compact" && item.message.text) {
+        const n = findAll(item.message.text, pattern).length;
+        if (n > 0) summaryMatches.set(item.key, n);
+      }
+    }
+  }
+  const findTarget = useFind(rootRef, find, groupMatches, summaryMatches, onFindStatus);
+
   return (
-    <div className={styles.stream}>
+    <div className={styles.stream} ref={rootRef}>
       {rendered.map((item) => {
         if (item.type === "quiet") {
           return (
@@ -220,6 +255,9 @@ export function ChatRenderer({
             <ActivityGroup
               key={item.key}
               entries={item.entries}
+              findKey={item.key}
+              findMatches={groupMatches.get(item.key)}
+              findCurrent={findTarget?.kind === "entry" && findTarget.itemKey === item.key ? findTarget : undefined}
               live={Boolean(item.live && turnActive)}
               statuses={toolStatuses}
               background={background}
@@ -232,26 +270,31 @@ export function ChatRenderer({
           );
         }
         if (item.type === "plan") {
-          return <PlanWidget key={item.key} todos={item.todos} />;
+          return <PlanWidget key={item.key} todos={item.todos} findKey={item.key} />;
         }
         if (item.type === "card") {
           const card = cardsById.get(item.id);
-          return card ? <WorktreeCard key={item.key} card={card} actions={worktreeActions} /> : null;
+          return card ? (
+            <div key={item.key} className={styles.findable} data-find={item.key}>
+              <WorktreeCard card={card} actions={worktreeActions} />
+            </div>
+          ) : null;
         }
         if (item.type === "task") {
           const model = item.tool.id ? tasks?.get(item.tool.id) : undefined;
           return (
-            <TaskCard
-              key={item.key}
-              tool={item.tool}
-              model={model}
-              status={item.tool.id ? toolStatuses?.get(item.tool.id) : undefined}
-              permissions={item.tool.id ? permissions.anchored.get(item.tool.id) : undefined}
-              onResolvePermission={onResolvePermission}
-              onOpen={
-                onOpenTask && item.tool.id ? () => onOpenTask(item.tool.id!, item.tool) : undefined
-              }
-            />
+            <div key={item.key} className={styles.findable} data-find={item.key} data-find-tool>
+              <TaskCard
+                tool={item.tool}
+                model={model}
+                status={item.tool.id ? toolStatuses?.get(item.tool.id) : undefined}
+                permissions={item.tool.id ? permissions.anchored.get(item.tool.id) : undefined}
+                onResolvePermission={onResolvePermission}
+                onOpen={
+                  onOpenTask && item.tool.id ? () => onOpenTask(item.tool.id!, item.tool) : undefined
+                }
+              />
+            </div>
           );
         }
         const message = item.message;
@@ -266,7 +309,7 @@ export function ChatRenderer({
         // under it. Never the user's voice, and not gated on linking.
         if (message.attribution && !message.attribution.link_id) {
           return (
-            <div key={item.key} className={styles.injected}>
+            <div key={item.key} className={styles.injected} data-find={item.key}>
               <Chip tone="info">⇄ from {message.attribution.source_name || "mads"}</Chip>
               <Markdown className={styles.prose} text={message.text ?? ""} />
             </div>
@@ -276,7 +319,7 @@ export function ChatRenderer({
           const link = linksById.get(message.attribution.link_id);
           if (link && viewedSessionId === link.granting_session_id) {
             return (
-              <div key={item.key} className={styles.digest}>
+              <div key={item.key} className={styles.digest} data-find={item.key}>
                 <div className={styles.digestHeader}>
                   ⌗ digest · <b>{message.attribution.source_name}</b>
                 </div>
@@ -286,7 +329,7 @@ export function ChatRenderer({
             );
           }
           return (
-            <div key={item.key} className={styles.injected}>
+            <div key={item.key} className={styles.injected} data-find={item.key}>
               <Chip tone="info">
                 ⇄ from Leader · {message.attribution.source_name}
               </Chip>
@@ -298,6 +341,9 @@ export function ChatRenderer({
           return (
             <CompactionMarker
               key={item.key}
+              findKey={item.key}
+              findMatches={summaryMatches.get(item.key)}
+              findOpen={findTarget?.kind === "summary" && findTarget.itemKey === item.key}
               marker={message.compact ?? {}}
               summary={message.text}
               timestamp={message.timestamp}
@@ -311,7 +357,7 @@ export function ChatRenderer({
           // <task-notification> XML the human never wrote.
           const at = parseMessageTime(message.timestamp);
           return (
-            <div key={item.key} className={styles.notification} role="note">
+            <div key={item.key} className={styles.notification} role="note" data-find={item.key}>
               <span aria-hidden="true">⏺</span>
               <span className={styles.notificationText} title={message.text}>
                 {message.text || "Background task finished"}
@@ -352,6 +398,7 @@ export function ChatRenderer({
           <div
             key={item.key}
             className={styles[message.role] ?? styles.agent}
+            data-find={item.key}
             // Anchor for the Ctrl+↑/↓ "hop between my messages" shortcut.
             data-user-msg={isUser ? "" : undefined}
             data-undelivered={sent?.error ? "" : undefined}

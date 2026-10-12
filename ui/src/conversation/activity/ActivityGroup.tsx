@@ -5,6 +5,7 @@ import { Fold, useArrivals } from "../../components/Motion";
 import type { BackgroundTask, PermissionRequest, ToolKind, ToolStatus, ToolUse } from "../../router/types";
 import type { PermissionReveal } from "../ApprovalJump/permissionReveal";
 import { PermissionCard } from "../ChatRenderer/PermissionCard";
+import { entryKey, snippet, type EntryMatch } from "../Find/findText";
 import { BackgroundElapsed } from "./Background";
 import type { ActivityEntry, ToolEntry } from "./conversationItems";
 import { DiffView } from "./DiffView";
@@ -49,6 +50,12 @@ export interface ActivityGroupProps {
   onResolvePermission?: (id: string, decision: "allow" | "deny") => Promise<void>;
   /** The approval jump's latest reveal — opens this group if it holds that pending card. */
   reveal?: PermissionReveal | null;
+  /** This group's item key, for find (useFind's `data-find-group`). */
+  findKey?: string;
+  /** Find's matches in these rows' full text, which the rows don't show. */
+  findMatches?: EntryMatch[];
+  /** Find's current match, when it's in this group: the group opens and shows it in context. */
+  findCurrent?: { id: string; match: EntryMatch };
 }
 
 const PEEK_TEXT_CAP = 400;
@@ -148,8 +155,14 @@ export function ActivityGroup({
   permissions,
   onResolvePermission,
   reveal,
+  findKey,
+  findMatches,
+  findCurrent,
 }: ActivityGroupProps) {
   const [open, setOpen] = useState(live || defaultOpen);
+  // Held open by find while it holds the current match — on top of the
+  // user's own open state, so moving on closes it again only if find opened it.
+  const shown = open || findCurrent !== undefined;
   // A group that mounts mid-turn has just arrived; one from history hasn't.
   const [arrivedLive] = useState(live);
   // Collapse exactly once when the live turn ends, after a short linger —
@@ -170,7 +183,7 @@ export function ActivityGroup({
   useEffect(() => () => window.clearTimeout(linger.current), []);
   const toggle = () => {
     window.clearTimeout(linger.current);
-    setOpen((o) => !o);
+    setOpen(!shown);
   };
 
   // A pending request must never hide inside a collapsed group: each newly
@@ -218,11 +231,16 @@ export function ActivityGroup({
 
   return (
     <Fold appear={arrivedLive} fade>
-      <div className={styles.group} data-open={open || undefined} data-testid="activity-group">
+      <div
+        className={styles.group}
+        data-open={shown || undefined}
+        data-testid="activity-group"
+        data-find-group={findKey}
+      >
         <button
           type="button"
           className={styles.head}
-          aria-expanded={open}
+          aria-expanded={shown}
           onClick={toggle}
         >
           <span className={styles.chevron} aria-hidden="true">
@@ -235,17 +253,20 @@ export function ActivityGroup({
           </span>
           <span>{label}</span>
           <span className={styles.meta}>
-            {!open && awaiting && <Chip tone="warn">needs your approval</Chip>}
+            {!shown && awaiting && <Chip tone="warn">needs your approval</Chip>}
+            {!shown && findMatches && findMatches.length > 0 && <FindHits count={findMatches.length} />}
             <Diffstat adds={stat.adds} dels={stat.dels} />
             {duration && <span>{duration}</span>}
             {agg === "in_progress" ? <Spinner /> : <StatusGlyph status={agg} />}
           </span>
         </button>
-        <Fold open={open}>
+        <Fold open={shown}>
           <div className={styles.body}>
             {entries.map((entry, i) => {
               const requests =
                 entry.type === "tool" && entry.tool.id ? permissions?.get(entry.tool.id) : undefined;
+              const current = findCurrent?.match.entryKey === keys[i] ? findCurrent : undefined;
+              const hits = findMatches?.filter((m) => m.entryKey === keys[i]).length ?? 0;
               return (
                 <Fold key={keys[i]} appear={arrived(keys[i])} fade className={styles.rowFold}>
                   <ActivityRow
@@ -260,7 +281,10 @@ export function ActivityGroup({
                       entry.tool.id === selectedToolId
                     }
                     onOpen={onOpenTool}
+                    findHits={current ? undefined : hits}
+                    findCurrent={current !== undefined}
                   />
+                  {current && <FindSnippet id={current.id} match={current.match} />}
                   {/* Under its row, in the row's own fold: the card belongs to that call. */}
                   {requests?.map((req) => {
                     const fresh = arrived(`p:${req.id}`);
@@ -286,8 +310,25 @@ export function ActivityGroup({
   );
 }
 
-function entryKey(entry: ActivityEntry, i: number): string {
-  return entry.type === "tool" ? (entry.tool.id ?? `t${i}`) : `th${i}`;
+/** How many of find's matches a closed group or a row holds. */
+function FindHits({ count }: { count: number }) {
+  return (
+    <span className={styles.findHits} aria-label={`${count} ${count === 1 ? "match" : "matches"}`} data-find-skip>
+      {count}
+    </span>
+  );
+}
+
+/** Find's current match in a row's full text, in one line of context under the row. */
+function FindSnippet({ id, match }: { id: string; match: EntryMatch }) {
+  const { before, match: hit, after } = snippet(match.text, match.start, match.length);
+  return (
+    <div className={styles.findSnippet} data-find-current={id} data-testid="find-snippet">
+      <span className={styles.findPart}>{match.part} ·</span> {before}
+      <mark>{hit}</mark>
+      {after}
+    </div>
+  );
 }
 
 function firstLine(text: string, cap = 100): string {
@@ -301,6 +342,8 @@ export function ActivityRow({
   background,
   selected,
   onOpen,
+  findHits = 0,
+  findCurrent = false,
 }: {
   entry: ActivityEntry;
   status?: ToolStatus;
@@ -308,6 +351,10 @@ export function ActivityRow({
   background?: BackgroundTask;
   selected?: boolean;
   onOpen?: (tool: ToolUse) => void;
+  /** Find's matches in this row's full text. */
+  findHits?: number;
+  /** Holds find's current match (shown in context under the row). */
+  findCurrent?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -346,6 +393,7 @@ export function ActivityRow({
         )}
         {status &&
           (status === "in_progress" ? <Spinner /> : <StatusGlyph status={status} />)}
+        {findHits > 0 && <FindHits count={findHits} />}
       </span>
     </>
   );
@@ -357,6 +405,7 @@ export function ActivityRow({
       ref={rowRef}
       className={rowCls}
       data-sel={selected || undefined}
+      data-find-row-current={findCurrent || undefined}
       data-background-id={background ? tool?.id : undefined}
       data-testid="activity-row"
       onMouseEnter={() => setHovered(true)}

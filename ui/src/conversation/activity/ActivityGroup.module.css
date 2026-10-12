@@ -186,3 +186,39 @@ button.rowLine:hover {
 .lbl:first-child {
   margin-top: 0;
 }
+
+/* ---------- find (useFind) ---------- */
+
+/* How many matches a closed group, or a row, holds in text it doesn't show. */
+.findHits {
+  font: 600 var(--fs-chip) var(--sans);
+  color: var(--find-current-fg);
+  background: var(--find-current);
+  border-radius: 999px;
+  padding: 0 7px;
+  line-height: 16px;
+}
+
+.row[data-find-row-current] {
+  background: color-mix(in srgb, var(--find-current) 10%, transparent);
+  box-shadow: inset 2px 0 0 var(--find-current);
+}
+
+/* The current match in context, under its row: the row itself shows one line. */
+.findSnippet {
+  padding: 3px 10px 5px 40px;
+  font: var(--fs-sm) var(--mono);
+  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.findSnippet mark {
+  background: var(--find-current);
+  color: var(--find-current-fg);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.findPart {
+  color: var(--text3);
+}

@@ -149,6 +149,7 @@ function CodeBlock({ token, links, linksKey }: { token: Tokens.Code; links: Link
       <button
         type="button"
         className={styles.copy}
+        data-find-skip
         data-copied={copied || undefined}
         aria-label={copied ? "Copied" : "Copy code"}
         onClick={copy}

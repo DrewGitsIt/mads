@@ -272,6 +272,12 @@
      clear it. Still under shell toasts (50) and the activity drawer (60). */
   --z-dock-menu: 45;
 
+  /* find in conversation: every match tinted, the current one solid. The
+     current one's text stays dark on every palette — it sits on amber. */
+  --find-hit: color-mix(in srgb, var(--warn) 30%, transparent);
+  --find-current: var(--warn);
+  --find-current-fg: #1a1408;
+
   /* prose reading measure (MADS-UX §3.3: full-width stream, ~90-92ch prose) */
   --measure-prose: 92ch;
 

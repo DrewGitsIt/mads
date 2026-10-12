@@ -13,11 +13,18 @@ const MARKS: Record<PlanTodo["status"], string> = {
  * in place — buildItems routes every later TodoWrite call back into this
  * same widget instead of emitting activity rows.
  */
-export function PlanWidget({ todos }: { todos: PlanTodo[] }) {
+export function PlanWidget({
+  todos,
+  findKey,
+}: {
+  todos: PlanTodo[];
+  /** Searchable by find (useFind), as this item. */
+  findKey?: string;
+}) {
   const done = todos.filter((t) => t.status === "completed").length;
   return (
-    <div className={styles.plan} data-testid="plan-widget">
-      <div className={styles.head}>
+    <div className={styles.plan} data-testid="plan-widget" data-find={findKey}>
+      <div className={styles.head} data-find-skip>
         <KindIcon kind="plan" />
         <span>Plan</span>
         <span className={styles.count}>

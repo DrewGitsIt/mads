@@ -130,7 +130,7 @@ export function TaskCard({
         {running && model?.currentStep && (
           <span className={styles.step}>{model.currentStep}</span>
         )}
-        <span className={styles.meta} title={stateTitle(model)}>
+        <span className={styles.meta} title={stateTitle(model)} data-find-skip>
           {counters && (
             <span data-testid="task-counters">
               <TaskCounters model={model!} />

@@ -109,3 +109,13 @@ kbd {
   transition: none !important;
   animation: none !important;
 }
+
+/* Find in conversation (conversation/Find/useFind): painted with the CSS
+   Custom Highlight API, so the rendered markdown never changes. */
+::highlight(find-match) {
+  background-color: var(--find-hit);
+}
+::highlight(find-current) {
+  background-color: var(--find-current);
+  color: var(--find-current-fg);
+}

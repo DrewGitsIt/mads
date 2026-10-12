@@ -22,7 +22,7 @@ export function SendDelivery({
   const { error, attempts } = delivery;
   const n = attempts.length;
   return (
-    <div className={styles.delivery}>
+    <div className={styles.delivery} data-find-skip>
       {error && (
         <div className={styles.failed} role="status">
           <span className={styles.failedLabel}>Not delivered</span>
