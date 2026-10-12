@@ -465,9 +465,9 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
     expect(readFileSync(path.join(primary, A), "utf8")).toBe(`alpha changed by the session ${token}\n`);
     expect(git(primary, "status", "--porcelain")).toBe("");
 
-    // Walkthrough only: where "Write commit messages for me" lives.
+    // Walkthrough only: where "Write commit messages for me" lives — the
+    // Sessions section of the one-page Settings.
     await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("button", { name: "General" }).click();
     await page
       .getByText("Write commit messages for me")
       .scrollIntoViewIfNeeded()
