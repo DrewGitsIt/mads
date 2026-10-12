@@ -15,6 +15,12 @@ export interface StickToBottom<T extends HTMLElement> {
   follow: () => void;
   /** Let go of the tail (the user is jumping up the history). */
   release: () => void;
+  /**
+   * Hold still while `on` (find is open: new output mustn't scroll the match
+   * being read away). Letting go follows the tail again only if the
+   * scroller is at it.
+   */
+  hold: (on: boolean) => void;
 }
 
 /**
@@ -34,13 +40,14 @@ export interface StickToBottom<T extends HTMLElement> {
 export function useStickToBottom<T extends HTMLElement = HTMLDivElement>(): StickToBottom<T> {
   const element = useRef<T | null>(null);
   const stuck = useRef(true);
+  const held = useRef(false);
   // The scroller's last scrollTop as onScroll saw it (or pin set it).
   const lastTop = useRef(0);
   const detach = useRef<(() => void) | null>(null);
 
   const pin = useCallback(() => {
     const el = element.current;
-    if (!el || !stuck.current) return;
+    if (!el || !stuck.current || held.current) return;
     el.scrollTop = el.scrollHeight;
     lastTop.current = el.scrollTop;
   }, []);
@@ -96,5 +103,14 @@ export function useStickToBottom<T extends HTMLElement = HTMLDivElement>(): Stic
     stuck.current = false;
   }, []);
 
-  return useMemo(() => ({ ref, element, onScroll, follow, release }), [ref, onScroll, follow, release]);
+  const hold = useCallback((on: boolean) => {
+    held.current = on;
+    const el = element.current;
+    if (!on && el) stuck.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_THRESHOLD_PX;
+  }, []);
+
+  return useMemo(
+    () => ({ ref, element, onScroll, follow, release, hold }),
+    [ref, onScroll, follow, release, hold],
+  );
 }

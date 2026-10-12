@@ -137,6 +137,30 @@ describe("useStickToBottom", () => {
     expect(top).toBe(2300);
   });
 
+  it("hold() stays put at the tail, and letting go follows again only from the tail", () => {
+    let stick!: StickToBottom<HTMLDivElement>;
+    const { el } = mount(1, (s) => (stick = s));
+    stick.hold(true);
+    height = 2300;
+    resize();
+    expect(top).toBe(1500);
+
+    // Still at the tail when let go: follows again.
+    scrollTo(el, 1800);
+    stick.hold(false);
+    height = 2600;
+    resize();
+    expect(top).toBe(2600);
+
+    // Let go somewhere up the history: stays there.
+    stick.hold(true);
+    scrollTo(el, 400);
+    stick.hold(false);
+    height = 2900;
+    resize();
+    expect(top).toBe(400);
+  });
+
   it("disconnects when the scroller unmounts", () => {
     const { unmount } = mount();
     unmount();
