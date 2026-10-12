@@ -493,8 +493,16 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 	if resp.Error != nil {
 		// auth_required (-32000), credits_exhausted, "session already has
 		// active run" on a concurrent prompt, generic stream failures — all
-		// surface as EventError + TurnEnd; see rpcError.text.
-		s.events <- provider.Event{Kind: provider.EventError, Text: resp.Error.text()}
+		// surface as EventError + TurnEnd; see rpcError.text. The failure
+		// is recorded in the transcript too, as an agent entry marked
+		// IsError, so the user's message reads as not delivered rather than
+		// unanswered — the shape claude-code's own transcript gives it.
+		text := resp.Error.text()
+		s.mu.Lock()
+		s.transcript = append(s.transcript, provider.Message{Role: "agent", Text: text, Timestamp: time.Now().UTC(), IsError: true})
+		s.lastAgentMsgID = ""
+		s.mu.Unlock()
+		s.events <- provider.Event{Kind: provider.EventError, Text: text}
 		s.events <- provider.Event{Kind: provider.EventTurnEnd, Interrupted: interrupted}
 		return
 	}

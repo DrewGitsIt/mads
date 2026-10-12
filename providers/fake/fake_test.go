@@ -3,6 +3,7 @@ package fake_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -695,5 +696,41 @@ func TestDeterministicUsage(t *testing.T) {
 	}
 	if a.Usage != b.Usage || a.Usage.OutputTokens == 0 {
 		t.Fatalf("usage not deterministic: %+v vs %+v", a.Usage, b.Usage)
+	}
+}
+
+// "fail once <x>" fails its first send, recording the failure as an IsError
+// agent entry (claude-code's API-error shape), and echoes when sent again —
+// the retry journey's lever.
+func TestFailOnceThenEcho(t *testing.T) {
+	f := fake.New()
+	sess, err := f.Start(context.Background(), provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := sess.Send(context.Background(), "fail once hi"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ended := collect(t, sess); !ended {
+			t.Fatal("turn never ended")
+		}
+	}
+	msgs, err := f.Transcript(context.Background(), sess.Ref())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shape []string
+	for _, m := range msgs {
+		shape = append(shape, fmt.Sprintf("%s:%v:%s", m.Role, m.IsError, m.Text))
+	}
+	want := []string{
+		"user:false:fail once hi",
+		"agent:true:" + (&provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}).Error(),
+		"user:false:fail once hi",
+		"agent:false:you said hi",
+	}
+	if strings.Join(shape, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("transcript =\n%s\nwant\n%s", strings.Join(shape, "\n"), strings.Join(want, "\n"))
 	}
 }

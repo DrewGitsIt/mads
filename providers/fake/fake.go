@@ -16,6 +16,9 @@
 //	"recall"    → replies with markers echoed earlier in the conversation
 //	"crash"     → dies mid-turn (event stream closes with no turn end)
 //	"ratelimit" → the turn fails with a rate-limit error
+//	"fail once <x>" → fails like "ratelimit" the first time it's sent in a
+//	                  conversation, then replies as "echo <x>" — a retry
+//	                  that succeeds
 //	anything    → "ok"
 package fake
 
@@ -491,6 +494,13 @@ func (f *Fake) plan(prompt string, history []provider.Message) turnPlan {
 		return turnPlan{crash: true}
 	case prompt == "ratelimit":
 		return turnPlan{rateLimit: true}
+	case strings.HasPrefix(prompt, "fail once "):
+		for _, m := range history {
+			if m.Role == "user" && m.Text == prompt {
+				return turnPlan{chunks: []string{"you said " + strings.TrimPrefix(prompt, "fail once ")}}
+			}
+		}
+		return turnPlan{rateLimit: true}
 	case prompt == "attempt-write":
 		return turnPlan{
 			tools:  []ToolStep{{Name: "write_file", Path: "trust-probe.txt", Content: "should not exist under read_only"}},
@@ -789,6 +799,9 @@ func (s *fakeSession) Send(_ context.Context, text string) error {
 func (s *fakeSession) respond(prompt string, plan turnPlan) {
 	if plan.rateLimit {
 		rle := provider.RateLimitError{RetryAfter: time.Second, Message: "scripted rate limit"}
+		// Recorded the way claude-code's transcript keeps an API error: an
+		// agent entry marked IsError, in place of a reply.
+		s.f.record(s.ref, provider.Message{Role: "agent", Text: rle.Error(), IsError: true})
 		s.emit(provider.Event{Kind: provider.EventError, Text: rle.Error()})
 		s.emit(provider.Event{Kind: provider.EventTurnEnd})
 		return

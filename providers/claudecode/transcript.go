@@ -61,6 +61,11 @@ type transcriptLine struct {
 	// IsMeta marks harness-injected user lines (caveat preambles, scheduled
 	// prompt re-invocations, hook payloads) — text the human never typed.
 	IsMeta bool `json:"isMeta"`
+	// IsAPIErrorMessage marks the assistant line the CLI writes itself when
+	// a request never reached the model or failed outright (model
+	// "<synthetic>": "Login expired · Please run /login", "API Error:
+	// Connection refused…") — a failed delivery, not the agent's reply.
+	IsAPIErrorMessage bool `json:"isApiErrorMessage"`
 	// Origin marks a user-role line the CLI wrote itself: kind
 	// "task-notification" is the <task-notification> block it feeds the
 	// model when a background task finishes.
@@ -280,7 +285,7 @@ func normalizeLines(r io.Reader, sidechain bool) ([]provider.Message, error) {
 				switch b.Type {
 				case "text":
 					if b.Text != "" {
-						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts})
+						msgs = append(msgs, provider.Message{Role: "agent", Text: b.Text, Timestamp: ts, IsError: l.IsAPIErrorMessage})
 					}
 				case "tool_use":
 					msgs = append(msgs, provider.Message{Role: "tool", Tool: newToolUse(b.ID, b.Name, b.Input), Timestamp: ts})

@@ -381,7 +381,9 @@ type Message struct {
 	// format carries one. Zero value when unknown.
 	Timestamp time.Time `json:"timestamp,omitempty"`
 	// IsError marks a Role "tool_result" entry as the tool call having
-	// failed. Meaningless on other roles.
+	// failed, or a Role "agent" entry as the harness reporting a failed
+	// turn in the agent's place (auth rejected, API unreachable, out of
+	// credits) rather than a reply. Meaningless on other roles.
 	IsError bool `json:"is_error,omitempty"`
 	// Compact describes a Role "compact" entry: a compaction pass, placed
 	// where it happened. Its Text is the summary the agent carried forward

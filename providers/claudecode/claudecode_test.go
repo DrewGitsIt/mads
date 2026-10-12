@@ -268,6 +268,32 @@ func TestTranscriptSkipsMetaAndCommandLines(t *testing.T) {
 	}
 }
 
+// The CLI's own reply to a request that failed (expired login, API
+// unreachable) is an assistant line flagged isApiErrorMessage. It must come
+// through as an agent entry marked IsError, so the conversation can show the
+// user's message as not delivered rather than as answered. Line shape taken
+// from a real 2.1.285 transcript.
+func TestTranscriptMarksAPIErrorReplies(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"2026-10-11T21:43:15Z"}`,
+		`{"type":"assistant","isApiErrorMessage":true,"error":"authentication_failed","message":{"role":"assistant","model":"<synthetic>","content":[{"type":"text","text":"Login expired · Please run /login"}]},"timestamp":"2026-10-11T21:43:16Z"}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"a real reply"}]},"timestamp":"2026-10-11T21:44:00Z"}`,
+	}, "\n")
+	msgs, err := normalizeTranscript(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages, want 3: %+v", len(msgs), msgs)
+	}
+	if m := msgs[1]; m.Role != "agent" || !m.IsError || m.Text != "Login expired · Please run /login" {
+		t.Errorf("API error line = %+v, want an agent entry marked IsError", m)
+	}
+	if msgs[2].IsError {
+		t.Errorf("ordinary reply marked IsError: %+v", msgs[2])
+	}
+}
+
 func TestTranscriptNormalizationDenialGolden(t *testing.T) {
 	f, err := os.Open("testdata/transcript_denial.jsonl")
 	if err != nil {

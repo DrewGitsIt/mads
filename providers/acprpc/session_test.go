@@ -685,3 +685,21 @@ func TestACPLiveTranscriptCapturesAssistantReply(t *testing.T) {
 		t.Fatalf("transcript[1] = %+v, want the assistant reply", msgs[1])
 	}
 }
+
+// A turn the agent fails (auth_required here) leaves the failure in the
+// running transcript as an agent entry marked IsError — the shape
+// claude-code's transcript gives an API error — so the conversation can show
+// the user's message as not delivered, not merely unanswered.
+func TestACPLiveTranscriptRecordsTurnError(t *testing.T) {
+	e := testEngine(t, gooseConfig(), "goose", t.TempDir())
+	sess := startSession(t, e, provider.StartOptions{})
+	turnEnd(t, sendTurn(t, sess, "auth"))
+	type transcripter interface{ Transcript() []provider.Message }
+	msgs := sess.(transcripter).Transcript()
+	if len(msgs) != 2 || msgs[0].Role != "user" {
+		t.Fatalf("transcript = %+v, want the user prompt then the failure", msgs)
+	}
+	if m := msgs[1]; m.Role != "agent" || !m.IsError || !strings.Contains(m.Text, "agent authentication required") {
+		t.Fatalf("transcript[1] = %+v, want an IsError agent entry carrying the error", m)
+	}
+}
