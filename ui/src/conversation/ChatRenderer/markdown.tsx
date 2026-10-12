@@ -1,7 +1,8 @@
-import { useMemo } from "react";
-import { marked, type Links, type Token, type TokensList } from "marked";
+import { useEffect, useMemo, useState } from "react";
+import { marked, type Links, type Token, type Tokens, type TokensList } from "marked";
 import { Fold, useArrivals } from "../../components/Motion";
 import DOMPurify from "dompurify";
+import { useElectronClipboardBridge } from "../TerminalRenderer/ptyBridge";
 import styles from "./markdown.module.css";
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -88,7 +89,7 @@ export function Markdown({
         // never changes type (and remounts) the render after it lands.
         token.type === "code" ? (
           <Fold key={key} appear={arrived(key)} fade className={styles.codeFold}>
-            <Block token={token} links={links} linksKey={linksKey} />
+            <CodeBlock token={token as Tokens.Code} links={links} linksKey={linksKey} />
           </Fold>
         ) : (
           <Block key={key} token={token} links={links} linksKey={linksKey} />
@@ -107,4 +108,53 @@ function Block({ token, links, linksKey }: { token: Token; links: Links; linksKe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token.raw, linksKey]);
   return <div className={styles.block} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+/** How long "Copied" stays on the button — the same beat as the dock's path Copy. */
+const COPIED_MS = 1500;
+
+/**
+ * A top-level fenced/indented code block with a Copy button in its corner,
+ * shown on hover or focus. Copies the token's source text — the code as the
+ * agent wrote it, not the rendered HTML's text. Code nested in a list or
+ * quote renders inside its parent's Block and gets no button.
+ */
+function CodeBlock({ token, links, linksKey }: { token: Tokens.Code; links: Links; linksKey: string }) {
+  const clipboard = useElectronClipboardBridge();
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
+  // Electron's clipboard bridge when present (navigator.clipboard is
+  // unreliable in a BrowserWindow), else navigator.clipboard — WorkArea's split.
+  function copy() {
+    const write = clipboard
+      ? clipboard.writeText(token.text)
+      : navigator.clipboard?.writeText
+        ? navigator.clipboard.writeText(token.text)
+        : undefined;
+    write?.then(
+      () => setCopied(true),
+      () => {},
+    );
+  }
+
+  return (
+    <div className={styles.code}>
+      <Block token={token} links={links} linksKey={linksKey} />
+      <button
+        type="button"
+        className={styles.copy}
+        data-copied={copied || undefined}
+        aria-label={copied ? "Copied" : "Copy code"}
+        onClick={copy}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
 }

@@ -8,8 +8,8 @@
 // actually exercised. Production renders in Electron's real Chromium DOM,
 // where DOMPurify works as documented — this override only affects the test
 // run, not runtime behavior.
-import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { Markdown } from "./markdown";
 import styles from "./markdown.module.css";
@@ -92,5 +92,37 @@ describe("Markdown", () => {
     expect(container.querySelector("p")!.parentElement!.classList.contains(styles.block)).toBe(true);
     const css = readFileSync("src/conversation/ChatRenderer/markdown.module.css", "utf8");
     expect(css).toMatch(/\.block \{[^}]*display: contents/);
+  });
+});
+
+describe("Markdown code block Copy", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+  });
+
+  function stubClipboard() {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    return writeText;
+  }
+
+  it("copies the block's source text, then reads Copied until it times out", async () => {
+    vi.useFakeTimers();
+    const writeText = stubClipboard();
+    render(<Markdown text={"Run:\n\n```sh\necho '<hi>' && ls\n```\n"} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy code" }));
+    await act(async () => {});
+    expect(writeText).toHaveBeenCalledWith("echo '<hi>' && ls");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+
+    act(() => vi.advanceTimersByTime(1500));
+    expect(screen.getByRole("button", { name: "Copy code" })).toBeTruthy();
+  });
+
+  it("gives each top-level code block its own button, and inline code none", () => {
+    render(<Markdown text={"`inline`\n\n```\none\n```\n\n```\ntwo\n```\n"} />);
+    expect(screen.getAllByRole("button", { name: "Copy code" })).toHaveLength(2);
   });
 });

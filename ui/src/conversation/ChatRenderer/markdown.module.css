@@ -31,3 +31,42 @@
 .codeFold pre {
   margin: 0;
 }
+
+/* Copy, pinned to a code block's top-right corner and revealed on hover or
+   keyboard focus; it stays up while it reads "Copied". The pre keeps a
+   strip clear on its right for it — a short block shrink-wraps its code, so
+   an overlaid button would otherwise sit on the code it copies. */
+.code {
+  --copy-w: 60px;
+  position: relative;
+}
+.code .block pre {
+  padding-right: calc(var(--copy-w) + 2 * var(--space-1));
+}
+
+.copy {
+  position: absolute;
+  top: var(--space-1);
+  right: var(--space-1);
+  width: var(--copy-w);
+  padding: 2px 0;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  background: var(--bg2);
+  color: var(--text2);
+  font: 400 var(--fs-sm) var(--sans);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) ease;
+}
+
+.code:hover .copy,
+.copy:focus-visible,
+.copy[data-copied] {
+  opacity: 1;
+}
+
+.copy:hover {
+  color: var(--text);
+  background: var(--bg3);
+}
