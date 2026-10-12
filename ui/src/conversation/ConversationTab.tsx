@@ -82,6 +82,7 @@ import { useWorktreeCards } from "./Worktree/useWorktreeCards";
 import { SHELL_TOGGLE_EVENT } from "./shellToggleSignal";
 import { STREAM_REATTACH_EVENT, type StreamReattachDetail } from "./streamReattachSignal";
 import { useStickToBottom } from "./useStickToBottom";
+import { FindBar, useFindBar } from "./Find/FindBar";
 import { useVisibleCards } from "./useVisibleCards";
 import { useDelegateFile } from "./activity/useDelegateFile";
 import styles from "./ConversationTab.module.css";
@@ -1310,6 +1311,45 @@ export function ConversationTab({
     };
   }, [needStreamReplay, routerClient, sessionId]);
 
+  const showHistory = transport.status !== "idle" || transport.mode === "chat";
+
+  // Find in conversation (⌘F / Ctrl+F): the chat view only — the terminal
+  // view keeps Ctrl+F for readline. A selection in the tab seeds the query.
+  const find = useFindBar();
+  const { show: showFind, go: stepFind, close: closeFind, open: findOpen } = find;
+  useEffect(() => {
+    if (!showHistory) return;
+    function onKey(e: KeyboardEvent) {
+      // A key something else already handled (an editor's own find) isn't ours.
+      if (e.defaultPrevented) return;
+      const el = streamRef.current;
+      // Hidden behind another workspace tab: not ours to take.
+      if (!el || (el.checkVisibility && !el.checkVisibility())) return;
+      if (matches("find", e)) {
+        e.preventDefault();
+        const sel = window.getSelection();
+        const picked =
+          sel && !sel.isCollapsed && sel.anchorNode && tabRef.current?.contains(sel.anchorNode)
+            ? sel.toString().trim()
+            : "";
+        showFind(picked && !picked.includes("\n") ? picked : undefined);
+      } else if (findOpen && (matches("findNext", e) || matches("findPrevious", e))) {
+        e.preventDefault();
+        stepFind(matches("findPrevious", e) ? -1 : 1);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [showHistory, findOpen, showFind, stepFind, streamRef]);
+  // The terminal view has no find; leaving chat closes it.
+  useEffect(() => {
+    if (!showHistory && findOpen) closeFind();
+  }, [showHistory, findOpen, closeFind]);
+  // New output doesn't scroll the stream while find is open.
+  useEffect(() => {
+    stick.hold(findOpen);
+  }, [findOpen, stick]);
+
   if (loadError) {
     return (
       <div className={styles.stateWrap}>
@@ -1339,7 +1379,6 @@ export function ConversationTab({
       : transport.status === "switching"
         ? transport.to
         : transport.attemptedMode;
-  const showHistory = transport.status !== "idle" || transport.mode === "chat";
   // Never shown mid-switch/terminal — terminal mode already has its own live
   // view via SessionTerminalBridge on the same stream. The paced items are the
   // live turn's content.
@@ -1625,6 +1664,8 @@ export function ConversationTab({
                   onResolvePermission={resolvePermission}
                   permissionReveal={permissionReveal}
                   onRetry={(text) => void retrySend(text)}
+                  find={find.request}
+                  onFindStatus={find.onStatus}
                 />
               )}
               {transport.status !== "idle" && (
@@ -1728,6 +1769,7 @@ export function ConversationTab({
                 )}
               </div>
             </div>
+            {find.open && <FindBar {...find.bar} streamRef={streamRef} />}
             <SessionDock {...dockProps} mode="chat">
               <Composer
                 routerClient={routerClient}
