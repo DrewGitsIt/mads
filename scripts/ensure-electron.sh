@@ -108,68 +108,97 @@ mads_ensure_electron() {
 # The Dock label, the bold menu-bar name and the Cmd-Tab icon all come from
 # the launching bundle's Info.plist — "Electron", com.github.Electron — and
 # nothing main.ts does at runtime changes them. Until real packaging (W7),
-# app.sh launches a copy of Electron.app branded as mads instead. It lives in
-# dist/ next to the original, so the `npm ci` that wipes one wipes both, and
-# it is rebuilt whenever the stamp beside it (outside the bundle: anything
-# written inside after signing breaks the seal) no longer matches.
+# app.sh launches a copy of Electron.app branded as mads instead.
+#
+# The copy lives outside node_modules, in .mads-app/<key>/mads.app. A running
+# app reads its helper executables off disk every time it starts a child
+# process (shell host, renderer), and Electron aborts the whole app when the
+# helper is gone ("Aborted from launching unexpected helper executable").
+# `npm ci` — every `make build`/`make test` — deletes node_modules, so a
+# bundle there dies on its next child process after any build in this
+# checkout. <key> names the recipe, Electron version and icon: a change gets
+# a fresh directory instead of rewriting one a running app may be using
+# (whose helpers would then be another Electron's), and old ones are pruned
+# only once nothing runs from them. No symlinks on the way: Electron compares
+# the helper's resolved path against the one it launched from.
 MADS_ICNS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ui/assets/icon/mads.icns"
+MADS_APP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.mads-app"
 # Bump when mads_brand_app changes what it writes, so existing copies rebuild.
 MADS_BRAND_RECIPE=1
+
+# The bundle directory's name: everything the build depends on.
+mads_brand_key() {
+  printf 'r%s-electron-%s-icon-%s' "$MADS_BRAND_RECIPE" \
+    "$(tr -d 'v' < "$MADS_ELECTRON_PKG/dist/version")" "$(cksum < "$MADS_ICNS" | cut -d' ' -f1)"
+}
 
 # The executable app.sh launches: mads.app's on macOS (the executable keeps
 # its name — Electron finds its "Electron Helper" apps by it), the stock
 # binary elsewhere.
 mads_app_bin() {
   case "$(uname -s)" in
-    Darwin) echo "$MADS_ELECTRON_PKG/dist/mads.app/Contents/MacOS/Electron" ;;
+    Darwin) echo "$MADS_APP_ROOT/$(mads_brand_key)/mads.app/Contents/MacOS/Electron" ;;
     *)      mads_electron_bin ;;
   esac
 }
 
-mads_brand_stamp() {
-  printf 'recipe %s electron %s icon %s' "$MADS_BRAND_RECIPE" \
-    "$(cat "$MADS_ELECTRON_PKG/dist/version")" "$(cksum < "$MADS_ICNS")"
-}
-
-# Build dist/mads.app from dist/Electron.app if it is missing or stale; a
-# no-op off macOS. Run after mads_ensure_electron. On failure nothing usable
-# is left behind, so the caller can fall back to the stock bundle.
+# Build .mads-app/<key>/mads.app from dist/Electron.app if it is missing, then
+# prune other keys nothing runs from; a no-op off macOS. Run after
+# mads_ensure_electron. The bundle is built beside its final place and renamed
+# in whole, so a directory under its key is always complete; on failure
+# nothing usable is left behind, so the caller can fall back to the stock one.
 mads_brand_app() {
   [ "$(uname -s)" = Darwin ] || return 0
   local src="$MADS_ELECTRON_PKG/dist/Electron.app"
-  local app="$MADS_ELECTRON_PKG/dist/mads.app"
-  local stamp="$MADS_ELECTRON_PKG/dist/mads.app.stamp"
-  local want helper
-  want="$(mads_brand_stamp)" || return 1
-  if [ -x "$(mads_app_bin)" ] && [ "$(cat "$stamp" 2>/dev/null)" = "$want" ]; then
-    return 0
+  local key dir tmp app helper
+  key="$(mads_brand_key)" || return 1
+  dir="$MADS_APP_ROOT/$key"
+  if [ ! -x "$(mads_app_bin)" ]; then
+    echo "ensure-electron: branding the dev bundle as mads.app ($key)"
+    mkdir -p "$MADS_APP_ROOT" || return 1
+    tmp="$(mktemp -d "$MADS_APP_ROOT/.build.XXXXXX")" || return 1
+    app="$tmp/mads.app"
+    # ditto, not cp -R: it keeps the frameworks' symlinks and extended attributes.
+    if ! { ditto "$src" "$app" &&
+      plutil -replace CFBundleName -string mads "$app/Contents/Info.plist" &&
+      plutil -replace CFBundleDisplayName -string mads "$app/Contents/Info.plist" &&
+      plutil -replace CFBundleIdentifier -string dev.mads.app "$app/Contents/Info.plist" &&
+      cp "$MADS_ICNS" "$app/Contents/Resources/electron.icns"; }; then
+      rm -rf "$tmp"
+      echo "ensure-electron: could not build mads.app" >&2
+      return 1
+    fi
+    # Helpers carry the main bundle's id as a prefix, as a packaged app's would.
+    for helper in "$app"/Contents/Frameworks/*Helper*.app; do
+      [ -d "$helper" ] || continue
+      plutil -replace CFBundleIdentifier -string dev.mads.app.helper "$helper/Contents/Info.plist" \
+        || { rm -rf "$tmp"; echo "ensure-electron: could not build mads.app" >&2; return 1; }
+    done
+    # The edits broke Electron's signature, and Apple Silicon won't run an
+    # unsigned bundle: re-sign the whole tree ad hoc (local use only).
+    if ! codesign --force --deep --sign - "$app" >/dev/null 2>&1; then
+      rm -rf "$tmp"
+      echo "ensure-electron: could not sign mads.app" >&2
+      return 1
+    fi
+    # A leftover (say, a build whose rename was interrupted) can't be running:
+    # nothing launches a bundle that isn't complete.
+    rm -rf "$dir"
+    mv "$tmp" "$dir" || { rm -rf "$tmp"; echo "ensure-electron: could not place mads.app" >&2; return 1; }
   fi
-  echo "ensure-electron: branding the dev bundle as mads.app"
-  rm -rf "$app" "$stamp"
-  # ditto, not cp -R: it keeps the frameworks' symlinks and extended attributes.
-  if ! { ditto "$src" "$app" &&
-    plutil -replace CFBundleName -string mads "$app/Contents/Info.plist" &&
-    plutil -replace CFBundleDisplayName -string mads "$app/Contents/Info.plist" &&
-    plutil -replace CFBundleIdentifier -string dev.mads.app "$app/Contents/Info.plist" &&
-    cp "$MADS_ICNS" "$app/Contents/Resources/electron.icns"; }; then
-    rm -rf "$app"
-    echo "ensure-electron: could not build mads.app" >&2
-    return 1
-  fi
-  # Helpers carry the main bundle's id as a prefix, as a packaged app's would.
-  for helper in "$app"/Contents/Frameworks/*Helper*.app; do
-    [ -d "$helper" ] || continue
-    plutil -replace CFBundleIdentifier -string dev.mads.app.helper "$helper/Contents/Info.plist" \
-      || { rm -rf "$app"; echo "ensure-electron: could not build mads.app" >&2; return 1; }
+  mads_prune_apps "$key"
+}
+
+# Removes .mads-app bundles other than <key> that no process runs from, and
+# builds that never finished. Best effort: without pgrep it keeps everything.
+mads_prune_apps() { # <key to keep>
+  local old
+  command -v pgrep >/dev/null 2>&1 || return 0
+  for old in "$MADS_APP_ROOT"/* "$MADS_APP_ROOT"/.build.*; do
+    [ -d "$old" ] && [ "$old" != "$MADS_APP_ROOT/$1" ] || continue
+    pgrep -f -- "$old/" >/dev/null 2>&1 && continue
+    rm -rf "$old"
   done
-  # The edits broke Electron's signature, and Apple Silicon won't run an
-  # unsigned bundle: re-sign the whole tree ad hoc (local use only).
-  if ! codesign --force --deep --sign - "$app" >/dev/null 2>&1; then
-    rm -rf "$app"
-    echo "ensure-electron: could not sign mads.app" >&2
-    return 1
-  fi
-  printf '%s' "$want" > "$stamp"
 }
 
 # 0 when the renderer sandbox cannot work on this host and the caller must set

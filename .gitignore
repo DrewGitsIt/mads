@@ -7,6 +7,7 @@ dist/
 dist-electron/
 coverage.out
 /ui/test-results/
+/.mads-app/
 
 # local artifacts / tooling state (not part of the repo)
 /mads
