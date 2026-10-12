@@ -26,6 +26,14 @@ describe("hotkeys on mac", () => {
     expect(matches("toggleView", ev({ key: "t", metaKey: true }), undefined, "darwin")).toBe(false);
   });
 
+  it("find is Cmd+F; next and previous are Cmd+G and Cmd+Shift+G", () => {
+    expect(matches("find", ev({ key: "f", metaKey: true }), undefined, "darwin")).toBe(true);
+    expect(matches("find", ev({ key: "f", ctrlKey: true }), undefined, "darwin")).toBe(false);
+    expect(matches("findNext", ev({ key: "g", metaKey: true }), undefined, "darwin")).toBe(true);
+    expect(matches("findPrevious", ev({ key: "G", metaKey: true, shiftKey: true }), undefined, "darwin")).toBe(true);
+    expect(matches("findNext", ev({ key: "G", metaKey: true, shiftKey: true }), undefined, "darwin")).toBe(false);
+  });
+
   it("labels use glyphs", () => {
     expect(hotkeyLabel("expandEditor", undefined, "darwin")).toBe("⌘E");
     expect(hotkeyLabel("sendFromEditor", undefined, "darwin")).toBe("⌘⏎");
@@ -48,6 +56,14 @@ describe("hotkeys on linux", () => {
     expect(matches("sendFromEditor", ev({ key: "Enter" }), undefined, "linux")).toBe(false);
     expect(matches("collapseEditor", ev({ key: "Escape" }), undefined, "linux")).toBe(true);
     expect(matches("collapseEditor", ev({ key: "Escape", ctrlKey: true }), undefined, "linux")).toBe(false);
+  });
+
+  it("find is plain Ctrl+F (the chat view only binds it); next and previous are F3 and Shift+F3", () => {
+    expect(matches("find", ev({ key: "f", ctrlKey: true }), undefined, "linux")).toBe(true);
+    expect(matches("find", ev({ key: "F", ctrlKey: true, shiftKey: true }), undefined, "linux")).toBe(false);
+    expect(matches("findNext", ev({ key: "F3" }), undefined, "linux")).toBe(true);
+    expect(matches("findPrevious", ev({ key: "F3", shiftKey: true }), undefined, "linux")).toBe(true);
+    expect(hotkeyLabel("findNext", undefined, "linux")).toBe("F3");
   });
 
   it("labels spell out modifiers", () => {

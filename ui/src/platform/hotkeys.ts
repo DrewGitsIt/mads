@@ -1,6 +1,7 @@
 // Single binding table for the session dock's keyboard shortcuts. Matching is
 // exact on modifiers: on Linux/Windows a plain Ctrl+letter is never bound
-// (readline owns those in terminals), so every non-mac default carries Shift.
+// (readline owns those in terminals), so every non-mac default carries Shift —
+// except find, which only the chat view binds.
 //
 // A user override map (future Settings/Config) plugs in through
 // setHotkeyOverrides() or the optional `overrides` argument of each function.
@@ -13,7 +14,10 @@ export type HotkeyAction =
   | "sendFromEditor"
   | "collapseEditor"
   | "toggleView" // chat <-> terminal
-  | "attachFiles";
+  | "attachFiles"
+  | "find" // find in conversation — chat view only
+  | "findNext"
+  | "findPrevious";
 
 export interface Binding {
   /** KeyboardEvent.key, compared case-insensitively ("e", "Enter", "Escape"). */
@@ -45,6 +49,20 @@ export const DEFAULT_BINDINGS: Record<HotkeyAction, { mac: Binding; other: Bindi
   attachFiles: {
     mac: { key: "a", mod: true, shift: true },
     other: { key: "a", mod: true, shift: true },
+  },
+  // The one plain Ctrl+letter: it's bound only while the chat view is
+  // showing, so the terminal view still hands Ctrl+F to readline.
+  find: {
+    mac: { key: "f", mod: true, shift: false },
+    other: { key: "f", mod: true, shift: false },
+  },
+  findNext: {
+    mac: { key: "g", mod: true, shift: false },
+    other: { key: "F3", mod: false, shift: false },
+  },
+  findPrevious: {
+    mac: { key: "g", mod: true, shift: true },
+    other: { key: "F3", mod: false, shift: true },
   },
 };
 
