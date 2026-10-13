@@ -15,7 +15,7 @@ describe("reduceSteps", () => {
     expect(steps.slice(2).every((s) => s.status === "pending")).toBe(true);
   });
 
-  it("reflects today's backend reality: a single provider_ready event marks steps 1-4 done and step 5 done too", () => {
+  it("marks every step done once provider_ready arrives, even if earlier steps were missed", () => {
     const steps = reduceSteps(["provider_ready"], false);
     const lastIndex = KNOWN_STEPS.length - 1;
     expect(steps.slice(0, lastIndex + 1).every((s) => s.status === "done")).toBe(true);
@@ -26,12 +26,13 @@ describe("reduceSteps", () => {
     expect(steps.every((s) => s.status === "done")).toBe(true);
   });
 
-  it("degrades correctly for a hypothetical richer step sequence", () => {
-    const steps = reduceSteps(["worktree", "hook", "agent_starting"], false);
+  it("follows the runner's step order: capabilities before the agent starts", () => {
+    const steps = reduceSteps(["worktree", "hook", "mcp_up"], false);
     expect(steps[0].status).toBe("done");
     expect(steps[1].status).toBe("done");
     expect(steps[2].status).toBe("done");
     expect(steps[3].status).toBe("active");
+    expect(steps[3].id).toBe("agent_starting");
     expect(steps[4].status).toBe("pending");
   });
 

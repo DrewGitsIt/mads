@@ -1,15 +1,14 @@
-// Ordered known-step catalog for the provisioning strip. The spec's 5-step
-// model (worktree -> hook -> agent starting -> MCP up -> delivered) doesn't
-// exist server-side yet: services/session/internal/runner only ever emits a
-// single "provider_ready" session.provisioning event today. A later step
-// implies every earlier step completed, so this renders correctly both for
-// today's single-event reality and a richer future emission with no UI
-// changes.
+// Ordered known-step catalog for the provisioning strip, in the order
+// services/session/internal/runner Start emits session.provisioning steps:
+// capabilities (skills, MCP servers) are set up before the agent process
+// spawns, so mcp_up precedes agent_starting. Each step is emitted when it
+// finishes, and a later step implies every earlier one completed, so a
+// missed or skipped event never stalls the strip.
 export const KNOWN_STEPS = [
   "worktree",
   "hook",
-  "agent_starting",
   "mcp_up",
+  "agent_starting",
   "provider_ready",
 ] as const;
 

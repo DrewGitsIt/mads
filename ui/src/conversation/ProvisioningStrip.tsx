@@ -6,8 +6,8 @@ import styles from "./ProvisioningStrip.module.css";
 const STEP_LABELS: Record<StepId, string> = {
   worktree: "Setting up worktree",
   hook: "Installing commit hook",
-  agent_starting: "Starting agent",
   mcp_up: "Connecting capabilities",
+  agent_starting: "Starting agent",
   provider_ready: "Ready",
 };
 

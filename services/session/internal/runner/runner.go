@@ -419,9 +419,11 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	r.appendProvisioning(ctx, "worktree", nil)
 	// Stamps this session into the worktree's own config for the hook — or,
 	// working in place, into the user's checkout.
 	r.installHook(ctx, cwd)
+	r.appendProvisioning(ctx, "hook", nil)
 
 	// Shadow store provisioning (docs/SHADOW-GIT-DIFFS-ADR.md): record the
 	// store's base path on the session record now (persisted with the
@@ -436,6 +438,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	agent, agentOK := r.loadAgent(ctx, sess)
 	capEnv := r.setupCapabilities(ctx, cwd, agent, agentOK)
 	orchestrateMCP, orchestrateErr := r.setupOrchestrate(ctx, sess)
+	r.appendProvisioning(ctx, "mcp_up", nil)
 
 	opts := provider.StartOptions{
 		Mode:         provider.ModeACP,
@@ -503,6 +506,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("runner: start provider session: %w", err)
 	}
+	r.appendProvisioning(ctx, "agent_starting", nil)
 
 	// Persist the resume handle before returning success, so a crash right
 	// after this point still leaves a resumable ref recorded.
@@ -548,13 +552,7 @@ func (r *Runner) Start(ctx context.Context) error {
 		r.markOrchestrateLinks(ctx, status, "")
 	}
 
-	if err := r.data.Append(ctx, &contracts.Envelope{
-		Type:      contracts.SessionProvisioning,
-		SessionID: r.sessionID,
-		Payload:   mustJSON(map[string]string{"step": "provider_ready", "provider": sess.Provider}),
-	}); err != nil {
-		log.Printf("runner: append session.provisioning: %v", err)
-	}
+	r.appendProvisioning(ctx, "provider_ready", map[string]string{"provider": sess.Provider})
 	if err := r.data.Append(ctx, &contracts.Envelope{
 		Type:      contracts.SessionActivityChanged,
 		SessionID: r.sessionID,
@@ -758,6 +756,24 @@ func (r *Runner) isolate(ctx context.Context, sess *contracts.Session) (string, 
 		}
 	}
 	return cwd, nil
+}
+
+// appendProvisioning records that one Start step finished, for the
+// Launchpad's provisioning strip (ui/src/conversation/provisioningSteps.ts).
+// Steps arrive in Start's order — worktree, hook, mcp_up, agent_starting,
+// provider_ready — and a step that had nothing to do (working in place, no
+// capabilities) is still reported, so the strip never stalls on it. Best
+// effort, like every other Start event.
+func (r *Runner) appendProvisioning(ctx context.Context, step string, extra map[string]string) {
+	payload := map[string]string{"step": step}
+	for k, v := range extra {
+		payload[k] = v
+	}
+	if err := r.data.Append(ctx, &contracts.Envelope{
+		Type: contracts.SessionProvisioning, SessionID: r.sessionID, Payload: mustJSON(payload),
+	}); err != nil {
+		log.Printf("runner: append session.provisioning: %v", err)
+	}
 }
 
 // appendWorktreeEvent records what isolation did, so it shows as a card

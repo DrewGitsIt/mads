@@ -352,3 +352,47 @@ func TestCountsInPlace(t *testing.T) {
 	h.turn("write")
 	h.waitCounts(1, 0)
 }
+
+// Start reports each step as it finishes, in order, so the Launchpad's
+// provisioning strip moves with real progress; a failed provider start
+// stops before agent_starting.
+func TestStartReportsProvisioningSteps(t *testing.T) {
+	repo := t.TempDir()
+	initRepo(t, repo)
+	h := newWTHarness(t, contracts.Session{Dir: repo, Isolation: contracts.IsolationWorktree}, fake.Scenario{})
+
+	h.prov.fail = true
+	if err := h.boot(); err == nil {
+		t.Fatal("start succeeded; want the scripted provider failure")
+	}
+	if got, want := h.provisioningSteps(), "worktree hook mcp_up"; got != want {
+		t.Errorf("steps after failed start = %q, want %q", got, want)
+	}
+
+	if err := h.boot(); err != nil {
+		t.Fatalf("second start: %v", err)
+	}
+	want := "worktree hook mcp_up worktree hook mcp_up agent_starting provider_ready"
+	if got := h.provisioningSteps(); got != want {
+		t.Errorf("steps = %q, want %q", got, want)
+	}
+}
+
+// provisioningSteps returns the session.provisioning steps, oldest first,
+// space-joined.
+func (h *wtHarness) provisioningSteps() string {
+	h.t.Helper()
+	evs, err := h.data.Events(context.Background(), 0, h.id, []string{string(contracts.SessionProvisioning)})
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	steps := make([]string, len(evs))
+	for i, ev := range evs {
+		var p map[string]string
+		if err := json.Unmarshal(ev.Payload, &p); err != nil {
+			h.t.Fatal(err)
+		}
+		steps[i] = p["step"]
+	}
+	return strings.Join(steps, " ")
+}
