@@ -1,0 +1,153 @@
+/* A field, not a button: these are rarely-touched defaults (persona/model/
+   trust/isolation/folder), so at rest they read as metadata — quiet, tight,
+   no hard border — and only stand out (accent dot + stronger text) when the
+   user has staged an override that differs from the saved defaults. */
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 3px var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text2);
+  font: 500 var(--fs-sm) var(--sans);
+  cursor: pointer;
+}
+
+.trigger:hover {
+  background: var(--bg2);
+  border-color: var(--line-soft);
+  color: var(--text);
+}
+
+/* A staged override — the one state a user is actually choosing, worth
+   standing out next to the quiet defaults. */
+.modified {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--bg2);
+}
+
+.modified::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Locked: fixed by something outside the pill (see LockedPill.tsx). Dashed
+   so it reads as "not a choice", with help cursor pointing at the tooltip. */
+.locked,
+.locked:hover {
+  border: 1px dashed var(--line);
+  background: transparent;
+  color: var(--text3);
+  cursor: help;
+}
+
+.locked::before {
+  content: "🔒";
+  font-size: 10px;
+}
+
+.key {
+  color: var(--text3);
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 180px;
+}
+
+.option {
+  display: block;
+  width: 100%;
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: 500 var(--fs-sm) var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.optionLabel {
+  display: block;
+  font: 500 var(--fs-sm) var(--sans);
+}
+
+.optionDescription {
+  display: block;
+  font-size: var(--fs-chip);
+  color: var(--text3);
+}
+
+.option:hover {
+  background: var(--bg3);
+}
+
+.optionSelected {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.groupLabel {
+  padding: var(--space-1) var(--space-2) 0;
+  color: var(--text3);
+  font: 600 var(--fs-chip) var(--sans);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* Why a provider's group is empty: discovering, unavailable (with the
+   harness's own reason), or genuinely no models. */
+.groupNote {
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--text3);
+  font: 400 var(--fs-chip) var(--sans);
+  font-style: italic;
+}
+
+.agentIntents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--line-soft);
+}
+
+.intentNote {
+  padding: var(--space-1) var(--space-2);
+}
+
+/* Folder pill: wide enough for a typed path, and long paths in the
+   shortcut list wrap rather than stretch the popover. */
+.folderMenu {
+  width: 320px;
+}
+
+.folderMenu .optionDescription {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+}
+
+.pathInput {
+  padding: var(--space-1) var(--space-2);
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  outline: none;
+}
+
+.pathInput:focus {
+  border-color: var(--accent);
+}

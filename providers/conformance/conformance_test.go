@@ -42,10 +42,12 @@ func TestRunAgainstHonestStub(t *testing.T) {
 // An honest partial provider also passes: unsupported rows refuse correctly.
 func TestHonestPartialStubPasses(t *testing.T) {
 	p := newStub(map[provider.Behavior]provider.Support{
-		provider.BehaviorResume:         provider.Unsupported,
-		provider.BehaviorTranscript:     provider.Unsupported,
-		provider.BehaviorModelDiscovery: provider.Unsupported,
-		provider.BehaviorPTY:            provider.Unsupported,
+		provider.BehaviorResume:          provider.Unsupported,
+		provider.BehaviorTranscript:      provider.Unsupported,
+		provider.BehaviorModelDiscovery:  provider.Unsupported,
+		provider.BehaviorPTY:             provider.Unsupported,
+		provider.BehaviorCompaction:      provider.Unsupported,
+		provider.BehaviorCompactionFocus: provider.Unsupported,
 	}, lies{})
 	for _, r := range Check(context.Background(), p, stubScript()) {
 		if r.Err != nil {
@@ -135,6 +137,13 @@ func TestMismatchesAreCaught(t *testing.T) {
 			"disallowed tool completes below full trust",
 			newStub(nil, lies{completesDisallowed: true}),
 			provider.BehaviorTrustLimited, "disallowed tool completed successfully",
+		},
+		{
+			"compaction instructions silently dropped",
+			newStub(map[provider.Behavior]provider.Support{
+				provider.BehaviorCompactionFocus: provider.Unsupported,
+			}, lies{dropsFocus: true}),
+			provider.BehaviorCompactionFocus, "want ErrUnsupported",
 		},
 	}
 	for _, c := range cases {

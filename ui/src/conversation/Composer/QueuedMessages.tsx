@@ -16,10 +16,17 @@ export interface QueuedMessagesProps {
  * "above" strip, next to the working line); Composer still renders them
  * itself when handed a `queued` list directly.
  */
-export function QueuedMessages({ queued, onCancel, className }: QueuedMessagesProps) {
+export function QueuedMessages({
+  queued,
+  onCancel,
+  className,
+}: QueuedMessagesProps) {
   if (queued.length === 0) return null;
   return (
-    <div className={[styles.queued, className].filter(Boolean).join(" ")} data-testid="queued-messages">
+    <div
+      className={[styles.queued, className].filter(Boolean).join(" ")}
+      data-testid="queued-messages"
+    >
       {queued.map((q) => (
         <div key={q.id} className={styles.queuedItem}>
           <span className={styles.queuedBadge}>Queued</span>

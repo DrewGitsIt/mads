@@ -89,6 +89,17 @@ const (
 	// all (a provider is allowed to declare this Unsupported if it genuinely
 	// has nothing — none of the three shipped providers do).
 	BehaviorRefAnnounce Behavior = "ref_announce"
+	// BehaviorCompaction — the harness runs its own context-compaction pass
+	// on request, out of band from a normal turn (provider.Compactor on the
+	// structured session). Optional, and never emulated: a summary mads
+	// wrote itself would be a different conversation, so a provider without
+	// one declares Unsupported and every Compact affordance hides for it.
+	BehaviorCompaction Behavior = "compaction"
+	// BehaviorCompactionFocus — the compaction pass takes free-text focus
+	// instructions (Compactor.Compact's instructions) and the harness
+	// actually steers its summary by them. Optional; working requires
+	// BehaviorCompaction working.
+	BehaviorCompactionFocus Behavior = "compaction_focus"
 
 	// Delegates (docs/DELEGATES-DESIGN.md): subagents the harness runs on a
 	// session's behalf. These rows are the per-harness defaults; what is
@@ -166,6 +177,8 @@ var requirements = map[Behavior]Level{
 	BehaviorTrustAutoReview: LevelOptional,
 	BehaviorOneShotStream:   LevelOptional,
 	BehaviorRefAnnounce:     LevelExpected,
+	BehaviorCompaction:      LevelOptional,
+	BehaviorCompactionFocus: LevelOptional,
 
 	BehaviorDelegateLifecycle:  LevelOptional,
 	BehaviorDelegateTranscript: LevelOptional,
@@ -219,6 +232,16 @@ func (m Matrix) Validate() error {
 	}
 	if !m[BehaviorACP].Works() && !m[BehaviorPTY].Works() {
 		probs = append(probs, "at least one of acp/pty must be supported")
+	}
+	if m[BehaviorCompactionFocus].Works() && !m[BehaviorCompaction].Works() {
+		probs = append(probs, "compaction_focus needs compaction")
+	}
+	// Never emulated (see BehaviorCompaction): Works() would count Emulated
+	// as working and light up every Compact affordance.
+	for _, b := range []Behavior{BehaviorCompaction, BehaviorCompactionFocus} {
+		if m[b] == Emulated {
+			probs = append(probs, fmt.Sprintf("behavior %q cannot be emulated", b))
+		}
 	}
 	if len(probs) == 0 {
 		return nil

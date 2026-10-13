@@ -39,6 +39,13 @@ func TestMatrixValidate(t *testing.T) {
 		}), "at least one of acp/pty"},
 		{"unknown behavior", fullMatrix(map[Behavior]Support{"telepathy": Native}), `unknown behavior "telepathy"`},
 		{"invalid support", fullMatrix(map[Behavior]Support{BehaviorResume: "partial"}), `invalid support "partial"`},
+		{"compaction without focus", fullMatrix(map[Behavior]Support{BehaviorCompactionFocus: Unsupported}), ""},
+		{"focus without compaction", fullMatrix(map[Behavior]Support{
+			BehaviorCompaction: Unsupported,
+		}), "compaction_focus needs compaction"},
+		{"emulated compaction", fullMatrix(map[Behavior]Support{
+			BehaviorCompaction: Emulated,
+		}), `behavior "compaction" cannot be emulated`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -78,6 +85,9 @@ func TestRequirementLevels(t *testing.T) {
 		BehaviorDelegateTranscript: LevelOptional,
 		BehaviorDelegateSteer:      LevelOptional,
 		BehaviorDelegateStop:       LevelOptional,
+		// Never emulated: a harness without its own pass just hides Compact.
+		BehaviorCompaction:      LevelOptional,
+		BehaviorCompactionFocus: LevelOptional,
 	} {
 		if got := Requirement(b); got != want {
 			t.Errorf("Requirement(%s) = %s, want %s", b, got, want)
@@ -86,8 +96,8 @@ func TestRequirementLevels(t *testing.T) {
 	if Requirement("telepathy") != "" {
 		t.Error("unknown behavior should have no level")
 	}
-	if n := len(Behaviors()); n != 21 {
-		t.Errorf("Behaviors() = %d entries, want 21", n)
+	if n := len(Behaviors()); n != 23 {
+		t.Errorf("Behaviors() = %d entries, want 23", n)
 	}
 }
 

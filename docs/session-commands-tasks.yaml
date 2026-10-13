@@ -1,0 +1,322 @@
+# Session commands (/task /compact /usage /new* /export) — implementation graph.
+# Visual: docs/mockups/session-commands.html (/usage = layout B, Ledger).
+# Supersedes tasks 1-3 of docs/command-framework-tasks.yaml (design doc, #// split,
+# descriptor registry); that file's remaining tasks stay parked.
+# Seed:  bin/mads seed -session <session-id> -file docs/session-commands-tasks.yaml
+tasks:
+  # ── Foundation ────────────────────────────────────────────────────────
+  - title: "Session commands: write the command framework design doc"
+    description: >
+      Write docs/COMMAND-FRAMEWORK.md from docs/mockups/command-framework.html
+      and docs/mockups/session-commands.html. Capture: the three namespaces
+      (/ = commands, # = skills, @ = references); the emulation rule (an action
+      a harness can't do natively is emulated with a user-sent message shown as
+      a system message in the UI) and its one exception (compaction is never
+      emulated — hidden where unsupported); the session command set and the
+      parked list (/help, /diff, /rewind, /remember, Provider.Commands()
+      passthrough).
+    acceptance_criteria: |
+      1. Doc defines /, #, @ and their backing sources.
+      2. Emulation rule and the compaction exception are stated.
+      3. Each first-pass command (/task, /compact, /usage, /new, /new-leader, /new-follower, /new-monitor, /export) has a one-paragraph contract.
+      4. Explicitly supersedes MADS-UX.md's "provider-native slashes are terminal-only" stance.
+    labels: [command-framework, design]
+
+  - title: "Session commands: split trigger namespaces (skills to #, / for commands)"
+    description: >
+      Repoint composer triggers so / and # are distinct sources. # resolves the
+      capability registry (skills, GET /capabilities, health-badged). / resolves
+      the command registry only. @ unchanged. Touches useMentionResolver.ts
+      (detectTrigger accepts #), MentionMenu, Composer, and tests.
+    acceptance_criteria: |
+      1. Typing # opens the skills menu; / no longer lists skills.
+      2. / lists only commands; @ unchanged.
+      3. useMentionResolver + MentionMenu tests updated and green.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Session commands: write the command framework design doc"
+
+  - title: "Session commands: command descriptor registry with aliases and availability"
+    description: >
+      Replace STATIC_COMMANDS / GROUP_COMMANDS and the head === "agent"/"model"
+      branches in useMentionResolver, plus Composer.executeCommand's bespoke
+      dispatch, with a descriptor table: { name, aliases, description, argHint,
+      available(session) -> { ok, reason }, execute }. Unavailable commands
+      render in the / menu as disabled rows with the reason inline and cannot
+      be selected; typing one and pressing Enter shows the reason instead of
+      sending literal text. Fold /model and /agent in.
+    acceptance_criteria: |
+      1. /model and /agent are descriptors; the old branches are deleted.
+      2. Aliases resolve to their command (e.g. /status -> /usage) and match in autocomplete.
+      3. A descriptor whose available() is not ok renders disabled with its reason and never sends text.
+      4. Adding a command is one new descriptor entry.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Session commands: write the command framework design doc"
+
+  - title: "Session commands: command card host above the composer"
+    description: >
+      A container that renders a command's card directly above the composer.
+      No header/footer chrome; dismiss on Esc or click-away. Cards are UI only
+      and never written to the transcript. Takes a descriptor's render output
+      plus a close callback. (Only the host — the four-archetype widget kit in
+      command-framework-tasks.yaml stays parked.)
+    acceptance_criteria: |
+      1. A descriptor can open a card above the composer.
+      2. Esc and click-away dismiss it; focus returns to the composer.
+      3. Nothing a card renders appears in the transcript.
+    labels: [command-framework, ui]
+    depends_on:
+      - "Session commands: command descriptor registry with aliases and availability"
+
+  # ── /task ─────────────────────────────────────────────────────────────
+  - title: "Session commands: /task creates an empty task"
+    description: >
+      "/task reproduce DNS error for tracing service" calls routerClient.createTask
+      ({ title, session_id }) and shows a toast linking to the new task. Nothing
+      is sent to the agent.
+    acceptance_criteria: |
+      1. /task <title> creates a task with that title bound to the current session.
+      2. A toast confirms with a link that opens the task.
+      3. /task with no title shows an inline "needs a title" error and creates nothing.
+    labels: [command-framework, ui, tasks]
+    depends_on:
+      - "Session commands: command descriptor registry with aliases and availability"
+
+  # ── /compact ──────────────────────────────────────────────────────────
+  - title: "Session commands: compaction capabilities in the provider matrix"
+    description: >
+      Add matrix behaviors for compaction (native | unsupported) and for
+      compaction focus instructions (native | unsupported) in
+      providers/provider/matrix.go. claude-code: both native. ACP providers:
+      unsupported unless the probe task finds otherwise. Surface via
+      GET /providers so the UI can gate /compact and the existing Compact
+      affordances (+ menu, ContextRim link).
+    acceptance_criteria: |
+      1. Both behaviors exist in the matrix and every provider declares them.
+      2. GET /providers returns them.
+      3. The + menu "Compact now" item and ContextRim's Compact link hide for providers without native compaction.
+    labels: [command-framework, provider]
+
+  - title: "Session commands: probe ACP harnesses for native compaction"
+    description: >
+      Check whether goose and kiro advertise a compact command over ACP
+      (available_commands_update or equivalent) and whether it accepts focus
+      text. If so, implement provider.Compactor in acprpc by invoking it and
+      flip their matrix entries. Record findings in
+      providers/acprpc/testdata/captures/README.md.
+    acceptance_criteria: |
+      1. Findings for goose and kiro are recorded with capture evidence.
+      2. Where supported, acprpc implements Compactor and the matrix reports native.
+    labels: [command-framework, provider, research]
+    depends_on:
+      - "Session commands: compaction capabilities in the provider matrix"
+
+  - title: "Session commands: /compact [focus] command"
+    description: >
+      Extend provider.Compactor to Compact(ctx, instructions string);
+      claude-code sends "/compact <instructions>". Thread instructions through
+      POST /sessions/{id}/compact (optional body field) and Runner.CompactNow;
+      auto-compaction passes "". The /compact descriptor is unavailable (hidden
+      reason: "<harness> can't compact") without native compaction — never
+      emulated. If the harness compacts but doesn't take focus text, the
+      descriptor shows no argument hint, and text after /compact blocks send
+      with "<harness> can't take compaction instructions — send /compact alone".
+    acceptance_criteria: |
+      1. /compact and /compact <focus> both compact a claude-code session; the focus text reaches the CLI.
+      2. Without native compaction, /compact is disabled in the menu with its reason.
+      3. With compaction but no focus support, /compact alone works and /compact <text> is blocked with the reason.
+      4. Auto-compaction on resume is unchanged.
+    labels: [command-framework, ui, provider]
+    depends_on:
+      - "Session commands: compaction capabilities in the provider matrix"
+      - "Session commands: command descriptor registry with aliases and availability"
+
+  # ── /usage ────────────────────────────────────────────────────────────
+  - title: "Session commands: per-session cumulative usage totals"
+    description: >
+      Alongside Session.LastUsage, persist running totals (input, output,
+      cache read/write, turns, cost_usd) updated in persistTurnEnd. Fold
+      EventSubagentUsage (delegates) into the totals and also keep a separate
+      delegate subtotal for the card's "↳ delegates" row. Add CostUSD to
+      contracts.Usage.
+    acceptance_criteria: |
+      1. Totals survive session sleep/wake and router restart.
+      2. Delegate usage is included in totals and available as its own subtotal.
+      3. A zero-token turn (e.g. compaction with no report) doesn't disturb totals.
+    labels: [usage, session]
+
+  - title: "Session commands: claude-code billing mode and rate limits"
+    description: >
+      Read system/init apiKeySource ("none" = subscription plan, otherwise
+      usage-billed) and stop discarding rate_limit_event (wire.go:455): map
+      rate_limit_info.unifiedWindows.{five_hour, seven_day} to
+      { id, label, used_pct, resets_at }. Carry both as provider events and
+      persist the latest snapshot on the session record. ACP providers report
+      billing mode "unknown" and no limits.
+    acceptance_criteria: |
+      1. A plan-login session records billing mode "plan" and current 5-hour/weekly windows.
+      2. An API-key session records billing mode "usage".
+      3. Parsing is covered by tests against the existing testdata captures.
+    labels: [usage, provider]
+
+  - title: "Session commands: session health fields"
+    description: >
+      Expose process_started_at and last_event_at for a session (from the
+      supervisor / session child) and the harness version from preflight. A
+      sleeping session reports state "sleeping" with no process fields.
+    acceptance_criteria: |
+      1. Running sessions report process start and last-event times.
+      2. Sleeping and crashed sessions report their state without process fields.
+      3. Harness version comes from the existing preflight data.
+    labels: [usage, session]
+
+  - title: "Session commands: SessionReport contract and endpoint"
+    description: >
+      Define SessionReport in pkg/contracts and ui/src/router/types.ts:
+      health (required), context (window, used, can_compact), tokens (with
+      delegate subtotal), billing.mode, limits[] (plan only), cost (usage-billed
+      only). Serve GET /sessions/{id}/report. Rule: cost appears only when
+      billing.mode == "usage"; an ACP-reported cost with unknown billing is
+      dropped.
+    acceptance_criteria: |
+      1. Report assembles from totals, billing/limits and health with optional sections omitted when unknown.
+      2. Cost never appears unless billing mode is "usage".
+      3. Contract tests cover a plan, an API-key and an ACP/local session.
+    labels: [usage, contracts]
+    depends_on:
+      - "Session commands: per-session cumulative usage totals"
+      - "Session commands: claude-code billing mode and rate limits"
+      - "Session commands: session health fields"
+
+  - title: "Session commands: /usage Ledger card"
+    description: >
+      /usage (aliases /status, /context) opens the Ledger card (mockup layout B):
+      one narrow column — Health, Context (meter + Compact now when allowed),
+      Tokens · session (in/out, from cache, ↳ delegates, turns), then Plan
+      limits or Spend when present. Missing sections are simply absent. Live
+      updates from turn_end and agent_state SSE while open.
+    acceptance_criteria: |
+      1. Matches the mockup's Ledger for plan, API-key and local sessions.
+      2. Updates live while open; dismisses per the card host.
+      3. Compact now appears only when the provider compacts natively.
+      4. Playwright covers opening via /usage and an alias.
+    labels: [usage, ui]
+    depends_on:
+      - "Session commands: SessionReport contract and endpoint"
+      - "Session commands: command card host above the composer"
+      - "Session commands: compaction capabilities in the provider matrix"
+
+  # ── /new family ───────────────────────────────────────────────────────
+  - title: "Session commands: extract shared Launchpad pills"
+    description: >
+      Pull FolderPill, AgentPill, ModelPill, TrustPill and IsolationPill out of
+      Launchpad into shared components that take value + onChange (+ an
+      optional locked state with a tooltip reason), so the /new card and the
+      Launchpad use the same controls.
+    acceptance_criteria: |
+      1. Launchpad uses the shared pills with no behavior change (existing tests + e2e green).
+      2. Pills support a locked state with a tooltip reason.
+    labels: [sessions, ui, refactor]
+
+  - title: "Session commands: session-create dry-run validation endpoint"
+    description: >
+      POST /sessions/validate takes a CreateSessionPayload (including staged
+      links) and runs resolveSessionDefaults + validateStagedLinks + the Data
+      Service link checks (one orchestrate holder per subject, pipeline runs
+      can't be led) without creating anything. Returns the resolved dir and
+      isolation (e.g. joined counterpart worktree) and field-level errors, so
+      the UI never re-implements git same-repo logic.
+    acceptance_criteria: |
+      1. Returns resolved dir/isolation for a link against a worktree-isolated counterpart in the same repo.
+      2. Returns the existing error messages for second-leader, pipeline-leader and missing-worktree cases.
+      3. Creates nothing (no session, no link, no worktree).
+    labels: [sessions, router]
+
+  - title: "Session commands: /new inline card"
+    description: >
+      /new [goal] opens a card with the goal prefilled from the args and every
+      pill prefilled from the current session's values (no defaults toggle).
+      Enter starts the session in the background and keeps the user here;
+      ⌘Enter starts and opens it. Name derivation matches the Launchpad.
+    acceptance_criteria: |
+      1. Pills start with the current session's folder, agent, model, trust and isolation; all editable.
+      2. Enter creates and stays; ⌘Enter creates and navigates.
+      3. Playwright covers both paths.
+    labels: [sessions, ui]
+    depends_on:
+      - "Session commands: extract shared Launchpad pills"
+      - "Session commands: command card host above the composer"
+
+  - title: "Session commands: /new-leader, /new-follower, /new-monitor"
+    description: >
+      Link variants of the /new card, creating the link atomically via staged
+      links on POST /sessions: /new-leader = leader preset, holder $new,
+      subject this; /new-follower = leader preset, holder this, subject $new;
+      /new-monitor = monitor preset, holder $new, subject this. The card shows
+      a relationship row (this ── leads/watches ──▶ new) with a prose tooltip
+      for what the link allows, and a cadence switch (on signal default, per
+      turn, manual) with its own tooltip. Hidden when feature_flags.linked_sessions is off.
+    acceptance_criteria: |
+      1. Each command creates the session and the correctly-oriented link in one request.
+      2. Cadence choice is applied to the link.
+      3. Commands are absent from the / menu when the flag is off.
+    labels: [sessions, links, ui]
+    depends_on:
+      - "Session commands: /new inline card"
+
+  - title: "Session commands: link-variant validation in menu and card"
+    description: >
+      /new-leader is disabled in the / menu with the reason when this session
+      already has a leader (naming it) or is a pipeline run. The card calls
+      POST /sessions/validate (debounced) as pills change: a joined counterpart
+      worktree locks the Isolation pill to "shares <name>'s worktree" with a
+      tooltip and an info banner; any blocking error disables Start with the
+      server's message.
+    acceptance_criteria: |
+      1. A led session shows /new-leader disabled with "already led by <name>".
+      2. Same-repo worktree counterpart locks Isolation and shows the joined folder.
+      3. Blocking validation errors disable both Start actions.
+    labels: [sessions, links, ui]
+    depends_on:
+      - "Session commands: /new-leader, /new-follower, /new-monitor"
+      - "Session commands: session-create dry-run validation endpoint"
+      - "Session commands: command descriptor registry with aliases and availability"
+
+  # ── /export ───────────────────────────────────────────────────────────
+  - title: "Session commands: transcript export endpoint"
+    description: >
+      GET /sessions/{id}/export?format=md|json renders server-side with
+      Content-Disposition: attachment. Always includes everything: tool calls
+      and results, thinking, system and link messages, delegate transcripts.
+      JSON uses a versioned wrapper { schema: "mads.export/v1", session,
+      messages, delegates }. Markdown folds tool calls in <details>.
+    acceptance_criteria: |
+      1. Both formats download with name <session-name>_<date>.<ext>.
+      2. Delegate transcripts are included.
+      3. JSON validates against the v1 wrapper shape; golden tests for both formats.
+    labels: [export, router]
+
+  - title: "Session commands: export format preference"
+    description: >
+      Add Config.export_format ("" = ask, "md", "json") with validation and a
+      row in Settings → Conversation.
+    acceptance_criteria: |
+      1. Field defaults to "" on existing installs.
+      2. Editable in Settings and persisted.
+    labels: [export, settings]
+
+  - title: "Session commands: /export command and dialog"
+    description: >
+      /export downloads in the saved format; /export md|json overrides once.
+      With no saved preference, a small dialog offers Markdown / JSON with
+      "Always use this format" (checked by default) and Download.
+    acceptance_criteria: |
+      1. With a preference set, /export downloads immediately.
+      2. Without one, the dialog appears; checking the box saves the preference.
+      3. /export md and /export json override without changing the preference.
+    labels: [export, ui]
+    depends_on:
+      - "Session commands: transcript export endpoint"
+      - "Session commands: export format preference"
+      - "Session commands: command descriptor registry with aliases and availability"

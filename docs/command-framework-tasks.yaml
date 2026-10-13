@@ -1,5 +1,8 @@
 # Command & mention framework (/ # @) — implementation graph.
 # Design + visual: docs/mockups/command-framework.html
+# Tasks 1-3 (design doc, # / split, descriptor registry) are superseded by
+# docs/session-commands-tasks.yaml; seed that first and point the remaining
+# depends_on entries here at its task IDs.
 # Seed:  bin/mads seed -session ses_88cc3077de745194 -file docs/command-framework-tasks.yaml
 tasks:
   - title: "Command framework: write the design doc"

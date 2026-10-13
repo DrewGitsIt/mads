@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { PipelineClient } from "../pipeline/client/pipelineClient";
 import type { RouterClient } from "../router/client";
 import { Button } from "../components/Button/Button";
@@ -17,6 +17,8 @@ export interface TasksTabProps {
   routerClient: RouterClient;
   /** Opt-in — threaded to the graph's live stage-pip run-state subscription only. */
   pipelineClient?: PipelineClient;
+  /** Opens this task's detail sheet; a new object each time re-opens it. */
+  focusTask?: { id: string };
 }
 
 type ViewMode = "list" | "graph";
@@ -27,7 +29,7 @@ type OpenSheet = "detail" | "import" | null;
  * open" piece of state, not two independent booleans (§5, kit has no Modal,
  * bulk import reuses SideSheet).
  */
-export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabProps) {
+export function TasksTab({ sessionId, routerClient, pipelineClient, focusTask }: TasksTabProps) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   const workspace = useSessionWorkspace(routerClient, sessionId);
   const { capabilities } = useCapabilities();
@@ -41,6 +43,10 @@ export function TasksTab({ sessionId, routerClient, pipelineClient }: TasksTabPr
     setSelectedTaskId(taskId);
     setOpenSheet("detail");
   }
+
+  useEffect(() => {
+    if (focusTask) selectTask(focusTask.id);
+  }, [focusTask]);
 
   return (
     <div className={styles.tab}>

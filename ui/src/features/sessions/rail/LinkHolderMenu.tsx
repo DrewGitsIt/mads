@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { Popover } from "../../../components/Popover/Popover";
-import pillStyles from "../launchpad/pills/pills.module.css";
+import pillStyles from "../pills/pills.module.css";
 import { flyoutPlacement } from "./LinkOptionsMenu";
 import type { SubjectBadge } from "./railLinks";
 import styles from "./SessionRail.module.css";

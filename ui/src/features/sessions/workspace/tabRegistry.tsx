@@ -30,6 +30,10 @@ export interface WorkspaceTabContext {
   focusCommitFile?: { hash: string; path: string };
   /** Open one of this session's delegates (harness subagents) as a full-pane view — the dock's "Open as page". */
   onOpenDelegate?: (harnessId: string) => void;
+  /** Open one of this session's tasks — the composer's "/task" toast link; the workspace routes to the Tasks tab. */
+  onOpenTask?: (taskId: string) => void;
+  /** Task to open in the Tasks tab's detail sheet, set by onOpenTask. A new object each time, so a repeat click re-opens. */
+  focusTask?: { id: string };
 }
 
 export interface WorkspaceTabDef {
@@ -54,6 +58,7 @@ function ConversationTabView({
   onOpenFile,
   onOpenCommitFile,
   onOpenDelegate,
+  onOpenTask,
 }: WorkspaceTabContext) {
   const { tasks, tasksById } = useTaskStore(routerClient, sessionId);
   return (
@@ -69,6 +74,7 @@ function ConversationTabView({
           onOpenFile={onOpenFile}
           onOpenCommitFile={onOpenCommitFile}
           onOpenDelegate={onOpenDelegate}
+          onOpenTask={onOpenTask}
         />
       </div>
       <ContextRail
@@ -82,8 +88,15 @@ function ConversationTabView({
   );
 }
 
-function TasksTabView({ sessionId, routerClient, pipelineClient }: WorkspaceTabContext) {
-  return <TasksTab sessionId={sessionId} routerClient={routerClient} pipelineClient={pipelineClient} />;
+function TasksTabView({ sessionId, routerClient, pipelineClient, focusTask }: WorkspaceTabContext) {
+  return (
+    <TasksTab
+      sessionId={sessionId}
+      routerClient={routerClient}
+      pipelineClient={pipelineClient}
+      focusTask={focusTask}
+    />
+  );
 }
 
 function FilesTabView({ sessionId, routerClient, focusFilePath, focusCommitFile }: WorkspaceTabContext) {

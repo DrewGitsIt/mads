@@ -1,10 +1,19 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { Composer } from "./Composer";
 import { clearAllDrafts } from "./composerDrafts";
 import { FakeRouterClient } from "../../router/fixtures";
 import { setPlatform } from "../../platform/shortcut";
-import type { Agent, Model } from "../../router/types";
+import type { Agent, Model, Session } from "../../router/types";
+import type { CommandDescriptor } from "./commands/types";
+import { useState } from "react";
+import { Popover } from "../../components/Popover/Popover";
 
 // Fake Monaco that also drives the real onMount/onChange callbacks
 // ExpandedComposer wires up (addCommand for the sendFromEditor binding and
@@ -34,7 +43,10 @@ vi.mock("@monaco-editor/react", () => ({
       setPosition: () => {},
       revealPositionInCenterIfOutsideViewport: () => {},
       getModel: () => ({
-        getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }),
+        getPositionAt: (offset: number) => ({
+          lineNumber: 1,
+          column: offset + 1,
+        }),
         getOffsetAt: (pos: { column: number }) => pos.column - 1,
         getValueLength: () => props.value.length,
       }),
@@ -97,7 +109,12 @@ describe("Composer", () => {
   afterEach(() => setPlatform(undefined));
 
   it("keeps the placeholder text exactly (e2e specs select on it)", () => {
-    render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+    render(
+      <Composer
+        routerClient={new FakeRouterClient()}
+        sessionId="session-active"
+      />,
+    );
     expect(screen.getByPlaceholderText(PLACEHOLDER)).toBeTruthy();
   });
 
@@ -115,7 +132,9 @@ describe("Composer", () => {
   it("selects a mention candidate, splicing the token into the value and staging it", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "check @deep" } });
     await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
@@ -127,7 +146,32 @@ describe("Composer", () => {
     expect(screen.getAllByText("deep-research").length).toBeGreaterThan(0);
   });
 
-  it("resolves / commands against skill capabilities, badging unhealthy ones", async () => {
+  it("resolves # skills against capabilities, badging unhealthy ones, and inserts the skill as text", async () => {
+    const client = new FakeRouterClient();
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        agentId="autonomous-executor"
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: "#security" } });
+
+    await waitFor(() =>
+      expect(menu().getByText("#security-review")).toBeTruthy(),
+    );
+    expect(screen.getByText("unhealthy")).toBeTruthy();
+
+    fireEvent.mouseDown(menu().getByText("#security-review"));
+    expect(textarea.value).toBe("#security-review ");
+    expect(screen.queryByLabelText(/Remove /)).toBeNull();
+  });
+
+  it("/ no longer lists skills — only commands", async () => {
     const client = new FakeRouterClient();
     render(
       <Composer
@@ -138,10 +182,12 @@ describe("Composer", () => {
     );
     const textarea = screen.getByPlaceholderText(/Message the agent/);
 
-    fireEvent.change(textarea, { target: { value: "/security" } });
-
-    await waitFor(() => expect(screen.getByText("/security-review")).toBeTruthy());
-    expect(screen.getByText("unhealthy")).toBeTruthy();
+    fireEvent.change(textarea, { target: { value: "/" } });
+    await waitFor(() =>
+      expect(menu().getByRole("option", { name: /^\/task\b/ })).toBeTruthy(),
+    );
+    expect(menu().queryByText(/security-review/)).toBeNull();
+    expect(menu().queryByText(/verify/)).toBeNull();
   });
 
   describe("hotkeys", () => {
@@ -165,7 +211,12 @@ describe("Composer", () => {
     });
 
     it("plain Ctrl+E and Cmd+E do nothing on linux", async () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
       const textarea = screen.getByPlaceholderText(/Message the agent/);
       fireEvent.keyDown(textarea, { key: "e", ctrlKey: true });
       fireEvent.keyDown(textarea, { key: "e", metaKey: true });
@@ -175,7 +226,12 @@ describe("Composer", () => {
 
     it("Cmd+E expands on mac, and Ctrl+Shift+E does not", async () => {
       setPlatform("darwin");
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
       const textarea = screen.getByPlaceholderText(/Message the agent/);
       fireEvent.keyDown(textarea, EXPAND_LINUX);
       await new Promise((r) => setTimeout(r, 20));
@@ -187,15 +243,25 @@ describe("Composer", () => {
 
     it("the attachFiles hotkey opens the file picker, collapsed and expanded", async () => {
       const { container } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
       );
-      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const input =
+        container.querySelector<HTMLInputElement>('input[type="file"]')!;
       const picked = vi.spyOn(input, "click");
 
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), ATTACH_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        ATTACH_LINUX,
+      );
       expect(picked).toHaveBeenCalledTimes(1);
 
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        EXPAND_LINUX,
+      );
       const editor = await screen.findByTestId("fake-monaco-editor");
       fireEvent.keyDown(editor, ATTACH_LINUX);
       expect(picked).toHaveBeenCalledTimes(2);
@@ -204,10 +270,16 @@ describe("Composer", () => {
     it("the toggleView hotkey switches to terminal when onModeChange is provided", () => {
       const onModeChange = vi.fn();
       const { rerender } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
       );
       // No handler: the chord is left alone (no throw, nothing to call).
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), TOGGLE_VIEW_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        TOGGLE_VIEW_LINUX,
+      );
 
       rerender(
         <Composer
@@ -216,105 +288,218 @@ describe("Composer", () => {
           onModeChange={onModeChange}
         />,
       );
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), TOGGLE_VIEW_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        TOGGLE_VIEW_LINUX,
+      );
       expect(onModeChange).toHaveBeenCalledWith("terminal");
     });
   });
 
   describe("+ menu", () => {
     it("lists the Input items with platform hotkey labels", () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
       const m = openPlusMenu();
-      expect(m.getByRole("menuitem", { name: /Attach files…/ }).textContent).toContain("Ctrl+Shift+A");
-      expect(m.getByRole("menuitem", { name: /Mention file or session/ })).toBeTruthy();
+      expect(
+        m.getByRole("menuitem", { name: /Attach files…/ }).textContent,
+      ).toContain("Ctrl+Shift+A");
+      expect(
+        m.getByRole("menuitem", { name: /Mention file or session/ }),
+      ).toBeTruthy();
       expect(m.getByRole("menuitem", { name: /Commands/ })).toBeTruthy();
-      expect(m.getByRole("menuitem", { name: /Expand editor/ }).textContent).toContain("Ctrl+Shift+E");
-      expect(m.getByRole("menuitem", { name: /Keyboard shortcuts/ })).toBeTruthy();
+      expect(
+        m.getByRole("menuitem", { name: /Expand editor/ }).textContent,
+      ).toContain("Ctrl+Shift+E");
+      expect(
+        m.getByRole("menuitem", { name: /Keyboard shortcuts/ }),
+      ).toBeTruthy();
     });
 
     it("labels hotkeys with mac glyphs on darwin", () => {
       setPlatform("darwin");
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
       const m = openPlusMenu();
-      expect(m.getByRole("menuitem", { name: /Expand editor/ }).textContent).toContain("⌘E");
-      expect(m.getByRole("menuitem", { name: /Attach files…/ }).textContent).toContain("⌘⇧A");
+      expect(
+        m.getByRole("menuitem", { name: /Expand editor/ }).textContent,
+      ).toContain("⌘E");
+      expect(
+        m.getByRole("menuitem", { name: /Attach files…/ }).textContent,
+      ).toContain("⌘⇧A");
     });
 
     it("Expand editor / Collapse editor toggle the Monaco editor", async () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Expand editor/ }));
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Expand editor/ }),
+      );
       expect(await screen.findByTestId("fake-monaco-editor")).toBeTruthy();
       expect(screen.queryByRole("menu")).toBeNull(); // the menu closes on choose
 
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Collapse editor/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Collapse editor/ }),
+      );
       expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
       expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy();
     });
 
     it("Attach files… opens the file picker", () => {
       const { container } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
       );
-      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const input =
+        container.querySelector<HTMLInputElement>('input[type="file"]')!;
       const picked = vi.spyOn(input, "click");
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }),
+      );
       expect(picked).toHaveBeenCalledTimes(1);
     });
 
     it("keeps attach reachable in the expanded editor through its + menu", async () => {
       const { container } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
       );
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        EXPAND_LINUX,
+      );
       await screen.findByTestId("fake-monaco-editor");
 
-      const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+      const input =
+        container.querySelector<HTMLInputElement>('input[type="file"]')!;
       const picked = vi.spyOn(input, "click");
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Attach files…/ }),
+      );
       expect(picked).toHaveBeenCalledTimes(1);
     });
 
     it("Mention inserts @ at the caret and opens the mention menu", async () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
       fireEvent.change(textarea, { target: { value: "check" } });
 
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Mention file or session/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", {
+          name: /Mention file or session/,
+        }),
+      );
       expect(textarea.value).toBe("check @");
-      await waitFor(() => expect(menu().getByText("deep-research")).toBeTruthy());
+      await waitFor(() =>
+        expect(menu().getByText("deep-research")).toBeTruthy(),
+      );
     });
 
     it("Commands inserts / and opens the command menu", async () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-      const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
 
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Commands/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Commands/ }),
+      );
       expect(textarea.value).toBe("/");
-      await waitFor(() => expect(menu().getByRole("option", { name: "/task" })).toBeTruthy());
+      await waitFor(() =>
+        expect(menu().getByRole("option", { name: /^\/task\b/ })).toBeTruthy(),
+      );
     });
 
     it("Mention from the expanded editor collapses back to the textarea first", async () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        EXPAND_LINUX,
+      );
       await screen.findByTestId("fake-monaco-editor");
 
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Mention file or session/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", {
+          name: /Mention file or session/,
+        }),
+      );
       expect(screen.queryByTestId("fake-monaco-editor")).toBeNull();
-      expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe("@");
+      expect(
+        (
+          screen.getByPlaceholderText(
+            /Message the agent/,
+          ) as HTMLTextAreaElement
+        ).value,
+      ).toBe("@");
     });
 
     it("Keyboard shortcuts lists every binding from hotkeys.ts", () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Keyboard shortcuts/ }));
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Keyboard shortcuts/ }),
+      );
       const keys = screen.getByRole("group", { name: "Keyboard shortcuts" });
       const text = keys.textContent ?? "";
-      for (const label of ["⏎", "⇧⏎", "Ctrl+Shift+E", "Ctrl+⏎", "Esc", "@", "/", "Ctrl+Shift+A", "Ctrl+Shift+T"]) {
+      for (const label of [
+        "⏎",
+        "⇧⏎",
+        "Ctrl+Shift+E",
+        "Ctrl+⏎",
+        "Esc",
+        "@",
+        "/",
+        "Ctrl+Shift+A",
+        "Ctrl+Shift+T",
+      ]) {
         expect(text).toContain(label);
       }
     });
 
     it("hides the View section without onModeChange", () => {
-      render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
+      render(
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
+      );
       openPlusMenu();
       expect(screen.queryByRole("group", { name: "View" })).toBeNull();
     });
@@ -331,14 +516,20 @@ describe("Composer", () => {
       );
       openPlusMenu();
       const view = within(screen.getByRole("group", { name: "View" }));
-      expect(view.getByRole("button", { name: /Chat/ }).getAttribute("aria-pressed")).toBe("true");
+      expect(
+        view.getByRole("button", { name: /Chat/ }).getAttribute("aria-pressed"),
+      ).toBe("true");
       fireEvent.click(view.getByRole("button", { name: /Terminal/ }));
       expect(onModeChange).toHaveBeenCalledWith("terminal");
     });
 
     it("hides the context row without usage, shows tokens and % with it", () => {
       const { rerender } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" contextWindow={128000} />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          contextWindow={128000}
+        />,
       );
       openPlusMenu();
       expect(screen.queryByTestId("composer-context")).toBeNull();
@@ -361,15 +552,26 @@ describe("Composer", () => {
     it("offers Compact now only with onCompact, and calls it", () => {
       const onCompact = vi.fn();
       const { rerender } = render(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+        />,
       );
-      expect(openPlusMenu().queryByRole("menuitem", { name: /Compact now/ })).toBeNull();
+      expect(
+        openPlusMenu().queryByRole("menuitem", { name: /Compact now/ }),
+      ).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Input options" })); // close
 
       rerender(
-        <Composer routerClient={new FakeRouterClient()} sessionId="session-active" onCompact={onCompact} />,
+        <Composer
+          routerClient={new FakeRouterClient()}
+          sessionId="session-active"
+          onCompact={onCompact}
+        />,
       );
-      fireEvent.click(openPlusMenu().getByRole("menuitem", { name: /Compact now/ }));
+      fireEvent.click(
+        openPlusMenu().getByRole("menuitem", { name: /Compact now/ }),
+      );
       expect(onCompact).toHaveBeenCalledTimes(1);
     });
   });
@@ -388,25 +590,41 @@ describe("Composer", () => {
   });
 
   it("renders the expanded editor with a line-number gutter and a send hint", async () => {
-    render(<Composer routerClient={new FakeRouterClient()} sessionId="session-active" />);
-    fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+    render(
+      <Composer
+        routerClient={new FakeRouterClient()}
+        sessionId="session-active"
+      />,
+    );
+    fireEvent.keyDown(
+      screen.getByPlaceholderText(/Message the agent/),
+      EXPAND_LINUX,
+    );
     const editor = await screen.findByTestId("fake-monaco-editor");
     expect(editor.getAttribute("data-line-numbers")).toBe("on");
-    expect(screen.getByTestId("expanded-composer").textContent).toContain("Ctrl+⏎ send · Esc collapse");
+    expect(screen.getByTestId("expanded-composer").textContent).toContain(
+      "Ctrl+⏎ send · Esc collapse",
+    );
   });
 
   it("round-trips typed text losslessly between collapsed and expanded", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "line one\nline two\t🎉" } });
     fireEvent.keyDown(textarea, EXPAND_LINUX);
 
-    const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
+    const editor = (await screen.findByTestId(
+      "fake-monaco-editor",
+    )) as HTMLTextAreaElement;
     expect(editor.value).toBe("line one\nline two\t🎉");
 
-    fireEvent.change(editor, { target: { value: "line one\nline two\t🎉 edited" } });
+    fireEvent.change(editor, {
+      target: { value: "line one\nline two\t🎉 edited" },
+    });
     fireEvent.keyDown(editor, EXPAND_LINUX);
 
     expect(screen.getByPlaceholderText(/Message the agent/)).toHaveProperty(
@@ -423,7 +641,9 @@ describe("Composer", () => {
     const textarea = screen.getByPlaceholderText(/Message the agent/);
     fireEvent.keyDown(textarea, EXPAND_LINUX);
 
-    const editor = (await screen.findByTestId("fake-monaco-editor")) as HTMLTextAreaElement;
+    const editor = (await screen.findByTestId(
+      "fake-monaco-editor",
+    )) as HTMLTextAreaElement;
     fireEvent.change(editor, { target: { value: "hello from monaco" } });
     fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true });
 
@@ -439,9 +659,17 @@ describe("Composer", () => {
   it("shows Stop and Queue in the expanded action bar while busy", async () => {
     const onStop = vi.fn();
     render(
-      <Composer routerClient={new FakeRouterClient()} sessionId="session-active" busy onStop={onStop} />,
+      <Composer
+        routerClient={new FakeRouterClient()}
+        sessionId="session-active"
+        busy
+        onStop={onStop}
+      />,
     );
-    fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+    fireEvent.keyDown(
+      screen.getByPlaceholderText(/Message the agent/),
+      EXPAND_LINUX,
+    );
     await screen.findByTestId("fake-monaco-editor");
     expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /stop generating/i }));
@@ -479,7 +707,9 @@ describe("Composer", () => {
     const sendMessage = vi.spyOn(client, "sendMessage");
 
     render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "hello there" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -498,7 +728,11 @@ describe("Composer", () => {
   // here — a local queue died with the pane and the message was never sent.
   it("hands a mid-turn send to the session's queue instead of holding it", async () => {
     const client = new FakeRouterClient();
-    const queued = { id: "q_1", text: "next question", queued_at: "2026-09-29T22:58:00Z" };
+    const queued = {
+      id: "q_1",
+      text: "next question",
+      queued_at: "2026-09-29T22:58:00Z",
+    };
     const sendMessage = vi
       .spyOn(client, "sendMessage")
       .mockResolvedValue({ status: "queued", queued });
@@ -514,7 +748,9 @@ describe("Composer", () => {
         onSent={onSent}
       />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "next question" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -530,11 +766,15 @@ describe("Composer", () => {
 
   it("labels the send button Send when idle and Queue while busy", () => {
     const client = new FakeRouterClient();
-    const { rerender } = render(<Composer routerClient={client} sessionId="session-active" />);
+    const { rerender } = render(
+      <Composer routerClient={client} sessionId="session-active" />,
+    );
     expect(screen.getByRole("button", { name: "Send" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
 
-    rerender(<Composer routerClient={client} sessionId="session-active" busy />);
+    rerender(
+      <Composer routerClient={client} sessionId="session-active" busy />,
+    );
     expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
   });
@@ -544,12 +784,25 @@ describe("Composer", () => {
     const onStop = vi.fn();
 
     const { rerender } = render(
-      <Composer routerClient={client} sessionId="session-active" onStop={onStop} />,
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        onStop={onStop}
+      />,
     );
     // Idle: no Stop button.
-    expect(screen.queryByRole("button", { name: /stop generating/i })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /stop generating/i }),
+    ).toBeNull();
 
-    rerender(<Composer routerClient={client} sessionId="session-active" busy onStop={onStop} />);
+    rerender(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        busy
+        onStop={onStop}
+      />,
+    );
     const stop = screen.getByRole("button", { name: /stop generating/i });
     fireEvent.click(stop);
     expect(onStop).toHaveBeenCalledTimes(1);
@@ -576,28 +829,36 @@ describe("Composer", () => {
 
   it("restores a per-session draft after the composer remounts", () => {
     const client = new FakeRouterClient();
-    const { unmount } = render(<Composer routerClient={client} sessionId="session-active" />);
+    const { unmount } = render(
+      <Composer routerClient={client} sessionId="session-active" />,
+    );
     fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
       target: { value: "half-written thought" },
     });
     unmount();
 
     render(<Composer routerClient={client} sessionId="session-active" />);
-    expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe(
-      "half-written thought",
-    );
+    expect(
+      (screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement)
+        .value,
+    ).toBe("half-written thought");
   });
 
   it("keeps drafts separate per session", () => {
     const client = new FakeRouterClient();
-    const { unmount } = render(<Composer routerClient={client} sessionId="session-active" />);
+    const { unmount } = render(
+      <Composer routerClient={client} sessionId="session-active" />,
+    );
     fireEvent.change(screen.getByPlaceholderText(/Message the agent/), {
       target: { value: "for session A" },
     });
     unmount();
 
     render(<Composer routerClient={client} sessionId="session-other" />);
-    expect((screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement).value).toBe("");
+    expect(
+      (screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement)
+        .value,
+    ).toBe("");
   });
 
   it("auto-sends initialValue on mount and clears the textarea once it succeeds", async () => {
@@ -612,7 +873,9 @@ describe("Composer", () => {
         autoSendInitial
       />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
     expect(textarea.value).toBe("fix the deploy script");
 
     await waitFor(() =>
@@ -627,7 +890,9 @@ describe("Composer", () => {
 
   it("preserves the initial text and calls onSendError when the auto-send fails", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("network down"));
+    vi.spyOn(client, "sendMessage").mockRejectedValue(
+      new Error("network down"),
+    );
     const onSendError = vi.fn();
 
     render(
@@ -639,9 +904,13 @@ describe("Composer", () => {
         onSendError={onSendError}
       />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
-    await waitFor(() => expect(onSendError).toHaveBeenCalledWith("network down"));
+    await waitFor(() =>
+      expect(onSendError).toHaveBeenCalledWith("network down"),
+    );
     expect(textarea.value).toBe("fix the deploy script");
   });
 
@@ -650,8 +919,16 @@ describe("Composer", () => {
     vi.spyOn(client, "sendMessage").mockRejectedValue(new Error("boom"));
     const onSendError = vi.fn();
 
-    render(<Composer routerClient={client} sessionId="session-active" onSendError={onSendError} />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        onSendError={onSendError}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: "hello there" } });
     fireEvent.keyDown(textarea, { key: "Enter" });
 
@@ -661,7 +938,9 @@ describe("Composer", () => {
 
   it("'/agent' descends to registry agents; selecting one rebinds the session, clears the composer, and confirms — no chip, no send", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "listAgents").mockResolvedValue([fixtureAgent("investigator")]);
+    vi.spyOn(client, "listAgents").mockResolvedValue([
+      fixtureAgent("investigator"),
+    ]);
     const sendMessage = vi.spyOn(client, "sendMessage");
     const onUpdateSession = vi.fn();
     const onCommandExecuted = vi.fn();
@@ -674,12 +953,16 @@ describe("Composer", () => {
         onCommandExecuted={onCommandExecuted}
       />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "/agent" } });
-    await waitFor(() => expect(menu().getByRole("option", { name: "/agent" })).toBeTruthy());
+    await waitFor(() =>
+      expect(menu().getByRole("option", { name: /^\/agent\b/ })).toBeTruthy(),
+    );
 
-    fireEvent.mouseDown(menu().getByRole("option", { name: "/agent" }));
+    fireEvent.mouseDown(menu().getByRole("option", { name: /^\/agent\b/ }));
     expect(textarea.value).toBe("/agent ");
 
     await waitFor(() =>
@@ -687,9 +970,14 @@ describe("Composer", () => {
     );
     fireEvent.mouseDown(menu().getByRole("option", { name: "investigator" }));
 
-    expect(onUpdateSession).toHaveBeenCalledWith({ agent: "investigator" });
     await waitFor(() =>
-      expect(onCommandExecuted).toHaveBeenCalledWith("Agent set to investigator"),
+      expect(onUpdateSession).toHaveBeenCalledWith({ agent: "investigator" }),
+    );
+    await waitFor(() =>
+      expect(onCommandExecuted).toHaveBeenCalledWith(
+        "Agent set to investigator",
+        undefined,
+      ),
     );
     expect(textarea.value).toBe("");
     expect(screen.queryByLabelText(/Remove /)).toBeNull();
@@ -712,36 +1000,51 @@ describe("Composer", () => {
         onCommandExecuted={onCommandExecuted}
       />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "/model" } });
-    await waitFor(() => expect(menu().getByRole("option", { name: "/model" })).toBeTruthy());
+    await waitFor(() =>
+      expect(menu().getByRole("option", { name: /^\/model\b/ })).toBeTruthy(),
+    );
 
-    fireEvent.mouseDown(menu().getByRole("option", { name: "/model" }));
+    fireEvent.mouseDown(menu().getByRole("option", { name: /^\/model\b/ }));
     expect(textarea.value).toBe("/model ");
 
     await waitFor(() =>
-      expect(menu().getByRole("option", { name: "Claude Opus 5" })).toBeTruthy(),
+      expect(
+        menu().getByRole("option", { name: "Claude Opus 5" }),
+      ).toBeTruthy(),
     );
     fireEvent.mouseDown(menu().getByRole("option", { name: "Claude Opus 5" }));
 
     expect(client.listModels).toHaveBeenCalledWith("claudecode");
-    expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" });
     await waitFor(() =>
-      expect(onCommandExecuted).toHaveBeenCalledWith("Model set to Claude Opus 5"),
+      expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" }),
+    );
+    await waitFor(() =>
+      expect(onCommandExecuted).toHaveBeenCalledWith(
+        "Model set to Claude Opus 5",
+        undefined,
+      ),
     );
     expect(textarea.value).toBe("");
   });
 
-  it("a no-argument command (/task) executes on first select — inserts text, stages no chip", async () => {
+  it("a command that takes args (/task) inserts '/task ' on select for the title — stages no chip", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "/task" } });
-    await waitFor(() => expect(menu().getByRole("option", { name: "/task" })).toBeTruthy());
+    await waitFor(() =>
+      expect(menu().getByRole("option", { name: /^\/task\b/ })).toBeTruthy(),
+    );
 
-    fireEvent.mouseDown(menu().getByRole("option", { name: "/task" }));
+    fireEvent.mouseDown(menu().getByRole("option", { name: /^\/task\b/ }));
 
     expect(textarea.value).toBe("/task ");
     expect(screen.queryByLabelText(/Remove /)).toBeNull();
@@ -750,7 +1053,9 @@ describe("Composer", () => {
   it("unrecognized text after / just filters — no menu, no crash, no chip", async () => {
     const client = new FakeRouterClient();
     render(<Composer routerClient={client} sessionId="session-active" />);
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     fireEvent.change(textarea, { target: { value: "/zzzznotacommand" } });
     await new Promise((r) => setTimeout(r, 200));
@@ -769,9 +1074,15 @@ describe("Composer", () => {
     const onUpdateSession = vi.fn();
 
     render(
-      <Composer routerClient={client} sessionId="session-active" onUpdateSession={onUpdateSession} />,
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        onUpdateSession={onUpdateSession}
+      />,
     );
-    const textarea = screen.getByPlaceholderText(/Message the agent/) as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
 
     // open — typing "/" surfaces the root command list
     fireEvent.change(textarea, { target: { value: "/agent" } });
@@ -790,18 +1101,562 @@ describe("Composer", () => {
     // back — Escape drops the argument, returning to level 1
     fireEvent.keyDown(textarea, { key: "Escape" });
     expect(textarea.value).toBe("/agent");
-    await waitFor(() => expect(menu().getByRole("option", { name: "/agent" })).toBeTruthy());
+    await waitFor(() =>
+      expect(menu().getByRole("option", { name: /^\/agent\b/ })).toBeTruthy(),
+    );
 
     // descend again, then execute via Enter on the (reset) first leaf
     fireEvent.keyDown(textarea, { key: "Enter" });
     expect(textarea.value).toBe("/agent ");
     await waitFor(() =>
-      expect(menu().getByRole("option", { name: "autonomous-executor" })).toBeTruthy(),
+      expect(
+        menu().getByRole("option", { name: "autonomous-executor" }),
+      ).toBeTruthy(),
     );
     fireEvent.keyDown(textarea, { key: "Enter" });
 
-    expect(onUpdateSession).toHaveBeenCalledWith({ agent: "autonomous-executor" });
     expect(textarea.value).toBe("");
+    await waitFor(() =>
+      expect(onUpdateSession).toHaveBeenCalledWith({
+        agent: "autonomous-executor",
+      }),
+    );
+  });
+
+  it("typing a full '/model <id>' (no menu row matches the label) and pressing Enter runs it — nothing is sent", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "listModels").mockResolvedValue([
+      { id: "claude-opus-5", name: "Claude Opus 5" },
+    ]);
+    const sendMessage = vi.spyOn(client, "sendMessage");
+    const onUpdateSession = vi.fn();
+    render(
+      <Composer
+        routerClient={client}
+        sessionId="session-active"
+        provider="claudecode"
+        onUpdateSession={onUpdateSession}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(
+      /Message the agent/,
+    ) as HTMLTextAreaElement;
+
+    fireEvent.change(textarea, { target: { value: "/model claude-opus-5" } });
+    fireEvent.keyDown(textarea, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(onUpdateSession).toHaveBeenCalledWith({ model: "claude-opus-5" }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  describe("command registry", () => {
+    it("renders an unavailable command disabled with its reason; arrows skip it and Enter on it only shows the reason", async () => {
+      const client = new FakeRouterClient();
+      const sendMessage = vi.spyOn(client, "sendMessage");
+      const ran = vi.fn();
+      const commands: CommandDescriptor[] = [
+        {
+          name: "new-leader",
+          description: "start a session that leads this one",
+          available: () => ({
+            ok: false,
+            reason: "already led by triage-lead",
+          }),
+          execute: ran,
+        },
+        { name: "new", description: "start a session", execute: ran },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/new" } });
+      const row = await waitFor(() =>
+        menu().getByRole("option", { name: /^\/new-leader/ }),
+      );
+      expect(row.getAttribute("aria-disabled")).toBe("true");
+      expect(within(row).getByText("already led by triage-lead")).toBeTruthy();
+
+      // Exact "/new" is ranked first and active; arrowing never lands on the disabled row.
+      const active = () => menu().getByRole("option", { selected: true });
+      expect(active().textContent).toMatch(/^\/new(?!-)/);
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      expect(active().textContent).toMatch(/^\/new(?!-)/);
+
+      // Clicking it does nothing.
+      fireEvent.mouseDown(row);
+      expect(ran).not.toHaveBeenCalled();
+
+      // Typed in full + Enter: the reason, inline; nothing runs or sends, the text stays.
+      fireEvent.change(textarea, { target: { value: "/new-leader" } });
+      await waitFor(() =>
+        expect(menu().getAllByRole("option")).toHaveLength(1),
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("alert").textContent).toBe(
+        "already led by triage-lead",
+      );
+      expect(textarea.value).toBe("/new-leader");
+
+      fireEvent.change(textarea, {
+        target: { value: "/new-leader with a goal" },
+      });
+      expect(screen.queryByRole("alert")).toBeNull(); // an edit clears the notice
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(screen.getByRole("alert").textContent).toBe(
+        "already led by triage-lead",
+      );
+
+      expect(ran).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("a runsWhenUnavailable command stays disabled in the menu but typed + Enter runs it", async () => {
+      const client = new FakeRouterClient();
+      const ran = vi.fn();
+      const commands: CommandDescriptor[] = [
+        {
+          name: "new-leader",
+          description: "start a session that leads this one",
+          argHint: "[goal]",
+          available: () => ({ ok: false, reason: "already led by triage-lead" }),
+          runsWhenUnavailable: true,
+          execute: ran,
+        },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/new-leader" } });
+      const row = await waitFor(() =>
+        menu().getByRole("option", { name: /^\/new-leader/ }),
+      );
+      fireEvent.mouseDown(row);
+      expect(ran).not.toHaveBeenCalled();
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(ran).toHaveBeenCalledWith({ args: "" }, expect.anything());
+
+      fireEvent.change(textarea, { target: { value: "/new-leader a goal" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(ran).toHaveBeenLastCalledWith({ args: "a goal" }, expect.anything());
+    });
+
+    it("an alias matches in the menu and runs its command when typed + Enter", async () => {
+      const client = new FakeRouterClient();
+      const execute = vi.fn();
+      const commands: CommandDescriptor[] = [
+        {
+          name: "usage",
+          aliases: ["status", "context"],
+          description: "usage and health",
+          execute,
+        },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/stat" } });
+      const row = await waitFor(() =>
+        menu().getByRole("option", { name: /^\/usage/ }),
+      );
+      expect(within(row).getByText("/status")).toBeTruthy();
+
+      fireEvent.change(textarea, { target: { value: "/status" } });
+      await waitFor(() =>
+        expect(menu().getByRole("option", { name: /^\/usage/ })).toBeTruthy(),
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      expect(execute).toHaveBeenCalledWith({ args: "" }, expect.anything());
+      expect(textarea.value).toBe("");
+    });
+
+    it("a session record update while the menu is open keeps the arrowed selection", async () => {
+      const client = new FakeRouterClient();
+      const noop = vi.fn();
+      const commands: CommandDescriptor[] = ["alpha", "beta", "gamma"].map(
+        (name) => ({ name, description: name, execute: noop }),
+      );
+      const session: Session = {
+        id: "session-active",
+        name: "dns-tracing",
+        activity: "active",
+        created_at: "2026-10-01T00:00:00Z",
+        updated_at: "2026-10-01T00:00:00Z",
+      };
+      const { rerender } = render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          session={session}
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/" } });
+      await waitFor(() => expect(menu().getAllByRole("option")).toHaveLength(3));
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      fireEvent.keyDown(textarea, { key: "ArrowDown" });
+      const active = () => menu().getByRole("option", { selected: true });
+      expect(active().textContent).toMatch(/^\/gamma/);
+
+      // A turn ends: a new record, nothing a command reads changed.
+      rerender(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          session={{ ...session, activity: "inactive", updated_at: "2026-10-01T00:01:00Z" }}
+          commands={commands}
+        />,
+      );
+      await new Promise((r) => setTimeout(r, 200)); // past the resolver's debounce
+      expect(active().textContent).toMatch(/^\/gamma/);
+    });
+
+    it("Enter acts on what's typed, not on rows resolved for an earlier query", async () => {
+      const client = new FakeRouterClient();
+      const compact = vi.fn();
+      const usage = vi.fn();
+      const commands: CommandDescriptor[] = [
+        { name: "compact", description: "compact", execute: compact },
+        {
+          name: "usage",
+          aliases: ["context"],
+          description: "usage",
+          execute: usage,
+        },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      // "/c", a pause (the menu resolves with /compact first)…
+      fireEvent.change(textarea, { target: { value: "/c" } });
+      await waitFor(() =>
+        expect(
+          menu().getByRole("option", { selected: true }).textContent,
+        ).toMatch(/^\/compact/),
+      );
+      // …then "ontext" + Enter inside the debounce.
+      fireEvent.change(textarea, { target: { value: "/context" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      expect(compact).not.toHaveBeenCalled();
+      expect(usage).toHaveBeenCalledWith({ args: "" }, expect.anything());
+      expect(textarea.value).toBe("");
+    });
+
+    it("Enter with stale rows and no exact command waits for the rows", async () => {
+      const client = new FakeRouterClient();
+      const compact = vi.fn();
+      const commit = vi.fn();
+      const commands: CommandDescriptor[] = [
+        { name: "compact", description: "compact", execute: compact },
+        { name: "commit", description: "commit", execute: commit },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/c" } });
+      await waitFor(() => expect(menu().getAllByRole("option")).toHaveLength(2));
+      fireEvent.change(textarea, { target: { value: "/commi" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(compact).not.toHaveBeenCalled();
+      expect(commit).not.toHaveBeenCalled();
+      expect(textarea.value).toBe("/commi");
+
+      await waitFor(() => expect(menu().getAllByRole("option")).toHaveLength(1));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(commit).toHaveBeenCalledOnce();
+      expect(compact).not.toHaveBeenCalled();
+    });
+
+    it("sends an unknown /word to the agent as plain text", async () => {
+      const client = new FakeRouterClient();
+      const sendMessage = vi.spyOn(client, "sendMessage");
+      render(<Composer routerClient={client} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, {
+        target: { value: "/clear the context please" },
+      });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() =>
+        expect(sendMessage).toHaveBeenCalledWith(
+          "session-active",
+          expect.objectContaining({ text: "/clear the context please" }),
+        ),
+      );
+    });
+  });
+
+  describe("command card host", () => {
+    function cardCommand(): CommandDescriptor {
+      return {
+        name: "usage",
+        description: "usage and health",
+        execute: (_inv, api) =>
+          api.openCard((close) => (
+            <div>
+              <span>Context 71%</span>
+              <button type="button" onClick={close}>
+                Done
+              </button>
+            </div>
+          )),
+      };
+    }
+
+    async function openCard(client = new FakeRouterClient()) {
+      const sendMessage = vi.spyOn(client, "sendMessage");
+      const onSent = vi.fn();
+      render(
+        <div>
+          <p>elsewhere</p>
+          <Composer
+            routerClient={client}
+            sessionId="session-active"
+            commands={[cardCommand()]}
+            onSent={onSent}
+          />
+        </div>,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/usage" } });
+      await waitFor(() =>
+        expect(menu().getByRole("option", { name: /^\/usage/ })).toBeTruthy(),
+      );
+      fireEvent.mouseDown(menu().getByRole("option", { name: /^\/usage/ }));
+      expect(screen.getByTestId("command-card").textContent).toContain(
+        "Context 71%",
+      );
+      return { textarea, sendMessage, onSent };
+    }
+
+    it("opens a command's card above the composer, never in the transcript", async () => {
+      const { textarea, sendMessage, onSent } = await openCard();
+      expect(textarea.value).toBe("");
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(onSent).not.toHaveBeenCalled();
+    });
+
+    it("Esc in the composer dismisses it and keeps focus there", async () => {
+      const { textarea } = await openCard();
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(screen.queryByTestId("command-card")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+    });
+
+    it("Esc inside the card dismisses it and returns focus to the composer", async () => {
+      const { textarea } = await openCard();
+      const done = screen.getByRole("button", { name: "Done" });
+      done.focus();
+      fireEvent.keyDown(done, { key: "Escape" });
+      expect(screen.queryByTestId("command-card")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+    });
+
+    it("Esc in a menu inside the card closes only the menu; the next Esc closes the card", async () => {
+      function Pill() {
+        const [open, setOpen] = useState(false);
+        return (
+          <Popover
+            open={open}
+            onClose={() => setOpen(false)}
+            anchor={
+              <button type="button" onClick={() => setOpen((o) => !o)}>
+                trust
+              </button>
+            }
+          >
+            <button type="button">Auto review</button>
+          </Popover>
+        );
+      }
+      const client = new FakeRouterClient();
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={[
+            {
+              name: "new",
+              description: "start a session",
+              execute: (_inv, api) => api.openCard(() => <Pill />),
+            },
+          ]}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+      fireEvent.change(textarea, { target: { value: "/new" } });
+      fireEvent.mouseDown(
+        await waitFor(() => menu().getByRole("option", { name: /^\/new/ })),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "trust" }));
+      const item = screen.getByRole("button", { name: "Auto review" });
+      item.focus();
+
+      fireEvent.keyDown(item, { key: "Escape" });
+      expect(screen.queryByRole("button", { name: "Auto review" })).toBeNull();
+      expect(screen.getByTestId("command-card")).toBeTruthy();
+
+      const trust = screen.getByRole("button", { name: "trust" });
+      trust.focus();
+      fireEvent.keyDown(trust, { key: "Escape" });
+      expect(screen.queryByTestId("command-card")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+    });
+
+    it("a click away dismisses it; a click inside doesn't", async () => {
+      const { textarea } = await openCard();
+      await new Promise((r) => setTimeout(r, 0)); // the host arms click-away a tick after opening
+      fireEvent.mouseDown(screen.getByText("Context 71%"));
+      expect(screen.getByTestId("command-card")).toBeTruthy();
+      fireEvent.mouseDown(screen.getByText("elsewhere"));
+      expect(screen.queryByTestId("command-card")).toBeNull();
+      await waitFor(() => expect(document.activeElement).toBe(textarea));
+    });
+
+    it("the card's close callback dismisses it", async () => {
+      await openCard();
+      fireEvent.click(screen.getByRole("button", { name: "Done" }));
+      expect(screen.queryByTestId("command-card")).toBeNull();
+    });
+  });
+
+  describe("/task", () => {
+    it("creates a task with the typed title bound to this session, confirms with an Open task link, sends nothing", async () => {
+      const client = new FakeRouterClient();
+      const createTask = vi.spyOn(client, "createTask");
+      const sendMessage = vi.spyOn(client, "sendMessage");
+      const onCommandExecuted = vi.fn();
+      const onOpenTask = vi.fn();
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          onCommandExecuted={onCommandExecuted}
+          onOpenTask={onOpenTask}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, {
+        target: { value: "/task reproduce DNS error for tracing service" },
+      });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      expect(textarea.value).toBe("");
+      await waitFor(() => expect(onCommandExecuted).toHaveBeenCalled());
+      expect(createTask).toHaveBeenCalledWith({
+        title: "reproduce DNS error for tracing service",
+        session_id: "session-active",
+        source: "user",
+      });
+      const created = await createTask.mock.results[0].value;
+      const [message, action] = onCommandExecuted.mock.calls[0];
+      expect(message).toBe(
+        "Task created: reproduce DNS error for tracing service",
+      );
+      expect(action.label).toBe("Open task");
+      action.onClick();
+      expect(onOpenTask).toHaveBeenCalledWith(created.id);
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("with no title shows an inline 'needs a title' and creates nothing", async () => {
+      const client = new FakeRouterClient();
+      const createTask = vi.spyOn(client, "createTask");
+      const sendMessage = vi.spyOn(client, "sendMessage");
+      render(<Composer routerClient={client} sessionId="session-active" />);
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/task " } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      expect(screen.getByRole("alert").textContent).toBe("/task needs a title");
+      expect(textarea.value).toBe("/task ");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(createTask).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("surfaces a Router failure through onCommandError", async () => {
+      const client = new FakeRouterClient();
+      vi.spyOn(client, "createTask").mockRejectedValue(
+        new Error("router down"),
+      );
+      const onCommandError = vi.fn();
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          onCommandError={onCommandError}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/task flaky" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+
+      await waitFor(() =>
+        expect(onCommandError).toHaveBeenCalledWith("router down"),
+      );
+    });
   });
 
   describe("attachments", () => {
@@ -819,8 +1674,11 @@ describe("Composer", () => {
       await waitFor(() => expect(client.uploadedAttachments).toHaveLength(1));
       const { owner, attachment } = client.uploadedAttachments[0];
       expect(owner).toEqual({ session: "s1" });
-      expect(attachment.name).toMatch(/^screenshot-\d{4}-\d{2}-\d{2}-\d{6}\.png$/);
-      const chip = (await screen.findByLabelText(`Remove ${attachment.name}`)).parentElement!;
+      expect(attachment.name).toMatch(
+        /^screenshot-\d{4}-\d{2}-\d{2}-\d{6}\.png$/,
+      );
+      const chip = (await screen.findByLabelText(`Remove ${attachment.name}`))
+        .parentElement!;
       await waitFor(() =>
         expect(chip.querySelector("img")?.getAttribute("src")).toBe(
           `fixture://sessions/s1/attachments/${attachment.id}/thumbnail`,
@@ -831,10 +1689,19 @@ describe("Composer", () => {
     it("stages a file pasted into the expanded editor", async () => {
       const client = new FakeRouterClient();
       render(<Composer routerClient={client} sessionId="s1" />);
-      fireEvent.keyDown(screen.getByPlaceholderText(/Message the agent/), EXPAND_LINUX);
+      fireEvent.keyDown(
+        screen.getByPlaceholderText(/Message the agent/),
+        EXPAND_LINUX,
+      );
       const editor = await screen.findByTestId("fake-monaco-editor");
-      pasteFiles(editor, [new File(["x"], "notes.txt", { type: "text/plain" })]);
-      await waitFor(() => expect(client.uploadedAttachments[0]?.attachment.name).toBe("notes.txt"));
+      pasteFiles(editor, [
+        new File(["x"], "notes.txt", { type: "text/plain" }),
+      ]);
+      await waitFor(() =>
+        expect(client.uploadedAttachments[0]?.attachment.name).toBe(
+          "notes.txt",
+        ),
+      );
     });
 
     it("leaves a plain-text paste to the textarea", () => {
@@ -850,12 +1717,18 @@ describe("Composer", () => {
 
     it("stages dropped files", async () => {
       const client = new FakeRouterClient();
-      const { container } = render(<Composer routerClient={client} sessionId="s1" />);
+      const { container } = render(
+        <Composer routerClient={client} sessionId="s1" />,
+      );
       const file = new File(["log"], "build.log", { type: "text/plain" });
       fireEvent.drop(container.firstElementChild!, {
         dataTransfer: { files: [file], types: ["Files"] },
       });
-      await waitFor(() => expect(client.uploadedAttachments[0]?.attachment.name).toBe("build.log"));
+      await waitFor(() =>
+        expect(client.uploadedAttachments[0]?.attachment.name).toBe(
+          "build.log",
+        ),
+      );
     });
 
     it("sends staged attachments by id, shows them in the sent bubble's text, and clears them", async () => {
@@ -864,7 +1737,9 @@ describe("Composer", () => {
       const onSent = vi.fn();
       render(<Composer routerClient={client} sessionId="s1" onSent={onSent} />);
       const textarea = screen.getByPlaceholderText(/Message the agent/);
-      pasteFiles(textarea, [new File(["x"], "notes.txt", { type: "text/plain" })]);
+      pasteFiles(textarea, [
+        new File(["x"], "notes.txt", { type: "text/plain" }),
+      ]);
       await screen.findByText("1 B");
 
       fireEvent.change(textarea, { target: { value: "read this" } });
@@ -874,7 +1749,10 @@ describe("Composer", () => {
       const { attachment } = client.uploadedAttachments[0];
       expect(send).toHaveBeenCalledWith(
         "s1",
-        expect.objectContaining({ text: "read this", attachments: [attachment.id] }),
+        expect.objectContaining({
+          text: "read this",
+          attachments: [attachment.id],
+        }),
       );
       expect(onSent.mock.calls[0][0]).toContain(`- ${attachment.path}`);
       expect(screen.queryByLabelText("Remove notes.txt")).toBeNull();
@@ -886,7 +1764,9 @@ describe("Composer", () => {
       const client = new FakeRouterClient();
       const send = vi.spyOn(client, "sendMessage");
       render(<Composer routerClient={client} sessionId="s1" />);
-      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [
+        new File(["x"], "a.txt"),
+      ]);
       await screen.findByText("1 B");
       fireEvent.click(screen.getByText("Send"));
       await waitFor(() =>
@@ -904,7 +1784,13 @@ describe("Composer", () => {
         (_owner, file, name) =>
           new Promise((resolve) => {
             land = () =>
-              resolve({ id: "att_slow", name, path: `/a/s1/att_slow/${name}`, size: file.size, thumbnail: false });
+              resolve({
+                id: "att_slow",
+                name,
+                path: `/a/s1/att_slow/${name}`,
+                size: file.size,
+                thumbnail: false,
+              });
           }),
       );
       render(<Composer routerClient={client} sessionId="s1" />);
@@ -922,15 +1808,21 @@ describe("Composer", () => {
     it("removing a staged file deletes it from the Router", async () => {
       const client = new FakeRouterClient();
       render(<Composer routerClient={client} sessionId="s1" />);
-      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [
+        new File(["x"], "a.txt"),
+      ]);
       fireEvent.click(await screen.findByLabelText("Remove a.txt"));
       await waitFor(() => expect(client.deletedAttachments).toEqual(["att_1"]));
     });
 
     it("keeps staged files across a remount, like the text draft", async () => {
       const client = new FakeRouterClient();
-      const { unmount } = render(<Composer routerClient={client} sessionId="s1" />);
-      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [new File(["x"], "a.txt")]);
+      const { unmount } = render(
+        <Composer routerClient={client} sessionId="s1" />,
+      );
+      pasteFiles(screen.getByPlaceholderText(/Message the agent/), [
+        new File(["x"], "a.txt"),
+      ]);
       await screen.findByLabelText("Remove a.txt");
       unmount();
       render(<Composer routerClient={client} sessionId="s1" />);

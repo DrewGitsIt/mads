@@ -5,6 +5,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
 import { resetProviderModelCache } from "../router/useProviderModels";
+import { resetProviderInfoCache } from "../router/useProviderInfos";
 import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { requestStreamReattach } from "./streamReattachSignal";
@@ -1251,6 +1252,44 @@ describe("ConversationTab", () => {
     await waitFor(() => expect(rimPct()).toBe("100"));
     expect(screen.getByTestId("context-meter").hasAttribute("data-pinned")).toBe(false);
     expect(screen.queryByRole("button", { name: "Compact" })).toBeNull();
+  });
+
+  // Compaction is never emulated: a provider whose matrix declares it
+  // unsupported gets neither the rim's Compact link nor the + menu's
+  // "Compact now", even near the limit; one that compacts gets both.
+  it.each([
+    ["goose", "unsupported", false],
+    ["claude-code", "native", true],
+  ] as const)("Compact affordances for %s (compaction %s)", async (provider, compaction, shown) => {
+    resetProviderInfoCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(
+          url.endsWith("/providers")
+            ? new Response(JSON.stringify([{ name: provider, matrix: { compaction } }]), { status: 200 })
+            : new Response("{}", { status: 404 }),
+        ),
+      ),
+    );
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getSession").mockResolvedValueOnce({
+      id: "session-active",
+      created_at: "2026-07-14T00:00:00Z",
+      updated_at: "2026-07-14T00:00:00Z",
+      name: "near the limit",
+      activity: "active",
+      provider,
+      model: "claude-sonnet-5",
+      last_usage: { input_tokens: 10, output_tokens: 5, context_tokens: 180_000, context_window: 200_000 },
+    });
+    vi.spyOn(client, "getTranscript").mockResolvedValueOnce([]);
+    render(<ConversationTab sessionId="session-active" routerClient={client} />);
+
+    await waitFor(() => expect(rimPct()).toBe("90"));
+    await waitFor(() => expect(Boolean(screen.queryByRole("button", { name: "Compact" }))).toBe(shown));
+    fireEvent.click(await screen.findByRole("button", { name: "Input options" }));
+    expect(Boolean(screen.queryByRole("menuitem", { name: /Compact now/ }))).toBe(shown);
   });
 
   // The "compaction completed banner sticks around far longer than it

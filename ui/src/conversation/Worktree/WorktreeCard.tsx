@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button } from "../../components/Button/Button";
-import { trustLabel } from "../../features/sessions/launchpad/pills/trustLevels";
+import { trustLabel } from "../../features/sessions/pills/trustLevels";
 import type { UndoCommitResult } from "../../router/types";
 import { formatMessageTime, parseMessageTime } from "../ChatRenderer/messageTime";
 import type { WorktreeCardModel } from "./worktreeCards";

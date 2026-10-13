@@ -16,7 +16,11 @@ const registered: number[] = [];
 vi.mock("@monaco-editor/react", () => ({
   Editor: (props: {
     value: string;
-    options?: { lineNumbers?: string; wordWrap?: string; minimap?: { enabled?: boolean } };
+    options?: {
+      lineNumbers?: string;
+      wordWrap?: string;
+      minimap?: { enabled?: boolean };
+    };
     onChange?: (value: string) => void;
     onMount?: (editor: unknown, monaco: unknown) => void;
   }) => {
@@ -30,7 +34,10 @@ vi.mock("@monaco-editor/react", () => ({
       setPosition: () => {},
       revealPositionInCenterIfOutsideViewport: () => {},
       getModel: () => ({
-        getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }),
+        getPositionAt: (offset: number) => ({
+          lineNumber: 1,
+          column: offset + 1,
+        }),
         getOffsetAt: (pos: { column: number }) => pos.column - 1,
       }),
       onDidChangeCursorPosition: () => ({ dispose: () => {} }),
@@ -48,7 +55,8 @@ vi.mock("@monaco-editor/react", () => ({
         value={props.value}
         onChange={(e) => props.onChange?.(e.target.value)}
         onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") commands.get(CTRL_CMD | KEY_ENTER)?.();
+          if ((e.metaKey || e.ctrlKey) && e.key === "Enter")
+            commands.get(CTRL_CMD | KEY_ENTER)?.();
           if (e.key === "Escape") commands.get(KEY_ESCAPE)?.();
         }}
       />
@@ -64,7 +72,14 @@ describe("ExpandedComposer", () => {
   afterEach(() => setPlatform(undefined));
 
   it("shows a line-number gutter with word wrap on and no minimap", async () => {
-    render(<ExpandedComposer value="" onChange={() => {}} onSend={() => {}} onCollapse={() => {}} />);
+    render(
+      <ExpandedComposer
+        value=""
+        onChange={() => {}}
+        onSend={() => {}}
+        onCollapse={() => {}}
+      />,
+    );
     const editor = await screen.findByTestId("fake-monaco-editor");
     expect(editor.getAttribute("data-line-numbers")).toBe("on");
     expect(editor.getAttribute("data-word-wrap")).toBe("on");
@@ -74,7 +89,14 @@ describe("ExpandedComposer", () => {
   it("binds the sendFromEditor hotkey (CtrlCmd+Enter) and Escape collapse", async () => {
     const onSend = vi.fn();
     const onCollapse = vi.fn();
-    render(<ExpandedComposer value="draft" onChange={() => {}} onSend={onSend} onCollapse={onCollapse} />);
+    render(
+      <ExpandedComposer
+        value="draft"
+        onChange={() => {}}
+        onSend={onSend}
+        onCollapse={onCollapse}
+      />,
+    );
     const editor = await screen.findByTestId("fake-monaco-editor");
     expect(registered).toContain(CTRL_CMD | KEY_ENTER);
 
@@ -99,7 +121,9 @@ describe("ExpandedComposer", () => {
     );
     await screen.findByTestId("fake-monaco-editor");
     expect(screen.getByRole("button", { name: "plus" })).toBeTruthy();
-    expect(screen.getByTestId("expanded-composer").textContent).toContain("Ctrl+⏎ send · Esc collapse");
+    expect(screen.getByTestId("expanded-composer").textContent).toContain(
+      "Ctrl+⏎ send · Esc collapse",
+    );
     expect(screen.getByRole("button", { name: "Queue" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /stop generating/i }));
     expect(onStop).toHaveBeenCalledTimes(1);
@@ -107,9 +131,18 @@ describe("ExpandedComposer", () => {
 
   it("uses mac labels on darwin", async () => {
     setPlatform("darwin");
-    render(<ExpandedComposer value="" onChange={() => {}} onSend={() => {}} onCollapse={() => {}} />);
+    render(
+      <ExpandedComposer
+        value=""
+        onChange={() => {}}
+        onSend={() => {}}
+        onCollapse={() => {}}
+      />,
+    );
     await screen.findByTestId("fake-monaco-editor");
-    expect(screen.getByTestId("expanded-composer").textContent).toContain("⌘⏎ send · Esc collapse");
+    expect(screen.getByTestId("expanded-composer").textContent).toContain(
+      "⌘⏎ send · Esc collapse",
+    );
   });
 
   it("serves terminal compose: custom send label, no Stop/Queue, sends the text", async () => {
@@ -129,9 +162,15 @@ describe("ExpandedComposer", () => {
     );
     await screen.findByTestId("fake-monaco-editor");
     expect(screen.queryByRole("button", { name: "Queue" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /stop generating/i })).toBeNull();
-    expect(screen.getByTestId("expanded-composer").textContent).toContain("sent as a bracketed paste");
-    fireEvent.click(screen.getByRole("button", { name: "Paste into terminal" }));
+    expect(
+      screen.queryByRole("button", { name: /stop generating/i }),
+    ).toBeNull();
+    expect(screen.getByTestId("expanded-composer").textContent).toContain(
+      "sent as a bracketed paste",
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Paste into terminal" }),
+    );
     expect(onSend).toHaveBeenCalledWith("ls -la");
   });
 
@@ -146,7 +185,9 @@ describe("ExpandedComposer", () => {
       />,
     );
     await screen.findByTestId("fake-monaco-editor");
-    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    const send = screen.getByRole("button", {
+      name: "Send",
+    }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
     expect(send.title).toBe("Waiting for attachments to finish uploading");
   });
@@ -159,12 +200,20 @@ describe("monacoKeybinding", () => {
   } as unknown as Parameters<typeof monacoKeybinding>[1];
 
   it("maps mod, shift and key", () => {
-    expect(monacoKeybinding({ key: "Enter", mod: true, shift: false }, monaco)).toBe(CTRL_CMD | KEY_ENTER);
-    expect(monacoKeybinding({ key: "e", mod: true, shift: true }, monaco)).toBe(CTRL_CMD | SHIFT | KEY_E);
-    expect(monacoKeybinding({ key: "Escape", mod: false, shift: false }, monaco)).toBe(KEY_ESCAPE);
+    expect(
+      monacoKeybinding({ key: "Enter", mod: true, shift: false }, monaco),
+    ).toBe(CTRL_CMD | KEY_ENTER);
+    expect(monacoKeybinding({ key: "e", mod: true, shift: true }, monaco)).toBe(
+      CTRL_CMD | SHIFT | KEY_E,
+    );
+    expect(
+      monacoKeybinding({ key: "Escape", mod: false, shift: false }, monaco),
+    ).toBe(KEY_ESCAPE);
   });
 
   it("returns undefined for a key it can't map", () => {
-    expect(monacoKeybinding({ key: "F13", mod: false, shift: false }, monaco)).toBeUndefined();
+    expect(
+      monacoKeybinding({ key: "F13", mod: false, shift: false }, monaco),
+    ).toBeUndefined();
   });
 });

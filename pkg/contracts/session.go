@@ -315,6 +315,15 @@ type Session struct {
 	// (services/session/internal/runner/compact.go). Nil until the session's
 	// first turn ends.
 	LastUsage *Usage `json:"last_usage,omitempty"`
+	// UsageTotals is the running sum of every turn's usage, delegates
+	// included (see its type). Runner-owned like LastTurnAt: written only by
+	// the scoped AddUsage, carried forward by a full-record PUT. Nil until
+	// the first turn ends.
+	UsageTotals *UsageTotals `json:"usage_totals,omitempty"`
+	// Billing is the harness's latest billing snapshot — mode and plan
+	// rate-limit windows. Runner-owned and scoped like UsageTotals. Nil
+	// means unknown, which every provider but claude-code always is.
+	Billing *SessionBilling `json:"billing,omitempty"`
 	// AgentState mirrors the latest SessionAgentState transition the Runner
 	// appended — the same payload, written by the same scoped store call
 	// that appends the event (store.Sessions.SetAgentState), so the record

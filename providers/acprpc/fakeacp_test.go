@@ -595,11 +595,16 @@ func faServe(pr faProfile) {
 			switch {
 			case strings.HasPrefix(prompt, "echo "):
 				reply = "you said " + strings.TrimPrefix(prompt, "echo ")
+			case strings.HasPrefix(prompt, "/compact"):
+				// goose 1.50.1's ack (goose-acp-compact.jsonl).
+				reply = "Compaction complete"
 			case strings.HasSuffix(prompt, "recall"):
 				var parts []string
 				for _, h := range history[:len(history)-1] {
 					if strings.HasPrefix(h, "echo ") {
 						parts = append(parts, strings.TrimPrefix(h, "echo "))
+					} else if strings.HasPrefix(h, "/compact") {
+						parts = append(parts, h)
 					}
 				}
 				reply = "earlier you said: " + strings.Join(parts, ", ")

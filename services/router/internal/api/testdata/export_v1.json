@@ -1,0 +1,109 @@
+{
+  "schema": "mads.export/v1",
+  "exported_at": "2026-10-12T18:30:00Z",
+  "session": {
+    "id": "sess-1",
+    "name": "Fix the <login> bug",
+    "provider": "claude",
+    "model": "opus",
+    "created_at": "2026-10-12T09:00:00Z"
+  },
+  "messages": [
+    {
+      "role": "user",
+      "text": "Why does login fail?",
+      "timestamp": "2026-10-12T09:00:00Z"
+    },
+    {
+      "role": "tool",
+      "tool": {
+        "id": "t1",
+        "name": "Read",
+        "input": {
+          "file_path": "auth/login.go"
+        },
+        "path": "auth/login.go",
+        "kind": "read",
+        "title": "auth/login.go",
+        "status": "completed"
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "tool_result",
+      "text": "package auth\n\n```go\nfunc Login() {}\n```",
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "tool",
+      "tool": {
+        "id": "t2",
+        "name": "Bash",
+        "input": {
+          "command": "go test ./..."
+        },
+        "kind": "execute"
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "tool_result",
+      "text": "FAIL auth",
+      "timestamp": "0001-01-01T00:00:00Z",
+      "is_error": true
+    },
+    {
+      "role": "agent",
+      "text": "The token check is inverted.",
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "user",
+      "text": "Reviewer says ship it.",
+      "attribution": {
+        "link_id": "l1",
+        "source_name": "reviewer"
+      },
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "notification",
+      "text": "Background task finished.",
+      "timestamp": "0001-01-01T00:00:00Z"
+    },
+    {
+      "role": "compact",
+      "text": "Summary of earlier work.",
+      "timestamp": "0001-01-01T00:00:00Z",
+      "compact": {
+        "trigger": "auto",
+        "pre_tokens": 120000,
+        "post_tokens": 8000
+      }
+    }
+  ],
+  "delegates": [
+    {
+      "id": "a1",
+      "name": "Explore the auth package",
+      "type": "Explore",
+      "messages": [
+        {
+          "role": "user",
+          "text": "Find the token check.",
+          "timestamp": "0001-01-01T00:00:00Z"
+        },
+        {
+          "role": "agent",
+          "text": "It is in auth/token.go.",
+          "timestamp": "0001-01-01T00:00:00Z"
+        }
+      ]
+    },
+    {
+      "id": "a2",
+      "name": "Gone",
+      "messages": []
+    }
+  ]
+}

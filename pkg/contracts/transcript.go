@@ -96,6 +96,9 @@ type Usage struct {
 	// authoritative over the static ContextWindowForModel table. Zero when
 	// unreported.
 	ContextWindow int `json:"context_window,omitempty"`
+	// CostUSD is what the provider said the turn cost (provider.Usage's
+	// CostUSD); zero when it didn't say.
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // Attribution identifies the linked session a message was injected from

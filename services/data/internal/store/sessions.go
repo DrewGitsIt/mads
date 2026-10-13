@@ -25,38 +25,6 @@ func NewSessions(log *Log) *Sessions {
 	return &Sessions{log: log}
 }
 
-func validateSession(s *contracts.Session) *contracts.ValidationError {
-	var v contracts.ValidationError
-	if s.Name == "" {
-		v.Add("name", "required")
-	}
-	if s.Activity != "" && s.Activity != contracts.SessionActive && s.Activity != contracts.SessionInactive {
-		v.Add("activity", fmt.Sprintf("must be %q or %q", contracts.SessionActive, contracts.SessionInactive))
-	}
-	if s.Isolation != "" && s.Isolation != contracts.IsolationWorktree && s.Isolation != contracts.IsolationCurrentDir {
-		v.Add("isolation", fmt.Sprintf("must be %q or %q", contracts.IsolationWorktree, contracts.IsolationCurrentDir))
-	}
-	if s.NameSource != "" && s.NameSource != contracts.SessionNameSourceDerived &&
-		s.NameSource != contracts.SessionNameSourceUser && s.NameSource != contracts.SessionNameSourceGenerated {
-		v.Add("name_source", fmt.Sprintf("must be %q, %q, or %q",
-			contracts.SessionNameSourceDerived, contracts.SessionNameSourceUser, contracts.SessionNameSourceGenerated))
-	}
-	if s.SynthesisMode != "" && !s.SynthesisMode.Valid() {
-		v.Add("synthesis_mode", fmt.Sprintf("unknown synthesis mode %q", s.SynthesisMode))
-	}
-	// Fail closed: an unrecognized trust value would otherwise fall through
-	// trustArgs' default branch at spawn (providers/claudecode) and run with
-	// FULL access — a typo'd "read-only" must be rejected here, not silently
-	// granted everything.
-	if s.Trust != "" && !s.Trust.Valid() {
-		v.Add("trust", "must be one of: "+contracts.SessionTrustChoices())
-	}
-	if v.Empty() {
-		return nil
-	}
-	return &v
-}
-
 // Create stores a new session (implicit on first message, spec §1) and
 // announces it. Activity defaults to active, isolation to worktree.
 //
@@ -76,7 +44,7 @@ func (s *Sessions) Create(ctx context.Context, sess *contracts.Session, actor st
 	}
 	// Derived on read by the Router, never stored (Session.EffectiveTrust).
 	sess.EffectiveTrust = ""
-	if verr := validateSession(sess); verr != nil {
+	if verr := contracts.ValidateSession(sess); verr != nil {
 		return verr
 	}
 	return s.log.WithTx(ctx, func(tx *Tx) error {
@@ -105,7 +73,7 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 	// A record read through the Router comes back decorated; writing it
 	// back must not freeze the derivation into the row.
 	sess.EffectiveTrust = ""
-	if verr := validateSession(sess); verr != nil {
+	if verr := contracts.ValidateSession(sess); verr != nil {
 		return verr
 	}
 	return s.log.WithTx(ctx, func(tx *Tx) error {
@@ -126,6 +94,10 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		// one.
 		sess.AgentState = old.AgentState
 		sess.LastTurnAt = old.LastTurnAt
+		// Usage totals and billing are the same kind: a PUT carrying an
+		// older read would roll back every turn counted since it.
+		sess.UsageTotals = old.UsageTotals
+		sess.Billing = old.Billing
 		// The isolation state is the same kind of field, written only
 		// through SetWorktree: the counts are recomputed at every turn end,
 		// and a rename that read the record before the runner persisted its
@@ -318,6 +290,69 @@ func (s *Sessions) RecordTurnEnd(ctx context.Context, id string, usage *contract
 		return tx.Append(&contracts.Envelope{
 			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})
+	})
+}
+
+// AddUsage folds one turn's usage into the session's running totals
+// (contracts.UsageTotals) inside one transaction — a sum can't be written as
+// a Get-then-Update round trip without losing whatever another increment
+// added in the gap. No event and no UpdatedAt bump: the turn end it rides
+// beside already announced the change (RecordTurnEnd's session.updated).
+func (s *Sessions) AddUsage(ctx context.Context, id string, inc contracts.UsageIncrement) error {
+	if inc.IsZero() {
+		return nil
+	}
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if sess.UsageTotals == nil {
+			sess.UsageTotals = &contracts.UsageTotals{}
+		}
+		sess.UsageTotals.Add(inc)
+		return s.write(tx, sess)
+	})
+}
+
+// SetBilling applies the harness's latest billing report: a non-empty Mode
+// replaces the mode, a non-nil Limits the rate-limit windows. Scoped for the
+// reason SetActivity gives. Like AddUsage it appends nothing: the snapshot
+// is read on demand (GET /sessions/{id}/report), and a rate-limit report
+// arrives every turn.
+func (s *Sessions) SetBilling(ctx context.Context, id string, p contracts.SessionBillingPatch) error {
+	switch p.Mode {
+	case "", contracts.BillingPlan, contracts.BillingUsage, contracts.BillingUnknown:
+	default:
+		var v contracts.ValidationError
+		v.Add("mode", fmt.Sprintf("must be %q, %q or %q", contracts.BillingPlan, contracts.BillingUsage, contracts.BillingUnknown))
+		return &v
+	}
+	if p.Mode == "" && p.Limits == nil {
+		return nil
+	}
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		b := contracts.SessionBilling{Mode: contracts.BillingUnknown}
+		if sess.Billing != nil {
+			b = *sess.Billing
+		}
+		if p.Mode != "" {
+			b.Mode = p.Mode
+		}
+		if p.Limits != nil {
+			at := p.At
+			if at.IsZero() {
+				at = time.Now()
+			}
+			at = at.UTC()
+			b.Limits, b.LimitsAt = p.Limits, &at
+		}
+		sess.Billing = &b
+		return s.write(tx, sess)
 	})
 }
 

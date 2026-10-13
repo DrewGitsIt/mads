@@ -126,6 +126,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// so a fresh PTY session's ref is never learned. Emulated as the
 		// one-row summary across both transports. See README.
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// No capture shows kiro advertising a compaction command over ACP,
+		// and no binary was available to probe (acprpc testdata/captures/
+		// README.md "Native compaction") — so Compact hides for kiro
+		// until a probe says otherwise; never emulated.
+		provider.BehaviorCompaction:      provider.Unsupported,
+		provider.BehaviorCompactionFocus: provider.Unsupported,
 		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,

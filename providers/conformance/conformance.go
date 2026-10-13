@@ -258,6 +258,19 @@ func Check(ctx context.Context, p provider.Provider, s Script) []Result {
 		c.add(b, nil, "not probed: needs a live harness subagent (see the provider's own fixture tests)")
 	}
 
+	// Compaction: a real pass is the harness's model summarizing — slow and
+	// not scriptable — so the rows are held structurally on a fresh
+	// structured session, plus the one cheap negative: instructions the
+	// harness can't take are refused, never silently dropped.
+	if structured {
+		compactErr, focusErr, focusNote := c.compactor()
+		c.add(provider.BehaviorCompaction, compactErr, "structural: the strategy, not a compaction pass")
+		c.add(provider.BehaviorCompactionFocus, focusErr, focusNote)
+	} else {
+		c.add(provider.BehaviorCompaction, nil, "not probed: needs the structured transport")
+		c.add(provider.BehaviorCompactionFocus, nil, "not probed: needs the structured transport")
+	}
+
 	return c.results
 }
 
@@ -280,6 +293,44 @@ func (c *checker) delegateInspector() error {
 		return errors.New("declared unsupported but the provider implements DelegateInspector")
 	}
 	return nil
+}
+
+// compactor checks the compaction rows on a fresh structured session that
+// never sends a turn. BehaviorCompaction working needs the session to be a
+// provider.Compactor; unsupported needs it not to be one, or to refuse a
+// plain Compact with ErrUnsupported (an engine shared across agents carries
+// the method for all of them). BehaviorCompactionFocus unsupported on a
+// compacting session needs Compact with instructions refused the same way;
+// working is held only by Validate (it needs compaction) — whether the
+// summary honors the text is the harness's model, not probed.
+func (c *checker) compactor() (compactErr, focusErr error, focusNote string) {
+	sess, err := c.p.Start(c.ctx, provider.StartOptions{Mode: provider.ModeACP})
+	if err != nil {
+		err = fmt.Errorf("Start(acp): %w", err)
+		return err, err, ""
+	}
+	defer func() { _ = sess.Close() }()
+	comp, has := sess.(provider.Compactor)
+	compacts := c.m[provider.BehaviorCompaction].Works()
+	switch {
+	case compacts && !has:
+		compactErr = errors.New("declared working but the structured session doesn't implement Compactor")
+	case !compacts && has:
+		if err := comp.Compact(c.ctx, ""); !errors.Is(err, provider.ErrUnsupported) {
+			compactErr = fmt.Errorf("declared unsupported but Compact returned %v, want ErrUnsupported", err)
+		}
+	}
+	switch {
+	case c.m[provider.BehaviorCompactionFocus].Works():
+		focusNote = "not probed: whether the summary honors the instructions is the harness's model"
+	case compacts && has:
+		if err := comp.Compact(c.ctx, "keep only the word mk-focus"); !errors.Is(err, provider.ErrUnsupported) {
+			focusErr = fmt.Errorf("declared unsupported but Compact with instructions returned %v, want ErrUnsupported", err)
+		}
+	default:
+		focusNote = "declared unsupported along with compaction: nothing to refuse"
+	}
+	return compactErr, focusErr, focusNote
 }
 
 func (c *checker) add(b provider.Behavior, err error, note string) {

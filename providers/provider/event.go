@@ -104,6 +104,13 @@ const (
 	// tick (claude-code's "system"/"thinking_tokens" lines) for a "Thinking…"
 	// indicator title.
 	EventThinking EventKind = "thinking"
+	// EventAccount — what the harness says about the account the session
+	// runs on: Account carries its billing mode, its plan rate-limit
+	// windows, or both. Only claude-code reports either (system/init's
+	// apiKeySource; rate_limit_event); an ACP provider never sends one, so
+	// its billing stays unknown. Live-only as an event: the runner persists
+	// the latest snapshot on the session record (contracts.SessionBilling).
+	EventAccount EventKind = "account"
 )
 
 // Event is one entry in a session's normalized stream.
@@ -132,6 +139,8 @@ type Event struct {
 	// TaskRoster for EventTaskRoster: the running background subagents'
 	// task ids, in the harness's order.
 	TaskRoster []string `json:"task_roster,omitempty"`
+	// Account for EventAccount.
+	Account *AccountStatus `json:"account,omitempty"`
 	// Background for EventBackground: the running background processes, in
 	// the harness's order. Empty (omitted) means none.
 	Background []BackgroundTask `json:"background,omitempty"`
@@ -151,6 +160,35 @@ type Event struct {
 	// TaskDescription is the spawning tool call's short description on a
 	// parent-tagged event.
 	TaskDescription string `json:"task_description,omitempty"`
+}
+
+// Billing modes for AccountStatus.BillingMode — contracts.BillingPlan and
+// contracts.BillingUsage, mirrored so providers needn't import contracts.
+const (
+	BillingPlan  = "plan"
+	BillingUsage = "usage"
+)
+
+// AccountStatus carries EventAccount's detail. The harness reports the two
+// halves on different lines, so a zero half means "this event doesn't say",
+// never "none".
+type AccountStatus struct {
+	// BillingMode is BillingPlan (a subscription login) or BillingUsage (an
+	// API key); empty when this event doesn't say.
+	BillingMode string `json:"billing_mode,omitempty"`
+	// Limits is the plan's rate-limit windows; nil when this event doesn't
+	// say.
+	Limits []RateLimitWindow `json:"limits,omitempty"`
+}
+
+// RateLimitWindow is one plan rate-limit window's current standing.
+type RateLimitWindow struct {
+	// ID is the harness's key for the window ("five_hour", "seven_day").
+	ID string `json:"id"`
+	// UsedPct is how much of it is spent, 0-100.
+	UsedPct float64 `json:"used_pct"`
+	// ResetsAt is when it starts over; zero when unreported.
+	ResetsAt time.Time `json:"resets_at,omitzero"`
 }
 
 // BackgroundTask is one running background process in EventBackground.
@@ -358,6 +396,9 @@ type Usage struct {
 	// CostUSD is the caller-computed dollar cost, when the provider reports
 	// it (BehaviorCostReporting). Zero when unknown — the platform does no
 	// pricing math of its own (spec §11's hookpoint for usage.recorded).
+	// On EventTurnEnd it is that turn's cost alone, never a running total —
+	// a harness that reports a cumulative figure (claude-code's
+	// total_cost_usd) is differenced by its adapter.
 	CostUSD float64 `json:"cost_usd,omitempty"`
 	// ContextTokens is the prompt-side occupancy of the turn's FINAL API
 	// call (input + cache read + cache creation) — what the next turn will

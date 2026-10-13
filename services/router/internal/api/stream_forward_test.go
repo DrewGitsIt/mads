@@ -193,6 +193,13 @@ func TestSessionCompactForwarding(t *testing.T) {
 	if cResp.StatusCode != http.StatusAccepted {
 		t.Fatalf("compact status = %d, want 202", cResp.StatusCode)
 	}
+
+	// The optional focus body passes through to the child.
+	fResp := postJSON(t, srv.URL+"/sessions/"+created.Session.ID+"/compact", map[string]string{"instructions": "keep the plan"})
+	defer func() { _ = fResp.Body.Close() }()
+	if fResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("compact with instructions status = %d, want 202", fResp.StatusCode)
+	}
 }
 
 func TestSessionInterruptNotRunning(t *testing.T) {

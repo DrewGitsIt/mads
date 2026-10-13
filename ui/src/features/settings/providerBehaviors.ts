@@ -32,6 +32,8 @@ const BEHAVIOR_LABELS: Record<string, string> = {
   trust_auto_review: "Auto-review trust",
   one_shot_stream: "One-shot streaming",
   ref_announce: "Early session ref",
+  compaction: "Compact",
+  compaction_focus: "Compact instructions",
   delegate_lifecycle: "Subagent cards",
   delegate_transcript: "Subagent transcripts",
   delegate_steer: "Subagent messages",

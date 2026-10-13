@@ -26,7 +26,39 @@ import (
 // commits land on the counterpart's branch, and the counterpart lands
 // everything. A new session can join one such folder, not two.
 func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Session, links []contracts.LinkRequest) error {
+	join, verr, err := s.planStagedLinks(ctx, sess, links)
+	if err != nil {
+		return err
+	}
+	if verr != nil {
+		return verr
+	}
+	join.apply(sess)
+	return nil
+}
+
+// stagedJoin is where a new session lands when it joins a linked
+// counterpart's worktree: Dir is the folder it works in, Counterpart whose
+// copy that is. The zero value means no join.
+type stagedJoin struct {
+	Dir         string
+	Counterpart contracts.Session
+}
+
+// apply moves sess into the joined folder, working in place.
+func (j stagedJoin) apply(sess *contracts.Session) {
+	if j.Dir != "" {
+		sess.Dir, sess.Isolation = j.Dir, contracts.IsolationCurrentDir
+	}
+}
+
+// planStagedLinks is validateStagedLinks without the mutation: it reports
+// the join the staged links imply (and every problem found) but leaves sess
+// alone, so POST /sessions/validate can answer without creating anything.
+// A non-nil *ValidationError is the field errors; err is a lookup failure.
+func (s *server) planStagedLinks(ctx context.Context, sess *contracts.Session, links []contracts.LinkRequest) (stagedJoin, *contracts.ValidationError, error) {
 	var v contracts.ValidationError
+	var joined contracts.Session
 	join := ""
 	for i, l := range links {
 		field := fmt.Sprintf("links[%d]", i)
@@ -50,7 +82,7 @@ func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Sessio
 		}
 		counterpart, err := s.data.Session(ctx, counterpartID)
 		if err != nil {
-			return err // not-found → 404 via writeError, before any session is created
+			return stagedJoin{}, nil, err // not-found → 404 via writeError, before any session is created
 		}
 		if counterpart.WorktreeDir == "" || !s.sameRepoAs(ctx, sess, counterpart) {
 			continue
@@ -61,22 +93,22 @@ func (s *server) validateStagedLinks(ctx context.Context, sess *contracts.Sessio
 		case !dirExists(counterpart.WorktreeDir):
 			v.Add(field+".worktree", fmt.Sprintf("session %q works in an isolated copy of the repo that is missing on disk — open it once to restore its folder, then link to it", counterpart.Name))
 		default:
-			join = counterpart.WorktreeDir
+			join, joined = counterpart.WorktreeDir, counterpart
 		}
 	}
 	if !v.Empty() {
-		return &v
+		return stagedJoin{}, &v, nil
 	}
-	if join != "" {
-		dir := join
-		// Started from a subdirectory of the repo: the same subdirectory of
-		// the shared folder.
-		if prefix, err := sessionwt.Prefix(ctx, sess.Dir); err == nil && prefix != "" && dirExists(filepath.Join(join, prefix)) {
-			dir = filepath.Join(join, prefix)
-		}
-		sess.Dir, sess.Isolation = dir, contracts.IsolationCurrentDir
+	if join == "" {
+		return stagedJoin{}, nil, nil
 	}
-	return nil
+	dir := join
+	// Started from a subdirectory of the repo: the same subdirectory of
+	// the shared folder.
+	if prefix, err := sessionwt.Prefix(ctx, sess.Dir); err == nil && prefix != "" && dirExists(filepath.Join(join, prefix)) {
+		dir = filepath.Join(join, prefix)
+	}
+	return stagedJoin{Dir: dir, Counterpart: joined}, nil, nil
 }
 
 // sameRepoAs reports whether the new session would work in the same repo

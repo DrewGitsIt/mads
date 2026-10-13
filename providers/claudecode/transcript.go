@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,59 @@ func (p *Provider) Transcript(_ context.Context, ref string) ([]provider.Message
 	}
 	defer func() { _ = f.Close() }()
 	return normalizeTranscript(f)
+}
+
+// restoredCostTotal is the running cost a `claude --resume ref` process
+// starts from: the totalCostUSD of the last "cost-state" line in ref's
+// transcript, which the CLI appends as each process ends and reads back on
+// resume. Probed on 2.1.285 (2026-10-13): a one-turn process reported
+// total_cost_usd 0.0183063 and wrote a cost-state with that figure; a second
+// process on --resume reported 0.0208454 for its own one turn — the restored
+// 0.0183063 plus that turn's ~0.0025 — and wrote a cost-state of 0.0208454.
+// Reading the same line the CLI restores from keeps the baseline in step
+// with it rather than guessing. 0 when there is no transcript or no
+// cost-state line (a process that never ended cleanly writes none — and
+// then the CLI has nothing to restore either).
+func (p *Provider) restoredCostTotal(ref string) float64 {
+	if ref == "" || p.cfg.TranscriptDir == "" {
+		return 0
+	}
+	matches, err := filepath.Glob(filepath.Join(p.cfg.TranscriptDir, "*", ref+".jsonl"))
+	if err != nil || len(matches) == 0 {
+		return 0
+	}
+	f, err := os.Open(matches[0])
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = f.Close() }()
+	return lastCostState(f, ref)
+}
+
+// lastCostState scans transcript JSONL for the last cost-state line written
+// for ref and returns its totalCostUSD.
+func lastCostState(r io.Reader, ref string) float64 {
+	marker := []byte(`"cost-state"`)
+	total := 0.0
+	lr := newLineReader(r)
+	for lr.Scan() {
+		if !bytes.Contains(lr.line, marker) {
+			continue
+		}
+		var ln struct {
+			Type         string  `json:"type"`
+			SessionID    string  `json:"sessionId"`
+			TotalCostUSD float64 `json:"totalCostUSD"`
+		}
+		if json.Unmarshal(lr.line, &ln) != nil || ln.Type != "cost-state" {
+			continue
+		}
+		if ln.SessionID != "" && ln.SessionID != ref {
+			continue
+		}
+		total = ln.TotalCostUSD
+	}
+	return total
 }
 
 // transcriptLine is one JSONL entry in a claude-code project transcript.

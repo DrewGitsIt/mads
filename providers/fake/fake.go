@@ -79,6 +79,8 @@ type Fake struct {
 	// resume-above-threshold trigger, services/session/internal/runner/
 	// compact.go).
 	compactCalls []string
+	// compactInstructions parallels compactCalls: each call's instructions.
+	compactInstructions []string
 	// mcpHotSet (WithMCPHotSet) makes Start's sessions provider.MCPHotSetter,
 	// and hotSets counts SetMCPServers calls.
 	mcpHotSet bool
@@ -146,6 +148,14 @@ func (f *Fake) CompactCalls() []string {
 	return append([]string{}, f.compactCalls...)
 }
 
+// CompactInstructions returns each Compact call's instructions, parallel to
+// CompactCalls ("" for a plain compaction).
+func (f *Fake) CompactInstructions() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string{}, f.compactInstructions...)
+}
+
 // New returns a fake running only the built-in dialect.
 func New(opts ...Option) *Fake {
 	f, _ := NewWithScenario(Scenario{Name: "builtin"}, opts...)
@@ -194,6 +204,10 @@ func (f *Fake) Matrix() provider.Matrix {
 		// The fake implements RefAnnouncer and scripts timing via
 		// Scenario.RefAnnounce for conformance/runner test coverage.
 		provider.BehaviorRefAnnounce: provider.Native,
+		// fakeSession.Compact scripts claude-code's start/done pair and
+		// records the instructions it was given.
+		provider.BehaviorCompaction:      provider.Native,
+		provider.BehaviorCompactionFocus: provider.Native,
 		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,
@@ -728,16 +742,23 @@ func (s *fakeSession) SetRef(string) {
 
 // Compact implements provider.Compactor: records the call (CompactCalls) and
 // emits the same start/done EventCompact pair the real claude-code wire
-// produces (wire.go's systemEvents), so a caller (Runner.maybeRequestCompact)
-// sees consistent behavior scripted against either provider.
-func (s *fakeSession) Compact(context.Context) error {
+// produces (wire.go's systemEvents), then the turn end that closes the pass —
+// claude-code's /compact ends in a result line and acprpc's in its
+// session/prompt response, and the Runner holds the session busy until it
+// arrives — so a caller (Runner.CompactNow, the resume trigger) sees
+// consistent behavior scripted against either provider. Instructions are
+// recorded (CompactInstructions), matching the matrix's native
+// compaction_focus.
+func (s *fakeSession) Compact(_ context.Context, instructions string) error {
 	s.f.mu.Lock()
 	s.f.compactCalls = append(s.f.compactCalls, s.ref)
+	s.f.compactInstructions = append(s.f.compactInstructions, instructions)
 	s.f.mu.Unlock()
 	if !s.emit(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}}) {
 		return nil
 	}
 	s.emit(provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "done", Success: true}})
+	s.emit(provider.Event{Kind: provider.EventTurnEnd})
 	return nil
 }
 

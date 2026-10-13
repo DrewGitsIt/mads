@@ -1,0 +1,30 @@
+{
+  "session_id": "ses_api",
+  "health": {
+    "state": "idle",
+    "since": "2026-10-12T11:57:46Z",
+    "process_started_at": "2026-10-12T10:28:00Z",
+    "last_event_at": "2026-10-12T11:59:57Z",
+    "harness": "claude-code",
+    "version": "2.1.290",
+    "preflight_ok": true
+  },
+  "context": {
+    "used": 44000,
+    "window": 200000,
+    "can_compact": true
+  },
+  "tokens": {
+    "input": 69000,
+    "output": 12200,
+    "cache_read": 241000,
+    "turns": 9
+  },
+  "billing": {
+    "mode": "usage"
+  },
+  "cost": {
+    "usd": 0.91,
+    "basis": "list_price"
+  }
+}

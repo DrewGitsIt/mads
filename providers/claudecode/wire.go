@@ -2,7 +2,11 @@ package claudecode
 
 import (
 	"encoding/json"
+	"math"
+	"slices"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/drewkidwell/mads/providers/provider"
 )
@@ -26,8 +30,16 @@ type wireLine struct {
 	ModelUsage   map[string]wireModelUsage `json:"modelUsage"`
 	Origin       *wireOrigin               `json:"origin"`
 
-	// init-line fields
-	Model string `json:"model"`
+	// init-line fields. APIKeySource says how the CLI authenticated: "none"
+	// for a subscription login, otherwise where its API key came from
+	// ("ANTHROPIC_API_KEY", "apiKeyHelper", ...) — verified against
+	// claude-code 2.1.285, testdata/stream-auto-mode.jsonl.
+	Model        string `json:"model"`
+	APIKeySource string `json:"apiKeySource"`
+
+	// rate_limit_event field: the plan's rate-limit standing, sent around
+	// each model call on a subscription login.
+	RateLimitInfo *wireRateLimitInfo `json:"rate_limit_info"`
 
 	// system-line fields ("system" type; Subtype distinguishes "init",
 	// "status", and "compact_boundary" — verified against claude-code
@@ -128,7 +140,9 @@ func (l *wireLine) turnEnd(interrupted bool) provider.Event {
 // closed. Only the streaming transport can know that's what the line closes
 // (streamSession.handleLine). Its usage is the turn's real occupancy, so it
 // is kept. total_cost_usd is not: on this line it repeats a cumulative
-// figure, and counting it again would double-count the session's cost.
+// figure, and counting it again would double-count the session's cost —
+// the streaming transport, which knows the running total, puts back the
+// turn's own share (streamSession.costSeen).
 func (l *wireLine) notificationTurnEnd() []provider.Event {
 	ev := l.turnEnd(false)
 	if ev.Usage != nil {
@@ -138,6 +152,61 @@ func (l *wireLine) notificationTurnEnd() []provider.Event {
 		return []provider.Event{{Kind: provider.EventError, Text: l.Result}, ev}
 	}
 	return []provider.Event{ev}
+}
+
+// wireRateLimitInfo is a rate_limit_event's rate_limit_info. Only
+// unifiedWindows is read: it carries every window at once, where the
+// top-level status/resetsAt describe just the one rateLimitType names.
+type wireRateLimitInfo struct {
+	UnifiedWindows map[string]wireRateLimitWindow `json:"unifiedWindows"`
+}
+
+// wireRateLimitWindow is one unifiedWindows entry: utilization 0-1,
+// resetsAt in epoch seconds.
+type wireRateLimitWindow struct {
+	Utilization float64 `json:"utilization"`
+	ResetsAt    int64   `json:"resetsAt"`
+}
+
+// rateLimitWindowOrder lists the windows in the order the /usage card shows
+// them; any window not named here follows, sorted by id.
+var rateLimitWindowOrder = []string{"five_hour", "seven_day"}
+
+// accountEvents builds the EventAccount an init line (billing mode) or a
+// rate_limit_event (plan windows) stands for; nil for a line that says
+// neither.
+func (l *wireLine) accountEvents() []provider.Event {
+	switch {
+	case l.Type == "system" && l.Subtype == "init" && l.APIKeySource != "":
+		mode := provider.BillingUsage
+		if l.APIKeySource == "none" {
+			mode = provider.BillingPlan
+		}
+		return []provider.Event{{Kind: provider.EventAccount, Account: &provider.AccountStatus{BillingMode: mode}}}
+	case l.Type == "rate_limit_event" && l.RateLimitInfo != nil && len(l.RateLimitInfo.UnifiedWindows) > 0:
+		ws := l.RateLimitInfo.UnifiedWindows
+		ids := make([]string, 0, len(ws))
+		for id := range ws {
+			if !slices.Contains(rateLimitWindowOrder, id) {
+				ids = append(ids, id)
+			}
+		}
+		sort.Strings(ids)
+		limits := make([]provider.RateLimitWindow, 0, len(ws))
+		for _, id := range append(slices.Clone(rateLimitWindowOrder), ids...) {
+			w, ok := ws[id]
+			if !ok {
+				continue
+			}
+			lw := provider.RateLimitWindow{ID: id, UsedPct: math.Round(w.Utilization*1000) / 10}
+			if w.ResetsAt > 0 {
+				lw.ResetsAt = time.Unix(w.ResetsAt, 0).UTC()
+			}
+			limits = append(limits, lw)
+		}
+		return []provider.Event{{Kind: provider.EventAccount, Account: &provider.AccountStatus{Limits: limits}}}
+	}
+	return nil
 }
 
 // wireRosterTask is one entry of a "background_tasks_changed" roster.
@@ -455,9 +524,10 @@ func (l *wireLine) events(interrupted bool, partial bool) []provider.Event {
 			})
 		}
 		return l.tagged(evs)
+	case "rate_limit_event":
+		return l.accountEvents()
 	default:
-		// rate_limit_event, control_response, ...: bookkeeping, not
-		// conversation.
+		// control_response, ...: bookkeeping, not conversation.
 		return nil
 	}
 }
@@ -485,8 +555,9 @@ func (l *wireLine) tagged(evs []provider.Event) []provider.Event {
 // announcement, the line claude-code re-emits right after a compaction
 // completes, and the second one a background subagent's notification
 // re-invocation opens with — session.go's handleLine still reads it for
-// ref/model, and its refFired guard keeps the repeat harmless) and any other
-// subtype are bookkeeping, same as the events() default case.
+// ref/model, and its refFired guard keeps the repeat harmless) yields only
+// its billing mode (accountEvents); any other subtype is bookkeeping, same
+// as the events() default case.
 func (l *wireLine) systemEvents() []provider.Event {
 	switch {
 	case l.Subtype == "status" && l.Status == "compacting":
@@ -503,6 +574,11 @@ func (l *wireLine) systemEvents() []provider.Event {
 		return []provider.Event{{Kind: provider.EventTaskRoster, TaskRoster: l.agentRoster()}}
 	case l.Subtype == "thinking_tokens":
 		return []provider.Event{{Kind: provider.EventThinking, ThinkingTokens: l.EstimatedTokens}}
+	case l.Subtype == "init":
+		// Its billing mode only; the ref and model it also carries are
+		// session.go's (see above). A repeat init says the same thing again,
+		// which the runner's write-on-change absorbs.
+		return l.accountEvents()
 	default:
 		return nil
 	}

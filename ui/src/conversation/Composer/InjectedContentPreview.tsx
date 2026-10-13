@@ -12,7 +12,10 @@ export interface InjectedContentPreviewProps {
  * fetched/expanded until send (MADS-UX §2.4: "resolves at send
  * time... before anything reaches the harness").
  */
-export function InjectedContentPreview({ items, onRemove }: InjectedContentPreviewProps) {
+export function InjectedContentPreview({
+  items,
+  onRemove,
+}: InjectedContentPreviewProps) {
   if (items.length === 0) return null;
 
   return (

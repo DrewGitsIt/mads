@@ -188,6 +188,11 @@ type Runner struct {
 	delegates   *delegates.Tracker
 	delegatePub delegatePublisher
 
+	// tally counts what the session has used — the running totals, the
+	// harness's billing snapshot and when it last spoke (usage.go). Fed by
+	// observeConversation; own internal lock.
+	tally usageTally
+
 	// digest accumulates the in-flight turn's activity for the per-turn
 	// digest push (docs/LINKED-SESSIONS-DESIGN.md decision 4). Always
 	// active — unlike synthEngine it isn't mode-gated, since whether anyone
@@ -563,6 +568,10 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	r.synthEngine = synth.New(sess.SynthesisMode, r.sessionID, dataclient.New(r.data.BaseURL(), "synthesizer"), r.FastModel)
 
+	// Decided before the session is installed so the pass is in flight
+	// from the moment anything can reach the session (beginCompactLocked).
+	resumeCompact := resumeCompactor(provSess, sess.LastUsage, sess.Model)
+
 	r.mu.Lock()
 	r.sess = provSess
 	r.providerName = sess.Provider
@@ -576,7 +585,13 @@ func (r *Runner) Start(ctx context.Context) error {
 	}
 	r.spawnedAt = spawnedAt
 	r.providerCwd = cwd
+	if resumeCompact != nil {
+		r.beginCompactLocked()
+	}
 	r.mu.Unlock()
+	if resumeCompact != nil {
+		r.markAgentWorking("/compact")
+	}
 
 	r.watchRefAnnounce(ctx, provSess)
 
@@ -590,7 +605,9 @@ func (r *Runner) Start(ctx context.Context) error {
 
 	r.startShellWatch()
 	go r.pump(provSess)
-	r.maybeRequestCompact(ctx, provSess, sess.LastUsage, sess.Model)
+	if resumeCompact != nil {
+		r.requestResumeCompact(ctx, resumeCompact)
+	}
 	// Counted in the background: `git status` on a large checkout takes
 	// seconds, and provisioning must not wait on the header.
 	r.refreshCountsAsync()
@@ -931,6 +948,11 @@ func (r *Runner) Send(ctx context.Context, text string) error {
 		r.mu.Unlock()
 		r.restoreRerootNote(note)
 		r.markAgentIdle()
+		if errors.Is(err, provider.ErrTurnInFlight) {
+			// The harness has a turn this runner didn't know about: the
+			// same 409 as one it did, and SendOrQueue's cue to queue.
+			return fmt.Errorf("%w: %w", ErrTurnInFlight, err)
+		}
 		return err
 	}
 	if note != "" {
@@ -1541,6 +1563,7 @@ func (r *Runner) persistTurnEnd(ctx context.Context, usage *provider.Usage) {
 			Model:                    usage.Model,
 			ContextTokens:            usage.ContextTokens,
 			ContextWindow:            usage.ContextWindow,
+			CostUSD:                  usage.CostUSD,
 		}
 	}
 	r.recordMu.Lock()

@@ -77,8 +77,8 @@ func checkProviderBinary(ctx context.Context, name string, spec providerBinary) 
 	}
 	if compat, known := compatMatrix[name]; known {
 		if ok, unproven, guidance := compat.evaluate(version); !ok {
-			return Check{Name: checkName, Healthy: false, Warning: unproven, Detail: name + " v" + version + " detected", FixHint: guidance}
+			return Check{Name: checkName, Healthy: false, Warning: unproven, Detail: name + " v" + version + " detected", FixHint: guidance, Version: version}
 		}
 	}
-	return Check{Name: checkName, Healthy: true, Detail: name + " v" + version}
+	return Check{Name: checkName, Healthy: true, Detail: name + " v" + version, Version: version}
 }

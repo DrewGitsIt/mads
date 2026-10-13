@@ -270,6 +270,23 @@ func TestFastModelEffectiveModeExplicitWins(t *testing.T) {
 }
 
 // Empty is the 10-minute default, so a config predating the setting is valid.
+func TestValidateConfigExportFormat(t *testing.T) {
+	c := DefaultConfig()
+	if c.ExportFormat != "" {
+		t.Errorf("default export_format = %q, want empty (ask)", c.ExportFormat)
+	}
+	for _, f := range []ExportFormat{"", ExportFormatMarkdown, ExportFormatJSON} {
+		c.ExportFormat = f
+		if verr := ValidateConfig(&c); !verr.Empty() {
+			t.Errorf("export_format %q rejected: %+v", f, verr.Errors)
+		}
+	}
+	c.ExportFormat = "pdf"
+	if verr := ValidateConfig(&c); verr.Empty() {
+		t.Error("export_format pdf accepted")
+	}
+}
+
 func TestValidateConfigDelegateFade(t *testing.T) {
 	c := DefaultConfig()
 	for _, f := range append([]DelegateFade{""}, DelegateFades...) {

@@ -1,5 +1,5 @@
 import type { Agent, LinkRequest, Workspace } from "../../../router/types";
-import type { StagedConfig } from "./pills/stagedConfig";
+import type { StagedConfig } from "../pills/stagedConfig";
 
 /**
  * The launchpad's unsent goal — text, staged pill settings and staged

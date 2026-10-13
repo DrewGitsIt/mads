@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1249,8 +1250,10 @@ func TestStreamSessionLateNotificationEndsUnpromptedTurn(t *testing.T) {
 	if len(ends) != 1 {
 		t.Fatalf("unprompted turn: %d turn ends, want 1", len(ends))
 	}
-	if u := ends[0].Usage; u == nil || u.CacheReadInputTokens != 2000 || u.CostUSD != 0 {
-		t.Errorf("unprompted turn usage = %+v, want its occupancy and no repeated cumulative cost", u)
+	// Its cost is its own share of the running total (1.9 - 1.5), never the
+	// cumulative figure the line repeats.
+	if u := ends[0].Usage; u == nil || u.CacheReadInputTokens != 2000 || math.Abs(u.CostUSD-0.4) > 1e-9 {
+		t.Errorf("unprompted turn usage = %+v, want its occupancy and its own 0.4 of the cumulative cost", u)
 	}
 }
 

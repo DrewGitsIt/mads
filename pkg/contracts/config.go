@@ -52,6 +52,20 @@ func (t ModelTier) Valid() bool {
 	return false
 }
 
+// ExportFormat is the file format /export downloads a conversation as. The
+// zero value means "ask": the first export shows a Markdown / JSON dialog.
+type ExportFormat string
+
+const (
+	ExportFormatMarkdown ExportFormat = "md"
+	ExportFormatJSON     ExportFormat = "json"
+)
+
+// Valid reports whether f is a stored preference: "" (ask), "md" or "json".
+func (f ExportFormat) Valid() bool {
+	return f == "" || f == ExportFormatMarkdown || f == ExportFormatJSON
+}
+
 // DelegateFade is Settings' "Fade out subagent cards after inactivity": how
 // long a finished delegate keeps its row in the session rail. Measured from
 // when it finished — a running delegate never fades. Empty means the default,
@@ -265,6 +279,10 @@ type Config struct {
 	// (see DelegateFade); empty is the 10-minute default.
 	DelegateFade DelegateFade `json:"delegate_fade,omitempty"`
 
+	// ExportFormat is Settings' "Export format": what /export downloads
+	// without asking. Empty (every config predating it) asks on first use.
+	ExportFormat ExportFormat `json:"export_format,omitempty"`
+
 	// Session defaults (§3.7 General panel).
 	DefaultWorkspace string       `json:"default_workspace,omitempty"`
 	DefaultProvider  string       `json:"default_provider,omitempty"`
@@ -434,6 +452,9 @@ func ValidateConfig(c *Config) *ValidationError {
 	}
 	if !c.DelegateFade.Valid() {
 		v.Add("delegate_fade", "must be one of: 0m, 10m, never")
+	}
+	if !c.ExportFormat.Valid() {
+		v.Add("export_format", "must be one of: md, json (or empty to ask)")
 	}
 	if !c.Theme.Valid() {
 		v.Add("theme", "must be one of: dark, light, system")

@@ -1,3 +1,5 @@
+import type { Session } from "./router/types";
+
 // Cross-tree signals for jumping between top-level surfaces. App.tsx owns
 // which surface shows, but the callers (the shell dock's soft-limit notice,
 // the Settings shell inventory) sit several layers down, so — like
@@ -36,6 +38,26 @@ export function requestedShelf(): string | null {
 /** Show the Sessions surface with `sessionId` selected. */
 export function requestOpenSession(sessionId: string): void {
   window.dispatchEvent(new CustomEvent(OPEN_SESSION_EVENT, { detail: { sessionId } }));
+}
+
+export const OPEN_CREATED_SESSION_EVENT = "mads:open-created-session";
+
+/** What a just-created session needs to open the way the Launchpad opens one. */
+export interface CreatedSessionDetail {
+  session: Session;
+  /** The goal its composer sends as the opening message. */
+  goal: string;
+}
+
+/**
+ * Open a session that was just created (the composer's /new … ⌘↵): the
+ * Sessions surface selects it exactly as it does after a Launchpad start —
+ * provisioning strip, then the goal auto-sent from its composer.
+ */
+export function requestOpenCreatedSession(session: Session, goal: string): void {
+  window.dispatchEvent(
+    new CustomEvent<CreatedSessionDetail>(OPEN_CREATED_SESSION_EVENT, { detail: { session, goal } }),
+  );
 }
 
 /**

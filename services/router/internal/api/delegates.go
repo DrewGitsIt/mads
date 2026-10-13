@@ -65,30 +65,32 @@ func (s *server) handleDelegateTranscript(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, s.delegateTranscriptFor(r.Context(), sess, r.PathValue("harnessId")))
+}
+
+// delegateTranscriptFor reads one delegate's transcript from the harness's
+// store; shared by the endpoint above and the conversation export.
+func (s *server) delegateTranscriptFor(ctx context.Context, sess contracts.Session, harnessID string) contracts.DelegateTranscript {
 	out := contracts.DelegateTranscript{Messages: []contracts.TranscriptMessage{}}
 	p, err := s.providers.Get(sess.Provider)
 	if err != nil {
-		writeJSON(w, http.StatusOK, out)
-		return
+		return out
 	}
 	inspector, ok := p.(provider.DelegateInspector)
 	if !ok {
-		writeJSON(w, http.StatusOK, out)
-		return
+		return out
 	}
-	harnessID := r.PathValue("harnessId")
 	for _, ref := range delegateRefs(sess) {
-		msgs, found, err := inspector.DelegateTranscript(r.Context(), ref, harnessID)
+		msgs, found, err := inspector.DelegateTranscript(ctx, ref, harnessID)
 		if err != nil {
 			log.Printf("api: delegate transcript: session %s delegate %s: %v", sess.ID, harnessID, err)
 			continue
 		}
 		if found {
-			out = contracts.DelegateTranscript{Available: true, Messages: normalizeTurns(msgs)}
-			break
+			return contracts.DelegateTranscript{Available: true, Messages: normalizeTurns(msgs)}
 		}
 	}
-	writeJSON(w, http.StatusOK, out)
+	return out
 }
 
 // delegateRefs is where a session's delegates can be filed: under its

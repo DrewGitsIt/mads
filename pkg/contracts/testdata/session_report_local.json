@@ -1,0 +1,22 @@
+{
+  "session_id": "ses_local",
+  "health": {
+    "state": "sleeping",
+    "since": "2026-10-12T11:54:00Z",
+    "harness": "goose",
+    "version": "1.31.0"
+  },
+  "context": {
+    "used": 18100,
+    "window": 131072,
+    "can_compact": false
+  },
+  "tokens": {
+    "input": 212000,
+    "output": 9400,
+    "turns": 8
+  },
+  "billing": {
+    "mode": "unknown"
+  }
+}

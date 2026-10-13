@@ -51,6 +51,7 @@ import type {
   Retro,
   Session,
   SessionDefaults,
+  SessionReport,
   SessionTrust,
   SetSessionModelResponse,
   StreamEvent,
@@ -66,6 +67,8 @@ import type {
   VersionInfo,
   Workspace,
   WorktreeStatus,
+  CreateSessionPayload,
+  SessionValidation,
 } from "./types";
 import { PRESET_GRANTS } from "./types";
 
@@ -812,6 +815,79 @@ export const fixtureWorktreeStatus: WorktreeStatus = {
 };
 
 /**
+ * The /usage card's three cases (docs/mockups/session-commands.html,
+ * section 1; the same sessions pkg/contracts/testdata/session_report_*.json
+ * pins): a claude-code subscription login — plan limits, no cost — a
+ * claude-code API key — cost, no limits — and goose on a local model, where
+ * billing is unknown and neither appears.
+ */
+export const fixtureSessionReportPlan: SessionReport = {
+  session_id: "session-active",
+  health: {
+    state: "working",
+    since: "2026-10-12T11:57:46Z",
+    process_started_at: "2026-10-12T10:28:00Z",
+    last_event_at: "2026-10-12T11:59:57Z",
+    harness: "claude-code",
+    version: "2.1.290",
+    preflight_ok: true,
+  },
+  context: { used: 142_300, window: 200_000, can_compact: true },
+  tokens: {
+    input: 228_000,
+    output: 48_600,
+    cache_read: 982_000,
+    cache_write: 31_000,
+    turns: 37,
+    delegates: { input: 41_000, output: 6_100, cache_read: 120_000 },
+  },
+  billing: { mode: "plan" },
+  limits: [
+    { id: "five_hour", label: "5-hour", used_pct: 62, resets_at: "2026-10-12T14:10:00Z", scope: "account" },
+    { id: "seven_day", label: "Weekly", used_pct: 31, resets_at: "2026-10-15T09:00:00Z", scope: "account" },
+  ],
+};
+
+export const fixtureSessionReportApiKey: SessionReport = {
+  session_id: "session-api-key",
+  health: {
+    state: "idle",
+    since: "2026-10-12T11:59:20Z",
+    process_started_at: "2026-10-12T11:42:00Z",
+    last_event_at: "2026-10-12T11:59:20Z",
+    harness: "claude-code",
+    version: "2.1.290",
+    preflight_ok: true,
+  },
+  context: { used: 44_000, window: 200_000, can_compact: true },
+  tokens: { input: 69_000, output: 12_200, cache_read: 241_000, turns: 9 },
+  billing: { mode: "usage" },
+  cost: { usd: 0.91, basis: "list_price" },
+};
+
+export const fixtureSessionReportLocal: SessionReport = {
+  session_id: "session-local",
+  health: {
+    state: "idle",
+    since: "2026-10-12T11:54:00Z",
+    process_started_at: "2026-10-12T11:38:00Z",
+    last_event_at: "2026-10-12T11:54:00Z",
+    harness: "goose",
+    version: "1.31.0",
+    preflight_ok: true,
+  },
+  context: { used: 18_100, window: 131_072, can_compact: false },
+  tokens: { input: 212_000, output: 9_400, turns: 8 },
+  billing: { mode: "unknown" },
+};
+
+export const fixtureSessionReports: Record<string, SessionReport> = {
+  [fixtureSessionReportPlan.session_id]: fixtureSessionReportPlan,
+  [fixtureSessionReportApiKey.session_id]: fixtureSessionReportApiKey,
+  [fixtureSessionReportLocal.session_id]: fixtureSessionReportLocal,
+};
+
+/**
  * In-memory RouterClient for dev-mode demo mounting and component tests.
  * Every test outside client.test.ts should inject this rather than mocking
  * fetch — see ui/src/conversation/HANDOFF.md §3.
@@ -901,6 +977,10 @@ export class FakeRouterClient implements RouterClient {
     this.deletedAttachments.push(attachmentId);
   }
 
+  exportSessionUrl(sessionId: string, format: "md" | "json"): string {
+    return `fixture://sessions/${sessionId}/export?format=${format}`;
+  }
+
   attachmentUrl(owner: AttachmentOwner, attachmentId: string, variant?: "thumbnail"): string {
     const who =
       "session" in owner ? `sessions/${owner.session}` : `attachment-drafts/${owner.draft}`;
@@ -926,6 +1006,25 @@ export class FakeRouterClient implements RouterClient {
   async interrupt(): Promise<void> {}
 
   async compactSession(): Promise<void> {}
+
+  /** Reports getSessionReport serves, by session id — tests set entries directly. */
+  readonly sessionReports = new Map<string, SessionReport>(Object.entries(fixtureSessionReports));
+
+  async getSessionReport(sessionId: string): Promise<SessionReport> {
+    const report = this.sessionReports.get(sessionId);
+    if (report) return structuredClone(report);
+    // A session with no scripted report has its health alone, the shape a
+    // session that never finished a turn reports.
+    const session = await this.getSession(sessionId);
+    return {
+      session_id: sessionId,
+      health: {
+        state: session.activity === "active" ? "idle" : "sleeping",
+        harness: session.provider ?? "",
+      },
+      billing: { mode: "unknown" },
+    };
+  }
 
   async bounce(): Promise<void> {}
 
@@ -1343,6 +1442,16 @@ export class FakeRouterClient implements RouterClient {
 
   async createSession(): Promise<{ session: Session; addr: string }> {
     throw new Error("not fixtured: createSession");
+  }
+
+  // No server rules to run: echoes the payload as an accepted create.
+  async validateSession(payload: CreateSessionPayload): Promise<SessionValidation> {
+    return {
+      dir: payload.dir ?? "",
+      isolation: payload.isolation ?? "worktree",
+      workspace: payload.workspace,
+      errors: [],
+    };
   }
 
   // --- Config ---
@@ -1801,6 +1910,8 @@ export const fixtureProviders: ProviderInfo[] = [
       pty: "unsupported",
       branching: "unsupported",
       cwd_reroot: "unsupported",
+      compaction: "native",
+      compaction_focus: "native",
     },
     intents: {
       deny_commands: "native",

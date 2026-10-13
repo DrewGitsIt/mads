@@ -120,7 +120,9 @@ func (s *server) handleSessionCancelQueued(w http.ResponseWriter, r *http.Reques
 // session child's own POST /compact. It wakes a dormant session first, like
 // handleSessionMessages rather than handleSessionInterrupt: the action's
 // whole point is trimming a large conversation before the next turn, which
-// applies at least as much to a session that isn't currently running.
+// applies at least as much to a session that isn't currently running. The
+// optional body ({"instructions": "..."}, /compact's focus text) passes
+// through to the child untouched.
 func (s *server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	addr, err := s.ensureSession(r.Context(), id)

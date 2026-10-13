@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { Popover } from "../../../components/Popover/Popover";
 import type { RouterClient } from "../../../router/client";
 import type { Grant, LinkCadence, OrchestrateStatus } from "../../../router/types";
-import pillStyles from "../launchpad/pills/pills.module.css";
+import pillStyles from "../pills/pills.module.css";
 import styles from "./SessionRail.module.css";
 
 const CADENCE_OPTIONS: { value: LinkCadence; label: string; description: string }[] = [

@@ -372,8 +372,18 @@ type streamSession struct {
 	// deleted, because its transcript is the user's.
 	deleteOK    bool
 	interrupted bool // an interrupt was requested this turn
-	replaying   bool // session/load is in flight: buffer updates, don't stream them
-	replay      []provider.Message
+	// compacting — the in-flight turn is Compact's: reported as an
+	// EventCompact start (on its first update) / done (at its response)
+	// pair, its ack text kept out of the stream. compactStarted marks the
+	// start as sent.
+	compacting     bool
+	compactStarted bool
+	// compactPre/compactAt: occupancy and wall-clock when a compaction turn
+	// began — the marker recorded in the transcript when it succeeds.
+	compactPre int
+	compactAt  time.Time
+	replaying  bool // session/load is in flight: buffer updates, don't stream them
+	replay     []provider.Message
 	// transcript + lastAgentMsgID — the session's own record of its
 	// conversation, in wire order (session/load's replayed history first,
 	// then every live turn). agent_message_chunk fragments sharing one
@@ -455,8 +465,21 @@ func (s *streamSession) handleLine(raw []byte) {
 			s.turnID = 0
 			interrupted := s.interrupted
 			s.interrupted = false
+			compacting, started := s.compacting, s.compactStarted
+			pre, at := s.compactPre, s.compactAt
+			s.compacting, s.compactStarted = false, false
 			ctxUsed, ctxSize := s.ctxUsed, s.ctxSize
 			s.mu.Unlock()
+			if compacting {
+				if !started {
+					s.events <- compactStart()
+				}
+				done := compactDone(m, interrupted)
+				if done.Compact.Success {
+					s.recordCompaction(pre, ctxUsed, at)
+				}
+				s.events <- done
+			}
 			s.finishTurn(m, interrupted, ctxUsed, ctxSize)
 			return
 		}
@@ -529,6 +552,27 @@ func (s *streamSession) finishTurn(resp rpcMessage, interrupted bool, ctxUsed, c
 		end.Usage.ContextWindow = ctxSize
 	}
 	s.events <- end
+}
+
+func compactStart() provider.Event {
+	return provider.Event{Kind: provider.EventCompact, Compact: &provider.CompactStatus{Phase: "start"}}
+}
+
+// compactDone resolves a compaction turn's session/prompt response into the
+// closing EventCompact, ahead of the turn end finishTurn still emits. ACP
+// gives no compaction verdict of its own: a clean end_turn is success, an
+// error response or an interrupt is not.
+func compactDone(resp rpcMessage, interrupted bool) provider.Event {
+	st := &provider.CompactStatus{Phase: "done", Success: true}
+	var pr promptResult
+	_ = json.Unmarshal(resp.Result, &pr)
+	switch {
+	case resp.Error != nil:
+		st.Success, st.Error = false, resp.Error.text()
+	case interrupted || pr.StopReason == "cancelled":
+		st.Success, st.Error = false, "compaction interrupted"
+	}
+	return provider.Event{Kind: provider.EventCompact, Compact: st}
 }
 
 // handlePermission answers a session/request_permission. Who decides
@@ -816,7 +860,14 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 
 	s.mu.Lock()
 	replaying := s.replaying
+	startCompact := s.compacting && !s.compactStarted && !replaying
+	if startCompact {
+		s.compactStarted = true
+	}
 	s.mu.Unlock()
+	if startCompact {
+		s.events <- compactStart()
+	}
 
 	switch u.SessionUpdate {
 	case "agent_message_chunk":
@@ -835,8 +886,15 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			// its TranscriptReader already reads a persisted .jsonl, but
 			// buffering here is harmless and keeps the engine self-consistent
 			// for any agent that rides it.
-			s.recordAgentChunk(text, u.MessageID)
-			if replaying {
+			s.mu.Lock()
+			compacting := s.compacting
+			s.mu.Unlock()
+			if !compacting || replaying {
+				s.recordAgentChunk(text, u.MessageID)
+			}
+			// A compaction turn's only text is the agent's ack ("Compaction
+			// complete" from goose) — the EventCompact pair already says so.
+			if replaying || compacting {
 				return
 			}
 			select {
@@ -852,7 +910,10 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 			s.events <- provider.Event{Kind: provider.EventThinking, Text: text}
 		}
 	case "user_message_chunk":
-		if text := u.chunkText(); text != "" {
+		s.mu.Lock()
+		echo := s.compacting && !replaying // the agent echoing our own "/compact"
+		s.mu.Unlock()
+		if text := u.chunkText(); text != "" && !echo {
 			s.appendReplay(provider.Message{Role: "user", Text: text})
 		}
 		if !replaying {
@@ -914,6 +975,22 @@ func (s *streamSession) handleUpdate(raw json.RawMessage) {
 		// anything unrecognized (including future spec additions): skipped
 		// silently, never an error.
 	}
+}
+
+// recordCompaction appends the transcript entry for a successful compaction
+// pass — the same Role "compact" marker claude-code's transcript carries.
+// ACP has no summary text to carry, and the trigger isn't known here (the
+// Runner's near-limit resume uses the same path as the user), so only the
+// occupancy before/after and the duration are filled.
+func (s *streamSession) recordCompaction(pre, post int, began time.Time) {
+	m := &provider.CompactMarker{PreTokens: pre, PostTokens: post}
+	if !began.IsZero() {
+		m.DurationMS = time.Since(began).Milliseconds()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transcript = append(s.transcript, provider.Message{Role: "compact", Compact: m, Timestamp: time.Now().UTC()})
+	s.lastAgentMsgID = ""
 }
 
 func (s *streamSession) appendReplay(msg provider.Message) {
@@ -1060,6 +1137,30 @@ func (s *streamSession) Events() <-chan provider.Event { return s.events }
 // in-flight prompt per session is a spec obligation, enforced here: a
 // Send during an open turn fails immediately.
 func (s *streamSession) Send(_ context.Context, text string) error {
+	return s.prompt(text, false)
+}
+
+// Compact implements provider.Compactor by prompting the agent's own
+// compaction command (Config.CompactCommand) — ACP has no compaction
+// method, only the slash command agents advertise. The turn is reported as
+// an EventCompact pair rather than as a reply (see compacting). A pending
+// FirstSendPrefix system prompt is left for the next real Send: prefixed
+// onto "/compact" the agent would read it as a message, not the command.
+func (s *streamSession) Compact(_ context.Context, instructions string) error {
+	if s.cfg.CompactCommand == "" {
+		return fmt.Errorf("agent has no compaction command: %w", provider.ErrUnsupported)
+	}
+	text := s.cfg.CompactCommand
+	if instructions = strings.TrimSpace(instructions); instructions != "" {
+		if !s.cfg.CompactFocus {
+			return fmt.Errorf("agent's compaction takes no instructions: %w", provider.ErrUnsupported)
+		}
+		text += " " + instructions
+	}
+	return s.prompt(text, true)
+}
+
+func (s *streamSession) prompt(text string, compact bool) error {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -1067,23 +1168,32 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 	}
 	if s.turnID != 0 {
 		s.mu.Unlock()
-		return fmt.Errorf("session %s already has a prompt in flight", s.ref)
+		return fmt.Errorf("session %s already has a prompt in flight: %w", s.ref, provider.ErrTurnInFlight)
 	}
-	if s.promptPrefix != "" {
+	if s.promptPrefix != "" && !compact {
 		text = s.promptPrefix + "\n\n" + text
 		s.promptPrefix = ""
 	}
 	s.nextID++
 	id := s.nextID
 	s.turnID = id
+	s.compacting, s.compactStarted = compact, false
 	ref := s.ref
-	s.transcript = append(s.transcript, provider.Message{Role: "user", Text: text, Timestamp: time.Now().UTC()})
+	if compact {
+		// The "/compact" prompt and the agent's ack are plumbing, not
+		// conversation: a success lands in the transcript as one compact
+		// marker (recordCompaction), a failure as nothing.
+		s.compactPre, s.compactAt = s.ctxUsed, time.Now()
+	} else {
+		s.transcript = append(s.transcript, provider.Message{Role: "user", Text: text, Timestamp: time.Now().UTC()})
+	}
 	s.mu.Unlock()
 
 	clearTurn := func() {
 		s.mu.Lock()
 		if s.turnID == id {
 			s.turnID = 0
+			s.compacting, s.compactStarted = false, false
 		}
 		s.mu.Unlock()
 	}

@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — Session commands (/usage, /new*, /export)</title>
+<style>
+  /* clay/dark tokens lifted verbatim from ui/src/tokens/tokens.css (via command-framework.html) */
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14); --ok-fg:#7cb389;
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13); --warn-fg:#d3af5e;
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13); --info-fg:#96afc7;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-chip:10.5px; --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px; --fs-chat:15px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  .page { max-width:1120px; margin:0 auto; padding:var(--space-6) var(--space-5) 160px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:21px; font-weight:650; letter-spacing:-.01em; }
+  header.intro p { color:var(--text2); max-width:80ch; margin-top:var(--space-2); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; align-items:baseline; gap:var(--space-3); }
+  .block > h2 .tag { font-size:var(--fs-chip); font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--accent); background:var(--accent-soft); border-radius:999px; padding:1px 9px; }
+  .block .body { padding:var(--space-5); display:flex; flex-direction:column; gap:var(--space-4); }
+  .note { color:var(--text3); font-size:var(--fs-sm); max-width:90ch; }
+  .note b { color:var(--text2); font-weight:600; }
+  .q { border-left:3px solid var(--warn); background:var(--warn-soft); padding:var(--space-2) var(--space-3); border-radius:0 var(--r-sm) var(--r-sm) 0; font-size:var(--fs-sm); color:var(--text2); }
+  .q b { color:var(--warn-fg); }
+
+  .demoTabs { display:inline-flex; gap:2px; background:var(--bg2); border:1px solid var(--line-soft); border-radius:999px; padding:3px; align-self:flex-start; }
+  .demoTabs button { background:none; border:none; color:var(--text2); font:600 var(--fs-sm) var(--sans); padding:5px 13px; border-radius:999px; cursor:pointer; }
+  .demoTabs button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+
+  .frame { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg0); padding:var(--space-4); display:flex; flex-direction:column; justify-content:flex-end; gap:var(--space-3); min-height:200px; }
+  .composer { border:1px solid var(--line); border-radius:var(--r); background:var(--bg1); padding:var(--space-3); font:var(--fs-chat) var(--sans); color:var(--text2); }
+  .composer .slash { color:var(--accent); font-family:var(--mono); }
+
+  .card { background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); overflow:hidden; }
+  .cardHead { display:flex; align-items:center; gap:var(--space-2); padding:var(--space-2) var(--space-3); border-bottom:1px solid var(--line-soft); }
+  .cardHead .cmd { font:700 var(--fs-sm) var(--mono); color:var(--accent); }
+  .cardHead .crumb { color:var(--text3); font-size:var(--fs-chip); }
+  .cardHead .right { margin-left:auto; display:flex; gap:var(--space-2); align-items:center; color:var(--text3); font-size:var(--fs-chip); }
+  .cardHead .x { background:none; border:none; color:var(--text3); cursor:pointer; font-size:13px; }
+  .pill { display:inline-block; font:600 var(--fs-chip) var(--sans); border-radius:999px; padding:1px 8px; }
+  .pill.ok { background:var(--ok-soft); color:var(--ok-fg); }
+  .pill.warn { background:var(--warn-soft); color:var(--warn-fg); }
+  .pill.bad { background:var(--bad-soft); color:var(--bad-fg); }
+  .pill.info { background:var(--info-soft); color:var(--info-fg); }
+  .pill.mute { background:var(--bg3); color:var(--text3); }
+
+  /* usage card */
+  .ugrid { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--line-soft); }
+  .usec { background:var(--bg1); padding:var(--space-3) var(--space-4); display:flex; flex-direction:column; gap:var(--space-2); }
+  .usec h4 { font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; color:var(--text3); display:flex; gap:var(--space-2); align-items:center; }
+  .usec h4 .src { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:600; }
+  .row { display:flex; justify-content:space-between; gap:var(--space-3); font-size:var(--fs-sm); }
+  .row .k { color:var(--text3); } .row .v { color:var(--text); font-family:var(--mono); font-size:12px; }
+  .meter { height:6px; background:var(--bg3); border-radius:999px; overflow:hidden; }
+  .meter > i { display:block; height:100%; background:var(--accent); border-radius:999px; }
+  .meter.warn > i { background:var(--warn); } .meter.ok > i { background:var(--ok); }
+  .meterRow { display:grid; grid-template-columns:90px 1fr 140px; gap:var(--space-3); align-items:center; font-size:var(--fs-sm); }
+  .meterRow .lbl { color:var(--text2); } .meterRow .rt { color:var(--text3); font-size:var(--fs-chip); text-align:right; }
+  .absent { color:var(--text3); font-size:var(--fs-sm); font-style:italic; }
+  .wide { grid-column:1 / -1; }
+  .dot { width:8px; height:8px; border-radius:50%; display:inline-block; background:var(--ok); }
+  .dot.idle { background:var(--text3); }
+  .cardFoot { display:flex; gap:var(--space-3); padding:var(--space-2) var(--space-4); border-top:1px solid var(--line-soft); color:var(--text3); font-size:var(--fs-chip); }
+  .cardFoot .sp { margin-left:auto; }
+  .lnk { color:var(--accent); cursor:pointer; }
+
+  table.schema { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+  table.schema th, table.schema td { text-align:left; padding:6px var(--space-3); border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  table.schema th { color:var(--text3); font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; }
+  table.schema td:first-child { font-family:var(--mono); font-size:12px; color:var(--text); white-space:nowrap; }
+  table.schema td.c { text-align:center; }
+  pre { font:12px/1.5 var(--mono); background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:var(--space-3); color:var(--text2); overflow-x:auto; }
+
+  /* /new */
+  .opts { display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--space-3); }
+  .opt { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg2); padding:var(--space-3); display:flex; flex-direction:column; gap:var(--space-2); }
+  .opt h3 { font-size:var(--fs-body); font-weight:650; }
+  .opt.rec { border-color:var(--accent); }
+  .opt ul { padding-left:16px; color:var(--text2); font-size:var(--fs-sm); }
+  .pills { display:flex; flex-wrap:wrap; gap:var(--space-2); }
+  .ppill { display:inline-flex; gap:6px; align-items:center; border:1px solid var(--line); border-radius:999px; padding:3px 10px; font-size:var(--fs-sm); color:var(--text2); background:var(--bg2); cursor:pointer; }
+  .ppill .k { color:var(--text3); font-size:var(--fs-chip); text-transform:uppercase; letter-spacing:.05em; }
+  .ppill.changed { border-color:var(--accent); color:var(--text); }
+  .goal { border:1px solid var(--line); border-radius:var(--r-sm); background:var(--bg0); padding:var(--space-2) var(--space-3); font-size:var(--fs-chat); color:var(--text); min-height:44px; }
+  .seg { display:inline-flex; background:var(--bg2); border:1px solid var(--line-soft); border-radius:999px; padding:2px; }
+  .seg span { padding:2px 10px; border-radius:999px; font-size:var(--fs-chip); font-weight:600; color:var(--text3); cursor:pointer; }
+  .seg span.on { background:var(--accent-soft); color:var(--accent); }
+  .actions { display:flex; gap:var(--space-2); justify-content:flex-end; align-items:center; }
+  .btn { border:1px solid var(--line); background:var(--bg2); color:var(--text); border-radius:var(--r-sm); padding:5px 12px; font:600 var(--fs-sm) var(--sans); cursor:pointer; }
+  .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); }
+  .btn.ghost { background:none; border-color:transparent; color:var(--text2); }
+  .kbd { font:600 10px var(--mono); border:1px solid var(--line); border-radius:4px; padding:0 4px; color:var(--text3); }
+
+  .linkviz { display:flex; align-items:center; gap:var(--space-3); padding:var(--space-3); background:var(--bg2); border-radius:var(--r-sm); font-size:var(--fs-sm); }
+  .node { border:1px solid var(--line); border-radius:var(--r-sm); padding:4px 10px; background:var(--bg1); }
+  .node.new { border-style:dashed; border-color:var(--accent); color:var(--accent); }
+  .arrow { color:var(--text3); font-family:var(--mono); display:flex; flex-direction:column; align-items:center; font-size:var(--fs-chip); }
+  .arrow b { color:var(--info-fg); font-size:14px; }
+  table.links { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
+  table.links th, table.links td { text-align:left; padding:6px var(--space-3); border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  table.links th { color:var(--text3); font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; }
+  table.links td:first-child { font-family:var(--mono); color:var(--accent); white-space:nowrap; }
+
+  /* export dialog */
+  .scrim { background:rgba(0,0,0,.55); border-radius:var(--r); padding:var(--space-6); display:flex; justify-content:center; }
+  .dialog { width:520px; background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); }
+  .dialog header { padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); font-weight:650; font-size:var(--fs-ui); display:flex; align-items:center; }
+  .dialog header .x { margin-left:auto; color:var(--text3); }
+  .dialog .dbody { padding:var(--space-4); display:flex; flex-direction:column; gap:var(--space-4); }
+  .fmt { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--space-2); }
+  .fmt label { border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:var(--space-2) var(--space-3); background:var(--bg2); cursor:pointer; display:flex; flex-direction:column; gap:2px; }
+  .fmt label.on { border-color:var(--accent); background:var(--accent-soft); }
+  .fmt .t { font-weight:650; font-size:var(--fs-body); }
+  .fmt .d { color:var(--text3); font-size:var(--fs-chip); }
+  .lbl2 { font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin-bottom:var(--space-2); }
+  .checks { display:flex; flex-direction:column; gap:6px; font-size:var(--fs-sm); color:var(--text2); }
+  .checks .hint { color:var(--text3); font-size:var(--fs-chip); margin-left:4px; }
+  .fname { display:flex; align-items:center; gap:var(--space-2); font:12px var(--mono); color:var(--text2); background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r-sm); padding:6px var(--space-3); }
+  .dialog footer { padding:var(--space-3) var(--space-4); border-top:1px solid var(--line-soft); display:flex; align-items:center; gap:var(--space-2); }
+  .dialog footer .remember { font-size:var(--fs-sm); color:var(--text2); margin-right:auto; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Session commands: <code>/usage</code>, <code>/new*</code>, <code>/export</code></h1>
+    <p>A discussion mockup for the first harness-agnostic command pass. Each section has the UI on top and the open questions below it. These cards use the command-framework card kit (<code>docs/mockups/command-framework.html</code>): UI chrome above the composer that is never written to the transcript.</p>
+  </header>
+
+<style>
+  .ppill.locked { border-style:dashed; color:var(--text3); cursor:help; }
+  .ppill.locked::before { content:"🔒"; font-size:10px; }
+  .banner { display:flex; gap:var(--space-2); align-items:flex-start; padding:var(--space-2) var(--space-3); border-radius:var(--r-sm); font-size:var(--fs-sm); }
+  .banner.info { background:var(--info-soft); color:var(--info-fg); }
+  .banner.bad { background:var(--bad-soft); color:var(--bad-fg); }
+  .btn[disabled] { opacity:.45; cursor:not-allowed; }
+  .arrow b { cursor:help; border-bottom:1px dotted var(--info-fg); }
+  .menuMock { background:var(--bg1); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:var(--space-1); width:420px; }
+  .mi { display:flex; gap:var(--space-3); padding:6px var(--space-3); border-radius:var(--r-sm); font-size:var(--fs-sm); }
+  .mi .n { font-family:var(--mono); color:var(--text); min-width:110px; }
+  .mi .d { color:var(--text3); }
+  .mi.dis .n { color:var(--text3); text-decoration:line-through; }
+  .mi.dis .d { color:var(--bad-fg); }
+  .usageCard .ugrid { border-radius:var(--r); }
+  .fmt2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--space-2); }
+</style>
+
+  <!-- ───────────────────────── /usage ───────────────────────── -->
+  <section class="block">
+    <h2><span class="tag">1</span> /usage: one card for health and usage <span class="note">aliases: /status, /context</span></h2>
+    <div class="body">
+      <div style="display:flex; gap:var(--space-3); flex-wrap:wrap">
+        <div class="demoTabs" id="uLayout">
+          <button aria-pressed="true" data-v="strip">A · Strip</button>
+          <button aria-pressed="false" data-v="ledger">B · Ledger</button>
+          <button aria-pressed="false" data-v="tiles">C · Tiles</button>
+        </div>
+        <div class="demoTabs" id="uData">
+          <button aria-pressed="true" data-v="plan">claude-code · plan</button>
+          <button aria-pressed="false" data-v="api">claude-code · API key</button>
+          <button aria-pressed="false" data-v="local">goose · local Ollama</button>
+        </div>
+      </div>
+      <div class="frame">
+        <div id="usageMount"></div>
+        <div class="composer"><span class="slash">/usage</span></div>
+      </div>
+      <div class="note" id="layoutNote"></div>
+
+      <div class="note"><b>No header or footer.</b> Esc or clicking away closes the card. There's no "copy as JSON". <b>Cost became a billing-mode switch:</b> one spend section shows whichever signal matches how the session is billed, and is left out when there's none. Each layout is built to handle 2 to 4 sections without stretching.</div>
+
+<pre>{
+  "health":  { "state", "since", "process_started_at", "last_event_at", "harness", "version", "preflight_ok" },  // always (mads)
+  "context": { "used", "window", "can_compress" },                                                 // almost always
+  "tokens":  { "input", "output", "cache_read"?, "cache_write"?, "turns" },                       // when reported
+  "billing": { "mode": "plan" | "usage" | "unknown" },                                           // decides the 4th panel
+  "limits":  [ { "id", "label", "used_pct", "resets_at", "scope": "account" } ]?,               // mode = plan
+  "cost":    { "usd", "basis": "list_price" }?                                                   // mode = usage
+}</pre>
+
+      <table class="schema">
+        <tr><th>Signal</th><th>claude-code (stream-json)</th><th>ACP (goose, kiro, claude-agent-acp)</th></tr>
+        <tr><td>billing mode</td><td><code>system/init.apiKeySource</code>: <code>"none"</code> means a subscription login; anything else is an API key</td><td>Not in the spec, so mode = <code>unknown</code></td></tr>
+        <tr><td>limits</td><td><code>rate_limit_event.rate_limit_info.unifiedWindows.{five_hour, seven_day}</code>: utilization + resetsAt. Captured in testdata today; dropped at <code>wire.go:455</code></td><td>Nothing</td></tr>
+        <tr><td>cost</td><td><code>result.total_cost_usd</code>: claude-code's own list-price estimate, sent <i>even for plan users</i>, where it isn't money spent</td><td>Optional <code>usage_update.cost{amount, currency}</code>. claude-agent-acp sends it; goose doesn't in our captures</td></tr>
+      </table>
+      <div class="q"><b>Discuss:</b> when billing is <code>unknown</code> but ACP sends a <code>cost</code> (claude-agent-acp), should mads (a) hide it, since we can't tell if it's real money, or (b) show it as "≈ $X at API rates"? I'd hide it. It's the only case where a cost number would appear without us knowing what it means.</div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── /new ───────────────────────── -->
+  <section class="block">
+    <h2><span class="tag">2</span> /new, /new-leader, /new-follower, /new-monitor</h2>
+    <div class="body">
+      <div class="note">An inline card. Every pill starts with this session's values and can be edited. Linked variants show the relationship; hover the arrow for what the link allows. Validation shows up in two places: in the <code>/</code> menu before you pick, and in the card.</div>
+
+      <div class="demoTabs" id="newTabs">
+        <button aria-pressed="true" data-v="ok">/new-follower</button>
+        <button aria-pressed="false" data-v="join">/new-monitor · joins worktree</button>
+        <button aria-pressed="false" data-v="led">/new-leader · already led</button>
+      </div>
+
+      <div class="frame">
+        <!-- ok -->
+        <div class="card" data-new="ok">
+          <div style="padding:var(--space-3) var(--space-4); display:flex; flex-direction:column; gap:var(--space-3)">
+            <div class="linkviz">
+              <span class="node">dns-tracing <span class="pill mute">this</span></span>
+              <span class="arrow"><b title="dns-tracing will lead the new session. It can read what the new session is doing, send it messages, and direct its work through its orchestrate tools.">── leads ──▶</b></span>
+              <span class="node new">new session</span>
+              <span class="note" style="margin-left:auto; display:flex; gap:var(--space-2); align-items:center"><span title="How often dns-tracing gets a digest of the new session's activity: on signal = when the new session finishes or needs attention; per turn = after every turn; manual = only when asked.">Cadence</span> <span class="seg"><span class="on">on signal</span><span>per turn</span><span>manual</span></span></span>
+            </div>
+            <div class="goal">reproduce DNS error for tracing service<span style="color:var(--accent)">▍</span></div>
+            <div class="pills">
+              <span class="ppill"><span class="k">Folder</span> ~/repo/tracing</span>
+              <span class="ppill"><span class="k">Agent</span> debugger</span>
+              <span class="ppill changed"><span class="k">Model</span> claude-code · sonnet-5.5</span>
+              <span class="ppill"><span class="k">Trust</span> auto_review</span>
+              <span class="ppill locked" title="dns-tracing works in its own worktree of this repo. Linked sessions must share one copy of the repo, so the new session works inside dns-tracing's worktree."><span class="k">Isolation</span> shares dns-tracing's worktree</span>
+            </div>
+            <div class="actions">
+              <button class="btn">Start <span class="kbd">↵</span></button>
+              <button class="btn primary">Start &amp; open <span class="kbd">⌘↵</span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- join -->
+        <div class="card" data-new="join" style="display:none">
+          <div style="padding:var(--space-3) var(--space-4); display:flex; flex-direction:column; gap:var(--space-3)">
+            <div class="linkviz">
+              <span class="node new">new session</span>
+              <span class="arrow"><b title="The new session will watch dns-tracing. It gets a digest of dns-tracing's activity but can't send it messages.">── watches ──▶</b></span>
+              <span class="node">dns-tracing <span class="pill mute">this</span></span>
+              <span class="note" style="margin-left:auto; display:flex; gap:var(--space-2); align-items:center"><span title="How often the new session gets a digest of dns-tracing's activity: on signal = when dns-tracing finishes or needs attention; per turn = after every turn; manual = only when asked.">Cadence</span> <span class="seg"><span class="on">on signal</span><span>per turn</span><span>manual</span></span></span>
+            </div>
+            <div class="goal">flag anything that touches the resolver config<span style="color:var(--accent)">▍</span></div>
+            <div class="pills">
+              <span class="ppill changed"><span class="k">Folder</span> ~/repo/tracing (in dns-tracing's worktree)</span>
+              <span class="ppill"><span class="k">Agent</span> debugger</span>
+              <span class="ppill"><span class="k">Model</span> claude-code · opus-5.5</span>
+              <span class="ppill"><span class="k">Trust</span> auto_review</span>
+              <span class="ppill locked" title="A new worktree would put the two sessions on different copies of the repo, which linked sessions can't do."><span class="k">Isolation</span> shares dns-tracing's worktree</span>
+            </div>
+            <div class="banner info">ⓘ dns-tracing has its own worktree, so this session works inside it instead of creating a new one. Pick a folder in a different repo to unlock isolation.</div>
+            <div class="actions">
+              <button class="btn">Start <span class="kbd">↵</span></button>
+              <button class="btn primary">Start &amp; open <span class="kbd">⌘↵</span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- led -->
+        <div data-new="led" style="display:none; display:none; gap:var(--space-4); align-items:flex-end">
+          <div class="menuMock">
+            <div class="mi"><span class="n">/new</span><span class="d">start a session</span></div>
+            <div class="mi dis"><span class="n">/new-leader</span><span class="d">dns-tracing is already led by triage-lead</span></div>
+            <div class="mi"><span class="n">/new-follower</span><span class="d">start a session led by this one</span></div>
+            <div class="mi"><span class="n">/new-monitor</span><span class="d">start a session that watches this one</span></div>
+          </div>
+          <div class="note" style="max-width:40ch">Grayed out and not selectable, with the reason inline. If the user types it anyway and presses Enter, the card opens in a blocked state:<br><br>
+            <span class="banner bad" style="display:flex">✕ dns-tracing already has a leader (triage-lead). A session can have only one. <span class="lnk" style="margin-left:auto">Open triage-lead</span></span></div>
+        </div>
+        <div class="composer" id="newComposer"><span class="slash">/new-follower</span> reproduce DNS error for tracing service</div>
+      </div>
+
+      <table class="links">
+        <tr><th>Rule (enforced server-side today)</th><th>UI behavior</th></tr>
+        <tr><td style="font-family:var(--sans);color:var(--text)">One leader per session</td><td><code>/new-leader</code> is disabled in the menu with the current leader named. The card blocks Start.</td></tr>
+        <tr><td style="font-family:var(--sans);color:var(--text)">Pipeline runs can be monitored but not led</td><td><code>/new-leader</code> is disabled: "pipeline runs can't be led".</td></tr>
+        <tr><td style="font-family:var(--sans);color:var(--text)">Linked sessions share one copy of a repo</td><td>Server behavior: a new linked session against a worktree-isolated counterpart in the same repo <i>joins</i> that worktree (<code>stagedlinks.go:21-27</code>). The UI mirrors this: Isolation is locked to "shares X's worktree", and the Folder pill shows the worktree.</td></tr>
+        <tr><td style="font-family:var(--sans);color:var(--text)">Counterpart's worktree missing on disk</td><td>Blocked, with the server's existing message ("open it once to restore its folder").</td></tr>
+        <tr><td style="font-family:var(--sans);color:var(--text)">Linked-sessions flag off</td><td>The three link commands aren't in the menu.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── /export ───────────────────────── -->
+  <section class="block">
+    <h2><span class="tag">3</span> /export: MVP</h2>
+    <div class="body">
+      <div class="note">Exports everything (tools, thinking, system and link messages, delegates). <code>/export</code> downloads straight away in the saved format; <code>/export md</code> or <code>/export json</code> overrides it for one export. The dialog appears only until a preference is saved (also editable in Settings → Conversation).</div>
+      <div class="scrim">
+        <div class="dialog" style="width:420px">
+          <header>Export conversation <span class="x">✕</span></header>
+          <div class="dbody">
+            <div class="fmt fmt2">
+              <label class="on"><span class="t">Markdown</span><span class="d">For reading and sharing</span></label>
+              <label><span class="t">JSON</span><span class="d">Complete, machine-readable</span></label>
+            </div>
+          </div>
+          <footer>
+            <label class="remember"><input type="checkbox" checked> Always use this format</label>
+            <button class="btn primary">Download</button>
+          </footer>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<style>
+  .meter.bad > i { background:var(--bad); }
+  .ctxStrip { display:grid; grid-template-columns:auto 1fr auto auto; gap:var(--space-3); align-items:center; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .ctxStrip .lbl { font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; color:var(--text3); }
+  .ctxStrip .v { font:12px var(--mono); color:var(--text); }
+  .ledger { width:360px; padding:var(--space-2) var(--space-4) var(--space-3); display:flex; flex-direction:column; gap:4px; }
+  .lsec { font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; color:var(--text3); margin-top:var(--space-2); padding-top:var(--space-2); border-top:1px solid var(--line-soft); }
+  .lsec:first-child { border-top:none; margin-top:0; }
+  .lmeter { display:grid; grid-template-columns:auto 1fr auto; gap:var(--space-2); align-items:center; font-size:var(--fs-sm); }
+  .lmeter:not(:has(.k)) { grid-template-columns:1fr auto; }
+  .lmeter .k { color:var(--text3); min-width:52px; } .lmeter .v { font:12px var(--mono); color:var(--text); }
+  .tiles { display:flex; }
+  .tile { flex:1 1 0; min-width:0; padding:var(--space-3) var(--space-4); display:flex; flex-direction:column; gap:4px; border-left:1px solid var(--line-soft); }
+  .tile:first-child { border-left:none; }
+  .tile .cap { font:700 var(--fs-chip) var(--sans); text-transform:uppercase; letter-spacing:.06em; color:var(--text3); }
+  .tile .big { font:650 20px var(--sans); color:var(--text); display:flex; align-items:center; gap:6px; }
+  .tile .sub { color:var(--text3); font-size:var(--fs-chip); }
+</style>
+<script>
+  function tabs(id, attr, onPick) {
+    const t = document.getElementById(id);
+    t.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      [...t.children].forEach((x) => x.setAttribute("aria-pressed", x === b));
+      document.querySelectorAll("[" + attr + "]").forEach((c) => {
+        const on = c.getAttribute(attr) === b.dataset.v;
+        c.style.display = on ? (c.classList.contains("card") ? "block" : "flex") : "none";
+      });
+      onPick && onPick(b.dataset.v);
+    });
+  }
+  const D = {
+    plan: { harness: "claude-code 2.1.290", state: "working", since: "2m 14s", up: "1h 32m", last: "3s ago",
+            ctx: { used: "142.3k", win: "200k", pct: 71, compress: true },
+            tok: { in: "1.21M", cache: "982k (81%)", out: "48.6k", turns: 37, total: "1.26M" },
+            spend: { kind: "limits", rows: [ { l: "5-hour", pct: 62, r: "resets 2:10 PM" }, { l: "Weekly", pct: 31, r: "resets Thu 9:00 AM" } ] } },
+    api:  { harness: "claude-code 2.1.290", state: "idle", since: "40s", up: "18m", last: "40s ago",
+            ctx: { used: "44.0k", win: "200k", pct: 22, compress: true },
+            tok: { in: "310k", cache: "241k (78%)", out: "12.2k", turns: 9, total: "322k" },
+            spend: { kind: "cost", usd: "$0.91", basis: "list price" } },
+    local:{ harness: "goose 1.31", state: "idle", since: "6m", up: "22m", last: "6m ago",
+            ctx: { used: "18.1k", win: "131k", pct: 14, compress: false },
+            tok: { in: "212k", cache: null, out: "9.4k", turns: 8, total: "221k" },
+            spend: null },
+  };
+  const mcls = (p) => (p >= 80 ? "bad" : p >= 60 ? "warn" : "ok");
+  const meter = (p) => `<div class="meter ${mcls(p)}"><i style="width:${p}%"></i></div>`;
+  const dot = (s) => `<span class="dot ${s === "idle" ? "idle" : ""}"></span>`;
+  const row = (k, v) => `<div class="row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+
+  // A · Strip: context is a full-width bar on top; the other sections sit in equal columns that size to their count.
+  function strip(d) {
+    const cols = [
+      `<div class="usec"><h4>Health</h4>${row("Agent", dot(d.state) + " " + d.state + " · " + d.since)}${row("Process", "up " + d.up)}${row("Last event", d.last)}${row("Harness", d.harness + " ✓")}</div>`,
+      `<div class="usec"><h4>Tokens · session</h4>${row("Input", d.tok.in)}${d.tok.cache ? row("↳ from cache", d.tok.cache) : ""}${row("Output", d.tok.out)}${row("Turns", d.tok.turns)}</div>`,
+    ];
+    if (d.spend?.kind === "limits") cols.push(`<div class="usec"><h4>Plan limits</h4>${d.spend.rows.map((r) => `${row(r.l, r.pct + "% · " + r.r)}${meter(r.pct)}`).join("")}</div>`);
+    if (d.spend?.kind === "cost") cols.push(`<div class="usec"><h4>Spend · session</h4>${row("≈ Cost", d.spend.usd)}${row("Basis", d.spend.basis)}</div>`);
+    return `<div class="card"><div class="ctxStrip"><span class="lbl">Context</span>${meter(d.ctx.pct)}<span class="v">${d.ctx.used} / ${d.ctx.win} · ${d.ctx.pct}%</span>${d.ctx.compress ? '<span class="lnk">Compress</span>' : ""}</div>
+      <div class="ugrid" style="grid-template-columns:repeat(${cols.length},1fr)">${cols.join("")}</div></div>`;
+  }
+
+  // B · Ledger: a single narrow column of label/value rows. Missing sections simply aren't rows.
+  function ledger(d) {
+    const sec = (t) => `<div class="lsec">${t}</div>`;
+    let h = sec("Health") + row("Agent", dot(d.state) + " " + d.state + " · " + d.since) + row("Process · last event", "up " + d.up + " · " + d.last) + row("Harness", d.harness + " ✓");
+    h += sec("Context") + `<div class="lmeter">${meter(d.ctx.pct)}<span class="v">${d.ctx.used} / ${d.ctx.win}</span></div>` + (d.ctx.compress ? row("Auto-compress at 85%", '<span class="lnk">Compress now</span>') : "");
+    h += sec("Tokens · session") + row("In / out", d.tok.in + " / " + d.tok.out) + (d.tok.cache ? row("From cache", d.tok.cache) : "") + row("Turns", d.tok.turns);
+    if (d.spend?.kind === "limits") h += sec("Plan limits") + d.spend.rows.map((r) => `<div class="lmeter"><span class="k">${r.l}</span>${meter(r.pct)}<span class="v">${r.pct}% · ${r.r}</span></div>`).join("");
+    if (d.spend?.kind === "cost") h += sec("Spend · session") + row("≈ Cost (list price)", d.spend.usd);
+    return `<div class="card ledger">${h}</div>`;
+  }
+
+  // C · Tiles: one row of headline numbers; detail in a hover title. Tile count = section count.
+  function tiles(d) {
+    const t = (cap, big, sub, extra = "", title = "") => `<div class="tile" title="${title}"><div class="cap">${cap}</div><div class="big">${big}</div>${extra}<div class="sub">${sub}</div></div>`;
+    const ts = [
+      t("Agent", dot(d.state) + " " + d.state, d.since + " · up " + d.up, "", "Last event " + d.last + " · " + d.harness),
+      t("Context", d.ctx.pct + "%", d.ctx.used + " / " + d.ctx.win + (d.ctx.compress ? ' · <span class="lnk">Compress</span>' : ""), meter(d.ctx.pct)),
+      t("Tokens", d.tok.total, d.tok.turns + " turns" + (d.tok.cache ? " · 81% cached" : ""), "", "in " + d.tok.in + " · out " + d.tok.out),
+    ];
+    if (d.spend?.kind === "limits") d.spend.rows.forEach((r) => ts.push(t(r.l + " limit", r.pct + "%", r.r, meter(r.pct))));
+    if (d.spend?.kind === "cost") ts.push(t("Spend", d.spend.usd, "list price, this session"));
+    return `<div class="card"><div class="tiles">${ts.join("")}</div></div>`;
+  }
+
+  const NOTES = {
+    strip: "<b>A · Strip.</b> Context is the most-watched number, so it gets the full-width bar. The other sections share equal columns (2 or 3), all with similar row counts, so nothing stretches.",
+    ledger: "<b>B · Ledger.</b> One narrow column, about 360px. Very little whitespace whatever the data, since a missing section just means fewer rows. Taller, but the composer is the only thing it shares space with.",
+    tiles: "<b>C · Tiles.</b> Headline numbers only (3 to 5 tiles); detail is in the tooltip. Shortest and easiest to scan, but hides cache and token splits unless you hover.",
+  };
+  const U = { layout: "strip", data: "plan" };
+  const R = { strip, ledger, tiles };
+  function renderUsage() {
+    document.getElementById("usageMount").innerHTML = R[U.layout](D[U.data]);
+    document.getElementById("layoutNote").innerHTML = NOTES[U.layout];
+  }
+  for (const [id, key] of [["uLayout", "layout"], ["uData", "data"]]) {
+    const t = document.getElementById(id);
+    t.addEventListener("click", (e) => {
+      const b = e.target.closest("button"); if (!b) return;
+      [...t.children].forEach((x) => x.setAttribute("aria-pressed", x === b));
+      U[key] = b.dataset.v; renderUsage();
+    });
+  }
+  renderUsage();
+  const typed = { ok: '<span class="slash">/new-follower</span> reproduce DNS error for tracing service',
+                  join: '<span class="slash">/new-monitor</span> flag anything that touches the resolver config',
+                  led: '<span class="slash">/new-</span>' };
+  tabs("newTabs", "data-new", (v) => (document.getElementById("newComposer").innerHTML = typed[v]));
+  document.querySelectorAll(".fmt label").forEach((l) => l.addEventListener("click", () =>
+    document.querySelectorAll(".fmt label").forEach((x) => x.classList.toggle("on", x === l))));
+</script>
+</body>
+</html>

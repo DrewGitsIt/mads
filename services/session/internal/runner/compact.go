@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
@@ -56,38 +57,90 @@ func shouldCompactOnResume(usage *contracts.Usage, model string) bool {
 	return contextOccupancy(usage, model) > compactOccupancyThreshold
 }
 
-// maybeRequestCompact asks sess to run a native compaction pass if resuming
-// with last-known usage above compactOccupancyThreshold (shouldCompactOnResume).
-// A no-op, not an error, when sess doesn't implement provider.Compactor —
-// only claude-code's stream-json transport is verified to honor it today
-// (providers/claudecode's streamSession.Compact) — so an unsupporting
-// provider's resume proceeds exactly as before this trigger existed: no
-// error, no status shown.
-func (r *Runner) maybeRequestCompact(ctx context.Context, sess provider.Session, usage *contracts.Usage, model string) {
+// resumeCompactor returns sess's Compactor when resuming with last-known
+// usage above compactOccupancyThreshold (shouldCompactOnResume), nil
+// otherwise — including when sess doesn't implement provider.Compactor at
+// all, so an unsupporting provider's resume proceeds exactly as before this
+// trigger existed: no error, no status shown. Start asks before it installs
+// the session, so the compaction turn can be marked in flight in the same
+// lock hold that makes the session reachable (beginCompactLocked) — a
+// message arriving in between would otherwise go straight to a harness
+// that's about to be (or already is) compacting.
+func resumeCompactor(sess provider.Session, usage *contracts.Usage, model string) provider.Compactor {
 	if !shouldCompactOnResume(usage, model) {
+		return nil
+	}
+	compactor, _ := sess.(provider.Compactor)
+	return compactor
+}
+
+// requestResumeCompact runs the near-limit resume compaction Start decided
+// on (resumeCompactor) and already marked in flight (beginCompactLocked).
+// "" — the harness's default pass; focus text is only ever the user's.
+// ErrUnsupported is a shared engine's agent without a compaction command
+// (acprpc's CompactCommand unset): the same silent no-op as no Compactor at
+// all. Either way a pass that never started gives its turn back.
+func (r *Runner) requestResumeCompact(ctx context.Context, compactor provider.Compactor) {
+	err := compactor.Compact(ctx, "")
+	if err == nil {
 		return
 	}
-	compactor, ok := sess.(provider.Compactor)
-	if !ok {
-		return
-	}
-	if err := compactor.Compact(ctx); err != nil {
+	if !errors.Is(err, provider.ErrUnsupported) {
 		log.Printf("runner: request resume compaction: %v", err)
 	}
+	r.abortCompact()
+}
+
+// beginCompactLocked marks a runner-requested compaction pass (CompactNow,
+// or Start's near-limit trigger) as the in-flight turn. It is one, to the
+// harness: claude-code runs /compact as a turn ending in a result line, and
+// acprpc sends a real session/prompt and refuses any other prompt until it
+// answers. Left unmarked, a message sent meanwhile went SendOrQueue → not
+// busy → Send → the harness's "already has a prompt in flight" → a 500 and
+// a lost message; marked, it queues behind the pass exactly as behind any
+// turn, and onTurnEnd — the pass's own EventTurnEnd — delivers it. The
+// usage tally is told too, so the pass's tokens count but it doesn't count
+// as a turn of conversation (countTurn). Must be called with r.mu held; the
+// caller marks the agent working (markAgentWorking("/compact") labels it
+// Compacting) after unlocking.
+func (r *Runner) beginCompactLocked() {
+	r.busy = true
+	r.tally.setCompactTurn(true)
+}
+
+// abortCompact undoes beginCompactLocked for a pass the harness refused to
+// start: no turn is coming to end it, so this is its turn end — idle, and
+// anything that queued in the meantime goes out now.
+func (r *Runner) abortCompact() {
+	r.tally.setCompactTurn(false)
+	r.markAgentIdle()
+	r.mu.Lock()
+	r.busy = false
+	if len(r.pending) > 0 && !r.landing && r.sess != nil {
+		r.deliverNextLocked()
+		return
+	}
+	r.mu.Unlock()
 }
 
 // ErrCompactUnsupported is returned by CompactNow when the active provider
 // session doesn't implement provider.Compactor. Distinct from the silent
-// no-op maybeRequestCompact does for the same case: an explicit user request
+// no-op the resume trigger does for the same case: an explicit user request
 // deserves an explicit "this provider can't" answer.
 var ErrCompactUnsupported = errors.New("runner: provider does not support compaction")
 
 // CompactNow runs a native compaction pass on user request (the UI's
-// "Compact now" action, POST /compact). Unlike the resume trigger it applies
-// no threshold — the user asked. Progress and outcome arrive as EventCompact
-// on the stream, same as the resume path; this returns once the request is
-// accepted, not once compaction finishes.
-func (r *Runner) CompactNow(ctx context.Context) error {
+// "Compact now" action and /compact, POST /compact). Unlike the resume
+// trigger it applies no threshold — the user asked. Instructions, when
+// non-empty, steer the summary (the /compact focus text); a harness that
+// can't take them refuses rather than compacting without them, surfaced as
+// ErrCompactUnsupported like a harness with no compaction at all. Progress
+// and outcome arrive as EventCompact on the stream, same as the resume
+// path; this returns once the request is accepted, not once compaction
+// finishes. The pass is the session's in-flight turn until its turn end
+// (beginCompactLocked), so it refuses while another turn runs, and messages
+// sent while it runs queue behind it.
+func (r *Runner) CompactNow(ctx context.Context, instructions string) error {
 	r.mu.Lock()
 	if r.sess == nil {
 		r.mu.Unlock()
@@ -97,11 +150,20 @@ func (r *Runner) CompactNow(ctx context.Context) error {
 		r.mu.Unlock()
 		return ErrTurnInFlight
 	}
-	sess := r.sess
-	r.mu.Unlock()
-	compactor, ok := sess.(provider.Compactor)
+	compactor, ok := r.sess.(provider.Compactor)
 	if !ok {
+		r.mu.Unlock()
 		return ErrCompactUnsupported
 	}
-	return compactor.Compact(ctx)
+	r.beginCompactLocked()
+	r.mu.Unlock()
+	r.markAgentWorking("/compact")
+	if err := compactor.Compact(ctx, instructions); err != nil {
+		r.abortCompact()
+		if errors.Is(err, provider.ErrUnsupported) {
+			return fmt.Errorf("%w: %v", ErrCompactUnsupported, err)
+		}
+		return err
+	}
+	return nil
 }

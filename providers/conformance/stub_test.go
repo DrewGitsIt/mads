@@ -24,6 +24,7 @@ type lies struct {
 	zeroUsage           bool // reports no tokens despite declaring cost_reporting
 	acceptAnyResume     bool // resumes despite declaring resume unsupported
 	completesDisallowed bool // a disallowed tool completes (non-error result) below full trust
+	dropsFocus          bool // takes compaction instructions despite declaring compaction_focus unsupported
 }
 
 type stub struct {
@@ -187,6 +188,19 @@ func (ss *stubSession) Interrupt(context.Context) error {
 	select {
 	case ss.interrupt <- struct{}{}:
 	default:
+	}
+	return nil
+}
+
+// Compact is the stub's whole compaction surface: it refuses what the
+// matrix declares unsupported, unless lying about focus.
+func (ss *stubSession) Compact(_ context.Context, instructions string) error {
+	m := ss.p.matrix
+	if !m[provider.BehaviorCompaction].Works() {
+		return provider.ErrUnsupported
+	}
+	if instructions != "" && !m[provider.BehaviorCompactionFocus].Works() && !ss.p.lies.dropsFocus {
+		return provider.ErrUnsupported
 	}
 	return nil
 }

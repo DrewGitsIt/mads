@@ -141,6 +141,14 @@ func (p *Provider) Matrix() provider.Matrix {
 		// (rung 2). Weaker and slower than the wire announcement, hence
 		// Emulated as the one-row summary across both transports. See README.
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// "/compact [instructions]" sent as a user turn on the structured
+		// transport (streamSession.Compact) runs claude's own pass, and the
+		// CLI advertises the instructions argument itself ("<optional
+		// custom summarization instructions>" — acprpc testdata/captures/
+		// claude-agent-acp-full.jsonl). The terminal transport has no
+		// Compactor; there the user types /compact into claude directly.
+		provider.BehaviorCompaction:      provider.Native,
+		provider.BehaviorCompactionFocus: provider.Native,
 		// Delegates (docs/DELEGATES-DESIGN.md): task_*/background_tasks_changed
 		// lines carry a subagent's lifecycle past its spawning call; its own
 		// transcript sits under <ref>/subagents/ (InspectDelegate). Steering is

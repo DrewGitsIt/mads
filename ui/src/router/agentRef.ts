@@ -2,7 +2,7 @@ import type { Agent } from "./types";
 
 /**
  * Session.agent is a *reference* to a persona, not a name — the launchpad
- * stages the persona id (`agt_…`, see launchpad/pills/AgentPill.tsx) while a
+ * stages the persona id (`agt_…`, see sessions/pills/AgentPill.tsx) while a
  * workspace default and anything written by hand carry the name, so the
  * contract that holds on both sides is "id-or-name". This is the one place
  * the UI turns one into an Agent, the same split workspaceRef.ts draws for

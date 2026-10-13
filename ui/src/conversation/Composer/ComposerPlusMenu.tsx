@@ -36,7 +36,6 @@ const UPWARD = {
   zIndex: "var(--z-dock-menu)",
 } as const;
 
-
 /**
  * The composer's `+` menu (mockup E): Input (attach, mention, commands,
  * expand/collapse, keyboard shortcuts), View (Chat | Terminal), and the
@@ -100,7 +99,11 @@ export function ComposerPlusMenu({
     >
       {view === "keys" ? (
         <div role="group" aria-label="Keyboard shortcuts">
-          <button type="button" className={styles.menuHeadButton} onClick={() => setView("main")}>
+          <button
+            type="button"
+            className={styles.menuHeadButton}
+            onClick={() => setView("main")}
+          >
             ‹ Keyboard
           </button>
           <div className={styles.keys}>
@@ -116,7 +119,8 @@ export function ComposerPlusMenu({
             <kbd className={styles.kbd}>{hotkeyLabel("collapseEditor")}</kbd>
             <span>Mention · Commands</span>
             <span>
-              <kbd className={styles.kbd}>@</kbd> <kbd className={styles.kbd}>/</kbd>
+              <kbd className={styles.kbd}>@</kbd>{" "}
+              <kbd className={styles.kbd}>/</kbd>
             </span>
             <span>Attach files</span>
             <kbd className={styles.kbd}>{hotkeyLabel("attachFiles")}</kbd>
@@ -127,15 +131,30 @@ export function ComposerPlusMenu({
       ) : (
         <div role="menu" aria-label="Input options">
           <div className={styles.menuHead}>Input</div>
-          <button type="button" role="menuitem" className={styles.menuItem} onClick={() => run(onAttach)}>
+          <button
+            type="button"
+            role="menuitem"
+            className={styles.menuItem}
+            onClick={() => run(onAttach)}
+          >
             <span className={styles.menuGlyph}>📎</span>Attach files…
             <kbd className={styles.kbd}>{hotkeyLabel("attachFiles")}</kbd>
           </button>
-          <button type="button" role="menuitem" className={styles.menuItem} onClick={() => run(onMention)}>
+          <button
+            type="button"
+            role="menuitem"
+            className={styles.menuItem}
+            onClick={() => run(onMention)}
+          >
             <span className={styles.menuGlyph}>@</span>Mention file or session
             <kbd className={styles.kbd}>@</kbd>
           </button>
-          <button type="button" role="menuitem" className={styles.menuItem} onClick={() => run(onCommands)}>
+          <button
+            type="button"
+            role="menuitem"
+            className={styles.menuItem}
+            onClick={() => run(onCommands)}
+          >
             <span className={styles.menuGlyph}>/</span>Commands
             <kbd className={styles.kbd}>/</kbd>
           </button>
@@ -181,14 +200,20 @@ export function ComposerPlusMenu({
           {(occupancy || onCompact) && <hr className={styles.menuSep} />}
           {occupancy && (
             <div className={styles.ctxRow} data-testid="composer-context">
-              Context · {formatTokens(occupancy.used)} / {formatTokens(occupancy.window)} ({occupancy.pct}%)
+              Context · {formatTokens(occupancy.used)} /{" "}
+              {formatTokens(occupancy.window)} ({occupancy.pct}%)
               <div className={styles.ctxBar}>
                 <i className={tone} style={{ width: `${occupancy.pct}%` }} />
               </div>
             </div>
           )}
           {onCompact && (
-            <button type="button" role="menuitem" className={styles.menuItem} onClick={() => run(onCompact)}>
+            <button
+              type="button"
+              role="menuitem"
+              className={styles.menuItem}
+              onClick={() => run(onCompact)}
+            >
               <span className={styles.menuGlyph}>⇣</span>Compact now
             </button>
           )}

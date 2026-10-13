@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/providers/provider"
 )
 
 // SendOrQueue relays one user turn, or — if a turn is already in flight,
@@ -30,20 +31,35 @@ func (r *Runner) SendOrQueue(ctx context.Context, text string) (*contracts.Queue
 			return nil, ErrNotReady
 		}
 		if r.busy || r.landing {
-			q := contracts.QueuedMessage{ID: newQueueID(), Text: text, QueuedAt: time.Now().UTC()}
-			r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt})
-			snapshot := r.queuedLocked()
-			r.mu.Unlock()
-			r.publishQueue(contracts.QueueChanged{Queued: snapshot})
-			return &q, nil
+			return r.queueUserLocked(text), nil
 		}
 		r.mu.Unlock()
 		err := r.Send(ctx, text)
+		if errors.Is(err, provider.ErrTurnInFlight) {
+			// The harness itself refused: it has a turn running that this
+			// runner never marked (every runner-started turn, compaction
+			// passes included, sets busy — this is the backstop). That
+			// turn's own EventTurnEnd reaches onTurnEnd, which delivers
+			// the queue, so queueing is right even though busy is false.
+			r.mu.Lock()
+			return r.queueUserLocked(text), nil
+		}
 		if errors.Is(err, ErrTurnInFlight) && attempt == 0 {
 			continue
 		}
 		return nil, err
 	}
+}
+
+// queueUserLocked appends one user message to the queue and announces the
+// new queue. Called with r.mu held; it unlocks r.mu.
+func (r *Runner) queueUserLocked(text string) *contracts.QueuedMessage {
+	q := contracts.QueuedMessage{ID: newQueueID(), Text: text, QueuedAt: time.Now().UTC()}
+	r.pending = append(r.pending, pendingInjection{text: text, userID: q.ID, queuedAt: q.QueuedAt})
+	snapshot := r.queuedLocked()
+	r.mu.Unlock()
+	r.publishQueue(contracts.QueueChanged{Queued: snapshot})
+	return &q
 }
 
 // QueuedMessages returns the user's queued messages in delivery order. Never

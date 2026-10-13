@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -110,6 +111,16 @@ func (p *Provider) startStream(_ context.Context, opts provider.StartOptions) (p
 		s.refFired = true
 		s.announced <- opts.Resume
 	}
+	// A resumed (or forked) process's total_cost_usd starts from what the
+	// conversation already cost (restoredCostTotal), not from 0: without
+	// this baseline the first turn end after every wake re-billed the
+	// whole prior total. The new process appends its own cost-state only as
+	// it ends, so reading after its start still sees the last one. On a fork, if the CLI doesn't carry the
+	// original's total over, the first result reads below the baseline and
+	// turnCostLocked takes it as a count that started over: all of it new.
+	if opts.Resume != "" {
+		s.costSeen = p.restoredCostTotal(opts.Resume)
+	}
 	go s.read(stdout)
 	return s, nil
 }
@@ -148,8 +159,18 @@ type streamSession struct {
 	// for the turn's result line: /compact's result counts no tokens, so
 	// without it the turn end would report the conversation as empty.
 	compactedTo int
-	reqSeq      int
-	closed      bool
+	// costSeen is the last total_cost_usd a turn end accounted for. The CLI
+	// reports that figure as a running total (a /compact turn that counts
+	// no tokens still raises it), so each turn end carries the difference:
+	// provider.Usage.CostUSD is one turn's cost. The total is the
+	// conversation's, not the process's — a --resume restores it from the
+	// transcript — so a resumed session starts from that restored figure
+	// (restoredCostTotal), not 0. A suppressed in-turn notification result
+	// leaves it alone, so what that continuation spent lands on the next
+	// turn end instead of nowhere.
+	costSeen float64
+	reqSeq   int
+	closed   bool
 	// agentTasks records, per background task_id, whether it is a subagent
 	// (wire.go isAgentTask). Only a task_started line says so, so the later
 	// phases are kept or dropped by id. Never pruned: one entry per
@@ -269,6 +290,7 @@ func (s *streamSession) handleLine(raw []byte) {
 	interrupted := s.interrupted
 	closesUnprompted := false
 	compactedTo := 0
+	turnCost := 0.0
 	switch {
 	case l.Type == "system" && l.Subtype == "compact_boundary" && l.CompactMetadata != nil:
 		s.compactedTo = l.CompactMetadata.PostTokens
@@ -280,7 +302,11 @@ func (s *streamSession) handleLine(raw []byte) {
 		// second end there would double-fire every per-turn consumer.
 		closesUnprompted = !s.turnOpen && s.unprompted
 		s.unprompted = false
+		if closesUnprompted {
+			turnCost = s.turnCostLocked(l.TotalCostUSD)
+		}
 	case l.Type == "result":
+		turnCost = s.turnCostLocked(l.TotalCostUSD)
 		for key, mu := range l.ModelUsage {
 			if mu.ContextWindow > 0 {
 				if s.windows == nil {
@@ -321,6 +347,9 @@ func (s *streamSession) handleLine(raw []byte) {
 			if ev.Kind == provider.EventTurnEnd && compactedTo > 0 && l.Usage.countsNoTokens() {
 				ev.Usage.ContextTokens = compactedTo
 			}
+			if ev.Kind == provider.EventTurnEnd {
+				ev.Usage.CostUSD = turnCost
+			}
 			if ev.Usage.Model == "" {
 				ev.Usage.Model = model // learned from the init line
 			}
@@ -336,6 +365,23 @@ func (s *streamSession) handleLine(raw []byte) {
 	if bgChanged {
 		s.events <- provider.Event{Kind: provider.EventBackground, Background: background}
 	}
+}
+
+// turnCostLocked is the cost of the turn a result line reporting the
+// running total closes (see costSeen), and advances costSeen to it. A line
+// with no figure costs nothing and moves nothing; a total below the last
+// one can only be a count that started over, all of it new. Caller holds
+// s.mu.
+func (s *streamSession) turnCostLocked(total float64) float64 {
+	if total <= 0 {
+		return 0
+	}
+	cost := total - s.costSeen
+	if cost < 0 {
+		cost = total
+	}
+	s.costSeen = total
+	return cost
 }
 
 // bgCall is what a background task's task_started line says: the call that
@@ -488,8 +534,13 @@ func (s *streamSession) Send(_ context.Context, text string) error {
 // "command" wire shape for slash commands, so the same Send path a normal
 // message uses is all this needs. Progress and outcome arrive as ordinary
 // "system"/"status" lines on the same Events() stream (see wire.go's
-// systemEvents), not via this call's return.
-func (s *streamSession) Compact(ctx context.Context) error {
+// systemEvents), not via this call's return. Instructions ride after the
+// command exactly as a user would type them ("/compact <instructions>"),
+// claude's own custom-summarization argument.
+func (s *streamSession) Compact(ctx context.Context, instructions string) error {
+	if instructions = strings.TrimSpace(instructions); instructions != "" {
+		return s.Send(ctx, "/compact "+instructions)
+	}
 	return s.Send(ctx, "/compact")
 }
 

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { Launchpad, differsFromSaved, recentDirs, withStagedDefaults } from "./Launchpad";
+import { Launchpad, differsFromSaved, withStagedDefaults } from "./Launchpad";
+import { recentDirs } from "../pills/FolderPill";
 import { OPEN_SESSION_EVENT } from "../../../appNavigation";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { fixtureConfig as DEFAULT_CONFIG } from "../../../router/fixtures";

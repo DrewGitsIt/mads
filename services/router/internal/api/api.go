@@ -53,6 +53,9 @@ type server struct {
 	// importMu serializes conversation imports (imports.go): the scan-then-
 	// create is not atomic, so two at once would both import everything.
 	importMu sync.Mutex
+	// reportPreflight caches the preflight run GET /sessions/{id}/report
+	// reads harness versions from (report.go).
+	reportPreflight preflightMemo
 }
 
 // Options bundles server's dependencies so New takes a single argument —
@@ -139,6 +142,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
 	mux.HandleFunc("POST /sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /sessions/defaults", s.handleSessionDefaults)
+	mux.HandleFunc("POST /sessions/validate", s.handleValidateSession)
 	mux.HandleFunc("POST /sessions/{id}/terminate", s.handleTerminateSession)
 	mux.HandleFunc("POST /sessions/{id}/resume", s.handleResumeSession)
 	mux.HandleFunc("POST /sessions/{id}/bounce", s.handleBounceSession)
@@ -228,6 +232,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("GET /delegates", s.handleListDelegates)
 	mux.HandleFunc("GET /sessions/{id}/delegates", s.handleListSessionDelegates)
 	mux.HandleFunc("GET /sessions/{id}/delegates/{harnessId}/transcript", s.handleDelegateTranscript)
+	mux.HandleFunc("GET /sessions/{id}/export", s.handleExportSession)
 	mux.HandleFunc("POST /links/{id}/inject", s.requireLinkedSessions(s.handleLinkInject))
 	mux.HandleFunc("GET /sessions/{id}/orchestrate/subjects", s.requireLinkedSessions(s.handleOrchestrateSubjects))
 	mux.HandleFunc("GET /sessions/{id}/orchestrate/summary", s.requireLinkedSessions(s.handleOrchestrateSummary))
@@ -247,6 +252,7 @@ func NewMux(opts Options) *http.ServeMux {
 	mux.HandleFunc("POST /sessions/{id}/land", s.handleSessionLand)
 	mux.HandleFunc("GET /sessions/{id}/tool-diff", s.handleSessionToolDiff)
 	mux.HandleFunc("GET /sessions/{id}/transcript", s.handleSessionTranscript)
+	mux.HandleFunc("GET /sessions/{id}/report", s.handleSessionReport)
 	mux.HandleFunc("GET /sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /sessions", s.handleListSessions)
 	mux.HandleFunc("GET /workspaces", s.handleListWorkspaces)

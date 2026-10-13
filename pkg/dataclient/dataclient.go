@@ -327,6 +327,18 @@ func (c *Client) RecordSessionTurnEnd(ctx context.Context, id string, usage *con
 		map[string]any{"usage": usage, "at": at}, nil)
 }
 
+// AddSessionUsage folds one turn's usage into the session's running totals
+// atomically (contracts.UsageIncrement).
+func (c *Client) AddSessionUsage(ctx context.Context, id string, inc contracts.UsageIncrement) error {
+	return c.do(ctx, http.MethodPost, "/sessions/"+url.PathEscape(id)+"/usage", inc, nil)
+}
+
+// SetSessionBilling records the harness's latest billing mode and/or plan
+// rate limits; an empty mode or nil limits leaves that half alone.
+func (c *Client) SetSessionBilling(ctx context.Context, id string, patch contracts.SessionBillingPatch) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/billing", patch, nil)
+}
+
 // SetSessionWorktree applies a scoped write of the session's isolation
 // state (worktree folder/branch/base, D4 counts) in one atomic round trip;
 // nil fields are left alone. Like RecordSessionTurnEnd, it can't drop a field
@@ -754,6 +766,21 @@ func (c *Client) CreateLink(ctx context.Context, req contracts.LinkRequest) (con
 	var out contracts.Link
 	err := c.do(ctx, http.MethodPost, "/links", req, &out)
 	return out, err
+}
+
+// ValidateLinks dry-runs staged links (one endpoint of each is
+// contracts.NewSessionPlaceholder) through the Data Service's link rules
+// without creating anything. Returns the field errors found, nil when the
+// links would be accepted; a missing counterpart session is ErrNotFound.
+func (c *Client) ValidateLinks(ctx context.Context, reqs []contracts.LinkRequest) (*contracts.ValidationError, error) {
+	var out contracts.ValidationError
+	if err := c.do(ctx, http.MethodPost, "/links/validate", map[string]any{"links": reqs}, &out); err != nil {
+		return nil, err
+	}
+	if out.Empty() {
+		return nil, nil
+	}
+	return &out, nil
 }
 
 // Link fetches one link by id.

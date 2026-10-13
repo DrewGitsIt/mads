@@ -35,6 +35,7 @@ import { SessionTerminalBridge } from "./TerminalRenderer/sessionTerminalBridge"
 import { SessionDock, latestLandOutcome } from "./Dock";
 import { useCheckoutBranch } from "./Dock/useCheckoutBranch";
 import { useAgentIndex } from "../router/useAgentIndex";
+import { useCompactionSupport } from "../router/compaction";
 import { CompactionStatus } from "./CompactionStatus";
 import { ChatRenderer } from "./ChatRenderer/ChatRenderer";
 import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
@@ -131,6 +132,8 @@ export interface ConversationTabProps {
   onOpenCommitFile?: (hash: string, path: string) => void;
   /** Opens one of this session's delegates (by harness id) as a full-pane view — the dock's "Open as page". */
   onOpenDelegate?: (harnessId: string) => void;
+  /** Opens one of this session's tasks in the Tasks tab — the composer's "/task" toast link. */
+  onOpenTask?: (taskId: string) => void;
 }
 
 type DisplayMode = "chat" | "terminal";
@@ -182,6 +185,7 @@ export function ConversationTab({
   onOpenFile,
   onOpenCommitFile,
   onOpenDelegate,
+  onOpenTask,
 }: ConversationTabProps) {
   const [session, setSession] = useState<Session | null>(null);
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
@@ -204,7 +208,11 @@ export function ConversationTab({
   const terminalViewRef = useRef<TerminalViewHandle>(null);
   const [eventSource, setEventSource] = useState<SessionEventSource | null>(null);
   const [sendError, setSendError] = useState<string>();
-  const [commandToast, setCommandToast] = useState<{ tone: "ok" | "bad"; message: string }>();
+  const [commandToast, setCommandToast] = useState<{
+    tone: "ok" | "bad";
+    message: string;
+    action?: { label: string; onClick: () => void };
+  }>();
   const [waking, setWaking] = useState(false);
   const [turnPhase, setTurnPhase] = useState<TurnPhase>("idle");
   // session.workspace is a reference (id or name), not the name the dock's
@@ -944,19 +952,23 @@ export function ConversationTab({
     [routerClient, sessionId],
   );
 
-  const handleCompactNow = useCallback(async () => {
+  const handleCompactNow = useCallback(async (instructions?: string) => {
     // Optimistic "Compacting…" so the click lands visibly even before the
     // provider's own compact/start stream event arrives (the Router may
     // first have to wake a dormant session); the real done/failed event
     // overwrites it.
     setCompactStatus({ phase: "start" });
     try {
-      await routerClient.compactSession(sessionId);
+      await routerClient.compactSession(sessionId, instructions);
     } catch (err) {
       setCompactStatus(undefined);
       setSendError(err instanceof Error ? err.message : "Failed to compact the conversation.");
     }
   }, [routerClient, sessionId]);
+  // Compaction is never emulated: a provider whose matrix says it can't
+  // compact gets no Compact affordance at all (the + menu item and the
+  // context rim's link both hide when onCompact is absent).
+  const compaction = useCompactionSupport(session?.provider);
 
   // Consumes the same live output stream SessionTerminalBridge rides for
   // terminal mode (set up above) — chat mode folds its text/tool_use/
@@ -1548,7 +1560,7 @@ export function ConversationTab({
     session,
     usage: lastUsage,
     contextWindow: lastUsage ? contextWindowForModel(session.model) : undefined,
-    onCompact: () => void handleCompactNow(),
+    onCompact: compaction.compacts ? () => void handleCompactNow() : undefined,
     onModeChange: (m: DisplayMode) => void handleToggle(m),
     agents,
     workspaceName: sessionWorkspace?.name ?? undefined,
@@ -1778,6 +1790,8 @@ export function ConversationTab({
               <Composer
                 routerClient={routerClient}
                 sessionId={sessionId}
+                session={session}
+                links={links}
                 agentId={session.agent}
                 provider={session.provider}
                 usage={lastUsage}
@@ -1795,8 +1809,10 @@ export function ConversationTab({
                 onSendError={noteSendError}
                 onAutoSendStart={onPendingFirstMessageHandled}
                 onUpdateSession={handleUpdateSession}
-                onCommandExecuted={(message) => setCommandToast({ tone: "ok", message })}
+                onCommandExecuted={(message, action) => setCommandToast({ tone: "ok", message, action })}
                 onCommandError={(message) => setCommandToast({ tone: "bad", message })}
+                onOpenTask={onOpenTask}
+                onCompactSession={compaction.compacts ? (i) => void handleCompactNow(i) : undefined}
                 onQueued={noteQueued}
                 onSent={noteSent}
               />
@@ -1886,6 +1902,15 @@ export function ConversationTab({
           tone={commandToast.tone}
           title={commandToast.tone === "ok" ? commandToast.message : "Command failed"}
           description={commandToast.tone === "bad" ? commandToast.message : undefined}
+          action={
+            commandToast.action && {
+              label: commandToast.action.label,
+              onClick: () => {
+                setCommandToast(undefined);
+                commandToast.action?.onClick();
+              },
+            }
+          }
           onDismiss={() => setCommandToast(undefined)}
         />
       )}

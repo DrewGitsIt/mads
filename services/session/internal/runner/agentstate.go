@@ -176,10 +176,11 @@ func (r *Runner) observeAgentState(ev provider.Event) {
 	case ev.Kind == provider.EventToolUse && ev.Tool != nil:
 		r.setAgentState(contracts.AgentWorking, agentToolLabel(ev.Tool), false)
 	case ev.Kind == provider.EventCompact && ev.Compact != nil && ev.Compact.Phase == "start":
-		// Any compaction, including the Runner's own near-limit trigger —
-		// not only a typed /compact, which markAgentWorking already names.
-		// Relabel only: "Compact now" (CompactNow) runs outside any turn,
-		// and nothing would ever mark that idle again.
+		// Any compaction, including claude-code's own mid-turn auto-compact
+		// — not only a typed /compact or a Runner-requested pass, which
+		// markAgentWorking already names. Relabel only: a start seen with
+		// no turn in flight (a stray system line between turns) must not
+		// turn the session working, since nothing would mark it idle again.
 		r.relabelWorking(agentLabelCompacting)
 	case ev.Kind == provider.EventThinking && ev.Text == "":
 		// A bare token tick only relabels a turn already in flight: claude-

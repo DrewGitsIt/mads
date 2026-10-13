@@ -96,6 +96,7 @@ export function SessionWorkspace({
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
   const [focusCommitFile, setFocusCommitFile] = useState<{ hash: string; path: string }>();
+  const [focusTask, setFocusTask] = useState<{ id: string }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
 
   const refetchSession = useCallback(() => {
@@ -175,6 +176,13 @@ export function SessionWorkspace({
     setFocusFilePath(undefined);
     setFocusCommitFile({ hash, path });
     selectTab("files");
+  }
+
+  // The composer's "/task" toast link: surface the Tasks tab with the new
+  // task's detail sheet open.
+  function openTask(id: string) {
+    setFocusTask({ id });
+    selectTab("tasks");
   }
 
   function commitName() {
@@ -334,6 +342,8 @@ export function SessionWorkspace({
             onOpenCommitFile={openCommitFileDiff}
             focusCommitFile={focusCommitFile}
             onOpenDelegate={onOpenDelegate}
+            onOpenTask={openTask}
+            focusTask={focusTask}
           />
         </div>
       ))}

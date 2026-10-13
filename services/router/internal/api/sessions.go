@@ -26,32 +26,46 @@ func (s *server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// createSessionRequest is the body of POST /sessions (and the dry run,
+// POST /sessions/validate).
+type createSessionRequest struct {
+	contracts.Session
+	// Links stages link requests to create between the session record and
+	// its spawn, so a leader's orchestrate MCP is materialized on the
+	// child's first turn (setupOrchestrate reads LinksForSession at boot).
+	// Either endpoint may be contracts.NewSessionPlaceholder.
+	Links []contracts.LinkRequest `json:"links,omitempty"`
+	// OpeningPrompt is the composer's full text, sent only so agent="auto"
+	// (see resolveAutoAgent) has free text to infer from — the session
+	// record itself never persists it; Session.Name only ever carries the
+	// first line (see Launchpad's deriveSessionName).
+	OpeningPrompt string `json:"opening_prompt,omitempty"`
+	// AttachmentDraft names the launchpad draft whose attachments the
+	// opening message refers to — moved to the session once it's up.
+	AttachmentDraft string `json:"attachment_draft,omitempty"`
+}
+
+// clearServerOwned drops what a client may not set on a new session.
+// Creation time and import provenance are the Data Service's to stamp (and
+// the import's to supply): a client can't backdate a new session. The usage
+// totals and billing snapshot are the Runner's to write, turn by turn — a
+// create carrying them would start the session's /usage card from numbers
+// it never ran up.
+func clearServerOwned(sess *contracts.Session) {
+	sess.CreatedAt = time.Time{}
+	sess.ImportedFrom = ""
+	sess.UsageTotals = nil
+	sess.Billing = nil
+}
+
 func (s *server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		contracts.Session
-		// Links stages link requests to create between the session record and
-		// its spawn, so a leader's orchestrate MCP is materialized on the
-		// child's first turn (setupOrchestrate reads LinksForSession at boot).
-		// Either endpoint may be contracts.NewSessionPlaceholder.
-		Links []contracts.LinkRequest `json:"links,omitempty"`
-		// OpeningPrompt is the composer's full text, sent only so agent="auto"
-		// (see resolveAutoAgent) has free text to infer from — the session
-		// record itself never persists it; Session.Name only ever carries the
-		// first line (see Launchpad's deriveSessionName).
-		OpeningPrompt string `json:"opening_prompt,omitempty"`
-		// AttachmentDraft names the launchpad draft whose attachments the
-		// opening message refers to — moved to the session once it's up.
-		AttachmentDraft string `json:"attachment_draft,omitempty"`
-	}
+	var req createSessionRequest
 	if !decode(w, r, &req) {
 		return
 	}
 	sess := &req.Session
 	sess.ID = ""
-	// Creation time and import provenance are the Data Service's to stamp
-	// (and the import's to supply): a client can't backdate a new session.
-	sess.CreatedAt = time.Time{}
-	sess.ImportedFrom = ""
+	clearServerOwned(sess)
 	if len(req.Links) > 0 {
 		// Unlike requireLinkedSessions (which 404s whole routes), only the
 		// links field is refused flag-off — POST /sessions must keep working.

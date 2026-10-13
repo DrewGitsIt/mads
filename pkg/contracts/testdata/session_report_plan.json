@@ -1,0 +1,48 @@
+{
+  "session_id": "ses_plan",
+  "health": {
+    "state": "working",
+    "since": "2026-10-12T11:57:46Z",
+    "process_started_at": "2026-10-12T10:28:00Z",
+    "last_event_at": "2026-10-12T11:59:57Z",
+    "harness": "claude-code",
+    "version": "2.1.290",
+    "preflight_ok": true
+  },
+  "context": {
+    "used": 142300,
+    "window": 200000,
+    "can_compact": true
+  },
+  "tokens": {
+    "input": 228000,
+    "output": 48600,
+    "cache_read": 982000,
+    "cache_write": 31000,
+    "turns": 37,
+    "delegates": {
+      "input": 41000,
+      "output": 6100,
+      "cache_read": 120000
+    }
+  },
+  "billing": {
+    "mode": "plan"
+  },
+  "limits": [
+    {
+      "id": "five_hour",
+      "label": "5-hour",
+      "used_pct": 62,
+      "resets_at": "2026-10-12T14:00:00Z",
+      "scope": "account"
+    },
+    {
+      "id": "seven_day",
+      "label": "Weekly",
+      "used_pct": 31,
+      "resets_at": "2026-10-15T10:00:00Z",
+      "scope": "account"
+    }
+  ]
+}

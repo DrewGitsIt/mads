@@ -1,8 +1,38 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import type { RouterClient } from "../../router/client";
-import type { QueuedMessage, Session, Usage } from "../../router/types";
-import { useMentionResolver, type MentionCandidate } from "./useMentionResolver";
+import { useCompactionSupport } from "../../router/compaction";
+import type { Link, QueuedMessage, Session, Usage } from "../../router/types";
+import {
+  commandCandidates,
+  sameTrigger,
+  useMentionResolver,
+  type MentionCandidate,
+} from "./useMentionResolver";
 import { MentionMenu, mentionOptionId } from "./MentionMenu";
+import { CommandCardHost, CommandNotice } from "./CommandCardHost";
+import {
+  COMMANDS,
+  argHintFor,
+  availability,
+  findCommand,
+  parseCommandLine,
+} from "./commands/registry";
+import type {
+  CommandApi,
+  CommandCardRender,
+  CommandContext,
+  CommandDescriptor,
+  CommandInvocation,
+  CommandToastAction,
+} from "./commands/types";
+import { useLinkCommandState } from "./commands/useLinkCommandState";
 import { InjectedContentPreview } from "./InjectedContentPreview";
 import { ExpandedComposer } from "./ExpandedComposer";
 import { ComposerPlusMenu, type ComposerMode } from "./ComposerPlusMenu";
@@ -92,11 +122,23 @@ export interface ComposerProps {
    * turn finishes" rather than claiming it already took effect. Rejects on
    * failure, surfaced through onCommandError.
    */
-  onUpdateSession?: (patch: Partial<Pick<Session, "agent" | "model">>) => void | Promise<boolean | void>;
-  /** Fires once a "/agent"/"/model" command has been applied — surface as a toast, not a transcript message. */
-  onCommandExecuted?: (message: string) => void;
-  /** Fires when onUpdateSession throws for a "/agent"/"/model" command. */
+  onUpdateSession?: (
+    patch: Partial<Pick<Session, "agent" | "model">>,
+  ) => void | Promise<boolean | void>;
+  /** Fires once a "/" command has done its thing — surface as a toast (with `action` as its link), not a transcript message. */
+  onCommandExecuted?: (message: string, action?: CommandToastAction) => void;
+  /** Fires when a "/" command fails (e.g. onUpdateSession or the Router rejects it). */
   onCommandError?: (message: string) => void;
+  /** Opens one of this session's tasks — "/task"'s toast link. Absent → no link. */
+  onOpenTask?: (taskId: string) => void;
+  /** "/compact [focus]" — compacts through the same path as the Compact-now button. */
+  onCompactSession?: (instructions?: string) => void;
+  /** This session's record — the /new card prefills its pills from it. */
+  session?: Session;
+  /** Links touching this session — /new-leader is unavailable while one leads it. */
+  links?: Link[];
+  /** The "/" command registry. Default COMMANDS; tests pass their own. */
+  commands?: CommandDescriptor[];
 }
 
 /**
@@ -113,11 +155,23 @@ export interface ComposerProps {
  * the expanded editor is plain-text markdown compose only. `@` mentions
  * splice a plain-text reference token into the value and stage it in
  * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
- * `/` commands are a hierarchical palette: a plain leaf (skill/task) inserts
- * text the same way but never stages a chip; an argument-taking command
- * ("agent"/"model") descends to a second level and its leaves dispatch
- * directly (executeCommand) instead of touching the message at all.
+ * `#` skills insert their name as text the same way but never stage a chip.
+ * `/` resolves only the command registry (commands/registry.ts): a command
+ * with a submenu ("/agent", "/model") descends to a second level, one that
+ * takes args inserts "/name " to type them, and the rest run on select.
+ * Sending a line that starts with a registered "/name" runs that command
+ * instead of sending text; an unknown "/word" still goes to the agent.
+ * Commands never write to the transcript — their results are toasts or a
+ * card in the CommandCardHost above the input.
  */
+/** The row a fresh list selects: the first enabled one, else the first. */
+function firstSelectable(rows: MentionCandidate[]): number {
+  return Math.max(
+    0,
+    rows.findIndex((c) => c.disabledReason === undefined),
+  );
+}
+
 export function Composer({
   routerClient,
   sessionId,
@@ -141,6 +195,11 @@ export function Composer({
   onUpdateSession,
   onCommandExecuted,
   onCommandError,
+  onOpenTask,
+  onCompactSession,
+  session,
+  links,
+  commands = COMMANDS,
   queued = EMPTY_QUEUE,
   onQueued,
   onCancelQueued,
@@ -170,23 +229,103 @@ export function Composer({
   const staged = stagedForSession(sessionId, routerClient);
   const attachments = useStagedAttachments(staged);
   const uploading = attachments.some((a) => a.status === "uploading");
-  const { dragging, dropHandlers, onPaste } = useFileDrop((files) => staged.add(files));
+  const { dragging, dropHandlers, onPaste } = useFileDrop((files) =>
+    staged.add(files),
+  );
 
-  const { trigger, candidates } = useMentionResolver(
+  // What commands see (available(), options()). Memoized so the resolver's
+  // effect re-runs only when one of these actually changes.
+  const compaction = useCompactionSupport(provider);
+  const { linkedSessions, leader, pipelineRunning } = useLinkCommandState(
     routerClient,
-    agentId,
-    provider,
+    sessionId,
+    links,
+  );
+  // The session record is replaced on every update (a turn ending, activity),
+  // which would re-run the resolver and reset the menu's selection. Commands
+  // read only these fields of it, so the ctx keeps one record until one of
+  // them changes; execute still gets the latest (commandApi below).
+  const sessionKey =
+    session &&
+    JSON.stringify([
+      session.id,
+      session.name,
+      session.dir,
+      session.workspace,
+      session.agent,
+      session.provider,
+      session.model,
+      session.trust,
+      session.isolation,
+    ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the fields commands read, see above
+  const commandSession = useMemo(() => session, [sessionKey]);
+  const commandCtx = useMemo<CommandContext>(
+    () => ({
+      routerClient,
+      sessionId,
+      agentId,
+      provider,
+      compaction,
+      session: commandSession,
+      linkedSessions,
+      leader,
+      pipelineRunning,
+    }),
+    [
+      routerClient,
+      sessionId,
+      agentId,
+      provider,
+      compaction,
+      commandSession,
+      linkedSessions,
+      leader,
+      pipelineRunning,
+    ],
+  );
+  const { trigger, candidates, candidatesFor } = useMentionResolver(
+    commandCtx,
     value,
     cursor,
+    undefined,
+    commands,
   );
-  const menuOpen = !expanded && Boolean(trigger) && !menuDismissed && candidates.length > 0;
+  const menuOpen =
+    !expanded && Boolean(trigger) && !menuDismissed && candidates.length > 0;
   // A narrowing filter can shrink candidates out from under a higher
   // activeIndex (e.g. arrowed to #4, then typed a letter that leaves 2
-  // matches) — reset on every list change so selection/aria-activedescendant
-  // never index past the end.
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [candidates]);
+  // matches) — reset whenever the rows change so selection/aria-
+  // activedescendant never index past the end. Lands on the first selectable
+  // row. A re-resolve to the same rows (a ctx refresh) keeps the selection.
+  const rowsKey = candidates
+    .map((c) => `${c.id}\u0000${c.disabledReason ?? ""}`)
+    .join("\n");
+  const [activeRowsKey, setActiveRowsKey] = useState(rowsKey);
+  if (activeRowsKey !== rowsKey) {
+    setActiveRowsKey(rowsKey);
+    setActiveIndex(firstSelectable(candidates));
+  }
+
+  // The card above the input (CommandCardHost). A `notice` is a command's
+  // inline refusal ("/task needs a title") and clears on the next edit.
+  const [card, setCard] = useState<{
+    render: CommandCardRender;
+    notice?: boolean;
+  }>();
+
+  const closeCard = useCallback(() => {
+    setCard(undefined);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }, []);
+
+  function showNotice(message: string) {
+    setCard({
+      render: () => <CommandNotice message={message} />,
+      notice: true,
+    });
+    setMenuDismissed(true);
+  }
 
   function focusTextareaAt(offset: number) {
     requestAnimationFrame(() => {
@@ -195,11 +334,48 @@ export function Composer({
     });
   }
 
+  // Arrow keys step over disabled (unavailable) command rows.
+  function stepActive(dir: 1 | -1) {
+    const n = candidates.length;
+    setActiveIndex((i) => {
+      for (let step = 1; step <= n; step++) {
+        const j = (((i + dir * step) % n) + n) % n;
+        if (candidates[j].disabledReason === undefined) return j;
+      }
+      return i;
+    });
+  }
+
   function selectCandidate(candidate: MentionCandidate) {
     if (!trigger) return;
-    if (candidate.kind === "command-action") {
-      void executeCommand(candidate, trigger.start);
-      return;
+    if (candidate.kind === "command" || candidate.kind === "command-option") {
+      const command =
+        candidate.command &&
+        findCommand(candidate.command, commandCtx, commands);
+      if (!command) return;
+      const range = { start: trigger.start, end: cursor };
+      if (candidate.kind === "command-option") {
+        const { id, label, detail } = candidate;
+        runCommand(
+          command,
+          { args: label, option: { id, label, detail } },
+          range,
+        );
+        return;
+      }
+      if (candidate.disabledReason !== undefined) {
+        // Only reachable by keyboard, when every row left is disabled — the
+        // user typed it. A command with its own blocked state shows that.
+        if (command.runsWhenUnavailable) runCommand(command, { args: "" }, range);
+        else showNotice(candidate.disabledReason);
+        return;
+      }
+      if (!command.options && !argHintFor(command, commandCtx)) {
+        runCommand(command, { args: "" }, range);
+        return;
+      }
+      // Otherwise insert "/name " below: that descends to the submenu, or
+      // leaves the caret where the command's args go.
     }
     const before = value.slice(0, trigger.start);
     const after = value.slice(cursor);
@@ -208,9 +384,8 @@ export function Composer({
     const nextCursor = before.length + insertion.length;
     setValue(nextValue);
     setCursor(nextCursor);
-    // Only @-mentions/attachments stage into the chip strip — a command
-    // (skill or otherwise) is either plain text for the agent or, for
-    // command-action leaves above, dispatched directly with no chip at all.
+    // Only @-mentions/attachments stage into the chip strip — a skill is
+    // plain text for the agent and a command never leaves a chip behind.
     if (candidate.kind === "mentionable") {
       setInjected((prev) =>
         prev.some((p) => p.id === candidate.id) ? prev : [...prev, candidate],
@@ -220,29 +395,73 @@ export function Composer({
     focusTextareaAt(nextCursor);
   }
 
-  // Executes a level-2 leaf (rebind agent / switch model) against the
-  // session, wiping the whole "/agent foo" (or "/model foo") chunk out of
-  // the composer — never leaves residual command text or a chip behind.
-  async function executeCommand(candidate: MentionCandidate, triggerStart: number) {
-    const before = value.slice(0, triggerStart);
-    const after = value.slice(cursor);
-    const nextValue = `${before}${after}`;
-    const nextCursor = before.length;
-    setValue(nextValue);
-    setCursor(nextCursor);
-    setActiveIndex(0);
-    focusTextareaAt(nextCursor);
-    try {
-      const queued = await onUpdateSession?.(
-        candidate.group === "agent" ? { agent: candidate.id } : { model: candidate.id },
-      );
-      onCommandExecuted?.(
-        `${candidate.group === "agent" ? "Agent" : "Model"} set to ${candidate.label}` +
-          (queued ? " — applies when the current turn finishes." : ""),
-      );
-    } catch (err) {
-      onCommandError?.(err instanceof Error ? err.message : String(err));
+  const commandApi: CommandApi = {
+    ctx: { ...commandCtx, session },
+    updateSession: async (patch) => onUpdateSession?.(patch),
+    notify: (message, action) => onCommandExecuted?.(message, action),
+    fail: (message) => onCommandError?.(message),
+    openCard: (render) => setCard({ render }),
+    openTask: onOpenTask,
+    compact: onCompactSession,
+  };
+
+  // Runs a command against the session, wiping its text (value[range]) out
+  // of the composer — never leaves residual command text or a chip behind.
+  // An unavailable command, or one missing its required args, shows why
+  // inline instead and keeps the text so it can be fixed.
+  function runCommand(
+    command: CommandDescriptor,
+    invocation: CommandInvocation,
+    range: { start: number; end: number },
+  ) {
+    const avail = availability(command, commandCtx);
+    if (!avail.ok && !command.runsWhenUnavailable) {
+      showNotice(avail.reason);
+      return;
     }
+    const argError = command.argError?.(invocation.args, commandCtx);
+    if (argError) {
+      showNotice(argError);
+      return;
+    }
+    if (command.argRequired && !invocation.args && !invocation.option) {
+      showNotice(command.argRequired);
+      return;
+    }
+    const before = value.slice(0, range.start);
+    setValue(`${before}${value.slice(range.end)}`);
+    setCursor(before.length);
+    setActiveIndex(0);
+    setCard(undefined);
+    focusTextareaAt(before.length);
+    void command.execute(invocation, commandApi);
+  }
+
+  // Enter, Send, and the expanded editor's send: a message that starts with
+  // a registered "/name" runs that command rather than going to the agent.
+  // A bare submenu command ("/model" after Esc closed the menu) reopens its
+  // submenu instead. Unknown "/words" are sent as text, as before.
+  function submit() {
+    const parsed = parseCommandLine(value);
+    const command = parsed && findCommand(parsed.name, commandCtx, commands);
+    if (!parsed || !command) {
+      void handleSend();
+      return;
+    }
+    if (
+      command.options &&
+      !parsed.args &&
+      availability(command, commandCtx).ok
+    ) {
+      const nextValue = `/${command.name} `;
+      setExpanded(false);
+      setValue(nextValue);
+      setCursor(nextValue.length);
+      setMenuDismissed(false);
+      focusTextareaAt(nextValue.length);
+      return;
+    }
+    runCommand(command, { args: parsed.args }, { start: 0, end: value.length });
   }
 
   // The + menu's Mention / Commands: types the trigger character at the
@@ -273,6 +492,12 @@ export function Composer({
   // outer capture is what lets one binding work from both collapsed and
   // expanded focus.
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if (card && e.key === "Escape") {
+      e.preventDefault();
+      closeCard();
+      return;
+    }
+
     if (trigger && !menuDismissed && e.key === "Escape") {
       e.preventDefault();
       if (trigger.type === "/") {
@@ -295,25 +520,42 @@ export function Composer({
     if (menuOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
-        setActiveIndex((i) => (i + 1) % candidates.length);
+        stepActive(1);
         return;
       }
       if (e.key === "ArrowUp") {
         e.preventDefault();
-        setActiveIndex((i) => (i - 1 + candidates.length) % candidates.length);
+        stepActive(-1);
         return;
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        const candidate = candidates[activeIndex];
-        if (candidate) selectCandidate(candidate);
+        if (sameTrigger(candidatesFor, trigger)) {
+          const candidate = candidates[activeIndex];
+          if (candidate) selectCandidate(candidate);
+          return;
+        }
+        // The rows lag the text by the resolver's debounce: "/c", a pause,
+        // then "ontext" + Enter must not pick /compact off the "/c" list. An
+        // exact name or alias acts on what's typed now; anything else waits
+        // for its rows.
+        const exact =
+          trigger?.type === "/" &&
+          !trigger.query.includes(" ") &&
+          findCommand(trigger.query, commandCtx, commands);
+        const row =
+          exact &&
+          commandCandidates(trigger.query, commandCtx, commands).find(
+            (c) => c.command === exact.name,
+          );
+        if (row) selectCandidate(row);
         return;
       }
     }
 
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void handleSend();
+      submit();
     }
   }
 
@@ -419,27 +661,42 @@ export function Composer({
       onCompact={onCompact}
     />
   );
-  const sendBlockedReason = uploading ? "Waiting for attachments to finish uploading" : undefined;
+  const sendBlockedReason = uploading
+    ? "Waiting for attachments to finish uploading"
+    : undefined;
 
   return (
     <div
-      className={[styles.composer, dragging && styles.dropTarget].filter(Boolean).join(" ")}
+      className={[styles.composer, dragging && styles.dropTarget]
+        .filter(Boolean)
+        .join(" ")}
       data-composer=""
       onKeyDownCapture={handleComposerKeyDownCapture}
       onPaste={onPaste}
       {...dropHandlers}
     >
+      {card && (
+        <CommandCardHost onClose={closeCard}>
+          {card.render(closeCard)}
+        </CommandCardHost>
+      )}
       <QueuedMessages queued={queued} onCancel={onCancelQueued} />
       <div className={styles.chips}>
         <InjectedContentPreview
           items={injected}
-          onRemove={(id) => setInjected((prev) => prev.filter((p) => p.id !== id))}
+          onRemove={(id) =>
+            setInjected((prev) => prev.filter((p) => p.id !== id))
+          }
         />
         <AttachmentChips
           items={attachments}
           thumbnailUrl={(a) =>
             a.attachment?.thumbnail
-              ? routerClient.attachmentUrl(staged.owner, a.attachment.id, "thumbnail")
+              ? routerClient.attachmentUrl(
+                  staged.owner,
+                  a.attachment.id,
+                  "thumbnail",
+                )
               : undefined
           }
           onRemove={(key) => staged.remove(key)}
@@ -459,8 +716,11 @@ export function Composer({
       {expanded ? (
         <ExpandedComposer
           value={value}
-          onChange={setValue}
-          onSend={() => void handleSend()}
+          onChange={(next) => {
+            setValue(next);
+            if (card?.notice) setCard(undefined);
+          }}
+          onSend={submit}
           onCollapse={() => setExpanded(false)}
           initialCursor={cursor}
           onCursorChange={setCursor}
@@ -499,6 +759,7 @@ export function Composer({
               setValue(e.target.value);
               setCursor(e.target.selectionStart ?? e.target.value.length);
               setMenuDismissed(false);
+              if (card?.notice) setCard(undefined);
             }}
             onKeyUp={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
             onClick={(e) => setCursor(e.currentTarget.selectionStart ?? 0)}
@@ -517,12 +778,16 @@ export function Composer({
           )}
           <button
             type="button"
-            className={[styles.send, busy && styles.queue].filter(Boolean).join(" ")}
-            onClick={() => void handleSend()}
+            className={[styles.send, busy && styles.queue]
+              .filter(Boolean)
+              .join(" ")}
+            onClick={submit}
             disabled={disabled || uploading}
             title={
               sendBlockedReason ??
-              (busy ? "Queue — sends when the current turn finishes" : undefined)
+              (busy
+                ? "Queue — sends when the current turn finishes"
+                : undefined)
             }
           >
             {busy ? "Queue" : "Send"}
@@ -532,4 +797,3 @@ export function Composer({
     </div>
   );
 }
-

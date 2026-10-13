@@ -134,21 +134,12 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 		addsOrchestrate := hasGrant(link.Grants, contracts.GrantOrchestrate) &&
 			(existing == nil || !hasGrant(existing.Grants, contracts.GrantOrchestrate))
 		if addsOrchestrate {
-			live, err := subjectPipelineLive(tx, link.SubjectSessionID)
-			if err != nil {
-				return err
-			}
-			if live {
-				v.Add("grants", "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
-			}
 			excludeID := ""
 			if existing != nil {
 				excludeID = existing.ID
 			}
-			if msg, err := l.orchestrateHolderConflictInTx(tx, link.SubjectSessionID, excludeID); err != nil {
+			if err := l.checkOrchestrateInTx(tx, link.SubjectSessionID, excludeID, "grants", &v); err != nil {
 				return err
-			} else if msg != "" {
-				v.Add("grants", msg)
 			}
 		}
 
@@ -178,6 +169,113 @@ func (l *Links) Create(ctx context.Context, link *contracts.Link, actor string) 
 			Type: contracts.LinkCreated, SessionID: link.SubjectSessionID, Actor: actor, Payload: payload,
 		})
 	})
+}
+
+// checkOrchestrateInTx adds the refusals for granting orchestrate over
+// subjectID to v under field: a live pipeline run (monitorable, not
+// leadable), and an existing orchestrate holder other than excludeLinkID.
+// Shared by Create and the side-effect-free ValidateStaged.
+func (l *Links) checkOrchestrateInTx(tx *Tx, subjectID, excludeLinkID, field string, v *contracts.ValidationError) error {
+	live, err := subjectPipelineLive(tx, subjectID)
+	if err != nil {
+		return err
+	}
+	if live {
+		v.Add(field, "orchestrate is refused: the subject session has a live pipeline run (pipeline runs are monitorable, not leadable)")
+	}
+	msg, err := l.orchestrateHolderConflictInTx(tx, subjectID, excludeLinkID)
+	if err != nil {
+		return err
+	}
+	if msg != "" {
+		v.Add(field, msg)
+	}
+	return nil
+}
+
+// StagedLinkCheck is one entry of ValidateStaged: a link whose grants are
+// already resolved (preset expanded), with contracts.NewSessionPlaceholder
+// on exactly one endpoint, and the field prefix its errors are reported under.
+type StagedLinkCheck struct {
+	Field string
+	Link  contracts.Link
+}
+
+// ValidateStaged is the dry run of creating links for a session that does
+// not exist yet: it applies the rules Create would apply to each entry —
+// grant shape, cadence, counterpart exists, orchestrate vs. a live pipeline
+// run, at most one orchestrate holder per subject — and writes nothing (the
+// tx never appends, so it commits empty). Rules that need both rows
+// (self-link, differing worktrees) can't fire for a brand-new endpoint, and
+// an existing pair can't pre-exist, so they're skipped — but two staged
+// entries can still be each other's opposite direction (new→X and X→new),
+// which the second create would refuse, so that is checked among the
+// entries. Entries are checked in order; a placeholder subject led by an
+// earlier entry makes a later orchestrate entry the second leader, as
+// sequential creates would. A missing counterpart returns ErrNotFound.
+func (l *Links) ValidateStaged(ctx context.Context, checks []StagedLinkCheck) (*contracts.ValidationError, error) {
+	var v contracts.ValidationError
+	err := l.log.WithTx(ctx, func(tx *Tx) error {
+		newLeader := ""
+		// grantedBy records, per counterpart, the direction an earlier
+		// entry staged with it: true when the new session grants.
+		grantedBy := map[string]bool{}
+		for _, c := range checks {
+			link := c.Link
+			verr := validateGrants(link.Grants)
+			if verr == nil {
+				verr = validateCadence(&link)
+			}
+			if verr != nil {
+				for _, fe := range verr.Errors {
+					v.Add(c.Field+"."+fe.Field, fe.Message)
+				}
+				continue
+			}
+			grantingNew := link.GrantingSessionID == contracts.NewSessionPlaceholder
+			subjectNew := link.SubjectSessionID == contracts.NewSessionPlaceholder
+			if grantingNew == subjectNew {
+				v.Add(c.Field, "exactly one endpoint must be the new-session placeholder")
+				continue
+			}
+			counterpartID := link.GrantingSessionID
+			if grantingNew {
+				counterpartID = link.SubjectSessionID
+			}
+			counterpart, err := l.sessions.getInTx(tx, counterpartID)
+			if err != nil {
+				return err
+			}
+			if prev, seen := grantedBy[counterpartID]; seen && prev != grantingNew {
+				v.Add(c.Field+".direction", "another staged link with this session runs the opposite direction — peer/bidirectional links aren't supported")
+				continue
+			} else if !seen {
+				grantedBy[counterpartID] = grantingNew
+			}
+			if !hasGrant(link.Grants, contracts.GrantOrchestrate) {
+				continue
+			}
+			if grantingNew {
+				if err := l.checkOrchestrateInTx(tx, counterpartID, "", c.Field+".grants", &v); err != nil {
+					return err
+				}
+				continue
+			}
+			if newLeader != "" {
+				v.Add(c.Field+".grants", orchestrateHolderMessage(newLeader))
+				continue
+			}
+			newLeader = holderLabel(counterpartID, counterpart.Name)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if v.Empty() {
+		return nil, nil
+	}
+	return &v, nil
 }
 
 // mergeIntoExistingLinkInTx is Create's same-pair path: it rewrites existing
@@ -605,11 +703,24 @@ func (l *Links) orchestrateHolderConflictInTx(tx *Tx, subjectID, excludeLinkID s
 	if err != nil || holderID == "" {
 		return "", err
 	}
-	holder := holderID
-	if sess, err := l.sessions.getInTx(tx, holderID); err == nil && sess.Name != "" {
-		holder = fmt.Sprintf("%q (%s)", sess.Name, holderID)
+	name := ""
+	if sess, err := l.sessions.getInTx(tx, holderID); err == nil {
+		name = sess.Name
 	}
-	return fmt.Sprintf("the subject is already led by %s — a subject may have at most one orchestrate holder", holder), nil
+	return orchestrateHolderMessage(holderLabel(holderID, name)), nil
+}
+
+// holderLabel names a holder session for a refusal message: quoted name
+// plus id, or the id alone when the session has no name or is gone.
+func holderLabel(id, name string) string {
+	if name == "" {
+		return id
+	}
+	return fmt.Sprintf("%q (%s)", name, id)
+}
+
+func orchestrateHolderMessage(holder string) string {
+	return fmt.Sprintf("the subject is already led by %s — a subject may have at most one orchestrate holder", holder)
 }
 
 // orchestrateHolderInTx returns the granting session id of subjectID's

@@ -34,6 +34,51 @@ func linkRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusCreated, link)
 	})
 
+	// POST /links/validate is the dry run of staged links on POST /sessions
+	// (the Router calls it before the new session exists, so one endpoint of
+	// each entry is contracts.NewSessionPlaceholder). Runs the same grant
+	// resolution and store rules as POST /links but writes nothing, and
+	// reports problems as 200 {"errors":[...]} (empty when the links would be
+	// accepted) rather than 422 — a failed check is the answer, not a failure.
+	mux.HandleFunc("POST /links/validate", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Links []contracts.LinkRequest `json:"links"`
+		}
+		if !decode(w, r, &req) {
+			return
+		}
+		var v contracts.ValidationError
+		checks := make([]store.StagedLinkCheck, 0, len(req.Links))
+		for i, lr := range req.Links {
+			field := fmt.Sprintf("links[%d]", i)
+			grants, verr := resolveGrants(lr)
+			if verr != nil {
+				for _, fe := range verr.Errors {
+					v.Add(field+"."+fe.Field, fe.Message)
+				}
+				continue
+			}
+			checks = append(checks, store.StagedLinkCheck{Field: field, Link: contracts.Link{
+				GrantingSessionID: lr.GrantingSessionID,
+				SubjectSessionID:  lr.SubjectSessionID,
+				Grants:            grants,
+				Cadence:           lr.Cadence,
+			}})
+		}
+		storeErr, err := links.ValidateStaged(r.Context(), checks)
+		if err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		if storeErr != nil {
+			v.Errors = append(v.Errors, storeErr.Errors...)
+		}
+		if v.Errors == nil {
+			v.Errors = []contracts.FieldError{}
+		}
+		writeJSON(w, http.StatusOK, v)
+	})
+
 	mux.HandleFunc("GET /links/{id}", func(w http.ResponseWriter, r *http.Request) {
 		link, err := links.Get(r.Context(), r.PathValue("id"))
 		if err != nil {

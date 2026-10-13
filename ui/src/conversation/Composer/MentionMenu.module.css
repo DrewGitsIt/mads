@@ -46,8 +46,34 @@
   background: var(--bg3);
 }
 
+.item.disabled {
+  cursor: default;
+}
+
+.item.disabled:hover:not(.active) {
+  background: none;
+}
+
 .label {
   font: 600 var(--fs-body) var(--mono);
+}
+
+/* argHint ("<title>") and the alias a row matched through ("/status") */
+.hint {
+  color: var(--text3);
+  font: var(--fs-sm) var(--mono);
+  white-space: nowrap;
+}
+
+/* An unavailable command: struck-through name, the reason in place of the description. */
+.disabled .label {
+  color: var(--text3);
+  text-decoration: line-through;
+}
+
+.reason {
+  color: var(--bad-fg);
+  font: var(--fs-sm) var(--sans);
 }
 
 .detail {

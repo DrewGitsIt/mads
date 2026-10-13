@@ -190,6 +190,11 @@ func (p *Provider) engineConfig() acprpc.Config {
 		// for todo__todo_write): the engine allows read/search/think/fetch
 		// itself so the user's cards are the edits, commands and unknowns.
 		PermissionAsksEveryCall: true,
+		// goose advertises a builtin "compact" command (no input hint) and
+		// a "/compact" prompt really compacts — context 6339 → 172 tokens —
+		// but its summary ignores text after the command. Both pinned by a
+		// goose 1.50.1 probe, acprpc testdata/captures/goose-acp-compact.jsonl.
+		CompactCommand: "/compact",
 	}
 }
 
@@ -238,6 +243,12 @@ func (p *Provider) Matrix() provider.Matrix {
 		// could break. Emulated is the honest one-row summary across both
 		// transports (design doc).
 		provider.BehaviorRefAnnounce: provider.Emulated,
+		// goose's own "/compact" over ACP (engineConfig's CompactCommand):
+		// a real compaction pass, but text after it doesn't reach the
+		// summary — so no focus. Probe: acprpc testdata/captures/
+		// goose-acp-compact.jsonl and its README.
+		provider.BehaviorCompaction:      provider.Native,
+		provider.BehaviorCompactionFocus: provider.Unsupported,
 		// Delegates (docs/DELEGATES-DESIGN.md): no subagent surface reaches
 		// this adapter's wire.
 		provider.BehaviorDelegateLifecycle:  provider.Unsupported,

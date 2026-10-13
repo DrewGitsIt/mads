@@ -15,7 +15,7 @@ import { PalettePicker } from "./PalettePicker";
 import type { UseConfig } from "../state/useConfig";
 import { applyMotion } from "../theme/applyMotion";
 import { applyTheme } from "../theme/applyTheme";
-import type { PaletteName, StreamSpeed, ThemeMode } from "../../../router/types";
+import type { ExportFormat, PaletteName, StreamSpeed, ThemeMode } from "../../../router/types";
 import styles from "./AppearanceSection.module.css";
 
 // Option labels are display-only; the stored values are the lowercase enums.
@@ -40,6 +40,13 @@ const STREAM_SPEEDS: SegmentedOption<StreamSpeed>[] = [
   { value: "slow", label: "Slow" },
   { value: "fast", label: "Fast" },
   { value: "custom", label: "Custom" },
+];
+
+// export_format is "" until a format is chosen; "ask" is that unset state's label.
+const EXPORT_FORMATS: SegmentedOption<"ask" | "md" | "json">[] = [
+  { value: "ask", label: "Ask" },
+  { value: "md", label: "Markdown" },
+  { value: "json", label: "JSON" },
 ];
 
 function streamSpeedHint(speed: StreamSpeed, wpm: number): string {
@@ -100,6 +107,9 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
 
   // NumberField commits on blur/Enter only (live={false}) — saving every
   // keystroke would clamp "3" to the minimum before "350" is finished.
+  const chooseExportFormat = (v: "ask" | "md" | "json") =>
+    saveFields({ export_format: (v === "ask" ? "" : v) satisfies ExportFormat });
+
   const commitWpm = (stream_wpm: number) => saveFields({ stream_wpm });
 
   return (
@@ -183,6 +193,22 @@ export function AppearanceSection({ config }: AppearanceSectionProps) {
             />
           </SettingRow>
         )}
+      </SettingsCard>
+
+      <SettingsCard title="Conversation">
+        <SettingRow
+          label="Export format"
+          labelId="export-format-label"
+          help="What /export downloads. Ask shows a Markdown or JSON choice until you pick one."
+        >
+          <SegmentedControl
+            id="export-format"
+            aria-labelledby="export-format-label"
+            value={draft.export_format || "ask"}
+            options={EXPORT_FORMATS}
+            onChange={(v) => void chooseExportFormat(v)}
+          />
+        </SettingRow>
       </SettingsCard>
     </div>
   );

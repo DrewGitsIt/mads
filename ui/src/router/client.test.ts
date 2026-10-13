@@ -31,6 +31,14 @@ describe("FetchRouterClient", () => {
     expect(session.id).toBe("s1");
   });
 
+  it("getSessionReport fetches /sessions/:id/report", async () => {
+    const fetchMock = mockFetchOnce({ session_id: "s1", health: { state: "idle", harness: "fake" }, billing: { mode: "unknown" } });
+    const client = new FetchRouterClient("http://router.local");
+    const report = await client.getSessionReport("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/report");
+    expect(report.billing.mode).toBe("unknown");
+  });
+
   it("getTranscript includes the page query param when given", async () => {
     const fetchMock = mockFetchOnce([]);
     const client = new FetchRouterClient("http://router.local");
@@ -38,6 +46,17 @@ describe("FetchRouterClient", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://router.local/sessions/s1/transcript?page=2",
     );
+  });
+
+  it("compactSession sends instructions only when there are some", async () => {
+    const fetchMock = mockFetchOnce({ status: "accepted" });
+    const client = new FetchRouterClient("http://router.local");
+    await client.compactSession("s1");
+    await client.compactSession("s1", "  ");
+    await client.compactSession("s1", " keep the plan ");
+    const bodies = fetchMock.mock.calls.map(([, init]) => (init as RequestInit).body);
+    expect(fetchMock.mock.calls[0][0]).toBe("http://router.local/sessions/s1/compact");
+    expect(bodies).toEqual([undefined, undefined, JSON.stringify({ instructions: "keep the plan" })]);
   });
 
   it("sendMessage POSTs JSON and throws on a non-ok response", async () => {

@@ -29,6 +29,7 @@ prompt cancelled mid-turn via session/cancel → session/close.
 | `hermes-acp-full.jsonl` | 249 / 69516 | Hermes Agent 0.21.1 (native ACP) | `hermes acp` |
 | `hermes-acp-load.jsonl` | 14 / 16369 | same, fresh process, 2026-09-21 | `hermes acp` — initialize → session/load of the full run's (then 12-day-old) session → replayed updates |
 | `*.stderr.txt` | — | adapter/agent stderr for each run | |
+| `goose-acp-compact.jsonl` | 29 / 24702 | goose 1.50.1, local ollama, 2026-10-12 | `goose acp` — the native-compaction probe (see "Native compaction"); stderr not kept |
 
 The claude runs were spawned with every `CLAUDE*` env var removed
 (`CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_EFFORT`, `CLAUDE_PID`) — the
@@ -123,6 +124,62 @@ knob's live evidence.
   `_meta.jetbrains.*` extension blobs.
 - hermes is the only one with non-empty `authMethods` (`custom`,
   `setup`); claude and codex delegate auth to their wrapped CLIs.
+
+## Native compaction (2026-10-12)
+
+ACP v1 has no compaction method. Agents that can compact advertise a
+slash command in `available_commands_update`, invoked by sending it as an
+ordinary `session/prompt`. Advertised `compact`-like commands across every
+committed capture:
+
+| Agent | Command | `input` hint (focus text?) | Evidence |
+|---|---|---|---|
+| goose 1.48.0 / 1.50.1 | `compact` "Compact the conversation history" (`_meta.commandType: Builtin`) | none | `providers/goosecli/testdata/captures/acp-transcript.jsonl`, `goose-acp-compact.jsonl` line 8 |
+| claude-agent-acp 0.75.1 | `compact` "Free up context by summarizing the conversation so far" | `<optional custom summarization instructions>` | `claude-agent-acp-full.jsonl` |
+| codex-acp 1.10.0 | `compact` "Summarize conversation to avoid hitting the context limit." | none | `codex-acp-full.jsonl` |
+| hermes 0.21.1 | `compress` "Compress conversation context" | none | `hermes-acp-full.jsonl` |
+| kiro-cli | — no capture exists | — | no binary on the probe host |
+
+Advertising is not proof the command compacts, so goose — the one ACP
+binding mads ships that advertises it — was probed live
+(`goose-acp-compact.jsonl`, 29 lines, goose 1.50.1 from Goose.app, local
+ollama `qwen3.8-coder-nothink` — free tokens; driver
+`tools/probe_compact.py`, cwd `/tmp/mads-goose-compact-probe`). Wire:
+initialize → session/new → a one-word warm-up turn → `/compact` →
+`/compact keep only the word PINEAPPLE` → session/close.
+
+- **`/compact` really compacts.** Occupancy (`usage_update.used`) went
+  6339 → 172 across the `/compact` turn (lines 10, 16); the turn resolves
+  `end_turn` with 0 output tokens and its only streamed text is the ack
+  `"Compaction complete"` (line 17). No dedicated progress notification —
+  just `session_info_update` activeRunId on/off around the turn. `goose
+  session export` of the session shows the replaced history: a
+  `# Conversation Summary` user message plus "Your context was compacted
+  at the user's request…", both `agentVisible`.
+- **Focus text is accepted but ignored.** `/compact keep only the word
+  PINEAPPLE` also answers "Compaction complete" (line 24), but the
+  resulting summary (export) never mentions PINEAPPLE — goose's compact
+  command takes no argument, matching its missing `input` hint.
+
+Hence: goosecli declares `compaction` native and `compaction_focus`
+unsupported, with `Config.CompactCommand = "/compact"` (the engine's
+`Compact` prompts it, maps the turn to an EventCompact start/done pair and
+keeps the ack out of the text stream; instructions return ErrUnsupported
+unless `Config.CompactFocus`). kirocli declares both unsupported: no
+capture shows kiro advertising a compaction command over ACP, and no
+binary was available to probe. claude-agent-acp's argument hint is
+consistent with claude-code's own native `compaction_focus`; codex and
+hermes are not mads bindings.
+
+**Transcript and replay.** Live, a successful compaction turn is recorded
+in `Transcript()` as one `compact` entry (pre/post occupancy, duration) in
+place of the `/compact` prompt and the "Compaction complete" ack. On
+`session/load` replay nothing is rewritten: goose replaces the compacted
+history with a `# Conversation Summary` user message (export, above), so
+the `/compact` prompt/ack are not expected in a replay, but no committed
+capture replays a compacted session, and matching that summary text by
+prefix would be guessing at goose's wording. Replayed history is left as
+the agent reports it.
 
 ## codex permission options (source-pinned from codex-acp 1.10.0)
 

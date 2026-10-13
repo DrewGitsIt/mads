@@ -120,6 +120,34 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// The Session runner's per-turn usage, folded into the record's running
+	// totals in one transaction (store.Sessions.AddUsage).
+	mux.HandleFunc("POST /sessions/{id}/usage", func(w http.ResponseWriter, r *http.Request) {
+		var inc contracts.UsageIncrement
+		if !decode(w, r, &inc) {
+			return
+		}
+		if err := s.AddUsage(r.Context(), r.PathValue("id"), inc); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// The harness's billing mode and plan rate limits, as it last reported
+	// them (store.Sessions.SetBilling).
+	mux.HandleFunc("PUT /sessions/{id}/billing", func(w http.ResponseWriter, r *http.Request) {
+		var patch contracts.SessionBillingPatch
+		if !decode(w, r, &patch) {
+			return
+		}
+		if err := s.SetBilling(r.Context(), r.PathValue("id"), patch); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	// Scoped isolation-state write (contracts.SessionWorktreePatch): the
 	// worktree fields before the provider starts, and D4's counts after.
 	mux.HandleFunc("PATCH /sessions/{id}/worktree", func(w http.ResponseWriter, r *http.Request) {

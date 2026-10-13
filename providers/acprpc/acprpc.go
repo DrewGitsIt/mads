@@ -142,6 +142,22 @@ type Config struct {
 	// (TrustModes[TrustAutoReview], e.g. goose smart_approve) has already
 	// filtered, so every ask it makes is forwarded.
 	PermissionAsksEveryCall bool
+	// CompactCommand is the prompt text that runs the agent's own
+	// compaction pass, e.g. "/compact". ACP has no compaction method;
+	// agents advertise a slash command in available_commands_update
+	// instead (goose, codex-acp and claude-agent-acp all list "compact",
+	// hermes "compress" — testdata/captures/README.md "Native
+	// compaction"). Empty means the agent has none: Compact returns
+	// provider.ErrUnsupported, and the binding's matrix declares
+	// BehaviorCompaction Unsupported. Set only where a live probe showed
+	// the command really compacts (goose: goose-acp-compact.jsonl).
+	CompactCommand string
+	// CompactFocus declares that text after CompactCommand steers the
+	// agent's summary (BehaviorCompactionFocus). False makes Compact with
+	// instructions return provider.ErrUnsupported rather than send text the
+	// agent drops — goose 1.50.1 accepts "/compact <text>" but its summary
+	// ignores the text (same capture, turn 3).
+	CompactFocus bool
 }
 
 // ConfigOptionValue is one PreseedConfigOptions entry.

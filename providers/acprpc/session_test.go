@@ -284,11 +284,103 @@ func TestSecondSendWhileTurnOpenFailsImmediately(t *testing.T) {
 		t.Fatal("second Send during an open turn must fail")
 	} else if !strings.Contains(err.Error(), "prompt in flight") {
 		t.Fatalf("unexpected error: %v", err)
+	} else if !errors.Is(err, provider.ErrTurnInFlight) {
+		// The Runner queues on this sentinel instead of failing the send.
+		t.Fatalf("refusal %v is not provider.ErrTurnInFlight", err)
 	}
 	if err := sess.Interrupt(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	drainTurn(t, sess)
+}
+
+// compactPhases lists a turn's EventCompact phases ("done" carries its
+// verdict as "done:ok" / "done:failed").
+func compactPhases(events []provider.Event) []string {
+	var out []string
+	for _, ev := range events {
+		if ev.Kind != provider.EventCompact {
+			continue
+		}
+		p := ev.Compact.Phase
+		if p == "done" {
+			if ev.Compact.Success {
+				p += ":ok"
+			} else {
+				p += ":failed"
+			}
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// TestCompactPromptsTheAgentsCommand: Compact sends CompactCommand as a
+// prompt and reports the turn as a start/done EventCompact pair ahead of its
+// turn end, keeping the agent's ack out of the text stream; the next Send
+// is an ordinary turn again.
+func TestCompactPromptsTheAgentsCommand(t *testing.T) {
+	cfg := gooseConfig()
+	cfg.CompactCommand = "/compact"
+	e := testEngine(t, cfg, "goose", t.TempDir())
+	sess := startSession(t, e, provider.StartOptions{})
+	comp, ok := sess.(provider.Compactor)
+	if !ok {
+		t.Fatal("session is not a provider.Compactor")
+	}
+	if err := comp.Compact(context.Background(), ""); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	events := drainTurn(t, sess)
+	if got := compactPhases(events); len(got) != 2 || got[0] != "start" || got[1] != "done:ok" {
+		t.Fatalf("compact phases = %v, want [start done:ok]", got)
+	}
+	if txt := turnText(events); txt != "" {
+		t.Fatalf("compaction ack leaked into the text stream: %q", txt)
+	}
+	turnEnd(t, events)
+	tr := sess.(interface{ Transcript() []provider.Message }).Transcript()
+	if len(tr) != 1 || tr[0].Role != "compact" || tr[0].Compact == nil {
+		t.Fatalf("transcript = %+v, want one compact marker (no /compact prompt, no ack)", tr)
+	}
+
+	events = sendTurn(t, sess, "echo after")
+	if got := compactPhases(events); len(got) != 0 {
+		t.Fatalf("an ordinary turn after compaction reported %v", got)
+	}
+	if got := turnText(events); got != "you said after" {
+		t.Fatalf("text after compaction = %q", got)
+	}
+}
+
+// TestCompactRefusals: no CompactCommand means no compaction at all, and
+// instructions are refused unless CompactFocus — never sent and dropped.
+func TestCompactRefusals(t *testing.T) {
+	e := testEngine(t, gooseConfig(), "goose", t.TempDir())
+	sess := startSession(t, e, provider.StartOptions{})
+	if err := sess.(provider.Compactor).Compact(context.Background(), ""); !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("Compact without CompactCommand = %v, want ErrUnsupported", err)
+	}
+
+	cfg := gooseConfig()
+	cfg.CompactCommand = "/compact"
+	e = testEngine(t, cfg, "goose", t.TempDir())
+	sess = startSession(t, e, provider.StartOptions{})
+	if err := sess.(provider.Compactor).Compact(context.Background(), "keep the plan"); !errors.Is(err, provider.ErrUnsupported) {
+		t.Fatalf("Compact with instructions, no CompactFocus = %v, want ErrUnsupported", err)
+	}
+
+	cfg.CompactFocus = true
+	e = testEngine(t, cfg, "goose", t.TempDir())
+	sess = startSession(t, e, provider.StartOptions{})
+	if err := sess.(provider.Compactor).Compact(context.Background(), "keep the plan"); err != nil {
+		t.Fatalf("Compact with instructions under CompactFocus: %v", err)
+	}
+	drainTurn(t, sess)
+	// The prompt isn't in the transcript any more; ask the agent what it saw.
+	if got := turnText(sendTurn(t, sess, "recall")); got != "earlier you said: /compact keep the plan" {
+		t.Fatalf("agent saw %q, want \"/compact keep the plan\" sent", got)
+	}
 }
 
 func TestCrashClosesEventsWithoutTurnEnd(t *testing.T) {
@@ -701,5 +793,32 @@ func TestACPLiveTranscriptRecordsTurnError(t *testing.T) {
 	}
 	if m := msgs[1]; m.Role != "agent" || !m.IsError || !strings.Contains(m.Text, "agent authentication required") {
 		t.Fatalf("transcript[1] = %+v, want an IsError agent entry carrying the error", m)
+	}
+}
+
+// TestCompactionTranscriptShowsOneMarker: a compaction turn is a single
+// Role "compact" entry in Transcript() — neither the "/compact" prompt nor
+// the agent's "Compaction complete" ack — and the turns around it are
+// untouched.
+func TestCompactionTranscriptShowsOneMarker(t *testing.T) {
+	cfg := gooseConfig()
+	cfg.CompactCommand = "/compact"
+	e := testEngine(t, cfg, "goose", t.TempDir())
+	sess := startSession(t, e, provider.StartOptions{})
+	sendTurn(t, sess, "echo before")
+	if err := sess.(provider.Compactor).Compact(context.Background(), ""); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	drainTurn(t, sess)
+	sendTurn(t, sess, "echo after")
+	var roles []string
+	for _, m := range sess.(interface{ Transcript() []provider.Message }).Transcript() {
+		roles = append(roles, m.Role)
+		if m.Text == "/compact" || m.Text == "Compaction complete" {
+			t.Fatalf("raw compaction plumbing in transcript: %+v", m)
+		}
+	}
+	if got := strings.Join(roles, ","); got != "user,agent,compact,user,agent" {
+		t.Fatalf("transcript roles = %s, want user,agent,compact,user,agent", got)
 	}
 }

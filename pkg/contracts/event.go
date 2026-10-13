@@ -126,6 +126,14 @@ const (
 	// never fired for a subagent's parent-tagged events — a sidechain rolls
 	// up as a count, not as the main agent's label.
 	SessionAgentState EventType = "session.agent_state"
+	// SessionUsageUpdated fires once a turn's usage has been written to the
+	// session record — LastUsage and the running totals — and when the
+	// harness's billing report (mode, plan limits) changes. No payload: it
+	// says GET /sessions/{id}/report has moved. Its own event because
+	// session.turn_ended and the idle session.agent_state go out before
+	// those writes land, so a /usage card that refetched on them read the
+	// previous turn's numbers.
+	SessionUsageUpdated EventType = "session.usage_updated"
 	// SessionDelegateChanged fires when a session's delegate record
 	// (contracts.Delegate — a harness-run subagent, docs/DELEGATES-DESIGN.md)
 	// is created or changes state. Payload: contracts.Delegate, the full
@@ -459,7 +467,7 @@ const (
 var EventTypes = []EventType{
 	SessionCreated, SessionProvisioning, SessionRenamed, SessionActivityChanged, SessionUpdated, SessionDeleted, SessionCrashed,
 	SessionPermissionRequested, SessionPermissionResolved,
-	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState, SessionDelegateChanged,
+	SessionSubagentEvent, SessionSubagentTask, SessionThinking, SessionToolStatusChanged, SessionCompact, SessionQueueChanged, SessionAgentState, SessionUsageUpdated, SessionDelegateChanged,
 	SessionTrustChanged,
 	TaskCreated, TaskUpdated, TaskStatusChanged, TaskConfirmed, TaskDiscarded,
 	NoteCreated, NoteConfirmed, NoteDiscarded,

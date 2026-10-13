@@ -27,6 +27,7 @@ func New(r *runner.Runner) http.Handler {
 	s := &server{runner: r}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /status", s.handleStatus)
 	mux.HandleFunc("POST /messages", s.handleSendMessage)
 	mux.HandleFunc("GET /queue", s.handleQueue)
 	mux.HandleFunc("DELETE /queue/{id}", s.handleCancelQueued)
@@ -60,6 +61,13 @@ func New(r *runner.Runner) http.Handler {
 // POST /messages's 503, not from here.
 func (s *server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"service": "session", "status": "ok"})
+}
+
+// handleStatus reports what only this process knows about itself — when
+// it started and when its harness last sent anything — for the Router's
+// session report (GET /sessions/{id}/report's health section).
+func (s *server) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.runner.Status())
 }
 
 func (s *server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -135,8 +143,19 @@ func (s *server) handleInterrupt(w http.ResponseWriter, r *http.Request) {
 // handleCompact runs a native context-compaction pass on user request (the
 // UI's "Compact now" action). Accepted means started — progress and outcome
 // arrive as compact events on /output, mirroring the resume-triggered pass.
+// The body is optional: {"instructions": "..."} steers the summary (the
+// /compact focus text); none, or an empty one, is a plain compaction.
 func (s *server) handleCompact(w http.ResponseWriter, r *http.Request) {
-	if err := s.runner.CompactNow(r.Context()); err != nil {
+	var req struct {
+		Instructions string `json:"instructions"`
+	}
+	if r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+			return
+		}
+	}
+	if err := s.runner.CompactNow(r.Context(), req.Instructions); err != nil {
 		writeRunnerError(w, err)
 		return
 	}

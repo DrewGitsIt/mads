@@ -32,6 +32,7 @@ func (r *Runner) observeConversation(ev provider.Event) provider.Event {
 	ev = r.stampToolStatus(ev)
 	r.observeAgentState(ev)
 	r.observeDelegates(ev)
+	r.observeUsage(ev)
 	if ev.Kind == provider.EventTurnEnd {
 		r.flushInterruptedTools()
 	}
@@ -43,10 +44,15 @@ func (r *Runner) observeConversation(ev provider.Event) provider.Event {
 // provider stream closes underneath it (Shutdown, or the process dying):
 // every tool call still without a result, and the agent state — which must
 // never stay "working" just because no EventTurnEnd ever arrived. Both are
-// no-ops when the ordinary turn-end path already ran.
+// no-ops when the ordinary turn-end path already ran. Usage a delegate ran
+// up after the last turn end is sent too, rather than dying with the
+// process.
 func (r *Runner) flushTurnState() {
 	r.flushInterruptedTools()
 	r.markAgentIdle()
+	if r.flushUsage() {
+		r.publishUsageUpdated()
+	}
 }
 
 // stampToolStatus computes the status for a tool_use/tool_result event and

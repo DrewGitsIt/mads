@@ -19,6 +19,7 @@ import type {
   Config,
   CostMetrics,
   CreateSessionPayload,
+  SessionValidation,
   DiagnoseResult,
   ConversationImportResult,
   ConversationImportScan,
@@ -48,6 +49,7 @@ import type {
   RegistryPublishItem,
   Retro,
   Session,
+  SessionReport,
   SessionDefaults,
   QueuedMessage,
   SendResult,
@@ -113,6 +115,12 @@ export interface RouterClient {
   deleteAttachment(owner: AttachmentOwner, attachmentId: string): Promise<void>;
   /** Where the original file, or its thumbnail, is served. */
   attachmentUrl(owner: AttachmentOwner, attachmentId: string, variant?: "thumbnail"): string;
+  /**
+   * Where the session's whole conversation downloads from: the Router sends
+   * it as an attachment (<name>_<date>.md|json), so navigating or clicking an
+   * anchor to this URL saves a file.
+   */
+  exportSessionUrl(sessionId: string, format: "md" | "json"): string;
   /** The session's queued messages, in delivery order. */
   listQueuedMessages(sessionId: string): Promise<QueuedMessage[]>;
   /** Drop one queued message before it's delivered. */
@@ -120,10 +128,15 @@ export interface RouterClient {
   interrupt(sessionId: string): Promise<void>;
   /**
    * Run a native context-compaction pass now (the "Compact now" banner
-   * action). Resolves once the request is accepted; progress and outcome
-   * arrive as `compact` stream events, same as a resume-triggered pass.
+   * action, and /compact). `instructions` steer the summary — only for a
+   * provider whose matrix declares `compaction_focus` (compactionSupport);
+   * elsewhere the Router answers 400 rather than drop them. Resolves once
+   * the request is accepted; progress and outcome arrive as `compact`
+   * stream events, same as a resume-triggered pass.
    */
-  compactSession(sessionId: string): Promise<void>;
+  compactSession(sessionId: string, instructions?: string): Promise<void>;
+  /** The session's health and usage in one read — the /usage card's input. */
+  getSessionReport(sessionId: string): Promise<SessionReport>;
   bounce(sessionId: string): Promise<void>;
 
   // --- Chat/Terminal transport handoff (single provider conversation,
@@ -223,6 +236,8 @@ export interface RouterClient {
   createSession(
     payload: CreateSessionPayload,
   ): Promise<{ session: Session; addr: string; links?: Link[] }>;
+  /** Dry run of createSession (POST /sessions/validate): resolved dir/isolation and field errors, nothing created. */
+  validateSession(payload: CreateSessionPayload): Promise<SessionValidation>;
 
   // --- Config ---
   getConfig(): Promise<Config>;
@@ -631,6 +646,10 @@ export class FetchRouterClient implements RouterClient {
     return variant ? `${base}/${variant}` : base;
   }
 
+  exportSessionUrl(sessionId: string, format: "md" | "json"): string {
+    return `${this.baseUrl}/sessions/${encodeURIComponent(sessionId)}/export?format=${format}`;
+  }
+
   async listQueuedMessages(sessionId: string): Promise<QueuedMessage[]> {
     const res = await routerGet<{ queued?: QueuedMessage[] }>(
       this.baseUrl,
@@ -653,8 +672,13 @@ export class FetchRouterClient implements RouterClient {
     return routerPost(this.baseUrl, `/sessions/${sessionId}/interrupt`);
   }
 
-  async compactSession(sessionId: string): Promise<void> {
-    return routerPost(this.baseUrl, `/sessions/${sessionId}/compact`);
+  async compactSession(sessionId: string, instructions?: string): Promise<void> {
+    const focus = instructions?.trim();
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/compact`, focus ? { instructions: focus } : undefined);
+  }
+
+  async getSessionReport(sessionId: string): Promise<SessionReport> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/report`);
   }
 
   async bounce(sessionId: string): Promise<void> {
@@ -947,6 +971,10 @@ export class FetchRouterClient implements RouterClient {
     payload: CreateSessionPayload,
   ): Promise<{ session: Session; addr: string; links?: Link[] }> {
     return routerPost(this.baseUrl, "/sessions", payload);
+  }
+
+  async validateSession(payload: CreateSessionPayload): Promise<SessionValidation> {
+    return routerPost(this.baseUrl, "/sessions/validate", payload);
   }
 
   // --- Config ---

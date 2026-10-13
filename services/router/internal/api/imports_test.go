@@ -398,11 +398,14 @@ func TestImportConversationsEmpty(t *testing.T) {
 	}
 }
 
-// A client can't backdate a session created through POST /sessions.
+// A client can't backdate a session created through POST /sessions, nor
+// hand it usage totals or a billing snapshot — those are the Runner's.
 func TestCreateSessionIgnoresClientCreatedAt(t *testing.T) {
 	srv := newTestServer(t)
 	resp := postJSON(t, srv.URL+"/sessions", map[string]any{
 		"name": "fresh", "provider": "fake", "created_at": "2001-01-01T00:00:00Z", "imported_from": "x",
+		"usage_totals": map[string]any{"turns": 40, "cost_usd": 12.5},
+		"billing":      map[string]any{"mode": "plan"},
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -412,6 +415,9 @@ func TestCreateSessionIgnoresClientCreatedAt(t *testing.T) {
 	}](t, resp)
 	if created.Session.CreatedAt.Year() < 2020 || created.Session.ImportedFrom != "" {
 		t.Errorf("created_at=%v imported_from=%q, want server-stamped and empty", created.Session.CreatedAt, created.Session.ImportedFrom)
+	}
+	if created.Session.UsageTotals != nil || created.Session.Billing != nil {
+		t.Errorf("usage_totals=%+v billing=%+v, want none", created.Session.UsageTotals, created.Session.Billing)
 	}
 }
 

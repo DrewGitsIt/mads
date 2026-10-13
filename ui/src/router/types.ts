@@ -532,6 +532,65 @@ export interface Usage {
   // Provider-reported window size for model — authoritative over the
   // static CONTEXT_WINDOWS table (modelDisplay.ts).
   context_window?: number;
+  // What the provider said the turn cost, whatever the billing; only a
+  // SessionReport decides whether that is money spent.
+  cost_usd?: number;
+}
+
+// mirrors pkg/contracts/session_report.go — GET /sessions/{id}/report, the
+// /usage card's whole input. health and billing are always present; every
+// other section is absent when unknown. limits appear only when
+// billing.mode is "plan", cost only when it is "usage".
+export type BillingMode = "plan" | "usage" | "unknown";
+
+export type SessionHealthState = "working" | "idle" | "sleeping" | "crashed";
+
+export interface TokenCounts {
+  input: number;
+  output: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
+export interface RateLimit {
+  /** The harness's window key: "five_hour", "seven_day". */
+  id: string;
+  /** Display label: "5-hour", "Weekly". */
+  label: string;
+  /** 0-100. */
+  used_pct: number;
+  resets_at?: string; // RFC3339
+  /** What the window limits — always "account": shared by every session on the login. */
+  scope: string;
+}
+
+export interface SessionReport {
+  session_id: string;
+  health: {
+    state: SessionHealthState;
+    since?: string; // RFC3339
+    /** Present only while a process runs (working/idle). */
+    process_started_at?: string;
+    last_event_at?: string;
+    /** Provider name. */
+    harness: string;
+    /** From the harness's preflight row, when preflight knows it. */
+    version?: string;
+    preflight_ok?: boolean;
+  };
+  context?: {
+    used: number;
+    /** Provider-reported window; absent means fall back to CONTEXT_WINDOWS. */
+    window?: number;
+    /** The harness compacts natively — offer "Compact now". */
+    can_compact: boolean;
+  };
+  /** Cumulative over the session's life; delegates are included in the totals and repeated as their own subtotal. */
+  tokens?: TokenCounts & { turns: number; delegates?: TokenCounts };
+  billing: { mode: BillingMode };
+  limits?: RateLimit[];
+  /** basis "list_price": the harness's estimate at published API rates. */
+  cost?: { usd: number; basis: string };
 }
 
 // mirrors pkg/contracts/transcript.go Attribution — identifies the linked
@@ -624,6 +683,22 @@ export type CreateSessionPayload = Partial<Session> & {
   attachment_draft?: string;
 };
 
+// mirrors pkg/contracts/sessionvalidate.go SessionValidation — the answer to
+// POST /sessions/validate, the dry run of POST /sessions. Always 200: a
+// refused create comes back in `errors` (ValidationError's field shape), and
+// nothing is created either way.
+export interface SessionValidation {
+  /** Resolved folder — the counterpart's worktree when joined. */
+  dir: string;
+  /** Resolved isolation — "current_dir" when joining a counterpart's worktree. */
+  isolation: string;
+  workspace?: string;
+  /** The session whose isolated worktree the new one would share. */
+  joined_worktree_of?: { session_id: string; name: string };
+  /** Blocking problems; empty when the create would be accepted. */
+  errors: { field: string; message: string }[];
+}
+
 // mirrors services/router/internal/attachments Attachment — one stored file.
 export interface Attachment {
   id: string;
@@ -694,6 +769,9 @@ export type SendResult = { status: "accepted" } | { status: "queued"; queued: Qu
 /** mirrors pkg/contracts/delegate.go DelegateCapabilities (docs/DELEGATES-DESIGN.md C1–C3). */
 /** mirrors pkg/contracts/config.go DelegateFade. */
 export type DelegateFade = "0m" | "10m" | "never";
+
+/** mirrors pkg/contracts/config.go ExportFormat; "" means ask on first /export. */
+export type ExportFormat = "" | "md" | "json";
 
 export interface DelegateCapabilities {
   /** C1: its own durable transcript is on disk — only ever true on evidence. */
@@ -1386,6 +1464,9 @@ export interface Config {
   // delegate_fade mirrors pkg/contracts/config.go's DelegateFade — Settings'
   // "Fade out subagent cards after inactivity". Absent means "10m".
   delegate_fade?: DelegateFade;
+  // export_format mirrors pkg/contracts/config.go's ExportFormat — what
+  // /export downloads without asking. Absent or "" asks on first use.
+  export_format?: ExportFormat;
 
   default_workspace?: string;
   default_provider?: string;

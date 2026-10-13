@@ -1,6 +1,9 @@
 import { Suspense, lazy, useRef, type ReactNode } from "react";
 import type { Monaco } from "@monaco-editor/react";
-import { defineMadsMonacoTheme, MADS_MONACO_THEME } from "../../utils/createMonacoTheme";
+import {
+  defineMadsMonacoTheme,
+  MADS_MONACO_THEME,
+} from "../../utils/createMonacoTheme";
 import { bindingFor, hotkeyLabel } from "../../platform/hotkeys";
 import { monacoKeybinding } from "./monacoKeybinding";
 import styles from "./Composer.module.css";
@@ -8,7 +11,9 @@ import styles from "./Composer.module.css";
 // Same lazy+Suspense precedent as YamlSourceView/DiffViewer/MergeEditor —
 // Monaco needs Worker/canvas APIs happy-dom doesn't provide, so tests mock
 // this import instead of ever mounting the real editor.
-const MonacoEditor = lazy(() => import("@monaco-editor/react").then((m) => ({ default: m.Editor })));
+const MonacoEditor = lazy(() =>
+  import("@monaco-editor/react").then((m) => ({ default: m.Editor })),
+);
 
 export interface ExpandedComposerProps {
   value: string;
@@ -87,7 +92,9 @@ export function ExpandedComposer({
   return (
     <div className={styles.expanded} data-testid="expanded-composer">
       <div className={styles.editorWrap}>
-        <Suspense fallback={<div className={styles.editorLoading}>Loading editor…</div>}>
+        <Suspense
+          fallback={<div className={styles.editorLoading}>Loading editor…</div>}
+        >
           <MonacoEditor
             language="markdown"
             theme={MADS_MONACO_THEME}
@@ -105,10 +112,18 @@ export function ExpandedComposer({
               // Both chords come from the hotkeys table, so a future user
               // override reaches the editor too (Monaco can only bind them
               // here, through addCommand).
-              const send = monacoKeybinding(bindingFor("sendFromEditor"), monaco);
-              if (send !== undefined) ed.addCommand(send, () => onSendRef.current(valueRef.current));
-              const collapse = monacoKeybinding(bindingFor("collapseEditor"), monaco);
-              if (collapse !== undefined) ed.addCommand(collapse, () => onCollapseRef.current());
+              const send = monacoKeybinding(
+                bindingFor("sendFromEditor"),
+                monaco,
+              );
+              if (send !== undefined)
+                ed.addCommand(send, () => onSendRef.current(valueRef.current));
+              const collapse = monacoKeybinding(
+                bindingFor("collapseEditor"),
+                monaco,
+              );
+              if (collapse !== undefined)
+                ed.addCommand(collapse, () => onCollapseRef.current());
               ed.onDidChangeCursorPosition((e) => {
                 const m = ed.getModel();
                 onCursorChangeRef.current?.(m ? m.getOffsetAt(e.position) : 0);
@@ -136,8 +151,9 @@ export function ExpandedComposer({
       <div className={styles.exbar}>
         {leading}
         <span className={styles.hint}>
-          <kbd className={styles.kbd}>{hotkeyLabel("sendFromEditor")}</kbd> send ·{" "}
-          <kbd className={styles.kbd}>{hotkeyLabel("collapseEditor")}</kbd> collapse
+          <kbd className={styles.kbd}>{hotkeyLabel("sendFromEditor")}</kbd> send
+          · <kbd className={styles.kbd}>{hotkeyLabel("collapseEditor")}</kbd>{" "}
+          collapse
           {hintSuffix ? ` · ${hintSuffix}` : ""}
         </span>
         <span className={styles.spacer} />
@@ -154,12 +170,16 @@ export function ExpandedComposer({
         )}
         <button
           type="button"
-          className={[styles.send, queueing && styles.queue].filter(Boolean).join(" ")}
+          className={[styles.send, queueing && styles.queue]
+            .filter(Boolean)
+            .join(" ")}
           onClick={() => onSend(value)}
           disabled={sendDisabled}
           title={
             sendBlockedReason ??
-            (queueing ? "Queue — sends when the current turn finishes" : undefined)
+            (queueing
+              ? "Queue — sends when the current turn finishes"
+              : undefined)
           }
         >
           {queueing ? "Queue" : sendLabel}

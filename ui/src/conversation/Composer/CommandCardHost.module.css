@@ -1,0 +1,29 @@
+/* A command's card, floating over the bottom of the stream just above the
+   composer (docs/mockups/session-commands.html). No header or footer. */
+.host {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: var(--space-2);
+  background: var(--bg1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  z-index: var(--z-dock-menu);
+}
+
+.notice {
+  padding: var(--space-2) var(--space-3);
+  background: var(--bad-soft);
+  color: var(--bad-fg);
+  font: var(--fs-body) var(--sans);
+}
+
+/* A card with its own fixed width (the /usage Ledger) marks its root
+   data-card-fit; the host then shrinks to it, left-aligned. */
+.host:has(> [data-card-fit]) {
+  right: auto;
+  max-width: 100%;
+}

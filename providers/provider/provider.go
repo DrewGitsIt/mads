@@ -13,6 +13,13 @@ import (
 // asserts it appears exactly where the matrix says it should.
 var ErrUnsupported = errors.New("behavior unsupported by provider")
 
+// ErrTurnInFlight is returned by a Session's Send (or a Compactor's Compact)
+// when the harness already has a turn running and takes one at a time — ACP's
+// one-prompt-per-session rule (providers/acprpc). The Runner normally never
+// gets here, holding its own in-flight flag; this is what lets it tell "busy,
+// queue it" from a real failure when the two disagree.
+var ErrTurnInFlight = errors.New("provider: a turn is already in flight")
+
 // ErrDiscoveryUnavailable marks a ModelDiscoverer failure that's an expected
 // runtime condition — the provider's binary is missing or exec itself
 // failed (the same class of problem pkg/preflight checks for ahead of time)
@@ -493,18 +500,24 @@ type Completer interface {
 // (services/session/internal/runner/compact.go), so resuming a big
 // transcript in headless mode doesn't silently burn usage limits the way an
 // uncompacted resume would (interactive claude-code offers a "resume from
-// summary" prompt headless -p mode has no equivalent of). Not part of the
-// Behavior matrix — like Completer and RefSetter, callers detect it with a
-// type assertion, since only claude-code's stream-json transport is verified
-// to honor a plain "/compact" user-turn Send (providers/claudecode's
-// streamSession.Compact); a provider with no native equivalent simply
-// doesn't implement this interface, and the trigger no-ops for it — no
-// error, no status shown, resume proceeds exactly as before this capability
-// existed.
+// summary" prompt headless -p mode has no equivalent of) — and the user's
+// own Compact action. The provider-level declaration is the matrix's
+// BehaviorCompaction (and BehaviorCompactionFocus for instructions), which
+// the conformance suite holds to this interface on the structured session;
+// callers still detect it per session with a type assertion, since a
+// provider's terminal transport never has it. A session without it simply
+// doesn't compact: the resume trigger no-ops (no error, no status shown,
+// resume proceeds exactly as before this capability existed), and the UI
+// hides Compact for the provider.
 type Compactor interface {
-	// Compact asks the session to run its native compaction pass. Progress
-	// and completion are reported on the session's normal Events() channel
+	// Compact asks the session to run its native compaction pass, steering
+	// the summary by instructions when non-empty ("" = the harness's
+	// default pass — what auto-compaction always sends). Instructions are
+	// only meaningful where the matrix declares BehaviorCompactionFocus; an
+	// implementation that can't take them returns ErrUnsupported for a
+	// non-empty value rather than silently dropping them. Progress and
+	// completion are reported on the session's normal Events() channel
 	// (EventCompact) — this call's error is only about failing to even
 	// submit the request (e.g. a closed stdin), not the compaction outcome.
-	Compact(ctx context.Context) error
+	Compact(ctx context.Context, instructions string) error
 }

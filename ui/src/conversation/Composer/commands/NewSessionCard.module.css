@@ -1,0 +1,143 @@
+/* The /new card (docs/mockups/session-commands.html §2). No header bar. */
+
+/* The host clips its children to its rounded corners; this card's pill
+   menus open upward out of it, so let them through. */
+:global([data-testid="command-card"]):has(> .card) {
+  overflow: visible;
+}
+
+.card {
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.linkviz {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  background: var(--bg2);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.node {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 4px 10px;
+  background: var(--bg1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 24ch;
+}
+
+.newNode {
+  border-style: dashed;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.thisTag {
+  display: inline-block;
+  font: 600 var(--fs-chip) var(--sans);
+  border-radius: 999px;
+  padding: 1px 8px;
+  background: var(--bg3);
+  color: var(--text3);
+}
+
+.arrow {
+  color: var(--info-fg);
+  font: 700 14px var(--mono);
+  white-space: nowrap;
+  cursor: help;
+}
+
+.cadence {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--text3);
+  font-size: var(--fs-sm);
+}
+
+.cadenceLabel {
+  cursor: help;
+}
+
+.seg {
+  font-size: var(--fs-chip);
+}
+
+.goal {
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--bg0);
+  padding: var(--space-2) var(--space-3);
+  font: var(--fs-chat) var(--sans);
+  color: var(--text);
+  min-height: 44px;
+  resize: vertical;
+}
+
+.goal:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.banner {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+}
+
+.info {
+  background: var(--info-soft);
+  color: var(--info-fg);
+}
+
+.bad {
+  background: var(--bad-soft);
+  color: var(--bad-fg);
+}
+
+.bannerLink {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.kbd {
+  font: 600 10px var(--mono);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  opacity: 0.7;
+  margin-left: var(--space-1);
+}

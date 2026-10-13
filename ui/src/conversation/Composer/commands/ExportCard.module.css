@@ -1,0 +1,65 @@
+/* The /export card (docs/mockups/session-commands.html, section 3). */
+.card {
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--line-soft);
+  font: 650 var(--fs-ui) var(--sans);
+  color: var(--text);
+}
+
+.body {
+  padding: var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+}
+
+.fmt {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r-sm);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg2);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  font-family: var(--sans);
+  color: var(--text);
+}
+
+.fmt[aria-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.title {
+  font-weight: 650;
+  font-size: var(--fs-body);
+}
+
+.desc {
+  color: var(--text3);
+  font-size: var(--fs-chip);
+}
+
+.footer {
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--line-soft);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.remember {
+  margin-right: auto;
+  font-size: var(--fs-sm);
+  color: var(--text2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useBusHealth } from "../../router/useBusHealth";
@@ -6,6 +6,7 @@ import type { PipelineClient } from "../../pipeline/client/pipelineClient";
 import { useAgents } from "../../library/agents/useAgents";
 import { useWorkspaces } from "../../library/workspaces/useWorkspaces";
 import { router } from "../../router/client";
+import { OPEN_CREATED_SESSION_EVENT, type CreatedSessionDetail } from "../../appNavigation";
 import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
@@ -109,6 +110,18 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     setProvisioningSessionId(session.id);
     setPendingFirstMessage({ sessionId: session.id, text: goalText });
   }
+
+  // The composer's /new card (⌘↵) opens what it created the same way.
+  const handleSessionCreatedRef = useRef(handleSessionCreated);
+  handleSessionCreatedRef.current = handleSessionCreated;
+  useEffect(() => {
+    const onCreated = (e: Event) => {
+      const { session, goal } = (e as CustomEvent<CreatedSessionDetail>).detail;
+      handleSessionCreatedRef.current(session, goal);
+    };
+    window.addEventListener(OPEN_CREATED_SESSION_EVENT, onCreated);
+    return () => window.removeEventListener(OPEN_CREATED_SESSION_EVENT, onCreated);
+  }, []);
 
   return (
     <div className={styles.surface}>

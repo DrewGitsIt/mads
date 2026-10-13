@@ -40,6 +40,18 @@ describe("AppearanceSection", () => {
     expect(config.saveFields).toHaveBeenCalledWith({ reduce_motion: true });
   });
 
+  it("saves the export format live; Ask clears it", () => {
+    const config = makeConfig({ draft: { ...fixtureConfig, export_format: "md" } });
+    render(<AppearanceSection config={config} />);
+    const group = screen.getByRole("radiogroup", { name: "Export format" });
+    expect(within(group).getByRole("radio", { name: "Markdown" }).getAttribute("aria-checked")).toBe("true");
+
+    fireEvent.click(within(group).getByRole("radio", { name: "JSON" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ export_format: "json" });
+    fireEvent.click(within(group).getByRole("radio", { name: "Ask" }));
+    expect(config.saveFields).toHaveBeenCalledWith({ export_format: "" });
+  });
+
   it("back to system clears the override, and a failed save reverts it", async () => {
     const config = makeConfig({
       saved: { ...fixtureConfig, reduce_motion: true },

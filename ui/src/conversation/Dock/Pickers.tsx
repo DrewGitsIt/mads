@@ -4,7 +4,7 @@ import { Caret } from "../../components/Caret/Caret";
 import { Popover } from "../../components/Popover/Popover";
 import { modelDisplayName } from "../../router/modelDisplay";
 import type { Model, ProviderBehavior, ProviderSupport, SessionTrust } from "../../router/types";
-import { trustLabel, trustLevels } from "../../features/sessions/launchpad/pills/trustLevels";
+import { trustLabel, trustLevels } from "../../features/sessions/pills/trustLevels";
 import { shortModel, shortPersona, trustTone } from "./dockLabels";
 import styles from "./StatusLine.module.css";
 

@@ -19,12 +19,12 @@ import type {
 } from "../../../router/types";
 import { LinkChooserDialog } from "../rail/LinkChooserDialog";
 import { useProviderMatrix } from "../../settings/state/useProviderMatrix";
-import { FolderPill } from "./pills/FolderPill";
-import { AgentPill } from "./pills/AgentPill";
-import { ModelPill } from "./pills/ModelPill";
-import { TrustPill } from "./pills/TrustPill";
-import { IsolationPill } from "./pills/IsolationPill";
-import type { StagedConfig } from "./pills/stagedConfig";
+import { FolderPill, recentDirs } from "../pills/FolderPill";
+import { AgentPill } from "../pills/AgentPill";
+import { ModelPill } from "../pills/ModelPill";
+import { TrustPill } from "../pills/TrustPill";
+import { IsolationPill } from "../pills/IsolationPill";
+import type { StagedConfig } from "../pills/stagedConfig";
 import { AttachmentChips } from "../../../components/Attachments/AttachmentChips";
 import {
   handLaunchpadToSession,
@@ -34,18 +34,11 @@ import { useStagedAttachments } from "../../../components/Attachments/useStagedA
 import { useFileDrop } from "../../../components/Attachments/useFileDrop";
 import { StagedLinkChips } from "./StagedLinkChips";
 import { clearLaunchpadDraft, getLaunchpadDraft, setLaunchpadDraft } from "./launchpadDraft";
+import { buildCreateSessionPayload, deriveSessionName } from "./sessionPayload";
 import styles from "./Launchpad.module.css";
 
-/**
- * Backend requires a non-empty Session.Name with no server-side derivation —
- * derive one from the first line of the composer text, stored in full. The
- * header and rail truncate long names with CSS, not by cutting the stored
- * string; the router job (services/router/internal/job/title.go) replaces
- * this placeholder with a generated title after the session's first turn.
- */
-export function deriveSessionName(text: string): string {
-  return text.trim().split("\n")[0];
-}
+// Re-exported: callers and tests import it from here.
+export { deriveSessionName };
 
 /** A session named in a Launchpad note, opening it on click. */
 function SessionLink({ session }: { session: WorktreeTenant }) {
@@ -75,15 +68,6 @@ function OwnerNote({ owner, isolation }: { owner: WorktreeTenant; isolation?: st
       )}
     </p>
   );
-}
-
-/** Folders past sessions started in, newest first, each once. */
-export function recentDirs(sessions: Session[]): string[] {
-  const seen = new Set<string>();
-  return [...sessions]
-    .sort((a, b) => b.created_at.localeCompare(a.created_at))
-    .map((s) => s.dir)
-    .filter((d): d is string => !!d && !seen.has(d) && !!seen.add(d));
 }
 
 /**
@@ -264,21 +248,13 @@ export function Launchpad({
     submittingRef.current = true;
     setSubmitting(true);
     try {
-      const session = await createSession({
-        name: deriveSessionName(trimmed),
-        name_source: "derived",
-        dir: staged.dir,
-        workspace: staged.workspace,
-        agent: staged.agent,
-        provider: staged.provider,
-        model: staged.model,
-        trust: staged.trust,
-        isolation: staged.isolation,
-        // A saved Auto default needs the prompt as much as a picked one.
-        ...((staged.agent ?? resolved?.agent?.value) === "auto" ? { opening_prompt: trimmed } : {}),
-        ...(stagedLinks.length > 0 ? { links: stagedLinks } : {}),
-        ...(hasFiles && "draft" in draft ? { attachment_draft: draft.draft } : {}),
-      });
+      const session = await createSession(
+        buildCreateSessionPayload(trimmed, staged, {
+          resolvedAgent: resolved?.agent?.value,
+          links: stagedLinks,
+          attachmentDraft: hasFiles && "draft" in draft ? draft.draft : undefined,
+        }),
+      );
       // Started: the whole draft goes, so the next new session begins from
       // the defaults again. On failure all of it stays — the server rolled
       // back the whole create, so it's still what the user wants to retry.

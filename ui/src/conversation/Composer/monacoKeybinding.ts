@@ -16,8 +16,14 @@ export function monacoKeybinding(
   if (k === "enter") code = monaco.KeyCode.Enter;
   else if (k === "escape") code = monaco.KeyCode.Escape;
   else if (/^[a-z]$/.test(k)) {
-    code = (monaco.KeyCode as unknown as Record<string, number>)[`Key${k.toUpperCase()}`];
+    code = (monaco.KeyCode as unknown as Record<string, number>)[
+      `Key${k.toUpperCase()}`
+    ];
   }
   if (code === undefined) return undefined;
-  return (b.mod ? monaco.KeyMod.CtrlCmd : 0) | (b.shift ? monaco.KeyMod.Shift : 0) | code;
+  return (
+    (b.mod ? monaco.KeyMod.CtrlCmd : 0) |
+    (b.shift ? monaco.KeyMod.Shift : 0) |
+    code
+  );
 }
