@@ -63,6 +63,14 @@
   max-width: none;
 }
 
+/* A wide table scrolls inside itself, like a pre, rather than widening the
+   whole stream. display:block is what lets a table take overflow-x. */
+.prose :global(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .prose :global(code) {
   font: var(--fs-chat-code) var(--mono);
   background: var(--bg2);

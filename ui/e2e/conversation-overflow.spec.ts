@@ -16,9 +16,9 @@ async function horizontalOverflowers(page: import("@playwright/test").Page) {
     if (!panel) return ["<no conversation panel>"];
     return ([panel, ...panel.querySelectorAll("*")] as HTMLElement[])
       .filter((el) => el.scrollWidth > el.clientWidth + 1)
-      // A pre is the one element allowed to scroll horizontally — that's
-      // where wide code blocks are supposed to overflow.
-      .filter((el) => el.tagName !== "PRE")
+      // A pre or a table is allowed to scroll horizontally — that's where
+      // wide code blocks and tables are supposed to overflow.
+      .filter((el) => el.tagName !== "PRE" && el.tagName !== "TABLE")
       .map((el) => `${el.tagName}.${el.getAttribute("class") ?? ""}`);
   });
 }
@@ -50,6 +50,18 @@ test("conversation pane never scrolls horizontally on unbreakable content", asyn
   // waits for the settled state, which is also exactly what the overflow
   // measurement below needs rendered.
   await expect(page.getByText("B".repeat(400))).toHaveCount(2);
+
+  // A wide fenced code block and a wide table. The code block sits in a
+  // Fold (a grid): an auto column there grew to the pre's full width once
+  // the fold settled, widening the whole stream (seen live 2026-10-12).
+  const wide = "x = " + "call(".repeat(200) + ";";
+  const cells = (s: string) => `| ${Array.from({ length: 14 }, (_, i) => `${s}_${i}`).join(" | ")} |`;
+  const table = `${cells("column_header")}\n|${" --- |".repeat(14)}\n${cells("value")}`;
+  await composer.fill(`echo wide\n\n\`\`\`\n${wide}\n\`\`\`\n\n${table}\n\nwide-end ${token}`);
+  await composer.press("Enter");
+  await expect(page.getByText(`wide-end ${token}`)).toHaveCount(2);
+  // Past the fold's 240ms settle, when the inner box stops clipping.
+  await page.waitForTimeout(400);
 
   expect(await horizontalOverflowers(page)).toEqual([]);
 });

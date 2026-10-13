@@ -4,6 +4,11 @@
    global.css's prefers-reduced-motion rule makes every change instant. */
 .fold {
   display: grid;
+  /* minmax(0, 1fr), not the implicit auto column: once settled the inner
+     box stops clipping, and an auto track would grow to its content's
+     min-content width — a wide pre would widen the whole stream instead
+     of scrolling inside itself. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 0fr;
   transition:
     grid-template-rows var(--dur-slow) var(--ease-io),
@@ -28,6 +33,7 @@
 
 .inner {
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 .fold[data-settled] > .inner {
