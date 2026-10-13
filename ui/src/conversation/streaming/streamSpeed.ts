@@ -13,7 +13,7 @@ import type { StreamSpeed } from "../../router/types";
  * theme/palette.
  */
 
-export const STREAM_WPM_PRESETS = { slow: 250, fast: 500 } as const;
+export const STREAM_WPM_PRESETS = { slow: 250, fast: 1500 } as const;
 /** Custom's pace before the user has typed one. */
 export const DEFAULT_CUSTOM_WPM = 350;
 // contracts.MinStreamWPM / MaxStreamWPM.
