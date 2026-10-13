@@ -15,6 +15,12 @@
 # high_contrast: keeps ChromaConscious's light-on-fill button text in dark mode.
 # Every other palette gets a bright fill with near-black text there.
 #
+# Background tint: the engine keeps dark surfaces near gray unless the neutral
+# is yours and taste is above 0.5. A tinted near-black neutral (OKLCH L 0.19,
+# chroma 0.035 tinted or 0.055 rich, in the palette's hue) at taste 1 gives
+# colored surfaces in both modes; that is how the tinted palettes were seeded.
+# Each export's #s= link records its exact inputs.
+#
 # overrides: per-mode mads tokens to set by hand after conversion. The engine is
 # a starting point, not a bible. Contrast is re-checked after overrides, and
 # text3 and the status tints are refitted to overridden surfaces.
@@ -26,7 +32,7 @@
 
 - name: rosewood
   label: Rosewood
-  description: Dusty rose over a mauve-gray, slate-blue second voice.
+  description: Dusty rose over a rosy dusk, slate-blue second voice.
   tags: [warm, muted]
 
 - name: dune
@@ -71,7 +77,7 @@
 
 - name: harbor
   label: Harbor
-  description: Navy and sea-teal on a fog gray. Nautical.
+  description: Navy and sea-teal on deep sea green. Nautical.
   tags: [cool, balanced]
 
 - name: lagoon
@@ -86,7 +92,7 @@
 
 - name: moss
   label: Moss
-  description: Olive and forest on a lichen gray. Calm, outdoorsy.
+  description: Olive and forest on lichen. Calm, outdoorsy.
   tags: [green, muted]
 
 - name: citrus
