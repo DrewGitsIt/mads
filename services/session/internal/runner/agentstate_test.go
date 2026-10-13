@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -587,5 +588,59 @@ func TestAgentStateRetryStopsAtShutdown(t *testing.T) {
 	time.Sleep(100 * time.Millisecond) // several retry periods
 	if after := gate.agentStateWrites(); after != before {
 		t.Fatalf("agent-state writes went from %d to %d after Shutdown; the retry is still running", before, after)
+	}
+}
+
+// TestAgentStateCountsBackgroundProcesses: a background process outliving
+// its turn keeps the idle state saying so, published on each change of the
+// count and cleared when the harness process exits — so a rail can tell
+// "waiting on a process" apart from idle, cold or live.
+func TestAgentStateCountsBackgroundProcesses(t *testing.T) {
+	r, data, sessionID := newDelegateRunner(t)
+	r.agent.floor = -1
+	sess := &gsSession{events: make(chan provider.Event, 8)}
+	r.mu.Lock()
+	r.sess = sess
+	r.mu.Unlock()
+
+	r.markAgentWorking("")
+	r.markAgentIdle()
+	two := []provider.BackgroundTask{{TaskID: "b1"}, {TaskID: "b2"}}
+	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two}
+	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two} // unchanged: nothing new
+	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two[:1]}
+	close(sess.events)
+	r.pump(sess)
+
+	states := eventsOfType[contracts.AgentState](t, data, sessionID, contracts.SessionAgentState)
+	var got []string
+	for _, s := range states {
+		got = append(got, fmt.Sprintf("%s/%d", s.State, s.Background))
+	}
+	want := []string{"working/0", "idle/0", "idle/2", "idle/1", "idle/0"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("agent states = %v, want %v", got, want)
+	}
+	// The idle edge's own clock is kept: a count change is not a new state.
+	if !states[2].Since.Equal(states[1].Since) {
+		t.Fatalf("since moved on a count change: %v → %v", states[1].Since, states[2].Since)
+	}
+
+	rec, err := data.Session(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.AgentState == nil || rec.AgentState.Background != 0 {
+		t.Fatalf("record agent state = %+v, want background 0 after exit", rec.AgentState)
+	}
+}
+
+// TestAgentStateBackgroundBeforeAnyTurn: with no state yet there is nothing
+// to publish a count with, and no event appears.
+func TestAgentStateBackgroundBeforeAnyTurn(t *testing.T) {
+	r, data, sessionID := newDelegateRunner(t)
+	r.setAgentBackground(1)
+	if got := eventsOfType[contracts.AgentState](t, data, sessionID, contracts.SessionAgentState); len(got) != 0 {
+		t.Fatalf("agent states = %+v, want none", got)
 	}
 }

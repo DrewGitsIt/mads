@@ -65,13 +65,15 @@ type agentState struct {
 	// the last values actually appended. Transitions are the diff between
 	// the two, which is also what makes a redundant sweep (turn end, then
 	// the stream closing behind it) append nothing.
-	state string
-	label string
-	since time.Time
+	state      string
+	label      string
+	since      time.Time
+	background int
 
-	sentState string
-	sentLabel string
-	sentAt    time.Time
+	sentState      string
+	sentLabel      string
+	sentBackground int
+	sentAt         time.Time
 
 	// timer is the pending trailing flush for a label change the floor
 	// deferred, nil when none is armed. Trailing rather than dropping,
@@ -120,6 +122,33 @@ func isCompactCommand(text string) bool {
 // is a no-op when the first already reported idle.
 func (r *Runner) markAgentIdle() {
 	r.setAgentState(contracts.AgentIdle, "", true)
+}
+
+// setAgentBackground records how many background processes (not subagents)
+// are running, from each EventBackground and as 0 when the process that ran
+// them exits. Published as soon as it changes, whatever the turn is doing:
+// it is what tells a rail "waiting on a process" apart from "idle" once the
+// turn is over, and processes start and end rarely enough to need no floor.
+// Before the first turn there is no state to publish it with; a turn always
+// comes first in practice, since only a turn starts a process.
+func (r *Runner) setAgentBackground(n int) {
+	st := &r.agent
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.background = n
+	if st.state == "" || st.unchangedLocked() {
+		return
+	}
+	st.stopTimerLocked()
+	r.emitAgentStateLocked(time.Now())
+}
+
+// clearBackground ends every background process's report when the harness
+// process that ran them is gone: the live list a viewer sees and the count
+// on the agent state.
+func (r *Runner) clearBackground() {
+	r.hub.clearBackground()
+	r.setAgentBackground(0)
 }
 
 // observeAgentState updates the working label from one live main-agent
@@ -175,7 +204,7 @@ func (r *Runner) setAgentState(state, label string, edge bool) {
 	}
 	st.state, st.label = state, label
 
-	if state == st.sentState && label == st.sentLabel {
+	if st.unchangedLocked() {
 		return // not a transition
 	}
 	if edge {
@@ -204,7 +233,7 @@ func (r *Runner) flushAgentState() {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	st.timer = nil
-	if st.state == st.sentState && st.label == st.sentLabel {
+	if st.unchangedLocked() {
 		return // an edge already appended this; nothing left to say
 	}
 	r.emitAgentStateLocked(time.Now())
@@ -229,7 +258,7 @@ func (r *Runner) flushAgentState() {
 // Service answers.
 func (r *Runner) emitAgentStateLocked(now time.Time) {
 	st := &r.agent
-	state := contracts.AgentState{State: st.state, Label: st.label, Since: st.since}
+	state := contracts.AgentState{State: st.state, Label: st.label, Since: st.since, Background: st.background}
 	if r.data != nil {
 		if err := r.data.SetSessionAgentState(context.Background(), r.sessionID, state); err != nil {
 			log.Printf("runner: set agent state %s (retrying): %v", state.State, err)
@@ -237,7 +266,13 @@ func (r *Runner) emitAgentStateLocked(now time.Time) {
 			return
 		}
 	}
-	st.sentState, st.sentLabel, st.sentAt = st.state, st.label, now
+	st.sentState, st.sentLabel, st.sentBackground, st.sentAt = st.state, st.label, st.background, now
+}
+
+// unchangedLocked reports whether the current state is what was last
+// published. Callers must hold st.mu.
+func (st *agentState) unchangedLocked() bool {
+	return st.state == st.sentState && st.label == st.sentLabel && st.background == st.sentBackground
 }
 
 // armRetryLocked schedules the trailing flush to re-publish an unsent state,

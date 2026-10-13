@@ -361,6 +361,21 @@ describe("useSessionAgentState", () => {
     await waitFor(() => expect(result.current).toEqual({}));
   });
 
+  it("carries the background-process count past the turn, and drops it at zero or on sleep", async () => {
+    const { result } = renderHook(() => useSessionAgentState([makeSession()]));
+    working("s1", "Running bash · ollama pull", "2026-09-28T10:00:00Z");
+    emit("session.agent_state", "s1", { state: "idle", since: "2026-09-28T10:01:00Z", background: 2 });
+    await waitFor(() => expect(result.current.s1).toEqual({ subagents: 0, done: true, background: 2 }));
+
+    emit("session.agent_state", "s1", { state: "idle", since: "2026-09-28T10:01:00Z" });
+    await waitFor(() => expect(result.current.s1).toEqual({ subagents: 0, done: true }));
+
+    emit("session.agent_state", "s1", { state: "idle", since: "2026-09-28T10:01:00Z", background: 1 });
+    await waitFor(() => expect(result.current.s1?.background).toBe(1));
+    emit("session.activity_changed", "s1", { activity: "inactive" });
+    await waitFor(() => expect(result.current.s1?.background).toBeUndefined());
+  });
+
   describe("the record mirror — a cold reader that missed the transition", () => {
     it("reports a live turn from the session list alone, with no event replay", async () => {
       const session = makeSession({ agent_state: MID_TURN });
@@ -379,6 +394,18 @@ describe("useSessionAgentState", () => {
       // leaves a working state on the record — a card must not spin forever.
       const session = makeSession({ activity: "inactive", agent_state: MID_TURN });
       const { result } = renderHook(() => useSessionAgentState([session]));
+      await waitFor(() => expect(result.current).toEqual({}));
+    });
+
+    it("reads a background count from an idle record on a live session only", async () => {
+      const waiting: AgentState = { state: "idle", since: "2026-09-28T10:01:00Z", background: 1 };
+      const { result, rerender } = renderHook(
+        ({ sessions }: { sessions: Session[] }) => useSessionAgentState(sessions),
+        { initialProps: { sessions: [makeSession({ agent_state: waiting })] } },
+      );
+      await waitFor(() => expect(result.current.s1).toEqual({ subagents: 0, background: 1 }));
+
+      rerender({ sessions: [makeSession({ activity: "inactive", agent_state: waiting })] });
       await waitFor(() => expect(result.current).toEqual({}));
     });
 

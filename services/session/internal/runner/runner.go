@@ -1341,7 +1341,7 @@ func (r *Runner) swapTransport(ctx context.Context, mode provider.Mode, mcp []pr
 	// started delegates of its own (see pump). Its background processes
 	// went the same way.
 	r.endDelegatesForProcessExit()
-	r.hub.clearBackground()
+	r.clearBackground()
 
 	opts.Mode = mode
 	opts.Resume = resumeRef
@@ -1765,6 +1765,9 @@ func (r *Runner) pump(sess provider.Session) {
 		ev = r.observeConversation(ev)
 		r.synthEngine.OnEvent(ev)
 		r.digest.recordEvent(ev)
+		if ev.Kind == provider.EventBackground {
+			r.setAgentBackground(len(ev.Background))
+		}
 		r.hub.broadcast(ev)
 	}
 
@@ -1786,7 +1789,7 @@ func (r *Runner) pump(sess provider.Session) {
 	r.mu.Unlock()
 	if current {
 		r.endDelegatesForProcessExit()
-		r.hub.clearBackground()
+		r.clearBackground()
 	}
 	r.flushTurnState()
 

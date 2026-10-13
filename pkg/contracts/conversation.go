@@ -151,6 +151,14 @@ type AgentState struct {
 	// tool (ui/src/conversation/ChatRenderer/WorkingIndicator.tsx's own
 	// rule). Turn-end time on idle.
 	Since time.Time `json:"since"`
+	// Background is how many background processes the agent started are
+	// still running (a run_in_background Bash call, a Monitor watch; not
+	// subagents, which have delegate records). A rail reading "Idle" while
+	// one runs would be wrong: the session is waiting on it. Updated on
+	// change, independent of State; live-only in spirit — a session service
+	// restart loses it, which is why a reader trusts it on an active session
+	// only.
+	Background int `json:"background,omitempty"`
 }
 
 // QueuedMessage is one user message waiting in the Runner's queue behind an

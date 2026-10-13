@@ -112,7 +112,12 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // `since` is the turn's start, held across the turn's label changes so
       // the card's elapsed counter spans the whole turn. Fall back to the
       // envelope's own stamp rather than dropping the transition.
-      fold.live = { state: state.state, label: state.label, since: state.since || env.timestamp };
+      fold.live = {
+        state: state.state,
+        label: state.label,
+        since: state.since || env.timestamp,
+        background: state.background,
+      };
       if (state.state === "working") {
         clearStale(fold);
         return;
@@ -131,7 +136,7 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
       // arrives when the child is killed rather than finished — a rebuild, a
       // Close, the supervisor healing a stale `active` record. Without it a
       // session terminated mid-sidechain keeps both a spinning card and its
-      // subagent count forever: mirroredWorking() refuses to trust a working
+      // subagent count forever: mirrored() refuses to trust a working
       // mirror on a dead session, but `live` outranks the mirror, so the
       // guard never gets a say. Waking says nothing about a turn, so only
       // the transition to inactive is news here.
@@ -189,13 +194,15 @@ function apply(fold: Fold, env: Envelope, fadeMs: number): void {
  * missed — a reload or an SSE reconnect mid-turn has only the record to go on,
  * which is exactly why the Runner writes it.
  *
- * Read as idle unless the session is live: only the running Runner clears
- * agent_state (pkg/contracts/session.go says so), so a hard-killed process
- * leaves a working state behind and a card would spin forever.
+ * Only a working state or a background-process count is worth reading, and
+ * only on a live session: only the running Runner clears agent_state
+ * (pkg/contracts/session.go says so), so a hard-killed process leaves either
+ * behind and a card would spin, or wait, forever.
  */
-function mirroredWorking(session: Session): AgentState | undefined {
+function mirrored(session: Session): AgentState | undefined {
   const state = session.agent_state;
-  if (!state || state.state !== "working" || session.activity !== "active") return undefined;
+  if (!state || session.activity !== "active") return undefined;
+  if (state.state !== "working" && !state.background) return undefined;
   return state;
 }
 
@@ -209,7 +216,7 @@ function project(
   const byId = new Map<string, Session>();
   for (const session of sessions) {
     byId.set(session.id, session);
-    if (mirroredWorking(session)) ids.add(session.id);
+    if (mirrored(session)) ids.add(session.id);
   }
   for (const id of ids) {
     const fold = folds.get(id);
@@ -217,7 +224,7 @@ function project(
     // The stream wins wherever it has spoken — including when it says idle.
     // The record only fills the silence before this connection's first
     // transition for that session.
-    const agent = fold?.live ?? (session ? mirroredWorking(session) : undefined);
+    const agent = fold?.live ?? (session ? mirrored(session) : undefined);
     // The oldest unresolved park is the one the card names: it's the one that
     // has been waiting on the user longest.
     const park = [...(fold?.pending.values() ?? [])].sort((a, b) => a.at.localeCompare(b.at))[0];
@@ -246,8 +253,11 @@ function project(
       state.workingSince = agent.since;
       if (agent.label) state.label = agent.label;
     }
+    // Live-only, like the delegates: a sleeping session's processes went
+    // with its child, whatever its last count said.
+    if (agent?.background && (!session || session.activity === "active")) state.background = agent.background;
     if (fold?.done) state.done = true;
-    if (state.crashed || state.awaitingSince || state.workingSince || state.done || state.delegates) {
+    if (state.crashed || state.awaitingSince || state.workingSince || state.done || state.delegates || state.background) {
       next[id] = state;
     }
   }
@@ -345,11 +355,11 @@ export function useSessionAgentState(
 
   // Republish when the mirror itself changes — between transitions the stream
   // says nothing, so a refetch is where a cold reader's state arrives. Keyed
-  // on only the fields mirroredWorking() reads, so an unrelated list refresh
+  // on only the fields mirrored() reads, so an unrelated list refresh
   // (a rename, a new summary) doesn't re-render every card.
   const mirrorKey = sessions
     .map((s) =>
-      [s.id, s.activity, s.agent_state?.state, s.agent_state?.label, s.agent_state?.since].join(
+      [s.id, s.activity, s.agent_state?.state, s.agent_state?.label, s.agent_state?.since, s.agent_state?.background].join(
         "\u0001",
       ),
     )

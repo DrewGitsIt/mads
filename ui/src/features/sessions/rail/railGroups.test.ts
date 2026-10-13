@@ -63,6 +63,27 @@ describe("statusOf", () => {
   const TURN_START = "2026-07-01T00:00:00Z";
   const DURING = Date.parse(TURN_START) + 60_000;
 
+  it("says what an otherwise idle session is waiting on — calm, not Idle", () => {
+    const session = makeSession({ activity: "active" });
+    expect(statusOf(session, makeAgentState({ background: 1 }), idle, DURING)).toMatchObject({
+      kind: "idle",
+      tone: "idle",
+      label: "Waiting on 1 process",
+    });
+    expect(statusOf(session, makeAgentState({ background: 2 }), idle, DURING).label).toBe("Waiting on 2 processes");
+    expect(statusOf(session, makeAgentState({ background: 1, done: true }), idle, DURING)).toMatchObject({
+      kind: "done",
+      label: "Done · waiting on 1 process",
+    });
+    // Work in flight, or a subagent, still owns the line.
+    const busy = makeAgentState({ background: 1, workingSince: TURN_START });
+    expect(statusOf(session, busy, idle, DURING).kind).toBe("working");
+    expect(statusOf(session, makeAgentState({ background: 1, subagents: 1 }), idle, DURING).kind).toBe("delegating");
+    // Asleep, its processes went with its child.
+    const asleep = makeSession({ activity: "inactive" });
+    expect(statusOf(asleep, makeAgentState({ background: 1 }), idle, DURING).label).toBe("Idle");
+  });
+
   it("reads delegates still running after the turn as busy — never plain Idle", () => {
     const session = makeSession({ activity: "active" });
     const state = makeAgentState({ subagents: 2, blockingSubagents: 0, subagentsSince: TURN_START });

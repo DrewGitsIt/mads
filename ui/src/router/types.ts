@@ -122,6 +122,13 @@ export interface AgentState {
    * driven off it spans the whole turn rather than resetting per tool.
    */
   since: string;
+  /**
+   * How many background processes the agent started are still running (a
+   * run_in_background Bash call, a Monitor watch — never subagents).
+   * Independent of `state`: once the turn ends it is what tells "waiting on
+   * a process" apart from idle. Absent means none.
+   */
+  background?: number;
 }
 
 export interface WorkspaceRepo {

@@ -70,6 +70,12 @@ export interface SessionAgentState {
   label?: string;
   /** Sticky: a turn ended and the session hasn't been opened since. */
   done?: boolean;
+  /**
+   * Background processes the agent started that are still running (a
+   * run_in_background Bash call, a Monitor watch — never subagents). Absent
+   * means none.
+   */
+  background?: number;
 }
 
 export const EMPTY_AGENT_STATE: SessionAgentState = { subagents: 0 };
@@ -216,6 +222,16 @@ export function statusOf(
     };
   }
   const dot = dotState(session, breakdown);
+  if (state.background && session.activity === "active") {
+    // The turn is over but a process it started isn't: not idle, though
+    // nothing is being worked on either — so the calm idle kind (its clock
+    // mark fits) with words that say what it is waiting for. An unseen turn
+    // end still leads, as it does for subagents.
+    const processes = `${state.background} ${state.background === 1 ? "process" : "processes"}`;
+    return state.done
+      ? { kind: "done", tone: "done", dot, label: `Done · waiting on ${processes}` }
+      : { kind: "idle", tone: "idle", dot, label: `Waiting on ${processes}` };
+  }
   // Still gated on an active session. `done` is sticky until the card is
   // opened, so on a session whose child has since gone it is reporting a turn
   // that ended in some earlier life of the process — "your turn" overstates
