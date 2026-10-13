@@ -19,7 +19,6 @@ import { MentionMenu, mentionOptionId } from "./MentionMenu";
 import { CommandCardHost, CommandNotice } from "./CommandCardHost";
 import {
   COMMANDS,
-  argHintFor,
   availability,
   findCommand,
   parseCommandLine,
@@ -158,7 +157,8 @@ export interface ComposerProps {
  * `#` skills insert their name as text the same way but never stage a chip.
  * `/` resolves only the command registry (commands/registry.ts): a command
  * with a submenu ("/agent", "/model") descends to a second level, one that
- * takes args inserts "/name " to type them, and the rest run on select.
+ * needs args (/task) inserts "/name " to type them, and the rest run on
+ * Enter or click. Tab only completes "/name ", so optional args can follow.
  * Sending a line that starts with a registered "/name" runs that command
  * instead of sending text; an unknown "/word" still goes to the agent.
  * Commands never write to the transcript — their results are toasts or a
@@ -346,9 +346,18 @@ export function Composer({
     });
   }
 
-  function selectCandidate(candidate: MentionCandidate) {
+  // "accept" (Enter, click) runs a command row when it can run as-is;
+  // "complete" (Tab) only writes "/name " so args can follow — then Enter
+  // sends the line, args and all.
+  function selectCandidate(
+    candidate: MentionCandidate,
+    mode: "accept" | "complete" = "accept",
+  ) {
     if (!trigger) return;
-    if (candidate.kind === "command" || candidate.kind === "command-option") {
+    if (
+      mode === "accept" &&
+      (candidate.kind === "command" || candidate.kind === "command-option")
+    ) {
       const command =
         candidate.command &&
         findCommand(candidate.command, commandCtx, commands);
@@ -370,12 +379,12 @@ export function Composer({
         else showNotice(candidate.disabledReason);
         return;
       }
-      if (!command.options && !argHintFor(command, commandCtx)) {
+      if (!command.options && !command.argRequired) {
         runCommand(command, { args: "" }, range);
         return;
       }
       // Otherwise insert "/name " below: that descends to the submenu, or
-      // leaves the caret where the command's args go.
+      // leaves the caret where the required args go.
     }
     const before = value.slice(0, trigger.start);
     const after = value.slice(cursor);
@@ -530,9 +539,10 @@ export function Composer({
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
+        const mode = e.key === "Tab" ? "complete" : "accept";
         if (sameTrigger(candidatesFor, trigger)) {
           const candidate = candidates[activeIndex];
-          if (candidate) selectCandidate(candidate);
+          if (candidate) selectCandidate(candidate, mode);
           return;
         }
         // The rows lag the text by the resolver's debounce: "/c", a pause,
@@ -548,7 +558,7 @@ export function Composer({
           commandCandidates(trigger.query, commandCtx, commands).find(
             (c) => c.command === exact.name,
           );
-        if (row) selectCandidate(row);
+        if (row) selectCandidate(row, mode);
         return;
       }
     }

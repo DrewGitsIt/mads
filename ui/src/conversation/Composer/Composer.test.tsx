@@ -1220,6 +1220,67 @@ describe("Composer", () => {
       expect(sendMessage).not.toHaveBeenCalled();
     });
 
+    it("Enter runs an optional-args command at once; Tab completes '/name ' for args, then Enter runs with them", async () => {
+      const client = new FakeRouterClient();
+      const ran = vi.fn();
+      const commands: CommandDescriptor[] = [
+        {
+          name: "compact",
+          description: "Compact the conversation",
+          argHint: "[focus]",
+          execute: ran,
+        },
+        {
+          name: "task",
+          description: "Create a task",
+          argHint: "<title>",
+          argRequired: "/task needs a title",
+          execute: ran,
+        },
+      ];
+      render(
+        <Composer
+          routerClient={client}
+          sessionId="session-active"
+          commands={commands}
+        />,
+      );
+      const textarea = screen.getByPlaceholderText(
+        /Message the agent/,
+      ) as HTMLTextAreaElement;
+
+      fireEvent.change(textarea, { target: { value: "/compact" } });
+      await waitFor(() =>
+        menu().getByRole("option", { name: /^\/compact/ }),
+      );
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(ran).toHaveBeenCalledWith({ args: "" }, expect.anything());
+      expect(textarea.value).toBe("");
+
+      fireEvent.change(textarea, { target: { value: "/c" } });
+      await waitFor(() =>
+        menu().getByRole("option", { name: /^\/compact/ }),
+      );
+      fireEvent.keyDown(textarea, { key: "Tab" });
+      expect(textarea.value).toBe("/compact ");
+      expect(ran).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull());
+
+      fireEvent.change(textarea, { target: { value: "/compact keep the API notes" } });
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(ran).toHaveBeenLastCalledWith(
+        { args: "keep the API notes" },
+        expect.anything(),
+      );
+
+      // A required arg still inserts on Enter rather than refusing.
+      fireEvent.change(textarea, { target: { value: "/task" } });
+      await waitFor(() => menu().getByRole("option", { name: /^\/task/ }));
+      fireEvent.keyDown(textarea, { key: "Enter" });
+      expect(textarea.value).toBe("/task ");
+      expect(ran).toHaveBeenCalledTimes(2);
+    });
+
     it("a runsWhenUnavailable command stays disabled in the menu but typed + Enter runs it", async () => {
       const client = new FakeRouterClient();
       const ran = vi.fn();

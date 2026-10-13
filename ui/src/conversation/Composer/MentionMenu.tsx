@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Panel, PanelBody } from "../../components/Panel/Panel";
 import { Chip } from "../../components/Chip/Chip";
 import type { MentionCandidate } from "./useMentionResolver";
@@ -25,6 +26,15 @@ export function MentionMenu({
   activeIndex,
   onSelect,
 }: MentionMenuProps) {
+  // Keyboard selection can leave the visible area — keep it in view.
+  const activeId = candidates[activeIndex]?.id;
+  useEffect(() => {
+    if (activeId === undefined) return;
+    document
+      .getElementById(mentionOptionId(activeId))
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [activeId]);
+
   if (candidates.length === 0) return null;
 
   // Level-2 candidates (a command's options) all share a `group` — breadcrumb
