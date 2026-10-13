@@ -156,9 +156,13 @@ type Event struct {
 // BackgroundTask is one running background process in EventBackground.
 type BackgroundTask struct {
 	TaskID string `json:"task_id"`
-	// ToolUseID is the call that started it; empty until the harness says.
-	ToolUseID   string `json:"tool_use_id,omitempty"`
-	Description string `json:"description,omitempty"`
+	// ToolUseID is the call that started it.
+	ToolUseID string `json:"tool_use_id,omitempty"`
+	// ParentToolUseID is set when a subagent started it: the subagent's
+	// spawning call, as on its parent-tagged events. ToolUseID is then a
+	// call in that subagent's own stream, not the main conversation.
+	ParentToolUseID string `json:"parent_tool_use_id,omitempty"`
+	Description     string `json:"description,omitempty"`
 	// StartedAt is when the provider first saw it running.
 	StartedAt time.Time `json:"started_at"`
 }

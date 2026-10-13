@@ -605,7 +605,8 @@ func TestAgentStateCountsBackgroundProcesses(t *testing.T) {
 
 	r.markAgentWorking("")
 	r.markAgentIdle()
-	two := []provider.BackgroundTask{{TaskID: "b1"}, {TaskID: "b2"}}
+	// A subagent's own process (b3) is never counted.
+	two := []provider.BackgroundTask{{TaskID: "b1"}, {TaskID: "b2"}, {TaskID: "b3", ParentToolUseID: "toolu_agent"}}
 	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two}
 	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two} // unchanged: nothing new
 	sess.events <- provider.Event{Kind: provider.EventBackground, Background: two[:1]}

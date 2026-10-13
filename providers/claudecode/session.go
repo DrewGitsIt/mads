@@ -162,11 +162,18 @@ type streamSession struct {
 	hasAgentFile func(ref, taskID string) bool
 	// background is the running background processes that aren't
 	// subagents, as EventBackground reports them: membership from the
-	// roster, the starting call from task_started (bgCalls, which can
-	// arrive on either side of the roster that names the task; never
-	// pruned, like agentTasks).
+	// latest roster (bgRoster), who started it from task_started (bgCalls,
+	// which can arrive on either side of the roster that names the task;
+	// never pruned, like agentTasks). A task is held back until its
+	// task_started says whose it is — the roster alone can't tell a
+	// subagent's process from the main agent's, and the line follows the
+	// roster immediately. A subagent's calls (sideCalls: tool_use id →
+	// spawning call, dropped once a task_started claims one) say which
+	// subagent a process belongs to.
 	background []provider.BackgroundTask
-	bgCalls    map[string]string
+	bgRoster   []wireRosterTask
+	bgCalls    map[string]bgCall
+	sideCalls  map[string]string
 	// windows is each model's context window as the latest result line's
 	// modelUsage reports it, keyed by model id with any "[1m]"-style suffix
 	// stripped: a subagent's own lines name its model but never its window.
@@ -331,46 +338,72 @@ func (s *streamSession) handleLine(raw []byte) {
 	}
 }
 
-// noteBackground folds a roster or task_started line into the running
-// background processes, returning a copy of the list when it changed. A
-// process's clock starts when the roster first names it. Caller holds s.mu.
+// bgCall is what a background task's task_started line says: the call that
+// started it and, for a subagent's process, that subagent's spawning call.
+type bgCall struct {
+	toolUseID string
+	parent    string
+	owned     bool
+}
+
+// noteBackground folds a roster, a task_started or a subagent's assistant
+// line into the running background processes, returning a copy of the list
+// when it changed. A process's clock starts when it is first listed. Caller
+// holds s.mu.
 func (s *streamSession) noteBackground(l *wireLine, now time.Time) ([]provider.BackgroundTask, bool) {
-	changed := false
 	switch {
 	case l.Type == "system" && l.Subtype == "background_tasks_changed":
-		var next []provider.BackgroundTask
+		s.bgRoster = s.bgRoster[:0]
 		for _, t := range l.Tasks {
-			if t.TaskID == "" || t.isAgent() {
-				continue
+			if t.TaskID != "" && !t.isAgent() {
+				s.bgRoster = append(s.bgRoster, t)
 			}
-			i := slices.IndexFunc(s.background, func(b provider.BackgroundTask) bool { return b.TaskID == t.TaskID })
-			if i >= 0 {
-				next = append(next, s.background[i])
-				continue
-			}
-			next = append(next, provider.BackgroundTask{
-				TaskID: t.TaskID, ToolUseID: s.bgCalls[t.TaskID], Description: t.Description, StartedAt: now,
-			})
-			changed = true
 		}
-		changed = changed || len(next) != len(s.background)
-		s.background = next
 	case l.Subtype == "task_started" && !l.isAgentTask() && l.ToolUseID != "":
 		if s.bgCalls == nil {
-			s.bgCalls = map[string]string{}
+			s.bgCalls = map[string]bgCall{}
 		}
-		s.bgCalls[l.TaskID] = l.ToolUseID
-		for i := range s.background {
-			if s.background[i].TaskID == l.TaskID && s.background[i].ToolUseID == "" {
-				s.background[i].ToolUseID = l.ToolUseID
-				changed = true
+		c := bgCall{toolUseID: l.ToolUseID, owned: l.OwnedBySubagent}
+		if c.owned {
+			c.parent = s.sideCalls[l.ToolUseID]
+		}
+		delete(s.sideCalls, l.ToolUseID)
+		s.bgCalls[l.TaskID] = c
+	case l.Type == "assistant" && l.ParentToolUseID != "":
+		for _, b := range l.Message.blocks() {
+			if b.Type == "tool_use" && b.ID != "" {
+				if s.sideCalls == nil {
+					s.sideCalls = map[string]string{}
+				}
+				s.sideCalls[b.ID] = l.ParentToolUseID
 			}
 		}
-	}
-	if !changed {
+		return nil, false
+	default:
 		return nil, false
 	}
-	return slices.Clone(s.background), true
+
+	var next []provider.BackgroundTask
+	for _, t := range s.bgRoster {
+		c, ok := s.bgCalls[t.TaskID]
+		if !ok || (c.owned && c.parent == "") {
+			// Not yet known whose it is; or a subagent's we can't place,
+			// which is at least not the main agent's.
+			continue
+		}
+		b := provider.BackgroundTask{
+			TaskID: t.TaskID, ToolUseID: c.toolUseID, ParentToolUseID: c.parent, Description: t.Description, StartedAt: now,
+		}
+		if i := slices.IndexFunc(s.background, func(o provider.BackgroundTask) bool { return o.TaskID == t.TaskID }); i >= 0 {
+			b.StartedAt = s.background[i].StartedAt
+		}
+		next = append(next, b)
+	}
+	if slices.Equal(next, s.background) {
+		return nil, false
+	}
+	s.background = next
+	return slices.Clone(next), true
 }
 
 // isOtherTask reports whether l is a task-lifecycle line for a background

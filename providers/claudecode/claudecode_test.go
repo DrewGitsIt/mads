@@ -1408,9 +1408,9 @@ func TestStreamSessionBackgroundList(t *testing.T) {
 		}
 		got = append(got, "["+strings.Join(ids, " ")+"]")
 	}
-	want := "[bisir4ftf@]," +
-		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp]," +
-		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp bratvqqsq@]," +
+	// Each task waits for its task_started (the line after the roster that
+	// first names it), so no list ever holds one whose owner is unknown.
+	want := "[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp]," +
 		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp bratvqqsq@toolu_01SiRgsByfdBLjWndxgHUAdS]," +
 		"[bisir4ftf@toolu_01Yc82wUcCqUAjD8qJb9NRQp]," +
 		"[]"
@@ -1423,6 +1423,33 @@ func TestStreamSessionBackgroundList(t *testing.T) {
 		if ev.Kind == provider.EventBackground {
 			t.Errorf("subagent capture produced a background list: %+v", ev.Background)
 		}
+	}
+}
+
+// A background Bash a subagent starts is listed under that subagent — its
+// task_started says owned_by_subagent, and the subagent's own tool_use line
+// (tagged with the spawning call) says which — never as the main agent's.
+// Captured with claude-code 2.1.285: the main agent runs `sleep 40` in the
+// background, then a foreground subagent runs `sleep 25` in the background.
+func TestStreamSessionSubagentBackgroundOwned(t *testing.T) {
+	const (
+		mainBash = "bstcpqzwz@toolu_01D8vQubXbL3MneiQR88Pii7@"
+		subBash  = "b5iw9qoqf@toolu_01GtEqQ4gajwFMBjSm4UNizv@toolu_01Dhf83pCqpUcuTK9ZNTyyar"
+	)
+	var got []string
+	for _, ev := range streamFixtureEvents(t, "stream-task-subagent-bash.jsonl") {
+		if ev.Kind != provider.EventBackground {
+			continue
+		}
+		var ids []string
+		for _, b := range ev.Background {
+			ids = append(ids, b.TaskID+"@"+b.ToolUseID+"@"+b.ParentToolUseID)
+		}
+		got = append(got, "["+strings.Join(ids, " ")+"]")
+	}
+	want := "[" + mainBash + "],[" + mainBash + " " + subBash + "],[" + mainBash + "],[]"
+	if g := strings.Join(got, ","); g != want {
+		t.Errorf("background lists =\n%s\nwant\n%s", g, want)
 	}
 }
 

@@ -385,7 +385,14 @@ What this means:
   against; mads currently drops it as bookkeeping (`wire.go:437`).
 - A late finish's `result` carries
   `origin:{kind:"task-notification",producer:"session-task"}`.
-- Nested `local_bash` tasks run by a delegate carry `owned_by_subagent: true`.
+- Nested `local_bash` tasks run by a delegate carry `owned_by_subagent: true`
+  — on `task_started` only, never on the roster or the later phases
+  (claude-code 2.1.285, `testdata/stream-task-subagent-bash.jsonl`). The
+  roster names a task one line before its `task_started`, so the background
+  list holds each task back until that line says whose it is; the
+  delegate's own `tool_use` line (tagged with its spawn id) says which
+  delegate. Its `tool_use_id` is a call in the delegate's stream, so it has
+  no card in the parent's.
 - Import consequence: continuing an imported conversation forks it, so the
   parent's old delegates can't be relayed to afterwards. They can still be
   read and synthetically forked.

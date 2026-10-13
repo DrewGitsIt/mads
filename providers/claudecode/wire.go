@@ -55,17 +55,21 @@ type wireLine struct {
 	// subagent, "local_bash" for a run_in_background Bash call — verified
 	// against claude-code 2.1.290, testdata/stream-task-bash.jsonl) and rides
 	// task_started only; the later phases carry just the task_id.
-	TaskType       string         `json:"task_type"`
-	TaskID         string         `json:"task_id"`
-	ToolUseID      string         `json:"tool_use_id"`
-	Description    string         `json:"description"`
-	Prompt         string         `json:"prompt"`
-	IsBackgrounded bool           `json:"is_backgrounded"`
-	SpawnDepth     int            `json:"spawn_depth"`
-	LastToolName   string         `json:"last_tool_name"`
-	Summary        string         `json:"summary"`
-	OutputFile     string         `json:"output_file"`
-	Patch          *wireTaskPatch `json:"patch"`
+	TaskType       string `json:"task_type"`
+	TaskID         string `json:"task_id"`
+	ToolUseID      string `json:"tool_use_id"`
+	Description    string `json:"description"`
+	Prompt         string `json:"prompt"`
+	IsBackgrounded bool   `json:"is_backgrounded"`
+	// OwnedBySubagent marks a background task a subagent started. Only
+	// task_started carries it (never the roster or the later phases), and
+	// only when true — verified against claude-code 2.1.285.
+	OwnedBySubagent bool           `json:"owned_by_subagent"`
+	SpawnDepth      int            `json:"spawn_depth"`
+	LastToolName    string         `json:"last_tool_name"`
+	Summary         string         `json:"summary"`
+	OutputFile      string         `json:"output_file"`
+	Patch           *wireTaskPatch `json:"patch"`
 	// Tasks is a "background_tasks_changed" line's roster: every background
 	// task still running, subagents and background Bash alike.
 	Tasks []wireRosterTask `json:"tasks"`

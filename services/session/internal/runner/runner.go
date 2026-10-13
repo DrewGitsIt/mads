@@ -1782,7 +1782,7 @@ func (r *Runner) pump(sess provider.Session) {
 		r.synthEngine.OnEvent(ev)
 		r.digest.recordEvent(ev)
 		if ev.Kind == provider.EventBackground {
-			r.setAgentBackground(len(ev.Background))
+			r.setAgentBackground(mainAgentBackground(ev.Background))
 		}
 		r.hub.broadcast(ev)
 	}

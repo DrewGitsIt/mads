@@ -143,6 +143,18 @@ func (r *Runner) setAgentBackground(n int) {
 	r.emitAgentStateLocked(time.Now())
 }
 
+// mainAgentBackground counts the processes the main agent itself started: a
+// subagent's are its own business, and while it runs the rail says so.
+func mainAgentBackground(bs []provider.BackgroundTask) int {
+	n := 0
+	for _, b := range bs {
+		if b.ParentToolUseID == "" {
+			n++
+		}
+	}
+	return n
+}
+
 // clearBackground ends every background process's report when the harness
 // process that ran them is gone: the live list a viewer sees and the count
 // on the agent state.
