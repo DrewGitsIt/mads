@@ -20,7 +20,6 @@ import {
   RAIL_FILTERS,
   filterBucketOf,
   asideDemandsAttention,
-  isEarlier,
   isSetAside,
   mostUrgentBucket,
   statusOf,
@@ -42,7 +41,7 @@ import {
   scopeSuggestions,
 } from "./railSearch";
 import type { MatchReason, SearchMatch } from "./railSearch";
-import { useSettledRailOrder } from "./railOrder";
+import { activeOrder, doneOrder, rankBetween, useRailRanks } from "./railOrder";
 import { useUnseenSessions } from "./railUnseen";
 import {
   EMPTY_LABEL_CONTEXT,
@@ -101,11 +100,18 @@ export interface SessionRailProps {
   onSleep?: (session: Session) => void;
   onDelete?: (id: string) => void;
   /**
-   * Set a session aside, or bring it back. Not a lifecycle action — nothing
-   * about the running session changes — which is why it sits beside Archive
-   * rather than beside Sleep.
+   * The ✓: check a session off into Done (which also puts its agent to
+   * sleep), or bring it back to the top of the active list. `working` is the
+   * rail's read of the session mid-turn, so the owner can ask before stopping
+   * it (useSessionSleep.requestDone).
    */
-  onSetAside?: (id: string, aside: boolean) => void;
+  onSetDone?: (session: Session, done: boolean, working: boolean) => void;
+  /**
+   * Persist a drag: the session's new rank in the active list
+   * (Session.rail_rank). The rail shows the move at once and reverts it if
+   * this rejects. Absent, the grip is not offered.
+   */
+  onMove?: (id: string, rank: number) => Promise<unknown>;
   /** Linked sessions (flag-gated): every link touching a visible session, deduped. */
   links?: Link[];
   /**
@@ -128,14 +134,6 @@ export interface SessionRailProps {
    * pre-load one. Absent, a non-empty list counts as loaded.
    */
   sessionsLoaded?: boolean;
-  /**
-   * Opaque stamp of an externally-driven search query, folded together with
-   * the rail's own omni-search box. Any change to either is a quiet boundary:
-   * the pending order applies at once, because a list the user just asked for
-   * has nothing to hold still. (The filter chips below are NOT a boundary —
-   * they narrow the order in place, they never re-rank it.)
-   */
-  filterKey?: string;
   className?: string;
   /**
    * Settings' "Expose subagents in session list": each session's delegates
@@ -156,6 +154,50 @@ interface LinkModeState {
   selectedIds: Set<string>;
 }
 
+/** How many Done rows show before "Show N more". */
+const DONE_PREVIEW = 5;
+
+/** localStorage key: whether the Done list is open ("0" = collapsed). A view preference, so local. */
+export const DONE_OPEN_KEY = "mads.sessionRail.doneOpen";
+
+/** The Done list's open state, remembered across reloads. Open unless the user closed it. */
+function useDoneOpen(): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(DONE_OPEN_KEY) !== "0";
+    } catch {
+      return true;
+    }
+  });
+  return [
+    open,
+    (next) => {
+      setOpen(next);
+      try {
+        localStorage.setItem(DONE_OPEN_KEY, next ? "1" : "0");
+      } catch {
+        // Storage blocked: the choice just won't survive a reload.
+      }
+    },
+  ];
+}
+
+type DropSide = "before" | "after";
+
+/** A drag in flight: the card being moved, and the slot it is over. */
+interface DragState {
+  id: string;
+  over?: string;
+  side?: DropSide;
+}
+
+/** The holder card's grip, while the active list can be reordered. */
+interface GripProps {
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+}
+
 export function SessionRail({
   sessions,
   openTaskCounts,
@@ -164,13 +206,13 @@ export function SessionRail({
   onSelect,
   onSleep,
   onDelete,
-  onSetAside,
+  onSetDone,
+  onMove,
   links = [],
   workspaces = [],
   agents = [],
   routerClient = router,
   sessionsLoaded,
-  filterKey,
   className,
   showDelegates = true,
   delegateFadeMs,
@@ -188,20 +230,15 @@ export function SessionRail({
   const [query, setQuery] = useState("");
   const railRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  // Order is settled, never live: see useSettledRailOrder for the contract.
-  // The search box is a settle boundary in its own right, so its text rides
-  // in the same opaque stamp as the caller's (NUL-joined, which neither can
-  // contain, so two different pairs can never collide into one stamp).
-  const { sessions: ordered, pendingMoves, settle, railHandlers } = useSettledRailOrder(
-    sessions,
-    selectedId,
-    `${filterKey ?? ""}\u0000${query}`,
-  );
+  // The user's order, never a live one: see railOrder.ts.
+  const { rankOf, setRank } = useRailRanks(sessions, onMove);
+  const ordered = activeOrder(sessions, rankOf);
   const { isUnseen, markSeen } = useUnseenSessions(sessions, selectedId, sessionsLoaded);
   const now = useRelativeNow();
   const [filter, setFilter] = useState<RailFilter>("all");
-  const [earlierOpen, setEarlierOpen] = useState(false);
-  const [asideOpen, setAsideOpen] = useState(false);
+  const [doneOpen, setDoneOpen] = useDoneOpen();
+  const [doneShowAll, setDoneShowAll] = useState(false);
+  const [drag, setDrag] = useState<DragState>();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
   const [linkMode, setLinkMode] = useState<LinkModeState>();
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -216,8 +253,7 @@ export function SessionRail({
   const wsIndex = workspaceIndex(workspaces);
 
   // Search bypasses the view entirely: it runs over every row the rail holds,
-  // including the ones folded into the collapsed "Earlier" tail and everything
-  // below the fold. A search that only searched what was rendered would be
+  // the Done list included, capped or collapsed. A search that only searched what was rendered would be
   // worse than useless.
   const terms = parseSearchQuery(query);
   const searching = terms.length > 0;
@@ -237,8 +273,8 @@ export function SessionRail({
   });
   // The one sanctioned reorder: relevance while a query is live, because the
   // user asked for it by typing. `resting` is the settled index, so ties break
-  // by recency and clearing the field drops straight back to it — the settled
-  // order itself is never touched.
+  // by the user's order and clearing the field drops straight back to it —
+  // the order itself is never touched.
   const rows = searching
     ? [...ranked].sort((a, b) => a.rank - b.rank || a.resting - b.resting).map((r) => r.row)
     : allRows;
@@ -277,37 +313,59 @@ export function SessionRail({
     agents: agentIndex(agents),
   };
 
-  // Three destinations, in priority order: a card the user set aside goes to
-  // its own fold unless it currently needs them, a card that has been quiet
-  // for a day goes to "Earlier", everything else stays in the list.
+  // Two lists: the active one, in the user's order, and Done. A card the user
+  // checked off goes to Done unless it currently needs them — then it sits in
+  // the active list, at its own rank, until it doesn't.
   //
-  // Aside is checked on the HOLDER only. A linked group is one card with its
-  // subjects drawn under it (railLinks.ts), so setting a leader aside takes
+  // Done is checked on the HOLDER only. A linked group is one card with its
+  // subjects drawn under it (railLinks.ts), so checking off a leader takes
   // the connector and its subjects with it — splitting a group across two
-  // folds would leave arrows pointing at nothing.
-  const head: RailRow[] = [];
-  const earlier: RailRow[] = [];
-  const aside: RailRow[] = [];
+  // lists would leave arrows pointing at nothing.
+  const active: RailRow[] = [];
+  const done: RailRow[] = [];
   for (const row of visible) {
     // The group-aware bucket, so a parked subject pulls its whole group back
-    // out of the fold — the same reason the filter chips count a holder by its
+    // out of Done — the same reason the filter chips count a holder by its
     // most urgent member.
     const bucket = bucketByRowId.get(row.session.id) ?? "idle";
-    if (isSetAside(row.session) && !asideDemandsAttention(bucket)) {
-      aside.push(row);
-    } else if (isEarlier(row.session, now)) {
-      earlier.push(row);
-    } else {
-      head.push(row);
-    }
+    if (isSetAside(row.session) && !asideDemandsAttention(bucket)) done.push(row);
+    else active.push(row);
   }
-  // A tail needs a head. With nothing recent above it, the fold would hide the
-  // entire rail behind one line, so the whole list just renders. While a query
-  // is live there is no fold at all: every hit is a result — including the
-  // ones the user set aside, which is the whole point of going looking.
-  const listRows = searching ? visible : head.length > 0 ? head : earlier;
-  const tailRows = searching || head.length === 0 ? [] : earlier;
-  const asideRows = searching ? [] : aside;
+  // While a query is live there is one list: every hit is a result —
+  // including the ones checked off, which is the whole point of going looking.
+  const listRows = searching ? visible : active;
+  const doneRows = searching ? [] : doneOrder(done, (row) => row.session);
+  const shownDone = doneShowAll ? doneRows : doneRows.slice(0, DONE_PREVIEW);
+
+  // Reordering is a gesture on the whole active list, so it is only offered
+  // while the whole list is what's showing: a drop between two of a filter's
+  // survivors would land somewhere among cards the user can't see.
+  const canReorder = Boolean(onMove) && !searching && filter === "all" && !linkMode;
+
+  /** Move an active row to `index` in the active list as it would read without it. */
+  function moveRow(id: string, index: number) {
+    const from = active.findIndex((row) => row.session.id === id);
+    if (from < 0) return;
+    const rest = active.filter((row) => row.session.id !== id);
+    const to = Math.max(0, Math.min(index, rest.length));
+    if (to === from) return;
+    const above = rest[to - 1]?.session;
+    const below = rest[to]?.session;
+    setRank(
+      active[from].session,
+      rankBetween(above && rankOf(above), below && rankOf(below)),
+    );
+  }
+
+  function dropOn(targetId: string, where: DropSide) {
+    const dragged = drag?.id;
+    setDrag(undefined);
+    if (!dragged || dragged === targetId) return;
+    const rest = active.filter((row) => row.session.id !== dragged);
+    const at = rest.findIndex((row) => row.session.id === targetId);
+    if (at < 0) return;
+    moveRow(dragged, at + (where === "after" ? 1 : 0));
+  }
 
   function startLinkMode(id: string) {
     setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
@@ -361,6 +419,17 @@ export function SessionRail({
   function walkResults(event: React.KeyboardEvent<HTMLElement>) {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const target = event.target as HTMLElement;
+    // ⌥↑ / ⌥↓ on a card: the grip's keyboard equivalent. Focus stays on the
+    // card, which keeps its element (and so its focus) across the re-sort.
+    if (event.altKey) {
+      const id = target.dataset?.railCard !== undefined ? target.dataset.railId : undefined;
+      if (!canReorder || !id) return;
+      const from = active.findIndex((row) => row.session.id === id);
+      if (from < 0) return;
+      event.preventDefault();
+      moveRow(id, from + (event.key === "ArrowDown" ? 1 : -1));
+      return;
+    }
     const fromSearch = target === searchRef.current;
     if (!fromSearch && target.dataset?.railCard === undefined) return;
     const cards = [...(railRef.current?.querySelectorAll<HTMLElement>("[data-rail-card]") ?? [])];
@@ -394,12 +463,11 @@ export function SessionRail({
   }
 
   // The delete dialog's copy is about one session, so it needs the record and
-  // not just the id — including for a row inside the collapsed "Earlier" tail
-  // or nested under a link, which is why this reads the unfiltered list.
+  // not just the id — including for a row in the Done list or nested under a
+  // link, which is why this reads the unfiltered list.
   const deleteTarget = sessions.find((s) => s.id === confirmDeleteId);
 
-  // Shared by the main list and the "Earlier" tail — the two render identical
-  // cards, they only differ in whether the fold is hiding them.
+  // Shared by the active list and Done — the two render identical cards.
   const rowProps = {
     openTaskCounts,
     agentStates,
@@ -411,7 +479,8 @@ export function SessionRail({
     onSeen: markSeen,
     onSelect,
     onSleep,
-    onSetAside,
+    onSetDone,
+    bucketOf,
     onDeleteRequest: setConfirmDeleteId,
     onUnlinkRequest: setUnlinkTarget,
     linkedSessionsEnabled,
@@ -432,17 +501,7 @@ export function SessionRail({
       className={[styles.rail, className].filter(Boolean).join(" ")}
       aria-label="Session list"
       onKeyDown={walkResults}
-      {...railHandlers}
     >
-      {pendingMoves > 0 && (
-        <button type="button" className={styles.pendingGhost} onClick={settle}>
-          <span className={styles.pendingArrow} aria-hidden="true">
-            ↑
-          </span>
-          {pendingMoves === 1 ? "1 session moved" : `${pendingMoves} sessions moved`}
-          <span className={styles.pendingHint}>— click to reorder</span>
-        </button>
-      )}
       {linkedSessionsEnabled && linkMode && (
         <div className={styles.linkBar}>
           <span className={styles.linkBarCount}>{linkMode.selectedIds.size} selected</span>
@@ -525,10 +584,43 @@ export function SessionRail({
           </button>
         ))}
       </div>
-      <div className={styles.list}>
-        {listRows.map((row) => (
-          <RailRowGroup key={row.session.id} row={row} {...rowProps} />
-        ))}
+      <div className={styles.list} data-rail-list="active">
+        {listRows.map((row) =>
+          canReorder ? (
+            <div
+              key={row.session.id}
+              className={styles.dropSlot}
+              data-drop={drag?.over === row.session.id ? drag.side : undefined}
+              onDragOver={(e) => {
+                if (!drag) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                const rect = e.currentTarget.getBoundingClientRect();
+                const side: DropSide = e.clientY < rect.top + rect.height / 2 ? "before" : "after";
+                if (drag.over !== row.session.id || drag.side !== side) {
+                  setDrag({ ...drag, over: row.session.id, side });
+                }
+              }}
+              onDrop={(e) => {
+                if (!drag) return;
+                e.preventDefault();
+                dropOn(row.session.id, drag.side ?? "before");
+              }}
+            >
+              <RailRowGroup
+                row={row}
+                {...rowProps}
+                grip={{
+                  dragging: drag?.id === row.session.id,
+                  onDragStart: () => setDrag({ id: row.session.id }),
+                  onDragEnd: () => setDrag(undefined),
+                }}
+              />
+            </div>
+          ) : (
+            <RailRowGroup key={row.session.id} row={row} {...rowProps} />
+          ),
+        )}
         {visible.length === 0 && (
           <div className={styles.emptyNote}>
             {searching
@@ -537,39 +629,32 @@ export function SessionRail({
           </div>
         )}
       </div>
-      {asideRows.length > 0 && (
-        <div className={styles.list}>
-          {/* Its own fold rather than a second door into "Earlier": the two
-              tails mean different things — I decided this, versus time decided
-              this — and only one of them is a list worth scanning on purpose. */}
+      {doneRows.length > 0 && (
+        <div className={[styles.list, styles.doneList].join(" ")} data-rail-list="done">
+          {/* Open by default and remembered: Done is a list worth scanning on
+              purpose, so a fold that hid it every visit worked against that.
+              The cap is what keeps it from burying the rail over time. */}
           <button
             type="button"
-            className={styles.earlierToggle}
-            aria-expanded={asideOpen}
-            onClick={() => setAsideOpen((open) => !open)}
+            className={styles.sectionToggle}
+            aria-expanded={doneOpen}
+            onClick={() => setDoneOpen(!doneOpen)}
           >
-            <span aria-hidden="true">{asideOpen ? "▾" : "▸"}</span>
-            Set aside
-            <span className={styles.earlierCount}>· {asideRows.length}</span>
+            <span aria-hidden="true">{doneOpen ? "▾" : "▸"}</span>
+            Done
+            <span className={styles.sectionCount}>· {doneRows.length}</span>
           </button>
-          {asideOpen &&
-            asideRows.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
-        </div>
-      )}
-      {tailRows.length > 0 && (
-        <div className={styles.list}>
-          <button
-            type="button"
-            className={styles.earlierToggle}
-            aria-expanded={earlierOpen}
-            onClick={() => setEarlierOpen((open) => !open)}
-          >
-            <span aria-hidden="true">{earlierOpen ? "▾" : "▸"}</span>
-            Earlier
-            <span className={styles.earlierCount}>· {tailRows.length}</span>
-          </button>
-          {earlierOpen &&
-            tailRows.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
+          {doneOpen &&
+            shownDone.map((row) => <RailRowGroup key={row.session.id} row={row} {...rowProps} />)}
+          {doneOpen && doneRows.length > DONE_PREVIEW && (
+            <button
+              type="button"
+              className={styles.showMore}
+              onClick={() => setDoneShowAll(!doneShowAll)}
+            >
+              {doneShowAll ? "Show fewer" : `Show ${doneRows.length - DONE_PREVIEW} more`}
+            </button>
+          )}
         </div>
       )}
       {deleteTarget && (
@@ -626,7 +711,8 @@ function RailRowGroup({
   onSeen,
   onSelect,
   onSleep,
-  onSetAside,
+  onSetDone,
+  bucketOf,
   onDeleteRequest,
   onUnlinkRequest,
   linkedSessionsEnabled,
@@ -639,6 +725,7 @@ function RailRowGroup({
   delegateFadeMs,
   selectedDelegate,
   onOpenDelegate,
+  grip,
 }: {
   row: ReturnType<typeof buildRailRows>[number];
   openTaskCounts: Record<string, OpenTaskBreakdown>;
@@ -655,7 +742,9 @@ function RailRowGroup({
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onSleep?: (session: Session) => void;
-  onSetAside?: (id: string, aside: boolean) => void;
+  onSetDone?: (session: Session, done: boolean, working: boolean) => void;
+  /** The rail's group-aware bucket, which the ✓ reads to know whether a turn is running. */
+  bucketOf: (session: Session) => RailFilterBucket;
   onDeleteRequest: (id: string) => void;
   onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
@@ -668,6 +757,8 @@ function RailRowGroup({
   delegateFadeMs?: number;
   selectedDelegate?: { sessionId: string; harnessId: string };
   onOpenDelegate?: (d: Delegate) => void;
+  /** Present only in a reorderable active list. */
+  grip?: GripProps;
 }) {
   const isAnchor = linkMode?.anchorId === row.session.id;
   // A session's delegates nest right under its own card — before any linked
@@ -699,7 +790,9 @@ function RailRowGroup({
         onSeen={onSeen}
         onSelect={onSelect}
         onSleep={onSleep}
-        onSetAside={onSetAside}
+        onSetDone={onSetDone}
+        working={bucketOf(row.session) === "working"}
+        grip={grip}
         onDeleteRequest={onDeleteRequest}
         linkBadge={row.badge}
         heldSubjects={subjects.map((sub) => ({
@@ -744,7 +837,6 @@ function RailRowGroup({
                 onSeen={onSeen}
                 onSelect={onSelect}
                 onSleep={onSleep}
-                onSetAside={onSetAside}
                 onDeleteRequest={onDeleteRequest}
                 linkBadge={sub.badge}
                 orchestrateStatus={sub.orchestrateStatus}
@@ -807,7 +899,9 @@ function SessionRow({
   onSeen,
   onSelect,
   onSleep,
-  onSetAside,
+  onSetDone,
+  working = false,
+  grip,
   onDeleteRequest,
   linkBadge,
   heldSubjects,
@@ -842,7 +936,11 @@ function SessionRow({
   onSeen: (id: string) => void;
   onSelect?: (id: string) => void;
   onSleep?: (session: Session) => void;
-  onSetAside?: (id: string, aside: boolean) => void;
+  onSetDone?: (session: Session, done: boolean, working: boolean) => void;
+  /** Mid-turn, as the rail reads it: the ✓ asks before stopping a running turn. */
+  working?: boolean;
+  /** Only on a holder card in a reorderable active list. */
+  grip?: GripProps;
   onDeleteRequest: (id: string) => void;
   linkBadge?: string;
   /**
@@ -898,7 +996,7 @@ function SessionRow({
     (session.last_turn_at
       ? `Last reply ${formatAbsoluteStamp(session.last_turn_at)}`
       : "No reply yet") + ` · Started ${formatAbsoluteStamp(session.created_at)}`;
-  const setAside = isSetAside(session);
+  const isDone = isSetAside(session);
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
   const labels = railLabelsFor(session, labelContext);
   // The rest of the record — model, provider, trust, isolation, context
@@ -1058,6 +1156,7 @@ function SessionRow({
       role="button"
       title={tooltip || undefined}
       data-rail-card=""
+      data-rail-id={session.id}
       data-unseen={unseen ? "" : undefined}
       // Awake or asleep isn't drawn any more (both read "Idle" — see
       // RailStatusKind), but the e2e journeys still need to see which one the
@@ -1071,6 +1170,7 @@ function SessionRow({
         unseen ? styles.unseen : "",
         nested ? styles.nestedRow : "",
         linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
+        grip?.dragging ? styles.dragging : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -1111,6 +1211,34 @@ function SessionRow({
       }}
     >
       {nested && <LinkConnector watched={linkBadge === "WATCHED"} />}
+      {grip && (
+        // In the rail's left gutter, outside the card: clear of the unseen
+        // bar (inset on the card's own edge), the status mark (inside it) and
+        // the link connector (which only ever hangs off a nested subject, and
+        // a subject has no grip — it moves with its holder).
+        <span
+          className={styles.grip}
+          draggable
+          title={`Drag to reorder · ${formatShortcut("Alt+↑")} / ${formatShortcut("Alt+↓")}`}
+          aria-hidden="true"
+          data-rail-grip=""
+          onClick={(e) => e.stopPropagation()}
+          onDragStart={(e) => {
+            e.stopPropagation();
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("application/x-mads-session", session.id);
+            if (rowRef.current) {
+              const rect = rowRef.current.getBoundingClientRect();
+              e.dataTransfer.setDragImage(rowRef.current, e.clientX - rect.left, e.clientY - rect.top);
+            }
+            setClusterAt(undefined);
+            grip.onDragStart();
+          }}
+          onDragEnd={grip.onDragEnd}
+        >
+          ⠿
+        </span>
+      )}
       <div className={styles.rowTop}>
         {shell && (
           <span
@@ -1238,26 +1366,26 @@ function SessionRow({
               🔗
             </button>
           )}
-          {onSetAside && !nested && (
-            // ✓ is the task-list gesture, and in this rail it now means
-            // exactly one thing: a judgement the user made. Every other mark
-            // on the card reports what the session is doing — which is why
-            // the Done status gave its tick up for a closed ring.
+          {onSetDone && !nested && (
+            // ✓ is the task-list gesture, and in this rail it means exactly
+            // one thing: a judgement the user made. Every other mark on the
+            // card reports what the session is doing — which is why the Done
+            // status gave its tick up for a closed ring.
             <button
               type="button"
-              className={[styles.actionButton, setAside ? styles.actionButtonOn : ""]
+              className={[styles.actionButton, isDone ? styles.actionButtonOn : ""]
                 .filter(Boolean)
                 .join(" ")}
               title={
-                setAside
-                  ? "Bring back — return this to the list"
-                  : "Set aside — fold this away; it comes back if it needs you"
+                isDone
+                  ? "Bring back — return this to the top of the list"
+                  : "Done — check this off and put its agent to sleep; it comes back if it needs you"
               }
-              aria-label={setAside ? `Bring back ${name}` : `Set aside ${name}`}
-              aria-pressed={setAside}
+              aria-label={isDone ? `Bring back ${name}` : `Check off ${name}`}
+              aria-pressed={isDone}
               onClick={(e) => {
                 e.stopPropagation();
-                onSetAside(session.id, !setAside);
+                onSetDone(session, !isDone, working);
               }}
             >
               ✓

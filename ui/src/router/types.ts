@@ -69,6 +69,13 @@ export interface Session {
   summary?: string;
   active_task_id?: string;
   tags?: string[];
+  /**
+   * The user's position for this session in the rail's active list, in
+   * Unix ms (higher = nearer the top); absent means "rank by created_at".
+   * Set by a drag (setSessionRailRank) and by bringing a session back from
+   * Done (contracts.Session.RailRank).
+   */
+  rail_rank?: number;
   retro_id?: string;
   synthesis_mode?: string;
   provider_ref?: string;

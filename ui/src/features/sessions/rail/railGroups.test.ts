@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   dotState,
   filterBucketOf,
-  isEarlier,
   lastReplyKey,
+  railRankOf,
   mostUrgentBucket,
   statusOf,
   totalOpenTasks,
@@ -427,27 +427,14 @@ describe("lastReplyKey", () => {
   });
 });
 
-describe("isEarlier", () => {
-  const now = Date.parse("2026-07-02T12:00:00Z");
-
-  it("is false inside the last day", () => {
-    expect(isEarlier(makeSession({ last_turn_at: "2026-07-02T11:00:00Z" }), now)).toBe(false);
+describe("railRankOf", () => {
+  it("is the user's rank when they have moved the card", () => {
+    expect(railRankOf(makeSession({ rail_rank: 42.5, created_at: "2026-07-01T00:00:00Z" }))).toBe(42.5);
   });
 
-  it("is true once the last reply is a full day cold", () => {
-    expect(isEarlier(makeSession({ last_turn_at: "2026-07-01T11:00:00Z" }), now)).toBe(true);
-    expect(isEarlier(makeSession({ last_turn_at: "2026-07-01T12:00:00Z" }), now)).toBe(true);
-  });
-
-  it("reads the reply, not the activity — a rename cannot pull a cold card back out of the tail", () => {
-    const renamed = makeSession({
-      last_turn_at: "2026-07-01T09:00:00Z",
-      updated_at: "2026-07-02T11:59:00Z",
-    });
-    expect(isEarlier(renamed, now)).toBe(true);
-  });
-
-  it("is false for an unparseable stamp rather than folding the card away", () => {
-    expect(isEarlier(makeSession({ last_turn_at: "not a date" }), now)).toBe(false);
+  it("is the start time, in the same unit, until then", () => {
+    const session = makeSession({ created_at: "2026-07-01T00:00:00Z", last_turn_at: "2026-07-03T00:00:00Z" });
+    // Not the last reply: a turn ending must not move a card.
+    expect(railRankOf(session)).toBe(Date.parse("2026-07-01T00:00:00Z"));
   });
 });

@@ -194,3 +194,36 @@ func TestInjectedTurnLeavesAsideAlone(t *testing.T) {
 		t.Fatalf("tags = %v after an injected turn, want the session still set aside", got.Tags)
 	}
 }
+
+// POST /sessions/{id}/rail-rank: the rail's drag-to-reorder, kept on the
+// record so the order survives a restart.
+
+func TestSetSessionRailRankRoundTrips(t *testing.T) {
+	srv, _ := newTrustTestServer(t, []string{testChildBin})
+	id := createAsideSession(t, srv.URL)
+
+	resp := postJSON(t, srv.URL+"/sessions/"+id+"/rail-rank", map[string]float64{"rank": 42.5})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rail-rank status = %d, want 200", resp.StatusCode)
+	}
+	if got := decodeJSON[contracts.Session](t, resp); got.RailRank == nil || *got.RailRank != 42.5 {
+		t.Fatalf("rail_rank = %v, want 42.5", got.RailRank)
+	}
+
+	// Bringing a session back from Done puts it on top again.
+	setAside(t, srv.URL, id, true)
+	if got := setAside(t, srv.URL, id, false); got.RailRank == nil || *got.RailRank <= 42.5 {
+		t.Fatalf("rail_rank after bring-back = %v, want above 42.5", got.RailRank)
+	}
+}
+
+func TestSetSessionRailRankValidates(t *testing.T) {
+	srv, _ := newTrustTestServer(t, []string{testChildBin})
+	id := createAsideSession(t, srv.URL)
+	if resp := postJSON(t, srv.URL+"/sessions/"+id+"/rail-rank", map[string]any{}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("rail-rank without a rank = %d, want 400", resp.StatusCode)
+	}
+	if resp := postJSON(t, srv.URL+"/sessions/ses_nope/rail-rank", map[string]float64{"rank": 1}); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("rail-rank on a missing session = %d, want 404", resp.StatusCode)
+	}
+}

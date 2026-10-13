@@ -1098,7 +1098,18 @@ export class FakeRouterClient implements RouterClient {
     const session = this.sessions.get(id);
     if (!session) throw new Error(`fixture session not found: ${id}`);
     const kept = (session.tags ?? []).filter((tag) => tag !== "aside");
+    const wasAside = kept.length !== (session.tags ?? []).length;
     session.tags = aside ? [...kept, "aside"] : kept;
+    // Mirrors store.Sessions.SetAside: coming back ranks the session on top
+    // (and clearing a tag that wasn't there writes nothing).
+    if (!aside && wasAside) session.rail_rank = Date.now();
+    return session;
+  }
+
+  async setSessionRailRank(id: string, rank: number): Promise<Session> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error(`fixture session not found: ${id}`);
+    session.rail_rank = rank;
     return session;
   }
 

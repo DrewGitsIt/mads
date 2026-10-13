@@ -4,16 +4,28 @@
   position: relative;
   height: 2px;
   background: var(--line-soft);
+  transition: background 0.15s;
 }
 
-/* Fat hover target: 14px band centred on the 2px line. */
-.rim::before {
+/* Fat hover target: a 20px band centred on the 2px line, only when there is a
+   meter to read. The band has to win the hit-test on both sides: above it is
+   the stream's sticky pinned strip (z-index 40, ConversationTab.module.css),
+   below it the composer's positioned input row, which paints later in DOM
+   order. Without the z-index both swallow the band and only the 2px line
+   itself is hoverable. 41 stays under the dock menus (--z-dock-menu) and the
+   terminal compose sheet (SessionDock.module.css). The band reaches 9px into
+   the pinned strip's 12px bottom padding, so it never covers a chip there. */
+.rim[role="meter"] {
+  z-index: 41;
+}
+
+.rim[role="meter"]::before {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
-  top: -6px;
-  height: 14px;
+  top: -9px;
+  height: 20px;
 }
 
 .fill {
@@ -23,7 +35,20 @@
   bottom: 0;
   background: var(--rim-tone);
   box-shadow: 0 0 6px var(--rim-tone);
-  transition: width 0.2s;
+  transition:
+    width 0.2s,
+    background 0.15s,
+    box-shadow 0.15s;
+}
+
+/* Hover feedback: the track firms up and the fill brightens toward the ink
+   colour, so the line answers before the label has finished fading in. */
+.rim[role="meter"]:hover {
+  background: var(--line);
+}
+.rim[role="meter"]:hover .fill {
+  background: color-mix(in srgb, var(--rim-tone) 65%, var(--text));
+  box-shadow: 0 0 10px var(--rim-tone);
 }
 
 .rim[data-tone="quiet"] {

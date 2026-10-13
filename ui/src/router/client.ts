@@ -167,6 +167,8 @@ export interface RouterClient {
   renameSession(id: string, name: string): Promise<Session>;
   /** Fold a session out of the rail's main list (or bring it back). Touches no child. */
   setSessionAside(id: string, aside: boolean): Promise<Session>;
+  /** Where the user dragged a session in the rail's active list (Session.rail_rank). */
+  setSessionRailRank(id: string, rank: number): Promise<Session>;
   setSessionTrust(id: string, trust: SessionTrust): Promise<Session>;
   setSessionModel(id: string, model: string): Promise<SetSessionModelResponse>;
   deleteSession(id: string): Promise<void>;
@@ -760,6 +762,12 @@ export class FetchRouterClient implements RouterClient {
   // deliberately leaves the running child alone.
   async setSessionAside(id: string, aside: boolean): Promise<Session> {
     return routerPost(this.baseUrl, `/sessions/${id}/aside`, { aside });
+  }
+
+  // The same kind of judgement as aside: the user's order, kept on the record
+  // so it survives a restart.
+  async setSessionRailRank(id: string, rank: number): Promise<Session> {
+    return routerPost(this.baseUrl, `/sessions/${id}/rail-rank`, { rank });
   }
 
   async setSessionTrust(id: string, trust: SessionTrust): Promise<Session> {

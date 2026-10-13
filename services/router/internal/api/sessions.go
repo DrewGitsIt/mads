@@ -200,6 +200,37 @@ func (s *server) handleSetSessionAside(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+// handleSetSessionRailRank records where the user dragged a session in the
+// rail's active list (contracts.Session.RailRank). Like the aside tag it is
+// the user's judgement, so it lives on the record and outlives a restart;
+// and like it, nothing about the running session changes.
+func (s *server) handleSetSessionRailRank(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		Rank *float64 `json:"rank"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	if body.Rank == nil {
+		var v contracts.ValidationError
+		v.Add("rank", "is required")
+		writeError(w, &v)
+		return
+	}
+	if err := s.data.SetSessionRailRank(r.Context(), id, *body.Rank); err != nil {
+		writeError(w, err)
+		return
+	}
+	sess, err := s.data.Session(r.Context(), id)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	s.decorateSession(&sess)
+	writeJSON(w, http.StatusOK, sess)
+}
+
 // handleSetSessionTrust changes a session's trust level after creation —
 // the "raise trust" path the blocked-permission banner points at. Trust is
 // read exactly once, at child spawn (services/session/internal/runner), so

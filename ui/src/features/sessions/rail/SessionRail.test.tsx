@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { SessionRail } from "./SessionRail";
+import { DONE_OPEN_KEY, SessionRail } from "./SessionRail";
 import { FLAGS } from "../../../featureFlags";
 import { FakeRouterClient } from "../../../router/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
@@ -17,7 +17,8 @@ function makeSession(overrides: Partial<Session>): Session {
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     // Every card here models a session that has replied at least once: the
-    // rail's stamp and its order both read last_turn_at.
+    // stamp and the Done order read last_turn_at. The active order does not —
+    // it is created_at (railRankOf), so a test that cares about order sets that.
     last_turn_at: "2026-07-01T00:00:00Z",
     ...overrides,
   };
@@ -836,9 +837,6 @@ describe("SessionRail timestamps", () => {
     expect(stampOf("sub-minute").textContent).toBe("now");
     expect(stampOf("minutes").textContent).toBe("14m");
     expect(stampOf("today").textContent).toBe("08:40");
-
-    // The last two are a day cold, so they sit in the collapsed "Earlier" tail.
-    fireEvent.click(screen.getByRole("button", { name: /Earlier/ }));
     expect(stampOf("this week").textContent).toMatch(/^\w{3,} 13:40$/);
     expect(stampOf("older").textContent).toMatch(/^18 \w{3,}$/);
   });
@@ -1467,22 +1465,35 @@ function cardNames(): string[] {
   );
 }
 
+/** Card names in one of the rail's two lists — the active one, or Done. */
+function listNames(list: "active" | "done"): string[] {
+  const el = document.querySelector(`[data-rail-list="${list}"]`);
+  if (!el) return [];
+  return [...el.querySelectorAll('div[role="button"]')].map(
+    (c) => c.querySelector('[class*="name"]')!.textContent!,
+  );
+}
+
+const activeNames = () => listNames("active");
+const doneNames = () => listNames("done");
+
 function chip(label: string): HTMLElement {
   const bar = screen.getByRole("group", { name: "Filter sessions" });
   return [...bar.querySelectorAll("button")].find((b) => b.textContent!.startsWith(label))!;
 }
 
 describe("SessionRail filter chips", () => {
-  // One of each bucket, most recent first, all inside the last day.
-  const working = makeSession({ id: "w", name: "working one", last_turn_at: isoAgo(1 * MINUTE) });
-  const parked = makeSession({ id: "p", name: "parked one", last_turn_at: isoAgo(2 * MINUTE) });
-  const crashed = makeSession({ id: "x", name: "crashed one", last_turn_at: isoAgo(3 * MINUTE) });
-  const ready = makeSession({ id: "r", name: "ready one", last_turn_at: isoAgo(4 * MINUTE) });
+  // One of each bucket, newest start first — the active order is start time,
+  // so these created_at values are what lay the list out.
+  const working = makeSession({ id: "w", name: "working one", created_at: isoAgo(1 * MINUTE) });
+  const parked = makeSession({ id: "p", name: "parked one", created_at: isoAgo(2 * MINUTE) });
+  const crashed = makeSession({ id: "x", name: "crashed one", created_at: isoAgo(3 * MINUTE) });
+  const ready = makeSession({ id: "r", name: "ready one", created_at: isoAgo(4 * MINUTE) });
   const sleeping = makeSession({
     id: "s",
     name: "sleeping one",
     activity: "inactive",
-    last_turn_at: isoAgo(5 * MINUTE),
+    created_at: isoAgo(5 * MINUTE),
   });
   const agentStates: Record<string, SessionAgentState> = {
     w: { subagents: 0, workingSince: isoAgo(30_000) },
@@ -1555,26 +1566,6 @@ describe("SessionRail filter chips", () => {
     ]);
   });
 
-  it("leaves a pending reorder pending — a chip narrows the order, it never applies one", () => {
-    vi.useFakeTimers({ now: NOW });
-    const a = makeSession({ id: "a", name: "alpha", last_turn_at: isoAgo(10 * MINUTE) });
-    const b = makeSession({ id: "b", name: "bravo", last_turn_at: isoAgo(20 * MINUTE) });
-    const c = makeSession({ id: "c", name: "charlie", last_turn_at: isoAgo(30 * MINUTE) });
-    const { rerender } = render(<SessionRail sessions={[a, b, c]} openTaskCounts={{}} />);
-    fireEvent.mouseEnter(screen.getByLabelText("Session list"));
-
-    const risen = { ...c, last_turn_at: isoAgo(1 * MINUTE) };
-    rerender(<SessionRail sessions={[a, b, risen]} openTaskCounts={{}} />);
-    expect(cardNames()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(screen.getByRole("button", { name: /session moved/ })).toBeTruthy();
-
-    // Filtering is a view, not a settle: the survivors keep the held order and
-    // the ghost is still the only thing offering to reorder them.
-    fireEvent.click(chip("Idle"));
-    expect(cardNames()).toEqual(["alpha", "bravo", "charlie"]);
-    expect(screen.getByRole("button", { name: /session moved/ })).toBeTruthy();
-  });
-
   it("holds the chosen chip — clicking it again is not a toggle back to All", () => {
     renderRail();
     fireEvent.click(chip("Working"));
@@ -1593,59 +1584,32 @@ describe("SessionRail filter chips", () => {
   });
 });
 
-describe("SessionRail — the Earlier tail", () => {
-  const fresh = makeSession({ id: "f", name: "fresh one", last_turn_at: isoAgo(5 * MINUTE) });
-  const yesterday = makeSession({ id: "y", name: "old one", last_turn_at: isoAgo(2 * DAY) });
-  const lastWeek = makeSession({ id: "l", name: "ancient one", last_turn_at: isoAgo(9 * DAY) });
-
+describe("SessionRail — no time-based fold", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("folds everything a day cold behind a collapsed 'Earlier' toggle, and expands it", () => {
+  // The rail used to fold everything a day cold behind "Earlier". Age is not
+  // a judgement, so it no longer hides anything: only the user's ✓ does.
+  it("keeps a session whose last reply is weeks old in the active list, with no toggle", () => {
     vi.useFakeTimers({ now: NOW });
-    render(<SessionRail sessions={[fresh, yesterday, lastWeek]} openTaskCounts={{}} />);
+    const fresh = makeSession({
+      id: "f",
+      name: "fresh one",
+      created_at: isoAgo(10 * MINUTE),
+      last_turn_at: isoAgo(5 * MINUTE),
+    });
+    const ancient = makeSession({
+      id: "l",
+      name: "ancient one",
+      created_at: isoAgo(30 * DAY),
+      last_turn_at: isoAgo(21 * DAY),
+    });
+    render(<SessionRail sessions={[fresh, ancient]} openTaskCounts={{}} />);
 
-    expect(cardNames()).toEqual(["fresh one"]);
-    const toggle = screen.getByRole("button", { name: /Earlier/ });
-    expect(toggle.textContent).toContain("· 2");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-
-    fireEvent.click(toggle);
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(cardNames()).toEqual(["fresh one", "old one", "ancient one"]);
-
-    fireEvent.click(toggle);
-    expect(cardNames()).toEqual(["fresh one"]);
-  });
-
-  it("renders no tail at all when nothing is recent — a fold with no head would hide the rail", () => {
-    vi.useFakeTimers({ now: NOW });
-    render(<SessionRail sessions={[yesterday, lastWeek]} openTaskCounts={{}} />);
-
-    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
-    expect(cardNames()).toEqual(["old one", "ancient one"]);
-  });
-
-  it("folds the tail out of the active filter, not out of the session list", () => {
-    vi.useFakeTimers({ now: NOW });
-    render(
-      <SessionRail
-        sessions={[fresh, yesterday, lastWeek]}
-        openTaskCounts={{}}
-        agentStates={{ f: { subagents: 0, workingSince: isoAgo(30_000) } }}
-      />,
-    );
-
-    // The tail's cards are still counted by the chips that describe them.
-    expect(chip("All").textContent).toBe("All3");
-    expect(chip("Idle").textContent).toBe("Idle2");
-
-    // Filter to Idle and the working card — the only recent one — drops out, so
-    // the tail becomes the whole list and unfolds itself.
-    fireEvent.click(chip("Idle"));
-    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
-    expect(cardNames()).toEqual(["old one", "ancient one"]);
+    expect(activeNames()).toEqual(["fresh one", "ancient one"]);
+    expect(screen.queryByRole("button", { expanded: false })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Earlier|Done/ })).toBeNull();
   });
 });
 
@@ -1667,161 +1631,233 @@ function cards(): HTMLElement[] {
   ];
 }
 
-describe("SessionRail — set aside", () => {
+describe("SessionRail — Done", () => {
   // The user's own judgement about a session, which is the one piece of rail
   // state no amount of watching the session could derive.
   const kept = makeSession({ id: "k", name: "keep me", last_turn_at: isoAgo(5 * MINUTE) });
-  const aside = makeSession({
+  const finished = makeSession({
     id: "a",
     name: "done with this",
     last_turn_at: isoAgo(5 * MINUTE),
     tags: ["aside"],
   });
 
+  function doneToggle(): HTMLElement {
+    return screen.getByRole("button", { name: /^Done/ });
+  }
+
+  // The open state is remembered, so one test's collapse must not leak into
+  // the next one's "open by default".
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("folds a set-aside session out of the list, under its own toggle", () => {
+  it("puts a checked-off session under an open 'Done · 1' toggle, below the active list", () => {
     vi.useFakeTimers({ now: NOW });
-    render(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} />);
+    render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
 
-    expect(cardNames()).toEqual(["keep me"]);
-    const toggle = screen.getByRole("button", { name: /Set aside/ });
-    expect(toggle.textContent).toContain("· 1");
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
-
-    fireEvent.click(toggle);
+    expect(activeNames()).toEqual(["keep me"]);
+    expect(doneNames()).toEqual(["done with this"]);
+    expect(doneToggle().textContent).toContain("· 1");
+    expect(doneToggle().getAttribute("aria-expanded")).toBe("true");
+    // Below, not beside: the whole rail reads active first, then Done.
     expect(cardNames()).toEqual(["keep me", "done with this"]);
   });
 
-  it("keeps its own fold rather than sharing 'Earlier' — the two tails mean different things", () => {
+  it("collapses on the toggle, and remembers that across a remount", () => {
     vi.useFakeTimers({ now: NOW });
-    const old = makeSession({ id: "o", name: "old one", last_turn_at: isoAgo(2 * DAY) });
-    render(<SessionRail sessions={[kept, aside, old]} openTaskCounts={{}} />);
+    const { unmount } = render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
 
-    expect(screen.getByRole("button", { name: /Set aside/ }).textContent).toContain("· 1");
-    expect(screen.getByRole("button", { name: /Earlier/ }).textContent).toContain("· 1");
+    fireEvent.click(doneToggle());
+    expect(doneToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(cardNames()).toEqual(["keep me"]);
+    expect(localStorage.getItem(DONE_OPEN_KEY)).toBe("0");
+
+    unmount();
+    render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
+    expect(doneToggle().getAttribute("aria-expanded")).toBe("false");
+    expect(cardNames()).toEqual(["keep me"]);
   });
 
-  it("pulls a set-aside session back out the moment it needs the user", () => {
-    // "Until I need it again" implemented as "until it needs me". A dismissal
-    // that could swallow a parked approval would stop being trusted, and an
-    // untrusted one is worse than no dismissal at all.
+  it("keeps a done session in the active list while it needs the user", () => {
+    // "Done until it needs me". A check-off that could swallow a parked
+    // approval would stop being trusted, and an untrusted one is worse than
+    // none at all.
     vi.useFakeTimers({ now: NOW });
     render(
       <SessionRail
-        sessions={[kept, aside]}
+        sessions={[kept, finished]}
         openTaskCounts={{}}
         agentStates={{ a: { subagents: 0, awaitingSince: isoAgo(MINUTE) } }}
       />,
     );
 
-    // Order is the rail's own (railOrder.ts puts the parked card first); what
-    // this pins is that it is in the main list at all, and that the fold it
-    // came from is gone with it.
-    expect(cardNames().sort()).toEqual(["done with this", "keep me"]);
-    expect(screen.queryByRole("button", { name: /Set aside/ })).toBeNull();
+    // At its own rank (equal start times, so id order), not hoisted to the top.
+    expect(activeNames()).toEqual(["done with this", "keep me"]);
+    expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
   });
 
-  it("returns it to the fold once the attention is resolved, without clearing the tag", () => {
+  it("returns it to Done once the attention is resolved, without clearing the tag", () => {
     vi.useFakeTimers({ now: NOW });
     const { rerender } = render(
       <SessionRail
-        sessions={[kept, aside]}
+        sessions={[kept, finished]}
         openTaskCounts={{}}
         agentStates={{ a: { subagents: 0, awaitingSince: isoAgo(MINUTE) } }}
       />,
     );
-    expect(cardNames().sort()).toEqual(["done with this", "keep me"]);
+    expect(activeNames()).toContain("done with this");
 
-    rerender(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} agentStates={{}} />);
-    expect(cardNames()).toEqual(["keep me"]);
-    expect(screen.getByRole("button", { name: /Set aside/ })).toBeTruthy();
+    rerender(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} agentStates={{}} />);
+    expect(activeNames()).toEqual(["keep me"]);
+    expect(doneNames()).toEqual(["done with this"]);
   });
 
-  it("shows every set-aside card while a query is live — going looking is the point", () => {
+  it("shows every done card in one list while a query is live — going looking is the point", () => {
     vi.useFakeTimers({ now: NOW });
-    render(<SessionRail sessions={[kept, aside]} openTaskCounts={{}} />);
+    render(<SessionRail sessions={[kept, finished]} openTaskCounts={{}} />);
 
     fireEvent.change(screen.getByPlaceholderText(/Search sessions/), {
       target: { value: "done" },
     });
-    expect(cardNames()).toEqual(["done with this"]);
-    expect(screen.queryByRole("button", { name: /Set aside/ })).toBeNull();
+    expect(activeNames()).toEqual(["done with this"]);
+    expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
   });
 
-  it("toggles through onSetAside, and never opens the card", () => {
+  it("checks off through onSetDone, and never opens the card", () => {
     vi.useFakeTimers({ now: NOW });
-    const onSetAside = vi.fn();
+    const onSetDone = vi.fn();
     const onSelect = vi.fn();
+    render(
+      <SessionRail sessions={[kept]} openTaskCounts={{}} onSetDone={onSetDone} onSelect={onSelect} />,
+    );
+
+    const button = screen.getByRole("button", { name: "Check off keep me" });
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(button);
+    expect(onSetDone).toHaveBeenCalledWith(kept, true, false);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("tells the owner the session is mid-turn, so it can ask before stopping it", () => {
+    vi.useFakeTimers({ now: NOW });
+    const onSetDone = vi.fn();
     render(
       <SessionRail
         sessions={[kept]}
         openTaskCounts={{}}
-        onSetAside={onSetAside}
-        onSelect={onSelect}
+        agentStates={{ k: { subagents: 0, workingSince: isoAgo(30_000) } }}
+        onSetDone={onSetDone}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Set aside keep me" }));
-    expect(onSetAside).toHaveBeenCalledWith("k", true);
-    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Check off keep me" }));
+    expect(onSetDone).toHaveBeenCalledWith(kept, true, true);
   });
 
-  it("offers the reverse on a card already set aside", () => {
+  it("offers the reverse on a done card", () => {
     vi.useFakeTimers({ now: NOW });
-    const onSetAside = vi.fn();
-    render(<SessionRail sessions={[aside]} openTaskCounts={{}} onSetAside={onSetAside} />);
+    const onSetDone = vi.fn();
+    render(<SessionRail sessions={[finished]} openTaskCounts={{}} onSetDone={onSetDone} />);
 
-    // Nothing is in the main list, so the fold is the whole rail; open it.
-    fireEvent.click(screen.getByRole("button", { name: /Set aside · 1/ }));
     const button = screen.getByRole("button", { name: "Bring back done with this" });
     expect(button.getAttribute("aria-pressed")).toBe("true");
 
     fireEvent.click(button);
-    expect(onSetAside).toHaveBeenCalledWith("a", false);
+    expect(onSetDone).toHaveBeenCalledWith(finished, false, false);
   });
 
   it("offers no control at all when the surface passes no handler", () => {
     vi.useFakeTimers({ now: NOW });
     render(<SessionRail sessions={[kept]} openTaskCounts={{}} />);
-    expect(screen.queryByRole("button", { name: "Set aside keep me" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check off keep me" })).toBeNull();
+  });
+
+  // Finished most recently first: last reply stands in for "finished at", so
+  // a session started long ago but wrapped up today is the one on top.
+  it("orders Done by last reply, newest first — not by when the session started", () => {
+    vi.useFakeTimers({ now: NOW });
+    const doneAt = (id: string, name: string, started: number, replied: number) =>
+      makeSession({
+        id,
+        name,
+        created_at: isoAgo(started),
+        last_turn_at: isoAgo(replied),
+        tags: ["aside"],
+      });
+    render(
+      <SessionRail
+        sessions={[
+          doneAt("d1", "started last", 1 * HOUR, 3 * HOUR),
+          doneAt("d2", "started first", 9 * DAY, 10 * MINUTE),
+          doneAt("d3", "in between", 2 * DAY, 1 * HOUR),
+        ]}
+        openTaskCounts={{}}
+      />,
+    );
+    expect(doneNames()).toEqual(["started first", "in between", "started last"]);
+  });
+
+  it("caps Done at five rows behind 'Show N more', which expands and reads 'Show fewer'", () => {
+    vi.useFakeTimers({ now: NOW });
+    const seven = Array.from({ length: 7 }, (_, i) =>
+      makeSession({
+        id: `d${i}`,
+        name: `done ${i}`,
+        last_turn_at: isoAgo((i + 1) * HOUR),
+        tags: ["aside"],
+      }),
+    );
+    render(<SessionRail sessions={seven} openTaskCounts={{}} />);
+
+    expect(doneToggle().textContent).toContain("· 7");
+    expect(doneNames()).toEqual(["done 0", "done 1", "done 2", "done 3", "done 4"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 more" }));
+    expect(doneNames()).toEqual(seven.map((s) => s.name));
+
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(doneNames()).toHaveLength(5);
   });
 });
 
 describe("SessionRail omni search", () => {
   // The mockup's own fixture set. "rail readability pass" is the case that
   // decides the field list: its workspace is "Main work", which shares no
-  // substring with ~/repo/mads-ui, so both have to be indexed.
+  // substring with ~/repo/mads-ui, so both have to be indexed. Listed newest
+  // start first, which is the resting order.
   const goose = makeSession({
     id: "g",
     name: "goose ACP transcript gap",
     workspace: "mads",
     cwd: "~/repo/mads",
     worktree_branch: "wt/goose-acp",
-    last_turn_at: isoAgo(1 * MINUTE),
+    created_at: isoAgo(1 * MINUTE),
   });
   const electron = makeSession({
     id: "e",
     name: "electron self-heal reinstall",
     workspace: "mads",
     cwd: "~/repo/mads",
-    last_turn_at: isoAgo(6 * MINUTE),
+    created_at: isoAgo(6 * MINUTE),
   });
   const retro = makeSession({
     id: "s",
     name: "retro: conversation UX",
     workspace: "sidecar",
     cwd: "~/repo/sidecar",
-    last_turn_at: isoAgo(3 * HOUR),
+    created_at: isoAgo(3 * HOUR),
   });
   const railUi = makeSession({
     id: "u",
     name: "rail readability pass",
     workspace: "Main work",
     cwd: "~/repo/mads-ui",
-    last_turn_at: isoAgo(5 * HOUR),
+    created_at: isoAgo(5 * HOUR),
   });
   const digest = makeSession({
     id: "d",
@@ -1829,7 +1865,7 @@ describe("SessionRail omni search", () => {
     workspace: "sidecar",
     cwd: "~/repo/sidecar",
     worktree_branch: "wt/digest",
-    last_turn_at: isoAgo(2 * DAY),
+    created_at: isoAgo(2 * DAY),
   });
   const all = [goose, electron, retro, railUi, digest];
 
@@ -1844,6 +1880,8 @@ describe("SessionRail omni search", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    // A test here collapses Done, and that choice is persisted.
+    localStorage.clear();
   });
 
   it("matches on each of the four indexed fields", () => {
@@ -1922,15 +1960,17 @@ describe("SessionRail omni search", () => {
     expect(reasonsOf("rail readability pass")).toEqual([]);
   });
 
-  it("reaches sessions folded into the collapsed Earlier tail", () => {
-    renderRail();
-    // At rest the two-day-old card is behind the fold.
+  it("reaches sessions in a collapsed Done list", () => {
+    const shelved = { ...digest, tags: ["aside"] };
+    renderRail({ sessions: [goose, electron, retro, railUi, shelved] });
+    fireEvent.click(screen.getByRole("button", { name: /^Done/ }));
+    // At rest the checked-off card is behind the collapsed toggle.
     expect(cardNames()).not.toContain("digest watcher backlog");
 
     type("digest");
     expect(cardNames()).toEqual(["digest watcher backlog"]);
-    // Search bypasses the view: no fold is drawn over a result list.
-    expect(screen.queryByRole("button", { name: /Earlier/ })).toBeNull();
+    // Search bypasses the view: no Done section is drawn over a result list.
+    expect(screen.queryByRole("button", { name: /^Done/ })).toBeNull();
   });
 
   it("orders hits by relevance and restores the resting order identically on clear", () => {
@@ -1941,11 +1981,12 @@ describe("SessionRail omni search", () => {
       "electron self-heal reinstall",
       "retro: conversation UX",
       "rail readability pass",
+      "digest watcher backlog",
     ]);
 
     // "re" is a name prefix for "retro", a name substring for the other two
-    // "…re…" names, and only a ~/repo hit for goose and the folded-away
-    // digest card — which search reaches and relevance drops to the bottom.
+    // "…re…" names, and only a ~/repo hit for goose and digest — which
+    // relevance drops to the bottom, in their resting order.
     type("re");
     expect(cardNames()).toEqual([
       "retro: conversation UX",

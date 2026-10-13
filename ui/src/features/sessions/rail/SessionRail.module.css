@@ -3,6 +3,12 @@
   flex-direction: column;
   gap: var(--space-3);
   overflow-y: auto;
+  /* A gutter for the grip. overflow-y:auto clips the cross axis too, so the
+     grip (left of the card) needs room inside this box: borrow the surface's
+     own 12px padding (SessionsSurface .rail) as padding here, which leaves
+     every card exactly where it was. */
+  margin-left: calc(-1 * var(--space-3));
+  padding-left: var(--space-3);
 }
 
 /* One flat list — the rail has no state-derived groups (mockup §2 option B). */
@@ -194,7 +200,8 @@
 }
 
 /* Anything a day cold folds down here rather than padding the scroll. */
-.earlierToggle {
+/* The Done list's header: a quiet section label that folds the list. */
+.sectionToggle {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -208,12 +215,103 @@
   cursor: pointer;
 }
 
-.earlierToggle:hover {
+.sectionToggle:hover {
   color: var(--text2);
 }
 
-.earlierCount {
+.sectionCount {
   opacity: 0.6;
+}
+
+/* Checked-off cards recede until the pointer or focus reaches one. */
+.doneList .row {
+  opacity: 0.72;
+}
+.doneList .row:hover,
+.doneList .row:focus-visible {
+  opacity: 1;
+}
+
+.showMore {
+  align-self: flex-start;
+  margin: var(--space-1) 0 0 var(--space-3);
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text3);
+  font: 500 var(--fs-chip) var(--sans);
+  cursor: pointer;
+}
+.showMore:hover {
+  color: var(--text2);
+  text-decoration: underline;
+}
+
+/* One reorderable slot: a holder card with its delegates and subjects. The
+   drop line paints in the 2px gap between cards, in the accent, so where the
+   card will land reads before it is let go. */
+.dropSlot {
+  position: relative;
+}
+.dropSlot[data-drop]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.dropSlot[data-drop="before"]::after {
+  top: -2px;
+}
+.dropSlot[data-drop="after"]::after {
+  bottom: 0;
+}
+
+/* The grip (G2): in the rail's left gutter, outside the card, so it shares
+   space with nothing on it — the unseen bar is inset on the card's own edge,
+   the status mark is inside it, and the link connector only hangs off nested
+   subjects, which have no grip. The gutter is .rail's 12px left padding,
+   which its overflow does not clip. Shown with the
+   action cluster — on hover or keyboard focus — and with a grab cursor. */
+.grip {
+  position: absolute;
+  top: 50%;
+  left: -12px;
+  width: 11px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  transform: translateY(-50%);
+  border-radius: 3px;
+  color: var(--text2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: grab;
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    color 0.12s,
+    background 0.12s;
+  user-select: none;
+}
+.row:hover > .grip,
+.row:focus-visible > .grip {
+  opacity: 1;
+}
+.grip:hover {
+  color: var(--text);
+  background: var(--bg3);
+}
+.grip:active {
+  cursor: grabbing;
+}
+
+/* The card being dragged stays in place as a placeholder. */
+.dragging {
+  opacity: 0.4;
 }
 
 .row {
@@ -788,33 +886,6 @@
 
 /* Pending re-settle: the order changed while the rail was busy, so it waits
    here as one clickable line instead of moving rows under the pointer. */
-.pendingGhost {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-1) var(--space-3);
-  background: none;
-  border: none;
-  color: var(--text3);
-  font: 500 var(--fs-chip) var(--sans);
-  text-align: left;
-  cursor: pointer;
-}
-
-.pendingGhost:hover {
-  color: var(--text2);
-}
-
-.pendingArrow {
-  color: var(--accent);
-}
-
-.pendingHint {
-  color: var(--text3);
-  opacity: 0.8;
-}
-
 /* Link options: the nested row's role badge doubles as the flyout trigger. */
 /* The link menus are cluster buttons now, so .actionButton carries all the
    chrome and this only has to make room for the alert mark. The disclosure

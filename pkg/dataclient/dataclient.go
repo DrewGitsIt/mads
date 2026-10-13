@@ -272,6 +272,13 @@ func (c *Client) SetSessionAside(ctx context.Context, id string, aside bool) err
 		map[string]any{"aside": aside}, nil)
 }
 
+// SetSessionRailRank records the user's drag position for a session in the
+// rail's active list, in one atomic round trip (store.Sessions.SetRailRank).
+func (c *Client) SetSessionRailRank(ctx context.Context, id string, rank float64) error {
+	return c.do(ctx, http.MethodPut, "/sessions/"+url.PathEscape(id)+"/rail-rank",
+		map[string]any{"rank": rank}, nil)
+}
+
 // SetSessionAgentState mirrors one main-agent transition onto the session
 // record AND appends its session.agent_state event, in one atomic round trip
 // — the pair has to land together or a cold reader and a live stream can

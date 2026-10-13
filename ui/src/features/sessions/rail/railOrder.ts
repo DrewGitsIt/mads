@@ -1,191 +1,97 @@
-import { useRef, useState } from "react";
-import { lastReplyKey } from "./railGroups";
+import { useEffect, useState } from "react";
 import type { Session } from "../../../router/types";
+import { lastReplyKey, railRankOf } from "./railGroups";
 
 /**
- * The order the rail is currently rendering from — a snapshot, not a live
- * derivation. The rail is ONE flat recency list (mockup §2, option B), so a
- * card's "index" is simply its index here: there is no group membership left
- * for a live state change to relocate it through.
+ * The rail is a checklist: an active list and a Done list, and neither order
+ * depends on anything a session does by itself. The active list is the user's
+ * rank — start time until they drag a card (railRankOf) — so a reply, a
+ * status flip or a rename can only ever repaint a card where it already is.
+ * That is what retired the old settle-and-hold machinery (a recency order
+ * held still while the pointer was on the rail, and a "N sessions moved" row
+ * to apply it): with nothing moving cards on their own, there is nothing to
+ * hold.
  */
-export type SettledOrder = string[];
 
-/**
- * The ordering key: recency of the last REPLY (lastReplyKey — last_turn_at,
- * not updated_at, so a rename or a summary write can't move a card), id as a
- * tiebreak. Deliberately status-free — `activity` and the status line decide
- * how a card is painted, never where it sits.
- */
-export function recencyOrder(sessions: Session[]): string[] {
-  return [...sessions]
-    .sort((a, b) => lastReplyKey(b).localeCompare(lastReplyKey(a)) || a.id.localeCompare(b.id))
-    .map((s) => s.id);
-}
-
-/**
- * Hold `heldIds` still: drop the ids that are gone (a deleted session leaves at
- * once) and splice genuinely-new ids in at their ranked position (appearing is
- * not moving). Every surviving id keeps the neighbour it already had.
- */
-export function reconcileOrder(heldIds: string[], targetIds: string[]): string[] {
-  const target = new Set(targetIds);
-  const held = new Set(heldIds);
-  const next = heldIds.filter((id) => target.has(id));
-  targetIds.forEach((id, i) => {
-    if (held.has(id)) return;
-    // Sit directly under the nearest session that already outranks it, so
-    // nothing above the newcomer shifts and nothing below it shifts by more
-    // than the one row it occupies.
-    let at = 0;
-    for (let above = i - 1; above >= 0; above--) {
-      const anchor = next.indexOf(targetIds[above]);
-      if (anchor >= 0) {
-        at = anchor + 1;
-        break;
-      }
-    }
-    next.splice(at, 0, id);
-  });
-  return next;
-}
-
-function clamp(value: number, max: number): number {
-  return Math.min(Math.max(value, 0), max);
-}
-
-/**
- * Rule 3: the open session never moves. Whatever row the selected card holds
- * now it keeps — every other card reorders around it, so nobody else's churn
- * can displace it.
- */
-export function pinSelected(
-  pending: SettledOrder,
-  held: SettledOrder,
-  selectedId?: string,
-): SettledOrder {
-  if (!selectedId) return pending;
-  const at = held.indexOf(selectedId);
-  if (at < 0 || !pending.includes(selectedId)) return pending;
-  const next = pending.filter((id) => id !== selectedId);
-  next.splice(clamp(at, next.length), 0, selectedId);
-  return next;
-}
-
-/** Length of the longest non-decreasing subsequence (patience sort over the tails). */
-function stableRunLength(ranks: number[]): number {
-  const tails: number[] = [];
-  for (const rank of ranks) {
-    let lo = 0;
-    let hi = tails.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (tails[mid] <= rank) lo = mid + 1;
-      else hi = mid;
-    }
-    tails[lo] = rank;
-  }
-  return tails.length;
-}
-
-/**
- * How many sessions the pending order would relocate — the ghost row's count.
- * A card counts only if it has to be picked up and re-dropped: the count is the
- * fewest such cards, not every index that shifts, so one session rising to the
- * top reads as "1 session moved", not "8". Newcomers are not counted —
- * appearing is not moving.
- */
-export function countMoved(held: SettledOrder, pending: SettledOrder): number {
-  const heldIndex = new Map(held.map((id, i) => [id, i]));
-  const ranks: number[] = [];
-  for (const id of pending) {
-    const rank = heldIndex.get(id);
-    if (rank !== undefined) ranks.push(rank);
-  }
-  return ranks.length - stableRunLength(ranks);
-}
-
-export interface SettledRailOrder {
-  /** The rail's cards, top to bottom — one list. */
-  sessions: Session[];
-  /** > 0 while a recomputed order is waiting for a quiet boundary. */
-  pendingMoves: number;
-  /** Apply the pending order now — the ghost row's click handler. */
-  settle: () => void;
-  railHandlers: {
-    onMouseEnter: () => void;
-    onMouseLeave: () => void;
-    onFocus: () => void;
-    onBlur: (event: React.FocusEvent<HTMLElement>) => void;
-  };
-}
-
-/**
- * Settled rail order. A new ordering is computed on every session-list change
- * but only APPLIED at a quiet boundary — the rail is at rest, the pointer
- * leaves it, it loses focus, the search changes, or the user clicks the pending
- * ghost. While the rail is engaged the previous order is held and the caller
- * renders the ghost instead of yanking rows out from under the cursor.
- *
- * Status never sorts. It is not in the ordering key and there is no longer any
- * group for it to move a card between, so a flip can only ever repaint the card
- * where it already is. The filter chips narrow this order; they never re-rank
- * it, which is why they are not a settle boundary.
- */
-export function useSettledRailOrder(
+/** The active list: highest rank first, id breaking ties so the order is total. */
+export function activeOrder(
   sessions: Session[],
-  selectedId?: string,
-  filterKey?: string,
-): SettledRailOrder {
-  const orderRef = useRef<SettledOrder>([]);
-  const hoveredRef = useRef(false);
-  const focusedRef = useRef(false);
-  const applyRef = useRef(false);
-  const filterRef = useRef(filterKey);
-  const [, bump] = useState(0);
+  rankOf: (session: Session) => number = railRankOf,
+): Session[] {
+  return [...sessions].sort((a, b) => rankOf(b) - rankOf(a) || a.id.localeCompare(b.id));
+}
 
-  function settle() {
-    applyRef.current = true;
-    bump((n) => n + 1);
-  }
+/**
+ * The Done list: most recently finished first. The last reply stands in for
+ * "finished at" — ✓ puts the session to sleep, so the stamp stops moving the
+ * moment it lands here, and a session started weeks ago but finished today
+ * sits at the top of the list rather than behind its "Show more".
+ */
+export function doneOrder<T>(items: T[], sessionOf: (item: T) => Session): T[] {
+  const key = (item: T) => Date.parse(lastReplyKey(sessionOf(item))) || 0;
+  return [...items].sort(
+    (a, b) => key(b) - key(a) || sessionOf(a).id.localeCompare(sessionOf(b).id),
+  );
+}
 
-  const byId = new Map(sessions.map((s) => [s.id, s]));
-  const targetIds = recencyOrder(sessions);
+/**
+ * The rank that drops a card between two neighbours of the active list
+ * (either may be absent: the top or the bottom). The midpoint, so a move
+ * rewrites only the card that moved. Ranks are Unix-ms sized, so a float64
+ * halves the gap between two sessions started a minute apart some 28 times
+ * before it runs out of precision.
+ */
+export function rankBetween(above?: number, below?: number): number {
+  if (above !== undefined && below !== undefined) return (above + below) / 2;
+  if (below !== undefined) return below + 1;
+  if (above !== undefined) return above - 1;
+  return Date.now();
+}
 
-  // A changed search is a quiet boundary in itself: the list the user is
-  // looking at is the one they just asked for, so there is nothing to hold.
-  const filterChanged = filterRef.current !== filterKey;
-  filterRef.current = filterKey;
+export interface RailRanks {
+  /** The rank to sort by: a move still in flight, else the record's. */
+  rankOf: (session: Session) => number;
+  /** Move a card: shows at once, persists through `persist`, reverts if that fails. */
+  setRank: (session: Session, rank: number) => void;
+}
 
-  const held = reconcileOrder(orderRef.current, targetIds);
-  const pending = pinSelected(targetIds, held, selectedId);
-  const moved = countMoved(held, pending);
-  const quiet = applyRef.current || filterChanged || !(hoveredRef.current || focusedRef.current);
-  applyRef.current = false;
+/**
+ * Ranks with optimistic moves. A dropped card has to stay where it was
+ * dropped while the write is in flight — otherwise it snaps back for a beat
+ * and then jumps again when session.updated arrives — so the new rank is held
+ * locally until the record agrees, and dropped if the write fails.
+ */
+export function useRailRanks(
+  sessions: Session[],
+  persist?: (id: string, rank: number) => Promise<unknown>,
+): RailRanks {
+  const [pending, setPending] = useState<ReadonlyMap<string, number>>(new Map());
 
-  const order = quiet ? pending : held;
-  orderRef.current = order;
+  useEffect(() => {
+    if (pending.size === 0) return;
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const settled = [...pending].filter(([id, rank]) => byId.get(id)?.rail_rank === rank || !byId.has(id));
+    if (settled.length === 0) return;
+    setPending((prev) => {
+      const next = new Map(prev);
+      for (const [id, rank] of settled) if (next.get(id) === rank) next.delete(id);
+      return next;
+    });
+  }, [sessions, pending]);
 
   return {
-    sessions: order.map((id) => byId.get(id)!),
-    pendingMoves: quiet ? 0 : moved,
-    settle,
-    railHandlers: {
-      onMouseEnter: () => {
-        hoveredRef.current = true;
-      },
-      onMouseLeave: () => {
-        hoveredRef.current = false;
-        settle();
-      },
-      onFocus: () => {
-        focusedRef.current = true;
-      },
-      onBlur: (event) => {
-        // Focus moving between two cards is not the rail losing focus.
-        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
-        focusedRef.current = false;
-        settle();
-      },
+    rankOf: (session) => pending.get(session.id) ?? railRankOf(session),
+    setRank: (session, rank) => {
+      if (!persist) return;
+      setPending((prev) => new Map(prev).set(session.id, rank));
+      persist(session.id, rank).catch(() => {
+        setPending((prev) => {
+          if (prev.get(session.id) !== rank) return prev;
+          const next = new Map(prev);
+          next.delete(session.id);
+          return next;
+        });
+      });
     },
   };
 }

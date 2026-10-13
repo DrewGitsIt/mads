@@ -311,7 +311,7 @@ export function filterBucketOf(status: RailStatus): RailFilterBucket {
 
 /**
  * When this session last replied — the rail's one recency value, shared by the
- * card's stamp, the order (railOrder.ts) and the "Earlier" fold below.
+ * card's stamp and the Done list's order (railOrder.ts).
  *
  * last_turn_at is the only field that means "the agent answered": updated_at is
  * bumped by renames, summary writes and activity flips too, which is what used
@@ -326,7 +326,8 @@ export function lastReplyKey(session: Session): string {
 }
 
 /**
- * The user's own judgement about a session: done with for now, fold it away.
+ * The user's own judgement about a session: done with for now — the rail's
+ * Done list, which the ✓ puts it in (and which sleeps it, SessionsSurface).
  * Mirrors contracts.SessionTagAside — a tag rather than a browser-local flag
  * because a task list has to survive a reload and a machine, unlike the rail's
  * unseen set (railUnseen.ts), which is a view preference.
@@ -361,10 +362,16 @@ export function asideDemandsAttention(bucket: RailFilterBucket): boolean {
   return bucket === "needs";
 }
 
-/** A session falls into the collapsed "Earlier" tail once its last reply is a day old. */
-export const EARLIER_AFTER_MS = 24 * 60 * 60 * 1000;
-
-export function isEarlier(session: Session, now: number): boolean {
-  const t = Date.parse(lastReplyKey(session));
-  return !Number.isNaN(t) && now - t >= EARLIER_AFTER_MS;
+/**
+ * Where a session sits in the active list: the user's own position when they
+ * have dragged it (or brought it back from Done, which ranks it "now"), else
+ * its start time. Both are Unix milliseconds (contracts.Session.RailRank), so
+ * the two mix in one sort — a session never moved sits by when it started and
+ * a new one lands on top. Neither changes on its own, which is the point: the
+ * order moves only when the user moves something.
+ */
+export function railRankOf(session: Session): number {
+  if (session.rail_rank !== undefined && session.rail_rank !== null) return session.rail_rank;
+  const started = Date.parse(session.created_at);
+  return Number.isNaN(started) ? 0 : started;
 }

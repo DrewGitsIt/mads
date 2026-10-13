@@ -268,6 +268,15 @@ type Session struct {
 	// tagged sessions, not a separate mode), "imported" for one the
 	// conversation import created, and SessionTagAside below.
 	Tags []string `json:"tags,omitempty"`
+	// RailRank is the user's own position for this session in the rail's
+	// active list: higher sits nearer the top. It shares a unit with
+	// CreatedAt in Unix milliseconds, which is what the rail ranks a session
+	// by while this is nil — so a session the user never moved sits where its
+	// start time puts it, and a new one lands on top of the list. Set by a
+	// drag (store.Sessions.SetRailRank) and by bringing a session back from
+	// Done (SetAside), which puts it on top; never by a full-record PUT, which
+	// carries the stored value forward the way it carries SessionTagAside.
+	RailRank *float64 `json:"rail_rank,omitempty"`
 	// RetroID is set when this session was created as a retro's follow-up
 	// (spec §7 DPA → task flow) — the traceability link back to the analysis.
 	RetroID string `json:"retro_id,omitempty"`

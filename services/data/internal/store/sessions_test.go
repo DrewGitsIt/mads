@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -690,5 +691,85 @@ func TestSetAsideScopedWrite(t *testing.T) {
 	}
 	if final.IsAside() {
 		t.Errorf("tags = %v — a stale PUT put the session back in the fold", final.Tags)
+	}
+}
+
+func TestSetRailRankScopedWrite(t *testing.T) {
+	s, _, l := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Dragged"})
+	before, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetRailRank(ctx, sess.ID, 1234.5, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RailRank == nil || *got.RailRank != 1234.5 {
+		t.Fatalf("rail_rank = %v, want 1234.5", got.RailRank)
+	}
+	// A position in one view is not a change to the session: the archive
+	// clock reads UpdatedAt.
+	if !got.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Error("SetRailRank bumped updated_at")
+	}
+	if n := len(eventTypes(t, l, Filter{SessionID: sess.ID, Types: []string{"session.updated"}})); n == 0 {
+		t.Error("SetRailRank announced no session.updated")
+	}
+
+	// A full-record PUT from a writer that read before the drag must not
+	// put the card back where it was.
+	stale := *before
+	stale.Summary = "runner wrote this"
+	if err := s.Update(ctx, &stale, "runner"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RailRank == nil || *got.RailRank != 1234.5 {
+		t.Fatalf("rail_rank after a stale PUT = %v, want 1234.5 kept", got.RailRank)
+	}
+
+	if err := s.SetRailRank(ctx, sess.ID, math.NaN(), "user"); err == nil {
+		t.Error("SetRailRank accepted NaN")
+	}
+}
+
+func TestBringingBackFromAsideRanksOnTop(t *testing.T) {
+	s, _, _ := newSessionStore(t)
+	ctx := context.Background()
+	sess := mkSession(t, s, contracts.Session{Name: "Picked up again"})
+	if err := s.SetRailRank(ctx, sess.ID, 1, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetAside(ctx, sess.ID, true, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RailRank == nil || *got.RailRank != 1 {
+		t.Fatalf("setting aside moved the rank: %v", got.RailRank)
+	}
+
+	start := float64(time.Now().UnixMilli())
+	if err := s.SetAside(ctx, sess.ID, false, "user"); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ranked "now", which is above every start time already in the list.
+	if got.RailRank == nil || *got.RailRank < start {
+		t.Fatalf("rail_rank after bring-back = %v, want >= %v", got.RailRank, start)
 	}
 }

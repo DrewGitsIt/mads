@@ -189,11 +189,19 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
               setActionError(undefined);
             }}
             onSleep={sleep.requestSleep}
-            onSetAside={(id, aside) => {
-              router.setSessionAside(id, aside).catch((err: unknown) => {
-                reportActionError(aside ? "set aside" : "bring back", id, err);
-              });
+            onSetDone={(session, done, working) => {
+              if (done) sleep.requestDone(session, working);
+              else sleep.bringBack(session);
             }}
+            onMove={(id, rank) =>
+              router.setSessionRailRank(id, rank).then(
+                () => undefined,
+                (err: unknown) => {
+                  reportActionError("move", id, err);
+                  throw err;
+                },
+              )
+            }
             onDelete={(id) => {
               router.deleteSession(id).catch((err: unknown) => {
                 reportActionError("delete", id, err);

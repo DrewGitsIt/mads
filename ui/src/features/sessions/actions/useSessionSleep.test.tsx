@@ -41,6 +41,15 @@ function renderHost(session: Session, client = new FakeRouterClient()) {
         <button type="button" onClick={() => sleep.wake(session)}>
           Wake it
         </button>
+        <button type="button" onClick={() => sleep.requestDone(session, false)}>
+          Done it
+        </button>
+        <button type="button" onClick={() => sleep.requestDone(session, true)}>
+          Done it mid-turn
+        </button>
+        <button type="button" onClick={() => sleep.bringBack(session)}>
+          Bring it back
+        </button>
         <SessionSleepPrompt sleep={sleep} routerClient={client} />
       </>
     );
@@ -182,5 +191,104 @@ describe("useSessionSleep — waking", () => {
 
     await waitFor(() => expect(onError).toHaveBeenCalled());
     expect(onError.mock.calls[0][0]).toBe("wake");
+  });
+});
+
+// The rail's ✓: Done-and-sleep. Same land question as ⏸, plus one before it
+// when a turn is running — disclosure rather than a silently-disabled check.
+describe("useSessionSleep — marking done", () => {
+  function spies(client: FakeRouterClient, session: Session) {
+    return {
+      aside: vi.spyOn(client, "setSessionAside").mockResolvedValue(session),
+      terminate: vi.spyOn(client, "closeSession").mockResolvedValue(),
+    };
+  }
+
+  it("checks off then sleeps, asking nothing when nothing waits", async () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    const { aside, terminate } = spies(client, session);
+    renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(aside).toHaveBeenCalledWith("s1", true);
+    await waitFor(() => expect(terminate).toHaveBeenCalledWith("s1"));
+  });
+
+  it("asks before stopping a running turn, and keeping it running does neither", () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    const { aside, terminate } = spies(client, session);
+    renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it mid-turn" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("is still working");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep it running" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(aside).not.toHaveBeenCalled();
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("goes on to the land question after a stop, and Keep for later finishes the check-off", async () => {
+    const session = isolated();
+    const client = new FakeRouterClient();
+    const { aside, terminate } = spies(client, session);
+    renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it mid-turn" }));
+    fireEvent.click(screen.getByRole("button", { name: "Mark done & stop" }));
+
+    const land = screen.getByRole("alertdialog");
+    expect(land.textContent).toContain("3 commits");
+    expect(aside).not.toHaveBeenCalled();
+
+    fireEvent.click(within(land).getByRole("button", { name: "Keep for later" }));
+    expect(aside).toHaveBeenCalledWith("s1", true);
+    await waitFor(() => expect(terminate).toHaveBeenCalledWith("s1"));
+  });
+
+  it("dismissing the land question leaves the session unchecked and awake", () => {
+    const session = isolated();
+    const client = new FakeRouterClient();
+    const { aside, terminate } = spies(client, session);
+    renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+    fireEvent.keyDown(screen.getByRole("alertdialog"), { key: "Escape" });
+
+    expect(aside).not.toHaveBeenCalled();
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("doesn't sleep a session whose check-off failed, and says so", async () => {
+    const session = isolated({ unlanded_count: 0 });
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "setSessionAside").mockRejectedValue(new Error("data service down"));
+    const terminate = vi.spyOn(client, "closeSession");
+    const { onError } = renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Done it" }));
+
+    await waitFor(() => expect(onError).toHaveBeenCalled());
+    expect(onError.mock.calls[0][0]).toBe("mark done");
+    expect(terminate).not.toHaveBeenCalled();
+  });
+
+  it("brings a session back without waking it", () => {
+    const session = isolated({ tags: ["aside"] });
+    const client = new FakeRouterClient();
+    const { aside, terminate } = spies(client, session);
+    const resume = vi.spyOn(client, "resumeSession");
+    renderHost(session, client);
+
+    fireEvent.click(screen.getByRole("button", { name: "Bring it back" }));
+
+    expect(aside).toHaveBeenCalledWith("s1", false);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(resume).not.toHaveBeenCalled();
   });
 });

@@ -90,6 +90,23 @@ func sessionRoutes(mux *http.ServeMux, log *store.Log) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Where the user dragged the session in the rail's active list
+	// (store.Sessions.SetRailRank). JSON can't carry NaN or ±Inf, but the
+	// store still refuses them for any other caller.
+	mux.HandleFunc("PUT /sessions/{id}/rail-rank", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Rank float64 `json:"rank"`
+		}
+		if !decode(w, r, &body) {
+			return
+		}
+		if err := s.SetRailRank(r.Context(), r.PathValue("id"), body.Rank, actor(r)); err != nil {
+			writeStoreError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
 	// The Session runner's main-agent transitions: one call mirrors the
 	// state onto the record and appends its event, so the rail's cold read
 	// and its live stream can never disagree (store.Sessions.SetAgentState).

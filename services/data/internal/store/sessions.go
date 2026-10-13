@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -118,6 +119,9 @@ func (s *Sessions) Update(ctx context.Context, sess *contracts.Session, actor st
 		// it out of. Only this tag is carried: the rest of Tags is a client
 		// field, and the runner's own re-root marker lands through a PUT.
 		sess.SetAside(old.IsAside())
+		// The rail position is the user's too, for the same reason: only
+		// SetRailRank and SetAside write it.
+		sess.RailRank = old.RailRank
 		sess.UpdatedAt = time.Now().UTC()
 		if err := s.write(tx, sess); err != nil {
 			return err
@@ -210,13 +214,52 @@ func (s *Sessions) SetAside(ctx context.Context, id string, aside bool, actor st
 		sess.SetAside(aside)
 		// Bumped, unlike SetAgentState's: setting a session aside IS a change
 		// to its user-visible state, and it is the user who made it.
-		sess.UpdatedAt = time.Now().UTC()
+		now := time.Now().UTC()
+		sess.UpdatedAt = now
+		if !aside {
+			// Coming back from Done is picking the session up again, so it
+			// returns to the top of the active list rather than to wherever
+			// its start time or an old drag left it (contracts.Session.RailRank).
+			rank := float64(now.UnixMilli())
+			sess.RailRank = &rank
+		}
 		if err := s.write(tx, sess); err != nil {
 			return err
 		}
 		// session.updated is what the rail's list subscribes to, so the fold
 		// closes (or opens) on every browser watching, not just the one that
 		// clicked.
+		return tx.Append(&contracts.Envelope{
+			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
+		})
+	})
+}
+
+// SetRailRank records where the user dragged a session in the rail's active
+// list (contracts.Session.RailRank). Scoped for SetAside's reason: the drop
+// can land while the session's runner is writing the same record.
+//
+// UpdatedAt is left alone, as SetAgentState leaves it: a position in one
+// view is not a change to the session, and bumping it would restart the
+// archive clock SweepExpiredShadows reads.
+func (s *Sessions) SetRailRank(ctx context.Context, id string, rank float64, actor string) error {
+	if math.IsNaN(rank) || math.IsInf(rank, 0) {
+		var v contracts.ValidationError
+		v.Add("rail_rank", "must be a finite number")
+		return &v
+	}
+	return s.log.WithTx(ctx, func(tx *Tx) error {
+		sess, err := s.getInTx(tx, id)
+		if err != nil {
+			return err
+		}
+		if sess.RailRank != nil && *sess.RailRank == rank {
+			return nil
+		}
+		sess.RailRank = &rank
+		if err := s.write(tx, sess); err != nil {
+			return err
+		}
 		return tx.Append(&contracts.Envelope{
 			Type: contracts.SessionUpdated, SessionID: id, Actor: actor,
 		})

@@ -20,7 +20,7 @@ const COMPACT_AT = 80;
 /**
  * The dock's 2px top hairline, which is the context meter (mockup E): its
  * fill is occupancy, text3 below 70%, warn from 70%, bad from 90%. Hovering
- * the rim (a 14px hit band around the 2px line) shows
+ * the rim (a 20px hit band around the 2px line, which brightens) shows
  * `106.5k / 128k · 83% context`; the label stays pinned from 70%, and from
  * 80% it carries a Compact link when `onCompact` is wired. Without usage
  * the rim is a plain hairline with no label — never a stale or made-up

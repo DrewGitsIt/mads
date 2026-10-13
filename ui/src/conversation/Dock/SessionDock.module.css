@@ -23,7 +23,8 @@
   left: 0;
   right: 0;
   bottom: 100%;
-  z-index: 20;
+  /* Above the context rim (z-index 41), whose hover band reaches up into it. */
+  z-index: 42;
   background: var(--bg1);
   border-top: 1px solid var(--line);
   box-shadow: 0 -14px 30px rgba(0, 0, 0, 0.5);

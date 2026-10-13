@@ -15,18 +15,17 @@ import {
 type Key = "alpha" | "bravo" | "charlie" | "delta";
 
 /**
- * The three rail behaviours no unit test can prove together, because each is
- * a claim about the *live* rail: the control-plane stream repainting a card
+ * The rail behaviours no unit test can prove together, because each is a
+ * claim about the *live* rail: the control-plane stream repainting a card
  * nobody is looking at, the search index reaching a field the card doesn't
- * even print, and the settled order holding across a real pointer, a real
- * focus move and a real SSE-driven refetch.
+ * even print, the user's order holding through a real SSE-driven refetch and
+ * surviving a reload, and the ✓ really putting a session's agent to sleep.
  *
- * Serial: every test reads the four sessions beforeAll creates, and each one
- * leaves the rail's recency order changed for the next (a finished turn and
- * a rename both restamp UpdatedAt). fullyParallel is off in this suite's
- * config today, but the convention is to declare serial up front rather than
- * depend on that — a block with shared beforeAll state must never be
- * splittable across workers.
+ * Serial: every test reads the four sessions beforeAll creates, and the later
+ * ones leave the rail's order changed for the next (a drag, a check-off).
+ * fullyParallel is off in this suite's config today, but the convention is to
+ * declare serial up front rather than depend on that — a block with shared
+ * beforeAll state must never be splittable across workers.
  *
  * Because the order moves as the block runs, no test hard-codes a row: each
  * reads the rail's current order first and picks its own cards out of it.
@@ -107,23 +106,22 @@ test.describe("session rail", () => {
   }
 
   /**
-   * The card a test drives a real turn through — the lowest of this block's
-   * four, since a climber has to have somewhere to climb from. Never "delta":
-   * it was seeded straight into the Data Service with no spawn, so there is no
+   * The lowest of this block's four live cards — the one that, under the old
+   * last-reply order, a finished turn would have lifted. Never "delta": it was
+   * seeded straight into the Data Service with no spawn, so there is no
    * runner to send to.
-   *
-   * A turn is what these journeys need because a turn END is now the only
-   * thing that changes a card's row: the order reads last_turn_at, so a rename
-   * (which moves updated_at alone) is deliberately not recency churn any more.
    */
-  function pickClimber(snap: RailSnapshot): Key {
+  function pickLowestLive(snap: RailSnapshot): Key {
     return [...snap.mine].reverse().find((key) => key !== "delta")!;
   }
 
-  /** Well clear of the 280px rail — the pointer leaving it is a settle boundary. */
+  /** Well clear of the 280px rail, so nothing is hovered while the rail updates. */
   async function movePointerOffRail(page: Page): Promise<void> {
     await page.mouse.move(1200, 700);
   }
+
+  const activeList = (page: Page) => railOf(page).locator('[data-rail-list="active"]');
+  const doneList = (page: Page) => railOf(page).locator('[data-rail-list="done"]');
 
   async function openRail(page: Page, routerURL: string): Promise<void> {
     await page.goto(routerURL);
@@ -205,86 +203,75 @@ test.describe("session rail", () => {
     await expect(cardFor(page, "alpha")).toBeVisible();
   });
 
-  test("hovering the rail holds every card's row until the pointer leaves", async ({
+  test("a turn ending repaints its card in place — nothing moves a card but the user", async ({
     page,
     routerURL,
   }) => {
     await openRail(page, routerURL);
-    // The pointer has never entered the rail, so this order is settled.
-    const before = await snapshot(page);
-    const climber = pickClimber(before);
-
-    // Engage the rail: pointer on a card, the way it is whenever anyone is
-    // about to click one.
-    await cardsOf(page).nth(before.rows[before.mine[0]]).hover();
-
-    // A rename lands while the rail is engaged. It restamps UpdatedAt and
-    // nothing else, so it is a repaint and not a move: the card takes its new
-    // name in place, proving the refetch arrived, and there is no pending
-    // reorder to hold — no ghost, because nothing was going to move.
-    await renameSession(routerURL, ids[climber], `${names[climber]} renamed`);
-    await expect(cardFor(page, climber)).toContainText("renamed");
-    const ghost = railOf(page).getByRole("button", { name: /session[s]? moved/ });
-    await expect(ghost).toHaveCount(0);
-    expect(await snapshot(page)).toEqual(before);
-
-    // Real recency churn, then: a turn that ends, which is the one thing that
-    // restamps LastTurnAt. Now there IS a move, and it is offered rather than
-    // performed under the cursor.
-    await sendChatMessage(routerURL, ids[climber], `echo rail hold ${stamp}`);
-    await expect(ghost).toBeVisible();
-    await expect(ghost).toHaveText(/1 session moved/);
-    // Nothing moved: not the card whose turn ended, not the cards it would
-    // have pushed down, and nothing appeared or vanished.
-    expect(await snapshot(page)).toEqual(before);
-
-    // The pointer leaves — that is the boundary, and the held order applies.
     await movePointerOffRail(page);
-    await expect(ghost).toHaveCount(0);
-    const after = await snapshot(page);
-    expect(after.mine[0]).toBe(climber);
-    expect(after.rows[climber]).toBe(before.rows[before.mine[0]]);
+    const before = await snapshot(page);
+    const lowest = pickLowestLive(before);
+
+    // A rename and a finished turn: the two record writes that used to move
+    // a card (updated_at, then last_turn_at). Neither may now.
+    await renameSession(routerURL, ids[lowest], `${names[lowest]} renamed`);
+    await expect(cardFor(page, lowest)).toContainText("renamed");
+    await sendChatMessage(routerURL, ids[lowest], `echo rail still ${stamp}`);
+    // The rail took the update: the card's own status line repaints...
+    await expect(cardFor(page, lowest).getByRole("status")).toContainText("Done · your turn");
+    // ...and nothing moved — with the pointer nowhere near the rail, which
+    // is exactly when the old order applied a move at once.
+    expect(await snapshot(page)).toEqual(before);
   });
 
-  test("the open session keeps its row while the rail reorders around it", async ({
+  test("dragging a card's grip reorders the rail, and the order survives a reload", async ({
     page,
     routerURL,
   }) => {
     await openRail(page, routerURL);
     const before = await snapshot(page);
-    const climber = pickClimber(before);
-    // The selected card needs cards on both sides: something above it, so the
-    // climber can visibly pass it, and the climber below, so an unpinned rail
-    // would push it down a row. "delta" is excluded — it is the dormant
-    // search fixture, and opening it would 404 its live-output subscription.
-    const selected = before.mine.find(
-      (key, i) => i > 0 && key !== "delta" && before.rows[key] < before.rows[climber],
-    )!;
-    expect(selected, "a middle, live card to open").toBeTruthy();
+    const top = before.mine[0];
+    const bottom = before.mine[before.mine.length - 1];
 
-    await cardFor(page, selected).click();
-    const composer = page.getByPlaceholder("Message the agent — @ to mention, / for commands");
-    await expect(composer).toBeVisible();
-    // Clicking a card leaves it focused, and a focused rail is held exactly
-    // like a hovered one. Moving focus into the composer and the pointer off
-    // the rail is the quiet boundary this journey needs: from here on, an
-    // order that doesn't apply is a pin, not a hold.
-    await composer.click();
-    await movePointerOffRail(page);
-    const selectedRow = before.rows[selected];
-    expect(await rowOf(page, selected)).toBe(selectedRow);
+    // The grip only shows on hover, in the gutter left of the card.
+    await cardFor(page, bottom).hover();
+    const grip = cardFor(page, bottom).locator("[data-rail-grip]");
+    await expect(grip).toBeVisible();
+    // Onto the top half of the top card: "before" it.
+    await grip.dragTo(cardFor(page, top), { targetPosition: { x: 40, y: 4 } });
 
-    // A turn end on the card below — the only churn that reorders the rail now.
-    await sendChatMessage(routerURL, ids[climber], `echo rail pin ${stamp}`);
-    // The rail took the update: the climber's own status line repaints.
-    await expect(cardFor(page, climber).getByRole("status")).toContainText("Done · your turn");
+    await expect.poll(() => rowOf(page, bottom)).toBe(before.rows[top]);
+    expect(await rowOf(page, top)).toBe(before.rows[top] + 1);
 
-    // The climber really did rise past the open session — the rail reordered,
-    // it did not simply freeze...
-    await expect.poll(() => rowOf(page, climber)).toBeLessThan(selectedRow);
-    // ...and the open session is still on exactly the row it was on.
-    expect(await rowOf(page, selected)).toBe(selectedRow);
-    // Still open, too: the pin held the row, it didn't drop the selection.
-    await expect(composer).toBeVisible();
+    // On the record, not in this page: a reload reads it back from the Router.
+    await page.reload();
+    await expect(cardFor(page, bottom)).toBeVisible();
+    expect(await rowOf(page, bottom)).toBe(before.rows[top]);
+    expect(await rowOf(page, top)).toBe(before.rows[top] + 1);
+  });
+
+  test("✓ checks a session off into Done and puts its agent to sleep; bringing it back puts it on top", async ({
+    page,
+    routerURL,
+  }) => {
+    await openRail(page, routerURL);
+    const before = await snapshot(page);
+    // A live card that isn't already on top, so "back on top" is a real move.
+    const target = before.mine.find((key, i) => i > 0 && key !== "delta")!;
+    expect(target, "a live card below the top").toBeTruthy();
+
+    await cardFor(page, target).hover();
+    await page.getByRole("button", { name: `Check off ${names[target]}` }).click();
+
+    const done = doneList(page).locator("[data-rail-card]").filter({ hasText: names[target] });
+    await expect(done).toBeVisible();
+    await expect(activeList(page).locator("[data-rail-card]").filter({ hasText: names[target] })).toHaveCount(0);
+    // Done is Done-and-sleep: the record reports the agent stopped.
+    await expect(done).toHaveAttribute("data-activity", "inactive");
+
+    await done.hover();
+    await page.getByRole("button", { name: `Bring back ${names[target]}` }).click();
+    await expect(activeList(page).locator("[data-rail-card]").first()).toContainText(names[target]);
+    await expect(doneList(page).locator("[data-rail-card]").filter({ hasText: names[target] })).toHaveCount(0);
   });
 });
