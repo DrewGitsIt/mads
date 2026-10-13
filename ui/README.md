@@ -33,16 +33,23 @@ entry, since `SURFACES` maps `IconRail` items, not in-surface state. The
 `FakeRouterClient` fixtures) for reviewing it in isolation without a live
 Router.
 
-Sources of truth for the design system: `docs/MADS-UX.md` §2–3 and
-`docs/palette-mockups.html` (the approved source for all three shipping
-palettes — `clay`/`space`/`glacier` — across both themes; see
-`src/tokens/tokens.ts` for how they're pinned). `docs/ux-prototype.html`
-remains correct for clay-dark's original pre-review baseline but is
-superseded by the mockup for the approved review values.
+Sources of truth for the design system: `docs/MADS-UX.md` §2–3 for the
+rules, and `src/tokens/palettes.yaml` for the palettes. Each palette was
+designed in [ChromaConscious](https://drewkidwell.com/chromaconscious); its
+export is committed under `src/tokens/chromaconscious/`, and
+`node scripts/make-palettes.mjs` converts those exports (offline) into
+`src/tokens/palettes.css` and `palettes.ts`, mapping ChromaConscious's tokens
+onto mads's 30, applying the yaml's hand overrides, and refusing to write any
+palette that misses WCAG AA. Never edit the generated files; edit the yaml (or
+re-export a palette with `make-palettes.mjs export <name> <state>`) and re-run.
+`tokens.test.ts` checks the CSS and TS agree, every combination holds AA, and
+`pkg/contracts` `Palettes` matches the yaml.
 
 Tokens vary along two independent dimensions on the root element:
-`[data-theme]` (`dark`/`light`) and `[data-palette]` (`clay`/`space`/
-`glacier`). `clay` is the default palette when `[data-palette]` is absent.
+`[data-theme]` (`dark`/`light`) and `[data-palette]` (any name in
+`palettes.yaml`). The first palette there, `clay`, is the default when
+`[data-palette]` is absent. Shared tokens (type, spacing, motion) stay
+hand-written in `src/tokens/tokens.css`, which imports `palettes.css`.
 
 ## Run it alone
 
@@ -85,15 +92,13 @@ npm run gallery
 ```
 
 Opens `gallery.html` via the Vite dev server: every component in the kit,
-rendered across all 6 palette×theme combinations (`clay`/`space`/`glacier` ×
-`dark`/`light`), grouped by component name. A palette/theme switcher above
-the sections lets you filter/highlight a specific combination without
-unmounting the others — all 6 stay rendered so the full audit view is always
-available. The sections also exercise the kit's interaction states: a
-hoverable card, a selected card, an edit-in-place card (`:focus-within`), an
-interactive/pressed chip, and a dismissable toast. This is the review
-artifact a human signs off on — all 6 combinations are approved, sourced from
-`docs/palette-mockups.html`, not a first pass.
+rendered across every palette×theme combination (each palette in
+`src/tokens/palettes.yaml` × `dark`/`light`), grouped by component name. A
+palette/theme switcher above the sections lets you filter/highlight a specific
+combination without unmounting the others — all stay rendered so the full
+audit view is always available. The sections also exercise the kit's
+interaction states: a hoverable card, a selected card, an edit-in-place card
+(`:focus-within`), an interactive/pressed chip, and a dismissable toast.
 
 ## Conversation tab
 

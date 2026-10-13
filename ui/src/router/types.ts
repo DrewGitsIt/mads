@@ -2,6 +2,8 @@
 // UI. Field names stay snake_case to match the JSON the Go services emit —
 // no camelCase translation layer for this first pass.
 
+import type { PaletteName } from "../tokens/palettes";
+
 export type SessionActivity = "active" | "inactive";
 // Picker order, most to least permissive (pkg/contracts SessionTrusts).
 export type SessionTrust = "full" | "auto_review" | "limited" | "read_only";
@@ -1338,7 +1340,8 @@ export type ThemeMode = "dark" | "light" | "system";
 // mirrors contracts.StreamSpeed — the conversation's reveal pace. "medium"
 // is retired: still accepted from an old config row, read as "fast".
 export type StreamSpeed = "off" | "slow" | "fast" | "custom" | "medium";
-export type PaletteName = "clay" | "space" | "glacier";
+// Generated from ui/src/tokens/palettes.yaml; pkg/contracts Palettes mirrors it.
+export type { PaletteName };
 // FastModelMode mirrors pkg/contracts/session.go: provider uses the default
 // provider's hermetic Completer capability (zero-config), endpoint uses the
 // explicit fast_model_base_url, off disables Fast Model features entirely.

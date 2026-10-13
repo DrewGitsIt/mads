@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { Gallery } from "./Gallery";
+import { paletteNames } from "../tokens/palettes";
 
 const COMPONENT_NAMES = [
   "button",
@@ -14,28 +15,21 @@ const COMPONENT_NAMES = [
   "draft",
 ];
 
-const COMBOS = [
-  "clay-dark",
-  "clay-light",
-  "space-dark",
-  "space-light",
-  "glacier-dark",
-  "glacier-light",
-];
+const COMBOS = paletteNames.flatMap((p) => [`${p}-dark`, `${p}-light`]);
 
 describe("Gallery", () => {
   it("renders without throwing", () => {
     expect(() => render(<Gallery />)).not.toThrow();
   });
 
-  it("renders all 6 palette×theme sections", () => {
+  it("renders every palette×theme section", () => {
     render(<Gallery />);
     for (const combo of COMBOS) {
       expect(screen.getByTestId(`combo-${combo}`)).toBeTruthy();
     }
   });
 
-  it.each(COMPONENT_NAMES)("renders the %s group in all 6 sections", (name) => {
+  it.each(COMPONENT_NAMES)("renders the %s group in every section", (name) => {
     render(<Gallery />);
     for (const combo of COMBOS) {
       const section = screen.getByTestId(`combo-${combo}`);

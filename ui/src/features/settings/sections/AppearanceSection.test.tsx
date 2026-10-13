@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import { fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppearanceSection } from "./AppearanceSection";
+import { paletteInfo, paletteNames } from "../../../tokens/palettes";
 import { fixtureConfig } from "../../../router/fixtures";
 import type { UseConfig } from "../state/useConfig";
 
@@ -71,8 +72,8 @@ describe("AppearanceSection", () => {
     render(<AppearanceSection config={makeConfig()} />);
     const group = screen.getByRole("radiogroup", { name: "Palette" });
     const cards = within(group).getAllByRole("radio");
-    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Clay", "Space", "Glacier"]);
-    expect(cards.map((c) => c.getAttribute("data-palette"))).toEqual(["clay", "space", "glacier"]);
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(paletteInfo.map((p) => p.label));
+    expect(cards.map((c) => c.getAttribute("data-palette"))).toEqual([...paletteNames]);
     // Scoped to the applied theme, so each card reads as this app in that palette.
     expect(cards.every((c) => c.getAttribute("data-theme") === "light")).toBe(true);
     expect(within(group).getByRole("radio", { name: "Clay" }).getAttribute("aria-checked")).toBe("true");
@@ -111,8 +112,31 @@ describe("AppearanceSection", () => {
     expect(document.documentElement.dataset.palette).toBe("clay");
 
     fireEvent.keyDown(clay, { key: "ArrowRight" });
-    expect(document.activeElement).toBe(screen.getByRole("radio", { name: "Space" }));
-    expect(config.saveFields).toHaveBeenCalledWith({ palette: "space" });
+    expect(document.activeElement).toBe(screen.getByRole("radio", { name: paletteInfo[1].label }));
+    expect(config.saveFields).toHaveBeenCalledWith({ palette: paletteInfo[1].name });
+  });
+
+  it("filters the cards by tag; arrow keys move among the cards shown", () => {
+    const config = makeConfig();
+    render(<AppearanceSection config={config} />);
+    const filters = screen.getByRole("group", { name: "Filter palettes" });
+    const group = screen.getByRole("radiogroup", { name: "Palette" });
+
+    fireEvent.click(within(filters).getByRole("button", { name: "Cool" }));
+    const cool = paletteInfo.filter((p) => p.tags.includes("cool"));
+    expect(within(filters).getByRole("button", { name: "Cool" }).getAttribute("aria-pressed")).toBe("true");
+    expect(within(group).getAllByRole("radio").map((c) => c.getAttribute("data-palette"))).toEqual(
+      cool.map((p) => p.name),
+    );
+
+    // The saved palette (clay) is filtered out, so the first card shown holds the tab stop.
+    const first = within(group).getByRole("radio", { name: cool[0].label });
+    expect(first.tabIndex).toBe(0);
+    fireEvent.keyDown(first, { key: "ArrowLeft" });
+    expect(config.saveFields).toHaveBeenCalledWith({ palette: cool[cool.length - 1].name });
+
+    fireEvent.click(within(filters).getByRole("button", { name: "All" }));
+    expect(within(group).getAllByRole("radio")).toHaveLength(paletteInfo.length);
   });
 
   it("reverts a clicked palette whose save fails", async () => {

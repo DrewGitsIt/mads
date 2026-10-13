@@ -3,6 +3,7 @@ package contracts
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // AgentSelectionMode controls how a session picks its agent (HANDOFF §2.1 /
@@ -170,8 +171,14 @@ func (m EnvMode) Valid() bool {
 }
 
 // Palettes is the full registry of design-system palettes (data-palette
-// values the tokens stylesheet defines), for validation and enumeration.
-var Palettes = []string{"clay", "space", "glacier"}
+// values the tokens stylesheet defines), for validation and enumeration. It
+// mirrors ui/src/tokens/palettes.yaml, in the same order; tokens.test.ts fails
+// if they drift. The first is the default.
+var Palettes = []string{
+	"clay", "rosewood", "dune", "aubergine", "sakura", "ember",
+	"space", "glacier", "harbor", "lagoon", "synthwave",
+	"moss", "citrus", "graphite", "ink",
+}
 
 // ValidPalette reports whether p is a registered palette.
 func ValidPalette(p string) bool {
@@ -438,7 +445,7 @@ func ValidateConfig(c *Config) *ValidationError {
 		v.Add("stream_wpm", fmt.Sprintf("must be between %d and %d", MinStreamWPM, MaxStreamWPM))
 	}
 	if c.Palette != "" && !ValidPalette(c.Palette) {
-		v.Add("palette", "must be one of: clay, space, glacier")
+		v.Add("palette", "must be one of: "+strings.Join(Palettes, ", "))
 	}
 	if c.ConcurrencyLimit < 1 {
 		v.Add("concurrency_limit", "must be at least 1")

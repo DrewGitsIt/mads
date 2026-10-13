@@ -1,0 +1,106 @@
+# mads palettes. scripts/make-palettes.mjs turns this file, plus each palette's
+# ChromaConscious export in ./chromaconscious/<name>.json, into palettes.css and
+# palettes.ts. Edit here and re-run the script; never edit the generated files.
+#
+#   node scripts/make-palettes.mjs                     convert (offline)
+#   node scripts/make-palettes.mjs export <name> <s>   re-export one palette from a
+#                                                      ChromaConscious state link (#s=…)
+#
+# The first palette is the default (no [data-palette] attribute, and the Go
+# config default). The order here is the picker's order.
+#
+# tags: one tone (warm, cool, green, neutral) and one vibrancy (muted, balanced,
+# vivid, high-contrast); the Settings filter chips read them.
+#
+# high_contrast: keeps ChromaConscious's light-on-fill button text in dark mode.
+# Every other palette gets a bright fill with near-black text there.
+#
+# overrides: per-mode mads tokens to set by hand after conversion. The engine is
+# a starting point, not a bible. Contrast is re-checked after overrides, and
+# text3 and the status tints are refitted to overridden surfaces.
+
+- name: clay
+  label: Clay
+  description: Warm umber with a terracotta accent. Paper and ink.
+  tags: [warm, muted]
+
+- name: rosewood
+  label: Rosewood
+  description: Dusty rose over a mauve-gray, slate-blue second voice.
+  tags: [warm, muted]
+
+- name: dune
+  label: Dune
+  description: Ochre and sage on sand. Sun-bleached.
+  tags: [warm, muted]
+
+- name: aubergine
+  label: Aubergine
+  description: Deep plum with a gold second voice. Velvet.
+  tags: [warm, balanced]
+
+- name: sakura
+  label: Sakura
+  description: Cherry-blossom pink with a jade second voice.
+  tags: [warm, balanced]
+
+- name: ember
+  label: Ember
+  description: Charcoal with a hot orange and amber. Forge-lit.
+  tags: [warm, vivid]
+
+- name: space
+  label: Space
+  description: Indigo-black with a violet accent and a teal second voice. Night shift.
+  tags: [cool, balanced]
+
+- name: glacier
+  label: Glacier
+  description: Deep navy with an icy blue accent and lavender. Crisp and quiet.
+  tags: [cool, muted]
+  overrides:
+    # The engine keeps dark neutrals near gray; Glacier's identity is navy.
+    dark:
+      bg0: "#03101d"
+      bg1: "#051c31"
+      bg2: "#09263f"
+      bg3: "#0e304e"
+      bg4: "#143a5c"
+      line: "#20507a"
+      lineSoft: "#0d2c47"
+
+- name: harbor
+  label: Harbor
+  description: Navy and sea-teal on a fog gray. Nautical.
+  tags: [cool, balanced]
+
+- name: lagoon
+  label: Lagoon
+  description: Bright aqua with a coral second voice. Tropical.
+  tags: [cool, vivid]
+
+- name: synthwave
+  label: Synthwave
+  description: Hot magenta and cyan on violet-black. Arcade at 2am.
+  tags: [cool, vivid]
+
+- name: moss
+  label: Moss
+  description: Olive and forest on a lichen gray. Calm, outdoorsy.
+  tags: [green, muted]
+
+- name: citrus
+  label: Citrus
+  description: Electric lime with a tangerine second voice.
+  tags: [green, vivid]
+
+- name: graphite
+  label: Graphite
+  description: True gray with a steel-blue accent. Nothing competes with the work.
+  tags: [neutral, muted]
+
+- name: ink
+  label: Ink
+  description: High-contrast ink on paper with a cobalt accent. 10:1 text.
+  tags: [neutral, high-contrast]
+  high_contrast: true
