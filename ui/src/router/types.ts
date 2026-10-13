@@ -829,8 +829,11 @@ export type StreamEvent = SubagentTag &
 // process (a run_in_background Bash call, a Monitor watch).
 export interface BackgroundTask {
   task_id: string;
-  // The call that started it; absent until the harness says.
+  // The call that started it.
   tool_use_id?: string;
+  // Set when a subagent started it: that subagent's spawning call. Its
+  // tool_use_id is then a call in the subagent's own stream.
+  parent_tool_use_id?: string;
   description?: string;
   started_at: string;
 }

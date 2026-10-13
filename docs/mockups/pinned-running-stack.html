@@ -1,0 +1,316 @@
+<!doctype html>
+<!--
+  Conversation: the pinned "running" stack (2026-10-13). Self-contained: open
+  in any browser.
+
+  The problem: every running subagent and background process whose card is
+  off screen gets its own pinned row above the composer, with no cap
+  (ui/src/conversation/ConversationTab.tsx's .pinned cluster: Substrip, then
+  BackgroundStrip). A session with 2 subagents and 7 processes buried the
+  conversation under nine ~70px rows.
+
+  Three options, each drawn with the same data (from the reported
+  screenshot). Agreed regardless of option: subagents outrank processes.
+  Processes a subagent started are drawn nested under it — pending the
+  owned_by_subagent check; today they are listed as the main agent's.
+
+  Live surfaces this mocks:
+    ui/src/conversation/ConversationTab.tsx        (.pinned cluster)
+    ui/src/conversation/activity/Substrip.tsx      (subagent rows)
+    ui/src/conversation/activity/Background.tsx    (process rows)
+    ui/src/conversation/Dock/StatusLine            (option 2's segment)
+-->
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mads — the pinned running stack</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-hover:#d3945e; --accent-soft:rgba(192,133,82,.15);
+    --ok:#7cb389; --ok-fg:#7cb389;
+    --bad:#d2604a;
+    --shadow:0 12px 28px rgba(0,0,0,.45);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px;
+    --fs-sm:12.5px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.55 var(--sans); }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border:1px solid var(--line-soft); border-radius:4px; padding:1px 5px; color:var(--text2); }
+
+  .page { max-width:1240px; margin:0 auto; padding:var(--space-6) var(--space-5) 140px; display:flex; flex-direction:column; gap:var(--space-6); }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:92ch; margin-top:var(--space-2); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:var(--space-3) var(--space-4); border-bottom:1px solid var(--line-soft); display:flex; gap:var(--space-3); align-items:baseline; }
+  .block > h2 small { color:var(--text3); font-weight:400; font-size:var(--fs-sm); }
+  .row { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:var(--space-5); padding:var(--space-4); }
+  .notes { color:var(--text2); font-size:var(--fs-sm); }
+  .notes h3 { color:var(--text); font-size:var(--fs-body); margin:0 0 var(--space-1); }
+  .notes ul { padding-left:18px; margin:var(--space-1) 0 var(--space-3); }
+  .notes li { margin:3px 0; }
+  .notes .pro { color:var(--ok-fg); }
+  .notes .con { color:#dd7a66; }
+  .toggle { margin-top:var(--space-2); background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:var(--r-sm); padding:5px 10px; font:12px var(--sans); cursor:pointer; }
+
+  /* ── the conversation pane ─────────────────────────────── */
+  .pane { height:620px; display:flex; flex-direction:column; background:var(--bg0); border:1px solid var(--line-soft); border-radius:var(--r); overflow:hidden; position:relative; }
+  .stream { flex:1; min-height:0; overflow:hidden; display:flex; flex-direction:column; position:relative; }
+  .msgs { padding:var(--space-4) var(--space-5); display:flex; flex-direction:column; gap:var(--space-3); color:var(--text); font-size:14px; line-height:1.6; }
+  .msgs .marker { color:var(--text3); font:12px var(--mono); text-align:center; }
+  .pinned { margin-top:auto; padding:0 var(--space-4) var(--space-3); display:flex; flex-direction:column; gap:var(--space-2); position:relative; z-index:2; }
+  .pinned::before { content:""; position:absolute; inset:-28px 0 0 0; background:linear-gradient(transparent, var(--bg0) 28px); z-index:-1; }
+
+  .composer { border-top:1px solid var(--line-soft); padding:var(--space-3) var(--space-4); display:flex; gap:var(--space-3); align-items:center; color:var(--text3); }
+  .composer .plus { width:30px; height:30px; border:1px solid var(--line); border-radius:50%; display:flex; align-items:center; justify-content:center; }
+  .composer .send { margin-left:auto; background:var(--accent); color:#1b140c; border-radius:var(--r-sm); padding:5px 14px; font-weight:600; }
+  .status { border-top:1px solid var(--line-soft); padding:6px var(--space-4); display:flex; gap:var(--space-4); align-items:center; color:var(--text2); font-size:12px; position:relative; }
+  .status .seg { display:inline-flex; gap:6px; align-items:center; padding:2px 6px; border-radius:5px; white-space:nowrap; flex:none; }
+  .status .seg.btn { cursor:pointer; border:1px solid transparent; }
+  .status .seg.btn:hover, .status .seg.btn.on { background:var(--bg2); border-color:var(--line); color:var(--text); }
+  .status .spacer { flex:1; }
+  .dot { width:7px; height:7px; border-radius:50%; display:inline-block; }
+
+  /* ── today's rows (Substrip.module.css) ─────────────────── */
+  .strip { display:flex; align-items:center; gap:11px; width:100%; background:var(--bg1); border:1px solid var(--accent); border-radius:10px; padding:10px 16px; font:13px var(--mono); color:var(--text); box-shadow:var(--shadow); }
+  .strip.passive { border-color:var(--line); }
+  .ki { width:22px; height:22px; border-radius:6px; background:var(--bg3); color:var(--accent); display:inline-flex; align-items:center; justify-content:center; font-size:12px; flex:none; }
+  .name { flex-shrink:0; max-width:40%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .op { color:var(--text2); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  .counters { margin-left:auto; color:var(--text3); font-size:12px; display:inline-flex; gap:12px; align-items:center; flex-shrink:0; white-space:nowrap; }
+  .spin { width:11px; height:11px; border:1.5px solid var(--accent); border-right-color:transparent; border-radius:50%; display:inline-block; flex:none; animation:spin 1s linear infinite; }
+  .spin.dim { border-color:var(--text3); border-right-color:transparent; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+
+  /* ── dense list rows (options 1, 2, 3) ──────────────────── */
+  .list { display:flex; flex-direction:column; }
+  .li { display:flex; align-items:center; gap:9px; padding:5px 12px; font:12.5px var(--mono); color:var(--text); min-height:30px; border-radius:6px; }
+  .li.agent { cursor:pointer; }
+  .li.agent:hover { background:var(--bg2); }
+  .li .ki { width:18px; height:18px; font-size:10px; }
+  .li.proc .ki { color:var(--text2); }
+  .li.nested { padding-left:38px; position:relative; color:var(--text2); }
+  .li.nested::before { content:""; position:absolute; left:20px; top:0; width:10px; height:16px; border-left:1.5px dashed var(--text3); border-bottom:1.5px dashed var(--text3); border-bottom-left-radius:5px; }
+  .group { font:600 10.5px var(--sans); color:var(--text3); text-transform:uppercase; letter-spacing:.08em; padding:8px 12px 3px; }
+
+  /* option 1 */
+  .summary { display:flex; align-items:center; gap:11px; width:100%; background:var(--bg1); border:1px solid var(--accent); border-radius:10px; padding:9px 16px; font:13px var(--mono); color:var(--text); box-shadow:var(--shadow); cursor:pointer; text-align:left; }
+  .summary:hover { background:var(--bg2); }
+  .summary .count { white-space:nowrap; }
+  .summary .count b { font-weight:600; }
+  .summary .chev { color:var(--text3); transition:transform .15s; }
+  .o1.open .summary .chev { transform:rotate(180deg); }
+  .o1 .panel { display:none; background:var(--bg1); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); max-height:260px; overflow:auto; padding:4px; }
+  .o1.open .panel { display:block; }
+
+  /* option 2 */
+  .menu { display:none; position:absolute; left:auto; right:var(--space-4); bottom:34px; width:560px; background:var(--bg1); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); max-height:330px; overflow:auto; padding:4px; z-index:5; }
+  .o2.open .menu { display:block; }
+  .seg .tick { color:var(--text3); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:var(--mono); font-size:11.5px; }
+
+  /* option 3 */
+  .capped { max-height:150px; overflow:auto; background:var(--bg1); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); padding:4px; }
+  .capped-head { display:flex; justify-content:space-between; color:var(--text3); font:11.5px var(--sans); padding:0 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>The pinned "running" stack</h1>
+    <p>Every running subagent and background process whose card has scrolled away gets its own pinned row above
+      the composer, with no limit. Below: today, then three options, all with the same nine items from the reported
+      session. Subagents come before processes in each. A process a subagent started is drawn nested under that
+      subagent. A real capture confirmed we can tell which those are: a subagent's background Bash has
+      <code>owned_by_subagent: true</code> on its <code>task_started</code> line.</p>
+  </header>
+
+  <!-- ───────────────────────── TODAY ───────────────────────── -->
+  <section class="block">
+    <h2>Today <small>nine rows, ~600px of a 620px pane</small></h2>
+    <div class="row">
+      <div class="pane">
+        <div class="stream">
+          <div class="msgs">
+            <p>Another interim update from the <code>/new</code> agent: a timeout it hit was in the <code>/usage</code> agent's test file, not its own.</p>
+            <div class="marker">● Agent "Wave2: /compact cmd + ACP transcript" finished 12:14 AM</div>
+            <p>The <code>/compact</code> agent is done. <code>/compact</code> goes through the same code path as the "Compact now" button…</p>
+          </div>
+          <div class="pinned" data-rows="today"></div>
+        </div>
+        <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
+        <div class="status"><span class="seg">P product-to-code-partner</span><span class="seg"><span class="dot" style="background:var(--info,#96afc7)"></span>Opus 5.5</span><span class="spacer"></span><span class="seg">⎇ mads / settings-ux</span></div>
+      </div>
+      <div class="notes">
+        <h3>What goes wrong</h3>
+        <ul>
+          <li>The conversation's last message is covered; you have to scroll to read anything.</li>
+          <li>Rows only show while their card is off screen, and with this many the cards are always far up. So the stack never shrinks.</li>
+          <li>Processes from a subagent's history (e.g. "Wait for usage test results") have no card in this conversation, so they're always pinned.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── OPTION 1 ───────────────────────── -->
+  <section class="block">
+    <h2>1 · One summary row, expandable <small>recommended</small></h2>
+    <div class="row">
+      <div class="pane o1" id="o1">
+        <div class="stream">
+          <div class="msgs">
+            <p>Another interim update from the <code>/new</code> agent: a timeout it hit was in the <code>/usage</code> agent's test file, not its own.</p>
+            <div class="marker">● Agent "Wave2: /compact cmd + ACP transcript" finished 12:14 AM</div>
+            <p>The <code>/compact</code> agent is done. <code>/compact</code> goes through the same code path as the "Compact now" button, and goose's transcript now shows a single compaction marker. One test still has the old command list hardcoded; I'll fix it once the registry stops changing. <code>/new</code> and <code>/usage</code> are still running.</p>
+          </div>
+          <div class="pinned">
+            <div class="panel" data-rows="dense"></div>
+            <button class="summary" type="button" onclick="document.getElementById('o1').classList.toggle('open')">
+              <span class="spin"></span>
+              <span class="count"><b>2 subagents</b> · 7 processes running</span>
+              <span class="op">· Wave2: /new family card — Running cd /Users/drew/repo/mads-cmds/ui && timeout 580 n…</span>
+              <span class="counters"><span>31m 18s</span><span class="chev">▴</span></span>
+            </button>
+          </div>
+        </div>
+        <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
+        <div class="status"><span class="seg">P product-to-code-partner</span><span class="seg"><span class="dot" style="background:#96afc7"></span>Opus 5.5</span><span class="spacer"></span><span class="seg">⎇ mads / settings-ux</span></div>
+      </div>
+      <div class="notes">
+        <h3>How it behaves</h3>
+        <ul>
+          <li>Two items or fewer: today's full rows, unchanged.</li>
+          <li>More than two: one row. Counts lead with subagents; the ticker is the busiest subagent's current step; the clock is the oldest item's.</li>
+          <li>Click: a list opens above it, capped at ~260px and scrolling on its own. Subagent rows open that subagent's history in the dock; processes are read-only.</li>
+          <li>Processes are nested under the subagent that started them.</li>
+        </ul>
+        <p class="pro">+ One row's height, whatever the count. Same idea as the sidebar's "+10 more".</p>
+        <p class="con">− The second subagent's step is hidden until you expand.</p>
+        <button class="toggle" onclick="document.getElementById('o1').classList.toggle('open')">Toggle expanded</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── OPTION 2 ───────────────────────── -->
+  <section class="block">
+    <h2>2 · A status-bar segment with a menu</h2>
+    <div class="row">
+      <div class="pane o2" id="o2">
+        <div class="stream">
+          <div class="msgs">
+            <p>Another interim update from the <code>/new</code> agent: a timeout it hit was in the <code>/usage</code> agent's test file, not its own.</p>
+            <div class="marker">● Agent "Wave2: /compact cmd + ACP transcript" finished 12:14 AM</div>
+            <p>The <code>/compact</code> agent is done. <code>/compact</code> goes through the same code path as the "Compact now" button, and goose's transcript now shows a single compaction marker. One test still has the old command list hardcoded; I'll fix it once the registry stops changing. <code>/new</code> and <code>/usage</code> are still running.</p>
+          </div>
+          <div class="pinned"></div>
+        </div>
+        <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
+        <div class="status">
+          <span class="seg">P product-to-code-partner</span><span class="seg"><span class="dot" style="background:#96afc7"></span>Opus 5.5</span>
+          <span class="spacer"></span>
+          <span class="seg btn" onclick="this.classList.toggle('on');document.getElementById('o2').classList.toggle('open')">
+            <span class="spin"></span>2 subagents · 7 processes
+            <span class="tick">Running cd /Users/drew/repo/mads-cmds/ui && timeout 580 n…</span>▴
+          </span>
+          <span class="seg">⎇ mads / settings-ux</span>
+          <div class="menu" data-rows="dense"></div>
+        </div>
+      </div>
+      <div class="notes">
+        <h3>How it behaves</h3>
+        <ul>
+          <li>The pinned area goes back to the turn only: approvals, the working indicator, the queue.</li>
+          <li>One status-bar item: a spinner, the counts and the busiest subagent's current step (dropped first when the bar is narrow).</li>
+          <li>Click: a menu with the same nested list as option 1.</li>
+        </ul>
+        <p class="pro">+ Takes no conversation space at all.</p>
+        <p class="con">− Much easier to miss than an accent-bordered row; the status bar is small grey text the eye learns to skip.</p>
+        <p class="con">− It's per conversation, but the status bar is about the session's settings (persona, model, trust, branch). Mixing in activity changes what that bar is for.</p>
+        <button class="toggle" onclick="document.querySelector('#o2 .seg.btn').click()">Toggle menu</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── OPTION 3 ───────────────────────── -->
+  <section class="block">
+    <h2>3 · Cap the stack, denser rows, scroll inside</h2>
+    <div class="row">
+      <div class="pane">
+        <div class="stream">
+          <div class="msgs">
+            <p>Another interim update from the <code>/new</code> agent: a timeout it hit was in the <code>/usage</code> agent's test file, not its own.</p>
+            <div class="marker">● Agent "Wave2: /compact cmd + ACP transcript" finished 12:14 AM</div>
+            <p>The <code>/compact</code> agent is done. <code>/compact</code> goes through the same code path as the "Compact now" button, and goose's transcript now shows a single compaction marker…</p>
+          </div>
+          <div class="pinned">
+            <div class="capped-head"><span>2 subagents · 7 processes running</span><span>scroll for more</span></div>
+            <div class="capped" data-rows="dense"></div>
+          </div>
+        </div>
+        <div class="composer"><span class="plus">+</span>Message the agent — @ to mention, / for commands<span class="send">Send</span></div>
+        <div class="status"><span class="seg">P product-to-code-partner</span><span class="seg"><span class="dot" style="background:#96afc7"></span>Opus 5.5</span><span class="spacer"></span><span class="seg">⎇ mads / settings-ux</span></div>
+      </div>
+      <div class="notes">
+        <h3>How it behaves</h3>
+        <ul>
+          <li>Rows shrink from ~46px to ~30px, without a border each; the whole stack is one box capped at ~4½ rows.</li>
+          <li>Past that, the box scrolls on its own. Subagents first, so they're what's visible without scrolling.</li>
+        </ul>
+        <p class="pro">+ Smallest change; everything stays visible without a click when there are few items.</p>
+        <p class="con">− Still ~150px of conversation gone whenever anything runs.</p>
+        <p class="con">− A scrolling box inside the scrolling conversation: the scroll wheel goes to whichever one the pointer is over.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  // One data set for every frame: subagents first, each with the processes it
+  // started nested under it; then the main agent's own processes.
+  const agents = [
+    { name: "Wave2: /new family card", op: "Running cd /Users/drew/repo/mads-cmds/ui && timeout 580 n…", counters: "203.2k tok · 101 tools · 30m 21s",
+      procs: [["cd /Users/drew/repo/mads-cmds/ui && (npx vitest run src/conversation/Composer src/router 2>&1 | tail -…", "18m 49s"],
+              ["Wait for composer test results", "8m 55s"]] },
+    { name: "Wave2: /usage Ledger card", op: "Running Wait for usage test results", counters: "135.2k tok · 70 tools · 31m 18s",
+      procs: [["Run usage tests in background with verbose reporter", "4m 23s"], ["Wait for usage test results", "4m 17s"]] },
+  ];
+  const mainProcs = [
+    ["cd /Users/drew/repo/mads-cmds/ui && for f in $(find src/conversation/Composer src/features/sessions -n…", "15m 48s"],
+    ["per-file vitest results (Composer + sessions)", "15m 35s"],
+    ["until [ \"$(wc -l < /tmp/mads-cmds-vitest-files.log)\" -ge 43 ]; do sleep 10; done; cat /tmp/mads-cmds-v…", "15m 33s"],
+  ];
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+
+  // Today: one bordered row each, subagents then processes, all flat.
+  let today = "";
+  for (const a of agents) {
+    today += `<div class="strip"><span class="ki">⁂</span><span class="name">${esc(a.name)}</span><span class="op">${esc(a.op)}</span><span class="counters"><span>${a.counters}</span><span class="spin"></span></span></div>`;
+  }
+  for (const [d, t] of [...agents.flatMap((a) => a.procs), ...mainProcs]) {
+    today += `<div class="strip passive"><span class="ki">❯</span><span class="op">${esc(d)}</span><span class="counters"><span>running · ${t}</span><span class="spin dim"></span></span></div>`;
+  }
+  document.querySelectorAll('[data-rows="today"]').forEach((el) => (el.innerHTML = today));
+
+  // Options 1–3: dense rows, processes nested under their subagent.
+  let dense = '<div class="group">Subagents</div><div class="list">';
+  for (const a of agents) {
+    dense += `<div class="li agent" title="Open this subagent's history"><span class="ki">⁂</span><span class="name">${esc(a.name)}</span><span class="op">${esc(a.op)}</span><span class="counters"><span>${a.counters}</span><span class="spin"></span></span></div>`;
+    for (const [d, t] of a.procs) {
+      dense += `<div class="li proc nested"><span class="ki">❯</span><span class="op">${esc(d)}</span><span class="counters"><span>${t}</span><span class="spin dim"></span></span></div>`;
+    }
+  }
+  dense += '</div><div class="group">Processes</div><div class="list">';
+  for (const [d, t] of mainProcs) {
+    dense += `<div class="li proc"><span class="ki">❯</span><span class="op">${esc(d)}</span><span class="counters"><span>${t}</span><span class="spin dim"></span></span></div>`;
+  }
+  dense += "</div>";
+  document.querySelectorAll('[data-rows="dense"]').forEach((el) => (el.innerHTML = dense));
+</script>
+</body>
+</html>

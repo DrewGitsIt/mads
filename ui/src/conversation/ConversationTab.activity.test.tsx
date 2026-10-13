@@ -910,6 +910,23 @@ describe("ConversationTab — background processes", () => {
     expect(within(ended).queryByLabelText("in progress")).toBeNull();
   });
 
+  it("never pins a subagent's process as the main agent's — it goes with its subagent", async () => {
+    const client = new FakeRouterClient();
+    const source = await mountActive(client);
+
+    act(() => {
+      source.emit({
+        kind: "background",
+        background: [
+          { task_id: "b3", tool_use_id: "inner", parent_tool_use_id: "spawn-gone", description: "sleep 25", started_at: hourAgo() },
+        ],
+      });
+    });
+    // Its subagent isn't running here, so there is nothing to nest it under.
+    expect(screen.queryByTestId("background-strip")).toBeNull();
+    expect(screen.queryByTestId("running-summary")).toBeNull();
+  });
+
   it("pins a process whose call isn't on the page at all, and starts each stream from what it's told", async () => {
     const client = new FakeRouterClient();
     const source = await mountActive(client);

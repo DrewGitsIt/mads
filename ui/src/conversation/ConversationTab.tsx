@@ -41,8 +41,8 @@ import { WorkingIndicator } from "./ChatRenderer/WorkingIndicator";
 import { ApprovalJump } from "./ApprovalJump/ApprovalJump";
 import type { PermissionReveal } from "./ApprovalJump/permissionReveal";
 import { ActivityDock, type DockView } from "./activity/ActivityDock";
-import { BackgroundStrip } from "./activity/Background";
-import { Substrip, type SubstripEntry } from "./activity/Substrip";
+import { RunningStack } from "./activity/RunningStack";
+import type { SubstripEntry } from "./activity/Substrip";
 import {
   appendSubagentItem,
   applyTaskEvent,
@@ -1451,8 +1451,11 @@ export function ConversationTab({
             : (model.currentStep ?? model.lastToolName);
       return { model, op };
     });
-  const offscreenBackground = background.filter(
-    (b) => !b.tool_use_id || !visibleBackgroundRows.has(b.tool_use_id),
+  // A main-agent process is pinned while its call's row is off screen; a
+  // subagent's has no row here (its call is in the subagent's stream) and
+  // goes with its subagent — RunningStack nests it under that one's entry.
+  const offscreenBackground = background.filter((b) =>
+    b.parent_tool_use_id ? true : !b.tool_use_id || !visibleBackgroundRows.has(b.tool_use_id),
   );
   const openTool = (tool: ToolUse) => {
     setShellDockState(sessionId, { open: false }); // never both bottom surfaces at once (hides; the shell keeps running)
@@ -1738,14 +1741,15 @@ export function ConversationTab({
                   reveal={permissionReveal}
                   onReveal={revealPermission}
                 />
-                <Substrip
-                  entries={substripEntries}
+                <RunningStack
+                  key={sessionId}
+                  agents={substripEntries}
+                  processes={offscreenBackground}
                   onOpen={(model) =>
                     model.toolUseId &&
                     openSubagent(model.toolUseId, model.description ?? "Subagent", model.subagentType)
                   }
                 />
-                <BackgroundStrip entries={offscreenBackground} />
                 {working && (
                   <WorkingIndicator
                     tool={working.tool}
