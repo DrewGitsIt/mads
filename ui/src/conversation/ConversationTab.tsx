@@ -236,8 +236,8 @@ export function ConversationTab({
     flush: pacerFlush,
     reset: pacerReset,
   } = pacer;
-  // Bumped by each send: a reveal's end-of-turn reconcile that resolves
-  // after the next turn started must leave that turn alone.
+  // Bumped by each turn start (beginTurn): an end-of-turn reconcile that
+  // resolves after the next turn started must leave that turn alone.
   const turnGenRef = useRef(0);
   // Last completed turn's usage, for the dock's context rim and the + menu's
   // context row. Populated from the stream's turn_end frame (the only place
@@ -790,20 +790,24 @@ export function ConversationTab({
   // frame says the turn is over. One fetch, one retry 300ms later if the
   // transcript hasn't caught up yet (or the fetch throws) — never an
   // unbounded poll; the frozen streamed bubble is the fallback if both fail.
+  // A transcript that hasn't grown never replaces the pane: it can be behind
+  // it — the harness writes a just-sent user message to its file a beat
+  // after receiving it, and the bubble added on send would vanish until the
+  // next turn's end.
   const refetchAfterTurn = useCallback(async (stillCurrent: () => boolean = () => true) => {
     const baseline = messagesRef.current.length;
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const fresh = await routerClient.getTranscript(sessionId);
         if (!stillCurrent()) return;
-        if (fresh.length > baseline || attempt === 1) {
+        if (fresh.length > baseline) {
           setMessages(fresh);
           return;
         }
       } catch {
-        if (attempt === 1) return;
+        // retry below
       }
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 300));
     }
   }, [routerClient, sessionId]);
 
@@ -911,7 +915,10 @@ export function ConversationTab({
         setTasks((m) => finishRunningTasks(m));
         endTurn();
       } else if (turnPhaseRef.current === "idle") {
-        void refetchAfterTurn();
+        // A late signal for a turn this pane already closed. A turn starting
+        // meanwhile (a queued message goes out exactly now) owns the pane.
+        const gen = turnGenRef.current;
+        void refetchAfterTurn(() => turnGenRef.current === gen);
       }
       // "revealing": the turn already ended here; its reveal reconciles.
     });

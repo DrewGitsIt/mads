@@ -754,6 +754,35 @@ describe("ConversationTab — reopened mid-turn", () => {
     expect(bubble.closest("[data-user-msg]")).toBeTruthy();
   });
 
+  // A queued message goes out exactly as the previous turn ends — while the
+  // late turn_ended signal's refetch is in flight, and before the harness
+  // has written the message to its transcript. That stale transcript must
+  // not erase the bubble (it stayed gone until the next turn's end).
+  it("keeps a delivered queued message's bubble when a stale end-of-turn refetch lands after it", async () => {
+    const client = new FakeRouterClient();
+    const before = [{ role: "user" as const, text: "first ask", timestamp: iso(60_000) }];
+    const getTranscript = vi.spyOn(client, "getTranscript").mockResolvedValue(before);
+    await mountActive(client);
+    await screen.findByText("first ask");
+
+    let release!: (m: typeof before) => void;
+    getTranscript.mockImplementation(() => new Promise((r) => (release = r)));
+    controlEnvelope("session.turn_ended", { delta: "…" });
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+
+    const queued = { id: "q_1", text: "then wire the tasks count", queued_at: iso(1_000) };
+    controlEnvelope("session.queue_changed", { queued: [], delivered: queued });
+    expect(screen.getByText("then wire the tasks count").closest("[data-user-msg]")).toBeTruthy();
+
+    // The transcript the refetch read predates the message; so does its retry.
+    getTranscript.mockResolvedValue(before);
+    await act(async () => {
+      release(before);
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    expect(screen.getByText("then wire the tasks count").closest("[data-user-msg]")).toBeTruthy();
+  });
+
   it("removing a queued message cancels it in the session", async () => {
     const client = new FakeRouterClient();
     working(client, iso(30_000));
