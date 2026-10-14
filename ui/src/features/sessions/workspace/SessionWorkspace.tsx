@@ -21,6 +21,7 @@ import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { requestShellToggle } from "../../../conversation/shellToggleSignal";
 import { requestStreamReattach } from "../../../conversation/streamReattachSignal";
+import type { ChangesFocus } from "../../../files/changesModel";
 import { WORKSPACE_TABS, type WorkspaceTabId } from "./tabRegistry";
 import { RUN_EVENT_TYPES } from "./usePipelineRunning";
 import styles from "./SessionWorkspace.module.css";
@@ -96,6 +97,7 @@ export function SessionWorkspace({
   const [draftName, setDraftName] = useState("");
   const [focusFilePath, setFocusFilePath] = useState<string>();
   const [focusCommitFile, setFocusCommitFile] = useState<{ hash: string; path: string }>();
+  const [focusChanges, setFocusChanges] = useState<ChangesFocus>();
   const [focusTask, setFocusTask] = useState<{ id: string }>();
   const openTaskCount = totalOpenTasks(openTaskBreakdown);
 
@@ -162,11 +164,20 @@ export function SessionWorkspace({
     setVisited((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  // A touched-file click in the Conversation tab's rail routes here: surface
-  // the Files tab (mounting it if unvisited) and hand it the file to diff.
+  // The Commit dialog's path links route here: surface the Changes tab
+  // (mounting it if unvisited) and hand it the file to diff.
   function openFileDiff(path: string) {
     setFocusCommitFile(undefined);
+    setFocusChanges(undefined);
     setFocusFilePath(path);
+    selectTab("files");
+  }
+
+  // The Context Rail's Changes list: a file, or the rail's tier and turn.
+  function openChanges(focus: ChangesFocus) {
+    setFocusCommitFile(undefined);
+    setFocusFilePath(undefined);
+    setFocusChanges({ ...focus });
     selectTab("files");
   }
 
@@ -174,6 +185,7 @@ export function SessionWorkspace({
   // merge commit left it, against the session's branch before it.
   function openCommitFileDiff(hash: string, path: string) {
     setFocusFilePath(undefined);
+    setFocusChanges(undefined);
     setFocusCommitFile({ hash, path });
     selectTab("files");
   }
@@ -339,6 +351,8 @@ export function SessionWorkspace({
             onPendingFirstMessageHandled={onPendingFirstMessageHandled}
             onOpenFile={openFileDiff}
             focusFilePath={focusFilePath}
+            onOpenChanges={openChanges}
+            focusChanges={focusChanges}
             onOpenCommitFile={openCommitFileDiff}
             focusCommitFile={focusCommitFile}
             onOpenDelegate={onOpenDelegate}

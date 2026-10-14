@@ -28,6 +28,9 @@ import type {
   FastModelStatus,
   FileChange,
   FileDiff,
+  ChangeBaselineId,
+  ChangeSet,
+  DeleteScratchResult,
   GenerateAgentBody,
   Link,
   LinkRequest,
@@ -202,7 +205,12 @@ export interface RouterClient {
   // documented-but-unimplemented contracts this client is built ahead of.
   getFileChanges(sessionId: string, taskId?: string): Promise<FileChange[]>;
   getCommits(sessionId: string): Promise<Commit[]>;
-  getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff>;
+  /** Working diff for one file; `vs` picks the Changes tab's baseline (the server defaults to "start"). */
+  getFileDiff(sessionId: string, path: string, taskId?: string, vs?: ChangeBaselineId): Promise<FileDiff>;
+  /** Changes tab / rail (docs/CHANGES-DESIGN.md): everything the session changed against one baseline. */
+  getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet>;
+  /** Deletes scratch files; the server re-classifies each path and skips anything no longer scratch. */
+  deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult>;
 
   getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff>;
   /**
@@ -891,8 +899,21 @@ export class FetchRouterClient implements RouterClient {
 
   // Working-change diff (services/router/internal/api/working_diff.go):
   // HEAD-vs-disk for a file in the session's file-change ledger.
-  async getFileDiff(sessionId: string, path: string, taskId?: string): Promise<FileDiff> {
-    return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId });
+  async getFileDiff(
+    sessionId: string,
+    path: string,
+    taskId?: string,
+    vs?: ChangeBaselineId,
+  ): Promise<FileDiff> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/changes`, { path, task_id: taskId, vs });
+  }
+
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
+    return routerGet(this.baseUrl, `/sessions/${sessionId}/changeset`, { vs });
+  }
+
+  async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
+    return routerPost(this.baseUrl, `/sessions/${sessionId}/changeset/delete-scratch`, { paths });
   }
 
   async getCommitFileDiff(sessionId: string, hash: string, path: string): Promise<FileDiff> {

@@ -1276,6 +1276,79 @@ export interface FileDiff {
   modified: string;
 }
 
+// --- Changes tab (docs/CHANGES-DESIGN.md) ---
+// mirrors pkg/contracts/changes.go — GET /sessions/{id}/changeset?vs=…
+
+export type ChangeBaselineId = "start" | "base" | "main";
+export type ChangeTier = "source" | "tests" | "config" | "generated" | "scratch";
+/** Tier display order. */
+export const CHANGE_TIERS: ChangeTier[] = ["source", "tests", "config", "generated", "scratch"];
+
+export interface ChangeBaseline {
+  id: ChangeBaselineId;
+  label: string;
+  available: boolean;
+  reason?: string;
+}
+
+export interface ChangedFile {
+  /** Absolute — the key for diff, delete and open-in-editor. */
+  path: string;
+  /** Relative to the session folder, or absolute when outside it. */
+  display: string;
+  outside?: boolean;
+  change: "added" | "modified" | "deleted";
+  added: number;
+  deleted: number;
+  binary?: boolean;
+  counts_unknown?: boolean;
+  tier: ChangeTier;
+  scratch_rule?: string;
+  attributed: boolean;
+  /** 1-based ChangeTurn.n values, ascending. */
+  turns: number[];
+  /** Session commit hashes containing the file, newest first. */
+  commits: string[];
+  uncommitted: boolean;
+  last_changed: string;
+}
+
+/**
+ * One user turn: the window from its prompt to the next. Only user prompts
+ * open a turn; harness-started work after a background task finishes is
+ * credited to the user turn that was running.
+ */
+export interface ChangeTurn {
+  n: number;
+  prompt: string;
+  at: string;
+  files: number;
+}
+
+export interface ChangeCommit {
+  hash: string;
+  message: string;
+  timestamp: string;
+  paths: string[];
+}
+
+export interface ChangeSet {
+  baseline: ChangeBaselineId;
+  baselines: ChangeBaseline[];
+  git: boolean;
+  files: ChangedFile[];
+  turns: ChangeTurn[];
+  commits: ChangeCommit[];
+  totals: { files: number; added: number; deleted: number };
+  notes?: string[];
+  computed_at: string;
+}
+
+export interface DeleteScratchResult {
+  deleted: string[];
+  skipped: { path: string; reason: string }[];
+}
+
 // mirrors services/router/internal/api/tool_diff.go toolDiff — one mutating
 // tool call's historically-accurate before/after content from the shadow
 // store (GET /sessions/{id}/tool-diff?tool_use_id=…). A 404 on that route

@@ -15,7 +15,7 @@ export interface CommitDialogProps {
   initialError?: CommitError;
   onClose: () => void;
   onCommitted: (result: CommitResult) => void;
-  /** Opens a file's diff in the Files tab (absolute path, as the change list records it). */
+  /** Opens a file's diff in the Changes tab (absolute path, as the change list records it). */
   onOpenFile?: (path: string) => void;
 }
 

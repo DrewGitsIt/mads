@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/drewkidwell/mads/pkg/contracts"
+	"github.com/drewkidwell/mads/services/session/shadow"
 )
 
 // fileDiff is the Router's response shape for one file's before/after
@@ -64,16 +68,69 @@ func (s *server) handleSessionCommitDiff(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	rel, ok := commitRelPath(r.Context(), commit.Repo, path)
+	if !ok {
+		writeErrMsg(w, http.StatusBadRequest, "", errors.New("path is outside the commit's repo"))
+		return
+	}
+
 	// hash^:<path> failing is the expected, benign shape for an added file
 	// (no parent had that path) — only the modified-side fetch is an error.
-	original, _ := gitShowFile(r.Context(), commit.Repo, hash+"^", path)
-	modified, err := gitShowFile(r.Context(), commit.Repo, hash, path)
+	original, _ := gitShowFile(r.Context(), commit.Repo, hash+"^", rel)
+	modified, err := gitShowFile(r.Context(), commit.Repo, hash, rel)
 	if err != nil {
 		writeErrMsg(w, http.StatusBadGateway, "", errors.New("file not found in commit"))
 		return
 	}
 
 	writeJSON(w, http.StatusOK, fileDiff{Path: path, Original: original, Modified: modified})
+}
+
+// commitRelPath turns the requested path into the repo-relative form `git
+// show <rev>:<path>` takes. A relative path is taken as already
+// repo-relative (the commit list's form). An absolute one — the Changes
+// tab's form — is made relative to the work tree that holds it: the
+// recorded repo, or a linked worktree of it (a worktree session's files),
+// which shares the object store and so resolves the same hash. ok=false
+// when the path is under neither.
+func commitRelPath(ctx context.Context, repo, path string) (string, bool) {
+	if !filepath.IsAbs(path) {
+		return filepath.ToSlash(path), true
+	}
+	path = shadow.RealPath(path)
+	for _, root := range []string{shadow.RealPath(repo), workTreeOf(ctx, path)} {
+		if root == "" {
+			continue
+		}
+		if rel, err := filepath.Rel(root, path); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel), true
+		}
+	}
+	return "", false
+}
+
+// workTreeOf is the git work tree containing path, found from the nearest
+// directory that still exists (a file deleted since may have taken its
+// folder with it). "" outside every repo.
+func workTreeOf(ctx context.Context, path string) string {
+	dir := filepath.Dir(path)
+	for {
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return shadow.RealPath(strings.TrimSpace(string(out)))
 }
 
 func commitReachable(ctx context.Context, repo, hash string) bool {

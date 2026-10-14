@@ -1,40 +1,65 @@
+// The Changes demo page (npm run files → /files.html): the Changes tab and
+// the Context Rail's Changes list side by side, against a fake router
+// serving the made-up session from docs/mockups/changes-v2.html.
 import { useState } from "react";
-import { FilesTab } from "./FilesTab";
+import { RailChangesList } from "../context-rail/RailChangesList";
 import { FakeRouterClient } from "../router/fixtures";
+import type { FileDiff } from "../router/types";
+import { ChangesTab } from "./ChangesTab";
+import type { ChangesFocus } from "./changesModel";
+import { demoChangeSet, demoDiff, demoSeen } from "./demoChangeSet";
+import { saveSeen, useSeenState } from "./seenState";
+import { useChangeSet } from "./useChangeSet";
 import styles from "./FilesDemo.module.css";
 
-const client = new FakeRouterClient();
+const SESSION = "demo-oauth";
 
-const DEMO_SESSIONS: { id: string; label: string; taskId?: string }[] = [
-  { id: "session-files-clean", label: "session-files-clean (clean changes)", taskId: "tsk_retry-backoff" },
-  {
-    id: "session-files-observed",
-    label: "session-files-observed (unattributed observation)",
-    taskId: "tsk_flaky-metrics",
-  },
-  { id: "session-files-conflict", label: "session-files-conflict", taskId: "tsk_contract-rename" },
-];
+class DemoRouterClient extends FakeRouterClient {
+  async getFileDiff(_sessionId: string, path: string): Promise<FileDiff> {
+    return demoDiff(path);
+  }
+  async getCommitFileDiff(_sessionId: string, hash: string, path: string): Promise<FileDiff> {
+    return demoDiff(path, ` @ ${hash.slice(0, 7)}`);
+  }
+}
+
+const client = new DemoRouterClient();
+// ?long pads the session to 70 turns (the strip narrows, then scrolls).
+const cs = demoChangeSet(new URLSearchParams(location.search).has("long") ? 56 : 0);
+client.changeSets.set(SESSION, cs);
+// Seed "already looked at" once, so the new-since-you-looked dots vary.
+if (!localStorage.getItem(`mads.changes.seen.${SESSION}`)) saveSeen(SESSION, demoSeen(cs));
 
 export function FilesDemo() {
-  const [sessionId, setSessionId] = useState(DEMO_SESSIONS[0].id);
-  const session = DEMO_SESSIONS.find((s) => s.id === sessionId)!;
+  const [focus, setFocus] = useState<ChangesFocus>();
+  const rail = useChangeSet(client, SESSION);
+  const { isUnseen } = useSeenState(SESSION);
 
   return (
     <div className={styles.demo}>
-      <div className={styles.picker}>
-        {DEMO_SESSIONS.map((s) => (
-          <button
-            key={s.id}
-            type="button"
-            className={s.id === sessionId ? styles.active : ""}
-            onClick={() => setSessionId(s.id)}
-          >
-            {s.label}
-          </button>
-        ))}
+      <div className={styles.tabs}>
+        <span>Conversation</span>
+        <span>Tasks</span>
+        <span className={styles.on}>Changes</span>
+        <span>Pipeline</span>
       </div>
-      <div className={styles.host}>
-        <FilesTab key={sessionId} sessionId={session.id} taskId={session.taskId} routerClient={client} />
+      <div className={styles.row}>
+        <div className={styles.host}>
+          <ChangesTab sessionId={SESSION} routerClient={client} focusView={focus} />
+        </div>
+        <aside className={styles.rail} aria-label="Context rail">
+          <div className={styles.railHead}>
+            <span className={styles.railTitle}>Changes</span>
+            <span className={styles.railCount}>{rail.changeSet?.files.filter((f) => f.tier !== "scratch").length ?? 0} files</span>
+          </div>
+          <RailChangesList
+            changeSet={rail.changeSet}
+            loading={rail.loading}
+            error={rail.error}
+            isUnseen={isUnseen}
+            onOpen={(f) => setFocus({ ...f })}
+          />
+        </aside>
       </div>
     </div>
   );

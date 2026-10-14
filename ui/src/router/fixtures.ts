@@ -31,6 +31,10 @@ import type {
   FastModelStatus,
   FileChange,
   FileDiff,
+  ChangeBaselineId,
+  ChangeSet,
+  ChangedFile,
+  DeleteScratchResult,
   GenerateAgentBody,
   Link,
   LinkRequest,
@@ -776,6 +780,98 @@ export const fixtureCommitFileDiffs: Record<string, FileDiff> = {
   },
 };
 
+// Changes tab / rail (docs/CHANGES-DESIGN.md) — what getChangeSet serves.
+// Paths double as fixtureFileDiffs / fixtureCommitFileDiffs keys so the
+// diff pane resolves; the real server sends absolute paths.
+function changedFile(f: Partial<ChangedFile> & Pick<ChangedFile, "path" | "tier">): ChangedFile {
+  return {
+    display: f.path,
+    change: "modified",
+    added: 0,
+    deleted: 0,
+    attributed: true,
+    turns: [],
+    commits: [],
+    uncommitted: true,
+    last_changed: "2026-07-14T10:00:00Z",
+    ...f,
+  };
+}
+
+function changeSetOf(
+  files: ChangedFile[],
+  rest: Partial<Omit<ChangeSet, "files" | "totals">> = {},
+): ChangeSet {
+  return {
+    baseline: "start",
+    baselines: [
+      { id: "start", label: "Session start", available: true },
+      { id: "base", label: "Base branch", available: false, reason: "not a worktree session" },
+      { id: "main", label: "main", available: false, reason: "same as session start" },
+    ],
+    git: true,
+    turns: [],
+    commits: [],
+    computed_at: "2026-07-14T10:10:00Z",
+    ...rest,
+    files,
+    totals: {
+      files: files.length,
+      added: files.reduce((n, f) => n + f.added, 0),
+      deleted: files.reduce((n, f) => n + f.deleted, 0),
+    },
+  };
+}
+
+export const fixtureChangeSets: Record<string, ChangeSet> = {
+  "session-active": changeSetOf(
+    [
+      changedFile({ path: "services/data/internal/ingest.go", tier: "source", added: 12, deleted: 3, turns: [1] }),
+      changedFile({
+        path: "services/data/internal/ingest_test.go",
+        tier: "tests",
+        change: "added",
+        added: 40,
+        turns: [2],
+      }),
+    ],
+    {
+      turns: [
+        { n: 1, prompt: "Add retry backoff to the ingest worker", at: "2026-07-01T10:14:00Z", files: 1 },
+        { n: 2, prompt: "Now cover it with a test", at: "2026-07-01T10:15:30Z", files: 1 },
+      ],
+    },
+  ),
+  "session-files-clean": changeSetOf(
+    [
+      changedFile({ path: "services/data/internal/ingest.go", tier: "source", added: 1, deleted: 1, turns: [1] }),
+      changedFile({ path: "services/data/internal/backoff.go", tier: "source", change: "added", added: 3, turns: [1], commits: ["a1b2c3d"], uncommitted: false }),
+      changedFile({ path: "services/data/internal/ingest_test.go", tier: "tests", change: "added", added: 22, turns: [2] }),
+      changedFile({ path: "services/data/internal/legacy_retry.go", tier: "source", change: "deleted", deleted: 30, turns: [2] }),
+      changedFile({ path: "out.json", tier: "scratch", change: "added", added: 80, turns: [2], scratch_rule: "never referenced" }),
+    ],
+    {
+      turns: [
+        { n: 1, prompt: "Add retry backoff with jitter to ingest", at: "2026-07-14T10:01:00Z", files: 2 },
+        { n: 2, prompt: "Drop the legacy retry and test the new one", at: "2026-07-14T10:04:00Z", files: 3 },
+      ],
+      commits: [
+        {
+          hash: "a1b2c3d",
+          message: "ingest: add retry backoff with jitter",
+          timestamp: "2026-07-14T10:06:00Z",
+          paths: ["services/data/internal/backoff.go"],
+        },
+      ],
+    },
+  ),
+};
+
+/** The empty answer for a session with no changes yet. */
+export function emptyChangeSet(vs: ChangeBaselineId = "start"): ChangeSet {
+  return changeSetOf([], { baseline: vs, git: false });
+}
+
 // An isolated session (docs/SESSION-WORKTREES-DESIGN.md D1) with work in
 // both states: files to commit and commits to land. Kept out of
 // fixtureSessions so lists that count those stay as they were.
@@ -1332,10 +1428,47 @@ export class FakeRouterClient implements RouterClient {
     return this.commits[sessionId] ?? [];
   }
 
-  async getFileDiff(_sessionId: string, path: string): Promise<FileDiff> {
+  /** Every getFileDiff call — tests assert the baseline the Changes tab asked for. */
+  readonly fileDiffCalls: { sessionId: string; path: string; vs?: ChangeBaselineId }[] = [];
+
+  async getFileDiff(sessionId: string, path: string, _taskId?: string, vs?: ChangeBaselineId): Promise<FileDiff> {
+    this.fileDiffCalls.push({ sessionId, path, vs });
     const diff = this.fileDiffs[path];
     if (!diff) throw new Error(`fixture diff not found: ${path}`);
     return diff;
+  }
+
+  // --- Changes tab / rail: change sets a test can replace, plus every call ---
+  /** What getChangeSet serves, by session id; absent reads as an empty set. */
+  readonly changeSets = new Map<string, ChangeSet>(
+    Object.entries(fixtureChangeSets).map(([id, cs]) => [id, structuredClone(cs)]),
+  );
+  readonly changeSetCalls: { sessionId: string; vs?: ChangeBaselineId }[] = [];
+  /** A function lets a test fail or hold back a fetch. */
+  changeSetOutcome?: (sessionId: string, vs?: ChangeBaselineId) => Promise<ChangeSet>;
+  readonly deleteScratchCalls: { sessionId: string; paths: string[] }[] = [];
+  /** Undefined deletes every requested path that is scratch in changeSets. */
+  deleteScratchOutcome?: DeleteScratchResult;
+
+  async getChangeSet(sessionId: string, vs?: ChangeBaselineId): Promise<ChangeSet> {
+    this.changeSetCalls.push({ sessionId, vs });
+    if (this.changeSetOutcome) return this.changeSetOutcome(sessionId, vs);
+    const cs = this.changeSets.get(sessionId);
+    return cs ? { ...structuredClone(cs), baseline: vs ?? cs.baseline } : emptyChangeSet(vs);
+  }
+
+  async deleteScratch(sessionId: string, paths: string[]): Promise<DeleteScratchResult> {
+    this.deleteScratchCalls.push({ sessionId, paths });
+    if (this.deleteScratchOutcome) return structuredClone(this.deleteScratchOutcome);
+    const cs = this.changeSets.get(sessionId);
+    const result: DeleteScratchResult = { deleted: [], skipped: [] };
+    for (const p of paths) {
+      const f = cs?.files.find((x) => x.path === p);
+      if (f?.tier === "scratch") result.deleted.push(p);
+      else result.skipped.push({ path: p, reason: "not a scratch file" });
+    }
+    if (cs) cs.files = cs.files.filter((f) => !result.deleted.includes(f.path));
+    return result;
   }
 
   async getCommitFileDiff(_sessionId: string, hash: string, path: string): Promise<FileDiff> {

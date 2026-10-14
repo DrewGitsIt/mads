@@ -114,27 +114,24 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     await expect(page.getByLabel("Title")).toHaveValue(`${workTask.title} (edited)`);
   });
 
-  test("files tab shows the pipeline's changed files", async ({ page, routerURL }) => {
+  test("changes tab shows the pipeline's changed files", async ({ page, routerURL }) => {
     await page.goto(routerURL);
     const rail = page.locator('[aria-label="Session list"]');
     await rail.getByText(sessionName, { exact: true }).click();
 
-    await page.getByRole("tab", { name: "Files" }).click();
-    await expect(page.getByText(changedFilePath)).toBeVisible();
-    await expect(page.getByText(commitMessage)).toBeVisible();
-    await expect(page.getByText(commitHash.slice(0, 7))).toBeVisible();
-    // Scoped to the Files panel (the conversation panel's context rail holds
-    // a hidden TaskRow copy of this title) and .first(): within Files the
-    // title legitimately recurs — two attribution chips plus the pipeline
-    // auto-commit message all contain it.
-    await expect(
-      page.locator("#workspace-panel-files").getByText(workTask.title).first(),
-    ).toBeVisible();
+    await page.getByRole("tab", { name: "Changes" }).click();
+    // The Changes tab (formerly Files; panel id unchanged) lists what
+    // differs on disk, not the touch ledger — so changedFilePath, a ledger
+    // record with no file behind it, isn't listed. Commits are a grouping.
+    const changes = page.locator("#workspace-panel-files");
+    await changes.getByRole("radio", { name: "Commit" }).click();
+    await expect(changes.getByText(commitMessage)).toBeVisible();
+    await expect(changes.getByText(commitHash.slice(0, 7)).first()).toBeVisible();
 
     // The seeded commit's file (src/commit-file.ts, added against a real
     // parent commit that didn't contain it — recordRealCommit) opens its
     // diff on click, exercising the endpoint's added-file/empty-original path.
-    await page.getByText("src/commit-file.ts").click();
+    await changes.getByText("commit-file.ts").first().click();
     // .monaco-diff-editor is the DiffEditor widget's own top-level container —
     // unlike .monaco-editor, which Monaco also applies to several nested
     // internal panes/gutters, so it isn't reliably "the" visible editor root.

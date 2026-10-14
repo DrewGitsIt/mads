@@ -63,4 +63,21 @@ describe("SegmentedControl", () => {
     for (const r of screen.getAllByRole("radio")) expect((r as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("radiogroup").getAttribute("aria-disabled")).toBe("true");
   });
+
+  it("a disabled option shows its title, can't be chosen, and arrow keys skip it", () => {
+    const onChange = vi.fn();
+    const opts = [
+      { value: "a", label: "A" },
+      { value: "b", label: "B", disabled: true, title: "Needs a plug-in" },
+      { value: "c", label: "C" },
+    ];
+    render(<SegmentedControl value="a" options={opts} onChange={onChange} />);
+    const b = radio("B") as HTMLButtonElement;
+    expect(b.disabled).toBe(true);
+    expect(b.title).toBe("Needs a plug-in");
+    fireEvent.click(b);
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(radio("A"), { key: "ArrowRight" });
+    expect(onChange).toHaveBeenLastCalledWith("c");
+  });
 });

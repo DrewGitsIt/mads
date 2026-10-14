@@ -141,6 +141,41 @@ describe("FetchRouterClient", () => {
     );
   });
 
+  it("getFileDiff passes the Changes tab's baseline as vs", async () => {
+    const fetchMock = mockFetchOnce({ path: "a.go", original: "", modified: "" });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getFileDiff("s1", "/w/a.go", undefined, "base");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/changes?path=%2Fw%2Fa.go&vs=base",
+    );
+  });
+
+  it("getChangeSet GETs /sessions/:id/changeset with vs", async () => {
+    const fetchMock = mockFetchOnce({ baseline: "main", files: [] });
+    const client = new FetchRouterClient("http://router.local");
+    const cs = await client.getChangeSet("s1", "main");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/changeset?vs=main");
+    expect(cs.baseline).toBe("main");
+  });
+
+  it("getChangeSet omits vs when not given", async () => {
+    const fetchMock = mockFetchOnce({ baseline: "start", files: [] });
+    const client = new FetchRouterClient("http://router.local");
+    await client.getChangeSet("s1");
+    expect(fetchMock).toHaveBeenCalledWith("http://router.local/sessions/s1/changeset");
+  });
+
+  it("deleteScratch POSTs the paths and returns the result", async () => {
+    const fetchMock = mockFetchOnce({ deleted: ["/w/out.json"], skipped: [] });
+    const client = new FetchRouterClient("http://router.local");
+    const res = await client.deleteScratch("s1", ["/w/out.json"]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://router.local/sessions/s1/changeset/delete-scratch",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ paths: ["/w/out.json"] }) }),
+    );
+    expect(res.deleted).toEqual(["/w/out.json"]);
+  });
+
   it("getToolDiff GETs /sessions/:id/tool-diff with the tool_use_id query param", async () => {
     const fetchMock = mockFetchOnce({
       path: "runner.go",

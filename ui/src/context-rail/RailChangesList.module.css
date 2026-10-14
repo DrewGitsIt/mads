@@ -1,105 +1,177 @@
-.list {
+/* The rail's Changes list (docs/mockups/changes-v2.html, rail): controls,
+   a scrolling file list, and a footer pinned under it. */
+.panel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  flex: 1;
+  min-height: 160px;
+  margin: 0 calc(-1 * var(--space-3)) calc(-1 * var(--space-3));
 }
 
-.empty {
-  padding: var(--space-3);
-  color: var(--text3);
+.ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 8px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.tier {
   font-size: var(--fs-sm);
 }
 
-.row {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--line-soft);
+.tsel {
+  display: grid;
+  grid-template-columns: 24px 1fr 24px;
+  align-items: center;
+  border: 1px solid var(--line);
   border-radius: var(--r-sm);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
-  cursor: pointer;
-}
-
-.row:not(:disabled):hover {
-  border-color: var(--line);
   background: var(--bg2);
 }
 
-.row:disabled {
+.arrow {
+  height: 26px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text2);
+  font-size: 14px;
+  cursor: pointer;
+}
+.arrow:hover:not(:disabled) {
+  background: var(--bg3);
+  color: var(--text);
+}
+.arrow:disabled {
+  opacity: 0.3;
   cursor: default;
 }
 
-.badge {
-  flex-shrink: 0;
-  width: 1.2em;
+.mid {
   text-align: center;
-  font-weight: 700;
-  font-family: var(--mono, monospace);
   font-size: var(--fs-sm);
-  line-height: 1.5;
-  color: var(--text2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-
-.badge[data-change="added"] {
+.tn,
+.latest {
+  font: 600 11px var(--mono);
+}
+.latest {
   color: var(--ok-fg);
 }
-.badge[data-change="modified"] {
-  color: var(--warn-fg);
-}
-.badge[data-change="deleted"] {
-  color: var(--bad-fg);
-}
-
-.file {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  flex: 1;
-  min-width: 0;
-}
-
-.top {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-/* Filename is the priority: it takes the row width and ellipsizes last. */
-.name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 600;
-  font-size: var(--fs-sm);
-  color: var(--text);
-}
-
-/* Attribution can't grow past the filename — a raw session-id actor truncates. */
-.attr {
-  flex-shrink: 0;
-  max-width: 45%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--fs-chip);
+.of {
+  font-size: 11px;
   color: var(--text3);
 }
 
-.attr[data-attributed="false"] {
-  color: var(--warn-fg);
+.tprompt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 34px;
+  font-size: 11.5px;
+  color: var(--text2);
 }
 
+.files {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.empty {
+  padding: 16px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text3);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 8px 18px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+  padding: 4px 10px 4px 12px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row:not(:disabled):hover {
+  background: var(--bg2);
+}
+.row:disabled {
+  cursor: default;
+}
+.row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.row[data-dim] {
+  opacity: 0.6;
+}
+
+.p {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+/* Filename first: it takes the row and ellipsizes last. */
+.fn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+/* Start-side truncation keeps the folder nearest the file. */
 .dir {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: var(--fs-chip);
+  direction: rtl;
+  text-align: left;
+  font-size: 11px;
   color: var(--text3);
+}
+.dir bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: 8px 12px;
+  border-top: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+}
+.shown {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text3);
+}
+.footDot {
+  display: inline-flex;
+}
+
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.link:hover {
+  text-decoration: underline;
 }

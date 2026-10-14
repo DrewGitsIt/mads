@@ -405,7 +405,8 @@ test.describe("session worktrees: isolate, commit, land, recover, delete", () =>
       await expect(composer).toHaveValue(new RegExp(`resolved ${M.replace(/\./g, "\\.")} automatically`));
       await composer.fill("");
 
-      // See the changes: the Files tab, on the merge commit's file.
+      // See the changes: the Changes tab (panel id still "files"), Commit
+      // grouping, on the merge commit's file.
       await auto.getByRole("button", { name: "See the changes" }).click();
       const files = page.locator("#workspace-panel-files");
       await expect(files).toBeVisible();

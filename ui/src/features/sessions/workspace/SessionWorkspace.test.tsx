@@ -45,13 +45,13 @@ describe("SessionWorkspace", () => {
       ),
     );
     expect(screen.getByRole("tab", { name: "Tasks" }).getAttribute("aria-selected")).toBe("false");
-    expect(screen.getByRole("tab", { name: "Files" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: "Changes" }).getAttribute("aria-selected")).toBe("false");
     expect(screen.getByRole("tab", { name: "Pipeline" }).getAttribute("aria-selected")).toBe(
       "false",
     );
 
     expect(screen.queryByRole("tabpanel", { name: "Tasks" })).toBeNull();
-    expect(screen.queryByRole("tabpanel", { name: "Files" })).toBeNull();
+    expect(screen.queryByRole("tabpanel", { name: "Changes" })).toBeNull();
     expect(screen.queryByRole("tabpanel", { name: "Pipeline" })).toBeNull();
   });
 

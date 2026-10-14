@@ -1,4 +1,4 @@
-import { Suspense, lazy, useState } from "react";
+import { Suspense, lazy, useState, type ReactNode } from "react";
 import { Button } from "../../components/Button/Button";
 import { Chip } from "../../components/Chip/Chip";
 import type { FileDiff } from "../../router/types";
@@ -44,44 +44,82 @@ export interface DiffViewerProps {
   loading?: boolean;
   error?: string;
   onOpenInEditor: (path: string) => void;
+  /**
+   * Replaces the path label with a richer header (the Changes tab's badge,
+   * path, counts, commit link and turn chips); the view toggles and "Open in
+   * editor" stay at the end of the row.
+   */
+  header?: ReactNode;
+  /** Shown instead of the "Select a file" prompt when there's no diff to load. */
+  emptyMessage?: string;
 }
 
 /** Side-by-side/inline Monaco diff viewer, plus the always-visible "Open in editor" action. */
-export function DiffViewer({ path, pathLabel, commitHash, diff, loading, error, onOpenInEditor }: DiffViewerProps) {
+export function DiffViewer({
+  path,
+  pathLabel,
+  commitHash,
+  diff,
+  loading,
+  error,
+  onOpenInEditor,
+  header,
+  emptyMessage,
+}: DiffViewerProps) {
   const [sideBySide, setSideBySide] = useState(true);
 
   return (
     <div className={styles.viewer}>
-      <div className={styles.toolbar}>
-        <Chip tone="neutral" pressed={sideBySide} onClick={() => setSideBySide(true)}>
-          Side by side
-        </Chip>
-        <Chip tone="neutral" pressed={!sideBySide} onClick={() => setSideBySide(false)}>
-          Inline
-        </Chip>
-        {commitHash && <Chip tone="neutral">Diff from commit {commitHash.slice(0, 7)}</Chip>}
-        {/* Same start-side (RTL) truncation as ChangeList rows — the filename tail is the identifying part; the span doubles as the toolbar's flexible spacer. */}
-        {path ? (
+      <div className={styles.toolbar} data-has-header={header !== undefined || undefined}>
+        {header !== undefined ? (
+          <span className={styles.header}>{header}</span>
+        ) : path ? (
+          // Start-side (RTL) truncation: the filename tail is the identifying
+          // part. The span doubles as the toolbar's flexible spacer.
           <span className={styles.pathLabel} title={path}>
             <span className={styles.pathText}>{pathLabel ?? path}</span>
           </span>
         ) : (
           <div className={styles.spacer} />
         )}
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={!path}
-          onClick={() => path && onOpenInEditor(path)}
-        >
-          Open in editor
-        </Button>
+        <span className={styles.tools}>
+          <Chip tone="neutral" pressed={sideBySide} onClick={() => setSideBySide(true)}>
+            Side by side
+          </Chip>
+          <Chip tone="neutral" pressed={!sideBySide} onClick={() => setSideBySide(false)}>
+            Inline
+          </Chip>
+          {commitHash && <Chip tone="neutral">Diff from commit {commitHash.slice(0, 7)}</Chip>}
+          <Button variant="secondary" size="sm" disabled={!path} onClick={() => path && onOpenInEditor(path)}>
+            Open in editor
+          </Button>
+        </span>
       </div>
 
+      <DiffBody diff={diff} loading={loading} error={error} sideBySide={sideBySide} emptyMessage={emptyMessage} />
+    </div>
+  );
+}
+
+function DiffBody({
+  diff,
+  loading,
+  error,
+  sideBySide,
+  emptyMessage,
+}: {
+  diff: FileDiff | null;
+  loading?: boolean;
+  error?: string;
+  sideBySide: boolean;
+  emptyMessage?: string;
+}) {
+  return (
+    <>
       {loading && <div className={styles.status}>Loading diff…</div>}
       {!loading && error && <div className={styles.status}>{error}</div>}
       {!loading && !error && !diff && (
-        <div className={styles.status}>Select a file to view its diff.</div>
+        <div className={styles.status}>{emptyMessage ?? "Select a file to view its diff."}</div>
       )}
       {!loading && !error && diff && (
         <Suspense fallback={<div className={styles.status}>Loading editor…</div>}>
@@ -98,6 +136,6 @@ export function DiffViewer({ path, pathLabel, commitHash, diff, loading, error, 
           </div>
         </Suspense>
       )}
-    </div>
+    </>
   );
 }

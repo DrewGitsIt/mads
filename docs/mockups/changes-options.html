@@ -1,0 +1,494 @@
+<!doctype html>
+<!--
+  mads — Changes: Files tab + rail options
+  ========================================
+
+  Three layouts for the Files tab over one realistic session, plus two rail
+  variants. Decisions they all share are in docs/CHANGES-DESIGN.md:
+  baselines (Session start default · Base branch · main), deterministic tiers
+  with scratch collapsed and deletable (confirm on every delete), a per-file
+  "new since you looked" dot, line counts, rule-based risk flags, the list
+  computed from disk, and optional plug-in output that sits beside the diff,
+  never instead of it.
+
+  A  Tier list + turn strip, Group by: Tier | Folder | Turn | Intent  (recommended)
+  B  Story first: intent groups with reading order; file list secondary
+  C  Timeline first: turns down the left, a turn's files and diff on the right
+
+  The session: "add OAuth device-flow login to the CLI" — 14 turns, ~150
+  files. Mostly generated snapshots/mocks; a dozen scratch files; one
+  unrequested refactor (HTTP retry) a grouping plug-in can surface.
+
+  Tokens: clay / dark, copied from tokens.css via chat-search.html.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — Changes options</title>
+<style>
+  :root {
+    --bg0:#120f0a; --bg1:#1c1914; --bg2:#242019; --bg3:#2f2a23; --bg4:#3c352c;
+    --line:#463e30; --line-soft:#322c23;
+    --text:#ede9df; --text2:#b2aa97; --text3:#8e8674;
+    --accent:#c08552; --accent-soft:rgba(192,133,82,.15); --accent-ink:#241305;
+    --ok:#7cb389; --ok-soft:rgba(124,179,137,.14);
+    --warn:#d3af5e; --warn-soft:rgba(211,175,94,.13);
+    --bad:#d2604a; --bad-soft:rgba(210,96,74,.13); --bad-fg:#dd7a66;
+    --info:#96afc7; --info-soft:rgba(150,175,199,.13);
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Ubuntu,Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+    --r:8px; --r-sm:6px;
+    --fs-chip:10.5px; --fs-sm:12px; --fs-body:13px; --fs-ui:14px;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg0); color:var(--text); font:var(--fs-body)/1.5 var(--sans); }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+  code { font:var(--fs-sm) var(--mono); background:var(--bg2); border-radius:3px; padding:1px 4px; }
+
+  .page { max-width:1440px; margin:0 auto; padding:28px 24px 120px; display:flex; flex-direction:column; gap:28px; }
+  header.intro h1 { font-size:20px; font-weight:650; }
+  header.intro p { color:var(--text2); max-width:100ch; margin-top:8px; }
+  .optbar { display:flex; gap:8px; flex-wrap:wrap; }
+  .opt { border:1px solid var(--line); border-radius:999px; padding:6px 14px; color:var(--text2); }
+  .opt[aria-pressed=true] { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .optnote { color:var(--text2); font-size:var(--fs-sm); max-width:110ch; }
+  .optnote b { color:var(--text); }
+
+  section.block { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .block > h2 { font-size:var(--fs-ui); font-weight:650; padding:12px 16px; border-bottom:1px solid var(--line-soft); }
+  .block > h2 .sub { font-weight:500; color:var(--text3); font-size:var(--fs-sm); margin-left:8px; }
+  .note { padding:12px 16px; color:var(--text2); border-top:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .note li { margin-left:18px; margin-top:2px; }
+
+  /* ---------- app chrome ---------- */
+  .app { display:flex; flex-direction:column; height:780px; background:var(--bg0); }
+  .tabs { display:flex; gap:2px; padding:0 12px; border-bottom:1px solid var(--line-soft); background:var(--bg1); }
+  .tabs span { padding:9px 12px; color:var(--text3); font-size:var(--fs-sm); }
+  .tabs span.on { color:var(--text); box-shadow:inset 0 -2px var(--accent); }
+  .tabs .count { background:var(--bg3); border-radius:999px; padding:0 6px; margin-left:4px; font-size:10.5px; color:var(--text2); }
+
+  .toolbar { display:flex; align-items:center; gap:12px; padding:8px 12px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+  .seg button { padding:3px 10px; font-size:var(--fs-sm); color:var(--text2); border-right:1px solid var(--line); }
+  .seg button:last-child { border-right:0; }
+  .seg button[aria-pressed=true] { background:var(--bg3); color:var(--text); }
+  .seg button:disabled { color:var(--text3); opacity:.55; cursor:not-allowed; }
+  .lbl { color:var(--text3); font-size:var(--fs-sm); }
+  .totals { font:var(--fs-sm) var(--mono); color:var(--text2); }
+  .add { color:var(--ok); } .del { color:var(--bad-fg); }
+  .spacer { flex:1; }
+  .plugin { display:inline-flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 4px 3px 10px; font-size:var(--fs-sm); color:var(--text2); }
+  .plugin .dot { width:7px; height:7px; border-radius:50%; background:var(--ok); }
+  .btn { border:1px solid var(--line); border-radius:var(--r-sm); padding:3px 10px; font-size:var(--fs-sm); color:var(--text); background:var(--bg2); }
+  .btn.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  .btn.danger { color:var(--bad-fg); border-color:color-mix(in srgb,var(--bad) 50%,var(--line)); }
+
+  /* turn strip */
+  .strip { display:flex; align-items:flex-end; gap:3px; padding:8px 12px 6px; border-bottom:1px solid var(--line-soft); }
+  .strip .t { display:flex; flex-direction:column; align-items:center; gap:3px; width:34px; }
+  .strip .bar { width:22px; background:var(--bg4); border-radius:2px 2px 0 0; min-height:3px; }
+  .strip .t span { font:10px var(--mono); color:var(--text3); }
+  .strip .t.sel .bar { background:var(--accent); }
+  .strip .t.sel span { color:var(--text); }
+  .strip .t.bg .bar { background:repeating-linear-gradient(45deg,var(--bg4) 0 3px,var(--bg3) 3px 6px); }
+  .strip .hint { margin-left:12px; color:var(--text3); font-size:var(--fs-sm); align-self:center; }
+
+  .body { display:flex; flex:1; min-height:0; }
+  .list { width:430px; border-right:1px solid var(--line-soft); overflow:auto; flex-shrink:0; }
+  .filter { display:flex; gap:6px; padding:8px 10px; border-bottom:1px solid var(--line-soft); position:sticky; top:0; background:var(--bg0); z-index:1; }
+  .filter input { flex:1; background:var(--bg2); border:1px solid var(--line); border-radius:var(--r-sm); color:var(--text); padding:3px 8px; font:var(--fs-sm) var(--sans); }
+
+  .grp { border-bottom:1px solid var(--line-soft); }
+  .gh { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; text-align:left; background:var(--bg1); }
+  .gh .caret { width:10px; color:var(--text3); font-size:10px; }
+  .gh .name { font-weight:600; font-size:var(--fs-sm); }
+  .gh .n { color:var(--text3); font-size:var(--fs-sm); }
+  .gh .muted { color:var(--text3); }
+  .gh .gsum { color:var(--text2); font-size:var(--fs-sm); font-weight:400; }
+  .gdesc { padding:2px 10px 6px 28px; color:var(--text3); font-size:11.5px; background:var(--bg1); }
+
+  .row { display:grid; grid-template-columns:10px 18px 1fr auto; gap:6px; align-items:center; width:100%; padding:4px 10px 4px 12px; text-align:left; }
+  .row:hover { background:var(--bg2); }
+  .row[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
+  .row.dim { opacity:.62; }
+  .new { width:6px; height:6px; border-radius:50%; background:var(--info); }
+  .k { font:600 10px var(--mono); border-radius:3px; text-align:center; padding:1px 0; }
+  .k.A { background:var(--ok-soft); color:var(--ok); } .k.M { background:var(--info-soft); color:var(--info); } .k.D { background:var(--bad-soft); color:var(--bad-fg); }
+  .p { min-width:0; display:flex; flex-direction:column; }
+  .p .fn { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:var(--fs-sm); }
+  .p .dir { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:11px; color:var(--text3); direction:rtl; text-align:left; }
+  .p .dir bdi { direction:ltr; unicode-bidi:isolate; }
+  .meta { display:flex; align-items:center; gap:6px; }
+  .flag { font-size:10px; border-radius:3px; padding:0 5px; border:1px solid; white-space:nowrap; }
+  .flag.risk { color:var(--warn); border-color:color-mix(in srgb,var(--warn) 45%,transparent); }
+  .flag.out { color:var(--bad-fg); border-color:color-mix(in srgb,var(--bad) 45%,transparent); }
+  .flag.git { color:var(--text3); border-color:var(--line); font-family:var(--mono); }
+  .size { display:flex; width:44px; height:5px; border-radius:2px; overflow:hidden; background:var(--bg3); }
+  .size i { display:block; height:100%; } .size .a { background:var(--ok); } .size .d { background:var(--bad); }
+  .num { font:10.5px var(--mono); color:var(--text3); width:58px; text-align:right; }
+
+  /* diff side */
+  .detail { flex:1; min-width:0; display:flex; flex-direction:column; }
+  .dh { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line-soft); flex-wrap:wrap; }
+  .dh .path { font:var(--fs-sm) var(--mono); }
+  .chip { font-size:10.5px; border-radius:999px; padding:1px 8px; background:var(--bg3); color:var(--text2); }
+  .chip.tchip { font-family:var(--mono); cursor:pointer; }
+  .chip.tchip:hover { background:var(--accent-soft); color:var(--text); }
+  .summary { margin:10px 12px 0; border:1px solid var(--line-soft); border-left:3px solid var(--info); border-radius:var(--r-sm); padding:8px 10px; background:var(--bg1); font-size:var(--fs-sm); color:var(--text2); }
+  .summary .src { color:var(--text3); font-size:11px; margin-bottom:3px; }
+  .summary.none { border-left-color:var(--line); color:var(--text3); }
+  .diff { margin:10px 12px 12px; border:1px solid var(--line-soft); border-radius:var(--r-sm); overflow:auto; font:12px/1.55 var(--mono); flex:1; background:var(--bg1); }
+  .diff div { padding:0 10px; white-space:pre; }
+  .diff .h { color:var(--text3); background:var(--bg2); }
+  .diff .a { background:color-mix(in srgb,var(--ok) 13%,transparent); }
+  .diff .d { background:color-mix(in srgb,var(--bad) 13%,transparent); }
+
+  /* B — story */
+  .story { flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+  .card { border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); }
+  .card .ch { display:flex; gap:10px; align-items:baseline; padding:10px 12px 4px; }
+  .card .ord { font:600 11px var(--mono); color:var(--accent); }
+  .card .title { font-weight:650; }
+  .card .why { padding:0 12px 8px 33px; color:var(--text2); font-size:var(--fs-sm); }
+  .card .files { padding:0 12px 10px 33px; display:flex; flex-wrap:wrap; gap:4px; }
+  .card .files button { font:11px var(--mono); background:var(--bg2); border-radius:3px; padding:1px 6px; color:var(--text2); }
+  .card .files button:hover { color:var(--text); background:var(--bg3); }
+  .card.flagged { border-color:color-mix(in srgb,var(--warn) 45%,var(--line-soft)); }
+  .card .tag { font-size:10.5px; color:var(--warn); }
+  .card.plain .title { font-weight:600; color:var(--text2); }
+
+  /* C — timeline */
+  .tl { width:360px; border-right:1px solid var(--line-soft); overflow:auto; flex-shrink:0; }
+  .turn { display:block; width:100%; text-align:left; padding:9px 12px; border-bottom:1px solid var(--line-soft); }
+  .turn:hover { background:var(--bg2); }
+  .turn[data-sel=true] { background:var(--accent-soft); box-shadow:inset 2px 0 var(--accent); }
+  .turn .tn { font:600 11px var(--mono); color:var(--text3); }
+  .turn .prompt { color:var(--text); font-size:var(--fs-sm); margin-top:2px; }
+  .turn .dig { color:var(--text2); font-size:11.5px; margin-top:3px; }
+  .turn .fc { color:var(--text3); font:10.5px var(--mono); margin-top:4px; }
+  .turnfiles { width:300px; border-right:1px solid var(--line-soft); overflow:auto; flex-shrink:0; }
+
+  /* rail */
+  .rails { display:flex; gap:24px; padding:16px; flex-wrap:wrap; }
+  .railwrap h3 { font-size:var(--fs-sm); color:var(--text2); font-weight:600; margin-bottom:8px; }
+  .rail { width:300px; border:1px solid var(--line-soft); border-radius:var(--r); background:var(--bg1); overflow:hidden; }
+  .rail .rh { display:flex; justify-content:space-between; padding:8px 10px; border-bottom:1px solid var(--line-soft); font-size:var(--fs-sm); }
+  .tiers { display:flex; flex-wrap:wrap; gap:4px 10px; padding:8px 10px; font-size:11.5px; color:var(--text2); border-bottom:1px solid var(--line-soft); }
+  .tiers b { color:var(--text); font-weight:600; }
+  .rail .row { grid-template-columns:10px 18px 1fr auto; }
+  .rail .foot { display:flex; justify-content:space-between; padding:7px 10px; border-top:1px solid var(--line-soft); font-size:11.5px; color:var(--text3); }
+  .rail .foot a { color:var(--accent); }
+  .rail .ins { padding:8px 10px; font-size:11.5px; color:var(--text2); border-bottom:1px solid var(--line-soft); }
+  .rail .ins .warnline { color:var(--warn); margin-top:3px; }
+  .rail .igrp { padding:6px 10px; font-size:var(--fs-sm); display:flex; justify-content:space-between; border-bottom:1px solid var(--line-soft); }
+  .rail .igrp span:last-child { color:var(--text3); font:11px var(--mono); }
+
+  /* confirm */
+  dialog { margin:auto; background:var(--bg2); color:var(--text); border:1px solid var(--line); border-radius:var(--r); padding:16px; width:460px; }
+  dialog::backdrop { background:rgba(0,0,0,.5); }
+  dialog h4 { font-size:var(--fs-ui); margin-bottom:6px; }
+  dialog p { color:var(--text2); font-size:var(--fs-sm); }
+  dialog ul { margin:10px 0; max-height:180px; overflow:auto; font:11.5px var(--mono); color:var(--text2); list-style:none; background:var(--bg1); border-radius:var(--r-sm); padding:6px 8px; }
+  dialog .acts { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="intro">
+    <h1>Changes: Files tab and rail options</h1>
+    <p>One session, three layouts. Every option shares what <code>docs/CHANGES-DESIGN.md</code> already settled: the baseline switcher, tiers with scratch collapsed and deletable, the blue “new since you looked” dot, line counts, rule-based risk flags, and plug-in output that sits <em>beside</em> the diff. Toggle the plug-in off to see what each layout looks like with no LLM at all. That is the default state, because plug-ins are opt-in.</p>
+  </header>
+
+  <div class="optbar" id="optbar"></div>
+  <div class="optnote" id="optnote"></div>
+
+  <section class="block">
+    <h2 id="apptitle">Files tab</h2>
+    <div class="app">
+      <div class="tabs"><span>Conversation</span><span>Tasks</span><span class="on">Files<span class="count" id="tabcount"></span></span><span>Pipeline</span></div>
+      <div class="toolbar">
+        <span class="lbl">Compare to</span>
+        <div class="seg" id="baseline"></div>
+        <span class="totals" id="totals"></span>
+        <span class="spacer"></span>
+        <span class="plugin" id="plugin"></span>
+      </div>
+      <div id="stripHost"></div>
+      <div class="body" id="bodyHost"></div>
+    </div>
+    <div class="note" id="appnote"></div>
+  </section>
+
+  <section class="block">
+    <h2>Context rail · Changes <span class="sub">two variants; both open the Files tab focused on the clicked file</span></h2>
+    <div class="rails">
+      <div class="railwrap"><h3>R1: tier counts + top core files</h3><div class="rail" id="rail1"></div></div>
+      <div class="railwrap"><h3>R2: with plug-in output (intent groups + flags)</h3><div class="rail" id="rail2"></div></div>
+    </div>
+    <div class="note"><ul>
+      <li>R1 works with no plug-in. Its order is the tier sort: the five largest core files, then a single line counting the rest.</li>
+      <li>R2 is what appears when a grouping plug-in has run since the session last settled. A flagged group (here, the unrequested retry refactor) is the most useful thing the rail can say.</li>
+      <li>The tier counts are buttons that open the Files tab filtered to that tier. Scratch shows its count but has no delete button here; deleting stays in the Files tab, behind its confirmation.</li>
+    </ul></div>
+  </section>
+</div>
+
+<dialog id="confirm">
+  <h4 id="cTitle"></h4>
+  <p>These files were created during this session and match the scratch rules. They'll be deleted from disk. This can't be undone.</p>
+  <ul id="cList"></ul>
+  <div class="acts"><button class="btn" onclick="confirmDlg.close()">Cancel</button><button class="btn danger" onclick="confirmDlg.close()">Delete files</button></div>
+</dialog>
+
+<script>
+/* ---------------- data ---------------- */
+// f(path, kind, add, del, turns, tier, intent, extra)
+const F = [];
+function f(path, kind, add, del, turns, tier, intent, x = {}) { F.push({ path, kind, add, del, turns, tier, intent, ...x }); }
+
+// core
+f("internal/auth/deviceflow.go","A",214,0,[2,3,5],"core","oauth",{commit:"3f1c2a9",risk:"auth",seen:true});
+f("internal/auth/poll.go","A",96,0,[3,5],"core","oauth",{commit:"3f1c2a9",risk:"auth"});
+f("internal/auth/token.go","M",58,21,[4,9],"core","store",{risk:"auth"});
+f("internal/auth/keychain_darwin.go","A",88,0,[4],"core","store",{commit:"8be0d41",risk:"auth"});
+f("internal/auth/keychain_linux.go","A",102,0,[4,9],"core","store",{risk:"auth"});
+f("internal/auth/keychain.go","A",41,0,[4],"core","store",{commit:"8be0d41"});
+f("cmd/mycli/login.go","A",131,0,[6,7],"core","cmd",{commit:"c09e7b2"});
+f("cmd/mycli/logout.go","A",44,0,[7],"core","cmd",{commit:"c09e7b2"});
+f("cmd/mycli/root.go","M",9,2,[6],"core","cmd",{commit:"c09e7b2",seen:true});
+f("internal/httpx/retry.go","M",187,142,[8,10],"core","retry");
+f("internal/httpx/client.go","M",63,38,[8],"core","retry");
+f("internal/httpx/backoff.go","D",0,77,[8],"core","retry",{risk:"deleted"});
+f("internal/api/session.go","M",22,6,[5,11],"core","oauth");
+f("ui/src/settings/AccountPane.tsx","M",74,12,[12],"core","cmd");
+f("ui/src/settings/LoginButton.tsx","A",58,0,[12],"core","cmd");
+f("docs/auth.md","A",66,0,[13],"core","cmd");
+// tests
+const tests = [
+  ["internal/auth/deviceflow_test.go","A",188,0,[3,5],"oauth"],["internal/auth/poll_test.go","A",92,0,[3],"oauth"],
+  ["internal/auth/token_test.go","M",41,8,[4,9],"store"],["internal/auth/keychain_test.go","A",77,0,[4,9],"store"],
+  ["cmd/mycli/login_test.go","A",120,0,[7],"cmd"],["internal/httpx/retry_test.go","M",96,104,[8,10],"retry"],
+  ["internal/httpx/client_test.go","M",14,9,[8],"retry"],["ui/src/settings/AccountPane.test.tsx","M",38,4,[12],"cmd"],
+  ["ui/src/settings/LoginButton.test.tsx","A",44,0,[12],"cmd"],["internal/auth/testdata/device_code.json","A",12,0,[3],"oauth"],
+  ["internal/auth/testdata/token_ok.json","A",9,0,[3],"oauth"],["internal/auth/testdata/token_pending.json","A",6,0,[3],"oauth"],
+  ["internal/auth/testdata/token_slow_down.json","A",6,0,[5],"oauth"],["internal/auth/testdata/token_denied.json","A",6,0,[5],"oauth"],
+  ["e2e/login.spec.ts","A",71,0,[13],"cmd"],
+];
+tests.forEach(([p,k,a,d,t,i]) => f(p,k,a,d,t,"tests",i));
+// config / deps
+f("go.mod","M",3,0,[4],"config","deps",{risk:"deps",commit:"8be0d41"});
+f("go.sum","M",12,0,[4],"config","deps",{risk:"deps",commit:"8be0d41"});
+f("ui/package.json","M",1,0,[12],"config","deps",{risk:"deps"});
+f(".github/workflows/ci.yml","M",8,2,[11],"config","deps",{risk:"CI"});
+f("Makefile","M",4,1,[11],"config","deps");
+f(".env.example","M",2,0,[6],"config","deps",{risk:"secrets"});
+// generated
+f("ui/package-lock.json","M",412,96,[12],"generated","deps");
+f("internal/api/openapi.gen.go","M",340,12,[11],"generated","oauth");
+for (let i = 0; i < 46; i++) f(`ui/src/settings/__snapshots__/Pane${String(i).padStart(2,"0")}.test.tsx.snap`,"M",6+(i*7)%30,3+(i*5)%11,[12],"generated","cmd");
+for (let i = 0; i < 26; i++) f(`internal/mocks/mock_${["store","client","clock","keychain","poller","http","signer","logger"][i%8]}${i>7?"_"+i:""}.go`,i<6?"A":"M",20+(i*13)%60,(i*3)%14,[i<6?4:8],"generated",i<6?"store":"retry");
+// scratch
+const scratch = [
+  ["test_oauth.py",48,[3],"name pattern, repo root"],["debug_poll.go",31,[5],"name pattern"],["scratch/notes.md",22,[2],"scratch/ dir"],
+  ["out.json",310,[5],"never referenced"],["repro_keychain.sh",17,[9],"name pattern, shell-created"],["tmp_token.txt",1,[4],"name pattern"],
+  ["/tmp/devflow.log",880,[5],"outside session folder"],["/tmp/curl_device.sh",9,[3],"outside session folder"],
+  ["cmd/mycli/main_debug.go",26,[6],"name pattern"],["internal/auth/x_test_scratch.go",40,[9],"name pattern"],
+  ["coverage.out",1204,[10],"gitignored"],["internal/httpx/bench.txt",64,[10],"never referenced"],
+];
+scratch.forEach(([p,a,t,why]) => f(p,"A",a,0,t,"scratch",null,{why, risk: p.startsWith("/tmp") ? "outside" : undefined}));
+
+// seen state: earlier turns mostly seen
+F.forEach(x => { if (x.seen === undefined) x.seen = Math.max(...x.turns) <= 5 && x.tier !== "core"; });
+
+const TIERS = [
+  ["core","Source","Hand-written code and docs: read these first"],
+  ["tests","Tests & fixtures",""],
+  ["config","Config & dependencies",""],
+  ["generated","Generated","Lockfiles, snapshots, mocks, *.gen.*: matched by linguist-generated and path rules"],
+  ["scratch","Scratch","Created this session and matched a scratch rule"],
+];
+const INTENTS = {
+  oauth: { title:"Device-flow OAuth client", why:"Requests a device code, shows the user a URL and code, then polls the token endpoint and handles authorization_pending, slow_down and denial." },
+  store: { title:"Token storage in the OS keychain", why:"Replaces the plaintext token file with Keychain (macOS) or Secret Service (Linux). One new dependency: go-keyring." },
+  cmd:   { title:"`login` / `logout` commands and the Settings button", why:"New CLI subcommands, plus a Login button in Settings › Account that runs the same flow." },
+  retry: { title:"Rewrote HTTP retry (not requested)", why:"Replaced backoff.go with jittered retry inside retry.go and changed which status codes are retried. Your prompts never mentioned retry; it began in turn 8 after a flaky test.", flag:true },
+  deps:  { title:"Dependencies, CI and build", why:"go-keyring added; CI gains a Linux job that needs dbus for Secret Service." },
+};
+const TURNS = [
+  [1,"Add device-flow OAuth login to the CLI","Read the auth package and the API client; no changes.",0],
+  [2,"(continued)","Sketched deviceflow.go; wrote scratch notes.",2],
+  [3,"","Implemented device code + polling; added fixtures; tested with a curl script.",11],
+  [4,"Store the token in the keychain, not a file","Keychain backends for macOS and Linux; added go-keyring.",13],
+  [5,"Handle slow_down properly","Backoff on slow_down; more fixtures; a debug logger dumping to /tmp.",9],
+  [6,"Wire it into the CLI","login command; root registration; .env.example.",4],
+  [7,"","logout command and login tests.",3],
+  [8,"The retry test is flaky, fix it","Rewrote the HTTP retry instead of the test; deleted backoff.go; regenerated mocks.",26],
+  [9,"Linux keychain fails headless","Fallback for no D-Bus session; repro script.",6],
+  [10,"","Retry benchmarks and coverage run (subagent, after turn end).",4,"bg"],
+  [11,"Run CI locally","CI Linux job; regenerated OpenAPI client.",4],
+  [12,"Add a Login button in Settings","AccountPane + LoginButton; 46 snapshots updated.",52],
+  [13,"Document it","docs/auth.md; e2e spec.",2],
+  [14,"Commit what's left","Read-only: summarized remaining changes; no commit made.",0],
+];
+const BASELINES = [["start","Session start"],["base","Base branch · feat/cli-auth"],["main","main"]];
+
+/* ---------------- state ---------------- */
+const S = { opt:"A", baseline:"start", group:"tier", plugin:false, turns:null, sel:"internal/httpx/retry.go", q:"", open:{ core:true, tests:true, config:true, generated:false, scratch:false }, turn:8 };
+
+/* ---------------- helpers ---------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;" })[c]);
+const base = p => p.slice(p.lastIndexOf("/")+1);
+const dir = p => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+function visible() {
+  return F.filter(x => {
+    if (S.turns && !x.turns.some(t => S.turns.includes(t))) return false;
+    if (S.q && !x.path.toLowerCase().includes(S.q.toLowerCase())) return false;
+    // "main" baseline also includes 3 files from a commit already on feat/cli-auth before the session; omitted for brevity
+    return true;
+  });
+}
+const sum = xs => xs.reduce((a,x) => [a[0]+x.add, a[1]+x.del], [0,0]);
+function sizeBar(x) { const t = x.add + x.del, w = Math.min(44, Math.round(Math.sqrt(t)*2.2)); return `<span class="size" title="+${x.add} −${x.del}" style="width:${Math.max(w,4)}px"><i class="a" style="width:${t?100*x.add/t:0}%"></i><i class="d" style="width:${t?100*x.del/t:0}%"></i></span>`; }
+function rowHTML(x, opts = {}) {
+  const flags = [];
+  if (x.risk === "outside") flags.push(`<span class="flag out">outside folder</span>`);
+  else if (x.risk) flags.push(`<span class="flag risk">${x.risk}</span>`);
+  if (x.commit && !opts.compact) flags.push(`<span class="flag git" title="committed in ${x.commit}">${x.commit.slice(0,4)}</span>`);
+  if (x.why && !opts.compact) flags.push(`<span class="flag git" title="scratch rule">${esc(x.why)}</span>`);
+  return `<button class="row ${x.tier==="generated"||x.tier==="scratch"?"dim":""}" data-sel="${S.sel===x.path}" onclick="pick('${x.path}')">
+    <span>${x.seen ? "" : `<span class="new" title="new since you looked"></span>`}</span>
+    <span class="k ${x.kind}">${x.kind}</span>
+    <span class="p"><span class="fn">${esc(base(x.path))}</span><span class="dir"><bdi>${esc(dir(x.path))}</bdi></span></span>
+    <span class="meta">${flags.join("")}${opts.compact ? "" : `<span class="num"><span class="add">+${x.add}</span> <span class="del">−${x.del}</span></span>`}${sizeBar(x)}</span>
+  </button>`;
+}
+function groupHTML(key, name, desc, files, extra = "") {
+  const open = S.open[key] ?? true, [a,d] = sum(files), unseen = files.filter(x => !x.seen).length;
+  const sorted = files.slice().sort((p,q) => (q.add+q.del) - (p.add+p.del));
+  return `<div class="grp"><button class="gh" onclick="toggle('${key}')"><span class="caret">${open?"▾":"▸"}</span><span class="name">${esc(name)}</span><span class="n">${files.length}</span>${unseen?`<span class="new" title="${unseen} new"></span>`:""}<span class="spacer"></span>${extra}<span class="totals"><span class="add">+${a}</span> <span class="del">−${d}</span></span></button>
+  ${open && desc ? `<div class="gdesc">${desc}</div>` : ""}${open ? sorted.map(x => rowHTML(x)).join("") : ""}</div>`;
+}
+
+/* ---------------- renderers ---------------- */
+function renderChrome() {
+  const v = visible(), [a,d] = sum(v);
+  $("tabcount").textContent = F.filter(x => x.tier !== "scratch").length;
+  $("baseline").innerHTML = BASELINES.map(([k,l]) => `<button aria-pressed="${S.baseline===k}" onclick="S.baseline='${k}';render()">${l}</button>`).join("");
+  $("totals").innerHTML = `${v.length} files · <span class="add">+${a.toLocaleString()}</span> <span class="del">−${d.toLocaleString()}</span>${S.turns ? ` · turns ${S.turns[0]}${S.turns.length>1?"–"+S.turns[S.turns.length-1]:""} <button class="btn" style="padding:0 6px" onclick="S.turns=null;render()">clear</button>` : ""}`;
+  $("plugin").innerHTML = S.plugin
+    ? `<span class="dot"></span>mads default · summarized after settling 2m ago<button class="btn" onclick="S.plugin=false;render()">Turn off</button>`
+    : `<span class="dot" style="background:var(--text3)"></span>No summaries · plug-ins are opt-in<button class="btn primary" onclick="S.plugin=true;render()">Run mads default</button>`;
+}
+function renderStrip() {
+  const max = Math.max(...TURNS.map(t => t[3]));
+  $("stripHost").innerHTML = `<div class="strip">${TURNS.map(([n,,,c,bg]) => `<button class="t ${S.turns&&S.turns.includes(n)?"sel":""} ${bg?"bg":""}" title="turn ${n}: ${c} files${bg?" (background, after turn end)":""}" onclick="turnClick(event,${n})"><span class="bar" style="height:${4+38*c/max}px"></span><span>${n}</span></button>`).join("")}
+  <span class="hint">Click a turn to filter; shift-click for a range. Hatched = written after turn end (a backgrounded subagent).</span></div>`;
+}
+function detailHTML() {
+  const x = F.find(y => y.path === S.sel); if (!x) return `<div class="detail"></div>`;
+  const it = x.intent && INTENTS[x.intent];
+  const summ = S.plugin
+    ? `<div class="summary"><div class="src">mads default · summary. Written by a model; the diff below is what actually happened.</div>${x.path.endsWith("retry.go") ? "Rewrites retry from fixed backoff to full-jitter exponential with a 30 s cap. <b>Behavior change:</b> 409 and 425 are now retried, and 502 is no longer retried. Callers in <code>internal/api</code> rely on 409 failing fast." : esc(it ? it.why : "Scratch output from a debugging run.")}</div>`
+    : `<div class="summary none">No summary. Turn on a summarize plug-in, or read the diff.</div>`;
+  return `<div class="detail"><div class="dh"><span class="k ${x.kind}">${x.kind}</span><span class="path">${esc(x.path)}</span>
+    <span class="totals"><span class="add">+${x.add}</span> <span class="del">−${x.del}</span></span>
+    ${x.commit ? `<span class="chip">committed ${x.commit}</span>` : `<span class="chip">uncommitted</span>`}
+    <span class="spacer"></span><span class="lbl">changed in</span>${x.turns.map(t => `<span class="chip tchip" title="jump to turn ${t} in the conversation">turn ${t}</span>`).join("")}
+    <button class="btn">Open in editor</button></div>${summ}
+    <div class="diff"><div class="h">@@ func (c *Client) do(req *http.Request) (*http.Response, error) @@</div>
+<div class="d">-	for attempt := 0; attempt &lt; c.maxRetries; attempt++ {</div><div class="d">-		resp, err := c.http.Do(req)</div><div class="d">-		if err == nil &amp;&amp; !retryable(resp.StatusCode) {</div><div class="d">-			return resp, nil</div><div class="d">-		}</div><div class="d">-		time.Sleep(backoff.Fixed(attempt))</div>
+<div class="a">+	return retry.Do(req.Context(), c.policy, func() (*http.Response, error) {</div><div class="a">+		resp, err := c.http.Do(req)</div><div class="a">+		if err != nil { return nil, retry.Temporary(err) }</div><div class="a">+		switch resp.StatusCode {</div><div class="a">+		case 409, 425, 429, 503, 504:</div><div class="a">+			return nil, retry.After(resp.Header.Get("Retry-After"))</div><div class="a">+		}</div><div class="a">+		return resp, nil</div><div class="a">+	})</div>
+<div class="h">@@ func retryable(code int) bool @@</div><div class="d">-	return code == 429 || code == 502 || code == 503 || code == 504</div></div></div>`;
+}
+
+function renderA() {
+  const v = visible(); let groups = "";
+  const scratchFiles = v.filter(x => x.tier === "scratch");
+  if (S.group === "tier") {
+    groups = TIERS.map(([k,n,d]) => { const fs = v.filter(x => x.tier === k); if (!fs.length) return "";
+      const extra = k === "scratch" ? `<span class="btn danger" onclick="event.stopPropagation();askDelete()">Delete ${fs.length}…</span>` : "";
+      return groupHTML(k, n, d, fs, extra); }).join("");
+  } else if (S.group === "folder") {
+    const by = {}; v.forEach(x => { const top = x.path.startsWith("/") ? "outside the session folder" : x.path.split("/").slice(0, x.path.split("/").length > 2 ? 2 : 1).join("/"); (by[top] ||= []).push(x); });
+    groups = Object.keys(by).sort().map(k => groupHTML("f:"+k, k + (by[k][0].path.includes("/") && !k.startsWith("outside") ? "/" : ""), "", by[k])).join("");
+  } else if (S.group === "turn") {
+    groups = TURNS.filter(t => v.some(x => x.turns.includes(t[0]))).map(([n,p,dg]) => groupHTML("t:"+n, `Turn ${n}`, esc(dg), v.filter(x => x.turns.includes(n)))).join("");
+  } else {
+    const order = ["oauth","store","cmd","retry","deps"];
+    groups = order.map(k => { const fs = v.filter(x => x.intent === k && x.tier !== "generated"); const gen = v.filter(x => x.intent === k && x.tier === "generated").length;
+      return fs.length ? groupHTML("i:"+k, INTENTS[k].title, `${INTENTS[k].flag ? '<span style="color:var(--warn)">⚑ not requested · </span>' : ""}${esc(INTENTS[k].why)}${gen ? ` <span class="muted">(+${gen} generated, hidden)</span>` : ""}`, fs) : ""; }).join("")
+      + (scratchFiles.length ? groupHTML("scratch","Scratch","", scratchFiles, `<span class="btn danger" onclick="event.stopPropagation();askDelete()">Delete ${scratchFiles.length}…</span>`) : "");
+  }
+  renderStrip();
+  $("bodyHost").innerHTML = `<div class="list"><div class="filter"><input placeholder="Filter files…" value="${esc(S.q)}" oninput="S.q=this.value;renderKeepFocus()"><div class="seg">${[["tier","Tier"],["folder","Folder"],["turn","Turn"],["intent","Intent"]].map(([k,l]) => `<button aria-pressed="${S.group===k}" ${k==="intent"&&!S.plugin?'disabled title="Needs a grouping plug-in"':""} onclick="S.group='${k}';render()">${l}</button>`).join("")}</div></div>${groups}</div>${detailHTML()}`;
+  $("appnote").innerHTML = `<ul>
+    <li><b>Default view with no plug-in:</b> tiers, sorted by size inside each tier. Generated and Scratch start collapsed, so ${F.filter(x=>x.tier==="generated"||x.tier==="scratch").length} of the ${F.length} files are out of the way until you open them. (The diff content is illustrative: every file shows the same retry.go hunk.)</li>
+    <li><b>Turn strip:</b> each bar's height is how many files that turn changed. Turn 10 is hatched because its writes came from a backgrounded subagent after the turn ended. The settle-time snapshot is what lets us credit those writes to turn 10 rather than turn 11.</li>
+    <li><b>Group by Intent</b> is disabled until a grouping plug-in has run. Try “Run mads default”, then Intent: the unrequested retry rewrite shows up as its own flagged group.</li>
+    <li>Short hashes (<code>3f1c</code>) mark files already committed. There's one list, and committed is a state of a file rather than a second panel.</li></ul>`;
+}
+
+function renderB() {
+  $("stripHost").innerHTML = "";
+  const v = visible();
+  const cards = S.plugin
+    ? ["oauth","store","cmd","retry","deps"].map((k,i) => { const fs = v.filter(x => x.intent === k && (x.tier === "core" || x.tier === "config")); const ts = v.filter(x => x.intent === k && x.tier === "tests").length; const gen = v.filter(x => x.intent === k && x.tier === "generated").length;
+        return `<div class="card ${INTENTS[k].flag?"flagged":""}"><div class="ch"><span class="ord">${i+1}</span><span class="title">${esc(INTENTS[k].title)}</span>${INTENTS[k].flag?'<span class="tag">⚑ not requested</span>':""}<span class="spacer"></span><span class="lbl">${fs.length} files · ${ts} tests${gen?` · ${gen} generated`:""}</span></div>
+        <div class="why">${esc(INTENTS[k].why)}</div><div class="files">${fs.map(x => `<button onclick="pick('${x.path}')">${esc(base(x.path))}</button>`).join("")}</div></div>`; }).join("")
+      + `<div class="card plain"><div class="ch"><span class="ord">·</span><span class="title">Scratch: ${v.filter(x=>x.tier==="scratch").length} files</span><span class="spacer"></span><span class="btn danger" onclick="askDelete()">Delete…</span></div></div>`
+    : TIERS.map(([k,n,d],i) => { const fs = v.filter(x => x.tier === k); return `<div class="card plain"><div class="ch"><span class="ord">${i+1}</span><span class="title">${n}</span><span class="spacer"></span><span class="lbl">${fs.length} files</span></div><div class="why">${d || "&nbsp;"}</div><div class="files">${fs.slice(0,12).map(x => `<button onclick="pick('${x.path}')">${esc(base(x.path))}</button>`).join("")}${fs.length>12?`<span class="lbl">+${fs.length-12} more</span>`:""}</div></div>`; }).join("");
+  $("bodyHost").innerHTML = `<div class="story" style="max-width:560px;border-right:1px solid var(--line-soft)">${S.plugin ? `<div class="lbl">Suggested reading order · mads default · written by a model, so check it against the diffs</div>` : `<div class="lbl">No grouping plug-in: falling back to tiers. Run one for the story view.</div>`}${cards}<div class="lbl"><a style="color:var(--accent)">All ${v.length} files as a list →</a></div></div>${detailHTML()}`;
+  $("appnote").innerHTML = `<ul><li>Best for “what did it do?” when the work is unfamiliar: five sentences tell you the shape before you open any diff.</li>
+    <li>Without a plug-in, which is the default, this degrades to tier cards. That's A with extra chrome and a less scannable list. Toggle the plug-in to compare.</li>
+    <li>Turn filtering has nowhere natural to live here.</li></ul>`;
+}
+
+function renderC() {
+  $("stripHost").innerHTML = "";
+  const v = visible().filter(x => x.turns.includes(S.turn));
+  const t = TURNS.find(y => y[0] === S.turn);
+  $("bodyHost").innerHTML = `<div class="tl">${TURNS.map(([n,p,dg,c,bg]) => `<button class="turn" data-sel="${S.turn===n}" onclick="S.turn=${n};S.sel=(F.find(x=>x.turns.includes(${n})&&x.tier==='core')||F.find(x=>x.turns.includes(${n}))||{}).path;render()"><div class="tn">TURN ${n}${bg?" · background":""}</div>${p?`<div class="prompt">“${esc(p)}”</div>`:""}<div class="dig">${esc(dg)}</div><div class="fc">${c} files</div></button>`).join("")}</div>
+    <div class="turnfiles">${v.length ? TIERS.map(([k,n]) => { const fs = v.filter(x => x.tier === k); return fs.length ? groupHTML("c:"+k, n, "", fs) : ""; }).join("") : `<div class="gdesc" style="padding:12px">No files changed in turn ${t[0]}.</div>`}</div>${detailHTML()}`;
+  $("appnote").innerHTML = `<ul><li>Turn digests already exist (<code>pkg/turndigest</code>), so this view gets prose with no new plug-in.</li>
+    <li>Weakness: there's no net-result view. <code>retry.go</code> appears under turns 8 and 10, and the diff shown is the turn's diff, not the session's. With 80 turns, the left column is a long scroll.</li>
+    <li>In A, this view is available as Group by → Turn, and the strip covers quick filtering.</li></ul>`;
+}
+
+function renderRails() {
+  const core = F.filter(x => x.tier === "core").sort((a,b) => (b.add+b.del)-(a.add+a.del));
+  const counts = TIERS.map(([k,n]) => `<span><b>${F.filter(x=>x.tier===k).length}</b> ${n.split(" ")[0].toLowerCase()}</span>`).join("");
+  const unseen = F.filter(x => !x.seen && x.tier !== "scratch" && x.tier !== "generated").length;
+  $("rail1").innerHTML = `<div class="rh"><span>Changes</span><span class="lbl">vs session start</span></div><div class="tiers">${counts}</div>
+    ${core.slice(0,5).map(x => rowHTML(x,{compact:true})).join("")}<div class="foot"><span>+${core.length-5} more source · <span style="color:var(--info)">●</span> ${unseen} new</span><a>Open Files →</a></div>`;
+  $("rail2").innerHTML = `<div class="rh"><span>Changes</span><span class="lbl">mads default · 2m ago</span></div><div class="tiers">${counts}</div>
+    <div class="ins">Device-flow login with keychain storage, CLI commands and a Settings button.<div class="warnline">⚑ Also rewrote HTTP retry (not requested): ${F.filter(x=>x.intent==="retry"&&x.tier!=="generated").length} files</div></div>
+    ${["oauth","store","cmd","retry","deps"].map(k => `<button class="igrp row" style="display:flex" onclick="S.opt='A';S.plugin=true;S.group='intent';render()"><span>${INTENTS[k].flag?'<span style="color:var(--warn)">⚑ </span>':""}${esc(INTENTS[k].title.replace(/`/g,""))}</span><span>${F.filter(x=>x.intent===k&&x.tier!=="generated").length}</span></button>`).join("")}
+    <div class="foot"><span><span style="color:var(--info)">●</span> ${unseen} new</span><a>Open Files →</a></div>`;
+}
+
+const OPTS = { A:["A · Tier list + turn strip (recommended)","<b>Recommended.</b> The tier-sorted list is useful with no plug-in. Turns, folders and plug-in intent groups are alternative groupings of the same list, not separate screens."],
+  B:["B · Story first","Intent groups with a reading order in front, and the file list one click behind. This is the strongest comprehension view, but it depends on a plug-in that is off by default."],
+  C:["C · Timeline first","Turns down the left; pick one to see its files and diffs. It mirrors the conversation, but there's no net-result view."] };
+function render() {
+  $("optbar").innerHTML = Object.entries(OPTS).map(([k,[l]]) => `<button class="opt" aria-pressed="${S.opt===k}" onclick="S.opt='${k}';render()">${l}</button>`).join("");
+  $("optnote").innerHTML = OPTS[S.opt][1];
+  $("apptitle").textContent = "Files tab · option " + S.opt;
+  if (S.group === "intent" && !S.plugin) S.group = "tier";
+  renderChrome(); ({ A:renderA, B:renderB, C:renderC })[S.opt](); renderRails();
+}
+function renderKeepFocus() { render(); const i = document.querySelector(".filter input"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }
+function pick(p) { S.sel = p; const x = F.find(y => y.path === p); if (x) x.seen = true; render(); }
+function toggle(k) { S.open[k] = !(S.open[k] ?? true); render(); }
+function turnClick(e, n) {
+  if (e.shiftKey && S.turns) { const lo = Math.min(S.turns[0], n), hi = Math.max(S.turns[S.turns.length-1], n); S.turns = Array.from({ length: hi-lo+1 }, (_, i) => lo+i); }
+  else S.turns = S.turns && S.turns.length === 1 && S.turns[0] === n ? null : [n];
+  render();
+}
+const confirmDlg = $("confirm");
+function askDelete() { const fs = F.filter(x => x.tier === "scratch"); $("cTitle").textContent = `Delete ${fs.length} scratch files?`; $("cList").innerHTML = fs.map(x => `<li>${esc(x.path)}  <span style="color:var(--text3)">· ${esc(x.why)}</span></li>`).join(""); confirmDlg.showModal(); }
+render();
+</script>
+</body>
+</html>

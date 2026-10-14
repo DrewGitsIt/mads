@@ -21,7 +21,7 @@ describe("WORKSPACE_TABS", () => {
     expect(WORKSPACE_TABS.map((t) => ({ id: t.id, label: t.label }))).toEqual([
       { id: "conversation", label: "Conversation" },
       { id: "tasks", label: "Tasks" },
-      { id: "files", label: "Files" },
+      { id: "files", label: "Changes" },
       { id: "pipeline", label: "Pipeline" },
     ]);
   });
@@ -75,7 +75,7 @@ describe("WORKSPACE_TABS", () => {
     expect(screen.getByText("Graph")).toBeTruthy();
   });
 
-  it("FilesTabView renders the real FilesTab", async () => {
+  it("the files entry renders the real Changes tab", async () => {
     const routerClient = new FakeRouterClient();
     const def = WORKSPACE_TABS.find((t) => t.id === "files")!;
     render(
@@ -85,7 +85,8 @@ describe("WORKSPACE_TABS", () => {
         pipelineClient={new FakePipelineClient()}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Working changes \(\d+\)/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole("radiogroup", { name: "Group by" })).toBeTruthy());
+    expect(screen.getByText("Source")).toBeTruthy();
   });
 
   it("PipelineTabView renders the real PipelineTab", async () => {

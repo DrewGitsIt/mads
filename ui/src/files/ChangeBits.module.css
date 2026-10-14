@@ -1,0 +1,61 @@
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--info);
+}
+
+.kind {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 0;
+  border-radius: 3px;
+  text-align: center;
+  font: 600 10px var(--mono);
+}
+.kind[data-kind="A"] {
+  background: var(--ok-soft);
+  color: var(--ok-fg);
+}
+.kind[data-kind="M"] {
+  background: var(--info-soft);
+  color: var(--info-fg);
+}
+.kind[data-kind="D"] {
+  background: var(--bad-soft);
+  color: var(--bad-fg);
+}
+
+.num {
+  min-width: 58px;
+  text-align: right;
+  white-space: nowrap;
+  font: 10.5px var(--mono);
+  color: var(--text3);
+}
+.add {
+  color: var(--ok-fg);
+}
+.del {
+  color: var(--bad-fg);
+}
+
+.size {
+  display: flex;
+  flex-shrink: 0;
+  height: 5px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--bg3);
+}
+.size i {
+  display: block;
+  height: 100%;
+}
+.a {
+  background: var(--ok);
+}
+.d {
+  background: var(--bad);
+}

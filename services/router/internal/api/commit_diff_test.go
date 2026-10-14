@@ -203,3 +203,49 @@ func TestSessionCommitDiffMissingPath(t *testing.T) {
 		t.Fatalf("status = %d, want 400", resp.StatusCode)
 	}
 }
+
+// TestSessionCommitDiffAbsolutePath: the Changes tab sends absolute paths.
+// One under the commit's repo (or a linked worktree of it) resolves like
+// its repo-relative form; one outside is a 400, never a read.
+func TestSessionCommitDiffAbsolutePath(t *testing.T) {
+	srv, base := newTestServerWithData(t)
+	data := dataclient.New(base, "test")
+	ctx := context.Background()
+
+	sess := &contracts.Session{Name: "s1"}
+	if err := data.CreateSession(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	repo := t.TempDir()
+	gitCommitTestRun(t, repo, "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(repo, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "src", "a.ts"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitCommitTestRun(t, repo, "add", "-A")
+	gitCommitTestRun(t, repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "add a")
+	hash := gitRevParseHead(t, repo)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitCommitTestRun(t, repo, "worktree", "add", "-q", "-b", "session", wt)
+	if _, err := data.RecordCommit(ctx, &dataclient.CommitReport{
+		Commit: contracts.Commit{SessionID: sess.ID, Hash: hash, Repo: repo, Message: "add a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, p := range []string{filepath.Join(repo, "src", "a.ts"), filepath.Join(wt, "src", "a.ts")} {
+		resp := getCommitDiffThroughRouter(t, srv.URL, sess.ID, hash, p)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", p, resp.StatusCode)
+		}
+		if got := decodeJSON[fileDiffResp](t, resp); got.Modified != "x\n" {
+			t.Errorf("%s: diff = %+v", p, got)
+		}
+	}
+	outside := filepath.Join(t.TempDir(), "src", "a.ts")
+	if resp := getCommitDiffThroughRouter(t, srv.URL, sess.ID, hash, outside); resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("outside path: status = %d, want 400", resp.StatusCode)
+	}
+}

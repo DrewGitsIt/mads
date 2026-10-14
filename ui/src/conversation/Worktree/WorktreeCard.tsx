@@ -30,7 +30,7 @@ export interface WorktreeCardActions {
   onLandAgain?: () => void;
   /** A Land is in flight: "Land again" waits. */
   landing?: boolean;
-  /** Shows one file's diff in a recorded commit — the Files tab's commit view. */
+  /** Shows one file's diff in a recorded commit — the Changes tab's commit view. */
   onOpenCommitFile?: (hash: string, path: string) => void;
 }
 
