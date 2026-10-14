@@ -27,6 +27,14 @@ describe("ShellDock", () => {
     expect(container.querySelector('[data-testid="terminal-view"]')).toBeTruthy();
   });
 
+  it("puts focus in the terminal on open, so typing goes straight to the shell", async () => {
+    const { fake, container } = mountDock();
+    await waitFor(() => expect(fake.host.open).toHaveBeenCalledTimes(1));
+
+    const terminal = container.querySelector('[data-testid="terminal-view"]')!;
+    expect(terminal.contains(document.activeElement)).toBe(true);
+  });
+
   it("passes cwd through to open", async () => {
     const { fake } = mountDock({ cwd: "/repo/worktree" });
 
@@ -187,6 +195,8 @@ describe("ShellDock", () => {
 
     await waitFor(() => expect(fake.host.open).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("button", { name: "Start new shell" })).toBeNull();
+    // The click moved focus to the button; the fresh terminal takes it back.
+    expect(screen.getByTestId("terminal-view").contains(document.activeElement)).toBe(true);
   });
 
   it("a dead shell host says so and offers Restart", async () => {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ResizablePanel } from "../../components/ResizablePanel/ResizablePanel";
-import { TerminalView } from "../TerminalRenderer/TerminalView";
+import { TerminalView, type TerminalViewHandle } from "../TerminalRenderer/TerminalView";
 import type { ShellActivity } from "../TerminalRenderer/ptyBridge";
 import { requestOpenSettings } from "../../appNavigation";
 import { EndShellDialog } from "./EndShellDialog";
@@ -37,6 +37,9 @@ type Lost = "exited" | "host-exited" | "detached";
  * (docs/SHELL-DOCK-DESIGN.md D2/D4). The × first asks the bridge what is
  * running: an idle shell ends at once, a busy one asks first (D4).
  *
+ * Opening the dock puts focus in the terminal — a new shell or a hidden one
+ * coming back — so typing goes straight to it; so does each remount below.
+ *
  * When the shell goes away under a mounted dock, a strip under the terminal
  * says why and offers the way back: each button remounts TerminalView, whose
  * mount is an `open` that starts or re-takes the session's shell.
@@ -52,6 +55,13 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
   // The soft-limit notice (D8), dismissed for this dock's lifetime only.
   const liveCount = useLiveShells().length;
   const [limitDismissed, setLimitDismissed] = useState(false);
+  const terminalRef = useRef<TerminalViewHandle>(null);
+
+  // TerminalView's own mount effect has created the xterm by the time this
+  // (parent) effect runs, so focus lands on a live terminal.
+  useEffect(() => {
+    terminalRef.current?.focus();
+  }, [generation]);
 
   useEffect(() => {
     const unsubDetached = bridge.onDetached(() => setLost("detached"));
@@ -133,6 +143,7 @@ export function ShellDock({ bridge, cwd, height, onHeightChange, onHide, onEnd }
         </div>
         <TerminalView
           key={generation}
+          ref={terminalRef}
           bridge={bridge}
           className={styles.terminal}
           spawnOptions={cwd ? { cwd } : undefined}
