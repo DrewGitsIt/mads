@@ -56,7 +56,13 @@
 
 .input {
   width: 100%;
-  resize: vertical;
+  resize: none;
+  /* Grow with the goal instead of a drag handle — the composer's field-sizing
+     (Composer.module.css), floored at the three rows it opened with and
+     capped at ~40% of the window, after which it scrolls. */
+  field-sizing: content;
+  min-height: calc(3lh);
+  max-height: 40vh;
   background: transparent;
   border: none;
   outline: none;
