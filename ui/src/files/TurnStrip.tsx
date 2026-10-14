@@ -21,8 +21,8 @@ const DENSE_AT = 30;
 /**
  * The turn strip (docs/mockups/changes-v2.html): one column per user turn,
  * bar height = files that turn touched, a flat stub for zero-file turns. The
- * whole column is the hit target. Hovering previews a turn's prompt on the
- * context line below; clicking pins it.
+ * whole column is the hit target. Hovering previews a turn's prompt in the
+ * context block to the right of the bars; clicking pins it.
  */
 export function TurnStrip({ turns, mode, selected, onSelect, spy, onNavigate }: TurnStripProps) {
   const [hover, setHover] = useState<number | null>(null);
@@ -127,39 +127,44 @@ export function TurnStrip({ turns, mode, selected, onSelect, spy, onNavigate }: 
         >
           ›
         </button>
-        <span className={styles.hint}>
-          {filter ? "Click to filter · shift-click for a range" : "Turn grouping: the strip follows your scroll"}
-        </span>
-      </div>
-      <div className={styles.ctx} data-preview={preview || undefined} data-testid="turn-context">
-        {!shown ? (
-          <>
-            <span className={styles.tn}>All turns</span>
-            <span className={styles.none}>Hover a turn to see its prompt; click to filter to it.</span>
-          </>
-        ) : (
-          <>
-            <span className={styles.tn}>{range}</span>
-            {/* Every turn has a prompt; an empty one (defensive) shows just "Turn N". */}
-            {shown.prompt && (
-              <span className={styles.prompt} title={shown.prompt}>
-                “{clipPrompt(shown.prompt)}”
+        <div className={styles.ctx} data-preview={preview || undefined} data-testid="turn-context">
+          {!shown ? (
+            <>
+              <span className={styles.head}>
+                <span className={styles.tn}>All turns</span>
               </span>
-            )}
-            <span className={styles.spacer} />
-            <span className={styles.meta}>
-              {shown.files} {shown.files === 1 ? "file" : "files"}
-              {sel && hover === null && (
-                <>
+              <span className={styles.none}>
+                {filter
+                  ? "Hover a turn to see its prompt. Click to filter to it, shift-click for a range."
+                  : "Turn grouping: the strip follows your scroll."}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={styles.head}>
+                <span className={styles.tn}>{range}</span>
+                <span className={styles.meta}>
                   {" · "}
-                  <button type="button" className={styles.link} onClick={() => onSelect(null)}>
-                    clear
-                  </button>
-                </>
+                  {shown.files} {shown.files === 1 ? "file" : "files"}
+                  {sel && hover === null && (
+                    <>
+                      {" · "}
+                      <button type="button" className={styles.link} onClick={() => onSelect(null)}>
+                        clear
+                      </button>
+                    </>
+                  )}
+                </span>
+              </span>
+              {/* Every turn has a prompt; an empty one (defensive) shows just "Turn N". */}
+              {shown.prompt && (
+                <span className={styles.prompt} title={shown.prompt}>
+                  “{clipPrompt(shown.prompt)}”
+                </span>
               )}
-            </span>
-          </>
-        )}
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 .wrap {
   flex-shrink: 0;
-  padding: 6px 8px 0;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--line-soft);
 }
 
@@ -33,6 +33,7 @@
 /* Columns are 32px until the strip runs out of room, then shrink to 8px,
    then the strip scrolls horizontally. */
 .cols {
+  flex: 0 1 auto;
   position: relative;
   display: flex;
   align-items: stretch;
@@ -100,29 +101,23 @@
   background: var(--info);
 }
 
-.hint {
-  flex: 0 1 auto;
-  min-width: 0;
+/* The turn's label, file count and prompt sit right of the bars, so the
+   strip is one row tall. The prompt gets two lines. */
+.ctx {
+  flex: 1 1 240px;
+  min-width: 200px;
   align-self: center;
-  max-width: 280px;
-  margin-left: auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding-left: var(--space-3);
-  text-align: right;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px 0 var(--space-3);
   font-size: var(--fs-sm);
-  color: var(--text3);
 }
 
-.ctx {
+.head {
   display: flex;
   align-items: baseline;
-  gap: var(--space-2);
-  min-height: 30px;
-  padding: 5px 4px 7px;
-  font-size: var(--fs-sm);
-  min-width: 0;
+  white-space: nowrap;
 }
 
 .tn {
@@ -132,11 +127,17 @@
   white-space: nowrap;
 }
 
-.prompt {
+.prompt,
+.none {
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.prompt {
   color: var(--text);
 }
 .ctx[data-preview] .prompt {
@@ -144,16 +145,8 @@
 }
 
 .none {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   color: var(--text3);
   font-style: italic;
-}
-
-.spacer {
-  flex: 1;
 }
 
 .meta {

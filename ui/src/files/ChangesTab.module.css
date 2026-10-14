@@ -62,13 +62,93 @@
   min-height: 0;
 }
 
+/* Width is inline (draggable, remembered); 340px by default, the old Files
+   tab's, so a 13" laptop's diff gets ~770px with the sidebar showing. */
 .list {
   position: relative;
   flex-shrink: 0;
-  width: min(440px, 45%);
-  min-width: 300px;
+  min-width: 240px;
   overflow: auto;
   border-right: 1px solid var(--line-soft);
+}
+.list[hidden] {
+  display: none;
+}
+
+/* The drag handle on the list's right edge. */
+.grip {
+  flex-shrink: 0;
+  width: 5px;
+  margin-left: -3px;
+  position: relative;
+  z-index: 3;
+  cursor: col-resize;
+}
+.grip:hover,
+.grip:focus-visible,
+.grip:active {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: none;
+}
+
+/* With the list hidden, a slim strip keeps the way back in the same place. */
+.listStub {
+  flex-shrink: 0;
+  width: 28px;
+  padding-top: 6px;
+  display: flex;
+  justify-content: center;
+  border-right: 1px solid var(--line-soft);
+  background: var(--bg1);
+}
+
+.stubBtn,
+.hideBtn,
+.navBtn {
+  border: 0;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--text2);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.stubBtn,
+.hideBtn {
+  width: 22px;
+  height: 22px;
+}
+.stubBtn:hover,
+.hideBtn:hover,
+.navBtn:hover {
+  background: var(--bg2);
+  color: var(--text);
+}
+
+.partial {
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: var(--fs-sm);
+  color: var(--text3);
+}
+
+/* Prev / next file in the diff header while the list is hidden. */
+.nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.navBtn {
+  padding: 1px 6px;
+}
+.navPos {
+  font: 11px var(--mono);
+  color: var(--text3);
+}
+
+.widthToggle {
+  margin-left: auto;
 }
 
 .filter {
@@ -110,7 +190,7 @@
   flex: 1;
   min-width: 0;
   min-height: 0;
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-2) 0 var(--space-3);
 }
 
 /* The header's flexible region: a small basis keeps it on the badge's line

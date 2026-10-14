@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Button } from "../components/Button/Button";
 import { Chip } from "../components/Chip/Chip";
 import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
@@ -12,6 +12,7 @@ import { FolderTreeView, GroupList, type ChangeSelection, type RowContext } from
 import { filterFiles, sumLines, turnByN, type ChangesFocus } from "./changesModel";
 import { DiffViewer } from "./DiffViewer/DiffViewer";
 import { buildFolderTree } from "./folderTree";
+import { useFullWidth } from "../features/sessions/fullWidth";
 import { useSeenState } from "./seenState";
 import { TurnStrip } from "./TurnStrip";
 import { useChangeSet } from "./useChangeSet";
@@ -26,6 +27,8 @@ export interface ChangesTabProps {
   focusCommit?: { hash: string; path: string };
   /** The rail's file click / "Open in Changes": file, tier and turn. A fresh object per click. */
   focusView?: ChangesFocus;
+  /** Whether the Changes tab is the one showing (tabs stay mounted when hidden). Gates keys and Full-width. */
+  active?: boolean;
 }
 
 export type Grouping = "tier" | "folder" | "turn" | "commit" | "intent";
@@ -42,19 +45,56 @@ const REVEAL_WAIT_MS = 3000;
 /** Programmatic scrolls (strip click → list) shouldn't be second-guessed by scroll-spy for this long. */
 const SPY_HOLD_MS = 150;
 
+/** Below this window width the tab opens Full-width (over the sessions sidebar) unless the user said otherwise. */
+export const AUTO_FULL_WIDTH_BELOW = 1600;
+
+/** localStorage keys for the list column — view preferences, so local. */
+export const LIST_WIDTH_KEY = "mads.changes.listWidth";
+export const LIST_HIDDEN_KEY = "mads.changes.listHidden";
+const LIST_DEFAULT_W = 340;
+const LIST_MIN_W = 240;
+/** The diff keeps at least this much when the list is dragged wider. */
+const DIFF_MIN_W = 360;
+
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private mode / storage full: the preference lasts for this view only.
+  }
+}
+
+/** Keys typed into a field, the diff editor or a dialog aren't the tab's shortcuts. */
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t instanceof Element ? t : null;
+  return !!el?.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""], .monaco-editor, [role="dialog"], dialog');
+}
+
 /**
  * The Changes tab (docs/CHANGES-DESIGN.md, docs/mockups/changes-v2.html):
  * a baseline switcher and totals, the turn strip, a grouped file list, and
  * the selected file's Monaco diff. Everything is read from the session's
  * server-computed ChangeSet; the tab only groups, filters and sorts it.
  */
-export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, focusView }: ChangesTabProps) {
+export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, focusView, active = true }: ChangesTabProps) {
   const [vs, setVs] = useState<ChangeBaselineId>("start");
   const { changeSet: cs, loading, error, refetch } = useChangeSet(routerClient, sessionId, vs);
   const { isUnseen, markSeen } = useSeenState(sessionId);
 
   const [grouping, setGroupingState] = useState<Grouping>("tier");
-  const [query, setQuery] = useState("");
+  const [query, setQueryState] = useState("");
+  const [includePartial, setIncludePartial] = useState(false);
+  const setQuery = useCallback((q: string | ((q: string) => string)) => {
+    setQueryState(q);
+    setIncludePartial(false);
+  }, []);
   const [turnSel, setTurnSel] = useState<number[] | null>(null);
   const [spy, setSpy] = useState<number | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
@@ -105,9 +145,9 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     [files, setReveal],
   );
 
-  const visible = useMemo(
-    () => filterFiles(files, { query, turns: filterMode ? turnSel : null }),
-    [files, query, filterMode, turnSel],
+  const { files: visible, partial } = useMemo(
+    () => filterFiles(files, { query, turns: filterMode ? turnSel : null, includePartial }),
+    [files, query, filterMode, turnSel, includePartial],
   );
 
   const isOpen = useCallback((key: string, dflt: boolean) => open[key] ?? dflt, [open]);
@@ -129,9 +169,12 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     const f = files.find((x) => x.path === exposePath);
     if (!f) return;
     setExposePath(null);
-    setQuery((q) => (q && !f.display.toLowerCase().includes(q.trim().toLowerCase()) ? "" : q));
+    const q = query.trim().toLowerCase();
+    if (q && !f.display.toLowerCase().includes(q)) setQuery("");
+    else if (q) setIncludePartial(true);
     setTurnSel((t) => (t && !f.turns.some((n) => t.includes(n)) ? null : t));
     setOpen((o) => ({ ...o, [`t:${f.tier}`]: true }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads the query at the moment the file shows up
   }, [exposePath, files]);
 
   // The Commit dialog's path links.
@@ -151,7 +194,7 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     setQuery("");
     setSelection({ path: focusCommit.path, commit: focusCommit.hash });
     setReveal({ selector: `[data-path="${CSS.escape(focusCommit.path)}"][data-commit="${CSS.escape(focusCommit.hash)}"]` });
-  }, [focusCommit, setReveal]);
+  }, [focusCommit, setReveal, setQuery]);
 
   // The rail: tier into view, the rail's turn as the strip's filter, the file selected.
   useEffect(() => {
@@ -179,6 +222,97 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     if (el || Date.now() > reveal.until) setRevealState(null);
     // Re-checked whenever what the list renders changes, until the row shows up.
   }, [reveal, cs, open, turnSel, query, grouping, selection]);
+
+  // --- Layout: list column, Full-width, keys ---------------------------------
+
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [listW, setListW] = useState(() => Number(readStored(LIST_WIDTH_KEY)) || LIST_DEFAULT_W);
+  const [listHidden, setListHiddenState] = useState(() => readStored(LIST_HIDDEN_KEY) === "1");
+  const setListHidden = useCallback((hidden: boolean) => {
+    setListHiddenState(hidden);
+    writeStored(LIST_HIDDEN_KEY, hidden ? "1" : "0");
+  }, []);
+  const clampListW = useCallback((w: number) => {
+    const room = (bodyRef.current?.clientWidth ?? 0) - DIFF_MIN_W;
+    return Math.round(Math.max(LIST_MIN_W, room > LIST_MIN_W ? Math.min(w, room) : w));
+  }, []);
+  const resizeList = useCallback(
+    (w: number) => {
+      const next = clampListW(w);
+      setListW(next);
+      writeStored(LIST_WIDTH_KEY, String(next));
+    },
+    [clampListW],
+  );
+
+  function onGripPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = listW;
+    const grip = e.currentTarget;
+    grip.setPointerCapture?.(e.pointerId);
+    const move = (ev: PointerEvent) => resizeList(startW + ev.clientX - startX);
+    const up = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  }
+
+  // Full-width covers the sessions sidebar. Small windows get it by default;
+  // the button's choice sticks for as long as this tab lives. Leaving the tab
+  // gives the sidebar back.
+  const fullWidth = useFullWidth();
+  const setFull = fullWidth?.setFull;
+  const [fullOverride, setFullOverride] = useState<boolean | null>(null);
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth < AUTO_FULL_WIDTH_BELOW);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < AUTO_FULL_WIDTH_BELOW);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const wantFull = active && (fullOverride ?? narrow);
+  useEffect(() => {
+    setFull?.(wantFull);
+  }, [setFull, wantFull]);
+  useEffect(() => () => setFull?.(false), [setFull]);
+
+  // j / k step through the rows as listed (expanded groups only); hidden
+  // list or not, the rows stay in the DOM.
+  const rowEls = () => [...(listRef.current?.querySelectorAll<HTMLElement>("[data-path]") ?? [])];
+  const stepFile = (d: -1 | 1) => {
+    const rows = rowEls();
+    if (!rows.length) return;
+    const cur = rows.findIndex((r) => r.getAttribute("aria-current") === "true");
+    const next = rows[cur < 0 ? (d > 0 ? 0 : rows.length - 1) : Math.min(rows.length - 1, Math.max(0, cur + d))];
+    const path = next.dataset.path;
+    if (!path) return;
+    setSelection({ path, commit: next.dataset.commit || undefined });
+    setReveal({ selector: '[aria-current="true"]' });
+  };
+  const stepFileRef = useRef(stepFile);
+  stepFileRef.current = stepFile;
+
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || isTypingTarget(e.target)) return;
+      if (e.key === "\\") {
+        e.preventDefault();
+        setListHidden(!listHidden);
+      } else if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        stepFileRef.current(e.key === "j" ? 1 : -1);
+      } else if (e.key === "Escape" && fullWidth?.full) {
+        setFullOverride(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active, listHidden, setListHidden, fullWidth?.full]);
 
   // --- Selected file and its diff ---------------------------------------------
 
@@ -225,6 +359,14 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the selection's fields, not its identity
   }, [routerClient, sessionId, selection?.path, selection?.commit, vs, gone, diffVersion, haveSet]);
+
+  const [navPos, setNavPos] = useState<{ i: number; n: number }>({ i: -1, n: 0 });
+  useLayoutEffect(() => {
+    const rows = rowEls();
+    const i = rows.findIndex((r) => r.getAttribute("aria-current") === "true");
+    setNavPos((p) => (p.i === i && p.n === rows.length ? p : { i, n: rows.length }));
+    // Re-read whenever what the list renders may have changed; the equality check ends the loop.
+  }, [cs, visible, selection, effectiveGrouping, open, listHidden]);
 
   // --- Turn grouping: scroll-spy and navigation -----------------------------
 
@@ -382,6 +524,18 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
         {loading && <span className={styles.quiet}>Updating…</span>}
         {error && <span className={styles.quiet}>Couldn't refresh: {error}</span>}
         {cs.notes && cs.notes.length > 0 && <span className={styles.notes}>{cs.notes.join(" · ")}</span>}
+        {fullWidth && (
+          <Button
+            variant="secondary"
+            size="sm"
+            className={styles.widthToggle}
+            aria-pressed={fullWidth.full}
+            title={fullWidth.full ? "Show the sessions sidebar (Esc)" : "Cover the sessions sidebar to give the diff more room"}
+            onClick={() => setFullOverride(!fullWidth.full)}
+          >
+            {fullWidth.full ? "Half-width" : "Full-width"}
+          </Button>
+        )}
       </div>
 
       {turns.length > 0 && (
@@ -395,15 +549,38 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
         />
       )}
 
-      <div className={styles.body}>
+      <div className={styles.body} ref={bodyRef}>
+        {listHidden && (
+          <div className={styles.listStub}>
+            <button
+              type="button"
+              className={styles.stubBtn}
+              onClick={() => setListHidden(false)}
+              title="Show the file list (\)"
+              aria-label="Show the file list"
+            >
+              ⇥
+            </button>
+          </div>
+        )}
         <div
           className={styles.list}
           ref={listRef}
           onScroll={onListScroll}
-          style={{ "--filter-h": `${filterH}px` } as CSSProperties}
+          hidden={listHidden}
+          style={{ "--filter-h": `${filterH}px`, width: listW } as CSSProperties}
           data-testid="changes-list"
         >
           <div className={styles.filter} ref={filterRef}>
+            <button
+              type="button"
+              className={styles.hideBtn}
+              onClick={() => setListHidden(true)}
+              title="Hide the file list (\)"
+              aria-label="Hide the file list"
+            >
+              ⇤
+            </button>
             <input
               className={styles.input}
               type="search"
@@ -420,8 +597,34 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
               onChange={setGrouping}
             />
           </div>
+          {partial > 0 && (
+            <div className={styles.partial}>
+              Whole-word matches only ·{" "}
+              <button type="button" className={styles.link} onClick={() => setIncludePartial(true)}>
+                show {partial} partial {partial === 1 ? "match" : "matches"}
+              </button>
+            </div>
+          )}
           {body}
         </div>
+        {!listHidden && (
+          <div
+            className={styles.grip}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the file list"
+            aria-valuenow={listW}
+            tabIndex={0}
+            onPointerDown={onGripPointerDown}
+            onDoubleClick={() => resizeList(LIST_DEFAULT_W)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                e.preventDefault();
+                resizeList(listW + (e.key === "ArrowRight" ? 24 : -24));
+              }
+            }}
+          />
+        )}
 
         <div className={styles.detail}>
           <DiffViewer
@@ -440,6 +643,20 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
             onOpenInEditor={(p) => void routerClient.openInEditor(p)}
             header={
               selection ? (
+                <>
+                {listHidden && (
+                  <span className={styles.nav}>
+                    <button type="button" className={styles.navBtn} onClick={() => stepFile(-1)} title="Previous file (k)" aria-label="Previous file">
+                      ‹
+                    </button>
+                    <span className={styles.navPos}>
+                      {navPos.i >= 0 ? navPos.i + 1 : "–"}/{navPos.n}
+                    </span>
+                    <button type="button" className={styles.navBtn} onClick={() => stepFile(1)} title="Next file (j)" aria-label="Next file">
+                      ›
+                    </button>
+                  </span>
+                )}
                 <DetailHeader
                   file={selectedFile}
                   path={selection.path}
@@ -457,6 +674,7 @@ export function ChangesTab({ sessionId, routerClient, focusPath, focusCommit, fo
                     setSelection({ path: selection.path });
                   }}
                 />
+                </>
               ) : undefined
             }
           />

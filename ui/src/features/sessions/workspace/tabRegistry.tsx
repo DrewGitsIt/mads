@@ -14,6 +14,8 @@ export type WorkspaceTabId = "conversation" | "tasks" | "files" | "pipeline";
 
 export interface WorkspaceTabContext {
   sessionId: string;
+  /** Whether this tab is the one showing — tabs stay mounted (hidden) after their first visit. */
+  active?: boolean;
   routerClient: RouterClient;
   pipelineClient: PipelineClient;
   /** Set for a session just created from the Launchpad — only ConversationTabView consumes these. */
@@ -108,7 +110,14 @@ function TasksTabView({ sessionId, routerClient, pipelineClient, focusTask }: Wo
 
 // The Changes tab (formerly "Files"); its internal id stays "files", which
 // e2e selectors and DOM ids (#workspace-panel-files) key on.
-function ChangesTabView({ sessionId, routerClient, focusFilePath, focusCommitFile, focusChanges }: WorkspaceTabContext) {
+function ChangesTabView({
+  sessionId,
+  routerClient,
+  focusFilePath,
+  focusCommitFile,
+  focusChanges,
+  active,
+}: WorkspaceTabContext) {
   return (
     <ChangesTab
       sessionId={sessionId}
@@ -116,6 +125,7 @@ function ChangesTabView({ sessionId, routerClient, focusFilePath, focusCommitFil
       focusPath={focusFilePath}
       focusCommit={focusCommitFile}
       focusView={focusChanges}
+      active={active}
     />
   );
 }

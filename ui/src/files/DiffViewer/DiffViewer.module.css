@@ -39,6 +39,10 @@
   unicode-bidi: isolate;
 }
 
+.editorWrap[hidden] {
+  display: none;
+}
+
 .editorWrap {
   /* Editor fills the pane's remaining height (height="100%" inside); min-height 0 keeps the flex chain collapsible so it never forces page scroll. */
   flex: 1;
@@ -72,4 +76,18 @@
   align-items: center;
   gap: var(--space-1);
   margin-left: auto;
+}
+
+/* "New file · 807 lines" over a plain (non-diff) view. */
+.banner {
+  font-size: var(--fs-sm);
+  color: var(--text3);
+}
+
+/* Added / deleted files: a thin edge bar instead of a full-width tint. */
+.editorWrap[data-shape="added"] {
+  border-left: 2px solid color-mix(in srgb, var(--ok) 60%, transparent);
+}
+.editorWrap[data-shape="deleted"] {
+  border-left: 2px solid color-mix(in srgb, var(--bad) 60%, transparent);
 }

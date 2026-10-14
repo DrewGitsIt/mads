@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { ChangesTab } from "./ChangesTab";
+import { useState, type ReactNode } from "react";
+import { ChangesTab, LIST_HIDDEN_KEY } from "./ChangesTab";
+import { FullWidthContext } from "../features/sessions/fullWidth";
 import { FakeRouterClient } from "../router/fixtures";
 import { FetchRouterClient } from "../router/client";
 import { FakeEventSource } from "../router/testFakeEventSource";
@@ -12,6 +14,8 @@ vi.mock("@monaco-editor/react", () => ({
   DiffEditor: (props: { original: string; modified: string }) => (
     <div data-testid="fake-diff-editor" data-original={props.original} data-modified={props.modified} />
   ),
+  // New and deleted files render as plain code.
+  Editor: (props: { value: string }) => <div data-testid="fake-editor" data-value={props.value} />,
 }));
 
 const SID = "session-files-clean";
@@ -120,8 +124,10 @@ describe("ChangesTab", () => {
         focusCommit={{ hash: "a1b2c3d", path: "services/data/internal/backoff.go" }}
       />,
     );
-    const editor = await screen.findByTestId("fake-diff-editor");
-    expect(editor.getAttribute("data-modified")).toBe("func backoff() time.Duration {\n\treturn baseDelay\n}\n");
+    // A file the commit added: plain code, not a diff against nothing.
+    const editor = await screen.findByTestId("fake-editor");
+    expect(editor.getAttribute("data-value")).toBe("func backoff() time.Duration {\n\treturn baseDelay\n}\n");
+    expect(screen.getByText(/New file · 3 lines/)).toBeTruthy();
     expect(screen.getByText("Diff from commit a1b2c3d")).toBeTruthy();
     expect(screen.getByRole("radio", { name: "Commit" }).getAttribute("aria-checked")).toBe("true");
     expect(list().getByText("ingest: add retry backoff with jitter")).toBeTruthy();
@@ -410,6 +416,147 @@ describe("ChangesTab", () => {
     );
     await waitFor(() => expect(row("ingest.go").getAttribute("data-selected")).toBe("true"));
     expect(await screen.findByTestId("fake-diff-editor")).toBeTruthy();
+  });
+
+  describe("search", () => {
+    function tsClient() {
+      const client = new FakeRouterClient();
+      client.changeSets.set(
+        "s-ts",
+        changeSet({
+          files: [file("ui/model.ts"), file("ui/ChangesTab.tsx"), file("ui/ChangesList.tsx")],
+        }),
+      );
+      return client;
+    }
+
+    it("shows whole-token matches first and reveals the partial ones on request", async () => {
+      render(<ChangesTab sessionId="s-ts" routerClient={tsClient()} />);
+      await (await inList()).findByText("model.ts");
+      fireEvent.change(screen.getByLabelText("Filter files"), { target: { value: ".ts" } });
+      expect(list().queryByText("ChangesTab.tsx")).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "show 2 partial matches" }));
+      expect(list().getByText("ChangesTab.tsx")).toBeTruthy();
+      expect(list().getByText("model.ts")).toBeTruthy();
+      // A new query starts back at whole-token matches.
+      fireEvent.change(screen.getByLabelText("Filter files"), { target: { value: "model.ts" } });
+      fireEvent.change(screen.getByLabelText("Filter files"), { target: { value: ".ts" } });
+      expect(list().queryByText("ChangesTab.tsx")).toBeNull();
+    });
+  });
+
+  describe("list column", () => {
+    it("hides and shows with the buttons and the \\ key, and remembers it", async () => {
+      const { unmount } = render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      await (await inList()).findByText("Source");
+      fireEvent.click(screen.getByRole("button", { name: "Hide the file list" }));
+      expect(screen.getByTestId("changes-list").hidden).toBe(true);
+      expect(localStorage.getItem(LIST_HIDDEN_KEY)).toBe("1");
+      unmount();
+
+      render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      await screen.findByRole("button", { name: "Show the file list" });
+      expect(screen.getByTestId("changes-list").hidden).toBe(true);
+      fireEvent.keyDown(document, { key: "\\" });
+      expect(screen.getByTestId("changes-list").hidden).toBe(false);
+    });
+
+    it("ignores its keys while typing or when the tab isn't showing", async () => {
+      const { rerender } = render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      await (await inList()).findByText("Source");
+      fireEvent.keyDown(screen.getByLabelText("Filter files"), { key: "\\" });
+      expect(screen.getByTestId("changes-list").hidden).toBe(false);
+      rerender(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} active={false} />);
+      fireEvent.keyDown(document, { key: "\\" });
+      expect(screen.getByTestId("changes-list").hidden).toBe(false);
+    });
+
+    it("j / k step the selection through the rows as listed", async () => {
+      render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      await (await inList()).findByText("Source");
+      const rows = [...screen.getByTestId("changes-list").querySelectorAll<HTMLElement>("[data-path]")];
+      expect(rows.length).toBeGreaterThan(1);
+      fireEvent.keyDown(document, { key: "j" });
+      await waitFor(() => expect(rows[0].getAttribute("data-selected")).toBe("true"));
+      fireEvent.keyDown(document, { key: "j" });
+      await waitFor(() => expect(rows[1].getAttribute("data-selected")).toBe("true"));
+      fireEvent.keyDown(document, { key: "k" });
+      await waitFor(() => expect(rows[0].getAttribute("data-selected")).toBe("true"));
+    });
+  });
+
+  describe("Full-width", () => {
+    let full = false;
+    function Host({ children }: { children: ReactNode }) {
+      const [on, setOn] = useState(false);
+      full = on;
+      return <FullWidthContext.Provider value={{ full: on, setFull: setOn }}>{children}</FullWidthContext.Provider>;
+    }
+    function setWidth(w: number) {
+      Object.defineProperty(window, "innerWidth", { configurable: true, value: w });
+    }
+    afterEach(() => setWidth(1024));
+
+    it("opens Full-width on a small window; the button and Esc give the sidebar back", async () => {
+      setWidth(1466);
+      render(
+        <Host>
+          <ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />
+        </Host>,
+      );
+      await (await inList()).findByText("Source");
+      expect(full).toBe(true);
+      fireEvent.click(screen.getByRole("button", { name: "Half-width" }));
+      expect(full).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Full-width" }));
+      expect(full).toBe(true);
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(full).toBe(false);
+    });
+
+    it("stays half-width on a large window until asked", async () => {
+      setWidth(1920);
+      render(
+        <Host>
+          <ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />
+        </Host>,
+      );
+      await (await inList()).findByText("Source");
+      expect(full).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Full-width" }));
+      expect(full).toBe(true);
+    });
+
+    it("gives the sidebar back when the tab is left or unmounted", async () => {
+      setWidth(1466);
+      const ui = (active: boolean) => (
+        <Host>
+          <ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} active={active} />
+        </Host>
+      );
+      const { rerender, unmount } = render(ui(true));
+      await (await inList()).findByText("Source");
+      expect(full).toBe(true);
+      rerender(ui(false));
+      expect(full).toBe(false);
+      rerender(ui(true));
+      expect(full).toBe(true);
+      // Esc only applies to the tab that's showing.
+      rerender(ui(false));
+      fireEvent.keyDown(document, { key: "Escape" });
+      rerender(ui(true));
+      expect(full).toBe(true);
+      // Switching sessions or opening a delegate unmounts the tab.
+      rerender(<Host>{null}</Host>);
+      expect(full).toBe(false);
+      unmount();
+    });
+
+    it("has no Full-width control outside the sessions surface", async () => {
+      render(<ChangesTab sessionId={SID} routerClient={new FakeRouterClient()} />);
+      await (await inList()).findByText("Source");
+      expect(screen.queryByRole("button", { name: /-width$/ })).toBeNull();
+    });
   });
 
   it("has no merge-back flow, and the retired components stay gone", async () => {

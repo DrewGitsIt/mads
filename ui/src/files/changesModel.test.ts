@@ -7,6 +7,7 @@ import {
   countNonScratch,
   dirname,
   filterFiles,
+  tokenMatch,
   nextTurnSelection,
   railFiles,
   railStops,
@@ -85,18 +86,68 @@ describe("filterFiles", () => {
   ];
 
   it("filters by any selected turn", () => {
-    expect(filterFiles(files, { turns: [4, 6] }).map((f) => f.display)).toEqual([
+    expect(filterFiles(files, { turns: [4, 6] }).files.map((f) => f.display)).toEqual([
       "internal/auth/token.go",
       "cmd/login.go",
     ]);
   });
 
   it("filters by a case-insensitive path query", () => {
-    expect(filterFiles(files, { query: "LOGIN" }).map((f) => f.display)).toEqual(["cmd/login.go"]);
+    expect(filterFiles(files, { query: "LOGIN" }).files.map((f) => f.display)).toEqual(["cmd/login.go"]);
   });
 
   it("passes everything with no turns and no query", () => {
-    expect(filterFiles(files, { turns: null, query: "  " })).toHaveLength(3);
+    expect(filterFiles(files, { turns: null, query: "  " }).files).toHaveLength(3);
+  });
+
+  const ts = [
+    file("ui/src/files/changesModel.ts"),
+    file("ui/src/files/ChangesTab.tsx"),
+    file("ui/src/files/ChangesList.tsx"),
+    file("pkg/changes/build.go"),
+    file("pkg/changes/builder.go"),
+  ];
+  const shown = (r: { files: { display: string }[] }) => r.files.map((f) => f.display);
+
+  it("prefers whole-token matches and counts the partial ones it hides", () => {
+    const r = filterFiles(ts, { query: ".ts" });
+    expect(shown(r)).toEqual(["ui/src/files/changesModel.ts"]);
+    expect(r.partial).toBe(2);
+    expect(shown(filterFiles(ts, { query: "build" }))).toEqual(["pkg/changes/build.go"]);
+  });
+
+  it("shows the partial matches on request", () => {
+    const r = filterFiles(ts, { query: ".ts", includePartial: true });
+    expect(r.files).toHaveLength(3);
+    expect(r.partial).toBe(0);
+  });
+
+  it("falls back to substring matching when nothing matches a whole token", () => {
+    const r = filterFiles(ts, { query: "buil" });
+    expect(shown(r)).toEqual(["pkg/changes/build.go", "pkg/changes/builder.go"]);
+    expect(r.partial).toBe(0);
+  });
+
+  it("treats a camelCase hump as a word edge", () => {
+    expect(shown(filterFiles(ts, { query: "tab" }))).toEqual(["ui/src/files/ChangesTab.tsx"]);
+    // "changes" is a whole token in every path here (a folder or a camelCase prefix).
+    expect(filterFiles(ts, { query: "changes" }).files).toHaveLength(5);
+  });
+});
+
+describe("tokenMatch", () => {
+  it("needs a word edge on each side the query has a word character", () => {
+    expect(tokenMatch("a/foo.ts", ".ts")).toBe(true);
+    expect(tokenMatch("a/foo.tsx", ".ts")).toBe(false);
+    expect(tokenMatch("a/foo.tsx", "foo.")).toBe(true);
+    expect(tokenMatch("a/xfoo.tsx", "foo.")).toBe(false);
+    expect(tokenMatch("a/foo.ts.bak", ".ts")).toBe(true);
+    expect(tokenMatch("a/HTTPServer.go", "server")).toBe(false);
+  });
+
+  it("checks every occurrence, not just the first", () => {
+    expect(tokenMatch("tsx/foo.ts", ".ts")).toBe(true);
+    expect(tokenMatch("tsconfig/ts", "ts")).toBe(true);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../../components/Button/Button";
 import { Toast } from "../../components/Toast/Toast";
 import { useBusHealth } from "../../router/useBusHealth";
@@ -22,6 +22,7 @@ import { DelegateView } from "./delegate/DelegateView";
 import { useDelegateSettings } from "./state/useDelegateSettings";
 import { delegateFadeMs } from "./rail/DelegateRows";
 import type { WorkspaceTabId } from "./workspace/tabRegistry";
+import { FullWidthContext, type FullWidthApi } from "./fullWidth";
 import styles from "./SessionsSurface.module.css";
 
 export interface SessionsSurfaceProps {
@@ -123,8 +124,11 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     return () => window.removeEventListener(OPEN_CREATED_SESSION_EVENT, onCreated);
   }, []);
 
-  return (
-    <div className={styles.surface}>
+  const [fullWidth, setFullWidth] = useState(false);
+  const fullWidthApi = useMemo<FullWidthApi>(() => ({ full: fullWidth, setFull: setFullWidth }), [fullWidth]);
+
+  const surface = (
+    <div className={styles.surface} data-full-width={fullWidth || undefined}>
       {/* data-rail-scroll marks the rail's scroll viewport — this aside owns the
           overflow-y:auto, not the SessionRail div inside it, which is unbounded
           and simply as tall as its content. SessionRow reads the marked box's
@@ -289,4 +293,6 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
       </main>
     </div>
   );
+
+  return <FullWidthContext.Provider value={fullWidthApi}>{surface}</FullWidthContext.Provider>;
 }

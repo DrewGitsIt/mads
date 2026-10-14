@@ -95,18 +95,59 @@ export function sizeBarWidth(added: number, deleted: number): number {
   return Math.max(4, Math.min(44, Math.round(Math.sqrt(added + deleted) * 2.2)));
 }
 
-/** Files that pass the list's filter box and (outside Turn grouping) the strip's turn filter. */
+const isWordChar = (c: string | undefined) => c !== undefined && /[\p{L}\p{N}]/u.test(c);
+const isUpper = (c: string | undefined) => c !== undefined && c !== c.toLowerCase();
+
+/**
+ * Whether `query` (already lowercased) appears in `text` as a whole token:
+ * not continuing a word on either side. A camelCase hump counts as a word
+ * edge, so "changes" matches ChangesTab.tsx, while ".ts" matches foo.ts but
+ * not foo.tsx and "build" matches build.go but not builder.go.
+ */
+export function tokenMatch(text: string, query: string): boolean {
+  const lower = text.toLowerCase();
+  if (!query) return true;
+  const startsWord = isWordChar(query[0]);
+  const endsWord = isWordChar(query[query.length - 1]);
+  for (let i = lower.indexOf(query); i >= 0; i = lower.indexOf(query, i + 1)) {
+    const j = i + query.length;
+    const before = text[i - 1];
+    const after = text[j];
+    const startOk = !startsWord || !isWordChar(before) || (isUpper(text[i]) && !isUpper(before));
+    const endOk = !endsWord || !isWordChar(after) || (isUpper(after) && !isUpper(text[j - 1]));
+    if (startOk && endOk) return true;
+  }
+  return false;
+}
+
+export interface FilterResult {
+  files: ChangedFile[];
+  /**
+   * Files the query matched only partway through a word, left out because
+   * some file matched it as a whole token. 0 when partial matches are shown.
+   */
+  partial: number;
+}
+
+/**
+ * Files that pass the list's filter box and (outside Turn grouping) the
+ * strip's turn filter. Whole-token matches win: when any file matches the
+ * query as a token, partial (substring) matches are hidden unless
+ * `includePartial`, and counted. When none does, substring matching applies.
+ */
 export function filterFiles(
   files: ChangedFile[],
-  opts: { query?: string; turns?: number[] | null },
-): ChangedFile[] {
+  opts: { query?: string; turns?: number[] | null; includePartial?: boolean },
+): FilterResult {
   const q = opts.query?.trim().toLowerCase();
   const turns = opts.turns && opts.turns.length ? opts.turns : null;
-  return files.filter((f) => {
-    if (turns && !f.turns.some((t) => turns.includes(t))) return false;
-    if (q && !f.display.toLowerCase().includes(q)) return false;
-    return true;
-  });
+  const inTurns = turns ? files.filter((f) => f.turns.some((t) => turns.includes(t))) : files;
+  if (!q) return { files: inTurns, partial: 0 };
+  const matched = inTurns.filter((f) => f.display.toLowerCase().includes(q));
+  if (opts.includePartial) return { files: matched, partial: 0 };
+  const exact = matched.filter((f) => tokenMatch(f.display, q));
+  if (exact.length === 0) return { files: matched, partial: 0 };
+  return { files: exact, partial: matched.length - exact.length };
 }
 
 /**

@@ -132,10 +132,12 @@ test.describe("session workspace: tasks/files/pipeline tabs", () => {
     // parent commit that didn't contain it — recordRealCommit) opens its
     // diff on click, exercising the endpoint's added-file/empty-original path.
     await changes.getByText("commit-file.ts").first().click();
-    // .monaco-diff-editor is the DiffEditor widget's own top-level container —
-    // unlike .monaco-editor, which Monaco also applies to several nested
-    // internal panes/gutters, so it isn't reliably "the" visible editor root.
-    await expect(page.locator(".monaco-diff-editor").first()).toBeVisible();
+    // An added file has nothing to compare against, so it opens as plain
+    // code under a "New file" banner. The diff editor stays mounted but
+    // hidden (DiffViewer's DiffBody), so check the plain editor is the one showing.
+    await expect(changes.getByText(/^New file · \d+ lines?$/)).toBeVisible();
+    await expect(changes.locator(".monaco-editor:not(.monaco-diff-editor *)").first()).toBeVisible();
+    await expect(changes.locator(".monaco-diff-editor").first()).toBeHidden();
     await expect(page.getByText(`Diff from commit ${commitHash.slice(0, 7)}`)).toBeVisible();
   });
 

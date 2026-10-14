@@ -343,6 +343,7 @@ export function SessionWorkspace({
         >
           <tab.component
             sessionId={sessionId}
+            active={tab.id === activeTab}
             routerClient={routerClient}
             pipelineClient={pipelineClient}
             provisioning={provisioning}

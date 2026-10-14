@@ -48,3 +48,29 @@
   flex-direction: column;
   overflow: hidden;
 }
+
+/* Full-width (fullWidth.ts): the sidebar slides out left and the workspace
+   takes its width; the icon rail, outside this surface, stays. Margin, not
+   width, so the cards keep their layout (and the rail its scroll position)
+   instead of reflowing through the animation. */
+.surface {
+  overflow: hidden;
+}
+.rail {
+  transition:
+    margin-left 0.2s ease,
+    visibility 0s linear 0s;
+}
+.surface[data-full-width] .rail {
+  margin-left: -312px;
+  visibility: hidden;
+  transition:
+    margin-left 0.2s ease,
+    visibility 0s linear 0.2s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail,
+  .surface[data-full-width] .rail {
+    transition: none;
+  }
+}

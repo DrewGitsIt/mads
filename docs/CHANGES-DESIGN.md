@@ -98,6 +98,34 @@ user edits mixed in unattributed.
 - **Rail** *(Drew's sketch, v2)*: Changes (n files) → tier dropdown →
   ‹ turn › selector (arrows skip turns with nothing in the tier; prompt
   below) → files by size → "Open in Changes". Optional "Latest" follow stop.
+- **Diff real estate** *(agreed 2026-10-14, after the first live pass on a
+  13" laptop; mockup `docs/mockups/changes-diff-space.html`)*. The diff
+  pane was ~640px: long lines scrolled sideways, and Monaco silently forced
+  inline below 900px, so the view toggle did nothing. Option B + Full-width:
+  - The diff wraps long lines, uses a slim gutter (no minimap, overview ruler
+    or folding), folds unchanged stretches, and uses soft palette tints
+    (`utils/createMonacoTheme.ts`). New and deleted files show as plain code
+    with an edge bar and a "New file · N lines" banner.
+  - Inline is the default; the Inline / Side by side choice is always
+    honoured and remembered.
+  - The list column is 340px by default, draggable and remembered; ⇤ or `\`
+    hides it, leaving a slim strip to bring it back. `j` / `k` step through
+    files, and ‹ n/N › appears in the diff header while the list is hidden.
+  - **Full-width** / **Half-width** (rightmost in the tab's toolbar) slides
+    the tab over the sessions sidebar; the icon rail stays. It's on by
+    default below 1600px, and the button's choice sticks while the tab
+    lives. Esc, leaving the tab, or switching session gives the sidebar
+    back. No attention dot while it's covered: the user is reading code.
+    It applies on entering the tab, not on picking a file, so rows don't
+    shift under the cursor.
+  - The turn strip stays full size; its label, file count and prompt (two
+    lines) sit to the right of the bars, not on a line below.
+  - Stacked (list above the diff) was rejected: the Folder tree is
+    unintelligible in a short, wide list.
+- **Search** *(agreed)*: whole-token matches win (`.ts` matches `foo.ts`, not
+  `foo.tsx`; a camelCase hump counts as a word edge). Any partial matches
+  hidden that way are counted, with a "show N partial matches" link. When
+  nothing matches a whole token, plain substring matching applies.
 - **Baselines** *(agreed)*: Session start (default — the only one that
   covers non-git directories), Base branch (what the worktree was created
   from, what Land targets), main (the repo's default branch). Each hides when

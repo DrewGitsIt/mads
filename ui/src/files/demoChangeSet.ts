@@ -179,12 +179,16 @@ export function demoSeen(cs: ChangeSet): Record<string, string> {
 }
 
 /** A believable diff for any demo file. */
-export function demoDiff(path: string, label = ""): FileDiff {
+export function demoDiff(path: string, label = "", change?: string): FileDiff {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return {
+  const diff: FileDiff = {
     path,
     language: name.endsWith(".go") ? "go" : name.endsWith(".tsx") || name.endsWith(".ts") ? "typescript" : "plaintext",
     original: `// ${name}${label}\nfunc (c *Client) do(req *http.Request) (*http.Response, error) {\n\tfor attempt := 0; attempt < c.maxRetries; attempt++ {\n\t\tresp, err := c.http.Do(req)\n\t\ttime.Sleep(backoff.Fixed(attempt))\n\t}\n}\n`,
     modified: `// ${name}${label}\nfunc (c *Client) do(req *http.Request) (*http.Response, error) {\n\treturn retry.Do(req.Context(), c.policy, func() (*http.Response, error) {\n\t\tresp, err := c.http.Do(req)\n\t\tswitch resp.StatusCode {\n\t\tcase 409, 425, 429, 503, 504:\n\t\t\treturn nil, retry.After(resp.Header.Get("Retry-After"))\n\t\t}\n\t\treturn resp, nil\n\t})\n}\n`,
   };
+  // Added and deleted files have nothing on one side, as the router serves them.
+  if (change === "added") diff.original = "";
+  if (change === "deleted") diff.modified = "";
+  return diff;
 }
