@@ -64,8 +64,6 @@ export interface SessionDockProps {
   /** The checkout's open branch for a session working in place (useCheckoutBranch). */
   checkoutBranch?: string;
 
-  /** Persona edits (free text, committed trimmed and only when changed). */
-  onUpdateSession?: (patch: Partial<Pick<Session, "name" | "agent">>) => void;
   /** Live model switch (POST /sessions/{id}/model). Without discovered models the segment is static. */
   onChangeModel?: (model: string) => void;
   /** Live trust switch (POST /sessions/{id}/trust). Absent → trust is a static segment. */

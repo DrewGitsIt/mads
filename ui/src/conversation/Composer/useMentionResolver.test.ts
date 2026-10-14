@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { detectTrigger, sameTrigger, useMentionResolver } from "./useMentionResolver";
 import { FakeRouterClient } from "../../router/fixtures";
-import type { Agent, Model } from "../../router/types";
+import type { Model } from "../../router/types";
 import { COMMANDS } from "./commands/registry";
 import type { CommandContext, CommandDescriptor } from "./commands/types";
 
@@ -48,15 +48,15 @@ describe("detectTrigger", () => {
   });
 
   it("tolerates one interior space for a / trigger, feeding a two-token query", () => {
-    expect(detectTrigger("/agent clau", 11)).toEqual({
+    expect(detectTrigger("/model clau", 11)).toEqual({
       type: "/",
-      query: "agent clau",
+      query: "model clau",
       start: 0,
     });
   });
 
   it("bails once a / query has two interior spaces", () => {
-    expect(detectTrigger("/agent claude opus", 19)).toBeNull();
+    expect(detectTrigger("/model claude opus", 19)).toBeNull();
   });
 });
 
@@ -198,45 +198,6 @@ describe("useMentionResolver", () => {
     );
     expect(result.current.trigger).toBeNull();
     expect(result.current.candidates).toEqual([]);
-  });
-
-  it("descends to registry agents as command-option leaves after '/agent '", async () => {
-    const client = new FakeRouterClient();
-    const agents: Agent[] = [
-      {
-        id: "autonomous-executor",
-        name: "autonomous-executor",
-        prompt: "",
-        created_at: "",
-        updated_at: "",
-      },
-      {
-        id: "investigator",
-        name: "investigator",
-        prompt: "",
-        created_at: "",
-        updated_at: "",
-      },
-    ];
-    vi.spyOn(client, "listAgents").mockResolvedValue(agents);
-    const ctx = ctxFor(client);
-
-    const { result } = renderHook(() =>
-      useMentionResolver(ctx, "/agent inves", 13, 10),
-    );
-
-    await waitFor(() =>
-      expect(result.current.candidates.length).toBeGreaterThan(0),
-    );
-    expect(result.current.candidates).toEqual([
-      expect.objectContaining({
-        id: "investigator",
-        label: "investigator",
-        kind: "command-option",
-        command: "agent",
-        group: "agent",
-      }),
-    ]);
   });
 
   it("descends to the session's provider models as command-option leaves after '/model '", async () => {

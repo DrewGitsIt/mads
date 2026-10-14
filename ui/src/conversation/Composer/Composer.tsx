@@ -114,15 +114,15 @@ export interface ComposerProps {
   /** Fires synchronously at the start of every send (manual or auto) — lets the caller show an in-flight indicator before the request resolves. */
   onSendStart?: () => void;
   /**
-   * Applies a "/agent" or "/model" command (the same commit path the dock's
-   * persona/model pickers use). Resolves true when the change was accepted
+   * Applies a "/model" command (the same commit path the dock's model
+   * picker uses). Resolves true when the change was accepted
    * but queued behind an in-flight turn — a model switch never interrupts a
    * running agent, so the confirmation has to say "applies when the current
    * turn finishes" rather than claiming it already took effect. Rejects on
    * failure, surfaced through onCommandError.
    */
   onUpdateSession?: (
-    patch: Partial<Pick<Session, "agent" | "model">>,
+    patch: Partial<Pick<Session, "model">>,
   ) => void | Promise<boolean | void>;
   /** Fires once a "/" command has done its thing — surface as a toast (with `action` as its link), not a transcript message. */
   onCommandExecuted?: (message: string, action?: CommandToastAction) => void;
@@ -156,7 +156,7 @@ export interface ComposerProps {
  * InjectedContentPreview — nothing is fetched/expanded until send (§2.4).
  * `#` skills insert their name as text the same way but never stage a chip.
  * `/` resolves only the command registry (commands/registry.ts): a command
- * with a submenu ("/agent", "/model") descends to a second level, one that
+ * with a submenu ("/model") descends to a second level, one that
  * needs args (/task) inserts "/name " to type them, and the rest run on
  * Enter or click. Tab only completes "/name ", so optional args can follow.
  * Sending a line that starts with a registered "/name" runs that command

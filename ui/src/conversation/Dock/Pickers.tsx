@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { CSSProperties } from "react";
 import { Caret } from "../../components/Caret/Caret";
 import { Popover } from "../../components/Popover/Popover";
@@ -53,70 +52,24 @@ interface SegmentPickerProps {
 }
 
 /**
- * Persona: the persona's name (never an `agt_…` id), edited in a small
- * upward popover. `value` is the raw wire value — it seeds the editor and is
- * what gets committed — and `label` is display only, so committing without
- * changes can't write a display name back into the record.
+ * Persona: the persona's name (never an `agt_…` id), read-only. A persona's
+ * prompt, tools and permissions are read once at spawn, so swapping one
+ * mid-session would need a Router endpoint that bounces the child the way
+ * trust does — until then the segment only says who is running.
  */
-export function PersonaSegment({
-  value: rawValue,
-  label,
-  open,
-  onOpen,
-  onClose,
-  onCommit,
-}: SegmentPickerProps & { value: string; label: string; onCommit: (value: string) => void }) {
-  const [value, setValue] = useState(rawValue);
+export function PersonaSegment({ label }: { label: string }) {
   return (
-    <Popover
-      open={open}
-      onClose={onClose}
-      style={UPWARD_LEFT}
-      anchor={
-        <button
-          type="button"
-          className={styles.seg}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-label={label}
-          title={`Persona: ${label}`}
-          data-segment="persona"
-          onClick={() => {
-            if (open) return onClose();
-            setValue(rawValue);
-            onOpen();
-          }}
-        >
-          <span className={styles.avatar} aria-hidden="true">
-            {(label.trim()[0] ?? "?").toUpperCase()}
-          </span>
-          <Ladder full={label} short={shortPersona(label)} iconOnly />
-          <Caret />
-        </button>
-      }
+    <span
+      className={cx(styles.seg, styles.segStatic)}
+      aria-label={label}
+      title={`Persona: ${label}`}
+      data-segment="persona"
     >
-      <div className={styles.menu} role="dialog" aria-label="Persona">
-        <div className={styles.menuHead}>Persona</div>
-        <form
-          className={styles.personaForm}
-          onSubmit={(e) => {
-            e.preventDefault();
-            onCommit(value);
-          }}
-        >
-          <input
-            className={styles.personaInput}
-            value={value}
-            autoFocus
-            aria-label="Persona name"
-            onChange={(e) => setValue(e.target.value)}
-          />
-          <button type="submit" className={cx(styles.btn, styles.btnPrimary)}>
-            Save
-          </button>
-        </form>
-      </div>
-    </Popover>
+      <span className={styles.avatar} aria-hidden="true">
+        {(label.trim()[0] ?? "?").toUpperCase()}
+      </span>
+      <Ladder full={label} short={shortPersona(label)} iconOnly />
+    </span>
   );
 }
 

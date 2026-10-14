@@ -23,7 +23,7 @@ export interface MentionTrigger {
  * active trigger to resolve (HANDOFF.md §4). `@` mentions and `#` skills
  * never tolerate whitespace since the trigger char. `/` commands tolerate
  * exactly one interior space so a command that takes an argument (e.g.
- * "/agent claude") stays resolvable as a single trigger — the resolver splits
+ * "/model opus") stays resolvable as a single trigger — the resolver splits
  * query on that space to drive the two-level command menu. A second space
  * still bails (that's just prose after a completed command, not a filter query).
  */

@@ -25,12 +25,12 @@ export async function pickOption(
   );
 }
 
-/** Shared by /agent and /model: apply the picked option and confirm with a toast. */
+/** /model's apply step: set the picked option and confirm with a toast. */
 export async function applySessionOption(
   command: CommandDescriptor,
   invocation: CommandInvocation,
   api: CommandApi,
-  field: "agent" | "model",
+  field: "model",
   noun: string,
 ) {
   try {

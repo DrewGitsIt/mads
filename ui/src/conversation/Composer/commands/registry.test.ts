@@ -33,9 +33,12 @@ const commands: CommandDescriptor[] = [
 ];
 
 describe("command registry", () => {
-  it("registers /task, /model and /agent, each name unique", () => {
+  it("registers /task and /model, each name unique", () => {
     const names = COMMANDS.map((c) => c.name);
-    expect(names).toEqual(expect.arrayContaining(["task", "model", "agent"]));
+    expect(names).toEqual(expect.arrayContaining(["task", "model"]));
+    // No /agent: a persona swap has no live-apply path, so it would only
+    // relabel the screen (the dock's persona segment is read-only for the same reason).
+    expect(names).not.toContain("agent");
     expect(new Set(names).size).toBe(names.length);
   });
 

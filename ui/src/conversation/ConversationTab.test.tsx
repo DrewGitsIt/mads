@@ -383,7 +383,7 @@ describe("ConversationTab", () => {
       await mountTerminal(client);
       fireEvent.click(screen.getByRole("button", { name: "Compose a long prompt" }));
       fireEvent.change(await screen.findByTestId("fake-monaco-editor"), {
-        target: { value: "check @deep /agent" },
+        target: { value: "check @deep /model" },
       });
       await new Promise((r) => setTimeout(r, 200));
       expect(screen.queryByRole("listbox")).toBeNull();

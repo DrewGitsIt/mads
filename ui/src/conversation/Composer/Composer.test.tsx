@@ -10,7 +10,7 @@ import { Composer } from "./Composer";
 import { clearAllDrafts } from "./composerDrafts";
 import { FakeRouterClient } from "../../router/fixtures";
 import { setPlatform } from "../../platform/shortcut";
-import type { Agent, Model, Session } from "../../router/types";
+import type { Model, Session } from "../../router/types";
 import type { CommandDescriptor } from "./commands/types";
 import { useState } from "react";
 import { Popover } from "../../components/Popover/Popover";
@@ -85,7 +85,7 @@ const ATTACH_LINUX = { key: "A", ctrlKey: true, shiftKey: true };
 const TOGGLE_VIEW_LINUX = { key: "T", ctrlKey: true, shiftKey: true };
 
 // React mirrors a controlled textarea's value into a text-node child (an SSR
-// carryover), so plain screen.getByText("/agent") can false-positive-match
+// carryover), so plain screen.getByText("/model") can false-positive-match
 // the textarea itself when the typed command equals the label under test.
 // Scoping to the listbox sidesteps that collision.
 function menu() {
@@ -95,10 +95,6 @@ function menu() {
 function openPlusMenu() {
   fireEvent.click(screen.getByRole("button", { name: "Input options" }));
   return within(screen.getByRole("menu", { name: "Input options" }));
-}
-
-function fixtureAgent(id: string): Agent {
-  return { id, name: id, prompt: "", created_at: "", updated_at: "" };
 }
 
 describe("Composer", () => {
@@ -936,54 +932,6 @@ describe("Composer", () => {
     expect(textarea.value).toBe("hello there");
   });
 
-  it("'/agent' descends to registry agents; selecting one rebinds the session, clears the composer, and confirms — no chip, no send", async () => {
-    const client = new FakeRouterClient();
-    vi.spyOn(client, "listAgents").mockResolvedValue([
-      fixtureAgent("investigator"),
-    ]);
-    const sendMessage = vi.spyOn(client, "sendMessage");
-    const onUpdateSession = vi.fn();
-    const onCommandExecuted = vi.fn();
-
-    render(
-      <Composer
-        routerClient={client}
-        sessionId="session-active"
-        onUpdateSession={onUpdateSession}
-        onCommandExecuted={onCommandExecuted}
-      />,
-    );
-    const textarea = screen.getByPlaceholderText(
-      /Message the agent/,
-    ) as HTMLTextAreaElement;
-
-    fireEvent.change(textarea, { target: { value: "/agent" } });
-    await waitFor(() =>
-      expect(menu().getByRole("option", { name: /^\/agent\b/ })).toBeTruthy(),
-    );
-
-    fireEvent.mouseDown(menu().getByRole("option", { name: /^\/agent\b/ }));
-    expect(textarea.value).toBe("/agent ");
-
-    await waitFor(() =>
-      expect(menu().getByRole("option", { name: "investigator" })).toBeTruthy(),
-    );
-    fireEvent.mouseDown(menu().getByRole("option", { name: "investigator" }));
-
-    await waitFor(() =>
-      expect(onUpdateSession).toHaveBeenCalledWith({ agent: "investigator" }),
-    );
-    await waitFor(() =>
-      expect(onCommandExecuted).toHaveBeenCalledWith(
-        "Agent set to investigator",
-        undefined,
-      ),
-    );
-    expect(textarea.value).toBe("");
-    expect(screen.queryByLabelText(/Remove /)).toBeNull();
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
   it("'/model' descends to the session's provider model list and rebinds on select", async () => {
     const client = new FakeRouterClient();
     const models: Model[] = [{ id: "claude-opus-5", name: "Claude Opus 5" }];
@@ -1067,9 +1015,9 @@ describe("Composer", () => {
 
   it("drives the two-level command menu entirely by keyboard: open, descend, arrow, back, execute", async () => {
     const client = new FakeRouterClient();
-    vi.spyOn(client, "listAgents").mockResolvedValue([
-      fixtureAgent("autonomous-executor"),
-      fixtureAgent("investigator"),
+    vi.spyOn(client, "listModels").mockResolvedValue([
+      { id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+      { id: "claude-opus-5", name: "Claude Opus 5" },
     ]);
     const onUpdateSession = vi.fn();
 
@@ -1077,6 +1025,7 @@ describe("Composer", () => {
       <Composer
         routerClient={client}
         sessionId="session-active"
+        provider="claudecode"
         onUpdateSession={onUpdateSession}
       />,
     );
@@ -1085,14 +1034,14 @@ describe("Composer", () => {
     ) as HTMLTextAreaElement;
 
     // open — typing "/" surfaces the root command list
-    fireEvent.change(textarea, { target: { value: "/agent" } });
+    fireEvent.change(textarea, { target: { value: "/model" } });
     await waitFor(() => expect(screen.getByRole("listbox")).toBeTruthy());
 
-    // descend — Enter on the "/agent" group advances to level 2
+    // descend — Enter on the "/model" group advances to level 2
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(textarea.value).toBe("/agent ");
+    expect(textarea.value).toBe("/model ");
     await waitFor(() =>
-      expect(menu().getByRole("option", { name: "investigator" })).toBeTruthy(),
+      expect(menu().getByRole("option", { name: "Claude Opus 5" })).toBeTruthy(),
     );
 
     // arrow — ArrowDown moves off the first leaf onto the second
@@ -1100,17 +1049,17 @@ describe("Composer", () => {
 
     // back — Escape drops the argument, returning to level 1
     fireEvent.keyDown(textarea, { key: "Escape" });
-    expect(textarea.value).toBe("/agent");
+    expect(textarea.value).toBe("/model");
     await waitFor(() =>
-      expect(menu().getByRole("option", { name: /^\/agent\b/ })).toBeTruthy(),
+      expect(menu().getByRole("option", { name: /^\/model\b/ })).toBeTruthy(),
     );
 
     // descend again, then execute via Enter on the (reset) first leaf
     fireEvent.keyDown(textarea, { key: "Enter" });
-    expect(textarea.value).toBe("/agent ");
+    expect(textarea.value).toBe("/model ");
     await waitFor(() =>
       expect(
-        menu().getByRole("option", { name: "autonomous-executor" }),
+        menu().getByRole("option", { name: "Claude Sonnet 5" }),
       ).toBeTruthy(),
     );
     fireEvent.keyDown(textarea, { key: "Enter" });
@@ -1118,7 +1067,7 @@ describe("Composer", () => {
     expect(textarea.value).toBe("");
     await waitFor(() =>
       expect(onUpdateSession).toHaveBeenCalledWith({
-        agent: "autonomous-executor",
+        model: "claude-sonnet-5",
       }),
     );
   });

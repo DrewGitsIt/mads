@@ -38,7 +38,7 @@ export function MentionMenu({
   if (candidates.length === 0) return null;
 
   // Level-2 candidates (a command's options) all share a `group` — breadcrumb
-  // reads "/agent ›" so the second level never looks like an unrelated flat list.
+  // reads "/model ›" so the second level never looks like an unrelated flat list.
   const group = candidates[0]?.group;
 
   return (

@@ -30,7 +30,7 @@ export interface CommandContext {
 /** available()'s answer. A reason is shown inline on the disabled menu row and when typed + Enter. */
 export type CommandAvailability = { ok: true } | { ok: false; reason: string };
 
-/** One row of a command's second-level menu ("/model ›", "/agent ›"). */
+/** One row of a command's second-level menu ("/model ›"). */
 export interface CommandOption {
   /** What execute receives — an agent id, a model id. */
   id: string;
@@ -54,9 +54,9 @@ export interface CommandToastAction {
  */
 export interface CommandApi {
   ctx: CommandContext;
-  /** Applies an agent/model change — the dock pickers' commit path. Resolves true when queued behind a running turn. */
+  /** Applies a model change — the dock model picker's commit path. Resolves true when queued behind a running turn. */
   updateSession: (
-    patch: Partial<Pick<Session, "agent" | "model">>,
+    patch: Partial<Pick<Session, "model">>,
   ) => Promise<boolean | void>;
   /** A success toast, optionally with an action link. */
   notify: (message: string, action?: CommandToastAction) => void;

@@ -68,22 +68,20 @@ describe("SessionDock", () => {
       expect(screen.queryByRole("button", { name: "claude-sonnet-5" })).toBeNull();
     });
 
-    // onChangeModel, not onUpdateSession: a model switch persists and
-    // reconfigures the running agent (POST /sessions/{id}/model).
+    // A model switch persists and reconfigures the running agent
+    // (POST /sessions/{id}/model).
     it("switches models from the provider dropdown via onChangeModel", async () => {
       stubProviderModels([
         { id: "claude-sonnet-5", name: "Claude Sonnet 5", default: true },
         { id: "claude-opus-5", name: "Claude Opus 5" },
       ]);
       const onChangeModel = vi.fn();
-      const onUpdateSession = vi.fn();
-      renderDock({ onChangeModel, onUpdateSession });
+      renderDock({ onChangeModel });
 
       fireEvent.click(await screen.findByRole("button", { name: "Claude Sonnet 5" }));
       fireEvent.click(screen.getByRole("option", { name: "Claude Opus 5" }));
 
       expect(onChangeModel).toHaveBeenCalledWith("claude-opus-5");
-      expect(onUpdateSession).not.toHaveBeenCalled();
       expect(screen.queryByRole("listbox", { name: "Model" })).toBeNull();
     });
 
@@ -160,45 +158,33 @@ describe("SessionDock", () => {
 
     it("names the persona an agt_ reference points at", () => {
       renderDock({ session: byId, agents: agentIndex([partner]) });
-      expect(screen.getByRole("button", { name: "mads-coding-partner" })).toBeTruthy();
+      expect(screen.getByLabelText("mads-coding-partner")).toBeTruthy();
       expect(screen.queryByText(/agt_/i)).toBeNull();
     });
 
     it("reads an unresolvable id as Unknown agent, never the id", () => {
       renderDock({ session: byId, agents: agentIndex([]) });
-      expect(screen.getByRole("button", { name: "Unknown agent" })).toBeTruthy();
+      expect(screen.getByLabelText("Unknown agent")).toBeTruthy();
       expect(screen.queryByText(/agt_/i)).toBeNull();
     });
 
     it("shows a neutral label, not the id, while personas are loading", () => {
       renderDock({ session: byId });
-      expect(screen.getByRole("button", { name: "Agent" })).toBeTruthy();
+      expect(screen.getByLabelText("Agent")).toBeTruthy();
       expect(screen.queryByText(/agt_/i)).toBeNull();
     });
 
     it("passes a name reference through", () => {
       renderDock({ agents: agentIndex([]) });
-      expect(screen.getByRole("button", { name: "autonomous-executor" })).toBeTruthy();
+      expect(screen.getByLabelText("autonomous-executor")).toBeTruthy();
     });
 
-    it("edits from the raw value and commits a trimmed change via onUpdateSession", () => {
-      const onUpdateSession = vi.fn();
-      renderDock({ session: byId, agents: agentIndex([partner]), onUpdateSession });
-      fireEvent.click(screen.getByRole("button", { name: "mads-coding-partner" }));
-      const input = screen.getByLabelText("Persona name") as HTMLInputElement;
-      // Seeds with the wire value, never the display name.
-      expect(input.value).toBe("agt_3212544bb2e37c92");
-      fireEvent.change(input, { target: { value: "  reviewer " } });
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      expect(onUpdateSession).toHaveBeenCalledWith({ agent: "reviewer" });
-    });
-
-    it("doesn't patch the session when saved unchanged", () => {
-      const onUpdateSession = vi.fn();
-      renderDock({ onUpdateSession });
-      fireEvent.click(screen.getByRole("button", { name: "autonomous-executor" }));
-      fireEvent.click(screen.getByRole("button", { name: "Save" }));
-      expect(onUpdateSession).not.toHaveBeenCalled();
+    it("is read-only: no editor, nothing to commit", () => {
+      renderDock({ session: byId, agents: agentIndex([partner]) });
+      const seg = screen.getByLabelText("mads-coding-partner");
+      expect(seg.tagName).toBe("SPAN");
+      fireEvent.click(seg);
+      expect(screen.queryByRole("dialog", { name: "Persona" })).toBeNull();
     });
   });
 

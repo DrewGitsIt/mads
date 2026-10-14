@@ -8,12 +8,12 @@ import type { SessionDockProps } from "./SessionDock";
 import { WorkArea } from "./WorkArea";
 import styles from "./StatusLine.module.css";
 
-type OpenSegment = "agent" | "model" | "trust" | "work";
+type OpenSegment = "model" | "trust" | "work";
 
 export type StatusLineProps = Omit<SessionDockProps, "children" | "sheet" | "usage" | "contextWindow" | "onCompact">;
 
 /**
- * The dock's bottom line (30px, bg0): persona ▾, model ▾, trust ▾ on the
+ * The dock's bottom line (30px, bg0): persona, model ▾, trust ▾ on the
  * left; `⎇ workspace / branch → base` and the Commit/Land control on the
  * right. In terminal mode a `💬 Chat` segment leads (the way back) and a
  * `⌘E compose` segment sits before ⎇. One popover open at a time.
@@ -27,7 +27,6 @@ export function StatusLine({
   agents,
   workspaceName,
   checkoutBranch,
-  onUpdateSession,
   onChangeModel,
   onChangeTrust,
   work,
@@ -55,18 +54,7 @@ export function StatusLine({
         </button>
       )}
       {session.agent && (
-        <PersonaSegment
-          value={session.agent}
-          label={personaLabel(session.agent, agents)}
-          open={openSeg === "agent"}
-          onOpen={() => setOpenSeg("agent")}
-          onClose={close}
-          onCommit={(v) => {
-            close();
-            const trimmed = v.trim();
-            if (trimmed && trimmed !== session.agent) onUpdateSession?.({ agent: trimmed });
-          }}
-        />
+        <PersonaSegment label={personaLabel(session.agent, agents)} />
       )}
       {session.model && (
         <ModelSegment

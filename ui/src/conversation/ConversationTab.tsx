@@ -573,13 +573,12 @@ export function ConversationTab({
     [applyModel],
   );
 
-  // Agent and name stay local-only: unlike model and trust, neither has a
-  // live-apply endpoint yet (the agent's system prompt is spawn-time too, so
-  // the persona picker is cosmetic until one exists — see HANDOFF.md).
+  // The composer's "/model". There is deliberately no persona path: a
+  // persona's prompt and tools are spawn-time, and with no Router endpoint to
+  // bounce the child a picker would only relabel the screen.
   const handleUpdateSession = useCallback(
-    async (patch: Partial<Pick<Session, "name" | "agent" | "model">>) => {
+    async (patch: Partial<Pick<Session, "model">>) => {
       if (patch.model !== undefined) return applyModel(patch.model);
-      setSession((s) => (s ? { ...s, ...patch } : s));
     },
     [applyModel],
   );
@@ -1572,7 +1571,6 @@ export function ConversationTab({
     agents,
     workspaceName: sessionWorkspace?.name ?? undefined,
     checkoutBranch,
-    onUpdateSession: handleUpdateSession,
     onChangeModel: handleChangeModel,
     onChangeTrust: handleChangeTrust,
     work: {

@@ -1,4 +1,3 @@
-import { agentCommand } from "./agent";
 import { compactCommand } from "./compact";
 import { exportCommand } from "./export";
 import { modelCommand } from "./model";
@@ -22,7 +21,6 @@ import type {
 export const COMMANDS: CommandDescriptor[] = [
   taskCommand,
   modelCommand,
-  agentCommand,
   exportCommand,
   compactCommand,
   usageCommand,

@@ -63,7 +63,7 @@ autocomplete, aliases, availability and dispatch all read the table.
 | `description`, `argHint?` | Hint shown after the name (`<title>`, `[focus]`); may be a function of the context. Having a hint means picking the row inserts `/name ` for typing args instead of executing. |
 | `argRequired?` | Message shown inline when invoked with no args; nothing runs. |
 | `argError?(args, ctx)` | Blocks a run with a message and keeps the typed text. |
-| `options?(ctx)` | Second-level menu rows (`/model ›`, `/agent ›`); `{id, label, detail}`. |
+| `options?(ctx)` | Second-level menu rows (`/model ›`); `{id, label, detail}`. |
 | `visible?(ctx)` | False hides the command entirely: not in the menu, not recognized when typed (so it passes through as text). Used for feature flags. |
 | `available?(ctx)` | `{ok:true}` or `{ok:false, reason}` (below). |
 | `runsWhenUnavailable?` | Unavailable still disables the menu row, but typed + Enter runs `execute` anyway, for commands that render their own blocked state. |
@@ -110,14 +110,18 @@ source:"user"})`). Nothing goes to the agent. Success toast "Task created: ..."
 with an "Open task" action (when the host can navigate); a Router error is a
 failure toast. No title: inline "/task needs a title".
 
-### /model `<name>` and /agent `<name>`
-Second-level menus: `/model` lists the session provider's models
-(`listModels(provider)`), `/agent` lists registry agents. Picking, or typing an
-exact id/label and Enter (`pickOption`), calls `updateSession({model|agent})`
-and toasts "Model set to X". If the change queued behind a running turn the
+### /model `<name>`
+Second-level menu of the session provider's models (`listModels(provider)`).
+Picking, or typing an exact id/label and Enter (`pickOption`), calls
+`updateSession({model})` and toasts "Model set to X". If the change queued behind a running turn the
 toast adds "applies when the current turn finishes". An unmatched name is a
 failure toast, nothing changes. `/model` is unavailable until the session has
 a provider.
+
+There is no `/agent`. A persona's prompt, tools and permissions are read once
+at spawn and no Router endpoint re-spawns a session under a new one, so a
+picker could only relabel the screen; the dock's persona segment is read-only
+for the same reason. Add it back alongside such an endpoint.
 
 ### /compact `[focus]`
 Runs the harness's own compaction through `api.compact(focus?)` — exactly the
