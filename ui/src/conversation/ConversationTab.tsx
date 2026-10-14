@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "../components/Button/Button";
 import { Card } from "../components/Card/Card";
+import { ConfirmDialog } from "../components/ConfirmDialog/ConfirmDialog";
 import { Toast } from "../components/Toast/Toast";
 import type { RouterClient, SessionEventSource } from "../router/client";
 import { CommitRefusedError, TransportSwitchError } from "../router/client";
@@ -296,6 +297,8 @@ export function ConversationTab({
   // (no Fast Model after all, a failing hook) so the user can see why and
   // write the message themselves.
   const [commitDialog, setCommitDialog] = useState<{ initialError?: CommitError } | null>(null);
+  // Stop asked while subagents or processes run — what it would end. Unset: no dialog.
+  const [stopConfirm, setStopConfirm] = useState<{ subagents: number; processes: number }>();
   // "Ask the agent to resolve" drafts into the composer; it never sends.
   const [composerPrefill, setComposerPrefill] = useState<{ text: string; nonce: number }>();
 
@@ -821,6 +824,8 @@ export function ConversationTab({
     // turn_end and the agent going idle both arrive) mustn't see "live".
     if (turnPhaseRef.current === "live") turnPhaseRef.current = "revealing";
     setTurnPhase((p) => (p === "live" ? "revealing" : p));
+    // A Stop question outlives nothing: the turn it asked about is over.
+    setStopConfirm(undefined);
     pacerFinish(() => {
       const gen = turnGenRef.current;
       const stillCurrent = () => turnGenRef.current === gen;
@@ -1447,6 +1452,15 @@ export function ConversationTab({
   // --- Redesign wiring: dock targets, running-subagent substrip ---
   // The record is authoritative wherever one exists (mergeDelegates).
   const effectiveTasks = mergeDelegates(tasks, delegates);
+  // Stop interrupts claude, which ends every subagent and background process
+  // with the reply (perTaskStopAffordance is unset — docs/DELEGATES-DESIGN.md
+  // C3b). With any of them running, Stop asks first; the reply alone stops at once.
+  const requestStop = () => {
+    const subagents = [...effectiveTasks.values()].filter((t) => t.running).length;
+    const processes = background.length;
+    if (subagents + processes === 0) void handleInterrupt();
+    else setStopConfirm({ subagents, processes });
+  };
   const tasksByToolUseMap = tasksByToolUse(effectiveTasks);
   // The approval jump's "· <subagent>" — named as its task card titles it.
   const subagentName = (req: PermissionRequest) => {
@@ -1806,7 +1820,7 @@ export function ConversationTab({
                 onCompact={dockProps.onCompact}
                 disabled={transport.status !== "idle" || waking}
                 busy={inChatTurn}
-                onStop={() => void handleInterrupt()}
+                onStop={requestStop}
                 initialValue={pendingFirstMessage}
                 prefill={composerPrefill}
                 autoSendInitial={Boolean(pendingFirstMessage)}
@@ -1873,6 +1887,20 @@ export function ConversationTab({
           ))}
       </div>
 
+      <ConfirmDialog
+        // A turn that ends while the question is up leaves nothing to stop.
+        open={stopConfirm !== undefined && inChatTurn}
+        title="Stop everything?"
+        description={stopConfirm && `Stopping the reply also ends ${stopSummary(stopConfirm)}.`}
+        confirmLabel="Stop everything"
+        cancelLabel="Keep working"
+        onConfirm={() => {
+          setStopConfirm(undefined);
+          void handleInterrupt();
+        }}
+        onCancel={() => setStopConfirm(undefined)}
+      />
+
       {dockView && (
         <ActivityDock
           view={dockView}
@@ -1921,4 +1949,13 @@ export function ConversationTab({
       )}
     </div>
   );
+}
+
+/** "2 subagents and 1 background process" — what a confirmed Stop ends. */
+function stopSummary({ subagents, processes }: { subagents: number; processes: number }): string {
+  const parts = [
+    subagents > 0 && `${subagents} ${subagents === 1 ? "subagent" : "subagents"}`,
+    processes > 0 && `${processes} ${processes === 1 ? "background process" : "background processes"}`,
+  ].filter(Boolean);
+  return parts.join(" and ");
 }

@@ -9,7 +9,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { ConversationTab } from "./ConversationTab";
-import { FakeRouterClient, fixtureSessions } from "../router/fixtures";
+import { FakeRouterClient, FakeSessionEventSource, fixtureSessions } from "../router/fixtures";
 import { FakeEventSource } from "../router/testFakeEventSource";
 import { STREAM_REATTACH_EVENT } from "./streamReattachSignal";
 import type { Delegate, Envelope } from "../router/types";
@@ -1364,5 +1364,86 @@ describe("ConversationTab — delegate records (docs/DELEGATES-DESIGN.md)", () =
       source.emit({ kind: "task", task: { phase: "progress", task_id: "tk1", tool_uses: 2 } });
     });
     expect(screen.queryByTestId("working-ticker")).toBeNull();
+  });
+});
+
+describe("ConversationTab — Stop with work beyond the reply", () => {
+  beforeEach(() => {
+    FakeEventSource.instances = [];
+    FakeIntersectionObserver.instances = [];
+    vi.stubGlobal("EventSource", FakeEventSource);
+    vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const startSubagent = (source: FakeSessionEventSource) =>
+    act(() => {
+      source.emit({
+        kind: "tool_use",
+        tool: { id: "tu1", name: "Task", kind: "agent", input: { description: "audit" } },
+      });
+      source.emit({
+        kind: "task",
+        task: { phase: "started", task_id: "tk1", tool_use_id: "tu1", description: "audit" },
+      });
+    });
+
+  it("stops a reply with nothing else running at once, no question", async () => {
+    const client = new FakeRouterClient();
+    const interrupt = vi.spyOn(client, "interrupt");
+    const source = await mountActive(client);
+    act(() => source.emit({ kind: "text", text: "Working on it" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop generating" }));
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await waitFor(() => expect(interrupt).toHaveBeenCalledWith("session-active"));
+  });
+
+  it("asks first while a subagent or process runs, counting both; Keep working leaves everything running", async () => {
+    const client = new FakeRouterClient();
+    const interrupt = vi.spyOn(client, "interrupt");
+    const source = await mountActive(client);
+    startSubagent(source);
+    act(() =>
+      source.emit({
+        kind: "background",
+        background: [{ task_id: "b1", tool_use_id: "bg1", description: "npm run watch", started_at: new Date().toISOString() }],
+      }),
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Stop generating" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("Stopping the reply also ends 1 subagent and 1 background process.");
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep working" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(interrupt).not.toHaveBeenCalled();
+    expect(screen.getByTestId("substrip")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generating" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Stop everything" }));
+    await waitFor(() => expect(interrupt).toHaveBeenCalledWith("session-active"));
+  });
+
+  it("drops the question when the turn ends under it, and doesn't bring it back next turn", async () => {
+    const client = new FakeRouterClient();
+    vi.spyOn(client, "getTranscript").mockResolvedValue([]);
+    const source = await mountActive(client);
+    startSubagent(source);
+    fireEvent.click(await screen.findByRole("button", { name: "Stop generating" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+
+    await act(async () => {
+      source.emit({ kind: "turn_end" });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    act(() => source.emit({ kind: "text", text: "Next turn" }));
+    await screen.findByRole("button", { name: "Stop generating" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });
