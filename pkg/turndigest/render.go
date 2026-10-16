@@ -11,12 +11,27 @@ import (
 // the session.turn_ended wire payload is unchanged. Entries of unknown Kind
 // are skipped, as they always were.
 func Render(entries []Entry) string {
-	items := make([]item, len(entries))
-	for i, e := range entries {
-		items[i] = item{entry: e, count: 1}
-	}
 	var sb strings.Builder
-	renderItems(&sb, items)
+	for _, e := range entries {
+		switch e.Kind {
+		case KindUser:
+			sb.WriteString("user: ")
+			sb.WriteString(e.Text)
+		case KindAssistant:
+			sb.WriteString("assistant: ")
+			sb.WriteString(e.Text)
+		case KindTool:
+			sb.WriteString("tool: ")
+			sb.WriteString(e.Tool)
+			if e.Path != "" {
+				sb.WriteString(" ")
+				sb.WriteString(e.Path)
+			}
+		default:
+			continue
+		}
+		sb.WriteString("\n")
+	}
 	return sb.String()
 }
 
@@ -53,45 +68,57 @@ func Parse(delta string) []Entry {
 	return entries
 }
 
-// renderTurns normalizes and renders each turn. Multi-turn renderings get a
-// "— turn N —" header per turn (omitted for unknown Number 0); a single
-// turn renders bare, so the n=1 prompt body looks exactly like today's.
+// renderTurns builds the digest prompt body: each turn normalized
+// (normalizeTurn) and rendered as its user lines, a "tools:" tally, then the
+// final "assistant:" reply. Multi-turn renderings get a "— turn N —" header
+// per turn (omitted for unknown Number 0); a single turn renders bare. When
+// the whole exceeds maxPromptBytes the oldest turns drop first, noted at
+// the top; the newest turn always survives, since each of its entries is
+// already capped.
 func renderTurns(turns []Turn) string {
-	var sb strings.Builder
 	multi := len(turns) > 1
-	for _, t := range turns {
-		if multi && t.Number > 0 {
-			fmt.Fprintf(&sb, "— turn %d —\n", t.Number)
+	blocks := make([]string, len(turns))
+	size := 0
+	for i, t := range turns {
+		blocks[i] = renderTurn(t, multi)
+		size += len(blocks[i])
+	}
+	dropped := 0
+	for dropped < len(blocks)-1 && size > maxPromptBytes {
+		size -= len(blocks[dropped])
+		dropped++
+	}
+	var sb strings.Builder
+	if dropped > 0 {
+		noun := "turns"
+		if dropped == 1 {
+			noun = "turn"
 		}
-		renderItems(&sb, normalizeTurn(t.Entries))
+		fmt.Fprintf(&sb, "[%d earlier %s omitted]\n", dropped, noun)
+	}
+	for _, b := range blocks[dropped:] {
+		sb.WriteString(b)
 	}
 	return sb.String()
 }
 
-// renderItems writes the canonical line format, with a " ×N" suffix on tool
-// lines the normalize pass collapsed (count 1 renders with no suffix).
-func renderItems(sb *strings.Builder, items []item) {
-	for _, it := range items {
-		switch it.entry.Kind {
-		case KindUser:
-			sb.WriteString("user: ")
-			sb.WriteString(it.entry.Text)
-		case KindAssistant:
-			sb.WriteString("assistant: ")
-			sb.WriteString(it.entry.Text)
-		case KindTool:
-			sb.WriteString("tool: ")
-			sb.WriteString(it.entry.Tool)
-			if it.entry.Path != "" {
-				sb.WriteString(" ")
-				sb.WriteString(it.entry.Path)
-			}
-			if it.count > 1 {
-				fmt.Fprintf(sb, " ×%d", it.count)
-			}
-		default:
-			continue
-		}
-		sb.WriteString("\n")
+func renderTurn(t Turn, multi bool) string {
+	ct := normalizeTurn(t.Entries)
+	if len(ct.users) == 0 && ct.tools == "" && ct.reply == "" {
+		return ""
 	}
+	var sb strings.Builder
+	if multi && t.Number > 0 {
+		fmt.Fprintf(&sb, "— turn %d —\n", t.Number)
+	}
+	for _, u := range ct.users {
+		sb.WriteString("user: " + u + "\n")
+	}
+	if ct.tools != "" {
+		sb.WriteString("tools: " + ct.tools + "\n")
+	}
+	if ct.reply != "" {
+		sb.WriteString("assistant: " + ct.reply + "\n")
+	}
+	return sb.String()
 }

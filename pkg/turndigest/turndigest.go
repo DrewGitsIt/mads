@@ -8,8 +8,8 @@
 // digests.
 //
 // The pipeline is headroom-inspired: a deterministic normalize pass first
-// (collapse repeated tool calls, merge adjacent assistant fragments, cap
-// per-entry length); if the normalized rendering fits the caller's token
+// (keep user messages and the final assistant reply, tally tool calls into
+// one line per turn, cap per-entry and total length); if the normalized rendering fits the caller's token
 // budget it is returned verbatim with no model call; otherwise exactly one
 // Fast Model call compresses it, with hard truncation as the backstop. A
 // skippable backend (fastmodel.IsSkippable) degrades to truncated verbatim

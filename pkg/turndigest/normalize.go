@@ -1,58 +1,104 @@
 package turndigest
 
-import "unicode/utf8"
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"unicode/utf8"
+)
 
-// maxEntryRunes caps a single entry's Text after merging — one pasted wall
-// of text must not dominate the prompt.
-const maxEntryRunes = 400
+// The digest prompt is conversation-first: what the user said and how the
+// agent finally answered carry nearly all of a turn's meaning, so those are
+// kept nearly whole, while tool calls shrink to one line proving the agent
+// was working. Limits:
+//
+//   - maxEntryRunes caps one user message or final reply. Over the cap it
+//     keeps the head and the tail — the tail is where a reply's conclusion
+//     lives — around an explicit omission marker, so the reading model
+//     never mistakes our cut for the agent trailing off mid-sentence.
+//   - maxPromptBytes caps the whole rendering (~6k tokens): leader catch-up
+//     digests up to 20 turns, and a local Fast Model can silently truncate
+//     an oversized prompt. The oldest turns drop first.
+const (
+	maxEntryRunes  = 4000
+	entryHeadRunes = 1500
+	maxPromptBytes = 24000
+)
 
-// item is a normalized entry plus its collapse count. The count exists only
-// for rendering ("tool: Read foo.go ×6") — it is deliberately not part of
-// the shared Entry contract.
-type item struct {
-	entry Entry
-	count int
+// conversationTurn is one turn reduced for the digest prompt: every user
+// entry in order, a tool-call tally, and only the terminal assistant reply
+// (the last run of adjacent assistant fragments, merged) — interim
+// narration between tool calls is dropped.
+type conversationTurn struct {
+	users []string
+	tools string // "" when the turn made no tool calls
+	reply string // "" when the turn ended without a reply
 }
 
-// normalizeTurn is the deterministic pass: merge runs of adjacent assistant
-// fragments (Text joined with "\n", same bytes as rendering them separately
-// minus the repeated prefixes), collapse runs of adjacent tool calls with
-// identical (Tool, Path) into one counted item, then cap every entry's Text
-// at maxEntryRunes.
-func normalizeTurn(entries []Entry) []item {
-	var items []item
+func normalizeTurn(entries []Entry) conversationTurn {
+	var ct conversationTurn
+	counts := map[string]int{}
+	var order []string // tool names, first-seen order
+	total := 0
+	var reply []string
+	replyOpen := false // the current reply run is still accepting fragments
 	for _, e := range entries {
-		if n := len(items); n > 0 {
-			last := &items[n-1]
-			if e.Kind == KindAssistant && last.entry.Kind == KindAssistant {
-				last.entry.Text += "\n" + e.Text
-				continue
+		switch e.Kind {
+		case KindUser:
+			ct.users = append(ct.users, capText(e.Text))
+			replyOpen = false
+		case KindAssistant:
+			if !replyOpen {
+				reply = reply[:0] // a newer run supersedes the interim one
+				replyOpen = true
 			}
-			if e.Kind == KindTool && last.entry.Kind == KindTool &&
-				e.Tool == last.entry.Tool && e.Path == last.entry.Path {
-				last.count++
-				continue
+			reply = append(reply, e.Text)
+		case KindTool:
+			if counts[e.Tool] == 0 {
+				order = append(order, e.Tool)
 			}
+			counts[e.Tool]++
+			total++
+			replyOpen = false
 		}
-		items = append(items, item{entry: e, count: 1})
 	}
-	for i := range items {
-		items[i].entry.Text = capText(items[i].entry.Text)
+	if len(reply) > 0 {
+		ct.reply = capText(strings.Join(reply, "\n"))
 	}
-	return items
+	if total > 0 {
+		ct.tools = toolTally(total, counts, order)
+	}
+	return ct
 }
 
-// capText cuts s rune-safe at maxEntryRunes, appending "…" when it cuts.
+// toolTally renders "18 calls (Read ×12, Bash ×4, Edit ×2)": busiest tool
+// first, ties in first-seen order, no ×1 suffix.
+func toolTally(total int, counts map[string]int, order []string) string {
+	sort.SliceStable(order, func(i, j int) bool { return counts[order[i]] > counts[order[j]] })
+	parts := make([]string, len(order))
+	for i, name := range order {
+		parts[i] = name
+		if n := counts[name]; n > 1 {
+			parts[i] = fmt.Sprintf("%s ×%d", name, n)
+		}
+	}
+	noun := "calls"
+	if total == 1 {
+		noun = "call"
+	}
+	return fmt.Sprintf("%d %s (%s)", total, noun, strings.Join(parts, ", "))
+}
+
+// capText keeps s whole up to maxEntryRunes; beyond that, the first
+// entryHeadRunes and the last maxEntryRunes-entryHeadRunes runes around a
+// "[…N chars omitted…]" marker. Rune-safe.
 func capText(s string) string {
-	if utf8.RuneCountInString(s) <= maxEntryRunes {
+	n := utf8.RuneCountInString(s)
+	if n <= maxEntryRunes {
 		return s
 	}
-	n := 0
-	for i := range s {
-		if n == maxEntryRunes {
-			return s[:i] + "…"
-		}
-		n++
-	}
-	return s
+	r := []rune(s)
+	tail := maxEntryRunes - entryHeadRunes
+	return fmt.Sprintf("%s\n[…%d chars omitted…]\n%s",
+		string(r[:entryHeadRunes]), n-maxEntryRunes, string(r[n-tail:]))
 }

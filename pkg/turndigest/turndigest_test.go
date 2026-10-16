@@ -108,23 +108,27 @@ func TestDigestNoEntriesIsEmptyVerbatim(t *testing.T) {
 	}
 }
 
-// The normalize pass: repeated tool calls collapse with a ×N count,
-// non-identical tools interleaved between them do not, adjacent assistant
-// fragments merge, and an over-long entry is capped with "…".
+// The normalize pass: interim assistant narration between tool calls is
+// dropped, tool calls tally into one "tools:" line (busiest first, no ×1),
+// the terminal reply's adjacent fragments merge, and an over-long reply
+// keeps its head and tail around an explicit omission marker.
 func TestNormalizeGoldenSingleTurn(t *testing.T) {
 	entries := []turndigest.Entry{
 		{Kind: turndigest.KindUser, Text: "fix the flaky test"},
+		{Kind: turndigest.KindAssistant, Text: "let me look at the test first"},
 	}
 	for range 6 {
 		entries = append(entries, turndigest.Entry{Kind: turndigest.KindTool, Tool: "Read", Path: "foo.go"})
 	}
 	entries = append(entries,
-		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Read", Path: "bar.go"},
+		turndigest.Entry{Kind: turndigest.KindAssistant, Text: "found it, editing"},
 		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Edit", Path: "bar.go"},
-		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Read", Path: "bar.go"},
+		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Bash"},
+		turndigest.Entry{Kind: turndigest.KindTool, Tool: "Bash"},
 		turndigest.Entry{Kind: turndigest.KindAssistant, Text: "the test races on"},
 		turndigest.Entry{Kind: turndigest.KindAssistant, Text: "the shared counter"},
-		turndigest.Entry{Kind: turndigest.KindAssistant, Text: strings.Repeat("x", 450)},
+		turndigest.Entry{Kind: turndigest.KindAssistant,
+			Text: strings.Repeat("h", 1500) + strings.Repeat("x", 3000) + strings.Repeat("t", 2500)},
 	)
 
 	d := newDigester(&countingBackend{})
@@ -139,7 +143,93 @@ func TestNormalizeGoldenSingleTurn(t *testing.T) {
 	if res.Source != turndigest.SourceVerbatim {
 		t.Fatalf("Source = %q, want verbatim", res.Source)
 	}
+	if strings.Contains(res.Text, "let me look") || strings.Contains(res.Text, "found it") {
+		t.Errorf("interim narration leaked into the rendering:\n%s", res.Text)
+	}
+	if !strings.Contains(res.Text, "[…3037 chars omitted…]") {
+		t.Errorf("rendering missing the omission marker")
+	}
 	golden.Assert(t, "normalize_single_turn.txt", []byte(res.Text))
+}
+
+// A user message injected after the reply keeps that reply; a turn of
+// only tool calls renders just its tally; a single call reads "1 call".
+func TestNormalizeEdgeTurns(t *testing.T) {
+	cases := []struct {
+		name    string
+		entries []turndigest.Entry
+		want    string
+	}{
+		{"user after reply", []turndigest.Entry{
+			{Kind: turndigest.KindUser, Text: "go"},
+			{Kind: turndigest.KindAssistant, Text: "done"},
+			{Kind: turndigest.KindUser, Text: "thanks"},
+		}, "user: go\nuser: thanks\nassistant: done\n"},
+		{"tools only", []turndigest.Entry{
+			{Kind: turndigest.KindTool, Tool: "Bash"},
+		}, "tools: 1 call (Bash)\n"},
+		{"reply superseded by later run", []turndigest.Entry{
+			{Kind: turndigest.KindAssistant, Text: "first"},
+			{Kind: turndigest.KindTool, Tool: "Read"},
+			{Kind: turndigest.KindAssistant, Text: "final"},
+		}, "tools: 1 call (Read)\nassistant: final\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newDigester(&countingBackend{})
+			res, err := d.Digest(context.Background(), turndigest.Request{
+				Turns: []turndigest.Turn{{Entries: tc.entries}}, BudgetTokens: 1 << 20,
+			})
+			if err != nil {
+				t.Fatalf("Digest: %v", err)
+			}
+			if res.Text != tc.want {
+				t.Errorf("Text = %q, want %q", res.Text, tc.want)
+			}
+		})
+	}
+}
+
+// Over the total prompt cap, the oldest turns drop first behind a note;
+// the newest turn always survives.
+func TestRenderDropsOldestTurnsOverPromptCap(t *testing.T) {
+	big := strings.Repeat("z", 3900) // under the per-entry cap: kept whole
+	var turns []turndigest.Turn
+	for i := 1; i <= 5; i++ {
+		turns = append(turns, turndigest.Turn{Number: i, Entries: []turndigest.Entry{
+			{Kind: turndigest.KindUser, Text: big},
+			{Kind: turndigest.KindAssistant, Text: big},
+		}})
+	}
+	backend := &countingBackend{reply: "digest"}
+	d := newDigester(backend)
+	if _, err := d.Digest(context.Background(), turndigest.Request{Turns: turns}); err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	prompt := backend.prompts[0]
+	if len(prompt) > 24000+64 {
+		t.Errorf("prompt is %d bytes, want ≲ the 24000-byte cap", len(prompt))
+	}
+	if !strings.HasPrefix(prompt, "[2 earlier turns omitted]\n— turn 3 —\n") {
+		t.Errorf("prompt head = %q, want the omission note then turn 3", prompt[:60])
+	}
+	if !strings.Contains(prompt, "— turn 5 —") {
+		t.Errorf("newest turn missing from prompt")
+	}
+
+	// A lone oversized turn is never dropped.
+	huge := []turndigest.Turn{{Entries: []turndigest.Entry{
+		{Kind: turndigest.KindUser, Text: big}, {Kind: turndigest.KindUser, Text: big},
+		{Kind: turndigest.KindUser, Text: big}, {Kind: turndigest.KindUser, Text: big},
+		{Kind: turndigest.KindUser, Text: big}, {Kind: turndigest.KindUser, Text: big},
+		{Kind: turndigest.KindUser, Text: big},
+	}}}
+	if _, err := d.Digest(context.Background(), turndigest.Request{Turns: huge}); err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if strings.Contains(backend.prompts[1], "omitted]") {
+		t.Errorf("a single turn must survive the cap whole")
+	}
 }
 
 // Multi-turn requests render each numbered turn under a "— turn N —"
