@@ -64,6 +64,13 @@ export interface SessionAgentState {
    */
   workingSince?: string;
   /**
+   * The newest session.* event this connection saw from the session while it
+   * worked — any label change, park or delegate update. Only ever set
+   * alongside workingSince, and never earlier than it. What the stall check
+   * measures from: a long turn that keeps reporting is not quiet.
+   */
+  lastHeardAt?: string;
+  /**
    * The server-built clause for what the agent is doing right now ("Running
    * bash · make check", "Thinking…"). Only ever set alongside workingSince.
    */
@@ -109,13 +116,14 @@ function plural(n: number, noun: string): string {
 }
 
 /**
- * How long a "working" claim stays credible. Past this the card stops
- * animating and says the agent has gone quiet instead.
- *
- * The bound is the product's own longest turn, not a guess: 30 minutes is
- * DefaultPipelineStageTimeoutMinutes (pkg/contracts/config.go) — what mads
- * itself is willing to wait for one agent turn before calling it failed. A
- * claim older than that is older than any turn this system would let run.
+ * How long a working session may go without a word before the card stops
+ * animating and says the agent has gone quiet instead. Measured from the last
+ * thing heard (SessionAgentState.lastHeardAt), not the turn's start: a turn
+ * can legitimately outlast any bound — a long task, or a laptop that slept
+ * mid-turn and picked back up — and only silence suggests trouble. Two hours
+ * rides out a slow build or a long think, and still flags an agent left
+ * asleep, which is the reminder it is for. After a reload nothing has been
+ * heard yet, so the turn's start stands in until the next transition.
  *
  * It exists because nothing else can retire the claim. agent_state is written
  * by the Runner on transitions only (services/session/internal/runner/
@@ -130,7 +138,7 @@ function plural(n: number, noun: string): string {
  * and still needs closing. It is here because the rail must not state as
  * present tense something it cannot support.
  */
-export const WORKING_STALE_AFTER_MS = 30 * 60 * 1000;
+export const WORKING_STALE_AFTER_MS = 2 * 60 * 60 * 1000;
 
 /**
  * The card's second line (mockup docs/mockups/sessions-ux-v2.html §1), in the
@@ -169,15 +177,16 @@ export function statusOf(
       since: state.awaitingSince,
     };
   }
-  if (state.workingSince !== undefined && isStaleWorking(state.workingSince, now)) {
-    // Deliberately keeps `since`, so the counter beside it reads "23h" — the
-    // age of the claim is the whole evidence for not believing it.
+  const lastHeard = state.lastHeardAt ?? state.workingSince;
+  if (state.workingSince !== undefined && lastHeard !== undefined && isStaleWorking(lastHeard, now)) {
+    // The counter reads how long it has been silent ("2h 14m") — the length
+    // of the silence is the whole evidence for not believing the claim.
     return {
       kind: "stalled",
       tone: "needs",
       dot: "attn",
       label: "Stalled · no agent activity",
-      since: state.workingSince,
+      since: lastHeard,
     };
   }
   if (state.workingSince !== undefined) {
@@ -254,13 +263,13 @@ export function statusOf(
 }
 
 /**
- * Whether a working claim has outlived the longest turn mads would run (see
- * WORKING_STALE_AFTER_MS). An unparseable stamp is never stale — a bad value
+ * Whether a working session has been silent since `lastHeard` for longer
+ * than WORKING_STALE_AFTER_MS. An unparseable stamp is never stale — a bad value
  * is not evidence of a dead agent, and guessing from one would turn every
  * clock-skewed record into a false alarm.
  */
-export function isStaleWorking(workingSince: string, now: number): boolean {
-  const since = Date.parse(workingSince);
+export function isStaleWorking(lastHeard: string, now: number): boolean {
+  const since = Date.parse(lastHeard);
   return Number.isFinite(since) && now - since >= WORKING_STALE_AFTER_MS;
 }
 

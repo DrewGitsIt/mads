@@ -384,10 +384,15 @@ export function ChatRenderer({
           attachments.length > 0 ? (
             <div className={styles.withAttachments}>
               <MessageAttachments attachments={attachments} attachmentUrl={attachmentUrl} />
-              {body && <Markdown className={styles.prose} text={body} />}
+              {body && <Markdown className={styles.prose} text={body} breaks />}
             </div>
           ) : (
-            <Markdown className={styles.prose} text={body} foldNewCode={foldNewCode && Boolean(item.live)} />
+            <Markdown
+              className={styles.prose}
+              text={body}
+              breaks={isUser}
+              foldNewCode={foldNewCode && Boolean(item.live)}
+            />
           );
         const sent = isUser ? delivery.get(message) : undefined;
         const retry =

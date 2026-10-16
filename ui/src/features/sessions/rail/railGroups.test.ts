@@ -297,7 +297,7 @@ describe("statusOf", () => {
   // retires agent_state but the Runner that wrote it, so a wedged agent's last
   // word stands forever — the card must not keep asserting it in the present
   // tense.
-  it("stops believing a working claim once it outlives the longest turn mads runs", () => {
+  it("stops believing a working claim once nothing has been heard for the bound", () => {
     const state = makeAgentState({ workingSince: TURN_START, label: "Thinking…" });
     const stale = Date.parse(TURN_START) + WORKING_STALE_AFTER_MS;
     expect(statusOf(makeSession({ activity: "active" }), state, idle, stale)).toEqual({
@@ -305,9 +305,41 @@ describe("statusOf", () => {
       tone: "needs",
       dot: "attn",
       label: "Stalled · no agent activity",
-      // Kept, so the counter reads "23h" — the age is the whole argument.
+      // Nothing heard since the turn began, so the silence counts from there.
       since: TURN_START,
     });
+  });
+
+  // 2026-10-14: a laptop slept mid-turn; on waking the agent picked up where
+  // it left off, but the card read "Stalled" because the TURN was old.
+  it("measures silence, not turn length: a long turn that keeps reporting stays working", () => {
+    const now = Date.parse(TURN_START) + 3 * WORKING_STALE_AFTER_MS;
+    const state = makeAgentState({
+      workingSince: TURN_START,
+      lastHeardAt: new Date(now - 10 * 60_000).toISOString(),
+      label: "Running bash · make check",
+    });
+    expect(statusOf(makeSession({}), state, idle, now)).toMatchObject({
+      kind: "working",
+      label: "Running bash · make check",
+      // The working counter still spans the whole turn.
+      since: TURN_START,
+    });
+  });
+
+  it("calls a long turn stalled once it has gone silent, counting the silence", () => {
+    const lastHeardAt = new Date(Date.parse(TURN_START) + 60 * 60_000).toISOString();
+    const now = Date.parse(lastHeardAt) + WORKING_STALE_AFTER_MS;
+    const state = makeAgentState({ workingSince: TURN_START, lastHeardAt, label: "Thinking…" });
+    expect(statusOf(makeSession({}), state, idle, now)).toMatchObject({
+      kind: "stalled",
+      since: lastHeardAt,
+    });
+  });
+
+  it("lets a turn run well past 30 minutes before suspecting it", () => {
+    const state = makeAgentState({ workingSince: TURN_START, label: "Thinking…" });
+    expect(statusOf(makeSession({}), state, idle, Date.parse(TURN_START) + 90 * 60_000).kind).toBe("working");
   });
 
   it("still believes a claim right up to the bound", () => {

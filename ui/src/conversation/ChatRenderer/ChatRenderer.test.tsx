@@ -32,6 +32,19 @@ describe("ChatRenderer", () => {
     expect(screen.getByText("hi back")).toBeTruthy();
   });
 
+  // A Shift+Enter in the composer is a new line in the history too; an
+  // agent's single newline stays markdown's soft wrap.
+  it("breaks a user message's lines where they were typed, but not an agent's", () => {
+    const messages: TranscriptMessage[] = [
+      { role: "user", text: "first line\nsecond line" },
+      { role: "agent", text: "wrapped\nprose" },
+    ];
+    const { container } = render(<ChatRenderer messages={messages} />);
+    const user = container.querySelector("[data-user-msg]")!;
+    expect(user.querySelectorAll("br")).toHaveLength(1);
+    expect(screen.getByText(/wrapped/).querySelector("br")).toBeNull();
+  });
+
   it("shows a user message's attached files as thumbnails and tiles, not the path list", () => {
     const text =
       "why is this red?\n\nAttached files (open each one with your file-reading tool):\n" +

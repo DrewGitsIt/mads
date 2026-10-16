@@ -58,6 +58,8 @@ interface Fold {
    */
   live?: AgentState;
   done: boolean;
+  /** The newest envelope stamp from this session — the stall check's "last heard". */
+  heardAt?: string;
 }
 
 function emptyFold(): Fold {
@@ -105,6 +107,10 @@ function pruneRecent(fold: Fold, fadeMs: number, now: number): void {
 }
 
 function apply(fold: Fold, env: Envelope, fadeMs: number): void {
+  // Parsed, not string-compared: RFC3339Nano drops trailing zeros, so ".1Z" sorts after ".12Z".
+  if (env.timestamp && (!fold.heardAt || Date.parse(env.timestamp) > Date.parse(fold.heardAt))) {
+    fold.heardAt = env.timestamp;
+  }
   switch (env.type) {
     case "session.agent_state": {
       const state = (env.payload ?? {}) as Partial<AgentState>;
@@ -251,6 +257,8 @@ function project(
     }
     if (agent?.state === "working") {
       state.workingSince = agent.since;
+      // Heard during this turn — an older stamp is a previous turn's.
+      if (fold?.heardAt && Date.parse(fold.heardAt) > Date.parse(agent.since)) state.lastHeardAt = fold.heardAt;
       if (agent.label) state.label = agent.label;
     }
     // Live-only, like the delegates: a sleeping session's processes went

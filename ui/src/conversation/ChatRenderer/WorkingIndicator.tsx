@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { ToolUse } from "../../router/types";
-import { toolTitle } from "../activity/toolDisplay";
+import { formatElapsed, toolTitle } from "../activity/toolDisplay";
 import styles from "./WorkingIndicator.module.css";
 
 const WORKING = "Working…";
@@ -68,7 +68,7 @@ export function WorkingIndicator({
           {ticker}
         </span>
       )}
-      {elapsed > 0 && <span className={styles.elapsed}>{elapsed}s</span>}
+      {elapsed > 0 && <span className={styles.elapsed}>{formatElapsed(elapsed * 1000)}</span>}
     </div>
   );
 }

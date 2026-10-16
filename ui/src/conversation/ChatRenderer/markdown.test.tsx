@@ -21,6 +21,14 @@ describe("Markdown", () => {
     expect(container.querySelector("code")?.textContent).toBe("code");
   });
 
+  it("keeps a lone newline a soft wrap by default, and a line break with breaks", () => {
+    const { container, rerender } = render(<Markdown text={"line one\nline two"} />);
+    expect(container.querySelector("br")).toBeNull();
+    rerender(<Markdown text={"line one\nline two"} breaks />);
+    expect(container.querySelectorAll("br")).toHaveLength(1);
+    expect(container.querySelectorAll("p")).toHaveLength(1);
+  });
+
   it("strips script tags and event-handler attributes", () => {
     const { container } = render(
       <Markdown text={'<script>alert(1)</script><p onclick="alert(1)">hi</p>'} />,
