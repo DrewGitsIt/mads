@@ -601,9 +601,8 @@
    It cannot be position:absolute: the rail scrolls (SessionsSurface's
    aside.rail is the overflow-y:auto box, marked data-rail-scroll) and a scroll
    container clips both axes, so top/left are computed from the row's rect and
-   handed in as inline style, the way LinkOptionsMenu already places its
-   flyout. Until they are (data-anchored absent) the cluster stays hidden —
-   fixed with auto offsets would paint it at the card's flow position.
+   handed in as inline style. Until they are (data-anchored absent) the
+   cluster stays hidden — fixed with auto offsets would paint it at the card's flow position.
 
    padding-left is a transparent bridge across the gap to the card, not a
    margin: the pointer must never cross dead space or :hover drops mid-travel
@@ -688,39 +687,6 @@
   color: var(--bad-fg);
   background: var(--bad-soft);
   border-color: var(--bad);
-}
-
-.linkBadge {
-  flex: none;
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.04em;
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
-  background: var(--bg3);
-  color: var(--text2);
-}
-
-.linkBadgeLead {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.orchestrateBadge {
-  flex: none;
-  font: 600 var(--fs-chip) var(--sans);
-  letter-spacing: 0.04em;
-  border-radius: var(--r-sm);
-  padding: 1px 7px;
-}
-
-.orchestrateBadgePending {
-  background: var(--warn-soft);
-  color: var(--warn-fg);
-}
-
-.orchestrateBadgeUnsupported {
-  background: var(--bad-soft);
-  color: var(--bad-fg);
 }
 
 .nestedRow {
@@ -944,90 +910,6 @@
   pointer-events: none;
 }
 
-.linkBar {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: 0 var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  background: var(--accent-soft);
-  border-radius: var(--r-sm);
-}
-
-.linkBarCount {
-  color: var(--accent);
-  font: 600 var(--fs-sm) var(--sans);
-}
-
-.linkBarAction {
-  background: transparent;
-  border: none;
-  color: var(--accent);
-  font: 600 var(--fs-sm) var(--sans);
-  cursor: pointer;
-  padding: 0;
-}
-
-.linkBarAction:disabled {
-  color: var(--text3);
-  cursor: not-allowed;
-}
-
-.linkBarCancel {
-  background: transparent;
-  border: none;
-  color: var(--text2);
-  font: 500 var(--fs-sm) var(--sans);
-  cursor: pointer;
-  padding: 0;
-  margin-left: auto;
-}
-
-.linkAnchor {
-  border-color: var(--accent);
-  border-width: 2px;
-}
-
-.linkModeIndicator {
-  position: absolute;
-  top: 0;
-  right: 0;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding-right: var(--space-3);
-}
-
-.linkAnchorBadge {
-  font: 600 var(--fs-chip) var(--sans);
-  color: var(--accent);
-  letter-spacing: 0.04em;
-}
-
-.linkCheckbox {
-  accent-color: var(--accent);
-  cursor: pointer;
-}
-
-/* Pending re-settle: the order changed while the rail was busy, so it waits
-   here as one clickable line instead of moving rows under the pointer. */
-/* Link options: the nested row's role badge doubles as the flyout trigger. */
-/* The link menus are cluster buttons now, so .actionButton carries all the
-   chrome and this only has to make room for the alert mark. The disclosure
-   caret that used to hang off here went with the pill: in a column of 24px
-   squares it was noise, and none of the cluster's other buttons claim to be
-   anything but a button. */
-.linkOptionsTrigger {
-  position: relative;
-}
-
-/* The one thing a nested row still says out loud about its link: something
-   is wrong with the orchestrate grant. A mark, not a word — the sentence is
-   in the flyout this trigger opens (LinkOptionsMenu's note). */
 /* A set-aside card's own control, held lit so the toggle's state is legible
    without opening anything — the card itself is in a fold that already says
    so, but the button is what you press to undo it. */
@@ -1037,6 +919,14 @@
   background: var(--accent-soft);
 }
 
+/* The chain button carries the alert mark (and the count), so it anchors them. */
+.linkTrigger {
+  position: relative;
+}
+
+/* The one thing a card still says out loud about its link: something is
+   wrong with the orchestrate grant. A mark, not a word — the sentence is the
+   chain button's tooltip and the link editor's note. */
 .linkBadgeAlert {
   position: absolute;
   /* Top-left: the top-right corner is the chain glyph's count badge. */
@@ -1046,30 +936,6 @@
   height: 5px;
   border-radius: 50%;
   background: var(--warn-fg);
-}
-
-/* Sized to fit inside the rail from a nested row's meta line (the rail
-   scrolls, so anything wider would be clipped or scroll it sideways). */
-.linkOptions {
-  min-width: 0;
-  width: 224px;
-}
-
-.linkOptionsNote {
-  margin: 0;
-  padding: var(--space-1) var(--space-2);
-  color: var(--warn-fg);
-  font-size: var(--fs-chip);
-}
-
-.linkOptionsDivider {
-  height: 1px;
-  margin: var(--space-1) 0;
-  background: var(--line-soft);
-}
-
-.linkOptionsDanger {
-  color: var(--bad-fg);
 }
 
 /* Context labels: location · branch. One line, never wrapped, and a steady
@@ -1147,4 +1013,79 @@
 .shellCard .status,
 .shellCard .detail {
   padding-left: 22px;
+}
+
+/* ── the rail as the link editor's picker (links/LinkModal.tsx) ──────────
+   While the editor is open the rail stays live: a click links a session to
+   the centred one. The centred card wears a "Center" tag, cards linked to it
+   are checked, and cards that can't be linked to it are dimmed and shake. */
+.linkCenter {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.linkPicked {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.linkBlocked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.linkCenterTag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font: 700 9px/16px var(--sans);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.linkTick {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1.5px solid var(--text3);
+  color: var(--accent-ink);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.linkTickOn {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.linkBlocked .linkTick {
+  visibility: hidden;
+}
+
+.linkBlockedTag {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--bg3);
+  color: var(--text3);
+  font: 500 10px var(--sans);
+}
+
+.nope {
+  animation: railNope 0.35s;
+}
+
+@keyframes railNope {
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
 }

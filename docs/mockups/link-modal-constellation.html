@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-palette="clay">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>mads — link modal v2: constellation, edge-level roles, multi-level</title>
+<link rel="stylesheet" href="../../ui/src/tokens/tokens.css" />
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg0); color: var(--text); font: 14px/1.5 var(--sans); padding: 22px 24px 80px; }
+  .frame { max-width: 1360px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .lede { color: var(--text2); max-width: 100ch; margin: 0 0 14px; }
+  .lede b { color: var(--text); }
+  button { font: inherit; color: inherit; }
+  code { background: var(--bg2); border: 1px solid var(--line-soft); border-radius: 4px; padding: 0 4px; font-size: .9em; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin: 0 0 14px; padding: 10px 12px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: 10px; font-size: 12.5px; color: var(--text2); }
+  .controls .grp { display: flex; gap: 4px; align-items: center; }
+  .controls .lbl { color: var(--text3); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; margin-right: 4px; }
+  .controls button, .controls select { background: var(--bg2); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; font: 12px var(--sans); }
+  .controls .sep { width: 1px; align-self: stretch; background: var(--line-soft); }
+
+  /* ── app shell ─────────────────────────────────────────── */
+  .app { display: grid; grid-template-columns: 300px 1fr; height: 720px; border: 1px solid var(--line-soft); border-radius: 12px; overflow: hidden; background: var(--bg0); }
+  .rail { position: relative; padding: 10px; overflow-y: auto; border-right: 1px solid var(--line-soft); }
+  .rail.live { box-shadow: inset -2px 0 0 var(--accent); }
+  .search { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; padding: 5px 9px; border: 1px solid var(--line-soft); border-radius: var(--r-sm); color: var(--text3); font-size: 12.5px; background: var(--bg1); }
+  .railhint { display: none; margin: -4px 0 10px; padding: 5px 9px; border-radius: var(--r-sm); background: var(--accent-soft); color: var(--text); font-size: 12px; }
+  .rail.live .railhint { display: block; }
+
+  .card { position: relative; display: flex; gap: 8px; padding: 7px 10px 7px 12px; margin-bottom: 3px; background: var(--bg1); border: 1px solid var(--line-soft); border-radius: var(--r-sm); font: 500 var(--fs-sm) var(--sans); cursor: pointer; }
+  .card:hover { border-color: var(--line); }
+  .card.open { background: var(--bg2); border-color: var(--line); }
+  .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .card .name { font-size: 13px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .status { color: var(--text3); font-size: 12px; font-weight: 400; display: flex; align-items: center; gap: 5px; }
+  .card .status.warn { color: var(--warn-fg); }
+  .card .side { color: var(--text3); font: 11px var(--mono); white-space: nowrap; }
+  .spin { width: 9px; height: 9px; border: 1.5px solid var(--accent); border-right-color: transparent; border-radius: 50%; display: inline-block; animation: rot .9s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .cluster { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 3px; opacity: 0; transition: opacity var(--dur-fast); }
+  .card:hover .cluster, .card .cluster.pinned { opacity: 1; }
+  .ab { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: var(--bg3); border: 1px solid var(--line); color: var(--text2); cursor: pointer; position: relative; padding: 0; }
+  .ab:hover { color: var(--text); border-color: var(--text3); }
+  .ab svg { width: 14px; height: 14px; }
+  .ab.linked { color: var(--accent); }
+  .ab .cnt { position: absolute; top: -5px; right: -5px; min-width: 14px; height: 14px; padding: 0 3px; border-radius: 7px; background: var(--accent); color: var(--accent-ink); font: 700 9px/14px var(--sans); text-align: center; }
+  .subjects { position: relative; margin: 0 0 3px 18px; padding-left: 12px; }
+  .subjects::before { content: ""; position: absolute; left: 0; top: -3px; bottom: 14px; border-left: 2px solid var(--text3); opacity: .5; border-bottom-left-radius: 6px; }
+  .subjects > .card::before { content: ""; position: absolute; left: -12px; top: 50%; width: 10px; border-top: 2px solid var(--text3); opacity: .5; }
+  .also { margin: -1px 0 3px 12px; color: var(--text3); font-size: 11px; }
+  .controls button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .htag { display: inline-flex; align-items: center; gap: 3px; align-self: flex-start; margin-top: 2px; padding: 0 6px; border-radius: 4px; font-size: 10.5px; font-weight: 400; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .htag.mon { background: var(--info-soft); color: var(--info); }
+  .htag.lead { background: var(--accent-soft); color: var(--accent); }
+  /* option 2 shortcut: one line, dashed, jumps to the real card */
+  .sc { position: relative; display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; margin-bottom: 3px; border: 1px dashed var(--line); border-radius: var(--r-sm); color: var(--text2); font-size: 12px; cursor: pointer; }
+  .sc:hover { border-color: var(--text3); color: var(--text); }
+  .sc .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sc .g { font-size: 11px; }
+  .sc .g.mon { color: var(--info); } .sc .g.lead { color: var(--accent); }
+  .sc .j { color: var(--text3); font-size: 11px; }
+  .subjects > .sc::before { content: ""; position: absolute; left: -12px; top: 50%; width: 10px; border-top: 2px dashed var(--text3); opacity: .5; }
+  .card.ref { border-style: dashed; opacity: .75; }
+  .card.ref .name::before { content: "↗ "; color: var(--text3); }
+  .card.flashy { animation: flashy 1.2s var(--ease-out); }
+  @keyframes flashy { 0%, 40% { box-shadow: 0 0 0 2px var(--accent); } }
+
+  .card .tick { display: none; flex: none; width: 16px; height: 16px; margin-top: 1px; border-radius: 4px; border: 1.5px solid var(--text3); align-items: center; justify-content: center; font-size: 11px; color: var(--accent-ink); }
+  .rail.live .card .tick { display: inline-flex; }
+  .rail.live .card.sel .tick { background: var(--accent); border-color: var(--accent); }
+  .rail.live .card.sel { border-color: var(--accent); background: var(--accent-soft); }
+  .rail.live .card.anchor { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .rail.live .card.anchor .tick { border: 0; width: auto; padding: 0 5px; background: var(--accent); color: var(--accent-ink); font: 700 9px/16px var(--sans); letter-spacing: .06em; text-transform: uppercase; }
+  .rail.live .card.off { opacity: .4; cursor: not-allowed; }
+  .rail.live .card.off .tick { visibility: hidden; }
+  .tag { font: 500 10px var(--sans); padding: 0 5px; border-radius: 4px; background: var(--bg3); color: var(--text3); }
+  .card.nope { animation: nope .35s; }
+  @keyframes nope { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+
+  /* ── conversation pane ─────────────────────────────────── */
+  .pane { position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .pane .content { flex: 1; display: flex; flex-direction: column; transition: filter var(--dur-slow) var(--ease-out), opacity var(--dur-slow); }
+  .pane.blurred .content { filter: blur(5px) saturate(.75); opacity: .5; pointer-events: none; }
+  .pane .hdr { padding: 12px 20px; border-bottom: 1px solid var(--line-soft); font-weight: 600; }
+  .chat { flex: 1; padding: 18px 28px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 64ch; color: var(--text2); }
+  .msg.user { align-self: flex-end; background: var(--bg2); border: 1px solid var(--line-soft); padding: 8px 12px; border-radius: 10px; color: var(--text); }
+  .composer { margin: 0 20px 16px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; color: var(--text3); background: var(--bg1); font-size: 13px; }
+  .scrim { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 16px; }
+  .pane.blurred .scrim { display: flex; }
+
+  /* ── modal ─────────────────────────────────────────────── */
+  .modal { position: relative; width: 660px; max-height: 100%; overflow: visible; border-radius: 16px; background: color-mix(in srgb, var(--bg1) 80%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent); backdrop-filter: blur(14px) saturate(1.2); -webkit-backdrop-filter: blur(14px) saturate(1.2); box-shadow: 0 24px 60px rgba(0,0,0,.45); }
+  .modal.enter { animation: pop var(--dur-slow) var(--ease-out); }
+  @keyframes pop { from { transform: translateY(8px) scale(.985); opacity: 0; } }
+  .mh { padding: 14px 18px 8px; display: flex; gap: 10px; align-items: flex-start; }
+  .mh .ttl { font-size: 16px; font-weight: 600; }
+  .mh .sub { color: var(--text3); font-size: 12.5px; }
+  .mh .x { margin-left: auto; background: none; border: 0; color: var(--text3); font-size: 18px; cursor: pointer; line-height: 1; }
+  .crumbs { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; margin-top: 4px; font-size: 12px; color: var(--text3); }
+  .crumbs button { background: none; border: 0; padding: 1px 6px; border-radius: 5px; color: var(--text2); cursor: pointer; }
+  .crumbs button:hover { background: var(--bg3); color: var(--text); }
+  .crumbs .cur { color: var(--text); font-weight: 600; padding: 1px 6px; }
+  .bar { padding: 0 18px 8px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--text3); }
+  .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font-size: 12px; color: var(--text2); display: inline-flex; gap: 5px; align-items: center; }
+  .chip.on { border-color: var(--accent); color: var(--text); background: var(--accent-soft); }
+  .chip.on.mon { border-color: var(--info); background: var(--info-soft); }
+  .bar .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--text3); margin: 0 4px; }
+
+  .sky { position: relative; margin: 0 18px; height: 400px; border-radius: 12px; border: 1px solid var(--line-soft); overflow: visible; background:
+      radial-gradient(circle at 50% 50%, var(--accent-soft), transparent 45%),
+      repeating-radial-gradient(circle at 50% 50%, transparent 0 44px, color-mix(in srgb, var(--line-soft) 55%, transparent) 44px 45px); }
+  .sky .lane { position: absolute; left: 12px; font: 10px var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--text3); }
+  svg.wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .wire { fill: none; stroke-width: 2.6; stroke-linecap: round; }
+  .wire.lead { stroke: var(--accent); }
+  .wire.mon { stroke: var(--info); }
+  /* Path always runs holder → subject. Leader: dashes travel toward the subject
+     (direction flows down). Monitor: dashes travel toward the holder (news flows up). */
+  .wire.per_turn { stroke-dasharray: 6 7; }
+  .wire.on_signal { stroke-dasharray: 2 12; stroke-width: 3; }
+  .wire.manual_only { stroke-dasharray: 1 6; opacity: .4; }
+  .wire.lead.per_turn  { animation: down13 .8s linear infinite; }
+  .wire.mon.per_turn   { animation: up13 .8s linear infinite; }
+  .wire.lead.on_signal { animation: down14 2.8s linear infinite; }
+  .wire.mon.on_signal  { animation: up14 2.8s linear infinite; }
+  @keyframes down13 { to { stroke-dashoffset: -26; } }
+  @keyframes up13 { to { stroke-dashoffset: 26; } }
+  @keyframes down14 { to { stroke-dashoffset: -28; } }
+  @keyframes up14 { to { stroke-dashoffset: 28; } }
+  .wire.ghost { stroke: var(--text3); stroke-dasharray: 4 6; opacity: .45; }
+
+  .node { position: absolute; transform: translate(-50%, -50%); width: 150px; padding: 6px 9px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); font-size: 12px; text-align: center; cursor: pointer; box-shadow: 0 6px 16px rgba(0,0,0,.22); transition: border-color var(--dur-fast), transform var(--dur) var(--ease-out); }
+  .node:hover { border-color: var(--text3); }
+  .node .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .st { color: var(--text3); font-size: 10.5px; display: flex; gap: 6px; justify-content: center; align-items: center; }
+  .node .st.warn { color: var(--warn-fg); }
+  .node .more { color: var(--text3); font: 10px var(--mono); }
+  .node.focus { width: 210px; padding: 10px 14px; border: 1.5px solid var(--text2); background: var(--bg3); font-size: 13.5px; font-weight: 600; cursor: default; }
+  .node.focus .st { font-weight: 400; }
+  .node.add { border-style: dashed; border-color: var(--accent); }
+  .node.ghost { border-style: dashed; color: var(--text3); background: transparent; box-shadow: none; cursor: default; width: auto; white-space: nowrap; }
+  .node .goto { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; border-radius: 50%; background: var(--bg4); border: 1px solid var(--line); color: var(--text2); font-size: 10px; line-height: 16px; opacity: 0; transition: opacity var(--dur-fast); }
+  .node:hover .goto { opacity: 1; }
+
+  .eb { position: absolute; transform: translate(-50%, -50%); z-index: 2; display: inline-flex; align-items: center; gap: 3px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg2); color: var(--text2); font-size: 11px; cursor: pointer; white-space: nowrap; }
+  .eb:hover, .eb.picked { border-color: var(--text2); color: var(--text); }
+  .eb.lead .g { color: var(--accent); }
+  .eb.mon .g { color: var(--info); }
+  .eb.dirty::after { content: ""; position: absolute; top: -3px; right: -3px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 2px var(--bg1); }
+  .eb.bad { border-color: var(--bad); }
+  .ico { width: 12px; height: 12px; display: inline-block; vertical-align: -2px; }
+
+  .pop { position: absolute; z-index: 6; width: 250px; max-height: 340px; overflow-y: auto; padding: 8px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 34px rgba(0,0,0,.45); animation: pop var(--dur-fast) var(--ease-out); font-size: 12.5px; }
+  .pop .ph { padding: 2px 4px 8px; color: var(--text3); font-size: 11.5px; }
+  .pop .ph b { color: var(--text); font-weight: 600; }
+  .pop .k { color: var(--text3); font-size: 10px; letter-spacing: .09em; text-transform: uppercase; padding: 2px 4px 4px; }
+  .pop .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 8px; }
+  .pop .seg button { padding: 5px 6px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg1); cursor: pointer; font-size: 12px; }
+  .pop .seg button.on.lead { border-color: var(--accent); background: var(--accent-soft); }
+  .pop .seg button.on.mon { border-color: var(--info); background: var(--info-soft); }
+  .pop .seg button:disabled { opacity: .4; cursor: not-allowed; }
+  .pop .o { display: flex; gap: 8px; align-items: flex-start; padding: 5px 6px; border-radius: 7px; cursor: pointer; }
+  .pop .o:hover { background: var(--bg3); }
+  .pop .o .r { flex: none; width: 13px; height: 13px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--text3); }
+  .pop .o.on .r { border: 4px solid var(--text); }
+  .pop .o .od { color: var(--text3); font-size: 11px; }
+  .pop hr { border: 0; border-top: 1px solid var(--line-soft); margin: 6px 0; }
+  .pop .act { display: flex; gap: 6px; align-items: center; padding: 5px 6px; border-radius: 7px; cursor: pointer; color: var(--text2); }
+  .pop .act:hover { background: var(--bg3); color: var(--text); }
+  .pop .act.bad { color: var(--bad-fg); }
+  .pop .act.dis { opacity: .45; cursor: not-allowed; }
+  .why { color: var(--warn-fg); font-size: 11px; padding: 0 6px 4px; }
+  .why.bad { color: var(--bad-fg); }
+  .newtag { display: inline-block; padding: 0 6px; border-radius: 4px; background: var(--accent); color: var(--accent-ink); font: 700 9.5px/16px var(--sans); letter-spacing: .06em; text-transform: uppercase; vertical-align: 1px; }
+  .invalid { color: var(--bad-fg); font-size: 12px; max-width: 380px; line-height: 1.35; }
+  .invalid b { color: var(--accent); font-weight: 600; }
+
+  .legend { display: flex; gap: 16px; justify-content: center; margin: 8px 18px 0; color: var(--text3); font-size: 11px; flex-wrap: wrap; }
+  .legend svg { width: 34px; height: 8px; vertical-align: middle; margin-right: 5px; overflow: visible; }
+  .mf { margin-top: 10px; padding: 12px 18px 14px; display: flex; gap: 8px; align-items: center; border-top: 1px solid var(--line-soft); }
+  .mf .sp { flex: 1; }
+  .mf .pending { color: var(--warn-fg); font-size: 12px; display: inline-flex; gap: 6px; align-items: center; }
+  .mf .pending::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+  .btn { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg2); cursor: pointer; font-size: 13px; }
+  .btn:hover { border-color: var(--text3); }
+  .btn.pri { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  .btn.pri:disabled { opacity: .4; cursor: default; }
+  .btn.danger { background: var(--bad); border-color: var(--bad); color: #1a1206; font-weight: 600; }
+
+  .confirm { position: absolute; inset: 0; z-index: 10; border-radius: 16px; background: color-mix(in srgb, var(--bg0) 55%, transparent); display: flex; align-items: center; justify-content: center; }
+  .confirm .box { width: 340px; padding: 16px; border-radius: 12px; background: var(--bg2); border: 1px solid var(--line); box-shadow: 0 16px 34px rgba(0,0,0,.45); animation: pop var(--dur-fast) var(--ease-out); }
+  .confirm .t { font-weight: 600; }
+  .confirm ul { margin: 8px 0 14px; padding-left: 18px; color: var(--text2); font-size: 12.5px; }
+  .confirm .row { display: flex; gap: 8px; justify-content: flex-end; }
+
+
+  /* ── rail placement comparison ─────────────────────────── */
+  .place { margin-top: 30px; }
+  .place h2 { font-size: 15px; margin: 0 0 4px; }
+  .place .lede { margin-bottom: 12px; }
+  .scenario { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 16px; font-size: 12.5px; color: var(--text2); }
+  .scenario .pill { padding: 2px 9px; border-radius: 999px; background: var(--bg2); border: 1px solid var(--line-soft); }
+  .scenario .lead { color: var(--accent); } .scenario .mon { color: var(--info); }
+  .minis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; align-items: start; }
+  .mini h3 { font-size: 13px; margin: 0 0 2px; }
+  .mini .v { font-size: 12px; color: var(--text3); margin: 0 0 8px; min-height: 34px; }
+  .mini .v.bad { color: var(--bad-fg); }
+  .mini .r { padding: 8px; border: 1px solid var(--line-soft); border-radius: 10px; background: var(--bg0); }
+  .mini .card { cursor: default; padding: 6px 9px; }
+  .mini .card .name { font-size: 12.5px; }
+  .mini .rel { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; padding: 0 6px; border-radius: 4px; margin-top: 2px; align-self: flex-start; }
+  .mini .rel.lead { background: var(--accent-soft); color: var(--accent); }
+  .mini .rel.mon { background: var(--info-soft); color: var(--info); }
+  .mini .card.miss { border-style: dashed; border-color: var(--bad); background: transparent; }
+  .mini .card.miss .name { color: var(--bad-fg); }
+  .mini .card.miss .status { color: var(--bad-fg); }
+  .mini .card.ref { opacity: .7; border-style: dashed; }
+  .mini .card.ref .name::before { content: "↗ "; color: var(--text3); }
+  .mini .card.dup { box-shadow: inset 3px 0 0 var(--warn); }
+  .mini .pros { margin: 8px 0 0; padding-left: 16px; font-size: 12px; color: var(--text2); }
+  .mini .pros li { margin: 2px 0; }
+  .mini .pros li.con { color: var(--text3); }
+  .mini .pros li.con::marker { content: "– "; }
+  .mini .pros li.pro::marker { content: "+ "; color: var(--ok-fg); }
+
+  .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 22px; }
+  .notes h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--text3); margin: 0 0 8px; }
+  .notes ol { margin: 0; padding-left: 20px; color: var(--text2); }
+  .notes li { margin: 5px 0; }
+  .notes b { color: var(--text); }
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); padding: 8px 14px; border-radius: 9px; background: var(--bg3); border: 1px solid var(--line); font-size: 13px; display: none; z-index: 50; }
+  .toast.show { display: block; animation: pop var(--dur) var(--ease-out); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <h1>Constellation v2: roles live on edges, centered on any session</h1>
+  <p class="lede">The modal is <b>centered on one session</b>. Sessions that lead or monitor it sit above, sessions it leads or monitors sit below. <b>Click any node to re-center</b> and walk the tree; unsaved edits carry across. Each <b>line is one link</b>: its badge shows the role (♛ leads, ◉ monitors), and clicking the badge edits role, cadence and direction.
+  Leader lines flow <b>down</b> to the subordinate (direction goes out). Monitor lines flow <b>up</b> to the watcher (news comes in). Speed shows cadence. Muted lines are still, with 🔕.
+  <br/>The seed opens on <i>Fix deploy</i>: it has a leader <i>and</i> a monitor above it, and both leads and monitors below.</p>
+
+  <div class="controls">
+    <div class="grp"><span class="lbl">Open on</span>
+      <button data-open="a">Fix deploy (middle)</button>
+      <button data-open="p">Release captain (top)</button>
+      <button data-open="c">Mergiraf (leaf)</button>
+      <button data-open="f">Profile startup (unlinked)</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Theme</span>
+      <button id="theme">Dark / light</button>
+      <select id="palette"></select>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><button id="reset">Reset data</button></div>
+  </div>
+  <div class="controls">
+    <div class="grp"><span class="lbl">Rail placement</span>
+      <button data-place="1">1 · Under leader + tag</button>
+      <button data-place="2" class="on">2 · Shortcut row</button>
+      <button data-place="2c">2 · Shortcut full card</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Save fails</span>
+      <button data-fail="off" class="on">Never</button>
+      <button data-fail="transient">Once (network)</button>
+      <button data-fail="refused">Refused (rule)</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp"><span class="lbl">Scenario</span>
+      <button data-scen="seed" class="on">Seed (1 shared session)</button>
+      <button data-scen="heavy">Heavy (two monitors watching 6 led sessions)</button>
+    </div>
+    <div class="sep"></div>
+    <div class="grp" id="railStats" style="font: 12px var(--mono); color: var(--text)"></div>
+  </div>
+
+  <div class="app">
+    <aside class="rail" id="rail"></aside>
+    <section class="pane" id="pane">
+      <div class="content">
+        <div class="hdr" id="paneTitle"></div>
+        <div class="chat">
+          <div class="msg user">The arm64 runner still fails at the docker login step. Can you look at the cache key too?</div>
+          <div class="msg">The login step reads <code>REGISTRY_TOKEN</code> from an environment that only exists on the x86 pool, and the cache key ignores <code>runner.arch</code>. Fixing both.</div>
+          <div class="msg user">Go.</div>
+        </div>
+        <div class="composer">Message…</div>
+      </div>
+      <div class="scrim" id="scrim"></div>
+    </section>
+  </div>
+
+
+  <div class="place">
+    <h2>Rail: where does a session go when two sessions hold it?</h2>
+    <p class="lede">The same links in every column:</p>
+    <div class="scenario">
+      <span class="pill">Release captain <span class="lead">♛ leads</span> Fix deploy</span>
+      <span class="pill">Cost watchdog <span class="mon">◉ monitors</span> Fix deploy</span>
+      <span class="pill">Fix deploy <span class="lead">♛ leads</span> Session rail · Mergiraf</span>
+    </div>
+    <div class="minis" id="minis"></div>
+  </div>
+
+  <div class="notes">
+    <div>
+      <h2>Interactions</h2>
+      <ol>
+        <li><b>Chain on any card centers the modal on that session.</b> There's no separate "opened from" state: a subordinate's chain shows its leader above it.</li>
+        <li><b>Click a node to re-center</b> (breadcrumbs let you step back). <code>▲2 ▼1</code> on a node counts its links outside this view, so you can tell there's more to explore.</li>
+        <li><b>Click a line's badge</b> to edit that link: Leads or Monitors, Follow, Signals or Muted, swap direction, remove. Leads is disabled with the reason shown when the subordinate already has a leader.</li>
+        <li><b>Rail clicks add or select.</b> Clicking a session not linked to the centered one adds it below as Leads with Signals (Monitors if it already has a leader), with its editor already open. There's no global default to configure. Clicking a session that's already linked opens its line's editor.</li>
+        <li><b>One draft, one Save.</b> Edits stay pending (amber dot on the badge) until Save. Esc, Cancel, × or a click on the blurred pane asks before discarding anything.</li>
+        <li><b>No mute mark in the rail.</b> Mute shows only in the modal.</li>
+      </ol>
+    </div>
+    <div>
+      <h2>Rules the modal enforces (from <code>store/links.go</code>)</h2>
+      <ol>
+        <li>At most one <b>leader</b> per session; any number of <b>monitors</b>.</li>
+        <li>One link per pair, so no A→B and B→A together. Swap direction flips the existing link instead.</li>
+        <li>No self-links. No links across workspaces (the rail dims and shakes those).</li>
+        <li><b>No loops of leaders</b> (A leads B leads C leads A). The badge turns red, the editor explains, and Save is disabled with the loop spelled out. Try it: center on <i>Mergiraf</i>, click <i>Release captain</i> in the rail. The backend needs the same check; today it only blocks the two-session case.</li>
+      </ol>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const ICON_LINK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+const ICON_MUTE = '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13.7 21a2 2 0 0 1-3.4 0"/><path d="M18.6 13A17.9 17.9 0 0 1 18 8"/><path d="M6.3 6.3A5.9 5.9 0 0 0 6 8c0 7-3 9-3 9h14"/><path d="M18 8a6 6 0 0 0-9.3-5"/><path d="m2 2 20 20"/></svg>';
+const CAD = {
+  per_turn:    { t: 'Follow',  d: 'Digest after each burst of activity.' },
+  on_signal:   { t: 'Signals', d: 'Only when it needs attention: permission, crash, task done or blocked.' },
+  manual_only: { t: 'Muted',   d: 'Total silence. A summary is still available on request.' },
+};
+const ROLE = { leader: { g: '♛', t: 'Leads', cls: 'lead' }, monitor: { g: '◉', t: 'Monitors', cls: 'mon' } };
+
+const SESSIONS = [
+  { id: 'p', name: 'Release captain', st: 'idle', ws: 'mads', t: '18:02' },
+  { id: 'm', name: 'Cost watchdog', st: 'idle', ws: 'mads', t: '17:59' },
+  { id: 'a', name: 'Fix deploy on Ubuntu runners', st: 'working', ws: 'mads', t: '17:48' },
+  { id: 'b', name: 'Session rail readability pass', st: 'idle', ws: 'mads', t: '17:20' },
+  { id: 'c', name: 'Mergiraf land-queue driver', st: 'working', ws: 'mads', t: '16:55' },
+  { id: 'h', name: 'Settings save-bar polish', st: 'waiting', ws: 'mads', t: '16:40' },
+  { id: 'd', name: 'Twin calibration uncertainty', st: 'idle', ws: 'mads', t: '15:07' },
+  { id: 'e', name: 'Release notes draft', st: 'idle', ws: 'mads', t: '14:31' },
+  { id: 'f', name: 'Profile startup time', st: 'idle', ws: 'mads', t: 'Fri' },
+  { id: 'q', name: 'QA sentinel', st: 'idle', ws: 'mads', t: 'Thu' },
+  { id: 'g', name: 'twinctl: fix flaky CI', st: 'idle', ws: 'twinctl', t: 'Thu' },
+];
+let place = '2', scen = 'seed', failSim = 'off';
+const HEAVY = () => [...SEED(),
+  { h: 'm', s: 'b', role: 'monitor', cad: 'on_signal' },
+  { h: 'm', s: 'c', role: 'monitor', cad: 'on_signal' },
+  { h: 'm', s: 'e', role: 'monitor', cad: 'manual_only' },
+  { h: 'q', s: 'a', role: 'monitor', cad: 'on_signal' },
+  { h: 'q', s: 'b', role: 'monitor', cad: 'per_turn' },
+  { h: 'q', s: 'h', role: 'monitor', cad: 'on_signal' },
+];
+const SEED = () => [
+  { h: 'p', s: 'a', role: 'leader', cad: 'on_signal' },
+  { h: 'm', s: 'a', role: 'monitor', cad: 'per_turn' },
+  { h: 'a', s: 'b', role: 'leader', cad: 'on_signal' },
+  { h: 'a', s: 'c', role: 'leader', cad: 'manual_only' },
+  { h: 'a', s: 'h', role: 'monitor', cad: 'per_turn' },
+  { h: 'p', s: 'd', role: 'monitor', cad: 'on_signal' },
+  { h: 'd', s: 'e', role: 'monitor', cad: 'per_turn' },
+];
+let links = SEED();
+let openId = 'a';
+let M = null; // { focus, trail, draft, pick, confirm, def }
+
+const byId = (id) => SESSIONS.find((s) => s.id === id);
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const key = (e) => e.h + '>' + e.s;
+const pairKey = (x, y) => [x, y].sort().join('~');
+const statusHtml = (s) => s.st === 'working' ? '<span class="spin"></span> Working' : s.st === 'waiting' ? '⚠ Needs permission' : '◷ Idle';
+
+/* ── rail (saved state; nests recursively, under the leader first) ── */
+function railParent(id) {
+  const hs = links.filter((l) => l.s === id);
+  return (hs.find((l) => l.role === 'leader') || hs[0])?.h;
+}
+function cardHtml(s, tags = []) {
+  const live = !!M;
+  const touching = links.filter((l) => l.h === s.id || l.s === s.id).length;
+  const cls = ['card'];
+  if (s.id === openId) cls.push('open');
+  let tick = '';
+  if (live) {
+    const adj = M.draft.some((e) => (e.h === M.focus && e.s === s.id) || (e.s === M.focus && e.h === s.id));
+    if (s.id === M.focus) { cls.push('anchor'); tick = 'Center'; }
+    else if (adj) { cls.push('sel'); tick = '✓'; }
+    if (s.ws !== byId(M.focus).ws) cls.push('off');
+  }
+  return `<div class="${cls.join(' ')}" data-card="${s.id}">
+    <span class="tick">${tick}</span>
+    <div class="body"><div class="name">${esc(s.name)}</div>
+      <div class="status ${s.st === 'waiting' ? 'warn' : ''}">${statusHtml(s)}${live && s.ws !== byId(M.focus).ws ? ' <span class="tag">different workspace</span>' : ''}</div>
+      ${tags.map((l) => `<span class="htag ${l.role === 'leader' ? 'lead' : 'mon'}">${l.role === 'leader' ? '♛ leading' : '◉ watching'} ${esc(byId(l.s).name)}</span>`).join('')}</div>
+    <div class="side">${s.t}</div>
+    <div class="cluster ${touching ? 'pinned' : ''}"><button class="ab ${touching ? 'linked' : ''}" data-link="${s.id}" title="Links">${ICON_LINK}${touching ? `<span class="cnt">${touching}</span>` : ''}</button></div>
+  </div>`;
+}
+function railTree(id, seen) {
+  if (seen.has(id)) return '';
+  seen.add(id);
+  // Full children: sessions whose home is here. Shortcuts: sessions this one
+  // holds whose home is under someone else (their leader, else first holder).
+  const kids = SESSIONS.filter((s) => railParent(s.id) === id);
+  const away = links.filter((l) => l.h === id && railParent(l.s) !== id);
+  let html = cardHtml(byId(id), place === '1' ? away : []);
+  const shortcuts = place === '1' ? '' : away.map((l) => {
+    const t = byId(l.s), g = l.role === 'leader' ? '♛' : '◉', cls = l.role === 'leader' ? 'lead' : 'mon';
+    return place === '2c'
+      ? `<div class="card ref" data-jump="${t.id}"><div class="body"><div class="name">${esc(t.name)}</div><div class="status">click to jump to it</div></div></div>`
+      : `<div class="sc" data-jump="${t.id}" title="Shown under ${esc(byId(railParent(t.id)).name)}. Click to jump."><span class="g ${cls}">${g}</span><span class="n">${esc(t.name)}</span><span class="j">↗</span></div>`;
+  }).join('');
+  if (kids.length || shortcuts) html += '<div class="subjects">' + kids.map((k) => railTree(k.id, seen)).join('') + shortcuts + '</div>';
+  return html;
+}
+function renderRail() {
+  const seen = new Set();
+  let html = '<div class="search">⌕ <span>Search sessions</span></div><div class="railhint">Click a session to link it to the centered one, or to edit its link.</div>';
+  for (const s of SESSIONS) if (!railParent(s.id)) html += railTree(s.id, seen);
+  const rail = document.getElementById('rail');
+  rail.innerHTML = html;
+  rail.classList.toggle('live', !!M);
+  const cards = rail.querySelectorAll('.card:not(.ref)').length, extra = rail.querySelectorAll('.sc, .card.ref').length;
+  const h = Math.round([...rail.children].reduce((a, el) => a + el.offsetHeight, 0) + 0);
+  document.getElementById('railStats').innerHTML = `rail: ${cards} sessions${extra ? ` + ${extra} shortcut${extra === 1 ? '' : 's'}` : ''} · ${h}px tall`;
+}
+
+/* ── draft model ───────────────────────────────────────── */
+function open(id) {
+  M = { focus: id, trail: [id], draft: links.map((l) => ({ ...l })), pick: null, confirm: false, enter: true };
+  render();
+}
+function diff() {
+  const before = new Map(links.map((l) => [key(l), l]));
+  const after = new Map(M.draft.map((l) => [key(l), l]));
+  const out = [];
+  for (const [k, l] of after) {
+    const o = before.get(k);
+    if (!o) {
+      const flipped = before.get(l.s + '>' + l.h);
+      out.push(flipped ? `Swap: ${byId(l.h).name} now ${l.role === 'leader' ? 'leads' : 'monitors'} ${byId(l.s).name}` : `Link: ${byId(l.h).name} ${l.role === 'leader' ? 'leads' : 'monitors'} ${byId(l.s).name}`);
+    } else if (o.role !== l.role || o.cad !== l.cad) {
+      out.push(`${byId(l.h).name} → ${byId(l.s).name}: ${o.role !== l.role ? ROLE[l.role].t.toLowerCase() : ''}${o.role !== l.role && o.cad !== l.cad ? ', ' : ''}${o.cad !== l.cad ? CAD[l.cad].t.toLowerCase() : ''}`);
+    }
+  }
+  for (const [k, l] of before) if (!after.has(k) && !after.has(l.s + '>' + l.h)) out.push(`Unlink: ${byId(l.h).name} → ${byId(l.s).name}`);
+  return out;
+}
+const isDirty = (e) => { const o = links.find((l) => key(l) === key(e)); return !o || o.role !== e.role || o.cad !== e.cad; };
+const leaderOf = (s, except) => M.draft.find((e) => e.s === s && e.role === 'leader' && e !== except);
+// Leader edges only: a loop of monitors is just mutual watching, harmless.
+// Returns the loop as session ids (e.h … e.h) when e closes one, else null.
+function loopThrough(e) {
+  if (e.role !== 'leader') return null;
+  const stack = [[e.s, [e.h, e.s]]], seen = new Set();
+  while (stack.length) {
+    const [n, path] = stack.pop();
+    if (n === e.h) return path;
+    if (seen.has(n)) continue; seen.add(n);
+    M.draft.filter((x) => x.h === n && x.role === 'leader').forEach((x) => stack.push([x.s, [...path, x.s]]));
+  }
+  return null;
+}
+const inCycle = (e) => !!loopThrough(e);
+function firstLoop() {
+  for (const e of M.draft) { const p = loopThrough(e); if (p) return p; }
+  return null;
+}
+function focusOn(id) {
+  if (id === M.focus) return;
+  const i = M.trail.indexOf(id);
+  M.trail = i >= 0 ? M.trail.slice(0, i + 1) : [...M.trail, id];
+  M.focus = id; M.pick = null;
+  render();
+}
+function railClick(id) {
+  if (id === M.focus) return;
+  const s = byId(id);
+  if (s.ws !== byId(M.focus).ws) { shake(id); toast('Links never cross workspaces'); return; }
+  const e = M.draft.find((x) => pairKey(x.h, x.s) === pairKey(id, M.focus));
+  if (e) { M.pick = key(e); render(); return; }
+  // No global default: a new link lands as Leads/Signals (Monitors if it's
+  // already led) with its editor open, so adjusting it is the next click.
+  const role = leaderOf(id) ? 'monitor' : 'leader';
+  const ne = { h: M.focus, s: id, role, cad: 'on_signal', fresh: true };
+  M.draft.push(ne); M.pick = key(ne);
+  render();
+}
+function edit(k, fn) {
+  const e = M.draft.find((x) => key(x) === k);
+  fn(e);
+  M.pick = key(e);
+  render();
+}
+function swapDir(k) {
+  const e = M.draft.find((x) => key(x) === k);
+  if (e.role === 'leader' && leaderOf(e.h)) { toast(`${byId(e.h).name} already has a leader`); return; }
+  [e.h, e.s] = [e.s, e.h];
+  M.pick = key(e);
+  render();
+}
+function removeEdge(k) { M.draft = M.draft.filter((x) => key(x) !== k); M.pick = null; render(); }
+function tryClose() {
+  if (diff().length) { M.confirm = true; render(); } else { M = null; render(); }
+}
+// applyLinkDraft: plan = diff(server links, draft) in the safe order
+// (deletes → leader downgrades → other updates → creates). Every prefix of
+// that order is a valid graph, so stopping at a failure leaves the rail
+// consistent. Retry re-plans from whatever the server now holds, so steps
+// that already landed simply drop out.
+function plan() {
+  const base = new Map(links.map((l) => [key(l), l]));
+  const want = new Map(M.draft.map((l) => [key(l), l]));
+  const del = [], down = [], upd = [], add = [];
+  for (const [k, l] of base) if (!want.has(k)) del.push({ kind: 'delete', e: l });
+  for (const [k, l] of want) {
+    const o = base.get(k);
+    if (!o) add.push({ kind: 'create', e: l });
+    else if (o.role === 'leader' && l.role !== 'leader') down.push({ kind: 'update', e: l });
+    else if (o.role !== l.role || o.cad !== l.cad) upd.push({ kind: 'update', e: l });
+  }
+  return [...del, ...down, ...upd, ...add];
+}
+function applyOp(op) {
+  links = links.filter((l) => key(l) !== key(op.e));
+  if (op.kind !== 'delete') links.push({ h: op.e.h, s: op.e.s, role: op.e.role, cad: op.e.cad });
+}
+const FAIL_MSG = {
+  transient: "the Router didn't respond.",
+  refused: 'its pipeline is running, so it can be monitored but not led.',
+};
+function save() {
+  const ops = plan();
+  // The refused case targets a leader write: that's what a live pipeline refuses.
+  const leaderAt = ops.findIndex((o) => o.kind !== 'delete' && o.e.role === 'leader');
+  const failAt = failSim === 'refused' && leaderAt >= 0 ? leaderAt : Math.min(2, ops.length - 1);
+  for (let i = 0; i < ops.length; i++) {
+    const failing = failSim !== 'off' && i === failAt && (failSim === 'refused' || !M.failedOnce);
+    if (failing) {
+      M.failedOnce = true;
+      M.saveErr = { done: i, total: ops.length, key: key(ops[i].e), kind: failSim, msg: FAIL_MSG[failSim],
+        label: `${byId(ops[i].e.h).name} → ${byId(ops[i].e.s).name}` };
+      M.savedSome = M.savedSome || i > 0;
+      M.pick = failSim === 'refused' ? key(ops[i].e) : null;
+      render();
+      return;
+    }
+    applyOp(ops[i]);
+  }
+  const n = ops.length;
+  M = null;
+  toast(`Saved ${n} change${n === 1 ? '' : 's'}`);
+  render();
+}
+
+/* ── constellation ─────────────────────────────────────── */
+const W = 622, H = 400, YU = 70, YF = 200, YD = 330;
+function spread(n, y) {
+  return Array.from({ length: n }, (_, i) => ({ x: n === 1 ? W / 2 : 92 + i * ((W - 184) / (n - 1)), y }));
+}
+function nodeHtml(id, x, y, extraCls = '') {
+  const s = byId(id);
+  const up = M.draft.filter((e) => e.s === id && e.h !== M.focus).length;
+  const down = M.draft.filter((e) => e.h === id && e.s !== M.focus).length;
+  const more = id === M.focus ? '' : [up ? `▲${up}` : '', down ? `▼${down}` : ''].filter(Boolean).join(' ');
+  return `<div class="node ${extraCls}" style="left:${x}px;top:${y}px" ${id === M.focus ? '' : `data-focus="${id}" title="Center on ${esc(s.name)}"`}>
+    ${id === M.focus ? '' : '<span class="goto">⤢</span>'}
+    <div class="nm">${esc(s.name)}</div>
+    <div class="st ${s.st === 'waiting' ? 'warn' : ''}">${statusHtml(s)}${more ? `<span class="more">${more}</span>` : ''}</div></div>`;
+}
+function sky() {
+  const ups = M.draft.filter((e) => e.s === M.focus);
+  const downs = M.draft.filter((e) => e.h === M.focus);
+  const pos = new Map();
+  pos.set(M.focus, { x: W / 2, y: YF });
+  spread(ups.length, YU).forEach((p, i) => pos.set(ups[i].h, p));
+  spread(downs.length, YD).forEach((p, i) => pos.set(downs[i].s, p));
+  const edges = [...ups, ...downs];
+  let wires = '', badges = '', nodes = '';
+  for (const e of edges) {
+    const a = pos.get(e.h), b = pos.get(e.s);
+    const y0 = a.y + (e.h === M.focus ? 24 : 20), y1 = b.y - (e.s === M.focus ? 24 : 20), ym = (y0 + y1) / 2;
+    wires += `<path class="wire ${ROLE[e.role].cls} ${e.cad}" d="M ${a.x} ${y0} C ${a.x} ${ym}, ${b.x} ${ym}, ${b.x} ${y1}"/>`;
+    const loop = inCycle(e) || (M.saveErr && M.saveErr.kind === 'refused' && M.saveErr.key === key(e) && isDirty(e));
+    badges += `<button class="eb ${ROLE[e.role].cls} ${M.pick === key(e) ? 'picked' : ''} ${isDirty(e) ? 'dirty' : ''} ${loop ? 'bad' : ''}" style="left:${(a.x + b.x) / 2}px;top:${ym}px" data-edge="${key(e)}" title="${loop ? 'This link closes a loop of leaders' : 'Edit this link'}">
+      <span class="g">${ROLE[e.role].g}</span>${e.cad === 'manual_only' ? ICON_MUTE : CAD[e.cad].t}</button>`;
+  }
+  nodes += nodeHtml(M.focus, W / 2, YF, 'focus');
+  ups.forEach((e) => { const p = pos.get(e.h); nodes += nodeHtml(e.h, p.x, p.y, isDirty(e) ? 'add' : ''); });
+  downs.forEach((e) => { const p = pos.get(e.s); nodes += nodeHtml(e.s, p.x, p.y, isDirty(e) ? 'add' : ''); });
+  if (!ups.length) nodes += `<div class="node ghost" style="left:${W / 2}px;top:${YU}px">nothing leads or monitors this</div>`;
+  if (!downs.length) { nodes += `<div class="node ghost" style="left:${W / 2}px;top:${YD}px">← click sessions in the rail to link them here</div>`; wires += `<path class="wire ghost" d="M ${W / 2} ${YF + 24} L ${W / 2} ${YD - 14}"/>`; }
+
+  let pop = '';
+  const pe = M.draft.find((x) => key(x) === M.pick);
+  if (pe) {
+    const a = pos.get(pe.h), b = pos.get(pe.s);
+    const mx = (a.x + b.x) / 2, my = ((a.y + b.y) / 2);
+    const left = Math.min(Math.max(mx + 20, 8), W - 258);
+    const top = Math.min(Math.max(my - 150, 6), H - 345);
+    const otherLeader = leaderOf(pe.s, pe);
+    const swapBlock = pe.role === 'leader' && leaderOf(pe.h);
+    pop = `<div class="pop" style="left:${left}px;top:${top}px">
+      <div class="ph">${pe.fresh && !links.some((l) => key(l) === key(pe)) ? '<span class="newtag">New link</span> ' : ''}<b>${esc(byId(pe.h).name)}</b> → <b>${esc(byId(pe.s).name)}</b></div>
+      ${inCycle(pe) ? `<div class="why bad">This closes a loop of leaders. Pick Monitors, swap, or unlink.</div>` : ''}
+      ${M.saveErr && M.saveErr.kind === 'refused' && M.saveErr.key === key(pe) && isDirty(pe) ? `<div class="why bad">Couldn't save: ${esc(M.saveErr.msg)}</div>` : ''}
+      <div class="k">Role</div>
+      <div class="seg">
+        <button class="lead ${pe.role === 'leader' ? 'on' : ''}" data-setrole="leader" ${otherLeader ? 'disabled' : ''}>♛ Leads</button>
+        <button class="mon ${pe.role === 'monitor' ? 'on' : ''}" data-setrole="monitor">◉ Monitors</button>
+      </div>
+      ${otherLeader ? `<div class="why">Already led by ${esc(byId(otherLeader.h).name)}.</div>` : ''}
+      <div class="k">Updates to ${esc(byId(pe.h).name)}</div>
+      ${['per_turn', 'on_signal', 'manual_only'].map((c) => `<div class="o ${pe.cad === c ? 'on' : ''}" data-setcad="${c}"><span class="r"></span><div><div>${c === 'manual_only' ? ICON_MUTE + ' ' : ''}${CAD[c].t}</div><div class="od">${CAD[c].d}</div></div></div>`).join('')}
+      <hr/>
+      <div class="act ${swapBlock ? 'dis' : ''}" data-swap="1" title="${swapBlock ? esc(byId(pe.h).name) + ' already has a leader' : ''}">⇅ Swap direction</div>
+      <div class="act bad" data-remove="1">× Unlink</div>
+    </div>`;
+  }
+  const lanes = `<span class="lane" style="top:10px">Leads / monitors this</span><span class="lane" style="bottom:8px">Led / monitored by this</span>`;
+  return `<div class="sky" data-sky style="width:${W}px;height:${H}px">${lanes}<svg class="wires" viewBox="0 0 ${W} ${H}">${wires}</svg>${nodes}${badges}${pop}</div>`;
+}
+function modal() {
+  const f = byId(M.focus);
+  const changes = diff();
+  const crumbs = M.trail.length > 1 ? `<div class="crumbs">${M.trail.map((id, i) => i === M.trail.length - 1 ? `<span class="cur">${esc(byId(id).name)}</span>` : `<button data-focus="${id}">${esc(byId(id).name)}</button><span>›</span>`).join('')}</div>` : '';
+  const loop = firstLoop();
+  const err = M.saveErr && changes.length ? `<span class="invalid">Saved ${M.saveErr.done} of ${M.saveErr.total}. Couldn't save ${esc(M.saveErr.label)}: ${esc(M.saveErr.msg)}${M.saveErr.kind === 'refused' ? ' Change that link, then save again.' : ''}</span>` : '';
+  const blocked = loop ? `<span class="invalid">Can't save: ${loop.map((id) => esc(byId(id).name)).join(' <b>♛→</b> ')} is a loop of leaders. Change one link to Monitors or unlink it.</span>` : '';
+  const ln = (cls) => `<svg viewBox="0 0 34 8"><path class="wire ${cls}" d="M1 4 L33 4"/></svg>`;
+  const legend = `<div class="legend"><span>${ln('lead per_turn')}♛ Leads: flows down</span><span>${ln('mon per_turn')}◉ Monitors: flows up</span><span>fast = Follow · slow = Signals · still = Muted</span></div>`;
+  const confirm = M.confirm ? `<div class="confirm"><div class="box"><div class="t">${M.savedSome ? 'Some changes are already saved. ' : ''}Discard the ${changes.length} unsaved change${changes.length === 1 ? '' : 's'}?</div>
+    <ul>${changes.map((c) => `<li>${esc(c)}</li>`).join('')}</ul>
+    <div class="row"><button class="btn" data-act="keep">Keep editing</button><button class="btn danger" data-act="discard">Discard</button></div></div></div>` : '';
+  return `<div class="modal ${M.enter ? 'enter' : ''}">
+    <div class="mh"><div><div class="ttl">Links · ${esc(f.name)}</div>${crumbs || '<div class="sub">Click a node to center on it. Click a line\'s badge to edit that link.</div>'}</div><button class="x" data-act="close" aria-label="Close">×</button></div>
+    ${sky()}${legend}
+    <div class="mf">${blocked || err || (changes.length ? `<span class="pending" title="${esc(changes.join('\n'))}">${changes.length} unsaved</span>` : '')}<span class="sp"></span>
+      <button class="btn" data-act="close">Cancel</button>
+      <button class="btn pri" data-act="save" ${changes.length && !loop ? '' : 'disabled'}>${changes.length ? (M.saveErr && M.saveErr.kind === 'transient' ? 'Retry' : `Save ${changes.length} change${changes.length === 1 ? '' : 's'}`) : 'No changes'}</button></div>
+    ${confirm}</div>`;
+}
+
+/* ── render + events ───────────────────────────────────── */
+function render() {
+  renderRail();
+  document.getElementById('pane').classList.toggle('blurred', !!M);
+  document.getElementById('scrim').innerHTML = M ? modal() : '';
+  document.getElementById('paneTitle').textContent = byId(openId).name;
+  if (M) M.enter = false;
+}
+document.getElementById('rail').addEventListener('click', (e) => {
+  const jump = e.target.closest('[data-jump]');
+  if (jump) {
+    const id = jump.dataset.jump;
+    if (M) { if (!M.confirm) railClick(id); return; }
+    const el = document.querySelector(`#rail [data-card="${id}"]`);
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    el.classList.remove('flashy'); void el.offsetWidth; el.classList.add('flashy');
+    return;
+  }
+  const lb = e.target.closest('[data-link]');
+  const card = e.target.closest('[data-card]');
+  if (M) {
+    if (M.confirm) return;
+    const id = (lb || card)?.dataset.link || card?.dataset.card;
+    if (id) railClick(id);
+    return;
+  }
+  if (lb) { e.stopPropagation(); open(lb.dataset.link); return; }
+  if (card) { openId = card.dataset.card; render(); }
+});
+document.getElementById('scrim').addEventListener('click', (e) => {
+  const t = e.target;
+  if (t.id === 'scrim') { if (!M.confirm) tryClose(); return; }
+  const g = (a) => t.closest(`[${a}]`)?.getAttribute(a);
+  let v;
+  if ((v = g('data-act'))) {
+    if (v === 'close') return tryClose();
+    if (v === 'save') return save();
+    if (v === 'keep') { M.confirm = false; return render(); }
+    if (v === 'discard') { M = null; return render(); }
+  }
+  if (M.confirm) return;
+  if ((v = g('data-setrole'))) return edit(M.pick, (x) => { x.role = v; });
+  if ((v = g('data-setcad'))) return edit(M.pick, (x) => { x.cad = v; });
+  if (g('data-swap')) return swapDir(M.pick);
+  if (g('data-remove')) return removeEdge(M.pick);
+  if ((v = g('data-edge'))) { M.pick = M.pick === v ? null : v; return render(); }
+  if ((v = g('data-focus'))) return focusOn(v);
+  if (t.closest('[data-sky]') && M.pick && !t.closest('.pop')) { M.pick = null; render(); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || !M) return;
+  if (M.confirm) { M.confirm = false; render(); }
+  else if (M.pick) { M.pick = null; render(); }
+  else tryClose();
+});
+function shake(id) { const el = document.querySelector(`[data-card="${id}"]`); el?.classList.remove('nope'); void el?.offsetWidth; el?.classList.add('nope'); }
+let tt;
+function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(tt); tt = setTimeout(() => t.classList.remove('show'), 2400); }
+document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => open(b.dataset.open)));
+document.getElementById('theme').onclick = () => { const r = document.documentElement; r.dataset.theme = r.dataset.theme === 'dark' ? 'light' : 'dark'; };
+const pal = document.getElementById('palette');
+['clay', 'aubergine', 'citrus', 'dune', 'ember', 'glacier', 'graphite', 'harbor', 'ink', 'lagoon', 'moss', 'rosewood', 'sakura', 'space', 'synthwave'].forEach((p) => pal.insertAdjacentHTML('beforeend', `<option>${p}</option>`));
+pal.onchange = () => { document.documentElement.dataset.palette = pal.value; };
+document.getElementById('reset').onclick = () => { links = scen === 'heavy' ? HEAVY() : SEED(); M = null; render(); };
+document.querySelectorAll('[data-fail]').forEach((b) => b.addEventListener('click', () => {
+  failSim = b.dataset.fail;
+  document.querySelectorAll('[data-fail]').forEach((x) => x.classList.toggle('on', x === b));
+}));
+document.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('click', () => {
+  place = b.dataset.place;
+  document.querySelectorAll('[data-place]').forEach((x) => x.classList.toggle('on', x === b));
+  render();
+}));
+document.querySelectorAll('[data-scen]').forEach((b) => b.addEventListener('click', () => {
+  scen = b.dataset.scen;
+  document.querySelectorAll('[data-scen]').forEach((x) => x.classList.toggle('on', x === b));
+  links = scen === 'heavy' ? HEAVY() : SEED(); M = null; render();
+}));
+
+/* ── rail placement comparison (static) ─────────────────── */
+(function () {
+  const c = (name, o = {}) => `<div class="card ${o.cls || ''}"><div class="body"><div class="name">${name}</div>
+    <div class="status">${o.status || '◷ Idle'}</div>${o.rel ? `<span class="rel ${o.relCls}">${o.rel}</span>` : ''}</div></div>`;
+  const sub = (inner) => `<div class="subjects">${inner}</div>`;
+  const working = '<span class="spin"></span> Working';
+  const cols = [
+    { h: 'Today', v: 'Bug: Fix deploy shows twice, and its own subordinates show nowhere.', bad: true,
+      rail: c('Release captain') + sub(c('Fix deploy on Ubuntu runners', { status: working, cls: 'dup' }))
+        + c('Cost watchdog') + sub(c('Fix deploy on Ubuntu runners', { status: working, cls: 'dup' }))
+        + c('Session rail readability pass', { cls: 'miss', status: 'missing from the rail' })
+        + c('Mergiraf land-queue driver', { cls: 'miss', status: 'missing from the rail' }) + c('Profile startup time'),
+      pros: [] },
+    { h: '1 · Under its leader', v: 'Fix deploy sits once, under the leader. The monitor gets a tag saying what it watches.',
+      rail: c('Release captain') + sub(c('Fix deploy on Ubuntu runners', { status: working })
+          + sub(c('Session rail readability pass') + c('Mergiraf land-queue driver', { status: working })))
+        + c('Cost watchdog', { rel: '◉ watching Fix deploy', relCls: 'mon' }) + c('Profile startup time'),
+      pros: ['+Every session appears exactly once', '-The monitor looks unlinked except for its tag'] },
+    { h: '2 · Under every holder', v: 'Full tree under the leader. Every other holder gets a dashed shortcut card that jumps to it.',
+      rail: c('Release captain') + sub(c('Fix deploy on Ubuntu runners', { status: working })
+          + sub(c('Session rail readability pass') + c('Mergiraf land-queue driver', { status: working })))
+        + c('Cost watchdog') + sub(c('Fix deploy on Ubuntu runners', { status: 'click to jump ↑', cls: 'ref' })) + c('Profile startup time'),
+      pros: ['+Each holder visibly holds what it holds', '-Two cards for one session (one is a shortcut)'] },
+    { h: '3 · Flat', v: 'No nesting at all. The chain badge counts links; the modal is the only place you see structure.',
+      rail: c('Release captain') + c('Cost watchdog') + c('Fix deploy on Ubuntu runners', { status: working })
+        + c('Session rail readability pass') + c('Mergiraf land-queue driver', { status: working }) + c('Profile startup time'),
+      pros: ['+Simplest, and the rail order never jumps', '-Relationships vanish from the rail'] },
+  ];
+  document.getElementById('minis').innerHTML = cols.map((x) => `<div class="mini"><h3>${x.h}</h3><div class="v ${x.bad ? 'bad' : ''}">${x.v}</div>
+    <div class="r">${x.rail}</div>${x.pros.length ? `<ul class="pros">${x.pros.map((p) => `<li class="${p[0] === '+' ? 'pro' : 'con'}">${p.slice(1)}</li>`).join('')}</ul>` : ''}</div>`).join('');
+})();
+render();
+open('a');
+</script>
+</body>
+</html>

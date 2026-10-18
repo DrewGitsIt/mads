@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { DONE_OPEN_KEY, SessionRail } from "./SessionRail";
+import { DONE_OPEN_KEY, SessionRail, type RailLinkEditor } from "./SessionRail";
 import { FLAGS } from "../../../featureFlags";
-import { FakeRouterClient } from "../../../router/fixtures";
 import { FakeEventSource } from "../../../router/testFakeEventSource";
 import { useSessionAgentState } from "../state/useSessionAgentState";
 import type { SessionAgentState } from "./railGroups";
@@ -457,20 +456,18 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     );
     expect(screen.queryByText("LEADER")).toBeNull();
     expect(screen.queryAllByRole("checkbox").length).toBe(0);
-    expect(screen.queryByRole("button", { name: /to link selection$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Links for/ })).toBeNull();
     // Flag off: no nesting either, so the subject still renders as its own flat row.
     expect(screen.getByText("payments refactor")).toBeTruthy();
   });
 
   // The relationship is drawn, not captioned: the subject already renders
   // indented underneath its holder, so LEADER / LINKED pills were the caption
-  // repeating the indent in caps. Both sides keep a control — now in the
-  // action cluster, where every other per-session verb lives.
+  // repeating the indent in caps. Every card, nested or not, has the one
+  // chain button that opens the link editor.
   it("nests the subject under its holder with no pill on either row, when the flag is on", () => {
     FLAGS.linkedSessions = true;
-    render(
-      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} />,
-    );
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} />);
     expect(screen.queryByText("LEADER")).toBeNull();
     expect(screen.queryByText("LINKED")).toBeNull();
     const subject = screen.getByText("payments refactor").closest('[role="button"]')!;
@@ -479,14 +476,10 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     // A holder with one subject has nothing to count, so the trunk carries no
     // numeral — "LEADER · 2" only ever earned a count above one.
     expect(trunk?.querySelector('[class*="linkFan"]')).toBeNull();
-    expect(screen.getByRole("button", { name: "Linked sessions held by investigator" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Links for investigator" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Links for payments refactor" })).toBeTruthy();
   });
 
-  // A nested subject row has a link flyout, and the flyout already explains
-  // every orchestrate state in a full sentence. A second pill shouting the same
-  // thing in caps was an extra line of card spent on a restatement — and the
-  // loudest thing on a subordinate row at that.
   it("keeps a nested row to one control, whatever the orchestrate state", () => {
     FLAGS.linkedSessions = true;
     for (const status of ["pending_restart", "unsupported", "failed", "active"] as const) {
@@ -498,14 +491,17 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
         />,
       );
       expect(screen.queryByText("TOOLS WHEN IDLE")).toBeNull();
-      expect(screen.queryByText("NO TOOLS")).toBeNull();
       expect(screen.queryByText("TOOLS FAILED")).toBeNull();
-      expect(screen.getByRole("button", { name: "Link options for payments refactor" })).toBeTruthy();
+      const trigger = screen.getByRole("button", { name: "Links for payments refactor" });
+      // Only trouble earns the mark; pending_restart resolves on its own.
+      expect(Boolean(trigger.querySelector('[class*="linkBadgeAlert"]'))).toBe(
+        status === "unsupported" || status === "failed",
+      );
       unmount();
     }
   });
 
-  it("says why the tools failed on the nested row's own trigger", () => {
+  it("says why the tools failed on the nested row's own chain button", () => {
     FLAGS.linkedSessions = true;
     const failedLink = makeLink({
       ...link,
@@ -513,155 +509,118 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
       orchestrate_error: 'exec: "mads": executable file not found in $PATH',
     });
     render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[failedLink]} />);
-    const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
+    const trigger = screen.getByRole("button", { name: "Links for payments refactor" });
     expect(trigger.getAttribute("title")).toMatch(/not found in \$PATH/);
   });
 
-  it("clicking a card's link action enters link mode with it as the anchor and shows a floating bar", () => {
+  it("opens the link editor from any card's chain, handing over the button, without opening the session", () => {
     FLAGS.linkedSessions = true;
-    const b = makeSession({ id: "b", name: "gateway hardening" });
-    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
-
-    expect(screen.queryByText(/selected$/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-
-    expect(screen.getByText("1 selected")).toBeTruthy();
-    expect(screen.getByText("Anchor")).toBeTruthy();
-    // The anchor no longer exposes its own link-start button; the bar's
-    // "Choose mode" advance is disabled until a second session joins.
-    expect(screen.queryByRole("button", { name: "Add investigator to link selection" })).toBeNull();
-    expect(
-      (screen.getByRole("button", { name: "Choose mode" }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-
-  it("tapping a same-workspace card in link mode adds it to the selection; tapping again removes it", () => {
-    FLAGS.linkedSessions = true;
-    const b = makeSession({ id: "b", name: "gateway hardening" });
+    const onOpenLinks = vi.fn();
     const onSelect = vi.fn();
-    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} onSelect={onSelect} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-    fireEvent.click(screen.getByText("gateway hardening"));
-
-    expect(screen.getByText("2 selected")).toBeTruthy();
-    expect(
-      (
-        screen.getByRole("checkbox", {
-          name: "Remove gateway hardening from link selection",
-        }) as HTMLInputElement
-      ).checked,
-    ).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "Choose mode" }) as HTMLButtonElement).disabled,
-    ).toBe(false);
-    // Tapping a card to add it to the selection must not also navigate to it.
-    expect(onSelect).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByText("gateway hardening"));
-    expect(screen.getByText("1 selected")).toBeTruthy();
-  });
-
-  it("lets link mode add sessions from any workspace — a link is only a message channel", () => {
-    FLAGS.linkedSessions = true;
-    const otherWorkspace = makeSession({ id: "c", name: "infra repo work", workspace: "repo-b" });
-    const noWorkspace = makeSession({ id: "d", name: "imported work" });
-    const anchor = makeSession({ id: "lead2", name: "investigator two", workspace: "repo-a" });
-    render(<SessionRail sessions={[anchor, otherWorkspace, noWorkspace]} openTaskCounts={{}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Add investigator two to link selection" }));
-
-    fireEvent.click(screen.getByText("infra repo work"));
-    expect(screen.getByText("2 selected")).toBeTruthy();
-    fireEvent.click(screen.getByText("imported work"));
-    expect(screen.getByText("3 selected")).toBeTruthy();
-  });
-
-  it("Cancel exits link mode and restores the normal per-row link action", () => {
-    FLAGS.linkedSessions = true;
-    const b = makeSession({ id: "b", name: "gateway hardening" });
-    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-    fireEvent.click(screen.getByText("gateway hardening"));
-    fireEvent.click(screen.getByText("Cancel"));
-
-    expect(screen.queryByText(/selected$/)).toBeNull();
-    expect(screen.getByRole("button", { name: "Add investigator to link selection" })).toBeTruthy();
-  });
-
-  it("opens the chooser dialog and creates a link via the router client", async () => {
-    FLAGS.linkedSessions = true;
-    const b = makeSession({ id: "b", name: "gateway hardening" });
-    const client = new FakeRouterClient();
-    const createLinkSpy = vi.spyOn(client, "createLink");
-    render(
-      <SessionRail sessions={[lead, b]} openTaskCounts={{}} routerClient={client} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Add investigator to link selection" }));
-    fireEvent.click(screen.getByText("gateway hardening"));
-    fireEvent.click(screen.getByRole("button", { name: "Choose mode" }));
-
-    expect(screen.getByRole("dialog")).toBeTruthy();
-    fireEvent.click(screen.getByText("Create 1 link"));
-
-    await waitFor(() => expect(createLinkSpy).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
-    // Creating resets link mode entirely.
-    expect(screen.queryByText(/selected$/)).toBeNull();
-  });
-
-  it("offers Unlink from the nested subject row's link options, and confirming deletes the link", async () => {
-    FLAGS.linkedSessions = true;
-    const client = new FakeRouterClient();
-    const deleteLinkSpy = vi.spyOn(client, "deleteLink");
     render(
       <SessionRail
         sessions={[lead, a]}
         openTaskCounts={{}}
         links={[link]}
-        routerClient={client}
+        onSelect={onSelect}
+        onOpenLinks={onOpenLinks}
       />,
     );
-
-    // Per-link detail (the update policy) lives only here, on the subject row.
-    expect(screen.queryByRole("button", { name: "Link options for investigator" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Link options for payments refactor" }));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Unlink…" }));
-
-    const dialog = screen.getByRole("alertdialog");
-    expect(dialog.textContent).toContain("payments refactor");
-    fireEvent.click(within(dialog).getByText("Unlink"));
-
-    await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
+    const chain = screen.getByRole("button", { name: "Links for payments refactor" });
+    fireEvent.click(chain);
+    expect(onOpenLinks).toHaveBeenCalledWith("a", chain);
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("unlinks from the holder's own badge too, naming the subject it would drop", async () => {
-    // Reachable from both ends of the connector: the holder's cluster names
-    // every subject it would drop, the subject's own cluster names its holder.
+  // Mute is shown only in the editor: a rail card states that a link exists,
+  // never how loud it is.
+  it("never puts the cadence or a mute mark on a card", () => {
     FLAGS.linkedSessions = true;
-    const client = new FakeRouterClient();
-    const deleteLinkSpy = vi.spyOn(client, "deleteLink");
-    render(
-      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
-    );
+    const manualLink = makeLink({ ...link, cadence: "manual_only" });
+    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
+    const trigger = screen.getByRole("button", { name: "Links for payments refactor" });
+    expect(trigger.querySelector("svg")).toBeTruthy();
+    expect(trigger.textContent).toBe("1");
+    expect(document.querySelector("[data-mute-icon]")).toBeNull();
+    expect(screen.queryByText(/Muted|Signals|Follow/)).toBeNull();
+  });
 
-    const holderTrigger = screen.getByRole("button", {
-      name: "Linked sessions held by investigator",
+  describe("while the link editor is open", () => {
+    const b = makeSession({ id: "b", name: "gateway hardening" });
+    const editor = (over: Partial<RailLinkEditor> = {}): RailLinkEditor => ({
+      focusId: "lead",
+      linkedIds: new Set(["a"]),
+      blockedReason: () => undefined,
+      onPick: vi.fn(() => true),
+      ...over,
     });
-    // The same chain glyph as every card, counting the one link it holds.
-    expect(holderTrigger.querySelector("svg")).toBeTruthy();
-    expect(holderTrigger.textContent).toBe("1");
-    fireEvent.click(holderTrigger);
-    fireEvent.click(screen.getByRole("menuitem", { name: /Unlink payments refactor…/ }));
 
-    const dialog = screen.getByRole("alertdialog");
-    expect(dialog.textContent).toContain("payments refactor");
-    fireEvent.click(within(dialog).getByText("Unlink"));
+    it("tags the centred card and checks the ones linked to it", () => {
+      FLAGS.linkedSessions = true;
+      render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link]} linkEditor={editor()} />);
+      const card = (name: string) => screen.getByText(name).closest("[data-rail-card]")!;
+      expect(card("investigator").getAttribute("data-link-edit")).toBe("center");
+      expect(within(card("investigator") as HTMLElement).getByText("Center")).toBeTruthy();
+      expect(card("payments refactor").getAttribute("data-link-edit")).toBe("linked");
+      expect(card("gateway hardening").getAttribute("data-link-edit")).toBe("");
+    });
 
-    await waitFor(() => expect(deleteLinkSpy).toHaveBeenCalledWith("l1"));
+    it("turns card, chain and shortcut clicks into picks, and never opens a session", () => {
+      FLAGS.linkedSessions = true;
+      const watcher = makeSession({ id: "w", name: "watcher" });
+      const watch = makeLink({ id: "l7", granting_session_id: "w", subject_session_id: "a", grants: ["read"] });
+      const ed = editor();
+      const onSelect = vi.fn();
+      const onOpenLinks = vi.fn();
+      render(
+        <SessionRail
+          sessions={[lead, a, b, watcher]}
+          openTaskCounts={{}}
+          links={[link, watch]}
+          onSelect={onSelect}
+          onOpenLinks={onOpenLinks}
+          linkEditor={ed}
+        />,
+      );
+      fireEvent.click(screen.getByText("gateway hardening"));
+      expect(ed.onPick).toHaveBeenLastCalledWith("b");
+      fireEvent.click(screen.getByRole("button", { name: "Links for investigator" }));
+      expect(ed.onPick).toHaveBeenLastCalledWith("lead");
+      // Watcher monitors "payments refactor", whose card lives under its leader.
+      fireEvent.click(screen.getByRole("button", { name: /^Link payments refactor/ }));
+      expect(ed.onPick).toHaveBeenLastCalledWith("a");
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(onOpenLinks).not.toHaveBeenCalled();
+    });
+
+    it("dims a session that can't be linked, and shakes it when it is picked anyway", () => {
+      FLAGS.linkedSessions = true;
+      const ed = editor({
+        blockedReason: (id) => (id === "b" ? "Each has its own isolated copy of the repo." : undefined),
+        onPick: vi.fn((id: string) => id !== "b"),
+      });
+      render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link]} linkEditor={ed} />);
+      const card = screen.getByText("gateway hardening").closest("[data-rail-card]")!;
+      expect(card.getAttribute("data-link-edit")).toBe("blocked");
+      expect(card.getAttribute("aria-disabled")).toBe("true");
+      expect(card.getAttribute("title")).toMatch(/isolated copy/);
+      expect(within(card as HTMLElement).getByText("separate worktree")).toBeTruthy();
+      fireEvent.click(card);
+      expect(card.className).toMatch(/nope/);
+    });
+
+    it("offers no reorder grip while picking", () => {
+      FLAGS.linkedSessions = true;
+      render(
+        <SessionRail
+          sessions={[lead, b]}
+          openTaskCounts={{}}
+          onMove={() => Promise.resolve()}
+          linkEditor={editor({ linkedIds: new Set() })}
+        />,
+      );
+      expect(document.querySelector("[data-rail-grip]")).toBeNull();
+    });
   });
 
   // How the line ENDS is what says which relationship it is. Dashing the line
@@ -732,67 +691,6 @@ describe("SessionRail — linked sessions (flag-gated)", () => {
     expect(box.parentElement?.lastElementChild).toBe(box);
   });
 
-  it("names every subject separately, so a holder of several is never ambiguous", () => {
-    FLAGS.linkedSessions = true;
-    const b = makeSession({ id: "b", name: "ledger cleanup" });
-    const second = makeLink({
-      id: "l2",
-      granting_session_id: "lead",
-      subject_session_id: "b",
-      grants: ["read"],
-    });
-    render(<SessionRail sessions={[lead, a, b]} openTaskCounts={{}} links={[link, second]} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Linked sessions held by investigator" }));
-    const items = screen.getAllByRole("menuitem").map((el) => el.textContent);
-    expect(items).toHaveLength(2);
-    // Each carries the role it would sever, not just the name.
-    expect(items[0]).toContain("Unlink payments refactor…");
-    expect(items[0]).toContain("Leading this session");
-    expect(items[1]).toContain("Unlink ledger cleanup…");
-    expect(items[1]).toContain("Watching this session");
-  });
-
-  it("leaves a card that holds nothing without a badge menu at all", () => {
-    FLAGS.linkedSessions = true;
-    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[]} />);
-    expect(screen.queryByRole("button", { name: /^Linked sessions held by/ })).toBeNull();
-  });
-
-  it("edits a nested subject row's update policy from its link options", async () => {
-    FLAGS.linkedSessions = true;
-    const client = new FakeRouterClient();
-    const updateLinkSpy = vi.spyOn(client, "updateLink");
-    render(
-      <SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[link]} routerClient={client} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Link options for payments refactor" }));
-    fireEvent.click(screen.getByText("Catch up on request"));
-
-    await waitFor(() =>
-      expect(updateLinkSpy).toHaveBeenCalledWith("l1", {
-        granting_session_id: "lead",
-        subject_session_id: "a",
-        grants: ["read", "inject", "orchestrate"],
-        cadence: "manual_only",
-      }),
-    );
-  });
-
-  it("leaves the cadence to the flyout rather than spelling it out on the row", () => {
-    FLAGS.linkedSessions = true;
-    const manualLink = makeLink({ ...link, cadence: "manual_only" });
-    render(<SessionRail sessions={[lead, a]} openTaskCounts={{}} links={[manualLink]} />);
-    const trigger = screen.getByRole("button", { name: "Link options for payments refactor" });
-    // The chain glyph and its count. Not the role spelled out, not the cadence.
-    expect(trigger.querySelector("svg")).toBeTruthy();
-    expect(trigger.textContent).toBe("1");
-    fireEvent.click(trigger);
-    expect(
-      screen.getByRole("menuitemradio", { name: /Catch up on request/ }).getAttribute("aria-checked"),
-    ).toBe("true");
-  });
 });
 
 /** Fixed local reference point: Monday 28 Sep 2026, 13:40:00. */
@@ -2279,12 +2177,12 @@ describe("SessionRail — recursive link tree", () => {
         tinted: /linkTriggerLinked/.test(button.className),
       };
     };
-    expect(countOf("Linked sessions held by Captain")).toEqual({ count: "1", tinted: true });
+    expect(countOf("Links for Captain")).toEqual({ count: "1", tinted: true });
     // Deploy: led by Captain, leads Rail and Merge.
-    expect(countOf("Link options for Deploy")).toEqual({ count: "3", tinted: true });
+    expect(countOf("Links for Deploy")).toEqual({ count: "3", tinted: true });
     // Rail: led by Deploy, watched by Watcher.
-    expect(countOf("Link options for Rail")).toEqual({ count: "2", tinted: true });
-    expect(countOf("Linked sessions held by Watcher")).toEqual({ count: "1", tinted: true });
-    expect(countOf("Add Solo to link selection")).toEqual({ count: undefined, tinted: false });
+    expect(countOf("Links for Rail")).toEqual({ count: "2", tinted: true });
+    expect(countOf("Links for Watcher")).toEqual({ count: "1", tinted: true });
+    expect(countOf("Links for Solo")).toEqual({ count: undefined, tinted: false });
   });
 });

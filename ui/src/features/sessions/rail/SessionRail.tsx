@@ -5,11 +5,6 @@ import { useLiveShells } from "../../../conversation/ShellDock/useLiveShells";
 import { useShellDockState } from "../../../conversation/ShellDock/dockState";
 import type { ShellInfo } from "../../../conversation/TerminalRenderer/ptyBridge";
 import { SessionDeleteConfirmDialog } from "../actions/SessionDeleteConfirmDialog";
-import { SessionUnlinkConfirmDialog } from "../actions/SessionUnlinkConfirmDialog";
-import { LinkHolderMenu } from "./LinkHolderMenu";
-import type { LinkHolderSubject } from "./LinkHolderMenu";
-import { LinkOptionsMenu } from "./LinkOptionsMenu";
-import { LinkChooserDialog } from "./LinkChooserDialog";
 import { HarnessMark } from "./HarnessMark";
 import { LinkConnector } from "./LinkConnector";
 import { StatusMark } from "./StatusMark";
@@ -65,16 +60,7 @@ import {
   useRelativeNow,
 } from "../../../utils/relativeTime";
 import { router, type RouterClient } from "../../../router/client";
-import type {
-  Agent,
-  Delegate,
-  Grant,
-  Link,
-  LinkCadence,
-  OrchestrateStatus,
-  Session,
-  Workspace,
-} from "../../../router/types";
+import type { Agent, Delegate, Link, OrchestrateStatus, Session, Workspace } from "../../../router/types";
 import styles from "./SessionRail.module.css";
 
 export interface SessionRailProps {
@@ -146,12 +132,29 @@ export interface SessionRailProps {
   selectedDelegate?: { sessionId: string; harnessId: string };
   /** Opens a delegate in the main pane. */
   onOpenDelegate?: (d: Delegate) => void;
+  /**
+   * A card's chain button: open the link editor centred on that session. The
+   * button is handed over so focus can return to it when the editor closes.
+   */
+  onOpenLinks?: (sessionId: string, trigger: HTMLElement) => void;
+  /** Set while the link editor is open: the rail becomes its picker (RailLinkEditor). */
+  linkEditor?: RailLinkEditor;
 }
 
-/** Link mode: anchor session (chosen by clicking a card's link action) plus every session tapped in after it. */
-interface LinkModeState {
-  anchorId: string;
-  selectedIds: Set<string>;
+/**
+ * The rail while the link editor is open. Cards stop opening sessions: a
+ * click (on the card, its chain, or a shortcut row) links that session to the
+ * centred one, or opens the existing link's editor.
+ */
+export interface RailLinkEditor {
+  /** The session the editor is centred on — its card wears a "Center" tag. */
+  focusId: string;
+  /** Sessions linked to the focus in the draft — their cards are checked. */
+  linkedIds: ReadonlySet<string>;
+  /** Why a session can't be linked to the focus (dimmed; shakes when clicked), or undefined. */
+  blockedReason: (sessionId: string) => string | undefined;
+  /** Add or select. False means it was refused, and the card shakes. */
+  onPick: (sessionId: string) => boolean;
 }
 
 /** How many Done rows show before "Show N more". */
@@ -218,6 +221,8 @@ export function SessionRail({
   delegateFadeMs,
   selectedDelegate,
   onOpenDelegate,
+  onOpenLinks,
+  linkEditor,
 }: SessionRailProps) {
   const linkedSessionsEnabled = FLAGS.linkedSessions;
   // Subscribed once here, not per card: N cards must not each hold a listener
@@ -240,9 +245,6 @@ export function SessionRail({
   const [doneShowAll, setDoneShowAll] = useState(false);
   const [drag, setDrag] = useState<DragState>();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string>();
-  const [linkMode, setLinkMode] = useState<LinkModeState>();
-  const [chooserOpen, setChooserOpen] = useState(false);
-  const [unlinkTarget, setUnlinkTarget] = useState<{ linkId: string; name: string }>();
 
   const allSessionsById = new Map(sessions.map((s) => [s.id, s]));
   const graph = computeRailLinks(linkedSessionsEnabled ? links : []);
@@ -344,7 +346,7 @@ export function SessionRail({
   // Reordering is a gesture on the whole active list, so it is only offered
   // while the whole list is what's showing: a drop between two of a filter's
   // survivors would land somewhere among cards the user can't see.
-  const canReorder = Boolean(onMove) && !searching && filter === "all" && !linkMode;
+  const canReorder = Boolean(onMove) && !searching && filter === "all" && !linkEditor;
 
   /** Move an active row to `index` in the active list as it would read without it. */
   function moveRow(id: string, index: number) {
@@ -371,39 +373,28 @@ export function SessionRail({
     moveRow(dragged, at + (where === "after" ? 1 : 0));
   }
 
-  function startLinkMode(id: string) {
-    setLinkMode({ anchorId: id, selectedIds: new Set([id]) });
-  }
-
-  function toggleLinkSelection(id: string) {
-    setLinkMode((prev) => {
-      if (!prev) return prev;
-      const next = new Set(prev.selectedIds);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return { ...prev, selectedIds: next };
-    });
-  }
-
-  function cancelLinkMode() {
-    setLinkMode(undefined);
-  }
-
   // A shortcut row's jump: bring the session's one real card into view and
   // flash it, so the eye lands on it. A card outside the drawn list (a
   // collapsed Done, a filter) has nothing to scroll to, so this does nothing.
   function jumpTo(id: string) {
-    const card = [
-      ...(railRef.current?.querySelectorAll<HTMLElement>("[data-rail-card]") ?? []),
-    ].find((el) => el.dataset.railId === id);
+    const card = cardElement(id);
     if (!card) return;
     card.scrollIntoView({ block: "nearest" });
-    // Restart the animation if it is already running: drop the class, force a
-    // style flush, add it back.
-    card.classList.remove(styles.flash);
-    void card.offsetWidth;
-    card.classList.add(styles.flash);
-    card.addEventListener("animationend", () => card.classList.remove(styles.flash), { once: true });
+    replayAnimation(card, styles.flash);
+  }
+
+  function cardElement(id: string) {
+    return [...(railRef.current?.querySelectorAll<HTMLElement>("[data-rail-card]") ?? [])].find(
+      (el) => el.dataset.railId === id,
+    );
+  }
+
+  // While the link editor is open, every click on a session is a pick. A
+  // refused pick (a session that can't be linked) shakes its card.
+  function pickForLinks(id: string) {
+    if (!linkEditor || linkEditor.onPick(id)) return;
+    const card = cardElement(id);
+    if (card) replayAnimation(card, styles.nope);
   }
 
   // ⌘K / Ctrl-K focuses the field. Capture phase on the document so the rail
@@ -503,11 +494,10 @@ export function SessionRail({
     onSetDone,
     bucketOf,
     onDeleteRequest: setConfirmDeleteId,
-    onUnlinkRequest: setUnlinkTarget,
     linkedSessionsEnabled,
-    linkMode,
-    onStartLinkMode: startLinkMode,
-    onToggleLinkSelection: toggleLinkSelection,
+    linkEditor: linkedSessionsEnabled ? linkEditor : undefined,
+    onOpenLinks,
+    onPickForLinks: pickForLinks,
     onJump: jumpTo,
     labelContext,
     routerClient,
@@ -524,22 +514,6 @@ export function SessionRail({
       aria-label="Session list"
       onKeyDown={walkResults}
     >
-      {linkedSessionsEnabled && linkMode && (
-        <div className={styles.linkBar}>
-          <span className={styles.linkBarCount}>{linkMode.selectedIds.size} selected</span>
-          <button
-            type="button"
-            className={styles.linkBarAction}
-            disabled={linkMode.selectedIds.size < 2}
-            onClick={() => setChooserOpen(true)}
-          >
-            Choose mode
-          </button>
-          <button type="button" className={styles.linkBarCancel} onClick={cancelLinkMode}>
-            Cancel
-          </button>
-        </div>
-      )}
       {/* One field, no workspace picker: it matches whatever you happen to
           remember — name, workspace, directory or branch. */}
       <div className={styles.searchWrap}>
@@ -693,30 +667,6 @@ export function SessionRail({
           onCancel={() => setConfirmDeleteId(undefined)}
         />
       )}
-      {linkedSessionsEnabled && (
-        <SessionUnlinkConfirmDialog
-          open={unlinkTarget !== undefined}
-          sessionName={unlinkTarget?.name ?? ""}
-          onConfirm={() => {
-            void routerClient.deleteLink(unlinkTarget!.linkId);
-            setUnlinkTarget(undefined);
-          }}
-          onCancel={() => setUnlinkTarget(undefined)}
-        />
-      )}
-      {linkedSessionsEnabled && chooserOpen && linkMode && (
-        <LinkChooserDialog
-          sessionIds={[...linkMode.selectedIds]}
-          sessions={sessions}
-          links={links}
-          routerClient={routerClient}
-          onClose={() => setChooserOpen(false)}
-          onCreated={() => {
-            setChooserOpen(false);
-            setLinkMode(undefined);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -741,11 +691,11 @@ interface RailRowContext {
   /** The rail's group-aware bucket, which the ✓ reads to know whether a turn is running. */
   bucketOf: (session: Session) => RailFilterBucket;
   onDeleteRequest: (id: string) => void;
-  onUnlinkRequest: (target: { linkId: string; name: string }) => void;
   linkedSessionsEnabled: boolean;
-  linkMode?: LinkModeState;
-  onStartLinkMode: (id: string) => void;
-  onToggleLinkSelection: (id: string) => void;
+  linkEditor?: RailLinkEditor;
+  onOpenLinks?: (sessionId: string, trigger: HTMLElement) => void;
+  /** A click on a session while the link editor is open. */
+  onPickForLinks: (id: string) => void;
   /** A shortcut row's click: bring the session's real card into view. */
   onJump: (id: string) => void;
   labelContext: RailLabelContext;
@@ -754,25 +704,6 @@ interface RailRowContext {
   delegateFadeMs?: number;
   selectedDelegate?: { sessionId: string; harnessId: string };
   onOpenDelegate?: (d: Delegate) => void;
-}
-
-/**
- * The subjects a holder answers for in its link menu: the ones drawn under
- * it and the ones it only points at, since it holds a link to each.
- */
-function heldSubjectsOf(row: RailRow): LinkHolderSubject[] {
-  return [
-    ...row.subjects.map((sub) => ({
-      name: sub.session.name || "Untitled session",
-      badge: sub.link!.badge,
-      linkId: sub.link!.linkId,
-    })),
-    ...row.shortcuts.map((sc) => ({
-      name: sc.session.name || "Untitled session",
-      badge: sc.role === "leader" ? ("LINKED" as const) : ("WATCHED" as const),
-      linkId: sc.linkId,
-    })),
-  ];
 }
 
 /** A session's delegates nest right under its own card — before any linked subjects, which are other sessions. */
@@ -797,8 +728,33 @@ function hasLinkChildren(row: RailRow, ctx: RailRowContext): boolean {
   return ctx.linkedSessionsEnabled && (row.subjects.length > 0 || row.shortcuts.length > 0);
 }
 
+/** A card's part in the link editor, when it is open. */
+interface CardLinkEdit {
+  center: boolean;
+  linked: boolean;
+  blocked?: string;
+}
+
+function linkEditFor(ctx: RailRowContext, id: string): CardLinkEdit | undefined {
+  const ed = ctx.linkEditor;
+  if (!ed) return undefined;
+  const center = id === ed.focusId;
+  return { center, linked: !center && ed.linkedIds.has(id), blocked: center ? undefined : ed.blockedReason(id) };
+}
+
+/** The props every card, nested or not, takes from the link side of the rail. */
+function linkPropsFor(ctx: RailRowContext, row: RailRow) {
+  const id = row.session.id;
+  return {
+    linkedSessionsEnabled: ctx.linkedSessionsEnabled,
+    linkCount: ctx.linkedSessionsEnabled ? row.linkCount : 0,
+    linkEdit: linkEditFor(ctx, id),
+    onPickForLinks: () => ctx.onPickForLinks(id),
+    onOpenLinks: ctx.onOpenLinks && ((trigger: HTMLElement) => ctx.onOpenLinks!(id, trigger)),
+  };
+}
+
 function RailRowGroup({ row, grip, ...ctx }: RailRowContext & { row: RailRow; grip?: GripProps }) {
-  const isAnchor = ctx.linkMode?.anchorId === row.session.id;
   const children = hasLinkChildren(row, ctx);
   return (
     <>
@@ -817,17 +773,8 @@ function RailRowGroup({ row, grip, ...ctx }: RailRowContext & { row: RailRow; gr
         working={ctx.bucketOf(row.session) === "working"}
         grip={grip}
         onDeleteRequest={ctx.onDeleteRequest}
-        linkBadge={row.badge}
-        linkCount={ctx.linkedSessionsEnabled ? row.linkCount : 0}
-        heldSubjects={ctx.linkedSessionsEnabled ? heldSubjectsOf(row) : []}
-        onUnlinkSubjectRequest={ctx.onUnlinkRequest}
-        linkedSessionsEnabled={ctx.linkedSessionsEnabled}
-        linkModeActive={Boolean(ctx.linkMode)}
-        isLinkAnchor={isAnchor}
-        isLinkSelected={ctx.linkMode?.selectedIds.has(row.session.id) ?? false}
         labelContext={ctx.labelContext}
-        onStartLinkMode={() => ctx.onStartLinkMode(row.session.id)}
-        onToggleLinkSelection={() => ctx.onToggleLinkSelection(row.session.id)}
+        {...linkPropsFor(ctx, row)}
       />
       {delegatesOf(ctx, row.session.id, children)}
       {children && <RailSubjects row={row} ctx={ctx} />}
@@ -867,7 +814,11 @@ function RailSubjects({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
       ))}
       {row.shortcuts.map((sc) => (
         <div key={`sc-${sc.linkId}`} className={styles.subject}>
-          <ShortcutRow shortcut={sc} onJump={ctx.onJump} />
+          <ShortcutRow
+            shortcut={sc}
+            onActivate={ctx.linkEditor ? ctx.onPickForLinks : ctx.onJump}
+            picking={Boolean(ctx.linkEditor)}
+          />
         </div>
       ))}
     </div>
@@ -891,25 +842,11 @@ function NestedSessionRow({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
       onSleep={ctx.onSleep}
       onDeleteRequest={ctx.onDeleteRequest}
       linkBadge={link.badge}
-      linkCount={row.linkCount}
       orchestrateStatus={link.orchestrateStatus}
       orchestrateError={link.orchestrateError}
       nested
-      onUnlinkRequest={() =>
-        ctx.onUnlinkRequest({ linkId: link.linkId, name: sub.name || "Untitled session" })
-      }
-      linkedSessionsEnabled={ctx.linkedSessionsEnabled}
-      linkModeActive={false}
-      isLinkAnchor={false}
-      isLinkSelected={false}
-      onStartLinkMode={() => {}}
-      onToggleLinkSelection={() => {}}
       labelContext={ctx.labelContext}
-      cadence={link.cadence}
-      grants={link.grants}
-      grantingSessionId={link.grantingSessionId}
-      linkId={link.linkId}
-      routerClient={ctx.routerClient}
+      {...linkPropsFor(ctx, row)}
     />
   );
 }
@@ -920,7 +857,16 @@ function NestedSessionRow({ row, ctx }: { row: RailRow; ctx: RailRowContext }) {
  * row — no status, no actions — so it is a plain button, outside the
  * [data-rail-card] set the keyboard walks.
  */
-function ShortcutRow({ shortcut, onJump }: { shortcut: RailShortcut; onJump: (id: string) => void }) {
+function ShortcutRow({
+  shortcut,
+  onActivate,
+  picking,
+}: {
+  shortcut: RailShortcut;
+  /** Jump to the real card — or, while the link editor is open, pick the session. */
+  onActivate: (id: string) => void;
+  picking: boolean;
+}) {
   const name = shortcut.session.name || "Untitled session";
   const where = shortcut.homeHolder
     ? `Shown under ${shortcut.homeHolder.name || "Untitled session"}`
@@ -930,12 +876,16 @@ function ShortcutRow({ shortcut, onJump }: { shortcut: RailShortcut; onJump: (id
     <button
       type="button"
       className={styles.shortcut}
-      title={`${where}. Click to jump.`}
-      aria-label={`Jump to ${name} (${leader ? "led" : "watched"} from here). ${where}.`}
+      title={picking ? `Link ${name}` : `${where}. Click to jump.`}
+      aria-label={
+        picking
+          ? `Link ${name} (${leader ? "led" : "watched"} from here)`
+          : `Jump to ${name} (${leader ? "led" : "watched"} from here). ${where}.`
+      }
       data-rail-shortcut={shortcut.session.id}
       onClick={(e) => {
         e.stopPropagation();
-        onJump(shortcut.session.id);
+        onActivate(shortcut.session.id);
       }}
     >
       <span
@@ -966,7 +916,7 @@ function reasonFor(
  * centred on the row (.actionCluster carries the translateY(-50%)). Fixed,
  * not absolute — .rail is overflow-y:auto, and a scroll container clips the
  * cross axis too, so an absolutely positioned child could never escape
- * sideways. Same trick LinkOptionsMenu already plays on this row's badge.
+ * sideways.
  */
 function clusterPlacement(row: HTMLElement): CSSProperties {
   const rect = row.getBoundingClientRect();
@@ -990,24 +940,14 @@ function SessionRow({
   onDeleteRequest,
   linkBadge,
   linkCount = 0,
-  heldSubjects,
-  onUnlinkSubjectRequest,
   orchestrateStatus,
   orchestrateError,
   nested,
-  onUnlinkRequest,
   linkedSessionsEnabled,
-  linkModeActive,
-  isLinkAnchor,
-  isLinkSelected,
-  onStartLinkMode,
-  onToggleLinkSelection,
+  linkEdit,
+  onPickForLinks,
+  onOpenLinks,
   labelContext = EMPTY_LABEL_CONTEXT,
-  cadence,
-  grants,
-  grantingSessionId,
-  linkId,
-  routerClient,
 }: {
   session: Session;
   openTaskBreakdown: OpenTaskBreakdown;
@@ -1028,36 +968,24 @@ function SessionRow({
   /** Only on a holder card in a reorderable active list. */
   grip?: GripProps;
   onDeleteRequest: (id: string) => void;
+  /** How a nested row hangs from its holder (LINKED / WATCHED) — picks the connector's style. */
   linkBadge?: string;
   /** Counted links touching this session — tints the chain glyph and badges it with the number. */
   linkCount?: number;
-  /**
-   * Only set on a holder row — the subjects it holds, which is what turns its
-   * badge from a bare pill into the menu that can unlink them.
-   */
-  heldSubjects?: LinkHolderSubject[];
-  /** Holder rows only: unlink one named subject, chosen from the badge's menu. */
-  onUnlinkSubjectRequest?: (target: { linkId: string; name: string }) => void;
   /** Only ever set on a LINKED (leader) subject row — the orchestrate grant's materialization state. */
   orchestrateStatus?: OrchestrateStatus;
-  /** Why the tools failed to start, when orchestrateStatus is "failed" — the badge's tooltip. */
+  /** Why the tools failed to start, when orchestrateStatus is "failed" — the chain button's tooltip. */
   orchestrateError?: string;
   nested?: boolean;
-  onUnlinkRequest?: () => void;
   linkedSessionsEnabled: boolean;
-  linkModeActive: boolean;
-  isLinkAnchor: boolean;
-  isLinkSelected: boolean;
-  onStartLinkMode: () => void;
-  onToggleLinkSelection: () => void;
+  /** Set while the link editor is open: this card's part in it. */
+  linkEdit?: CardLinkEdit;
+  /** A click while the link editor is open. */
+  onPickForLinks: () => void;
+  /** The chain button: open the link editor on this session. */
+  onOpenLinks?: (trigger: HTMLElement) => void;
   /** Adaptive-label inputs, shared by every card in the list. */
   labelContext?: RailLabelContext;
-  /** Only set on nested subject rows — the underlying link's cadence, editable via LinkOptionsMenu. */
-  cadence?: LinkCadence;
-  grants?: Grant[];
-  grantingSessionId?: string;
-  linkId?: string;
-  routerClient?: RouterClient;
 }) {
   const now = useRelativeNow();
   const status = statusOf(session, agentState, openTaskBreakdown, now);
@@ -1196,10 +1124,11 @@ function SessionRow({
     onSelect?.(session.id);
   }
 
-  function activateOrToggle() {
-    if (linkModeActive) {
-      if (isLinkAnchor) return;
-      onToggleLinkSelection();
+  // While the link editor is open a card never opens its session: the click
+  // links it to the centred one (or opens that link's editor).
+  function activateOrPick() {
+    if (linkEdit) {
+      onPickForLinks();
       return;
     }
     activate();
@@ -1209,7 +1138,7 @@ function SessionRow({
     <div
       ref={rowRef}
       role="button"
-      title={tooltip || undefined}
+      title={linkEdit?.blocked ?? (tooltip || undefined)}
       data-rail-card=""
       data-rail-id={session.id}
       data-unseen={unseen ? "" : undefined}
@@ -1224,12 +1153,16 @@ function SessionRow({
         shell ? styles.shellCard : "",
         unseen ? styles.unseen : "",
         nested ? styles.nestedRow : "",
-        linkModeActive && isLinkAnchor ? styles.linkAnchor : "",
+        linkEdit?.center ? styles.linkCenter : "",
+        linkEdit?.linked ? styles.linkPicked : "",
+        linkEdit?.blocked ? styles.linkBlocked : "",
         grip?.dragging ? styles.dragging : "",
       ]
         .filter(Boolean)
         .join(" ")}
-      onClick={activateOrToggle}
+      data-link-edit={linkEdit ? (linkEdit.center ? "center" : linkEdit.linked ? "linked" : linkEdit.blocked ? "blocked" : "") : undefined}
+      aria-disabled={linkEdit?.blocked ? true : undefined}
+      onClick={activateOrPick}
       onMouseEnter={() => {
         hovering.current = true;
         onSeen(session.id);
@@ -1261,7 +1194,7 @@ function SessionRow({
         if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          activateOrToggle();
+          activateOrPick();
         }
       }}
     >
@@ -1304,7 +1237,9 @@ function SessionRow({
             &gt;_
           </span>
         )}
+        {linkEdit && <LinkEditTick edit={linkEdit} />}
         <span className={styles.name}>{name}</span>
+        {linkEdit?.blocked && <span className={styles.linkBlockedTag}>separate worktree</span>}
         {/* The tint is colour alone; this is the same fact for a screen reader. */}
         {unseen && <span className={styles.srOnly}>New session</span>}
         {work && (
@@ -1362,109 +1297,80 @@ function SessionRow({
           )}
         </div>
       )}
-      {linkModeActive ? (
-        <div className={styles.linkModeIndicator}>
-          {isLinkAnchor && <span className={styles.linkAnchorBadge}>Anchor</span>}
-          {!isLinkAnchor && (
-            <input
-              type="checkbox"
-              className={styles.linkCheckbox}
-              checked={isLinkSelected}
-              readOnly
-              tabIndex={-1}
-              aria-label={
-                isLinkSelected ? `Remove ${name} from link selection` : `Add ${name} to link selection`
-              }
-            />
-          )}
-        </div>
-      ) : (
-        <div
-          className={styles.actionCluster}
-          style={clusterAt}
-          data-anchored={clusterAnchored ? "" : undefined}
-          role="group"
-          aria-label={`${name} actions`}
-        >
-          {onSleep && (
-            // Always offered, regardless of the activity record: it's the
-            // Supervisor's TerminateSession underneath, which is safe to call
-            // in every state (kills a live child if one exists, or reconciles
-            // an already-inactive record as a no-op) — the record can drift
-            // from the real child state, so it must never be the thing that
-            // hides the one control that recovers from that drift.
-            <button
-              type="button"
-              className={styles.actionButton}
-              title="Sleep now — frees the agent process; it wakes on your next message"
-              aria-label={`Sleep ${name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSleep(session);
-              }}
-            >
-              ⏸
-            </button>
-          )}
-          {linkedSessionsEnabled && (
-            <LinkTrigger
-              name={name}
-              sessionId={session.id}
-              linkCount={linkCount}
-              nested={nested}
-              linkBadge={linkBadge}
-              heldSubjects={heldSubjects}
-              onUnlinkSubjectRequest={onUnlinkSubjectRequest}
-              cadence={cadence}
-              linkId={linkId}
-              grantingSessionId={grantingSessionId}
-              grants={grants}
-              orchestrateStatus={orchestrateStatus}
-              orchestrateError={orchestrateError}
-              routerClient={routerClient}
-              onUnlinkRequest={onUnlinkRequest}
-              onStartLinkMode={onStartLinkMode}
-            />
-          )}
-          {onSetDone && !nested && (
-            // ✓ is the task-list gesture, and in this rail it means exactly
-            // one thing: a judgement the user made. Every other mark on the
-            // card reports what the session is doing — which is why the Done
-            // status gave its tick up for a closed ring.
-            <button
-              type="button"
-              className={[styles.actionButton, isDone ? styles.actionButtonOn : ""]
-                .filter(Boolean)
-                .join(" ")}
-              title={
-                isDone
-                  ? "Bring back — return this to the top of the list"
-                  : "Done — check this off and put its agent to sleep; it comes back if it needs you"
-              }
-              aria-label={isDone ? `Bring back ${name}` : `Check off ${name}`}
-              aria-pressed={isDone}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSetDone(session, !isDone, working);
-              }}
-            >
-              ✓
-            </button>
-          )}
+      <div
+        className={styles.actionCluster}
+        style={clusterAt}
+        data-anchored={clusterAnchored ? "" : undefined}
+        role="group"
+        aria-label={`${name} actions`}
+      >
+        {onSleep && (
+          // Always offered, regardless of the activity record: it's the
+          // Supervisor's TerminateSession underneath, which is safe to call
+          // in every state (kills a live child if one exists, or reconciles
+          // an already-inactive record as a no-op) — the record can drift
+          // from the real child state, so it must never be the thing that
+          // hides the one control that recovers from that drift.
           <button
             type="button"
-            className={[styles.actionButton, styles.actionButtonDanger].join(" ")}
-            title="Archive"
-            aria-label={`Archive ${name}`}
+            className={styles.actionButton}
+            title="Sleep now — frees the agent process; it wakes on your next message"
+            aria-label={`Sleep ${name}`}
             onClick={(e) => {
               e.stopPropagation();
-              onDeleteRequest(session.id);
+              onSleep(session);
             }}
           >
-            🗑
+            ⏸
           </button>
-        </div>
-      )}
+        )}
+        {linkedSessionsEnabled && (
+          <LinkTrigger
+            name={name}
+            linkCount={linkCount}
+            orchestrateStatus={orchestrateStatus}
+            orchestrateError={orchestrateError}
+            onClick={(trigger) => (linkEdit ? onPickForLinks() : onOpenLinks?.(trigger))}
+          />
+        )}
+        {onSetDone && !nested && (
+          // ✓ is the task-list gesture, and in this rail it means exactly
+          // one thing: a judgement the user made. Every other mark on the
+          // card reports what the session is doing — which is why the Done
+          // status gave its tick up for a closed ring.
+          <button
+            type="button"
+            className={[styles.actionButton, isDone ? styles.actionButtonOn : ""]
+              .filter(Boolean)
+              .join(" ")}
+            title={
+              isDone
+                ? "Bring back — return this to the top of the list"
+                : "Done — check this off and put its agent to sleep; it comes back if it needs you"
+            }
+            aria-label={isDone ? `Bring back ${name}` : `Check off ${name}`}
+            aria-pressed={isDone}
+            onClick={(e) => {
+              e.stopPropagation();
+              onSetDone(session, !isDone, working);
+            }}
+          >
+            ✓
+          </button>
+        )}
+        <button
+          type="button"
+          className={[styles.actionButton, styles.actionButtonDanger].join(" ")}
+          title="Archive"
+          aria-label={`Archive ${name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDeleteRequest(session.id);
+          }}
+        >
+          🗑
+        </button>
+      </div>
     </div>
   );
 }
@@ -1499,94 +1405,88 @@ function ChainGlyph({ count }: { count: number }) {
 }
 
 /**
- * A card's one link button. Its click still means what the glyph used to
- * spell out — a subject opens "who leads me" (LinkOptionsMenu), a holder
- * opens "who I lead" (LinkHolderMenu), an unlinked card starts link mode —
- * but every card wears the same chain glyph now. Kept as one component so it
- * can be rewired to a single "open links" action in one place.
+ * Whether a link is in a state the user should see without opening anything.
+ * Only trouble qualifies: a degraded orchestrate grant (the leader's tools
+ * aren't there and won't arrive on their own). pending_restart is not news —
+ * the tools mount at the leader's next idle moment.
+ */
+function isDegraded(status?: OrchestrateStatus): boolean {
+  return status === "unsupported" || status === "failed";
+}
+
+const DEGRADED_NOTE: Partial<Record<OrchestrateStatus, string>> = {
+  unsupported: "The leader's provider can't host orchestration tools.",
+  failed: "Orchestration tools failed to start.",
+};
+
+/** The card's tick while the link editor is open: "Center" on the focus, a check on its linked sessions. */
+function LinkEditTick({ edit }: { edit: CardLinkEdit }) {
+  if (edit.center) {
+    return (
+      <span className={styles.linkCenterTag} data-link-tick="center">
+        Center
+      </span>
+    );
+  }
+  return (
+    <span
+      className={[styles.linkTick, edit.linked ? styles.linkTickOn : ""].filter(Boolean).join(" ")}
+      data-link-tick={edit.linked ? "linked" : ""}
+      aria-hidden="true"
+    >
+      {edit.linked ? "✓" : ""}
+    </span>
+  );
+}
+
+/**
+ * A card's one link button, the same chain glyph on every card, nested or
+ * not. It opens the link editor centred on this session — or, while the
+ * editor is open, picks the session like a click on the card does.
  */
 function LinkTrigger({
   name,
-  sessionId,
   linkCount,
-  nested,
-  linkBadge,
-  heldSubjects,
-  onUnlinkSubjectRequest,
-  cadence,
-  linkId,
-  grantingSessionId,
-  grants,
   orchestrateStatus,
   orchestrateError,
-  routerClient,
-  onUnlinkRequest,
-  onStartLinkMode,
+  onClick,
 }: {
   name: string;
-  sessionId: string;
   linkCount: number;
-  nested?: boolean;
-  linkBadge?: string;
-  heldSubjects?: LinkHolderSubject[];
-  onUnlinkSubjectRequest?: (target: { linkId: string; name: string }) => void;
-  cadence?: LinkCadence;
-  linkId?: string;
-  grantingSessionId?: string;
-  grants?: Grant[];
   orchestrateStatus?: OrchestrateStatus;
   orchestrateError?: string;
-  routerClient?: RouterClient;
-  onUnlinkRequest?: () => void;
-  onStartLinkMode: () => void;
+  onClick: (trigger: HTMLElement) => void;
 }) {
-  const glyph = <ChainGlyph count={linkCount} />;
-  const tint = linkCount > 0 ? styles.linkTriggerLinked : undefined;
-  if (nested && linkBadge && cadence && linkId && grantingSessionId && routerClient && onUnlinkRequest) {
-    return (
-      <LinkOptionsMenu
-        badge={linkBadge}
-        subjectName={name}
-        linkId={linkId}
-        grantingSessionId={grantingSessionId}
-        subjectSessionId={sessionId}
-        grants={grants ?? []}
-        cadence={cadence}
-        orchestrateStatus={orchestrateStatus}
-        orchestrateError={orchestrateError}
-        routerClient={routerClient}
-        onUnlinkRequest={onUnlinkRequest}
-        glyph={glyph}
-        triggerClassName={tint}
-      />
-    );
-  }
-  if (linkBadge && heldSubjects?.length && onUnlinkSubjectRequest) {
-    return (
-      <LinkHolderMenu
-        holderName={name}
-        subjects={heldSubjects}
-        onUnlinkRequest={onUnlinkSubjectRequest}
-        glyph={glyph}
-        triggerClassName={tint}
-      />
-    );
-  }
-  if (nested) return null;
+  const degraded = isDegraded(orchestrateStatus);
+  const note = degraded
+    ? [DEGRADED_NOTE[orchestrateStatus!], orchestrateStatus === "failed" ? orchestrateError : ""].filter(Boolean).join(" ")
+    : undefined;
   return (
     <button
       type="button"
-      className={[styles.actionButton, styles.linkOptionsTrigger, tint].filter(Boolean).join(" ")}
-      title={linkCount > 0 ? `Link · ${linkCount} linked` : "Link"}
-      aria-label={`Add ${name} to link selection`}
+      className={[styles.actionButton, styles.linkTrigger, linkCount > 0 ? styles.linkTriggerLinked : ""]
+        .filter(Boolean)
+        .join(" ")}
+      title={note ?? (linkCount > 0 ? `Links · ${linkCount}` : "Links")}
+      aria-label={`Links for ${name}`}
+      data-link-trigger=""
       onClick={(e) => {
         e.stopPropagation();
-        onStartLinkMode();
+        onClick(e.currentTarget);
       }}
     >
-      {glyph}
+      <ChainGlyph count={linkCount} />
+      {degraded && <span className={styles.linkBadgeAlert} aria-hidden="true" />}
     </button>
   );
+}
+
+/** Restart a one-shot animation class on an element, even if it is mid-run. */
+function replayAnimation(el: HTMLElement, cls: string) {
+  el.classList.remove(cls);
+  void el.offsetWidth;
+  el.classList.add(cls);
+  el.addEventListener("animationend", () => el.classList.remove(cls), { once: true });
 }
 
 /** Status kinds with nothing live to say — the work note may share the line. */

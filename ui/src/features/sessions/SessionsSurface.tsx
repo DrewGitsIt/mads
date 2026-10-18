@@ -11,7 +11,9 @@ import type { Session } from "../../router/types";
 import { NoSessionsEmptyState } from "./EmptyStates";
 import { Launchpad } from "./launchpad/Launchpad";
 import { SessionRail } from "./rail/SessionRail";
-import { EMPTY_OPEN_TASK_BREAKDOWN } from "./rail/railGroups";
+import { EMPTY_AGENT_STATE, EMPTY_OPEN_TASK_BREAKDOWN, statusOf } from "./rail/railGroups";
+import { LinkModal, type NodeStatus } from "./links/LinkModal";
+import { useLinkEditor, useRailLinkEditor } from "./links/useLinkEditor";
 import { SessionSleepPrompt, useSessionSleep } from "./actions/useSessionSleep";
 import { useOpenTaskCounts } from "./state/useOpenTaskCounts";
 import { useSessionAgentState } from "./state/useSessionAgentState";
@@ -124,6 +126,30 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
     return () => window.removeEventListener(OPEN_CREATED_SESSION_EVENT, onCreated);
   }, []);
 
+  // The link editor: one draft shared by the modal and the rail, which turns
+  // into the editor's picker while it is open.
+  const linkEditor = useLinkEditor({ links, sessions, client: router });
+  const railLinkEditor = useRailLinkEditor(linkEditor);
+  const nodeStatus = (id: string): NodeStatus | undefined => {
+    const session = sessions.find((s) => s.id === id);
+    if (!session) return undefined;
+    const status = statusOf(
+      session,
+      agentStates[id] ?? EMPTY_AGENT_STATE,
+      openTaskCounts[id] ?? EMPTY_OPEN_TASK_BREAKDOWN,
+    );
+    return { label: status.label, tone: status.tone };
+  };
+  // The pane under the editor is blurred and out of reach: no pointer, no
+  // focus. inert is set by hand — React 18 doesn't know the attribute.
+  const paneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const pane = paneRef.current;
+    if (!pane) return;
+    if (linkEditor.isOpen) pane.setAttribute("inert", "");
+    else pane.removeAttribute("inert");
+  }, [linkEditor.isOpen]);
+
   const [fullWidth, setFullWidth] = useState(false);
   const fullWidthApi = useMemo<FullWidthApi>(() => ({ full: fullWidth, setFull: setFullWidth }), [fullWidth]);
 
@@ -211,51 +237,67 @@ export function SessionsSurface({ jumpToSessionId, jumpToTab, pipelineClient }: 
                 reportActionError("delete", id, err);
               });
             }}
+            onOpenLinks={(id, trigger) => linkEditor.openOn(id, trigger)}
+            linkEditor={railLinkEditor}
           />
         )}
       </aside>
       <main className={styles.main}>
-        {openDelegate ? (
-          <DelegateView
-            key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
-            sessionId={openDelegate.sessionId}
-            harnessId={openDelegate.harnessId}
-            parent={sessions.find((s) => s.id === openDelegate.sessionId)}
-            routerClient={router}
-            onBack={() => {
-              setSelectedId(openDelegate.sessionId);
-              setOpenDelegate(undefined);
-            }}
-          />
-        ) : selectedId ? (
-          <SessionWorkspace
-            key={selectedId}
-            sessionId={selectedId}
-            routerClient={router}
-            pipelineClient={pipelineClient}
-            openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
-            agentState={agentStates[selectedId]}
-            initialTab={initialTab}
-            onSleep={sleep.requestSleep}
-            onWake={sleep.wake}
-            onClose={() => setSelectedId(undefined)}
-            provisioning={selectedId === provisioningSessionId}
-            onProvisioningDone={() => setProvisioningSessionId(undefined)}
-            pendingFirstMessage={
-              selectedId && selectedId === pendingFirstMessage?.sessionId
-                ? pendingFirstMessage.text
-                : undefined
-            }
-            onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
-            onOpenDelegate={(harnessId) => setOpenDelegate({ sessionId: selectedId, harnessId })}
-          />
-        ) : (
-          <Launchpad
-            createSession={createSession}
-            onSessionCreated={handleSessionCreated}
-            sessions={sessions}
-            links={links}
-          />
+        <div
+          ref={paneRef}
+          className={styles.pane}
+          data-session-pane=""
+          data-blurred={linkEditor.isOpen || undefined}
+          aria-hidden={linkEditor.isOpen || undefined}
+        >
+          {openDelegate ? (
+            <DelegateView
+              key={`${openDelegate.sessionId}/${openDelegate.harnessId}`}
+              sessionId={openDelegate.sessionId}
+              harnessId={openDelegate.harnessId}
+              parent={sessions.find((s) => s.id === openDelegate.sessionId)}
+              routerClient={router}
+              onBack={() => {
+                setSelectedId(openDelegate.sessionId);
+                setOpenDelegate(undefined);
+              }}
+            />
+          ) : selectedId ? (
+            <SessionWorkspace
+              key={selectedId}
+              sessionId={selectedId}
+              routerClient={router}
+              pipelineClient={pipelineClient}
+              openTaskBreakdown={openTaskCounts[selectedId] ?? EMPTY_OPEN_TASK_BREAKDOWN}
+              agentState={agentStates[selectedId]}
+              initialTab={initialTab}
+              onSleep={sleep.requestSleep}
+              onWake={sleep.wake}
+              onClose={() => setSelectedId(undefined)}
+              provisioning={selectedId === provisioningSessionId}
+              onProvisioningDone={() => setProvisioningSessionId(undefined)}
+              pendingFirstMessage={
+                selectedId && selectedId === pendingFirstMessage?.sessionId
+                  ? pendingFirstMessage.text
+                  : undefined
+              }
+              onPendingFirstMessageHandled={() => setPendingFirstMessage(undefined)}
+              onOpenDelegate={(harnessId) => setOpenDelegate({ sessionId: selectedId, harnessId })}
+            />
+          ) : (
+            <Launchpad
+              createSession={createSession}
+              onSessionCreated={handleSessionCreated}
+              sessions={sessions}
+              links={links}
+            />
+          )}
+        </div>
+        {linkEditor.isOpen && (
+          // A click on the blurred pane around the editor is a close request.
+          <div className={styles.linkScrim} onClick={linkEditor.requestClose} data-link-scrim="">
+            <LinkModal editor={linkEditor} statusOf={nodeStatus} />
+          </div>
         )}
         <SessionSleepPrompt sleep={sleep} routerClient={router} />
         {error && error !== dismissedError && (

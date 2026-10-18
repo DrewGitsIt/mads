@@ -6,6 +6,7 @@ import { FakeEventSource } from "../../router/testFakeEventSource";
 import type { Session } from "../../router/types";
 import styles from "./SessionsSurface.module.css";
 import { readFileSync } from "node:fs";
+import { FLAGS } from "../../featureFlags";
 
 function makeSession(overrides: Partial<Session>): Session {
   return {
@@ -97,6 +98,47 @@ describe("SessionsSurface", () => {
     const railRule = surfaceCss.match(/\.rail \{([^}]*)\}/)![1];
     expect(railRule).toMatch(/overflow-y:\s*auto/);
     expect(viewport.className).toBe(styles.rail);
+  });
+
+  // The link editor floats over the main pane only: the pane behind it is
+  // blurred and out of reach, the rail stays live as its picker.
+  it("opens the link editor over a blurred, inert pane and leaves the rail live", async () => {
+    FLAGS.linkedSessions = true;
+    try {
+      const sessions = [makeSession({ id: "a", name: "Alpha" }), makeSession({ id: "b", name: "Beta" })];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((input: URL) => {
+          const url = input.toString();
+          if (url.includes("/links")) return json([]);
+          if (url.match(/\/sessions(\?|$)/)) return json(sessions);
+          return json([]);
+        }),
+      );
+      render(<SessionsSurface pipelineClient={new FakePipelineClient()} />);
+      await waitFor(() => expect(rail().getByText("Alpha")).toBeTruthy());
+
+      const pane = document.querySelector("[data-session-pane]")!;
+      expect(pane.hasAttribute("data-blurred")).toBe(false);
+      fireEvent.click(rail().getByRole("button", { name: "Links for Alpha" }));
+      const dialog = screen.getByRole("dialog", { name: "Links · Alpha" });
+      expect(pane.hasAttribute("data-blurred")).toBe(true);
+      expect(pane.hasAttribute("inert")).toBe(true);
+      expect(pane.contains(dialog)).toBe(false);
+      expect(document.querySelector("[data-rail-scroll]")!.contains(dialog)).toBe(false);
+
+      // A rail click picks rather than opening the session.
+      fireEvent.click(rail().getByText("Beta"));
+      expect(within(dialog).getByRole("group", { name: "Edit link Alpha → Beta" })).toBeTruthy();
+      expect(screen.queryByRole("tabpanel")).toBeNull();
+
+      fireEvent.click(document.querySelector("[data-link-scrim]")!);
+      fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(pane.hasAttribute("inert")).toBe(false);
+    } finally {
+      FLAGS.linkedSessions = false;
+    }
   });
 
   it("shows a new session in the rail once the SSE subscription reports it", async () => {
