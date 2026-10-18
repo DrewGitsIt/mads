@@ -47,6 +47,11 @@ Links are directed edges; nothing is 1:1 by design:
   set updates the link in place (same id, `link.updated`); a cadence left
   unset keeps the stored one. Adding `orchestrate` this way runs the same
   checks as a fresh leader link.
+- **No loop of leaders** (2026-10-18). A write that adds `orchestrate` is
+  refused if the subject already leads the granting session, directly or
+  through others; the refusal spells out the loop by session name. Monitor
+  edges don't count, and a loop stored before this rule can still have its
+  cadence changed or a link downgraded.
 
 ## Decisions
 
